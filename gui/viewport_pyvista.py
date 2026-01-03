@@ -1,0 +1,1008 @@
+"""
+LiteCAD - PyVista 3D Viewport
+COMPLETE BUILD: FXAA, Matte Look, Robust Picking, No crashes
+"""
+
+import math
+import numpy as np
+from typing import Optional, List, Tuple, Dict, Any
+
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
+from PySide6.QtGui import QCursor
+
+# ==================== IMPORTS ====================
+HAS_PYVISTA = False
+try:
+    import pyvista as pv
+    from pyvistaqt import QtInteractor
+    import vtk 
+    HAS_PYVISTA = True
+    print("✓ PyVista & VTK erfolgreich geladen.")
+except ImportError as e:
+    print(f"! PyVista Import-Fehler: {e}")
+
+HAS_BUILD123D = False
+try:
+    import build123d
+    HAS_BUILD123D = True
+except ImportError:
+    pass
+
+HAS_SHAPELY = False
+try:
+    from shapely.geometry import LineString, Polygon
+    from shapely.ops import polygonize, unary_union, triangulate
+    HAS_SHAPELY = True
+except ImportError:
+    pass
+
+
+class OverlayHomeButton(QToolButton):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setText("🏠")
+        self.setFixedSize(32, 32)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Standardansicht (Home)")
+        self.setStyleSheet("""
+            QToolButton {
+                background-color: rgba(60, 60, 60, 180);
+                color: #e0e0e0;
+                border: 1px solid rgba(100, 100, 100, 100);
+                border-radius: 4px;
+                font-size: 16px;
+            }
+            QToolButton:hover {
+                background-color: rgba(0, 120, 212, 230);
+                border: 1px solid #0078d4;
+                color: white;
+            }
+        """)
+
+class PyVistaViewport(QWidget):
+    view_changed = Signal()
+    plane_clicked = Signal(str)
+    custom_plane_clicked = Signal(tuple, tuple)
+    extrude_requested = Signal(list, float, str)
+    height_changed = Signal(float)
+    face_selected = Signal(int)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._viewcube_created = False  # VOR _setup_plotter initialisieren
+        
+        # Dunkler Hintergrund für das Widget selbst
+        self.setStyleSheet("background-color: #1e1e1e;")
+        self.setAutoFillBackground(True)
+        
+        self._setup_ui()
+        
+        if HAS_PYVISTA:
+            self._setup_plotter()
+            self._setup_scene()
+        
+        # State
+        self.sketches = []
+        self.bodies = {} 
+        self.detected_faces = []
+        self.selected_faces = set()
+        self.hovered_face = -1
+        
+        # Modes
+        self.plane_select_mode = False
+        self.extrude_mode = False
+        self.extrude_height = 0.0
+        self.is_dragging = False
+        self.drag_start_pos = QPoint()
+        self.drag_start_height = 0.0
+        
+        # Tracking
+        self._sketch_actors = []
+        self._body_actors = {}
+        self._plane_actors = {}
+        self._face_actors = []
+        self._preview_actor = None
+        self.last_highlighted_plane = None
+        
+        self.setFocusPolicy(Qt.StrongFocus)
+    
+    def _setup_ui(self):
+        # Direktes Layout ohne zusätzlichen Frame
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        if not HAS_PYVISTA:
+            self.main_layout.addWidget(QLabel("PyVista fehlt! Installiere: pip install pyvista pyvistaqt"))
+            return
+    
+    def _setup_plotter(self):
+        # QtInteractor direkt zum Widget-Layout hinzufügen (ohne extra Frame)
+        self.plotter = QtInteractor(self)
+        self.plotter.interactor.setStyleSheet("background-color: #262626;")
+        self.main_layout.addWidget(self.plotter.interactor)
+        
+        self.plotter.interactor.setMouseTracking(True)
+        self.plotter.interactor.installEventFilter(self)
+        
+        # Gradient Background - dunkler
+        self.plotter.set_background('#1e1e1e', top='#2d2d30')
+        self.plotter.enable_trackball_style()
+        
+        try: self.plotter.enable_anti_aliasing('fxaa')
+        except: pass
+        
+        # WICHTIG: Entferne alle Standard-Widgets die PyVista automatisch erstellt
+        try: self.plotter.hide_axes()
+        except: pass
+        
+        # NUR das große Camera Orientation Widget (ViewCube mit klickbaren Kugeln)
+        try:
+            widget = self.plotter.add_camera_orientation_widget()
+            if widget:
+                # Versuch Labels zu setzen, aber stürzt nicht ab wenn es fehlschlägt
+                try:
+                    rep = widget.GetRepresentation()
+                    if hasattr(rep, 'SetLabelText'):
+                        rep.SetLabelText(0, "RECHTS")
+                        rep.SetLabelText(1, "LINKS")
+                        rep.SetLabelText(2, "HINTEN")
+                        rep.SetLabelText(3, "VORNE")
+                        rep.SetLabelText(4, "OBEN")
+                        rep.SetLabelText(5, "UNTEN")
+                except:
+                    pass # Labels werden ignoriert, wenn nicht unterstützt
+                self._cam_widget = widget
+        except Exception as e:
+            print(f"ViewCube creation warning: {e}")
+        
+        # Home-Button als Overlay
+        self.btn_home = OverlayHomeButton(self)
+        self.btn_home.clicked.connect(self._reset_camera_animated)
+        self.btn_home.move(20, 20)
+        self.btn_home.raise_()
+        self.btn_home.show()
+        
+        self._viewcube_created = True
+        
+        try:
+            if hasattr(self.plotter, 'iren') and self.plotter.iren:
+                self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
+        except: pass
+
+    def _reset_camera_animated(self):
+        self.plotter.view_isometric()
+        self.plotter.reset_camera()
+        self.view_changed.emit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Home-Button immer oben links halten
+        if hasattr(self, 'btn_home'):
+            self.btn_home.move(20, 20)
+            self.btn_home.raise_()  # Nach vorne bringen
+
+    def _setup_scene(self):
+        self._draw_grid(200)
+        self._draw_axes(50)
+        self.plotter.camera_position = 'iso'
+        self.plotter.reset_camera()
+    
+    def _draw_grid(self, size=200, spacing=10):
+        try: self.plotter.remove_actor('grid_main')
+        except: pass
+        n_lines = int(size/spacing)+1
+        lines = []
+        h = size/2
+        for i in range(n_lines):
+            p = -h + i*spacing
+            lines.append(pv.Line((-h, p, 0), (h, p, 0)))
+            lines.append(pv.Line((p, -h, 0), (p, h, 0)))
+        if lines:
+            grid = pv.MultiBlock(lines).combine()
+            self.plotter.add_mesh(grid, color='#3a3a3a', line_width=1, name='grid_main', pickable=False)
+
+    def _draw_axes(self, length=50):
+        try:
+            self.plotter.remove_actor('axis_x_org')
+            self.plotter.remove_actor('axis_y_org')
+            self.plotter.remove_actor('axis_z_org')
+        except: pass
+        self.plotter.add_mesh(pv.Line((0,0,0),(length,0,0)), color='#ff4444', line_width=3, name='axis_x_org')
+        self.plotter.add_mesh(pv.Line((0,0,0),(0,length,0)), color='#44ff44', line_width=3, name='axis_y_org')
+        self.plotter.add_mesh(pv.Line((0,0,0),(0,0,length)), color='#4444ff', line_width=3, name='axis_z_org')
+
+    # ==================== EVENT FILTER ====================
+    def eventFilter(self, obj, event):
+        if not HAS_PYVISTA: return False
+        
+        if event.type() == QEvent.MouseMove:
+            pos = event.position() if hasattr(event, 'position') else event.pos()
+            x, y = int(pos.x()), int(pos.y())
+            if self.plane_select_mode:
+                self._highlight_plane_at_position(x, y)
+                return False
+            if self.is_dragging and self.extrude_mode:
+                # Maus nach oben (kleinere Y) = positive Extrusion
+                # Sensitivity angepasst für natürlicheres Gefühl
+                dy = self.drag_start_pos.y() - pos.y()
+                new_height = self.drag_start_height + (dy * 0.3)
+                self.show_extrude_preview(new_height)
+                self.height_changed.emit(self.extrude_height)
+                return True
+            if self.extrude_mode and not self.is_dragging:
+                self._pick_face_at_position(x, y, hover_only=True)
+                
+        elif event.type() == QEvent.MouseButtonPress:
+            if event.button() == Qt.LeftButton:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+                
+                if self.parent(): self.parent().setFocus()
+                self.setFocus()
+                
+                if self.plane_select_mode: 
+                    self._pick_plane_at_position(x, y)
+                elif self.extrude_mode:
+                    if self._pick_face_at_position(x, y):
+                        self.is_dragging = True
+                        self.drag_start_pos = pos
+                        self.drag_start_height = self.extrude_height
+                        
+        elif event.type() == QEvent.MouseButtonRelease:
+            if self.is_dragging and self.extrude_mode:
+                self.is_dragging = False
+                # NICHT automatisch confirm_extrusion() aufrufen!
+                # Der Benutzer soll das Panel benutzen können
+                
+        return False
+
+    # ==================== PICKING ====================
+    def _highlight_plane_at_position(self, x, y):
+        if not self._plane_actors: return
+        try:
+            picker = vtk.vtkPropPicker()
+            picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+            actor = picker.GetActor()
+            found = None
+            if actor:
+                for k, v in self._plane_actors.items():
+                    if self.plotter.renderer.actors.get(v) == actor: found = k; break
+            if found != self.last_highlighted_plane:
+                self.last_highlighted_plane = found
+                for k in ['xy','xz','yz']:
+                    self._set_opacity(k, 0.7 if k == found else 0.25)
+                self.plotter.render()
+        except: pass
+
+    def _set_opacity(self, key, val):
+        try: 
+            self.plotter.renderer.actors.get(self._plane_actors[key]).GetProperty().SetOpacity(val)
+        except: pass
+
+    def _pick_plane_at_position(self, x, y):
+        try:
+            height = self.plotter.interactor.height()
+            picker = vtk.vtkPropPicker()
+            picker.Pick(x, height-y, 0, self.plotter.renderer)
+            actor = picker.GetActor()
+            
+            if actor:
+                for name, actor_name in self._plane_actors.items():
+                    if self.plotter.renderer.actors.get(actor_name) == actor:
+                        self.plane_clicked.emit(name)
+                        return
+
+            cell_picker = vtk.vtkCellPicker()
+            cell_picker.SetTolerance(0.005)
+            if cell_picker.Pick(x, height-y, 0, self.plotter.renderer):
+                pos = cell_picker.GetPickPosition()
+                normal = cell_picker.GetPickNormal()
+                if pos and normal:
+                    nx, ny, nz = normal
+                    if abs(abs(nx)-1) < 0.05: normal = (1 if nx>0 else -1, 0, 0)
+                    elif abs(abs(ny)-1) < 0.05: normal = (0, 1 if ny>0 else -1, 0)
+                    elif abs(abs(nz)-1) < 0.05: normal = (0, 0, 1 if nz>0 else -1)
+                    self.custom_plane_clicked.emit(tuple(pos), tuple(normal))
+        except: pass
+
+    def _pick_face_at_position(self, x, y, hover_only=False):
+        if not self.detected_faces: return False
+        try:
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.005)
+            picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+            pos = picker.GetPickPosition()
+            if pos != (0.0,0.0,0.0):
+                self._on_face_clicked(pos, hover_only)
+                return True
+            elif hover_only and self.hovered_face != -1:
+                self.hovered_face = -1
+                self._draw_selectable_faces()
+        except: pass
+        return False
+
+    def _on_face_clicked(self, point, hover_only=False):
+        best_dist = float('inf')
+        best_idx = -1
+        
+        for i, face in enumerate(self.detected_faces):
+            c2 = face['center_2d']
+            c3 = self._transform_2d_to_3d(c2[0], c2[1], face['normal'], face['origin'])
+            dist = math.sqrt(sum((point[k]-c3[k])**2 for k in range(3)))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        
+        if best_idx >= 0 and best_dist < 200:
+            if hover_only:
+                if self.hovered_face != best_idx:
+                    self.hovered_face = best_idx
+                    self._draw_selectable_faces()
+            else:
+                if best_idx in self.selected_faces: self.selected_faces.remove(best_idx)
+                else: self.selected_faces.add(best_idx)
+                self._draw_selectable_faces()
+                self.face_selected.emit(best_idx)
+
+    def _transform_2d_to_3d(self, x, y, normal, origin):
+        ox, oy, oz = origin
+        if isinstance(normal, list): normal = tuple(normal)
+        if normal == (0, 0, 1): return (ox + x, oy + y, oz)
+        if normal == (0, 1, 0): return (ox + x, oy, oz - y)
+        if normal == (1, 0, 0): return (ox, oy + x, oz - y)
+        return (ox + x, oy + y, oz)
+
+    def _apply_boolean_operation(self, new_mesh, operation, target_body_id=None):
+        """Führt Boolean Ops durch: Union, Difference, New Body"""
+        import vtk
+        
+        # 1. Neuer Körper
+        if operation == "New Body" or not self.bodies or target_body_id is None:
+            new_id = max(self.bodies.keys(), default=0) + 1
+            self.add_body(new_id, f"Body {new_id}", new_mesh.points, [], color=None)
+            # Hinweis: add_body erwartet verts/faces, aber wir können PyVista mesh direkt nutzen wenn wir add_body anpassen
+            # Besserer Weg hier: Direkt mesh speichern
+            self._add_mesh_as_body(new_id, new_mesh)
+            return
+
+        # 2. Bestehenden Körper holen
+        # Wir nehmen vereinfacht an, es gibt einen 'aktiven' Körper oder den zuletzt erstellten
+        target_id = target_body_id if target_body_id else list(self.bodies.keys())[-1]
+        target_mesh = self.bodies[target_id]['mesh']
+
+        try:
+            # PyVista Boolean Operations (benötigt triangulierte, saubere Meshes)
+            # Sicherstellen, dass alles Dreiecke sind
+            if not target_mesh.is_all_triangles: target_mesh = target_mesh.triangulate()
+            if not new_mesh.is_all_triangles: new_mesh = new_mesh.triangulate()
+            
+            result_mesh = None
+            
+            if operation == "Join":
+                result_mesh = target_mesh.boolean_union(new_mesh)
+            elif operation == "Cut":
+                result_mesh = target_mesh.boolean_difference(new_mesh)
+            elif operation == "Intersect":
+                result_mesh = target_mesh.boolean_intersection(new_mesh)
+                
+            if result_mesh and result_mesh.n_points > 0:
+                # Körper aktualisieren
+                self._add_mesh_as_body(target_id, result_mesh, color=self.bodies[target_id]['color'])
+                print(f"Boolean {operation} success.")
+            else:
+                print("Boolean Operation failed (empty result).")
+                # Fallback: Als neuen Körper hinzufügen, damit Arbeit nicht verloren geht
+                self._apply_boolean_operation(new_mesh, "New Body")
+
+        except Exception as e:
+            print(f"Boolean Error: {e}")
+            self._apply_boolean_operation(new_mesh, "New Body")
+            
+    def _add_mesh_as_body(self, bid, mesh, color=None):
+        """Interne Hilfsfunktion um ein PyVista Mesh direkt als Body zu speichern"""
+        # Alten Actor entfernen
+        if bid in self._body_actors:
+            for n in self._body_actors[bid]: 
+                try: self.plotter.remove_actor(n)
+                except: pass
+        
+        mesh = mesh.clean() # Wichtig für Rendering
+        mesh.compute_normals(inplace=True)
+        
+        col = color or "lightblue"
+        n1 = f"body_{bid}_m"
+        # PBR (Physically Based Rendering) für Metall-Look
+        self.plotter.add_mesh(mesh, color=col, name=n1, show_edges=False, 
+                              smooth_shading=True, pbr=True, metallic=0.5, roughness=0.4)
+        
+        n2 = f"body_{bid}_e"
+        edges = mesh.extract_feature_edges(feature_angle=45)
+        self.plotter.add_mesh(edges, color="black", line_width=2, name=n2)
+        
+        self._body_actors[bid] = (n1, n2)
+        self.bodies[bid] = {'mesh': mesh, 'color': col}
+        self.plotter.render()
+
+    # ==================== PUBLIC API ====================
+    def set_plane_select_mode(self, enabled):
+        self.plane_select_mode = enabled
+        self.last_highlighted_plane = None
+        if enabled: self._show_selection_planes(); self.plotter.render()
+        else: self._hide_selection_planes()
+
+    def set_extrude_mode(self, enabled):
+        self.extrude_mode = enabled
+        self.selected_faces.clear()
+        self.hovered_face = -1
+        self.is_dragging = False; self.extrude_height = 0.0
+        if enabled: 
+            self._detect_faces()
+            self._draw_selectable_faces()
+        else: 
+            self._clear_face_actors(); self._clear_preview()
+
+    def set_sketches(self, sketches):
+        self.sketches = list(sketches)
+        if not HAS_PYVISTA: return
+        for n in self._sketch_actors:
+            try: self.plotter.remove_actor(n)
+            except: pass
+        self._sketch_actors.clear()
+        for s, v in self.sketches:
+            if v: self._render_sketch(s)
+        self.plotter.update()
+
+    def add_body(self, bid, name, verts, faces, color=None):
+        if not HAS_PYVISTA: return
+        if bid in self._body_actors:
+            for n in self._body_actors[bid]: 
+                try: self.plotter.remove_actor(n)
+                except: pass
+        
+        v = np.array(verts, dtype=np.float32)
+        f = []
+        for face in faces: f.extend([len(face)] + list(face))
+        
+        try:
+            mesh = pv.PolyData(v, np.array(f, dtype=np.int32))
+            mesh = mesh.clean()
+            mesh.compute_normals(cell_normals=True, point_normals=True, split_vertices=True, feature_angle=30, inplace=True)
+            
+            col = color or "lightblue"
+            n1 = f"body_{bid}_m"
+            self.plotter.add_mesh(mesh, color=col, name=n1, show_edges=False, 
+                                  smooth_shading=True, specular=0.0, diffuse=1.0, ambient=0.15)
+            n2 = f"body_{bid}_e"
+            edges = mesh.extract_feature_edges(45)
+            self.plotter.add_mesh(edges, color="black", line_width=2, name=n2)
+            
+            self._body_actors[bid] = (n1, n2)
+            self.bodies[bid] = {'mesh': mesh, 'color': col}
+            self.plotter.update()
+        except: pass
+
+    def set_body_visibility(self, body_id, visible):
+        if body_id not in self._body_actors: return
+        try:
+            m, e = self._body_actors[body_id]
+            self.plotter.renderer.actors[m].SetVisibility(visible)
+            self.plotter.renderer.actors[e].SetVisibility(visible)
+            self.plotter.render()
+        except: pass
+
+    def clear_bodies(self):
+        for names in self._body_actors.values():
+            for n in names: 
+                try: self.plotter.remove_actor(n)
+                except: pass
+        self._body_actors.clear(); self.bodies.clear(); self.plotter.render()
+
+    def get_body_mesh(self, body_id):
+        if body_id in self.bodies: return self.bodies[body_id]['mesh']
+        return None
+
+    def get_selected_faces(self):
+        return [self.detected_faces[i] for i in self.selected_faces if i < len(self.detected_faces)]
+
+    def get_extrusion_data(self, face_idx, height):
+        if face_idx < 0 or face_idx >= len(self.detected_faces): return [], []
+        return self._calculate_extrusion_geometry(self.detected_faces[face_idx], height)
+
+    def _calculate_extrusion_geometry(self, face, height):
+        if not HAS_SHAPELY: return [], []
+        poly = face.get('shapely_poly')
+        if not poly: return [], []
+        normal = face['normal']; origin = face['origin']
+        try:
+            tris = triangulate(poly)
+            valid_tris = [t for t in tris if poly.contains(t.centroid)]
+        except: return [], []
+        verts = []; faces = []; v_map = {}
+        def add(x,y,z):
+            k = (round(x,4), round(y,4), round(z,4))
+            if k in v_map: return v_map[k]
+            idx = len(verts); verts.append((x,y,z)); v_map[k] = idx; return idx
+        def trans(x,y,h): return self._transform_2d_to_3d(x,y,normal,origin)
+        def trans_h(x,y,h):
+            p = self._transform_2d_to_3d(x,y,normal,origin)
+            nx, ny, nz = normal
+            return (p[0]+nx*h, p[1]+ny*h, p[2]+nz*h)
+
+        for t in valid_tris:
+            xx, yy = t.exterior.coords.xy
+            p = list(zip(xx[:3], yy[:3]))
+            b = [add(*trans(x,y,0)) for x,y in p]
+            t_Idx = [add(*trans_h(x,y,height)) for x,y in p]
+            if height > 0:
+                faces.append((b[0], b[2], b[1])); faces.append((t_Idx[0], t_Idx[1], t_Idx[2]))
+            else:
+                faces.append((b[0], b[1], b[2])); faces.append((t_Idx[0], t_Idx[2], t_Idx[1]))
+
+        rings = [poly.exterior] + list(poly.interiors)
+        for ring in rings:
+            pts = list(ring.coords)
+            for i in range(len(pts)-1):
+                x1,y1 = pts[i]; x2,y2 = pts[i+1]
+                b1 = add(*trans(x1,y1,0)); b2 = add(*trans(x2,y2,0))
+                t1 = add(*trans_h(x1,y1,height)); t2 = add(*trans_h(x2,y2,height))
+                if height > 0:
+                    faces.append((b1, b2, t2)); faces.append((b1, t2, t1))
+                else:
+                    faces.append((b1, t1, t2)); faces.append((b1, t2, b2))
+        return verts, faces
+
+    def _detect_faces(self):
+        """
+        Erkennt Flächen aus Sketches für 3D-Extrusion.
+        FIX: Unterstützt Splines, Slots und erkennt Löcher automatisch durch einheitliche Polygonisierung.
+        """
+        self.detected_faces = []
+        if not HAS_SHAPELY: return
+        
+        from shapely.ops import polygonize, unary_union
+        from shapely.geometry import LineString, Polygon
+        
+        # Hilfsfunktion zum Runden (WICHTIG für Slots!)
+        def rnd(val):
+            return round(val, 5)
+            
+        for s, vis in self.sketches:
+            if not vis: continue
+            norm = tuple(getattr(s, 'plane_normal', (0,0,1)))
+            orig = getattr(s, 'plane_origin', (0,0,0))
+            
+            # Wir sammeln ALLES als Liniensegmente für maximale Robustheit
+            all_segments = []
+            
+            # 1. LINJEN
+            for l in getattr(s, 'lines', []):
+                if not getattr(l, 'construction', False):
+                    all_segments.append(LineString([
+                        (rnd(l.start.x), rnd(l.start.y)), 
+                        (rnd(l.end.x), rnd(l.end.y))
+                    ]))
+            
+            # 2. ARCS (Bögen)
+            for arc in getattr(s, 'arcs', []):
+                if not getattr(arc, 'construction', False):
+                    pts = []
+                    start = arc.start_angle
+                    end = arc.end_angle
+                    sweep = end - start
+                    if sweep < 0.1: sweep += 360
+                    
+                    # Feinere Auflösung für 3D
+                    steps = max(12, int(sweep / 5))
+                    
+                    for i in range(steps + 1):
+                        t = math.radians(start + sweep * (i / steps))
+                        x = arc.center.x + arc.radius * math.cos(t)
+                        y = arc.center.y + arc.radius * math.sin(t)
+                        pts.append((rnd(x), rnd(y)))
+                    
+                    if len(pts) >= 2:
+                        all_segments.append(LineString(pts))
+
+            # 3. SPLINES (Neu!)
+            for spline in getattr(s, 'splines', []):
+                if not getattr(spline, 'construction', False):
+                    # Punkte aus der Spline holen
+                    pts_raw = []
+                    # Versuche verschiedene Methoden, um Punkte zu bekommen
+                    if hasattr(spline, 'get_curve_points'):
+                         pts_raw = spline.get_curve_points(segments_per_span=16)
+                    elif hasattr(spline, 'to_lines'):
+                         lines = spline.to_lines(segments_per_span=16)
+                         if lines:
+                             pts_raw.append((lines[0].start.x, lines[0].start.y))
+                             for ln in lines:
+                                 pts_raw.append((ln.end.x, ln.end.y))
+                    
+                    # Koordinaten runden
+                    pts = [(rnd(p[0]), rnd(p[1])) for p in pts_raw]
+                    if len(pts) >= 2:
+                        all_segments.append(LineString(pts))
+
+            # 4. KREISE (Auch als Linien behandeln für "Loch-in-Fläche" Logik)
+            for c in getattr(s, 'circles', []):
+                if not getattr(c, 'construction', False):
+                    pts = []
+                    for i in range(65): # Geschlossener Loop
+                        angle = i * 2 * math.pi / 64
+                        x = c.center.x + c.radius * math.cos(angle)
+                        y = c.center.y + c.radius * math.sin(angle)
+                        pts.append((rnd(x), rnd(y)))
+                    all_segments.append(LineString(pts))
+
+            # 5. Polygonize: Findet Flächen und Löcher automatisch
+            if all_segments:
+                try:
+                    merged = unary_union(all_segments)
+                    for poly in polygonize(merged):
+                        if poly.is_valid and poly.area > 0.01:
+                            self.detected_faces.append({
+                                'shapely_poly': poly,
+                                'coords': list(poly.exterior.coords),
+                                'normal': norm,
+                                'origin': orig,
+                                'sketch': s,
+                                'center_2d': (poly.centroid.x, poly.centroid.y)
+                            })
+                except Exception as e:
+                    print(f"3D Face Detection Error: {e}")
+        
+        # Sortieren: Kleine Flächen zuerst (besser klickbar, falls in großen Flächen liegend)
+        self.detected_faces.sort(key=lambda x: x['shapely_poly'].area)
+    
+    def _compute_atomic_regions_from_polygons(self, polygons):
+        """
+        Berechnet alle atomaren (nicht weiter teilbaren) Regionen 
+        aus einer Liste von überlappenden Polygonen.
+        
+        Beispiel: 4 überlappende Kreise → 9 atomare Regionen
+        """
+        if not polygons:
+            return []
+        if len(polygons) == 1:
+            return polygons
+        
+        from shapely.geometry import Polygon, MultiPolygon
+        
+        n = len(polygons)
+        
+        # Für jede mögliche Kombination von Polygonen berechnen wir die Region,
+        # die IN allen Polygonen der Kombination liegt, aber NICHT in anderen.
+        
+        # Effizienterer Ansatz: Iterativ aufbauen
+        # Start mit dem ersten Polygon, dann mit jedem weiteren schneiden/subtrahieren
+        
+        atomic = []
+        
+        # Methode: Für jedes Polygon berechne die Teile die:
+        # - nur in diesem Polygon sind
+        # - in diesem UND anderen sind (Schnittmengen)
+        
+        # Wir verwenden einen "overlay" Ansatz
+        all_regions = []
+        
+        # Initialisiere mit dem ersten Polygon
+        current_regions = [{'poly': polygons[0], 'inside': {0}}]
+        
+        for i in range(1, n):
+            new_poly = polygons[i]
+            next_regions = []
+            
+            for region in current_regions:
+                poly = region['poly']
+                inside_set = region['inside']
+                
+                if not poly.is_valid or poly.is_empty:
+                    continue
+                
+                try:
+                    # Teil der Region der AUCH im neuen Polygon ist
+                    intersection = poly.intersection(new_poly)
+                    # Teil der Region der NICHT im neuen Polygon ist
+                    difference = poly.difference(new_poly)
+                    
+                    # Intersection hinzufügen (ist in allen bisherigen + dem neuen)
+                    if intersection.is_valid and not intersection.is_empty:
+                        for p in self._extract_polygons(intersection):
+                            if p.area > 0.01:
+                                next_regions.append({
+                                    'poly': p, 
+                                    'inside': inside_set | {i}
+                                })
+                    
+                    # Difference hinzufügen (ist nur in den bisherigen)
+                    if difference.is_valid and not difference.is_empty:
+                        for p in self._extract_polygons(difference):
+                            if p.area > 0.01:
+                                next_regions.append({
+                                    'poly': p, 
+                                    'inside': inside_set.copy()
+                                })
+                except Exception as e:
+                    # Bei Fehler: Region beibehalten
+                    next_regions.append(region)
+            
+            # Auch den Teil des neuen Polygons der in KEINER bisherigen Region war
+            try:
+                remaining = new_poly
+                for region in current_regions:
+                    if region['poly'].is_valid:
+                        remaining = remaining.difference(region['poly'])
+                
+                if remaining.is_valid and not remaining.is_empty:
+                    for p in self._extract_polygons(remaining):
+                        if p.area > 0.01:
+                            next_regions.append({
+                                'poly': p, 
+                                'inside': {i}
+                            })
+            except:
+                pass
+            
+            current_regions = next_regions
+        
+        # Extrahiere nur die Polygone
+        result = [r['poly'] for r in current_regions if r['poly'].is_valid and r['poly'].area > 0.01]
+        
+        # Deduplizierung
+        final = []
+        for poly in result:
+            is_dup = False
+            for existing in final:
+                try:
+                    # Wenn fast identisch (symmetrische Differenz sehr klein)
+                    sym_diff = poly.symmetric_difference(existing)
+                    if sym_diff.area < min(poly.area, existing.area) * 0.05:
+                        is_dup = True
+                        break
+                except:
+                    pass
+            if not is_dup:
+                final.append(poly)
+        
+        return final
+    
+    def _extract_polygons(self, geom):
+        """Extrahiert alle Polygone aus einer Shapely Geometrie"""
+        from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
+        
+        if geom.is_empty:
+            return []
+        if geom.geom_type == 'Polygon':
+            return [geom]
+        elif geom.geom_type == 'MultiPolygon':
+            return list(geom.geoms)
+        elif geom.geom_type == 'GeometryCollection':
+            result = []
+            for g in geom.geoms:
+                result.extend(self._extract_polygons(g))
+            return result
+        return []
+
+    def show_extrude_preview(self, height):
+        self._clear_preview(); self.extrude_height = height
+        if not self.selected_faces or abs(height)<0.1: return
+        for idx in self.selected_faces:
+            if idx >= len(self.detected_faces): continue
+            v, f = self.get_extrusion_data(idx, height)
+            if v:
+                vv = np.array(v, dtype=np.float32)
+                ff = []
+                for face in f: ff.extend([3]+list(face))
+                mesh = pv.PolyData(vv, np.array(ff, dtype=np.int32))
+                self._preview_actor = 'prev'
+                self.plotter.add_mesh(mesh, color='#6699ff', opacity=0.8, name='prev')
+        self.plotter.update()
+
+    def confirm_extrusion(self, operation="New Body"):
+            """Bestätigt Extrusion und sendet Daten + Operation an Main Window"""
+            # Nur senden, wenn Flächen ausgewählt sind und die Höhe nicht 0 ist
+            if self.selected_faces and abs(self.extrude_height) >= 0.1:
+                # WICHTIG: Hier senden wir die Operation (String) mit!
+                # Das Signal muss oben definiert sein als: Signal(list, float, str)
+                self.extrude_requested.emit(list(self.selected_faces), self.extrude_height, operation)
+                
+            # Modus beenden
+            self.set_extrude_mode(False)
+    
+    def _pick_face_at_position(self, x, y, hover_only=False):
+        """Erweitert: Prüft Sketches UND existierende 3D-Körper"""
+        
+        # 1. Prüfe Sketches (hat Vorrang für Profil-Auswahl)
+        if self.detected_faces:
+             # (Bestehender Code für Sketch-Picking...)
+             # Hier nur kurz reinkopiert/referenziert:
+             picked_sketch = self._pick_sketch_face_logic(x, y, hover_only) # Refactored helper
+             if picked_sketch: return True
+
+        # 2. Wenn kein Sketch getroffen, prüfe 3D Bodies
+        if not hover_only: # Body Face Picking nur bei Klick, um Performance zu sparen
+            self._pick_body_face(x, y)
+            
+        return False
+
+    def _pick_sketch_face_logic(self, x, y, hover_only):
+        """Der alte Code für Sketch-Picking ausgelagert"""
+        try:
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.005)
+            picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+            pos = picker.GetPickPosition()
+            if pos != (0.0,0.0,0.0):
+                self._on_face_clicked(pos, hover_only)
+                return True
+            elif hover_only and self.hovered_face != -1:
+                self.hovered_face = -1
+                self._draw_selectable_faces()
+        except: pass
+        return False
+
+    def _pick_body_face(self, x, y):
+        """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""
+        cell_picker = vtk.vtkCellPicker()
+        cell_picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+        
+        if cell_picker.GetCellId() != -1:
+            actor = cell_picker.GetActor()
+            # Finde Body ID zu Actor
+            body_id = None
+            for bid, actors in self._body_actors.items():
+                if self.plotter.renderer.actors.get(actors[0]) == actor: # Check main mesh
+                    body_id = bid
+                    break
+            
+            if body_id is not None:
+                # Normalenvektor der geklickten Zelle
+                normal = cell_picker.GetPickNormal()
+                pos = cell_picker.GetPickPosition()
+                
+                print(f"Body {body_id} clicked at {pos}, Normal: {normal}")
+                # Hier könnte man nun eine neue Skizze auf dieser Fläche starten
+                # Signal emitten:
+                self.custom_plane_clicked.emit(tuple(pos), tuple(normal))
+                return True
+        return False
+    
+    def _clear_preview(self):
+        if self._preview_actor: 
+            try: self.plotter.remove_actor(self._preview_actor)
+            except: pass; self._preview_actor=None
+
+    def _draw_selectable_faces(self):
+        self._clear_face_actors()
+        for i, face in enumerate(self.detected_faces):
+            is_selected = i in self.selected_faces
+            is_hovered = i == self.hovered_face
+            if is_selected: col = 'orange'; op = 0.6
+            elif is_hovered: col = '#44aaff'; op = 0.5
+            else: col = '#4488ff'; op = 0.3
+            
+            v, f = self.get_extrusion_data(i, 0)
+            if v:
+                vv = np.array(v, dtype=np.float32)
+                ff = []
+                for x in f: ff.extend([3]+list(x))
+                mesh = pv.PolyData(vv, np.array(ff, dtype=np.int32))
+                n = f"face_{i}"
+                self.plotter.add_mesh(mesh, color=col, opacity=op, name=n, pickable=True)
+                self._face_actors.append(n)
+        self.plotter.update()
+
+    def _clear_face_actors(self):
+        for n in self._face_actors:
+            try: self.plotter.remove_actor(n)
+            except: pass
+        self._face_actors.clear()
+
+    def _render_sketch(self, s):
+        norm = tuple(getattr(s,'plane_normal',(0,0,1))); orig = getattr(s,'plane_origin',(0,0,0))
+        sid = getattr(s,'id',id(s))
+        
+        def t3d(x,y): return self._transform_2d_to_3d(x,y,norm,orig)
+        
+        # Linien
+        for i,l in enumerate(getattr(s,'lines',[])):
+            col = 'gray' if getattr(l,'construction',False) else '#4d94ff'
+            self.plotter.add_mesh(pv.Line(t3d(l.start.x,l.start.y), t3d(l.end.x,l.end.y)), color=col, line_width=3, name=f"s_{sid}_l_{i}")
+            self._sketch_actors.append(f"s_{sid}_l_{i}")
+            
+        # Kreise
+        for i,c in enumerate(getattr(s,'circles',[])):
+            pts = [t3d(c.center.x+c.radius*math.cos(j*6.28/64), c.center.y+c.radius*math.sin(j*6.28/64)) for j in range(65)]
+            col = 'gray' if getattr(c,'construction',False) else '#4d94ff'
+            self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_c_{i}")
+            self._sketch_actors.append(f"s_{sid}_c_{i}")
+            
+        # Arcs (Neu: Bessere Darstellung)
+        for i, arc in enumerate(getattr(s, 'arcs', [])):
+            col = 'gray' if getattr(arc,'construction',False) else '#4d94ff'
+            pts = []
+            start = arc.start_angle
+            end = arc.end_angle
+            sweep = end - start
+            if sweep < 0.1: sweep += 360
+            steps = 32
+            for j in range(steps+1):
+                t = math.radians(start + sweep * (j/steps))
+                x = arc.center.x + arc.radius * math.cos(t)
+                y = arc.center.y + arc.radius * math.sin(t)
+                pts.append(t3d(x, y))
+            if len(pts) > 1:
+                self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_a_{i}")
+                self._sketch_actors.append(f"s_{sid}_a_{i}")
+                
+        # Splines (Neu!)
+        for i, spline in enumerate(getattr(s, 'splines', [])):
+            col = 'gray' if getattr(spline,'construction',False) else '#4d94ff'
+            pts_2d = []
+            # Punkte holen
+            if hasattr(spline, 'get_curve_points'):
+                 pts_2d = spline.get_curve_points(segments_per_span=10)
+            elif hasattr(spline, 'to_lines'):
+                 lines = spline.to_lines(segments_per_span=10)
+                 if lines:
+                     pts_2d.append((lines[0].start.x, lines[0].start.y))
+                     for l in lines: pts_2d.append((l.end.x, l.end.y))
+            
+            if len(pts_2d) > 1:
+                pts_3d = [t3d(p[0], p[1]) for p in pts_2d]
+                self.plotter.add_mesh(pv.lines_from_points(np.array(pts_3d)), color=col, line_width=3, name=f"s_{sid}_sp_{i}")
+                self._sketch_actors.append(f"s_{sid}_sp_{i}")
+
+    def _show_selection_planes(self):
+        sz = 150; op = 0.25
+        self.plotter.add_mesh(pv.Plane(center=(0,0,0), direction=(0,0,1), i_size=sz, j_size=sz), color='blue', opacity=op, name='xy', pickable=True)
+        self.plotter.add_mesh(pv.Plane(center=(0,0,0), direction=(0,1,0), i_size=sz, j_size=sz), color='green', opacity=op, name='xz', pickable=True)
+        self.plotter.add_mesh(pv.Plane(center=(0,0,0), direction=(1,0,0), i_size=sz, j_size=sz), color='red', opacity=op, name='yz', pickable=True)
+        self._plane_actors = {'xy':'xy','xz':'xz','yz':'yz'}
+
+    def _hide_selection_planes(self):
+        for n in ['xy','xz','yz']: 
+            try: self.plotter.remove_actor(n)
+            except: pass
+        self._plane_actors.clear()
+
+    def set_view(self, view_name):
+        """Setzt eine Standardansicht"""
+        if not HAS_PYVISTA:
+            return
+        
+        views = {
+            'iso': 'iso',
+            'top': 'xy',
+            'front': 'xz', 
+            'right': 'yz',
+            'back': '-xz',
+            'left': '-yz',
+            'bottom': '-xy'
+        }
+        
+        if view_name in views:
+            try:
+                self.plotter.view_vector(views[view_name])
+                self.plotter.reset_camera()
+                self.view_changed.emit()
+            except:
+                # Fallback
+                if view_name == 'iso':
+                    self.plotter.view_isometric()
+                elif view_name == 'top':
+                    self.plotter.view_xy()
+                elif view_name == 'front':
+                    self.plotter.view_xz()
+                elif view_name == 'right':
+                    self.plotter.view_yz()
+                self.plotter.reset_camera()
+                self.view_changed.emit()
+    def update(self): self.plotter.update(); super().update()
+
+
+def create_viewport(parent=None):
+    return PyVistaViewport(parent) if HAS_PYVISTA else QWidget(parent)
