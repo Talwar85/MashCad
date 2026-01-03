@@ -218,6 +218,12 @@ class ProjectBrowser(QFrame):
             return []
         return [(s, self.sketch_visibility.get(s.id, True)) for s in self.document.sketches]
     
+    def get_visible_bodies(self):
+        """Gibt Liste von (body, is_visible) Tupeln zurück"""
+        if not self.document:
+            return []
+        return [(b, self.body_visibility.get(b.id, True)) for b in self.document.bodies]
+    
     def _on_click(self, item, column):
         data = item.data(0, Qt.UserRole)
         if data:

@@ -19,11 +19,13 @@ class ExtrudeInputPanel(QFrame):
     direction_flipped = Signal()     # Emitted when direction is flipped
     confirmed = Signal()             # Emitted when Enter pressed or OK clicked
     cancelled = Signal()             # Emitted when Escape pressed or Cancel clicked
+    bodies_visibility_toggled = Signal(bool)  # Emitted when bodies should be hidden/shown
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._height = 0.0
         self._direction = 1  # 1 or -1
+        self._bodies_hidden = False
         
         self.setStyleSheet("""
             QFrame {
@@ -94,6 +96,31 @@ class ExtrudeInputPanel(QFrame):
         self.op_combo = QComboBox()
         self.op_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
         layout.addWidget(self.op_combo)
+
+        # Hide Bodies Toggle Button
+        self.hide_bodies_btn = QPushButton("👁")
+        self.hide_bodies_btn.setToolTip("Bodies ein/ausblenden (H)")
+        self.hide_bodies_btn.setCheckable(True)
+        self.hide_bodies_btn.setFixedSize(32, 32)
+        self.hide_bodies_btn.setStyleSheet("""
+            QPushButton {
+                background: #3a3a3a;
+                border: 1px solid #4a4a4a;
+                border-radius: 3px;
+                color: #ccc;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background: #4a4a4a;
+                color: #fff;
+            }
+            QPushButton:checked {
+                background: #c42b1c;
+                color: #fff;
+            }
+        """)
+        self.hide_bodies_btn.clicked.connect(self._toggle_bodies)
+        layout.addWidget(self.hide_bodies_btn)
 
         # Flip Direction Button
         self.flip_btn = QPushButton("⇅")
@@ -175,6 +202,11 @@ class ExtrudeInputPanel(QFrame):
         self.height_changed.emit(self._height)
         self.direction_flipped.emit()
     
+    def _toggle_bodies(self):
+        """Toggle Bodies visibility"""
+        self._bodies_hidden = self.hide_bodies_btn.isChecked()
+        self.bodies_visibility_toggled.emit(self._bodies_hidden)
+    
     def _confirm(self):
         if abs(self._height) >= 0.1:
             self.confirmed.emit()
@@ -201,10 +233,12 @@ class ExtrudeInputPanel(QFrame):
         """Reset to default state"""
         self._height = 0.0
         self._direction = 1
+        self._bodies_hidden = False
         self.height_input.blockSignals(True)
         self.height_input.setValue(0)
         self.height_input.blockSignals(False)
         self.op_combo.setCurrentIndex(0) # Reset auf New Body
+        self.hide_bodies_btn.setChecked(False)
     
     def show_at(self, viewport_widget):
         """Show panel at bottom center of viewport widget"""

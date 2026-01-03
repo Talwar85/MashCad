@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.extrude_panel.height_changed.connect(self._on_extrude_panel_height_changed)
         self.extrude_panel.confirmed.connect(self._on_extrude_confirmed)
         self.extrude_panel.cancelled.connect(self._on_extrude_cancelled)
+        self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
         
         self._create_toolbar()
 
@@ -255,7 +256,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         # 2D Tool Panel
-        self.tool_panel.tool_selected.connect(lambda t: self.sketch_editor.set_tool(getattr(SketchTool, t.upper(), SketchTool.SELECT)))
+        self.tool_panel.tool_selected.connect(self._on_sketch_tool_selected)
         self.tool_panel.option_changed.connect(self._on_opt_change)
         
         # 3D Tool Panel
@@ -323,6 +324,23 @@ class MainWindow(QMainWindow):
         """Zeigt Hinweis für noch nicht implementierte Features"""
         self.statusBar().showMessage(f"⚠ {feature} - {tr('Coming soon!')}", 3000)
     
+    def _on_sketch_tool_selected(self, tool_name: str):
+        """Verarbeitet Tool-Auswahl aus dem Sketch-ToolPanel"""
+        # Spezielle Aktionen (kein Tool-Wechsel)
+        special_actions = {
+            'import_dxf': self.sketch_editor.import_dxf,
+            'export_dxf': self.sketch_editor.export_dxf,
+            'import_svg': lambda: self._show_not_implemented("SVG Import"),
+            'export_svg': lambda: self._show_not_implemented("SVG Export"),
+        }
+        
+        if tool_name in special_actions:
+            special_actions[tool_name]()
+        else:
+            # Normaler Tool-Wechsel
+            tool = getattr(SketchTool, tool_name.upper(), SketchTool.SELECT)
+            self.sketch_editor.set_tool(tool)
+    
     def _on_feature_selected(self, data):
         """Wird aufgerufen wenn ein Feature im Tree ausgewählt wird"""
         if data and len(data) >= 2:
@@ -339,8 +357,8 @@ class MainWindow(QMainWindow):
         # Bodies - komplett neu laden um gelöschte zu entfernen
         self.viewport_3d.clear_bodies()
         colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
-        for i, b in enumerate(self.document.bodies):
-            if hasattr(b, '_mesh_vertices'):
+        for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
+            if visible and hasattr(b, '_mesh_vertices'):
                 self.viewport_3d.add_body(b.id, b.name, b._mesh_vertices, b._mesh_triangles, colors[i%3])
 
     def _set_mode(self, mode):
@@ -432,11 +450,18 @@ class MainWindow(QMainWindow):
         """Extrude abgebrochen"""
         self.viewport_3d.set_extrude_mode(False)
         self.extrude_panel.setVisible(False)
+        # Bodies wieder einblenden falls versteckt
+        self.viewport_3d.set_all_bodies_visible(True)
         self.statusBar().showMessage(tr("Extrude abgebrochen"), 2000)
+    
+    def _on_toggle_bodies_visibility(self, hide: bool):
+        """Toggle alle Bodies sichtbar/unsichtbar im Extrude-Modus"""
+        self.viewport_3d.set_all_bodies_visible(not hide)
 
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
         if not face_indices or abs(height) < 0.1:
             self.extrude_panel.setVisible(False)
+            self.viewport_3d.set_all_bodies_visible(True)  # Bodies wieder einblenden
             return
         
         if hasattr(self.viewport_3d, 'get_extrusion_data'):
@@ -447,6 +472,7 @@ class MainWindow(QMainWindow):
         
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
+        self.viewport_3d.set_all_bodies_visible(True)  # Bodies wieder einblenden
         self.browser.refresh()
 
     def _show_extrude_input_dialog(self):

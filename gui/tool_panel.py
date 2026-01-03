@@ -243,6 +243,29 @@ class ToolPanel(QFrame):
         special_group.setLayout(special_layout)
         layout.addWidget(special_group)
         
+        # === DATEI (Import/Export) ===
+        file_group = self._create_group("Datei")
+        file_layout = QGridLayout()
+        file_layout.setSpacing(4)
+        
+        tools_file = [
+            ("📥 DXF Import", "import_dxf", "Ctrl+I", 0, 0),
+            ("📤 DXF Export", "export_dxf", "Ctrl+E", 0, 1),
+            ("📥 SVG Import", "import_svg", "", 1, 0),
+            ("📤 SVG Export", "export_svg", "", 1, 1),
+        ]
+        
+        for text, name, shortcut, row, col in tools_file:
+            btn = ToolButton(text, shortcut, text)
+            btn.setCheckable(False)  # Diese sind Actions, keine Tools
+            btn.clicked.connect(lambda checked, n=name: self._on_tool_clicked(n))
+            self.buttons[name] = btn
+            # Nicht zur Button-Group hinzufügen (keine Radio-Buttons)
+            file_layout.addWidget(btn, row, col)
+        
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+        
         # === OPTIONEN (nur allgemeine Einstellungen) ===
         # Tool-spezifische Optionen (Rechteck, Kreis, Polygon) sind jetzt
         # in der schwebenden Palette direkt im Editor

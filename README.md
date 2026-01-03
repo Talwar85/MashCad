@@ -1,6 +1,6 @@
 # LiteCAD
 
-A lightweight CAD application focused on 2D sketching for 3D printing workflows, inspired by Fusion360's sketching experience.
+A lightweight CAD application focused on 2D sketching for 3D printing workflows.
 
 ## Features
 
