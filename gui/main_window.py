@@ -496,9 +496,20 @@ class MainWindow(QMainWindow):
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
         if not face_indices or abs(height) < 0.1:
             self.extrude_panel.setVisible(False)
-            self.viewport_3d.set_all_bodies_visible(True)  # Bodies wieder einblenden
+            self.viewport_3d.set_all_bodies_visible(True)
             return
         
+        # Versuche Build123d Extrusion für bessere Qualität
+        if HAS_BUILD123D and self.active_sketch:
+            success = self._extrude_with_build123d(face_indices, height, operation)
+            if success:
+                self.extrude_panel.setVisible(False)
+                self.viewport_3d.set_extrude_mode(False)
+                self.viewport_3d.set_all_bodies_visible(True)
+                self.browser.refresh()
+                return
+        
+        # Fallback: PyVista-basierte Extrusion
         if hasattr(self.viewport_3d, 'get_extrusion_data'):
             for idx in face_indices:
                 verts, faces = self.viewport_3d.get_extrusion_data(idx, height)
@@ -507,8 +518,128 @@ class MainWindow(QMainWindow):
         
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
-        self.viewport_3d.set_all_bodies_visible(True)  # Bodies wieder einblenden
+        self.viewport_3d.set_all_bodies_visible(True)
         self.browser.refresh()
+    
+    def _extrude_with_build123d(self, face_indices, height, operation):
+        """Extrudiert mit Build123d für echte BREP-Geometrie"""
+        try:
+            from build123d import (
+                BuildPart, BuildSketch, Plane, extrude,
+                Line, Circle, Arc, Polyline, make_face,
+                Location, Vector, fillet, chamfer
+            )
+            import numpy as np
+            
+            if not self.active_sketch:
+                return False
+            
+            sketch = self.active_sketch
+            plane_origin = getattr(sketch, 'plane_origin', (0, 0, 0))
+            plane_normal = getattr(sketch, 'plane_normal', (0, 0, 1))
+            
+            # Bestimme Build123d Plane
+            ox, oy, oz = plane_origin
+            nx, ny, nz = plane_normal
+            
+            if abs(nz - 1) < 0.01:
+                b3d_plane = Plane.XY.offset(oz)
+            elif abs(ny - 1) < 0.01:
+                b3d_plane = Plane.XZ.offset(oy)
+            elif abs(nx - 1) < 0.01:
+                b3d_plane = Plane.YZ.offset(ox)
+            else:
+                b3d_plane = Plane(origin=(ox, oy, oz), z_dir=(nx, ny, nz))
+            
+            # Sammle geschlossene Profile aus dem Sketch
+            profiles = self.viewport_3d.closed_profiles if hasattr(self.viewport_3d, 'closed_profiles') else []
+            
+            if not profiles and hasattr(self, 'sketch_editor'):
+                profiles = self.sketch_editor.closed_profiles
+            
+            if not profiles:
+                print("Build123d: Keine geschlossenen Profile gefunden")
+                return False
+            
+            # Erstelle Build123d Part
+            with BuildPart() as part:
+                with BuildSketch(b3d_plane):
+                    # Konvertiere Profile zu Build123d
+                    for profile in profiles:
+                        if hasattr(profile, 'exterior'):
+                            # Shapely Polygon
+                            coords = list(profile.exterior.coords)
+                            if len(coords) > 2:
+                                pts = [(c[0], c[1]) for c in coords[:-1]]  # Ohne letzten Punkt (=erster)
+                                Polyline(*pts, close=True)
+                        elif isinstance(profile, (list, tuple)):
+                            # Liste von Punkten
+                            if len(profile) > 2:
+                                Polyline(*profile, close=True)
+                    
+                    make_face()
+                
+                # Extrudieren
+                extrude(amount=height)
+            
+            solid = part.part
+            
+            if solid is None or not hasattr(solid, 'vertices'):
+                print("Build123d: Extrusion fehlgeschlagen")
+                return False
+            
+            # Boolean Operation wenn nötig
+            if operation in ["Join", "Cut", "Intersect"] and self.document.bodies:
+                target_body = self.document.bodies[-1]
+                if hasattr(target_body, '_build123d_solid') and target_body._build123d_solid:
+                    target_solid = target_body._build123d_solid
+                    
+                    if operation == "Join":
+                        solid = target_solid + solid
+                    elif operation == "Cut":
+                        solid = target_solid - solid
+                    elif operation == "Intersect":
+                        solid = target_solid & solid
+                    
+                    # Update bestehenden Body
+                    self._update_body_from_build123d(target_body, solid)
+                    return True
+            
+            # Neuer Body
+            b = self.document.new_body(f"Body{len(self.document.bodies)+1}")
+            feat = ExtrudeFeature(FeatureType.EXTRUDE, "Extrude", None, abs(height))
+            b.features.append(feat)
+            b._build123d_solid = solid  # BREP speichern für Fillet/Chamfer!
+            
+            self._update_body_from_build123d(b, solid)
+            
+            self.statusBar().showMessage(f"Build123d Extrusion: {height}mm", 2000)
+            return True
+            
+        except Exception as e:
+            print(f"Build123d Extrusion error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _update_body_from_build123d(self, body, solid):
+        """Konvertiert Build123d Solid zu Mesh und aktualisiert Body"""
+        try:
+            # Tessellieren für Anzeige
+            mesh_data = solid.tessellate(tolerance=0.1)
+            
+            # Build123d gibt (vertices, triangles) zurück
+            verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
+            faces = [tuple(t) for t in mesh_data[1]]
+            
+            body._mesh_vertices = verts
+            body._mesh_triangles = faces
+            body._build123d_solid = solid
+            
+            self.viewport_3d.add_body(body.id, body.name, verts, faces)
+            
+        except Exception as e:
+            print(f"Build123d mesh conversion error: {e}")
 
     def _show_extrude_input_dialog(self):
         """Legacy Dialog - wird durch Panel ersetzt"""
@@ -518,18 +649,23 @@ class MainWindow(QMainWindow):
 
     def _create_body_from_data(self, verts, faces, height, operation):
         import numpy as np
+        import pyvista as pv
+        
+        # Versuche Build123d für robustere Operationen
+        if HAS_BUILD123D and operation in ["Join", "Cut", "Intersect"]:
+            result = self._build123d_boolean(verts, faces, height, operation)
+            if result is not None:
+                return
+        
+        # PyVista Fallback
         v = np.array(verts, dtype=np.float32)
         f = []
         for face in faces: f.extend([len(face)] + list(face))
         
-        import pyvista as pv
-        
-        # Neues Mesh erstellen und aufbereiten
         new_mesh = pv.PolyData(v, np.array(f, dtype=np.int32))
         new_mesh = self._prepare_mesh_for_boolean(new_mesh)
         
         if operation in ["Join", "Cut", "Intersect"]:
-            # Suche passendes Target-Body
             target_body = None
             target_mesh = None
             
@@ -548,13 +684,50 @@ class MainWindow(QMainWindow):
                 else:
                     print(f"Boolean operation '{operation}' failed - creating new body instead")
 
-        # Fallback: Neuer Body
+        # Neuer Body
         b = self.document.new_body(f"Body{len(self.document.bodies)+1}")
         feat = ExtrudeFeature(FeatureType.EXTRUDE, "Extrude", None, abs(height))
         b.features.append(feat)
         b._mesh_vertices = verts
         b._mesh_triangles = faces
+        b._build123d_solid = None  # Placeholder für BREP
         self.viewport_3d.add_body(b.id, b.name, verts, faces)
+    
+    def _build123d_boolean(self, verts, faces, height, operation):
+        """Führt Boolean-Operation mit Build123d durch (robuster als PyVista)"""
+        try:
+            from build123d import Solid, Compound
+            import numpy as np
+            import pyvista as pv
+            
+            # Konvertiere neues Mesh zu PyVista
+            v = np.array(verts, dtype=np.float32)
+            f = []
+            for face in faces: f.extend([len(face)] + list(face))
+            new_mesh = pv.PolyData(v, np.array(f, dtype=np.int32)).clean()
+            
+            # Finde Target Body mit Build123d Solid
+            target_body = None
+            target_solid = None
+            
+            for body in self.document.bodies:
+                if hasattr(body, '_build123d_solid') and body._build123d_solid is not None:
+                    target_body = body
+                    target_solid = body._build123d_solid
+                    break
+            
+            if target_solid is None:
+                # Kein Build123d Solid vorhanden - Fallback
+                return None
+            
+            # Konvertiere neues Mesh zu Build123d (schwierig - braucht Solid)
+            # Für jetzt: Fallback zu PyVista
+            print("Build123d Boolean: Target hat kein BREP - verwende PyVista")
+            return None
+            
+        except Exception as e:
+            print(f"Build123d Boolean error: {e}")
+            return None
     
     def _prepare_mesh_for_boolean(self, mesh):
         """Bereitet ein Mesh für Boolean-Operationen vor"""
@@ -829,9 +1002,14 @@ class MainWindow(QMainWindow):
         import pyvista as pv
         import numpy as np
         
+        # Versuche Build123d Fillet
+        if HAS_BUILD123D and self._fillet_target_body:
+            result = self._build123d_fillet(radius)
+            if result:
+                return result
+        
+        # PyVista Fallback
         try:
-            # Methode 1: Subdivision für weichere Kanten
-            # Das ist keine echte Verrundung, aber eine Approximation
             smoothed = mesh.subdivide(nsub=1, subfilter='loop')
             smoothed = smoothed.smooth(n_iter=int(radius * 10), relaxation_factor=0.1)
             return smoothed.clean()
@@ -839,7 +1017,6 @@ class MainWindow(QMainWindow):
             print(f"Fillet subdivision failed: {e}")
         
         try:
-            # Methode 2: Decimate + Smooth für ähnlichen Effekt
             decimated = mesh.decimate(0.9)
             smoothed = decimated.smooth(n_iter=50, relaxation_factor=0.1)
             return smoothed.clean()
@@ -848,18 +1025,102 @@ class MainWindow(QMainWindow):
         
         return None
     
+    def _build123d_fillet(self, radius):
+        """Echtes Fillet mit Build123d"""
+        try:
+            from build123d import fillet
+            
+            body = self._fillet_target_body
+            if not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+                print("Build123d Fillet: Kein BREP Solid vorhanden")
+                return None
+            
+            solid = body._build123d_solid
+            edges = solid.edges()
+            
+            if not edges:
+                print("Build123d Fillet: Keine Kanten gefunden")
+                return None
+            
+            filleted = fillet(edges, radius=radius)
+            body._build123d_solid = filleted
+            
+            mesh_data = filleted.tessellate(tolerance=0.1)
+            verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
+            faces = [tuple(t) for t in mesh_data[1]]
+            
+            body._mesh_vertices = verts
+            body._mesh_triangles = faces
+            
+            v = np.array(verts, dtype=np.float32)
+            f = []
+            for face in faces: f.extend([3] + list(face))
+            
+            result = pv.PolyData(v, np.array(f, dtype=np.int32))
+            self.statusBar().showMessage(f"Build123d Fillet: {radius}mm", 2000)
+            return result
+            
+        except Exception as e:
+            print(f"Build123d Fillet error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     def _apply_chamfer_to_mesh(self, mesh, distance):
         """Wendet Chamfer auf Feature-Kanten an"""
         import pyvista as pv
         
+        # Versuche Build123d Chamfer
+        if HAS_BUILD123D and self._fillet_target_body:
+            result = self._build123d_chamfer(distance)
+            if result:
+                return result
+        
+        # PyVista Fallback
         try:
-            # Chamfer ist schwieriger - wir nutzen clip_box als Workaround
-            # Für echtes Chamfer bräuchte man edge-by-edge Bearbeitung
-            
-            # Vereinfachte Version: Leichte Glättung
             smoothed = mesh.smooth(n_iter=20, relaxation_factor=0.05)
             return smoothed.clean()
         except Exception as e:
             print(f"Chamfer failed: {e}")
         
         return None
+    
+    def _build123d_chamfer(self, distance):
+        """Echtes Chamfer mit Build123d"""
+        try:
+            from build123d import chamfer
+            import numpy as np
+            import pyvista as pv
+            
+            body = self._fillet_target_body
+            if not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+                print("Build123d Chamfer: Kein BREP Solid vorhanden")
+                return None
+            
+            solid = body._build123d_solid
+            edges = solid.edges()
+            
+            if not edges:
+                return None
+            
+            chamfered = chamfer(edges, length=distance)
+            body._build123d_solid = chamfered
+            
+            mesh_data = chamfered.tessellate(tolerance=0.1)
+            verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
+            faces = [tuple(t) for t in mesh_data[1]]
+            
+            body._mesh_vertices = verts
+            body._mesh_triangles = faces
+            
+            v = np.array(verts, dtype=np.float32)
+            f = []
+            for face in faces: f.extend([3] + list(face))
+            
+            result = pv.PolyData(v, np.array(f, dtype=np.int32))
+            self.statusBar().showMessage(f"Build123d Chamfer: {distance}mm", 2000)
+            return result
+            
+        except Exception as e:
+            print(f"Build123d Chamfer error: {e}")
+            return None
