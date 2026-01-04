@@ -21,8 +21,13 @@ A lightweight CAD application focused on 2D sketching for 3D printing workflows.
 - Boolean operations (New Body, Join, Cut, Intersect)
 
 ### Export
-- DXF, SVG (2D sketches)
-- STL, STEP (3D models)
+- DXF (2D sketches)
+- STL (3D models)
+
+
+###Missing:
+Step, SVG
+
 
 ## Installation
 

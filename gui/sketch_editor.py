@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QMenu, QApplication, QFrame, QInputDialog, QPushButton
 )
-from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer, QThread
 from PySide6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
     QMouseEvent, QWheelEvent, QKeyEvent, QPolygonF, QFontMetrics
@@ -77,6 +77,131 @@ if not _import_ok:
     class ToolOptionsPopup:
         def __init__(self, parent=None): pass
 
+
+def ramer_douglas_peucker(points, epsilon):
+    if len(points) < 3: return points
+    
+    dmax = 0.0
+    index = 0
+    end = len(points) - 1
+    p1 = points[0]
+    p2 = points[end]
+    
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    norm = math.hypot(dx, dy)
+    
+    for i in range(1, end):
+        p = points[i]
+        # Senkrechter Abstand Punkt zur Linie
+        if norm == 0:
+            d = math.hypot(p[0]-p1[0], p[1]-p1[1])
+        else:
+            d = abs(dy * p[0] - dx * p[1] + p2[0] * p1[1] - p2[1] * p1[0]) / norm
+        if d > dmax:
+            index = i
+            dmax = d
+
+    if dmax > epsilon:
+        res1 = ramer_douglas_peucker(points[:index+1], epsilon)
+        res2 = ramer_douglas_peucker(points[index:], epsilon)
+        return res1[:-1] + res2
+    else:
+        return [p1, p2]
+
+class DXFImportWorker(QThread):
+    finished_signal = Signal(list, list) # lines, circles
+    error_signal = Signal(str)
+    progress_signal = Signal(str)
+
+    def __init__(self, filepath):
+        super().__init__()
+        self.filepath = filepath
+
+    def run(self):
+        try:
+            import ezdxf
+            import ezdxf.path
+            
+            doc = ezdxf.readfile(self.filepath)
+            msp = doc.modelspace()
+            
+            new_lines = []
+            new_circles = []
+            
+            # Helper: Konvertiert komplexe Formen in mikroskopisch feine Linien
+            def add_path_as_lines(entity, matrix=None):
+                try:
+                    p = ezdxf.path.make_path(entity)
+                    if matrix: p = p.transform(matrix)
+                    
+                    # 1. SAMPLING: Alle 0.01 mm ein Punkt (Fusion-Qualität)
+                    raw_points = list(p.flattening(distance=0.01))
+                    if len(raw_points) < 2: return
+                    
+                    # 2. OPTIMIERUNG: RDP entfernt überflüssige Punkte
+                    # epsilon=0.005: Erlaubt max 5 Mikrometer Abweichung -> Unsichtbar für Auge
+                    points_2d = [(v.x, v.y) for v in raw_points]
+                    simplified = ramer_douglas_peucker(points_2d, 0.005)
+                    
+                    for k in range(len(simplified) - 1):
+                        p1 = simplified[k]
+                        p2 = simplified[k+1]
+                        # Min-Länge Filter (0.001mm) gegen Grafik-Glitches
+                        if math.hypot(p2[0]-p1[0], p2[1]-p1[1]) > 0.001:
+                            new_lines.append((p1[0], p1[1], p2[0], p2[1]))
+                except Exception as e:
+                    print(f"Path Error: {e}")
+
+            def process_entity(entity, matrix=None):
+                dxftype = entity.dxftype()
+                
+                # Blöcke rekursiv auflösen
+                if dxftype == 'INSERT':
+                    m = entity.matrix44()
+                    if matrix: m = m * matrix
+                    for virtual_entity in entity.virtual_entities():
+                        process_entity(virtual_entity, m)
+                
+                # Echte Kreise (sicher, da keine Winkel)
+                elif dxftype == 'CIRCLE':
+                    c = entity.dxf.center
+                    if matrix: c = matrix.transform(c)
+                    r = entity.dxf.radius
+                    if matrix:
+                        # Skalierung approximieren
+                        vec = matrix.transform_direction(ezdxf.math.Vec3(1, 0, 0))
+                        r *= vec.magnitude
+                    new_circles.append((c.x, c.y, r))
+
+                # Linien direkt übernehmen
+                elif dxftype == 'LINE':
+                    start = entity.dxf.start
+                    end = entity.dxf.end
+                    if matrix:
+                        start = matrix.transform(start)
+                        end = matrix.transform(end)
+                    new_lines.append((start.x, start.y, end.x, end.y))
+
+                # ALLES andere (Splines, Arcs, Polylines) -> High-Res Fitting
+                # Das verhindert Winkel-Fehler bei Arcs und Eckigkeit bei Splines
+                elif dxftype in ['ARC', 'SPLINE', 'LWPOLYLINE', 'POLYLINE', 'ELLIPSE']:
+                    add_path_as_lines(entity, matrix)
+
+            # Start
+            all_ents = list(msp)
+            total = len(all_ents)
+            for i, e in enumerate(all_ents):
+                process_entity(e)
+                if i % 20 == 0: 
+                    self.progress_signal.emit(f"Importiere... {int(i/total*100)}%")
+
+            self.finished_signal.emit(new_lines, new_circles)
+
+        except Exception as e:
+            self.error_signal.emit(str(e))
+            
+            
 class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     """Professioneller 2D-Sketch-Editor"""
     
@@ -547,75 +672,57 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
     
     def import_dxf(self, filepath=None):
-        """Importiert eine DXF-Datei"""
-        from PySide6.QtWidgets import QFileDialog
+        """Startet den Import im Hintergrund"""
+        from PySide6.QtWidgets import QFileDialog, QApplication
+        from PySide6.QtGui import Qt
         
+        try:
+            import ezdxf
+        except ImportError:
+            self.status_message.emit("Fehler: 'ezdxf' fehlt.")
+            return
+
         if filepath is None:
             filepath, _ = QFileDialog.getOpenFileName(
                 self, "DXF importieren", "", "DXF Dateien (*.dxf);;Alle Dateien (*)"
             )
+        if not filepath: return
+
+        self.status_message.emit("Starte Import (High-Fidelity)...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         
-        if not filepath:
-            return
+        # Worker starten
+        self._dxf_worker = DXFImportWorker(filepath)
+        self._dxf_worker.finished_signal.connect(self._on_dxf_finished)
+        self._dxf_worker.error_signal.connect(self._on_dxf_error)
+        self._dxf_worker.progress_signal.connect(self.status_message.emit)
+        self._dxf_worker.start()
+
+    def _on_dxf_finished(self, lines, circles):
+        from PySide6.QtWidgets import QApplication
         
-        try:
-            with open(filepath, 'r') as f:
-                content = f.read().replace('\r\n', '\n').split('\n')
+        self._save_undo()
+        
+        # Linien hinzufügen
+        for l in lines:
+            self.sketch.add_line(l[0], l[1], l[2], l[3])
             
-            self._save_undo()
+        # Kreise hinzufügen
+        for c in circles:
+            self.sketch.add_circle(c[0], c[1], c[2])
             
-            lines_added = 0
-            circles_added = 0
-            
-            i = 0
-            while i < len(content):
-                entity = content[i].strip()
-                
-                if entity == 'LINE':
-                    x1 = y1 = x2 = y2 = 0
-                    i += 1
-                    while i < len(content) and content[i].strip() != '0':
-                        code = content[i].strip()
-                        if i + 1 < len(content):
-                            val = content[i + 1].strip()
-                            try:
-                                if code == '10': x1 = float(val)
-                                elif code == '20': y1 = float(val)
-                                elif code == '11': x2 = float(val)
-                                elif code == '21': y2 = float(val)
-                            except ValueError:
-                                pass
-                        i += 2
-                    self.sketch.add_line(x1, y1, x2, y2)
-                    lines_added += 1
-                    
-                elif entity == 'CIRCLE':
-                    cx = cy = r = 0
-                    i += 1
-                    while i < len(content) and content[i].strip() != '0':
-                        code = content[i].strip()
-                        if i + 1 < len(content):
-                            val = content[i + 1].strip()
-                            try:
-                                if code == '10': cx = float(val)
-                                elif code == '20': cy = float(val)
-                                elif code == '40': r = float(val)
-                            except ValueError:
-                                pass
-                        i += 2
-                    if r > 0:
-                        self.sketch.add_circle(cx, cy, r)
-                        circles_added += 1
-                else:
-                    i += 1
-            
-            self._find_closed_profiles()
-            self.sketched_changed.emit()
-            self.status_message.emit(tr("DXF imported: {lines} lines, {circles} circles").format(lines=lines_added, circles=circles_added))
-            self.update()
-            
-        except Exception as e:
-            self.status_message.emit(tr("DXF import error: {e}").format(e=e))
+        QApplication.restoreOverrideCursor()
+        self._find_closed_profiles()
+        self.sketched_changed.emit()
+        self.status_message.emit(f"Fertig: {len(lines)} Pfad-Segmente, {len(circles)} Kreise.")
+        self.update()
+        self._dxf_worker = None
+
+    def _on_dxf_error(self, err):
+        from PySide6.QtWidgets import QApplication
+        QApplication.restoreOverrideCursor()
+        self.status_message.emit(f"Import Fehler: {err}")
+        self._dxf_worker = None
     
     def export_dxf(self, filepath=None):
         """Exportiert als DXF-Datei"""
