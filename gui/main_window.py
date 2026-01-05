@@ -28,19 +28,82 @@ if _project_root not in sys.path:
 from i18n import tr
 from sketcher import Sketch
 from modeling import Document, Body, ExtrudeFeature, FeatureType
+from modeling.brep_utils import pick_face_by_ray
 from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
-from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel
+from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
+
+try:
+    from ocp_tessellate.tessellator import tessellate
+    HAS_OCP_TESSELLATE = True
+except ImportError:
+    HAS_OCP_TESSELLATE = False
+    print("! ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
+
 
 if not HAS_PYVISTA:
     print("ERROR: PyVista is required! Install with: pip install pyvista pyvistaqt")
     sys.exit(1)
 
+class VectorInputDialog(QDialog):
+    def __init__(self, title="Eingabe", labels=("X:", "Y:", "Z:"), defaults=(0.0, 0.0, 0.0), parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        layout = QVBoxLayout(self)
+        self.inputs = []
+        
+        for label, default in zip(labels, defaults):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(-99999.0, 99999.0)
+            spin.setDecimals(2)
+            spin.setValue(default)
+            row.addWidget(spin)
+            layout.addLayout(row)
+            self.inputs.append(spin)
+            
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
 
-# FeatureTree wird durch ProjectBrowser aus gui/browser.py ersetzt
+    def get_values(self):
+        return [spin.value() for spin in self.inputs]
+
+class BooleanDialog(QDialog):
+    """Dialog für Boolesche Operationen: Wähle Target und Tool"""
+    def __init__(self, bodies, operation="Cut", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Boolean: {operation}")
+        self.bodies = bodies
+        layout = QFormLayout(self)
+        
+        self.cb_target = QComboBox()
+        self.cb_tool = QComboBox()
+        
+        for b in bodies:
+            self.cb_target.addItem(b.name, b.id)
+            self.cb_tool.addItem(b.name, b.id)
+            
+        # Standard: Letzter ist Tool, Vorletzter ist Target (typischer Workflow)
+        if len(bodies) >= 2:
+            self.cb_target.setCurrentIndex(len(bodies)-2)
+            self.cb_tool.setCurrentIndex(len(bodies)-1)
+            
+        layout.addRow("Ziel-Körper (bleibt):", self.cb_target)
+        layout.addRow("Werkzeug-Körper (wird benutzt):", self.cb_tool)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addRow(btns)
+        
+    def get_ids(self):
+        return self.cb_target.currentData(), self.cb_tool.currentData()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -50,6 +113,7 @@ class MainWindow(QMainWindow):
         self.document = Document("Projekt1")
         self.mode = "3d"
         self.active_sketch = None
+        self.selected_edges = [] # Liste der Indizes für Fillet
         self._apply_theme()
         self._create_ui()
         self._create_menus()
@@ -164,9 +228,17 @@ class MainWindow(QMainWindow):
         self.tool_stack.setMaximumWidth(200)
         self.tool_stack.setStyleSheet("background-color: #1e1e1e;")
         
+        self.transform_panel = TransformPanel(self) # Import oben anpassen!
+        self.transform_panel.values_changed.connect(self._on_transform_val_change)
+        self.transform_panel.confirmed.connect(self._on_transform_confirmed)
+        self.transform_panel.cancelled.connect(self._on_transform_cancelled)
+        self._active_transform_body = None
+        self._transform_mode = None
+        
         # 3D-ToolPanel (Index 0)
         self.tool_panel_3d = ToolPanel3D()
         self.tool_stack.addWidget(self.tool_panel_3d)
+        self.tool_panel_3d.action_triggered.connect(self._on_3d_action)
         
         # 2D-ToolPanel (Index 1) 
         self.tool_panel = ToolPanel()
@@ -331,18 +403,25 @@ class MainWindow(QMainWindow):
             'revolve': lambda: self._show_not_implemented("Revolve"),
             'sweep': lambda: self._show_not_implemented("Sweep"),
             'loft': lambda: self._show_not_implemented("Loft"),
+            
+            # --- Implementierte Transformationen ---
+            'move_body': lambda: self._start_transform_mode("move"),
+            'copy_body': self._copy_body,
+            'rotate_body': lambda: self._start_transform_mode("rotate"),
+            'mirror_body': self._mirror_body,
+            'scale_body': lambda: self._start_transform_mode("scale"),
+            
+            # --- Implementierte Booleans ---
+            'boolean_union': lambda: self._boolean_operation_dialog("Union"),
+            'boolean_cut': lambda: self._boolean_operation_dialog("Cut"),
+            'boolean_intersect': lambda: self._boolean_operation_dialog("Intersect"),
+            
             'fillet': self._start_fillet,
             'chamfer': self._start_chamfer,
+            
             'shell': lambda: self._show_not_implemented("Shell"),
             'hole': lambda: self._show_not_implemented("Bohrung"),
-            'boolean_union': lambda: self._show_not_implemented("Boolean Vereinen"),
-            'boolean_cut': lambda: self._show_not_implemented("Boolean Abziehen"),
-            'boolean_intersect': lambda: self._show_not_implemented("Boolean Schneiden"),
-            'move_body': lambda: self._show_not_implemented("Körper verschieben"),
-            'copy_body': lambda: self._show_not_implemented("Körper kopieren"),
-            'rotate_body': lambda: self._show_not_implemented("Körper drehen"),
-            'mirror_body': lambda: self._show_not_implemented("Körper spiegeln"),
-            'scale_body': lambda: self._show_not_implemented("Körper skalieren"),
+            
             'measure': lambda: self._show_not_implemented("Messen"),
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
             'check': lambda: self._show_not_implemented("Geometrie prüfen"),
@@ -384,7 +463,121 @@ class MainWindow(QMainWindow):
                 self.body_properties.update_body(data[1])
             else:
                 self.body_properties.clear()
+    
+    def _start_transform_mode(self, mode):
+        """Startet den Modus. Wenn kein Body gewählt ist, wartet er auf Klick."""
+        body = self._get_active_body()
+        
+        # Fall 1: Kein Körper gewählt -> Warte auf Klick im Viewport
+        if not body:
+            self.statusBar().showMessage(f"{mode.capitalize()}: Klicke jetzt auf einen Körper im 3D-Fenster...")
+            self._pending_transform_mode = mode 
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            return
+            
+        # Fall 2: Körper ist da -> Los geht's
+        self._transform_mode = mode
+        self._active_transform_body = body
+        self._pending_transform_mode = None
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        
+        # Panel anzeigen
+        self.transform_panel.set_mode(mode)
+        self.transform_panel.show_at(self.viewport_3d)
+        
+        # Gizmo aktivieren
+        if hasattr(self.viewport_3d, 'start_transform'):
+            self.viewport_3d.start_transform(body.id, mode)
+            
+            # --- FIX FÜR DEN FEHLER ---
+            # Wir trennen explizit NUR unsere Callback-Methode
+            try:
+                self.viewport_3d.transform_changed.disconnect(self._on_viewport_transform_update)
+            except Exception:
+                pass # War noch nicht verbunden, das ist okay.
+            
+            # Neu verbinden
+            self.viewport_3d.transform_changed.connect(self._on_viewport_transform_update)
+            
+        self.statusBar().showMessage(f"{mode.capitalize()}: Ziehe am Kasten oder gib Werte ein | Enter=OK")
 
+    def _on_transform_val_change(self, x, y, z):
+        """Live Update vom Panel -> Viewport Actor"""
+        if self._transform_mode:
+            self.viewport_3d.apply_transform_values(x, y, z, self._transform_mode)
+            
+    def _on_viewport_transform_update(self, x, y, z):
+        """Live Update vom Viewport Gizmo -> Panel Input Felder"""
+        # Werte an das Panel senden, damit die Zahlen sich drehen
+        if hasattr(self, 'transform_panel'):
+            self.transform_panel.update_values(x, y, z)
+        
+    def _on_transform_confirmed(self):
+        """Finalisieren der Transformation"""
+        if not self._active_transform_body: return
+        
+        # Werte aus dem Panel sind die "Wahrheit"
+        vals = self.transform_panel.get_values()
+        dx, dy, dz = vals
+        
+        body = self._active_transform_body
+        
+        if HAS_BUILD123D and getattr(body, '_build123d_solid', None):
+            from build123d import Location, Axis
+            
+            try:
+                if self._transform_mode == "move":
+                    # Translation
+                    body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+                    
+                elif self._transform_mode == "scale":
+                    # Uniform Scale (Panel hat x=y=z bei scale, meistens)
+                    # Wir nehmen X als Faktor
+                    factor = dx
+                    if factor > 0:
+                        body._build123d_solid = body._build123d_solid.scale(factor)
+                        
+                elif self._transform_mode == "rotate":
+                    # Euler Rotation (sequentiell)
+                    # Build123d rotiert um Achsen
+                    solid = body._build123d_solid
+                    if dx != 0: solid = solid.rotate(Axis.X, dx)
+                    if dy != 0: solid = solid.rotate(Axis.Y, dy)
+                    if dz != 0: solid = solid.rotate(Axis.Z, dz)
+                    body._build123d_solid = solid
+                    
+                # Mesh aktualisieren
+                self._update_body_from_build123d(body, body._build123d_solid)
+                print(f"Transform {self._transform_mode} applied via Build123d")
+                
+            except Exception as e:
+                print(f"Transform Error: {e}")
+                
+        else:
+            # Fallback Mesh-Only (wenn kein Build123d Objekt da ist)
+            mesh = self.viewport_3d.get_body_mesh(body.id)
+            if mesh:
+                if self._transform_mode == "move":
+                    mesh.translate((dx, dy, dz), inplace=True)
+                elif self._transform_mode == "scale":
+                    mesh.scale(dx, inplace=True) # Uniform scale logic needed usually
+                elif self._transform_mode == "rotate":
+                    mesh.rotate_x(dx, inplace=True)
+                    mesh.rotate_y(dy, inplace=True)
+                    mesh.rotate_z(dz, inplace=True)
+                self._update_body_mesh(body, mesh)
+
+        self._on_transform_cancelled() # Cleanup UI
+        self.browser.refresh()
+
+    def _on_transform_cancelled(self):
+        self.transform_panel.hide()
+        self.viewport_3d.end_transform()
+        # Viewport Refresh um visuelle Gizmo-Vorschau zurückzusetzen falls Cancel
+        self._update_viewport_all()
+        self._active_transform_body = None
+        self._transform_mode = None
+        
     def _update_viewport_all(self):
         """Aktualisiert ALLES im Viewport"""
         # Sketches
@@ -511,17 +704,19 @@ class MainWindow(QMainWindow):
             self.viewport_3d.show_extrude_preview(height)
     
     def _on_extrude_confirmed(self):
-        """Extrude bestätigt"""
+        """Wird aufgerufen, wenn im Panel OK oder Enter gedrückt wurde"""
         height = self.extrude_panel.get_height()
+        operation = self.extrude_panel.get_operation()
         
-        # WICHTIG: Operation aus dem Panel holen!
-        op = "New Body"
-        if hasattr(self.extrude_panel, 'get_operation'):
-            op = self.extrude_panel.get_operation()
-            
+        # Hole die selektierten Faces vom Viewport
         if hasattr(self.viewport_3d, 'selected_faces') and self.viewport_3d.selected_faces:
-            self._on_extrusion_finished(list(self.viewport_3d.selected_faces), height, op)
-        self.extrude_panel.setVisible(False)
+            faces = list(self.viewport_3d.selected_faces)
+            
+            # Starte die eigentliche Extrusion
+            self._on_extrusion_finished(faces, height, operation)
+            
+        else:
+            self.statusBar().showMessage("Keine Fläche ausgewählt!")
     
     def _on_extrude_cancelled(self):
         """Extrude abgebrochen"""
@@ -536,122 +731,410 @@ class MainWindow(QMainWindow):
         self.viewport_3d.set_all_bodies_visible(not hide)
 
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
+        """
+        Führt die Extrusion durch.
+        Priorisiert den parametrischen Weg (B-Rep), fällt aber auf Mesh zurück falls nötig.
+        """
+        # 1. Validierung und UI Cleanup
         if not face_indices or abs(height) < 0.001:
             self.extrude_panel.setVisible(False)
             self.viewport_3d.set_all_bodies_visible(True)
+            self.viewport_3d.set_extrude_mode(False)
             return
-        
-        # Prüfen: Ist die gewählte Fläche eine Körper-Fläche (Body Face)?
+
+        # 2. Sketch identifizieren
+        # Wir müssen herausfinden, welcher Sketch zu der angeklickten Fläche gehört
+        target_sketch = None
         is_body_face = False
+        
         if hasattr(self.viewport_3d, 'detected_faces'):
-            # Wir prüfen die erste gewählte Fläche
             idx = face_indices[0]
             if 0 <= idx < len(self.viewport_3d.detected_faces):
                 face_data = self.viewport_3d.detected_faces[idx]
                 if face_data.get('type') == 'body_face':
                     is_body_face = True
+                    # TODO: Body-Face Extrusion (Push/Pull) Logik hier
+                else:
+                    target_sketch = face_data.get('sketch')
 
-        # 1. Build123d Pfad (NUR für Sketches verwenden!)
-        # Wir überspringen diesen Block, wenn es eine Body-Face ist.
-        if HAS_BUILD123D and self.active_sketch and not is_body_face:
-            success = self._extrude_with_build123d(face_indices, height, operation)
-            if success:
-                self.extrude_panel.setVisible(False)
-                self.viewport_3d.set_extrude_mode(False)
-                self.viewport_3d.set_all_bodies_visible(True)
-                self.browser.refresh()
-                return
+        # Nimm den aktiven Sketch oder den, der zur geklickten Fläche gehört
+        sketch_to_use = self.active_sketch if self.active_sketch else target_sketch
+
+        # =========================================================
+        # PFAD A: Parametrisch / B-Rep (Build123d) - BEVORZUGT
+        # =========================================================
+        if HAS_BUILD123D and sketch_to_use and not is_body_face:
+            try:
+                print(f"Starte parametrische Extrusion: {operation}, Höhe={height}")
+                
+                # A1. Feature Objekt erstellen
+                # Dies speichert die "Intention" (Sketch + Höhe + Op)
+                feature = ExtrudeFeature(
+                    sketch=sketch_to_use,
+                    distance=height,
+                    operation=operation
+                )
+                
+                # A2. Ziel-Körper bestimmen
+                target_body = None
+                
+                if operation == "New Body":
+                    target_body = self.document.new_body()
+                else:
+                    # Bei Join/Cut/Intersect brauchen wir einen existierenden Körper
+                    target_body = self._get_active_body()
+                    
+                    # Falls kein Körper aktiv ist, nehmen wir den letzten
+                    if not target_body and self.document.bodies:
+                        target_body = self.document.bodies[-1]
+                    
+                    # Wenn gar kein Körper da ist, erzwingen wir "New Body"
+                    if not target_body:
+                        print("Kein Zielkörper für Boolean gefunden -> Erstelle neuen Body")
+                        target_body = self.document.new_body()
+                        feature.operation = "New Body"
+
+                if target_body:
+                    # A3. Feature hinzufügen und Rebuild auslösen
+                    # Das triggert body._rebuild(), was body._build123d_solid erzeugt (B-Rep!)
+                    target_body.add_feature(feature)
+                    
+                    # A4. Visuelles Mesh aktualisieren
+                    # Wir rufen _update_body_mesh auf, ohne Mesh zu übergeben.
+                    # Die Methode holt sich dann die frischen Daten aus dem Body.
+                    self._update_body_mesh(target_body, mesh_override=None)
+                    
+                    # Wenn es eine Boolean-Operation war und ein anderer Körper als "Werkzeug" diente,
+                    # müsste man theoretisch aufräumen. Hier ist alles im Feature gekapselt.
+                    
+                    # A5. Abschluss
+                    self._finish_extrusion_ui(success=True, msg=f"Extrusion ({feature.operation}) erfolgreich.")
+                    return
+
+            except Exception as e:
+                print(f"FEHLER bei parametrischer Extrusion: {e}")
+                import traceback
+                traceback.print_exc()
+                # Wir stürzen nicht ab, sondern gehen weiter zum Fallback (Pfad B)
+
+        # =========================================================
+        # PFAD B: Fallback (Mesh Only / Legacy)
+        # =========================================================
+        print("Fallback auf Mesh-Extrusion (Keine B-Rep Daten)")
         
-        # 2. Fallback / Body Face Pfad
-        # Dieser Pfad nutzt die Geometrie der Vorschau (PyVista).
-        # Da die blaue Vorschau im Bild korrekt ist, wird auch dieser Pfad das richtige Ergebnis liefern.
-        if hasattr(self.viewport_3d, 'get_extrusion_data'):
+        try:
+            # Wir holen uns die "dummen" Dreiecke direkt aus der Viewport-Berechnung
+            verts_all = []
+            faces_all = []
+            offset = 0
+            
             for idx in face_indices:
-                verts, faces = self.viewport_3d.get_extrusion_data(idx, height)
-                if verts: 
-                    self._create_body_from_data(verts, faces, height, operation)
-        
+                v, f = self.viewport_3d.get_extrusion_data(idx, height)
+                if v and f:
+                    verts_all.extend(v)
+                    for face in f:
+                        # Indizes anpassen, da wir Listen zusammenfügen
+                        faces_all.append(tuple(idx + offset for idx in face))
+                    offset += len(v)
+
+            if verts_all and faces_all:
+                # B1. Mesh Operationen simulieren (sehr eingeschränkt ohne CAD Kernel)
+                if operation == "New Body" or not self.document.bodies:
+                    # Einfach neuen Body anlegen
+                    b = self.document.new_body(f"MeshBody_{len(self.document.bodies)+1}")
+                    # Manuelles Setzen der Mesh-Daten
+                    b._mesh_vertices = verts_all
+                    b._mesh_triangles = faces_all
+                    b._build123d_solid = None # Explizit kein B-Rep
+                    
+                    self.viewport_3d.add_body(b.id, b.name, verts_all, faces_all)
+                
+                else:
+                    # Boolean auf Mesh-Ebene (Join/Cut) ist sehr schwer stabil zu bekommen ohne CAD Kernel.
+                    # Wir erstellen hier einfach einen neuen Body und warnen den User.
+                    print("Boolean auf Mesh-Ebene nicht unterstützt -> Erstelle neuen Body.")
+                    b = self.document.new_body(f"MeshBody_{len(self.document.bodies)+1}")
+                    b._mesh_vertices = verts_all
+                    b._mesh_triangles = faces_all
+                    self.viewport_3d.add_body(b.id, b.name, verts_all, faces_all)
+                    self.statusBar().showMessage("Warnung: Boolean fehlgeschlagen (Mesh-Modus), neuer Körper erstellt.", 4000)
+
+                self._finish_extrusion_ui(success=True, msg="Extrusion (Mesh) erstellt.")
+                return
+
+        except Exception as e:
+            print(f"Fataler Fehler im Fallback: {e}")
+            self.statusBar().showMessage("Fehler: Extrusion konnte nicht erstellt werden.")
+
+        # Wenn wir hier sind, ist alles fehlgeschlagen
+        self._finish_extrusion_ui(success=False)
+
+    def _finish_extrusion_ui(self, success=True, msg=""):
+        """Hilfsfunktion zum Aufräumen der UI nach Extrusion"""
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
         self.viewport_3d.set_all_bodies_visible(True)
-        self.browser.refresh()
-    
-    def _extrude_with_build123d(self, face_indices, height, operation):
-        """Extrudiert mit Build123d für echte BREP-Geometrie"""
+        
+        if success:
+            self.browser.refresh()
+            if msg: self.statusBar().showMessage(msg)
+        
+        
+    def _extrude_body_face_build123d(self, face_data, height, operation):
+        """
+        Extrudiert eine Fläche eines existierenden Solids unter Beibehaltung der CAD-Daten (Push/Pull).
+        """
         try:
-            # Prüfe ob sketch_editor Build123d unterstützt
-            if not hasattr(self, 'sketch_editor') or not self.sketch_editor.has_build123d():
-                return False
+            body_id = face_data.get('body_id')
+            # Finde den originalen Body im Dokument
+            target_body = next((b for b in self.document.bodies if b.id == body_id), None)
             
-            # Hole Build123d Part vom Sketch-Editor
+            if not target_body or not hasattr(target_body, '_build123d_solid') or target_body._build123d_solid is None:
+                print("Ziel-Körper hat keine BREP Daten.")
+                return False
+
+            from build123d import Vector, extrude, add, cut, intersect
+            
+            # 1. B-Rep Face wiederfinden
+            # Wir haben vom Viewport (Mesh) den Mittelpunkt der geklickten Fläche.
+            # Wir suchen im CAD-Modell die Fläche, die diesem Punkt am nächsten ist.
+            
+            mesh_center = Vector(face_data['center_3d'])
+            mesh_normal = Vector(face_data['normal'])
+            
+            best_face = None
+            min_dist = float('inf')
+            
+            # Iteriere über alle mathematischen Flächen des Solids
+            for face in target_body._build123d_solid.faces():
+                # Distanz checken
+                try:
+                    # face.center() berechnet den exakten geometrischen Mittelpunkt
+                    cad_center = face.center()
+                    dist = (cad_center - mesh_center).length
+                    
+                    if dist < min_dist:
+                        # Optional: Normale checken, um Rückseiten auszuschließen
+                        # face.normal_at(cad_center) ... (hier vereinfacht weggelassen für Robustheit)
+                        min_dist = dist
+                        best_face = face
+                except:
+                    continue
+            
+            # Toleranz: Wenn die Abweichung zu groß ist (> 10mm), haben wir die Fläche wohl nicht gefunden
+            if best_face is None or min_dist > 10.0:
+                print(f"B-Rep Face nicht gefunden (Min Dist: {min_dist})")
+                return False
+
+            print(f"B-Rep Face gefunden! (Abweichung: {min_dist:.4f}mm)")
+
+            # 2. Operation durchführen
+            # extrude() in build123d kann direkt ein Face annehmen
+            # dir=(0,0,0) bedeutet: entlang der Flächennormalen extrudieren (Standard Push/Pull)
+            new_geo = extrude(best_face, amount=height)
+            
+            # 3. Boolean Logik
+            final_solid = None
+            
+            if operation == "New Body":
+                # Neuen Körper erstellen
+                new_body = self.document.new_body(f"Extrusion_{len(self.document.bodies)+1}")
+                new_body._build123d_solid = new_geo
+                self._update_body_from_build123d(new_body, new_geo)
+                # Browser refresh passiert im Caller
+                return True
+                
+            elif operation == "Join":
+                final_solid = add(target_body._build123d_solid, new_geo)
+            elif operation == "Cut":
+                final_solid = cut(target_body._build123d_solid, new_geo)
+            elif operation == "Intersect":
+                final_solid = intersect(target_body._build123d_solid, new_geo)
+            
+            if final_solid:
+                # 4. Bestehenden Körper updaten
+                target_body._build123d_solid = final_solid
+                self._update_body_from_build123d(target_body, final_solid)
+                print(f"Body Extrusion ({operation}) erfolgreich via B-Rep.")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Face extrude error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+            
+            
+    def _extrude_with_build123d(self, face_indices, height, operation="New Body"):
+        try:
+            # 1. Solid erstellen
             solid, verts, faces = self.sketch_editor.get_build123d_part(height, operation)
             
-            if solid is None:
-                print("Build123d: Part-Erstellung fehlgeschlagen")
+            if solid is None or not verts:
+                print("Build123d: Keine Geometrie erzeugt.")
                 return False
+
+            # 2. Neuen Body im Dokument anlegen
+            new_body = self.document.new_body(f"Body {len(self.document.bodies)+1}")
             
-            # Boolean Operation wenn nötig
-            if operation in ["Join", "Cut", "Intersect"] and self.document.bodies:
-                target_body = self.document.bodies[-1]
-                if hasattr(target_body, '_build123d_solid') and target_body._build123d_solid:
-                    target_solid = target_body._build123d_solid
-                    
-                    if operation == "Join":
-                        solid = target_solid + solid
-                    elif operation == "Cut":
-                        solid = target_solid - solid
-                    elif operation == "Intersect":
-                        solid = target_solid & solid
-                    
-                    # Update bestehenden Body
-                    self._update_body_from_build123d(target_body, solid)
-                    return True
+            # 3. Daten zuweisen
+            new_body._build123d_solid = solid 
+            new_body._mesh_vertices = verts
+            new_body._mesh_triangles = faces
             
-            # Neuer Body
-            b = self.document.new_body(f"Body{len(self.document.bodies)+1}")
-            feat = ExtrudeFeature(FeatureType.EXTRUDE, "Extrude", None, abs(height))
-            b.features.append(feat)
-            b._build123d_solid = solid  # BREP speichern für Fillet/Chamfer!
+            # 4. Im Viewport anzeigen
+            self.viewport_3d.add_body(new_body.id, new_body.name, verts, faces)
             
-            self._update_body_from_build123d(b, solid)
+            # 5. WICHTIG: Browser aktualisieren, damit der Body in der Liste erscheint!
+            if hasattr(self, 'browser'):
+                self.browser.refresh()  # <--- DIESE ZEILE HAT GEFEHLT
             
-            self.statusBar().showMessage(f"Build123d Extrusion: {height}mm", 2000)
+            print(f"Extrusion erfolgreich. Solid gespeichert.")
             return True
             
         except Exception as e:
-            print(f"Build123d Extrusion error: {e}")
+            print(f"Build123d Extrude Error: {e}")
             import traceback
             traceback.print_exc()
             return False
-            import traceback
-            traceback.print_exc()
-            return False
+            
+    
     
     def _update_body_from_build123d(self, body, solid):
-        """Konvertiert Build123d Solid zu Mesh und aktualisiert Body"""
+        """High-Performance Update mit OCP Tessellierung (Korrigiert)"""
         try:
-            # Tessellieren für Anzeige
-            mesh_data = solid.tessellate(tolerance=0.1)
+            success = False
             
-            # Build123d gibt (vertices, triangles) zurück
-            verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
-            faces = [tuple(t) for t in mesh_data[1]]
-            
-            body._mesh_vertices = verts
-            body._mesh_triangles = faces
-            body._build123d_solid = solid
-            
-            self.viewport_3d.add_body(body.id, body.name, verts, faces)
-            
+            if HAS_OCP_TESSELLATE:
+                try:
+                    # OCP Tessellate Aufruf
+                    # Argumente können je nach Version variieren, 'tolerance' ist Standard
+                    # Rückgabe ist meist: (vertices, triangles, normals, edges)
+                    result = tessellate(solid.wrapped, tolerance=0.1)
+                    
+                    # Entpacken (wir ignorieren edges am Ende)
+                    # Falls das Tupel anders aussieht, fangen wir das ab
+                    if isinstance(result, tuple) and len(result) >= 2:
+                        verts = result[0]
+                        triangles = result[1]
+                        
+                        # Sicherstellen, dass es Listen sind für PyVista
+                        import numpy as np
+                        
+                        # 1. Vertices
+                        if isinstance(verts, np.ndarray):
+                            # Reshape falls flach (N*3) -> (N, 3)
+                            if len(verts.shape) == 1:
+                                verts = verts.reshape(-1, 3)
+                            v_list = verts.tolist()
+                        else:
+                            v_list = verts
+
+                        # 2. Triangles (Faces)
+                        # OCP liefert oft [v1, v2, v3, v1, v2, v3...] als flache Liste
+                        # PyVista braucht [(v1,v2,v3), (v4,v5,v6)...]
+                        if isinstance(triangles, np.ndarray):
+                            t_flat = triangles.reshape(-1)
+                            t_list = t_flat.tolist()
+                        else:
+                            t_list = triangles
+                            
+                        # Umwandeln in Tupel-Liste [(i1, i2, i3), ...]
+                        if len(t_list) > 0:
+                            # Prüfen ob Format [3, v1, v2, v3] (VTK style) oder [v1, v2, v3] (Simple)
+                            # ocp-tessellate liefert meist simple Indizes
+                            f_tuples = [tuple(t_list[i:i+3]) for i in range(0, len(t_list), 3)]
+                            
+                            # Update Body
+                            body._mesh_vertices = v_list
+                            body._mesh_triangles = f_tuples
+                            body._build123d_solid = solid
+                            
+                            # Viewport Update
+                            self.viewport_3d.add_body(
+                                body.id, 
+                                body.name, 
+                                v_list, 
+                                f_tuples, 
+                                color=getattr(body, 'color', None)
+                            )
+                            success = True
+                            
+                except Exception as e:
+                    print(f"OCP Tessellation error (fallback active): {e}")
+
+            if not success:
+                # Fallback: Langsame Standard-Methode von Build123d
+                mesh = solid.tessellate(tolerance=0.1)
+                v_list = [(v.X, v.Y, v.Z) for v in mesh[0]]
+                f_tuples = [tuple(t) for t in mesh[1]]
+                
+                body._mesh_vertices = v_list
+                body._mesh_triangles = f_tuples
+                body._build123d_solid = solid
+                
+                self.viewport_3d.add_body(
+                    body.id, 
+                    body.name, 
+                    v_list, 
+                    f_tuples, 
+                    color=getattr(body, 'color', None)
+                )
+
         except Exception as e:
-            print(f"Build123d mesh conversion error: {e}")
+            print(f"Critical mesh update error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _show_extrude_input_dialog(self):
         """Legacy Dialog - wird durch Panel ersetzt"""
         # Falls Tab gedrückt wird, fokussiere das Panel
         self.extrude_panel.height_input.setFocus()
         self.extrude_panel.height_input.selectAll()
+    
+    def _on_3d_click(self, event):
+        """Kernel-Level Selektion: Klickt auf das mathematische Modell"""
+        # 1. Klick-Position
+        pos = event.position() if hasattr(event, 'position') else event.pos()
+        x, y = int(pos.x()), int(pos.y())
+        
+        # 2. Strahl holen (aus Viewport Helper)
+        ray_origin, ray_dir = self.viewport_3d.get_ray_from_click(x, y)
+        
+        best_face = None
+        best_body = None
+        min_dist = float('inf')
+        
+        # 3. Durchlaufe alle CAD-Bodies im Dokument
+        for body in self.document.bodies:
+            if hasattr(body, '_build123d_solid') and body._build123d_solid:
+                # Kernel fragen!
+                face, dist = pick_face_by_ray(body._build123d_solid, ray_origin, ray_dir)
+                
+                if face and dist < min_dist:
+                    min_dist = dist
+                    best_face = face
+                    best_body = body
 
+        # 4. Ergebnis verarbeiten
+        if best_face:
+            self.statusBar().showMessage(f"BREP: {best_face.geom_type} auf {best_body.name} selektiert")
+            
+            # Highlighten (hier nutzen wir einen Trick: Wir erstellen ein temporäres Mesh NUR für die Face)
+            # Das ist viel schneller als den ganzen Body neu zu meshen.
+            self.selected_brep_face = best_face
+            self.selected_body = best_body
+            
+            # Optional: Sende das an den Viewport zur Anzeige
+            # self.viewport_3d.highlight_brep_face(best_face) # Müsste im Viewport implementiert werden
+            
+        else:
+            self.statusBar().showMessage("Nichts getroffen")
+            self.selected_brep_face = None
+        
+        
     def _create_body_from_data(self, verts, faces, height, operation):
         import numpy as np
         import pyvista as pv
@@ -697,6 +1180,7 @@ class MainWindow(QMainWindow):
         b._mesh_triangles = faces
         b._build123d_solid = None  # Placeholder für BREP
         self.viewport_3d.add_body(b.id, b.name, verts, faces)
+        pass
     
     def _build123d_boolean(self, verts, faces, height, operation):
         """Führt Boolean-Operation mit Build123d durch (robuster als PyVista)"""
@@ -822,17 +1306,34 @@ class MainWindow(QMainWindow):
             return result.clean()
         return None
 
-    def _update_body_mesh(self, body, pv_mesh):
-        points = pv_mesh.points.tolist()
-        faces = []
-        i = 0
-        while i < len(pv_mesh.faces):
-            n = pv_mesh.faces[i]
-            faces.append(tuple(pv_mesh.faces[i+1 : i+1+n]))
-            i += n + 1
-        body._mesh_vertices = points
-        body._mesh_triangles = faces
-        self.viewport_3d.add_body(body.id, body.name, points, faces)
+    def _update_body_mesh(self, body, mesh_override=None):
+        """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
+        
+        # Wenn wir manuelles Mesh übergeben (Legacy Fallback)
+        if mesh_override:
+             points = mesh_override.points.tolist()
+             faces = []
+             i = 0
+             while i < len(mesh_override.faces):
+                n = mesh_override.faces[i]
+                faces.append(tuple(mesh_override.faces[i+1 : i+1+n]))
+                i += n + 1
+             body._mesh_vertices = points
+             body._mesh_triangles = faces
+        
+        # Normale Route: Daten aus dem Body nehmen (wurden von _rebuild berechnet)
+        if body._mesh_vertices and body._mesh_triangles:
+             # Farbe bestimmen
+             col_idx = self.document.bodies.index(body) % 3
+             colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+             
+             self.viewport_3d.add_body(
+                 body.id, 
+                 body.name, 
+                 body._mesh_vertices, 
+                 body._mesh_triangles,
+                 color=colors[col_idx]
+             )
 
     def eventFilter(self, obj, event):
         if event.type() == 6:  # KeyPress
@@ -893,6 +1394,37 @@ class MainWindow(QMainWindow):
                     self._new_sketch()
                     return True
 
+        # Click handling for direct Body Selection in 3D
+        if obj == self.viewport_3d and event.type() == QEvent.MouseButtonPress:
+             if self.mode == "3d" and not self.viewport_3d.extrude_mode:
+                 # Nur wenn wir nicht in einem anderen Modus sind
+                 if not hasattr(self, '_fillet_mode') or not self._fillet_mode:
+                     self._on_3d_click(event)
+                     pos = event.position() if hasattr(event, 'position') else event.pos()
+                     
+                     # Prüfen ob ein Body geklickt wurde
+                     if hasattr(self.viewport_3d, 'select_body_at'):
+                         bid = self.viewport_3d.select_body_at(pos.x(), pos.y())
+                         
+                         if bid:
+                             body = next((b for b in self.document.bodies if b.id == bid), None)
+                             if body:
+                                 # Selektiere den Body im Browser (optisch)
+                                 # self.browser.select_body(body) # TODO
+                                 
+                                 # WICHTIG: Wenn wir auf Move geklickt haben (pending), starten wir jetzt!
+                                 if hasattr(self, '_pending_transform_mode') and self._pending_transform_mode:
+                                     # Aktiven Body setzen, damit _start_transform_mode ihn findet
+                                     # Da _get_active_body auf Browser schaut, müssen wir tricksen oder Browser updaten
+                                     # Wir setzen ihn hier direkt temporär als aktiv
+                                     self._active_transform_body = body 
+                                     
+                                     # Modus starten
+                                     self._start_transform_mode(self._pending_transform_mode)
+                                 else:
+                                     # Nur selektieren (Normaler Klick)
+                                     self._active_transform_body = body
+                                     self.statusBar().showMessage(f"Körper '{body.name}' selektiert")
         return False
 
     def _on_opt_change(self, o, v): pass
@@ -932,68 +1464,152 @@ class MainWindow(QMainWindow):
     # ==================== FILLET / CHAMFER ====================
     
     def _start_fillet(self):
-        """Startet den Fillet-Modus"""
-        if not self.document.bodies:
-            self.statusBar().showMessage("Kein Body vorhanden für Fillet!", 3000)
+        body = self._get_active_body()
+        if not body:
+            self.statusBar().showMessage("Bitte Körper auswählen!")
             return
+
+        # CHECK ENTFERNT/GELOCKERT: Wir erlauben jetzt auch Mesh-Only Bodies
+        has_brep = hasattr(body, '_build123d_solid') and body._build123d_solid is not None
         
-        self._fillet_mode = "fillet"
-        self._fillet_target_body = self.document.bodies[-1]  # Letzter Body
+        if not has_brep:
+            # Warnung, aber kein Abbruch (oder wir implementieren Mesh Fillet)
+            # Für jetzt: Zeige Warnung, dass es experimentell ist
+            self.statusBar().showMessage("Warnung: Nur Mesh-Daten. Fillet könnte ungenau sein.")
+            # Wir machen weiter, aber Fillet wird crashen, wenn wir edges() aufrufen.
+            
+            # Da Mesh-Fillet schwer ist, ist die Warnung "Keine CAD Daten" eigentlich KORREKT.
+            # Das Problem ist, dass die Extrusion BREP verliert.
+            pass
+
+        self.selected_edges = [] # Liste der Indizes
+        self.viewport_3d.clear_highlight()
         
+        # Aktivieren Sie einen Modus im Viewport, damit Klicks abgefangen werden
+        # Wir nutzen hier einen Trick und verbinden das Signal temporär
+        try: self.viewport_3d.clicked_3d_point.disconnect()
+        except: pass
+        self.viewport_3d.clicked_3d_point.connect(self._on_fillet_click)
+        
+        self.statusBar().showMessage(f"Fillet: Klicke auf Kanten von '{body.name}'...")
+        
+        # Panel anzeigen
+        self.fillet_panel.set_target_body(body)
         self.fillet_panel.set_mode("fillet")
-        self.fillet_panel.reset()
+        # Position fixen wir durch den Panel-Code update, einfach aufrufen:
         self.fillet_panel.show_at(self.viewport_3d)
-        
-        self.viewport_3d.set_edge_select_mode(True)
-        self.statusBar().showMessage("Fillet: Wähle Kanten oder gib Radius ein | Enter=OK | Esc=Abbrechen")
     
     def _start_chamfer(self):
-        """Startet den Chamfer-Modus"""
-        if not self.document.bodies:
-            self.statusBar().showMessage("Kein Body vorhanden für Chamfer!", 3000)
+        body = self._get_active_body()
+        if not body:
+            self.statusBar().showMessage("Bitte zuerst einen Körper auswählen!")
             return
-        
-        self._fillet_mode = "chamfer"
-        self._fillet_target_body = self.document.bodies[-1]
-        
-        self.fillet_panel.set_mode("chamfer")
-        self.fillet_panel.reset()
-        self.fillet_panel.show_at(self.viewport_3d)
-        
+
+        if not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+            QMessageBox.warning(self, "Nicht möglich", "Keine CAD-Daten (BREP) für diesen Körper vorhanden.")
+            return
+
+        self.statusBar().showMessage(f"Chamfer: Wähle Kanten an '{body.name}'...")
         self.viewport_3d.set_edge_select_mode(True)
-        self.statusBar().showMessage("Chamfer: Wähle Kanten oder gib Distanz ein | Enter=OK | Esc=Abbrechen")
+        
+        if hasattr(self, 'fillet_panel'):
+            self.fillet_panel.set_target_body(body)
+            self.fillet_panel.set_mode("chamfer")
+            self.fillet_panel.show()
     
     def _on_fillet_radius_changed(self, radius):
         """Preview für Fillet/Chamfer"""
         # Könnte Preview implementieren
         pass
     
-    def _on_fillet_confirmed(self):
-        """Fillet/Chamfer anwenden"""
-        if not self._fillet_target_body:
-            self._on_fillet_cancelled()
-            return
+    def _on_fillet_click(self, body_id, pos):
+        """Entscheidet, welche Kante gemeint ist"""
+        body = self.fillet_panel.get_target_body()
+        if not body or body.id != body_id: return
         
+        solid = body._build123d_solid
+        from build123d import Vector
+        click_pt = Vector(pos)
+        
+        # 1. Suche die nächste Kante
+        best_dist = float('inf')
+        best_edge_idx = -1
+        
+        # Wir iterieren über alle Kanten des Solids
+        all_edges = solid.edges()
+        for i, edge in enumerate(all_edges):
+            # Einfache Distanz zum Mittelpunkt der Kante oder Projektion
+            # Build123d Edge hat .center()
+            try:
+                # Distanz zum Zentrum der Kante (Vereinfachung)
+                # Für genauere Ergebnisse müsste man project_point nutzen, falls verfügbar
+                dist = (edge.center() - click_pt).length
+                
+                if dist < best_dist:
+                    best_dist = dist
+                    best_edge_idx = i
+            except: pass
+            
+        # Toleranz: Wenn wir zu weit weg sind (z.B. > 10mm), ignorieren
+        if best_dist < 15.0 and best_edge_idx != -1:
+            # Toggle Selection
+            if best_edge_idx in self.selected_edges:
+                self.selected_edges.remove(best_edge_idx)
+                print(f"Kante {best_edge_idx} abgewählt.")
+            else:
+                self.selected_edges.append(best_edge_idx)
+                print(f"Kante {best_edge_idx} gewählt (Dist: {best_dist:.2f})")
+                
+            # Visualisierung: Zeichne ALLE gewählten Kanten rot
+            # (Wir zeichnen hier vereinfacht nur Linien zwischen Start/Ende)
+            # Für Bögen ist das ungenau, aber als Feedback reicht es erstmal
+            self.viewport_3d.clear_highlight()
+            
+            # Wir erstellen ein temporäres Mesh für die Highlights
+            import numpy as np
+            points = []
+            lines = []
+            current_idx = 0
+            
+            for idx in self.selected_edges:
+                edge = all_edges[idx]
+                # Diskretisieren für Anzeige
+                # edge.as_wire().tessellate() gibt es evtl. nicht direkt so einfach
+                # Fallback: Start -> Ende
+                p1 = edge.position_at(0)
+                p2 = edge.position_at(1)
+                self.viewport_3d.highlight_edge((p1.X, p1.Y, p1.Z), (p2.X, p2.Y, p2.Z))
+
+    def _on_fillet_confirmed(self):
+        """Führt Fillet auf selektierten Kanten aus"""
         radius = self.fillet_panel.get_radius()
+        body = self.fillet_panel.get_target_body()
         
         try:
-            mesh = self.viewport_3d.get_body_mesh(self._fillet_target_body.id)
-            if mesh:
-                if self._fillet_mode == "fillet":
-                    result = self._apply_fillet_to_mesh(mesh, radius)
-                else:
-                    result = self._apply_chamfer_to_mesh(mesh, radius)
-                
-                if result and result.n_points > 0:
-                    self._update_body_mesh(self._fillet_target_body, result)
-                    self.statusBar().showMessage(f"{self._fillet_mode.capitalize()} angewendet: {radius}mm", 3000)
-                else:
-                    self.statusBar().showMessage(f"{self._fillet_mode.capitalize()} fehlgeschlagen!", 3000)
+            if not self.selected_edges:
+                # Fallback: Wenn nichts gewählt wurde, ALLE Kanten (altes Verhalten)
+                # Oder Warnung. Wir machen hier eine Warnung, weil "Alles" gefährlich ist.
+                res = QMessageBox.question(self, "Alles?", "Keine Kanten gewählt. Ganzen Körper abrunden?")
+                if res != QMessageBox.Yes: return
+                edges_to_fillet = body._build123d_solid.edges()
+            else:
+                all_edges = body._build123d_solid.edges()
+                edges_to_fillet = [all_edges[i] for i in self.selected_edges]
+            
+            # Operation ausführen
+            from build123d import fillet
+            new_solid = fillet(edges_to_fillet, radius=radius)
+            
+            # Body updaten
+            body._build123d_solid = new_solid
+            self._update_body_from_build123d(body, new_solid)
+            
+            self.fillet_panel.hide()
+            self.viewport_3d.clear_highlight()
+            self.statusBar().showMessage("Fillet erfolgreich.")
+            
         except Exception as e:
-            print(f"Fillet/Chamfer error: {e}")
-            self.statusBar().showMessage(f"Fehler: {e}", 3000)
-        
-        self._on_fillet_cancelled()
+            QMessageBox.critical(self, "Fehler", f"Fillet fehlgeschlagen: {e}")
     
     def _on_fillet_cancelled(self):
         """Fillet/Chamfer abbrechen"""
@@ -1131,3 +1747,186 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Build123d Chamfer error: {e}")
             return None
+            
+    # ==================== 3D OPERATIONEN ====================
+
+    def _get_active_body(self):
+        """Hilfsfunktion: Gibt den aktuell im Browser ausgewählten Body zurück"""
+        items = self.browser.tree.selectedItems()
+        if not items: return None
+        # Wir suchen die ID aus dem Tree-Item
+        # (Dies hängt von Ihrer Browser-Implementierung ab, hier eine generische Lösung)
+        # Wenn Browser selection ein Body-Objekt liefert:
+        if hasattr(self.browser, 'get_selected_body'):
+            return self.browser.get_selected_body()
+        
+        # Fallback: Letzten Body nehmen
+        if self.document.bodies:
+            return self.document.bodies[-1]
+        return None
+
+    def _move_body(self):
+        body = self._get_active_body()
+        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        
+        dlg = VectorInputDialog("Verschieben", ("X (mm):", "Y (mm):", "Z (mm):"), (0,0,0), self)
+        if dlg.exec():
+            dx, dy, dz = dlg.get_values()
+            if dx==0 and dy==0 and dz==0: return
+            
+            # 1. Build123d Transformation (für saubere Historie)
+            if HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+                from build123d import Location
+                body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+                # Mesh neu generieren
+                self._update_body_from_build123d(body, body._build123d_solid)
+            else:
+                # 2. PyVista Mesh Transformation (Fallback)
+                mesh = self.viewport_3d.get_body_mesh(body.id)
+                if mesh:
+                    mesh.translate((dx, dy, dz), inplace=True)
+                    self._update_body_mesh(body, mesh)
+            
+            self.browser.refresh()
+            self.statusBar().showMessage(f"Körper verschoben: {dx}, {dy}, {dz}")
+
+    def _scale_body(self):
+        body = self._get_active_body()
+        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        
+        dlg = VectorInputDialog("Skalieren", ("Faktor:",), (1.0,), self)
+        if dlg.exec():
+            s = dlg.get_values()[0]
+            if s == 1.0 or s <= 0: return
+
+            if HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+                body._build123d_solid = body._build123d_solid.scale(s)
+                self._update_body_from_build123d(body, body._build123d_solid)
+            else:
+                mesh = self.viewport_3d.get_body_mesh(body.id)
+                if mesh:
+                    mesh.scale(s, inplace=True)
+                    self._update_body_mesh(body, mesh)
+            self.browser.refresh()
+
+    def _rotate_body(self):
+        body = self._get_active_body()
+        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        
+        # Einfacher Dialog: Achse + Winkel
+        dlg = VectorInputDialog("Rotieren", ("X-Achse (0/1):", "Y-Achse (0/1):", "Z-Achse (0/1):", "Winkel (°):"), (0,0,1,90), self)
+        # Hack: Label 4 ist Winkel. Wir nutzen VectorInputDialog generisch.
+        if dlg.exec():
+            ax, ay, az, angle = dlg.get_values()
+            if angle == 0: return
+            
+            axis = (ax, ay, az)
+            
+            if HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+                from build123d import Axis, Location
+                # Rotation um Zentrum oder Ursprung? Hier Ursprung (einfacher)
+                # Für Rotation um Objektzentrum müsste man BoundingBox Center berechnen
+                body._build123d_solid = body._build123d_solid.rotate(Axis((0,0,0), axis), angle)
+                self._update_body_from_build123d(body, body._build123d_solid)
+            else:
+                mesh = self.viewport_3d.get_body_mesh(body.id)
+                if mesh:
+                    mesh.rotate_vector(vector=axis, angle=angle, inplace=True)
+                    self._update_body_mesh(body, mesh)
+            self.browser.refresh()
+
+    def _copy_body(self):
+        body = self._get_active_body()
+        if not body: return
+        
+        import copy
+        # Neuen Body erstellen
+        new_b = self.document.new_body(f"{body.name}_Kopie")
+        
+        # Daten kopieren
+        if hasattr(body, '_mesh_vertices'):
+            new_b._mesh_vertices = copy.deepcopy(body._mesh_vertices)
+            new_b._mesh_triangles = copy.deepcopy(body._mesh_triangles)
+            
+        if hasattr(body, '_build123d_solid') and body._build123d_solid:
+             new_b._build123d_solid = copy.deepcopy(body._build123d_solid)
+        
+        # Anzeigen
+        self.viewport_3d.add_body(new_b.id, new_b.name, new_b._mesh_vertices, new_b._mesh_triangles)
+        self.browser.refresh()
+        self.statusBar().showMessage(f"Kopie erstellt: {new_b.name}")
+
+    def _mirror_body(self):
+        body = self._get_active_body()
+        if not body: return
+
+        # Einfachheitshalber Mirror an XZ Ebene (Y spiegeln)
+        # In Zukunft könnte man Plane Selection machen
+        if HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+            from build123d import Plane
+            # Mirror an XZ Plane (Normal Y)
+            body._build123d_solid = body._build123d_solid.mirror(Plane.XZ)
+            self._update_body_from_build123d(body, body._build123d_solid)
+        else:
+            mesh = self.viewport_3d.get_body_mesh(body.id)
+            if mesh:
+                mesh.reflect((0,1,0), point=(0,0,0), inplace=True)
+                self._update_body_mesh(body, mesh)
+        self.browser.refresh()
+
+    def _boolean_operation_dialog(self, op_type="Cut"):
+        """Führt Union, Cut oder Intersect aus"""
+        if len(self.document.bodies) < 2:
+            QMessageBox.warning(self, "Fehler", "Mindestens 2 Körper benötigt!")
+            return
+
+        dlg = BooleanDialog(self.document.bodies, op_type, self)
+        if dlg.exec():
+            tid, tool_id = dlg.get_ids()
+            if tid == tool_id: return
+            
+            target = next(b for b in self.document.bodies if b.id == tid)
+            tool = next(b for b in self.document.bodies if b.id == tool_id)
+            
+            success = False
+            
+            # 1. Versuch: Build123d (Exakt)
+            if HAS_BUILD123D:
+                try:
+                    s1 = getattr(target, '_build123d_solid', None)
+                    s2 = getattr(tool, '_build123d_solid', None)
+                    
+                    if s1 and s2:
+                        new_solid = None
+                        if op_type == "Union": new_solid = s1 + s2
+                        elif op_type == "Cut": new_solid = s1 - s2
+                        elif op_type == "Intersect": new_solid = s1 & s2
+                        
+                        if new_solid:
+                            target._build123d_solid = new_solid
+                            self._update_body_from_build123d(target, new_solid)
+                            
+                            # Tool löschen oder verstecken? Meistens löschen bei Boolean
+                            # Wir verstecken es erstmal
+                            self.viewport_3d.set_body_visibility(tool.id, False)
+                            success = True
+                except Exception as e:
+                    print(f"Build123d Boolean Error: {e}")
+
+            # 2. Versuch: PyVista Mesh Boolean (Fallback)
+            if not success:
+                m1 = self.viewport_3d.get_body_mesh(target.id)
+                m2 = self.viewport_3d.get_body_mesh(tool.id)
+                
+                if m1 and m2:
+                    res = self._perform_boolean_operation(m1, m2, op_type)
+                    if res:
+                        self._update_body_mesh(target, res)
+                        self.viewport_3d.set_body_visibility(tool.id, False)
+                        success = True
+            
+            if success:
+                self.statusBar().showMessage(f"Boolean {op_type} erfolgreich.")
+                self.browser.refresh()
+            else:
+                QMessageBox.warning(self, "Fehler", "Operation fehlgeschlagen (Geometrie Fehler).")

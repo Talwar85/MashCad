@@ -20,6 +20,7 @@ import sys
 import os
 import numpy as np                  
 
+
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -959,26 +960,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     # ==================== BUILD123D INTEGRATION ====================
     
     def get_build123d_plane(self):
-        """
-        Gibt die Build123d Plane zurück.
-        WICHTIG: Nutzt x_dir um Rotation um die Normale zu verhindern!
-        """
-        if not HAS_BUILD123D:
-            return None
-        
-        # Hole gespeicherte Daten vom Sketch
+        """Sichere Methode um die Plane zu holen"""
+        if not HAS_BUILD123D: return None
         origin = getattr(self.sketch, 'plane_origin', (0, 0, 0))
         normal = getattr(self.sketch, 'plane_normal', (0, 0, 1))
-        
-        # WICHTIG: Die X-Richtung muss auch übereinstimmen!
-        # Wenn wir nur z_dir angeben, rät build123d die x_dir, was zu Rotationen führt.
-        x_dir = getattr(self.sketch, 'plane_x_dir', None)
-        
-        if x_dir:
-            return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
-        else:
-            # Fallback, falls x_dir noch nicht gesetzt wurde (sollte vermieden werden)
-            return Plane(origin=origin, z_dir=normal)
+        x_dir = getattr(self.sketch, 'plane_x_dir', None) # Kann None sein!
+
+        try:
+            if x_dir:
+                return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
+            else:
+                # Fallback: Build123d rät die X-Richtung
+                return Plane(origin=origin, z_dir=normal)
+        except Exception:
+            # Fallback bei mathematischen Fehlern (z.B. Vektoren parallel)
+            return Plane.XY
     
     def get_build123d_sketch(self, plane=None):
         """
@@ -1050,66 +1046,66 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def get_build123d_part(self, height: float, operation: str = "New Body"):
         """
-        Erstellt ein extrudiertes Build123d Part aus dem Sketch.
+        Extrudiert den Sketch. Fängt Fehler ab und liefert None zurück, 
+        statt abzustürzen.
         """
         if not HAS_BUILD123D:
-            print("Build123d nicht verfügbar!")
             return None, None, None
         
-        # Stelle sicher dass Profile aktuell sind
+        # 1. Zwingend Profile neu berechnen (das repariert oft das "kaputte" Rechteck)
         self._find_closed_profiles()
         
+        if not self.closed_profiles:
+            print("Keine geschlossenen Profile gefunden.")
+            return None, None, None
+            
         plane = self.get_build123d_plane()
         
         try:
             solid = None
             
-            # 1. Versuche Extrusion aus geschlossenen Profilen (Polygonen)
-            if self.closed_profiles:
-                with BuildPart() as part:
-                    with BuildSketch(plane):
-                        for p_type, p_data in self.closed_profiles:
-                            if p_type == 'polygon':
-                                # Shapely Polygon -> Build123d Polygon
-                                coords = list(p_data.exterior.coords)
-                                # Letzten Punkt entfernen (Shapely schließt Start/Ende, build123d macht das selbst)
-                                pts = [(float(c[0]), float(c[1])) for c in coords[:-1]]
+            with BuildPart() as part:
+                with BuildSketch(plane):
+                    created_any = False
+                    for p_type, p_data in self.closed_profiles:
+                        # Fall 1: Polygon
+                        if p_type == 'polygon':
+                            coords = list(p_data.exterior.coords)
+                            # Duplikate entfernen und zu Floats konvertieren
+                            pts = [(float(c[0]), float(c[1])) for c in coords]
+                            if len(pts) > 0 and pts[0] == pts[-1]:
+                                pts.pop() # Letzten Punkt weg, wenn doppelt
+                            
+                            if len(pts) >= 3:
+                                Polygon(*pts, align=None)
+                                created_any = True
                                 
-                                if len(pts) >= 3:
-                                    # Liste entpacken mit *
-                                    Polygon(*pts, align=None)
-                                    
-                                    # Löcher behandeln (Interiors)
-                                    if hasattr(p_data, 'interiors'):
-                                        for interior in p_data.interiors:
-                                            hole_coords = list(interior.coords)
-                                            hole_pts = [(float(c[0]), float(c[1])) for c in hole_coords[:-1]]
-                                            if len(hole_pts) >= 3:
-                                                with Mode.SUBTRACT:
-                                                    Polygon(*hole_pts, align=None)
+                                # Löcher (Interiors)
+                                if hasattr(p_data, 'interiors'):
+                                    for interior in p_data.interiors:
+                                        hole_coords = list(interior.coords)
+                                        h_pts = [(float(c[0]), float(c[1])) for c in hole_coords]
+                                        if len(h_pts)>0 and h_pts[0]==h_pts[-1]: h_pts.pop()
+                                        
+                                        if len(h_pts) >= 3:
+                                            with Mode.SUBTRACT:
+                                                Polygon(*h_pts, align=None)
 
-                            elif p_type == 'circle':
-                                with Locations((p_data.center.x, p_data.center.y)):
-                                    B3DCircle(radius=p_data.radius)
-                        
-                        # WICHTIG: make_face() WURDE ENTFERNT
-                        # Polygon() und Circle() erstellen die Faces automatisch.
-                        # Ein erneuter Aufruf von make_face() führt zum Crash, da keine losen Linien da sind.
+                        # Fall 2: Kreis
+                        elif p_type == 'circle':
+                            with Locations((p_data.center.x, p_data.center.y)):
+                                B3DCircle(radius=p_data.radius)
+                            created_any = True
 
-                    # Extrudieren
+                # Nur extrudieren, wenn Sketch-Elemente da sind
+                if created_any:
                     extrude(amount=height)
-                
-                solid = part.part
-
-            # 2. Fallback: Wenn keine Profile gefunden, versuche "Direct Mode"
-            if solid is None:
-                # Hier der Fallback Code (Rechteck-Erkennung etc.), falls vorhanden
-                pass
-
+                    solid = part.part
+            
             if solid is None:
                 return None, None, None
 
-            # Mesh generieren für PyVista Anzeige
+            # Mesh generieren
             mesh_data = solid.tessellate(tolerance=0.05)
             verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
             faces = [tuple(t) for t in mesh_data[1]]
@@ -1117,9 +1113,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return solid, verts, faces
             
         except Exception as e:
-            print(f"Build123d Part Erstellung fehlgeschlagen: {e}")
-            import traceback
-            traceback.print_exc()
+            # Statt GUI-Absturz nur Log-Ausgabe
+            print(f"Extrude Fehler (abgefangen): {e}")
             return None, None, None
     
     def _build123d_direct(self, height: float, plane):

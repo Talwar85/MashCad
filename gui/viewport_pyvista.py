@@ -6,6 +6,7 @@ COMPLETE BUILD: FXAA, Matte Look, Robust Picking, No crashes
 import math
 import numpy as np
 from typing import Optional, List, Tuple, Dict, Any
+import uuid
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -67,6 +68,8 @@ class PyVistaViewport(QWidget):
     extrude_requested = Signal(list, float, str)
     height_changed = Signal(float)
     face_selected = Signal(int)
+    transform_changed = Signal(float, float, float) # sendet delta während drag
+    clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,6 +98,7 @@ class PyVistaViewport(QWidget):
         # Modes
         self.plane_select_mode = False
         self.extrude_mode = False
+        self.edge_select_mode = False
         self.extrude_height = 0.0
         self.is_dragging = False
         self.drag_start_pos = QPoint()
@@ -109,6 +113,10 @@ class PyVistaViewport(QWidget):
         self.last_highlighted_plane = None
         
         self.setFocusPolicy(Qt.StrongFocus)
+        
+        self.transform_actor = None # Der Actor der gerade transformiert wird
+        self.transform_widget = None # Das Gizmo
+        self.original_matrix = None # Zum Zurücksetzen
     
     def _setup_ui(self):
         # Direktes Layout ohne zusätzlichen Frame
@@ -212,7 +220,189 @@ class PyVistaViewport(QWidget):
             
         # WICHTIG: Dies hat gefehlt!
         return tuple(x_dir), tuple(y_dir)
-    
+        
+    def start_transform(self, body_id, mode="move"):
+        """Aktiviert das Transformations-Gizmo (Box Widget) mit Callback"""
+        import vtk
+        
+        self.clear_highlight()
+        self.end_transform() 
+        
+        if body_id not in self._body_actors: return
+        mesh_name, _ = self._body_actors[body_id]
+        
+        actor = self.plotter.renderer.actors.get(mesh_name)
+        if not actor: return
+        
+        self.transform_actor = actor
+        self._transform_start_matrix = vtk.vtkMatrix4x4()
+        self.transform_actor.GetMatrix(self._transform_start_matrix)
+        
+        bounds = actor.GetBounds()
+        self._transform_mode = mode
+
+        # Widget hinzufügen mit Observer
+        if mode == "move":
+            self.transform_widget = self.plotter.add_box_widget(
+                actor, 
+                bounds=bounds,
+                rotation_enabled=False
+            )
+        elif mode == "rotate":
+            self.transform_widget = self.plotter.add_box_widget(
+                actor, 
+                bounds=bounds, 
+                rotation_enabled=True
+            )
+        elif mode == "scale":
+            self.transform_widget = self.plotter.add_box_widget(
+                actor, 
+                bounds=bounds,
+                rotation_enabled=False
+            )
+        
+        # Callback registrieren für Live-Updates
+        self.transform_widget.AddObserver('InteractionEvent', self._on_widget_transform)
+        self.plotter.render()
+        
+        
+    def select_body_at(self, x, y):
+        """Gibt die ID des Körpers unter der Maus zurück"""
+        import vtk
+        # Wir nutzen einen CellPicker für Präzision
+        picker = vtk.vtkCellPicker()
+        # Y-Koordinate in VTK ist invertiert (von unten nach oben)
+        picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+        actor = picker.GetActor()
+        
+        if actor:
+            # Suche, zu welcher Body-ID dieser Actor gehört
+            for bid, (name, _) in self._body_actors.items():
+                if self.plotter.renderer.actors.get(name) == actor:
+                    return bid
+        return None
+        
+    def end_transform(self):
+        """Entfernt das Gizmo und säubert den Status"""
+        try:
+            self.plotter.disable_box_widget()
+            self.plotter.clear_box_widgets()
+        except: pass
+        self.transform_actor = None
+        self.transform_widget = None
+        
+    def highlight_edge(self, p1, p2):
+        """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""
+        import uuid
+        import pyvista as pv
+        
+        # Linie erstellen
+        line = pv.Line(p1, p2)
+        
+        # Eindeutigen Namen generieren, damit wir mehrere Linien haben können
+        name = f"highlight_{uuid.uuid4()}"
+        
+        self.plotter.add_mesh(line, color='red', line_width=5, name=name)
+
+    def clear_highlight(self):
+        """Entfernt alle Highlight-Linien"""
+        # Suche alle Actors, die mit "highlight_" beginnen
+        to_remove = [name for name in self.plotter.renderer.actors.keys() if name.startswith("highlight_")]
+        
+        for name in to_remove:
+            self.plotter.remove_actor(name)
+            
+        # Zur Sicherheit Rendern
+        self.plotter.render()
+        
+    def apply_transform_values(self, x, y, z, mode):
+        """Wird vom Panel aufgerufen (Zahleneingabe) -> Bewegt Gizmo/Actor"""
+        if not self.transform_actor: return
+        import vtk
+
+        # Reset auf Start
+        self.transform_actor.SetUserMatrix(self._transform_start_matrix)
+        
+        if mode == "move":
+            # Neue Translation anwenden
+            self.transform_actor.AddPosition(x, y, z)
+            
+        elif mode == "scale":
+            # Scale anwenden
+            self.transform_actor.SetScale(x, y, z)
+            
+        elif mode == "rotate":
+            # Rotation anwenden (XYZ Euler)
+            self.transform_actor.RotateX(x)
+            self.transform_actor.RotateY(y)
+            self.transform_actor.RotateZ(z)
+
+        self.plotter.render()
+
+    def _on_widget_transform(self, widget, event):
+        """Callback wenn User am Gizmo zieht"""
+        if not self.transform_actor: return
+        
+        # Matrix des transformierten Actors holen (BoxWidget ändert den Actor direkt)
+        matrix = self.transform_actor.GetMatrix()
+        
+        # Delta berechnen basierend auf Modus
+        if self._transform_mode == "move":
+            # Translation extrahieren (Spalte 3)
+            tx = matrix.GetElement(0, 3)
+            ty = matrix.GetElement(1, 3)
+            tz = matrix.GetElement(2, 3)
+            
+            # Start Translation
+            sx = self._transform_start_matrix.GetElement(0, 3)
+            sy = self._transform_start_matrix.GetElement(1, 3)
+            sz = self._transform_start_matrix.GetElement(2, 3)
+            
+            # Delta senden
+            self.transform_changed.emit(tx - sx, ty - sy, tz - sz)
+            
+        elif self._transform_mode == "scale":
+            # Scale aus der Diagonalen der Matrix schätzen (grob)
+            # BoxWidget skaliert den Actor. 
+            # Wir nehmen scale factor relativ zum Start
+            
+            # Einfachheitshalber: Wir extrahieren Scale X aus (0,0) Element der Matrix
+            # Das ist nicht perfekt bei Rotation, aber für LiteCAD BoxWidget ok
+            current_scale_x = (matrix.GetElement(0,0)**2 + matrix.GetElement(0,1)**2 + matrix.GetElement(0,2)**2)**0.5
+            start_scale_x = (self._transform_start_matrix.GetElement(0,0)**2 + self._transform_start_matrix.GetElement(0,1)**2 + self._transform_start_matrix.GetElement(0,2)**2)**0.5
+            
+            if start_scale_x > 0.0001:
+                factor = current_scale_x / start_scale_x
+                self.transform_changed.emit(factor, factor, factor)
+
+    def get_current_transform_matrix(self):
+        """Gibt die aktuelle Matrix des transformierten Objekts zurück (für Apply)"""
+        if self.transform_actor:
+            vtk_mat = self.transform_actor.GetMatrix()
+            mat = []
+            for i in range(4):
+                row = []
+                for j in range(4):
+                    row.append(vtk_mat.GetElement(i, j))
+                mat.append(row)
+            return mat
+        return None
+        
+    def select_body_at(self, x, y):
+        """Picking Logik für Bodies"""
+        picker = self.plotter.renderer.GetPicker() # Standard picker
+        # Wir nutzen einen CellPicker für genauigkeit
+        import vtk
+        picker = vtk.vtkCellPicker()
+        picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+        actor = picker.GetActor()
+        
+        if actor:
+            for bid, (name, _) in self._body_actors.items():
+                if self.plotter.renderer.actors.get(name) == actor:
+                    return bid
+        return None
+        
     def _draw_grid(self, size=200, spacing=10):
         try: self.plotter.remove_actor('grid_main')
         except: pass
@@ -291,7 +481,11 @@ class PyVistaViewport(QWidget):
                     # Nichts getroffen? Kamera erlauben
                     self._is_potential_drag = False
                     return False
-                        
+                else:
+                    self._handle_3d_click(x, y)
+                    # Wir geben False zurück, damit PyVista Kamera-Steuerung noch geht,
+                    # es sei denn wir sind in einem speziellen Selection Mode
+                    return False       
         elif event.type() == QEvent.MouseMove:
             pos = event.position() if hasattr(event, 'position') else event.pos()
             x, y = int(pos.x()), int(pos.y())
@@ -367,7 +561,32 @@ class PyVistaViewport(QWidget):
                 
         return False
     
-    
+    def _handle_3d_click(self, x, y):
+        """Erkennt Klick auf 3D Körper und sendet Signal"""
+        if not self.bodies: return
+        
+        try:
+            # Benutze CellPicker für genaue 3D-Position auf der Oberfläche
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.005)
+            picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
+            
+            actor = picker.GetActor()
+            if actor:
+                # Finde Body ID
+                body_id = None
+                for bid, (mesh_name, _) in self._body_actors.items():
+                    if self.plotter.renderer.actors.get(mesh_name) == actor:
+                        body_id = bid
+                        break
+                
+                if body_id is not None:
+                    pos = picker.GetPickPosition()
+                    # Signal senden! (Das löst den Absturz)
+                    self.clicked_3d_point.emit(body_id, pos)
+        except Exception as e:
+            print(f"3D Click Error: {e}")
+            
     def _cache_drag_direction_for_face(self, face_idx):
         """Hilfsfunktion um Richtung basierend auf einem Face zu setzen"""
         if face_idx < 0 or face_idx >= len(self.detected_faces): return
@@ -818,7 +1037,32 @@ class PyVistaViewport(QWidget):
             self.plotter.update()
         except:
             pass
-    
+            
+    def get_ray_from_click(self, x, y):
+        """Berechnet Ursprung und Richtung für Raycasting an Pixel x,y"""
+        # PyVista Renderer nutzen
+        renderer = self.plotter.renderer
+        w, h = self.plotter.window_size
+        
+        # Invertiere Y (Qt vs VTK Koordinaten)
+        y_vtk = h - y
+        
+        # Startpunkt (Near Plane)
+        renderer.SetDisplayPoint(x, y_vtk, 0)
+        renderer.DisplayToWorld()
+        start = np.array(renderer.GetWorldPoint()[:3])
+        
+        # Endpunkt (Far Plane)
+        renderer.SetDisplayPoint(x, y_vtk, 1)
+        renderer.DisplayToWorld()
+        end = np.array(renderer.GetWorldPoint()[:3])
+        
+        # Richtung normalisieren
+        direction = end - start
+        direction = direction / np.linalg.norm(direction)
+        
+        return tuple(start), tuple(direction)
+        
     def _restore_body_colors(self):
         """Stellt Original-Farben aller Bodies wieder her"""
         for bid, (mesh_name, edge_name) in self._body_actors.items():
@@ -1271,7 +1515,7 @@ class PyVistaViewport(QWidget):
                 result.extend(self._extract_polygons(g))
             return result
         return []
-
+    
     def show_extrude_preview(self, height):
         self._clear_preview(); self.extrude_height = height
         
