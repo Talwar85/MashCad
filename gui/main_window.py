@@ -597,52 +597,75 @@ class MainWindow(QMainWindow):
         """Startet den Timer für das Update (Debounce)"""
         self._update_timer.start() # Reset timer if called again
         
+    # In Klasse MainWindow:
+
     def _update_viewport_all_impl(self):
         """Das eigentliche Update, wird vom Timer aufgerufen"""
+        if not HAS_PYVISTA: return
+
         # 1. Sketches updaten
         visible_sketches = self.browser.get_visible_sketches()
         self.viewport_3d.set_sketches(visible_sketches)
         
         # 2. Bodies updaten
-        # Wir löschen nicht alles (clear_bodies), da PyVista smart ist, 
-        # aber für den Anfang ist clear sicherer gegen Geisterobjekte.
         self.viewport_3d.clear_bodies()
         
         colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
-        
         visible_bodies = self.browser.get_visible_bodies()
         
         for i, (b, visible) in enumerate(visible_bodies):
             if not visible:
                 continue
 
-            # === NEUER PFAD: Prüfen auf VTK/PyVista Objekte ===
-            if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
-                # Hier übergeben wir direkt das PolyData Objekt!
-                self.viewport_3d.add_body(
-                    bid=b.id, 
-                    name=b.name, 
-                    mesh_obj=b.vtk_mesh,      # <--- Das ist neu
-                    edge_mesh_obj=b.vtk_edges, # <--- Das ist neu
-                    color=colors[i%3]
-                )
-                
-            # === LEGACY PFAD: Fallback für alte Listen (falls vtk_mesh fehlt) ===
-            elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
-                self.viewport_3d.add_body(
-                    bid=b.id, 
-                    name=b.name, 
-                    verts=b._mesh_vertices, 
-                    faces=b._mesh_triangles, 
-                    color=colors[i%3],
-                    normals=getattr(b, '_mesh_normals', None)
-                )
-        
+            try:
+                # Fall A: Vtk Cache vorhanden (Schnell & Modern)
+                if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
+                    self.viewport_3d.add_body(
+                        bid=b.id, 
+                        name=b.name, 
+                        mesh_obj=b.vtk_mesh, 
+                        edge_mesh_obj=b.vtk_edges, 
+                        color=colors[i%3]
+                    )
+                    
+                # Fall B: Fallback auf alte Listen (Legacy)
+                elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
+                    # FIX: Benannte Argumente (keywords) nutzen!
+                    # Verhindert, dass 'verts' in 'mesh_obj' landet.
+                    self.viewport_3d.add_body(
+                        bid=b.id, 
+                        name=b.name, 
+                        verts=b._mesh_vertices,     # <-- Keyword wichtig!
+                        faces=b._mesh_triangles,    # <-- Keyword wichtig!
+                        color=colors[i%3]
+                    )
+            except Exception as e:
+                print(f"Fehler beim Laden von Body {b.name}: {e}")
+
+        # Finales Rendering erzwingen
+        if hasattr(self.viewport_3d, 'plotter'):
+            self.viewport_3d.plotter.render()
         self.viewport_3d.update()
 
     def _update_viewport_all(self):
-        """Legacy Wrapper: Ruft sofortiges Update auf (wenn nötig) oder Trigger"""
-        self._trigger_viewport_update()  
+        """Aktualisiert ALLES im Viewport (Legacy Wrapper)"""
+        # Sketches
+        self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
+        
+        # Bodies - komplett neu laden
+        self.viewport_3d.clear_bodies()
+        colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+        
+        for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
+            if visible and hasattr(b, '_mesh_vertices') and b._mesh_vertices:
+                # FIX: Benannte Argumente verwenden!
+                self.viewport_3d.add_body(
+                    bid=b.id, 
+                    name=b.name, 
+                    verts=b._mesh_vertices,     # Explizit benennen
+                    faces=b._mesh_triangles,    # Explizit benennen
+                    color=colors[i%3]
+                ) 
         
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
@@ -943,15 +966,19 @@ class MainWindow(QMainWindow):
             self.sketch_editor.set_reference_bodies(bodies_data, normal, origin)
 
     def _finish_sketch(self):
-        # Body-Referenzen im SketchEditor löschen
+        """Beendet den Sketch-Modus und räumt auf."""
+        # Body-Referenzen im SketchEditor löschen (Ghost Bodies entfernen)
         if hasattr(self.sketch_editor, 'set_reference_bodies'):
             self.sketch_editor.set_reference_bodies([], (0,0,1), (0,0,0))
             
-        # WICHTIG: Aktiven Sketch zurücksetzen, damit im 3D-Modus 
-        # keine Verwechslung bei der Extrusion passiert!
         self.active_sketch = None
+        self._set_mode("3d")
         
-        self._set_mode("3d"); self.browser.refresh()
+        # Browser Refresh triggert Visibility-Check
+        self.browser.refresh()
+        
+        # WICHTIG: Explizit Update anstoßen für sauberen Statuswechsel
+        self._trigger_viewport_update()
 
     def _extrude_dialog(self):
         """Startet den Extrude-Modus mit sichtbarem Input-Panel"""
@@ -1328,7 +1355,12 @@ class MainWindow(QMainWindow):
         b._mesh_vertices = verts
         b._mesh_triangles = faces
         b._build123d_solid = None  # Placeholder für BREP
-        self.viewport_3d.add_body(b.id, b.name, verts, faces)
+        self.viewport_3d.add_body(
+            bid=b.id, 
+            name=b.name, 
+            verts=verts, 
+            faces=faces
+        )
         pass
     
     def _build123d_boolean(self, verts, faces, height, operation):

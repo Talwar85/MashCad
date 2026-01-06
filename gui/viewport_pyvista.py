@@ -1185,71 +1185,88 @@ class PyVistaViewport(QWidget):
 
     # In viewport_pyvista.py, Methode add_body anpassen:
 
+    # In Klasse PyVistaViewport:
+
     def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None, 
-                 # Legacy Parameter optional lassen für Abwärtskompatibilität:
                  verts=None, faces=None, normals=None, edges=None, edge_lines=None):
         """
         Fügt einen Körper hinzu. 
-        Optimiert: Akzeptiert direkt PyVista PolyData (mesh_obj).
+        FIX: Erkennt automatisch Legacy-Listen-Aufrufe und verhindert den 'point_data' Crash.
         """
-        print(f"Add Body {name}: MeshObj={mesh_obj is not None}, Verts={len(verts) if verts else 0}")
         if not HAS_PYVISTA: return
         
-        # 1. Cleanup alter Actors des Bodies
+        # === AUTO-FIX: Argumente verschieben ===
+        # Wenn main_window eine Liste als 3. Argument übergibt, landete sie in mesh_obj.
+        # Das verursacht den Absturz. Wir fangen das hier ab.
+        if isinstance(mesh_obj, list):
+            verts = mesh_obj          # Die Liste sind eigentlich Vertices
+            faces = edge_mesh_obj     # Das nächste Argument sind Faces
+            # mesh_obj muss None sein, damit wir unten in den richtigen Pfad (B) laufen
+            mesh_obj = None           
+            edge_mesh_obj = None
+
+        # Alten Actor entfernen (Cleanup)
         if bid in self._body_actors:
             for n in self._body_actors[bid]: 
                 try: self.plotter.remove_actor(n)
                 except: pass
         
         actors_list = []
-        
-        # Farbe
         if color is None: col_rgb = (0.6, 0.6, 0.8)
         elif isinstance(color, str): col_rgb = color
         else: col_rgb = tuple(color)
 
         try:
-            # === PFAD A: Optimierter Pfad (Direct PyVista Objects) ===
+            # === PFAD A: Modernes PyVista Objekt ===
             if mesh_obj is not None:
                 n_mesh = f"body_{bid}_m"
-                
-                # Wenn wir Normals haben, nutzen wir Gouraud Shading, sonst PBR
                 has_normals = "Normals" in mesh_obj.point_data
                 
-                self.plotter.add_mesh(
-                    mesh_obj, 
-                    color=col_rgb, 
-                    name=n_mesh, 
-                    show_edges=False, 
-                    smooth_shading=has_normals,
-                    pbr=not has_normals,  # PBR sieht gut aus, braucht aber Rechenleistung
-                    metallic=0.1, 
-                    roughness=0.6, 
-                    pickable=True
-                )
+                self.plotter.add_mesh(mesh_obj, color=col_rgb, name=n_mesh, show_edges=False, 
+                                      smooth_shading=has_normals, pbr=not has_normals, 
+                                      metallic=0.1, roughness=0.6, pickable=True)
+                
+                # Explizit sichtbar machen
+                if n_mesh in self.plotter.renderer.actors:
+                    self.plotter.renderer.actors[n_mesh].SetVisibility(True)
+                    
                 actors_list.append(n_mesh)
                 
                 if edge_mesh_obj is not None:
                     n_edge = f"body_{bid}_e"
-                    self.plotter.add_mesh(
-                        edge_mesh_obj, 
-                        color="black", 
-                        line_width=2, 
-                        name=n_edge, 
-                        pickable=False
-                    )
+                    self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
                     actors_list.append(n_edge)
                 
-                # Speichern für Picking
                 self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
 
-            # === PFAD B: Legacy Pfad (Raw Lists) ===
+            # === PFAD B: Legacy Listen (Verts/Faces) ===
             elif verts and faces:
-                # ... (Dein alter Code hier) ...
-                # Wichtig: Am Ende auch self.bodies[bid] setzen!
-                pass
+                import numpy as np
+                import pyvista as pv
+                v = np.array(verts, dtype=np.float32)
+                f = []
+                for face in faces: f.extend([len(face)] + list(face))
+                mesh = pv.PolyData(v, np.array(f, dtype=np.int32))
+                
+                if normals:
+                    try:
+                        n = np.array(normals, dtype=np.float32)
+                        if len(n) == len(v): mesh.point_data["Normals"] = n
+                    except: pass
+                
+                n_mesh = f"body_{bid}_m"
+                self.plotter.add_mesh(mesh, color=col_rgb, name=n_mesh, show_edges=False, smooth_shading=True, pickable=True)
+                
+                if n_mesh in self.plotter.renderer.actors:
+                    self.plotter.renderer.actors[n_mesh].SetVisibility(True)
+                    
+                actors_list.append(n_mesh)
+                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
                 
             self._body_actors[bid] = tuple(actors_list)
+            
+            # WICHTIG: Erzwinge Update direkt nach dem Hinzufügen
+            self.plotter.render()
             
         except Exception as e:
             print(f"Viewport Add Body Error: {e}")
