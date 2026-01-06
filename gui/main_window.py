@@ -261,6 +261,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         QApplication.instance().installEventFilter(self)
         self._set_mode("3d")
+        self.selection_mode = "all" 
         self.statusBar().showMessage(tr("Ready"))
         logger.info("Ready. PyVista & Build123d active.")
         
@@ -543,12 +544,20 @@ class MainWindow(QMainWindow):
         self._reposition_notifications()
     
     def _position_extrude_panel(self):
-        """Positioniert das Extrude-Panel am unteren Rand des Fensters"""
+        """Positioniert das Extrude-Panel am unteren Rand des Fensters, zentriert."""
         if hasattr(self, 'extrude_panel') and self.extrude_panel.isVisible():
-            panel_width = self.extrude_panel.width() if self.extrude_panel.width() > 100 else 320
-            x = (self.width() - panel_width) // 2
-            y = self.height() - 100
+            # Panel Größe holen (oder Standard annehmen)
+            pw = self.extrude_panel.width() if self.extrude_panel.width() > 10 else 320
+            ph = self.extrude_panel.height() if self.extrude_panel.height() > 10 else 150
+            
+            # Koordinaten berechnen (Relativ zum MainWindow)
+            # x = Mitte - halbe Panelbreite
+            x = (self.width() - pw) // 2
+            # y = Unten - Panelhöhe - etwas Abstand (z.B. 40px)
+            y = self.height() - ph - 40
+            
             self.extrude_panel.move(x, y)
+            self.extrude_panel.raise_() # Sicherstellen, dass es vorne ist
 
     def _create_toolbar(self):
         """Minimale Toolbar - nur Modus-Umschaltung"""
@@ -1113,20 +1122,28 @@ class MainWindow(QMainWindow):
         self._trigger_viewport_update()
 
     def _extrude_dialog(self):
-        """Startet den Extrude-Modus mit sichtbarem Input-Panel"""
-        self._update_detector()
+        """Startet den Extrude-Modus."""
+        # 1. Detector leeren und füllen
+        self._update_detector() 
+        
+        if not self.viewport_3d.detector.selection_faces:
+            self.statusBar().showMessage("Keine geschlossenen Flächen gefunden!", 3000)
+            return
+
+        # 2. Modus aktivieren
         self.viewport_3d.set_extrude_mode(True)
+        self.viewport_3d.set_selection_mode("face")
+        
+        # 3. Panel anzeigen
         self.extrude_panel.reset()
-        
-        # Panel unten mittig im Fenster positionieren
-        panel_width = self.extrude_panel.width() if self.extrude_panel.width() > 100 else 320
-        x = (self.width() - panel_width) // 2
-        y = self.height() - 100
-        self.extrude_panel.move(x, y)
         self.extrude_panel.setVisible(True)
-        self.extrude_panel.height_input.setFocus()
         
-        self.statusBar().showMessage(tr("Wähle Fläche und ziehe oder gib Höhe ein | Enter=OK | Esc=Abbrechen | F=Flip"))
+        # FIX PROBLEM 1: Panel Positionierung verzögern!
+        # Qt braucht ein paar Millisekunden, um die Breite des Panels zu berechnen.
+        # Ohne Timer ist width() oft 0 oder falsch, daher landet es oben.
+        QTimer.singleShot(10, self._position_extrude_panel)
+        
+        self.statusBar().showMessage("Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.")
 
     def _on_viewport_height_changed(self, h):
         """Wird aufgerufen wenn sich die Höhe durch Maus-Drag ändert"""
@@ -1161,30 +1178,49 @@ class MainWindow(QMainWindow):
         
     
     def _update_detector(self):
-        """Lädt alle relevanten Geometrien in den GeometryDetector des Viewports"""
-        if not hasattr(self.viewport_3d, 'detector') or self.viewport_3d.detector is None:
-            return
-
-        self.viewport_3d.detector.clear()
+        """
+        Lädt ALLE Geometrien in den Detector und gibt Debug-Infos aus.
+        """
+        if not hasattr(self.viewport_3d, 'detector'): return
         
-        # 1. Sichtbare Sketches verarbeiten
+        self.viewport_3d.detector.clear()
+        print("DEBUG: Detector Clear. Starte Sketch-Processing...")
+        
+        # A) Sketches verarbeiten
         visible_sketches = self.browser.get_visible_sketches()
-        for sketch, _ in visible_sketches:
-            plane = self._get_plane_from_sketch(sketch)
-            self.viewport_3d.detector.process_sketch(
-                sketch, 
-                tuple(plane.origin), 
-                tuple(plane.z_dir), 
-                tuple(plane.x_dir)
-            )
-            
-        # 2. Sichtbare Bodies verarbeiten (für Body-Face Selection / Push-Pull)
-        visible_bodies = self.browser.get_visible_bodies()
-        for body, _ in visible_bodies:
-            # Nutze bevorzugt das vtk_mesh für die schnelle Erkennung
-            mesh = getattr(body, 'vtk_mesh', None)
-            if mesh:
-                self.viewport_3d.detector.process_body_mesh(body.id, mesh)
+        if not visible_sketches:
+            print("DEBUG: Keine sichtbaren Sketches gefunden.")
+
+        for sketch, visible in visible_sketches:
+            if visible:
+                x_dir = getattr(sketch, 'plane_x_dir', None)
+                y_dir = getattr(sketch, 'plane_y_dir', None)
+                
+                # Fallback Berechnung falls Achsen fehlen (bei alten Projekten)
+                if x_dir is None:
+                     x_dir, y_dir = self.viewport_3d._calculate_plane_axes(sketch.plane_normal)
+                
+                print(f"DEBUG: Process Sketch '{sketch.name}' mit Normal {sketch.plane_normal}")
+                
+                self.viewport_3d.detector.process_sketch(
+                    sketch, 
+                    sketch.plane_origin, 
+                    sketch.plane_normal, 
+                    x_dir,
+                    y_dir 
+                )
+        
+        # B) Body-Flächen verarbeiten
+        for body in self.document.bodies:
+            if self.viewport_3d.is_body_visible(body.id):
+                mesh = self.viewport_3d.get_body_mesh(body.id)
+                if mesh:
+                    self.viewport_3d.detector.process_body_mesh(body.id, mesh)
+
+        count = len(self.viewport_3d.detector.selection_faces)
+        print(f"DEBUG: Detector Update fertig. {count} selektierbare Flächen gefunden.")
+        if count == 0:
+            self.statusBar().showMessage("Warnung: Keine geschlossenen Flächen erkannt!")
     
     def _get_plane_from_sketch(self, sketch):
         """Erstellt ein build123d Plane Objekt aus den Sketch-Metadaten"""
@@ -1197,53 +1233,78 @@ class MainWindow(QMainWindow):
     
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
         """Erstellt die finale Geometrie basierend auf der Auswahl im Detector"""
-        # 1. Sammle alle selektierten Face-Objekte vom Detector
-        selection_data = []
-        for fid in self.viewport_3d.selected_face_ids:
-            face = next((f for f in self.viewport_3d.detector.faces if f.id == fid), None)
-            if face: selection_data.append(face)
         
-        if not selection_data: 
-            self.statusBar().showMessage("Nichts selektiert.")
+        # FIX 1: Verhindere doppelte Ausführung (Panel Enter + Viewport Enter)
+        if getattr(self, '_is_processing_extrusion', False):
             return
+        self._is_processing_extrusion = True
 
-        # Fall A: Klassische Sketch-Extrusion
-        if selection_data[0].type == 'sketch':
-            try:
-                source_id = selection_data[0].sketch_id
-                target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
-                
-                feature = ExtrudeFeature(
-                    sketch=target_sketch,
-                    distance=height,
-                    operation=operation,
-                    precalculated_polys=[f.shapely_poly for f in selection_data]
-                )
-                
-                target_body = self._get_active_body()
-                if operation == "New Body" or not target_body:
-                    target_body = self.document.new_body()
-                
-                target_body.add_feature(feature)
-                self._update_body_mesh(target_body)
-                self._finish_extrusion_ui(msg=f"Extrusion auf {target_body.name} angewendet")
-            except Exception as e:
-                logger.error(f"Sketch Extrude Error: {e}")
-
-        # Fall B: Body-Face Extrusion (Push/Pull)
-        elif selection_data[0].type == 'body':
-            # Nutzt die bestehende Build123d Push/Pull Logik
-            # (Nimmt aktuell nur die erste selektierte Fläche für Push/Pull)
-            success = self._extrude_body_face_build123d({
-                'body_id': selection_data[0].body_id,
-                'center_3d': selection_data[0].center,
-                'normal': selection_data[0].plane_normal
-            }, height, operation)
+        try:
+            # 1. Daten sammeln
+            selection_data = []
+            for fid in self.viewport_3d.selected_face_ids:
+                face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == fid), None)
+                if face: selection_data.append(face)
             
-            if success:
-                self._finish_extrusion_ui(msg="Push/Pull erfolgreich angewendet")
-            else:
-                logger.error("Push/Pull fehlgeschlagen. Konvertiere Mesh evtl. erst zu BREP.")
+            if not selection_data: 
+                self.statusBar().showMessage("Nichts selektiert.")
+                return
+
+            first_face = selection_data[0]
+
+            # Fall A: Sketch-Extrusion
+            if first_face.domain_type.startswith('sketch'):
+                try:
+                    source_id = first_face.owner_id
+                    target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
+                    
+                    polys = [f.shapely_poly for f in selection_data]
+
+                    from modeling import ExtrudeFeature
+                    feature = ExtrudeFeature(
+                        sketch=target_sketch,
+                        distance=height,
+                        operation=operation,
+                        precalculated_polys=polys
+                    )
+                    
+                    target_body = self._get_active_body()
+                    if operation == "New Body" or not target_body:
+                        target_body = self.document.new_body()
+                    
+                    target_body.add_feature(feature)
+                    
+                    # Logik-Rebuild
+                    if hasattr(target_body, '_rebuild'):
+                        target_body._rebuild()
+                    
+                    # FIX 2: Visuelles Update erzwingen!
+                    # Ohne das hier weiß der Viewport nicht, dass es neue Dreiecke gibt.
+                    self._update_body_mesh(target_body)
+                    
+                    self._finish_extrusion_ui(msg=f"Extrusion erstellt: {target_body.name}")
+                except Exception as e:
+                    from loguru import logger
+                    logger.error(f"Sketch Extrude Error: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            # Fall B: Body-Face Extrusion (Push/Pull)
+            elif first_face.domain_type == 'body_face':
+                success = self._extrude_body_face_build123d({
+                    'body_id': first_face.owner_id,       
+                    'center_3d': first_face.plane_origin, 
+                    'normal': first_face.plane_normal
+                }, height, operation)
+                
+                if success:
+                    self._finish_extrusion_ui(msg="Push/Pull erfolgreich.")
+                else:
+                    self.statusBar().showMessage("Push/Pull fehlgeschlagen.")
+        
+        finally:
+            # Sperre wieder freigeben
+            self._is_processing_extrusion = False
 
     def _finish_extrusion_ui(self, success=True, msg=""):
         """Hilfsfunktion zum Aufräumen der UI"""
@@ -1415,44 +1476,53 @@ class MainWindow(QMainWindow):
         self.extrude_panel.height_input.selectAll()
     
     def _on_3d_click(self, event):
-        """Kernel-Level Selektion: Klickt auf das mathematische Modell"""
+        """CAD-Selection über GeometryDetector (Sketch + Body Faces)"""
+
         # 1. Klick-Position
         pos = event.position() if hasattr(event, 'position') else event.pos()
         x, y = int(pos.x()), int(pos.y())
-        
-        # 2. Strahl holen (aus Viewport Helper)
-        ray_origin, ray_dir = self.viewport_3d.get_ray_from_click(x, y)
-        
-        best_face = None
-        best_body = None
-        min_dist = float('inf')
-        
-        # 3. Durchlaufe alle CAD-Bodies im Dokument
-        for body in self.document.bodies:
-            if hasattr(body, '_build123d_solid') and body._build123d_solid:
-                # Kernel fragen!
-                face, dist = pick_face_by_ray(body._build123d_solid, ray_origin, ray_dir)
-                
-                if face and dist < min_dist:
-                    min_dist = dist
-                    best_face = face
-                    best_body = body
 
-        # 4. Ergebnis verarbeiten
-        if best_face:
-            self.statusBar().showMessage(f"BREP: {best_face.geom_type} auf {best_body.name} selektiert")
-            
-            # Highlighten (hier nutzen wir einen Trick: Wir erstellen ein temporäres Mesh NUR für die Face)
-            # Das ist viel schneller als den ganzen Body neu zu meshen.
-            self.selected_brep_face = best_face
-            self.selected_body = best_body
-            
-            # Optional: Sende das an den Viewport zur Anzeige
-            # self.viewport_3d.highlight_brep_face(best_face) # Müsste im Viewport implementiert werden
-            
+        # 2. Ray aus Viewport
+        ray_origin, ray_dir = self.viewport_3d.get_ray_from_click(x, y)
+
+        # 3. Selection-Mode an Viewport übergeben (wird dort in Filter übersetzt)
+        self.viewport_3d.set_selection_mode(self.selection_mode)
+
+        # 4. ZENTRALER CAD-Pick
+        face_id = self.viewport_3d.detector.pick(
+            ray_origin,
+            ray_dir,
+            selection_filter=self.viewport_3d.active_selection_filter
+        )
+
+        # 5. Ergebnis verarbeiten
+        if face_id != -1:
+            face = next(
+                (f for f in self.viewport_3d.detector.selection_faces if f.id == face_id),
+                None
+            )
+
+            if face:
+                self.statusBar().showMessage(
+                    f"Selection: {face.domain_type} ({face.owner_id})"
+                )
+
+                # Einheitliche Selection States
+                self.selected_face_id = face.id
+                self.selected_body = (
+                    self.document.get_body(face.owner_id)
+                    if face.domain_type == "body_face"
+                    else None
+                )
+
+                # Optional: Highlight im Viewport
+                self.viewport_3d.highlight_selection(face.id)
+
         else:
             self.statusBar().showMessage("Nichts getroffen")
-            self.selected_brep_face = None
+            self.selected_face_id = None
+            self.selected_body = None
+
         
         
     def _create_body_from_data(self, verts, faces, height, operation):
@@ -1679,99 +1749,48 @@ class MainWindow(QMainWindow):
              )
 
     def eventFilter(self, obj, event):
-        if event.type() == 6:  # KeyPress
+        from PySide6.QtCore import QEvent, Qt
+
+        if event.type() == QEvent.KeyPress:
             k = event.key()
-            
-            # Tab - fokussiert Input-Felder
-            if k == Qt.Key_Tab:
-                if self.mode == "sketch":
-                    self.sketch_editor.keyPressEvent(event)
+            if k == Qt.Key_E:
+                if not self.viewport_3d.extrude_mode:
+                    self._extrude_dialog()
+                return True
+                
+            # Selektions-Modi umschalten (Pipeline an Viewport senden)
+            if not getattr(self.viewport_3d, 'is_dragging', False):
+                if k == Qt.Key_1:
+                    self.selection_mode = "face"
+                    self.viewport_3d.set_selection_mode("face")
+                    self.statusBar().showMessage("Selektions-Filter: FLÄCHEN")
                     return True
-                if self.viewport_3d.extrude_mode:
-                    # Fokussiere das Extrude-Panel
-                    self.extrude_panel.height_input.setFocus()
-                    self.extrude_panel.height_input.selectAll()
+                elif k == Qt.Key_2:
+                    self.selection_mode = "hole"
+                    self.viewport_3d.set_selection_mode("hole")
+                    self.statusBar().showMessage("Selektions-Filter: LÖCHER")
                     return True
-            
-           
-            # Enter - bestätigt Extrusion (FIXED: Nutzt selected_face_ids vom Detector)
+                elif k == Qt.Key_3:
+                    self.selection_mode = "sketch"
+                    self.viewport_3d.set_selection_mode("sketch")
+                    self.statusBar().showMessage("Selektions-Filter: SKIZZE")
+                    return True
+
+            # Bestätigung für Extrude
             if k in (Qt.Key_Return, Qt.Key_Enter):
                 if self.viewport_3d.extrude_mode:
-                    # Wir prüfen den Detector im Viewport
-                    if self.viewport_3d.selected_face_ids:
-                        self._on_extrude_confirmed()
-                        return True
+                    self._on_extrude_confirmed()
+                    return True
             
-            # Escape - bricht ab
             if k == Qt.Key_Escape:
                 if self.viewport_3d.extrude_mode:
                     self._on_extrude_cancelled()
                     return True
-                elif self.viewport_3d.plane_select_mode:
-                    self.viewport_3d.set_plane_select_mode(False)
-                    return True
                 elif self.mode == "sketch":
                     self._finish_sketch()
                     return True
-            
-            # F - Flip Richtung im Extrude-Modus
-            if k == Qt.Key_F and self.viewport_3d.extrude_mode:
-                self.extrude_panel._flip_direction()
-                return True
-            
-            # Plane Selection Shortcuts
-            if self.viewport_3d.plane_select_mode:
-                if k in [Qt.Key_1, Qt.Key_T]:
-                    self._on_plane_selected('xy')
-                    return True
-                if k in [Qt.Key_2, Qt.Key_F]:
-                    self._on_plane_selected('xz')
-                    return True
-                if k in [Qt.Key_3, Qt.Key_R]:
-                    self._on_plane_selected('yz')
-                    return True
-            
-            # 3D Mode Shortcuts
-            if self.mode == "3d" and not self.viewport_3d.extrude_mode:
-                if k == Qt.Key_E:
-                    self._extrude_dialog()
-                    return True
-                if k == Qt.Key_S:
-                    self._new_sketch()
-                    return True
 
-        # Click handling for direct Body Selection in 3D
-        if obj == self.viewport_3d and event.type() == QEvent.MouseButtonPress:
-             if self.mode == "3d" and not self.viewport_3d.extrude_mode:
-                 # Nur wenn wir nicht in einem anderen Modus sind
-                 if not hasattr(self, '_fillet_mode') or not self._fillet_mode:
-                     self._on_3d_click(event)
-                     pos = event.position() if hasattr(event, 'position') else event.pos()
-                     
-                     # Prüfen ob ein Body geklickt wurde
-                     if hasattr(self.viewport_3d, 'select_body_at'):
-                         bid = self.viewport_3d.select_body_at(pos.x(), pos.y())
-                         
-                         if bid:
-                             body = next((b for b in self.document.bodies if b.id == bid), None)
-                             if body:
-                                 # Selektiere den Body im Browser (optisch)
-                                 # self.browser.select_body(body) # TODO
-                                 
-                                 # WICHTIG: Wenn wir auf Move geklickt haben (pending), starten wir jetzt!
-                                 if hasattr(self, '_pending_transform_mode') and self._pending_transform_mode:
-                                     # Aktiven Body setzen, damit _start_transform_mode ihn findet
-                                     # Da _get_active_body auf Browser schaut, müssen wir tricksen oder Browser updaten
-                                     # Wir setzen ihn hier direkt temporär als aktiv
-                                     self._active_transform_body = body 
-                                     
-                                     # Modus starten
-                                     self._start_transform_mode(self._pending_transform_mode)
-                                 else:
-                                     # Nur selektieren (Normaler Klick)
-                                     self._active_transform_body = body
-                                     self.statusBar().showMessage(f"Körper '{body.name}' selektiert")
-        return False
+        return super().eventFilter(obj, event)
 
     def _on_opt_change(self, o, v): pass
     def _edit_feature(self, d): 
@@ -1781,6 +1800,18 @@ class MainWindow(QMainWindow):
         self.browser.set_document(self.document)
         self._set_mode("3d")
     
+    def set_selection_mode(self, mode):
+        from gui.geometry_detector import SelectionFilter
+
+        if mode == "face":
+            self.active_selection_filter = SelectionFilter.FACE
+        elif mode == "hole":
+            self.active_selection_filter = SelectionFilter.HOLE
+        elif mode == "sketch":
+            self.active_selection_filter = SelectionFilter.SKETCH
+        else:
+            self.active_selection_filter = SelectionFilter.ALL
+        
     def _export_stl(self): 
         """STL Export mit Loguru statt QMessageBox"""
         bodies = self._get_export_candidates()
