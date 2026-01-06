@@ -156,14 +156,10 @@ class PyVistaViewport(QWidget):
         pos = event.position() if hasattr(event, 'position') else event.pos()
         x, y = int(pos.x()), int(pos.y())
 
-        ray_origin, ray_dir = self.get_ray_from_click(x, y)
+        #ray_origin, ray_dir = self.get_ray_from_click(x, y)
 
         # WICHTIG: Nutze self.pick statt self.detector.pick
-        face_id = self.pick(
-            ray_origin,
-            ray_dir,
-            selection_filter=self.active_selection_filter
-        )
+        face_id = self.pick(x, y, selection_filter=self.active_selection_filter) # <-- NEU: x, y übergeben
 
         if face_id != self.hover_face_id:
             self._update_hover(face_id)
@@ -649,9 +645,11 @@ class PyVistaViewport(QWidget):
             
             # Normales Hovering (Nur wenn Maus nicht gedrückt oder Drag aktiv)
             elif not (event.buttons() & Qt.LeftButton):
-                ray_o, ray_d = self.get_ray_from_click(x, y)
-                # WICHTIG: self.pick nutzen
-                hit_id = self.pick(ray_o, ray_d, selection_filter=self.active_selection_filter)
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+            
+            # ÄNDERUNG:
+                hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
                 if hit_id != getattr(self, 'hover_face_id', -1):
                     self._update_hover(hit_id)
             return False
@@ -660,10 +658,9 @@ class PyVistaViewport(QWidget):
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             pos = event.position() if hasattr(event, 'position') else event.pos()
             x, y = int(pos.x()), int(pos.y())
-            ray_o, ray_d = self.get_ray_from_click(x, y)
             
-            # WICHTIG: self.pick nutzen
-            hit_id = self.pick(ray_o, ray_d, selection_filter=self.active_selection_filter)
+            # ÄNDERUNG:
+            hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
             
             if hit_id != -1:
                 # Multi-Select mit STRG
@@ -1929,71 +1926,96 @@ class PyVistaViewport(QWidget):
     
    
 
-    def pick(self, ray_origin, ray_dir, selection_filter=None):
+    def pick(self, x, y, selection_filter=None):
         """
-        Verbessertes Picking für Body-Faces und Sketches.
+        Präzises Picking mittels vtkCellPicker (Hardware-gestützt).
+        Löst das Problem, dass falsche/verdeckte Flächen gewählt werden.
         """
-        # Lazy Import gegen Zirkelbezug
+        if not hasattr(self, 'detector'): return -1
+        
+        # Lazy Import
         if selection_filter is None:
              from gui.geometry_detector import GeometryDetector
              selection_filter = GeometryDetector.SelectionFilter.ALL
 
-        hits = []
+        # --- 1. BODY FACES (Hardware Picking) ---
+        # Wir fragen VTK: Was sieht die Kamera an Pixel x,y?
+        if "body_face" in selection_filter:
+            import vtk
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.005) # Sehr genau
+            
+            # Wichtig: VTK Y-Koordinate ist invertiert
+            height = self.plotter.interactor.height()
+            picker.Pick(x, height - y, 0, self.plotter.renderer)
+            
+            cell_id = picker.GetCellId()
+            
+            if cell_id != -1:
+                # Wir haben etwas getroffen! Position holen.
+                pos = np.array(picker.GetPickPosition())
+                normal = np.array(picker.GetPickNormal())
+                
+                # Jetzt suchen wir im Detector, welche logische Fläche zu diesem Punkt passt.
+                # Wir suchen die Fläche, die:
+                # 1. Zum selben Body gehört (oder wir prüfen nur Distanz)
+                # 2. Den Punkt 'pos' enthält (Distanz < Toleranz)
+                # 3. Eine ähnliche Normale hat
+                
+                best_face = None
+                best_dist = float('inf')
+                
+                for face in self.detector.selection_faces:
+                    if face.domain_type != "body_face": continue
+                    
+                    # Distanz des Pick-Punkts zur Ebene der Fläche
+                    dist_plane = abs(np.dot(pos - np.array(face.plane_origin), np.array(face.plane_normal)))
+                    
+                    # Normale vergleichen (Dot Product > 0.9 bedeutet fast parallel)
+                    dot_normal = np.dot(normal, np.array(face.plane_normal))
+                    
+                    if dist_plane < 1.0 and dot_normal > 0.8:
+                        # Prüfen, ob der Punkt auch wirklich nahe am Zentrum/Mesh liegt
+                        # Einfache Distanz ist hier oft gut genug, da wir den exakten Klickpunkt haben
+                        dist_center = np.linalg.norm(pos - np.array(face.plane_origin))
+                        if dist_center < best_dist:
+                            best_dist = dist_center
+                            best_face = face
+                
+                if best_face:
+                    return best_face.id
+
+        # --- 2. SKETCH FACES (Analytisches Picking) ---
+        # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch
+        # Aber nur, wenn wir kein Body-Face getroffen haben (oder Sketches bevorzugt sind)
+        
+        # Ray für Sketch-Berechnung
+        ray_origin, ray_dir = self.get_ray_from_click(x, y)
         ray_start = np.array(ray_origin)
         
-        if not hasattr(self, 'detector'): return -1
-
+        hits = []
         for face in self.detector.selection_faces:
-            # Filter prüfen
-            if face.domain_type not in selection_filter:
-                continue
-
-            # A) SKETCH FACES (2D Polygone im Raum)
-            if face.domain_type.startswith("sketch"):
+            if face.domain_type.startswith("sketch") and face.domain_type in selection_filter:
                 hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
                 if hit is None: continue
                 
-                # Prüfen ob Punkt im Polygon liegt
-                x, y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
-                if face.shapely_poly.contains(Point(x, y)):
+                # Prüfen ob Punkt im 2D-Polygon liegt
+                proj_x, proj_y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
+                
+                # Performance: Erst Bounding Box Check im 2D
+                minx, miny, maxx, maxy = face.shapely_poly.bounds
+                if not (minx <= proj_x <= maxx and miny <= proj_y <= maxy):
+                    continue
+                    
+                if face.shapely_poly.contains(Point(proj_x, proj_y)):
                     dist = np.linalg.norm(np.array(hit) - ray_start)
                     hits.append((face.pick_priority, dist, face.id))
 
-            # B) BODY FACES (3D Meshes)
-            elif face.domain_type == "body_face":
-                mesh = face.display_mesh
-                if mesh:
-                    # 1. Schnittpunkt mit der Ebene berechnen (schneller Vorfilter)
-                    hit_point = self.detector._intersect_ray_plane(
-                        ray_origin, ray_dir,
-                        face.plane_origin, face.plane_normal
-                    )
-                    
-                    if hit_point is not None:
-                        # 2. Bounding Box Check mit Toleranz
-                        b = mesh.bounds
-                        # Toleranz berechnen (damit flache Flächen auch klickbar sind)
-                        diag = math.sqrt((b[1]-b[0])**2 + (b[3]-b[2])**2 + (b[5]-b[4])**2)
-                        tol = max(0.5, diag * 0.1) 
-                        
-                        px, py, pz = hit_point
-                        
-                        # Liegt der Schnittpunkt grob im Bereich des Meshes?
-                        in_box = (b[0]-tol <= px <= b[1]+tol and
-                                  b[2]-tol <= py <= b[3]+tol and
-                                  b[4]-tol <= pz <= b[5]+tol)
-                        
-                        if in_box:
-                            # 3. Wenn in der Box, nehmen wir es als Treffer an.
-                            # Wir prüfen NICHT "closest_point", da das bei planaren Flächen oft fehlschlägt.
-                            dist_cam = np.linalg.norm(hit_point - ray_start)
-                            hits.append((face.pick_priority, dist_cam, face.id))
+        if hits:
+            hits.sort(key=lambda h: (-h[0], h[1]))
+            return hits[0][2]
 
-        if not hits: return -1
-        
-        # Sortieren: Höchste Priorität zuerst, dann geringste Distanz
-        hits.sort(key=lambda h: (-h[0], h[1]))
-        return hits[0][2]
+        return -1
         
     def _pick_body_face(self, x, y):
         """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""
