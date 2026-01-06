@@ -11,7 +11,8 @@ from gui.geometry_detector import GeometryDetector
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
-from PySide6.QtGui import QCursor
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
+from PySide6.QtGui import QCursor, QColor
 
 # ==================== IMPORTS ====================
 HAS_PYVISTA = False
@@ -478,19 +479,17 @@ class PyVistaViewport(QWidget):
     
     def _cache_drag_direction_for_face_v2(self, face):
         """
-        Berechnet den 2D-Bildschirmvektor für die Extrusionsrichtung.
-        Robustere Version, die Fallbacks nutzt, damit Push/Pull immer geht.
+        Berechnet den 2D-Bildschirmvektor UND speichert den 3D-Ankerpunkt
+        für korrekte Skalierung.
         """
         try:
-            # Daten vorbereiten
+            # 1. Normale und Zentrum holen
             normal = np.array(face.plane_normal, dtype=float)
             if np.linalg.norm(normal) < 1e-6: normal = np.array([0,0,1], dtype=float)
             
-            # Zentrum bestimmen
             if face.domain_type == 'body_face':
                  center = np.array(face.plane_origin, dtype=float)
             else:
-                 # Sketch Face: Zentrum aus Polygon berechnen
                  poly = face.shapely_poly
                  c2d = poly.centroid
                  ox, oy, oz = face.plane_origin
@@ -502,43 +501,77 @@ class PyVistaViewport(QWidget):
                      oz + c2d.x * uz + c2d.y * vz
                  ], dtype=float)
 
-            # VTK Koordinaten-Transformation
+            # WICHTIG: 3D-Punkt für Skalierungsberechnung merken!
+            self._drag_anchor_3d = center
+
+            # 2. Vektor im Screen-Space berechnen
             renderer = self.plotter.renderer
             
             def to_screen(pt_3d):
                 renderer.SetWorldPoint(pt_3d[0], pt_3d[1], pt_3d[2], 1.0)
                 renderer.WorldToDisplay()
                 disp = renderer.GetDisplayPoint()
-                # VTK Y ist invertiert (0 ist unten), Qt Y (0 ist oben)
-                # Wir brauchen hier Vektoren, also ist die absolute Y Position egal,
-                # aber die Richtung muss stimmen (-Y).
                 return np.array([disp[0], disp[1]])
 
             p1 = to_screen(center)
-            p2 = to_screen(center + normal * 10.0) # 10 Einheiten entlang Normale
+            p2 = to_screen(center + normal * 10.0) # Testpunkt in Extrude-Richtung
             
             vec = p2 - p1
-            
-            # Invertiere Y für Qt-Screen-Space (Mausbewegung ist in Qt-Coords)
-            # Da VTK 0 unten hat und Qt 0 oben, zeigt ein positiver VTK-Y Vektor nach OBEN.
-            # Im Qt Screen ist das negatives Y. 
-            # Aber wir wollen, dass Maus nach OBEN (negatives Qt Y) -> Extrude positiv.
-            # Das passt sich meist automatisch an, aber wir normalisieren es hier.
+            # Y-Achsen korrektur (VTK vs Qt)
             vec[1] = -vec[1] 
 
             length = np.linalg.norm(vec)
             
             if length < 1.0:
-                # Vektor zu kurz (wir schauen direkt drauf) -> Standard Y-Achse
                 self._drag_screen_vector = np.array([0.0, -1.0])
             else:
                 self._drag_screen_vector = vec / length
                 
         except Exception as e:
             print(f"Drag Vector Calc Error: {e}")
-            # Fallback: Immer vertikal ziehen lassen
             self._drag_screen_vector = np.array([0.0, -1.0])
+            self._drag_anchor_3d = np.array([0,0,0])
 
+    def _get_pixel_to_world_scale(self, anchor_point_3d):
+        """
+        Berechnet, wie viele 'Welt-Einheiten' ein Pixel an der Position
+        des Objekts entspricht. Löst das Problem 'manchmal schnell, manchmal langsam'.
+        """
+        if anchor_point_3d is None: return 0.1
+        
+        try:
+            renderer = self.plotter.renderer
+            
+            # Projektion des Ankerpunkts
+            renderer.SetWorldPoint(*anchor_point_3d, 1.0)
+            renderer.WorldToDisplay()
+            p1_disp = renderer.GetDisplayPoint()
+            
+            # Wir gehen 100 Pixel zur Seite im Screen Space (beliebiger Wert > 0)
+            p2_disp_x = p1_disp[0] + 100.0
+            p2_disp_y = p1_disp[1]
+            p2_disp_z = p1_disp[2] # Gleiche Tiefe (Z-Buffer Wert) behalten!
+            
+            # Zurück in World Space
+            renderer.SetDisplayPoint(p2_disp_x, p2_disp_y, p2_disp_z)
+            renderer.DisplayToWorld()
+            world_pt = renderer.GetWorldPoint()
+            
+            if world_pt[3] != 0:
+                p2_world = np.array(world_pt[:3]) / world_pt[3]
+            else:
+                p2_world = np.array(world_pt[:3])
+
+            # Distanz in Welt-Einheiten
+            dist_world = np.linalg.norm(p2_world - anchor_point_3d)
+            
+            # Faktor: Welt-Einheiten pro Pixel
+            # Wenn 100 Pixel = 50mm sind, ist Faktor 0.5
+            if dist_world == 0: return 0.1
+            return dist_world / 100.0
+            
+        except Exception:
+            return 0.1
     
     def is_body_visible(self, body_id):
         if body_id not in self._body_actors: return False
@@ -719,17 +752,21 @@ class PyVistaViewport(QWidget):
             self._cache_drag_direction_for_face(list(self.selected_faces)[0])
     
     def _calculate_extrude_delta(self, current_pos):
-        """Berechnet delta mit reduzierter Empfindlichkeit für bessere Präzision."""
+        """Berechnet delta mit dynamischer Skalierung."""
         dx = current_pos.x() - self.drag_start_pos.x()
         dy = current_pos.y() - self.drag_start_pos.y()
         mouse_vec = np.array([dx, dy])
         
-        projection = np.dot(mouse_vec, self._drag_screen_vector)
+        # 1. Projektion auf die Zug-Achse (wie viel bewegen wir uns entlang des Pfeils?)
+        projection_pixels = np.dot(mouse_vec, self._drag_screen_vector)
         
-        # Reduzierter Scaling-Faktor (0.2 statt 0.5) für feinere Kontrolle
-        scaling = 0.2 
-        return projection * scaling
-        return projection * scaling
+        # 2. Umrechnung Pixel -> Millimeter
+        # Nutze den gespeicherten 3D-Ankerpunkt
+        anchor = getattr(self, '_drag_anchor_3d', None)
+        scale_factor = self._get_pixel_to_world_scale(anchor)
+        
+        # Das Resultat sollte sich jetzt "1 zu 1" anfühlen
+        return projection_pixels * scale_factor
 
     # ==================== PICKING ====================
     def _highlight_plane_at_position(self, x, y):
@@ -1347,10 +1384,15 @@ class PyVistaViewport(QWidget):
                 except: pass
         
         actors_list = []
-        if color is None: col_rgb = (0.6, 0.6, 0.8)
-        elif isinstance(color, str): col_rgb = color
-        else: col_rgb = tuple(color)
-
+        if color is None: 
+            col_rgb = (0.5, 0.5, 0.5)
+        elif isinstance(color, str): 
+            # Wandelt "red", "blue" etc. in (1.0, 0.0, 0.0) um
+            c = QColor(color)
+            col_rgb = (c.redF(), c.greenF(), c.blueF())
+        else: 
+            # Ist schon Liste/Tuple
+            col_rgb = tuple(color)
         try:
             # === PFAD A: Modernes PyVista Objekt ===
             if mesh_obj is not None:
@@ -1885,68 +1927,73 @@ class PyVistaViewport(QWidget):
             # Wir senden nur die IDs, das Main Window holt sich die Daten aus dem Detector
             self.extrude_requested.emit(list(faces), height, operation)
     
+   
+
     def pick(self, ray_origin, ray_dir, selection_filter=None):
         """
-        Robuste Pick-Methode mit Safety-Check für Datentypen.
+        Verbessertes Picking für Body-Faces und Sketches.
         """
+        # Lazy Import gegen Zirkelbezug
         if selection_filter is None:
              from gui.geometry_detector import GeometryDetector
              selection_filter = GeometryDetector.SelectionFilter.ALL
 
         hits = []
         ray_start = np.array(ray_origin)
-        ray_end = ray_start + np.array(ray_dir) * 10000.0
         
+        if not hasattr(self, 'detector'): return -1
+
         for face in self.detector.selection_faces:
+            # Filter prüfen
             if face.domain_type not in selection_filter:
                 continue
 
-            # A) Sketch-Faces
+            # A) SKETCH FACES (2D Polygone im Raum)
             if face.domain_type.startswith("sketch"):
-                hit = self.detector._intersect_ray_plane(
-                    ray_origin, ray_dir,
-                    face.plane_origin,
-                    face.plane_normal
-                )
+                hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
                 if hit is None: continue
-
-                x, y = self.detector._project_point_2d(
-                    hit, face.plane_origin, face.plane_x, face.plane_y
-                )
-
+                
+                # Prüfen ob Punkt im Polygon liegt
+                x, y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
                 if face.shapely_poly.contains(Point(x, y)):
                     dist = np.linalg.norm(np.array(hit) - ray_start)
                     hits.append((face.pick_priority, dist, face.id))
 
-            # B) Body-Faces
+            # B) BODY FACES (3D Meshes)
             elif face.domain_type == "body_face":
                 mesh = face.display_mesh
                 if mesh:
-                    # SAFETY FIX: Falls mesh kein ray_trace hat (UnstructuredGrid), konvertieren
-                    if not hasattr(mesh, 'ray_trace'):
-                         try:
-                             # Versuchen zu konvertieren und cachen
-                             mesh = mesh.extract_surface()
-                             face.display_mesh = mesh 
-                         except:
-                             continue
-
-                    if mesh.n_points < 3: continue
+                    # 1. Schnittpunkt mit der Ebene berechnen (schneller Vorfilter)
+                    hit_point = self.detector._intersect_ray_plane(
+                        ray_origin, ray_dir,
+                        face.plane_origin, face.plane_normal
+                    )
                     
-                    try:
-                        pts, _ = mesh.ray_trace(ray_start, ray_end)
-                        if len(pts) > 0:
-                            dist = np.linalg.norm(pts[0] - ray_start)
-                            hits.append((face.pick_priority, dist, face.id))
-                    except Exception as e:
-                        # Ignoriere Fehler beim Raytracing einzelner Faces
-                        pass
+                    if hit_point is not None:
+                        # 2. Bounding Box Check mit Toleranz
+                        b = mesh.bounds
+                        # Toleranz berechnen (damit flache Flächen auch klickbar sind)
+                        diag = math.sqrt((b[1]-b[0])**2 + (b[3]-b[2])**2 + (b[5]-b[4])**2)
+                        tol = max(0.5, diag * 0.1) 
+                        
+                        px, py, pz = hit_point
+                        
+                        # Liegt der Schnittpunkt grob im Bereich des Meshes?
+                        in_box = (b[0]-tol <= px <= b[1]+tol and
+                                  b[2]-tol <= py <= b[3]+tol and
+                                  b[4]-tol <= pz <= b[5]+tol)
+                        
+                        if in_box:
+                            # 3. Wenn in der Box, nehmen wir es als Treffer an.
+                            # Wir prüfen NICHT "closest_point", da das bei planaren Flächen oft fehlschlägt.
+                            dist_cam = np.linalg.norm(hit_point - ray_start)
+                            hits.append((face.pick_priority, dist_cam, face.id))
 
         if not hits: return -1
         
+        # Sortieren: Höchste Priorität zuerst, dann geringste Distanz
         hits.sort(key=lambda h: (-h[0], h[1]))
         return hits[0][2]
-        
         
     def _pick_body_face(self, x, y):
         """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""

@@ -519,8 +519,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         for body in self.reference_bodies:
             edges_2d = body.get('edges_2d', [])
-            color = body.get('color', (0.6, 0.6, 0.8))
+            raw_color = body.get('color', (0.6, 0.6, 0.8))
             
+            # --- FIX: Farbe sicherstellen ---
+            if isinstance(raw_color, str):
+                # Falls Farbe ein Name ist (z.B. "red"), nutze QColor zum Parsen
+                c = QColor(raw_color)
+                color = (c.redF(), c.greenF(), c.blueF())
+            elif isinstance(raw_color, (tuple, list)) and len(raw_color) >= 3:
+                color = raw_color
+            else:
+                color = (0.5, 0.5, 0.5) # Fallback Grau
+            # --------------------------------
+
             # Farbe mit Transparenz
             r, g, b = int(color[0]*255), int(color[1]*255), int(color[2]*255)
             alpha = int(self.body_reference_opacity * 255)

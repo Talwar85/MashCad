@@ -706,7 +706,10 @@ class MainWindow(QMainWindow):
         # 2. Bodies updaten
         self.viewport_3d.clear_bodies()
         
-        colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+        # FIX: Variablen definieren, die vorher fehlten!
+        default_color = (0.7, 0.7, 0.7)
+        colors = [(0.6, 0.6, 0.8), (0.8, 0.6, 0.6), (0.6, 0.8, 0.6)]
+        
         visible_bodies = self.browser.get_visible_bodies()
         
         for i, (b, visible) in enumerate(visible_bodies):
@@ -715,25 +718,28 @@ class MainWindow(QMainWindow):
 
             try:
                 # Fall A: Vtk Cache vorhanden (Schnell & Modern)
+                col = getattr(b, 'color', default_color)
+                # Falls color None ist (manchmal bei Init), Default nehmen
+                if col is None: col = default_color
+                
                 if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
                     self.viewport_3d.add_body(
                         bid=b.id, 
                         name=b.name, 
                         mesh_obj=b.vtk_mesh, 
                         edge_mesh_obj=b.vtk_edges, 
-                        color=colors[i%3]
+                        color=col
                     )
                     
                 # Fall B: Fallback auf alte Listen (Legacy)
                 elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
                     # FIX: Benannte Argumente (keywords) nutzen!
-                    # Verhindert, dass 'verts' in 'mesh_obj' landet.
                     self.viewport_3d.add_body(
                         bid=b.id, 
                         name=b.name, 
                         verts=b._mesh_vertices,     # <-- Keyword wichtig!
                         faces=b._mesh_triangles,    # <-- Keyword wichtig!
-                        color=colors[i%3]
+                        color=colors[i % 3]
                     )
             except Exception as e:
                 print(f"Fehler beim Laden von Body {b.name}: {e}")
@@ -750,7 +756,7 @@ class MainWindow(QMainWindow):
         
         # Bodies - komplett neu laden
         self.viewport_3d.clear_bodies()
-        colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+        default_col = (0.7, 0.1, 0.1)
         
         for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
             if visible and hasattr(b, '_mesh_vertices') and b._mesh_vertices:
@@ -760,7 +766,7 @@ class MainWindow(QMainWindow):
                     name=b.name, 
                     verts=b._mesh_vertices,     # Explizit benennen
                     faces=b._mesh_triangles,    # Explizit benennen
-                    color=colors[i%3]
+                    color=default_col
                 ) 
         
     def _on_3d_action(self, action: str):
@@ -1170,6 +1176,11 @@ class MainWindow(QMainWindow):
         self.extrude_panel.setVisible(False)
         # Bodies wieder einblenden falls versteckt
         self.viewport_3d.set_all_bodies_visible(True)
+        if hasattr(self.viewport_3d, 'detector'):
+            self.viewport_3d.detector.clear()
+        self.viewport_3d.selected_face_ids.clear()
+        self.viewport_3d.hover_face_id = -1
+        self.viewport_3d._draw_selectable_faces_from_detector()
         self.statusBar().showMessage(tr("Extrude abgebrochen"), 2000)
     
     def _on_toggle_bodies_visibility(self, hide: bool):
@@ -1310,6 +1321,13 @@ class MainWindow(QMainWindow):
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
         self.viewport_3d.set_all_bodies_visible(True)
+        
+        if hasattr(self.viewport_3d, 'detector'):
+            self.viewport_3d.detector.clear()
+        self.viewport_3d.selected_face_ids.clear()
+        self.viewport_3d.hover_face_id = -1
+        self.viewport_3d._draw_selectable_faces_from_detector()    
+            
         if success:
             self.browser.refresh()
             if msg: self.statusBar().showMessage(msg)
@@ -1721,14 +1739,14 @@ class MainWindow(QMainWindow):
              try:
                  col_idx = self.document.bodies.index(body) % 3
              except: col_idx = 0
-             colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+             default_col = (0.7, 0.7, 0.7)
              
              self.viewport_3d.add_body(
                  bid=body.id, 
                  name=body.name, 
                  mesh_obj=body.vtk_mesh, 
                  edge_mesh_obj=body.vtk_edges,
-                 color=colors[col_idx]
+                 color=default_col
              )
              return
 

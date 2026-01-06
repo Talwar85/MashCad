@@ -405,62 +405,75 @@ class GeometryDetector:
         return np.dot(v, x_dir), np.dot(v, y_dir)
     
     
+    
+
     def process_body_mesh(self, body_id, vtk_mesh):
+        """
+        Zerlegt das Body-Mesh in planare Flächen.
+        FIX: Korrigierter Zugriff auf RegionId (vermeidet Connectivity Warning)
+        """
         if not HAS_VTK or vtk_mesh is None:
             return
-
-        if 'Normals' not in vtk_mesh.cell_data:
-            vtk_mesh.compute_normals(cell_normals=True, inplace=True)
 
         if not vtk_mesh.is_all_triangles:
             vtk_mesh = vtk_mesh.triangulate()
 
+        if 'Normals' not in vtk_mesh.cell_data:
+            vtk_mesh.compute_normals(cell_normals=True, inplace=True)
+
+        # 1. Zellen nach Normalen gruppieren
         normals = np.round(vtk_mesh.cell_data['Normals'], 3)
         unique_normals, groups = np.unique(normals, axis=0, return_inverse=True)
 
         for group_idx, normal in enumerate(unique_normals):
             cell_ids = np.where(groups == group_idx)[0]
-            
-            if len(cell_ids) < 1: 
-                continue
+            if len(cell_ids) < 1: continue
 
-            # Das hier ist ein UnstructuredGrid
+            # Sub-Mesh extrahieren
             group_mesh_ugrid = vtk_mesh.extract_cells(cell_ids)
-            
-            # WICHTIG: Sofort in PolyData (Surface) wandeln für ray_trace Support!
             group_mesh = group_mesh_ugrid.extract_surface()
 
             try:
-                # Connectivity Check
+                # 2. Connectivity Check (Inseln trennen)
                 conn = group_mesh.connectivity(extraction_mode='all')
-                n_regions = conn.n_regions
                 
-                if n_regions < 1:
-                    # Fallback: Alles nehmen
-                    if group_mesh.n_points >= 3:
-                        center = np.mean(group_mesh.points, axis=0)
-                        self._add_body_face(body_id, center, normal, group_mesh)
+                # FIX: Array direkt holen statt get_data_range()
+                region_ids = None
+                if 'RegionId' in conn.point_data:
+                    region_ids = conn.point_data['RegionId']
+                elif 'RegionId' in conn.cell_data:
+                    region_ids = conn.cell_data['RegionId']
+                
+                if region_ids is None:
+                    # Keine Regionen gefunden -> Alles ist eine Fläche
+                    self._add_single_face(body_id, group_mesh, normal)
                     continue
 
-                for i in range(n_regions):
+                # Min/Max direkt aus den Daten holen
+                min_id, max_id = region_ids.min(), region_ids.max()
+                
+                for i in range(int(min_id), int(max_id) + 1):
                     region = conn.threshold([i, i], scalars='RegionId')
-                    
-                    # Auch hier sicherstellen, dass wir Surface haben
                     region_surf = region.extract_surface()
                     
-                    if region_surf.n_points < 3:
-                        continue
-                    
-                    center = np.mean(region_surf.points, axis=0)
-                    self._add_body_face(body_id, center, normal, region_surf)
+                    if region_surf.n_points < 3: continue
+                    self._add_single_face(body_id, region_surf, normal)
 
             except Exception as e:
-                print(f"Connectivity Warning: {e}")
-                # Fallback bei Fehler: Das bereits konvertierte group_mesh nutzen
-                if group_mesh.n_points >= 3:
-                    center = np.mean(group_mesh.points, axis=0)
-                    self._add_body_face(body_id, center, normal, group_mesh)
+                # Fallback bei Fehler
+                print(f"Connectivity Fallback: {e}")
+                self._add_single_face(body_id, group_mesh, normal)
 
+    def _add_single_face(self, body_id, mesh, normal):
+        if mesh.n_points < 3: return
+        center = np.mean(mesh.points, axis=0)
+        
+        # Triangulieren für sauberes Rendering/Bounds
+        if not mesh.is_all_triangles:
+            mesh = mesh.triangulate()
+            
+        self._add_body_face(body_id, center, normal, mesh)
+    
     def _add_body_face(self, body_id, center, normal, mesh):
         face = SelectionFace(
             id=self._counter,
