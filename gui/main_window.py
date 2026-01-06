@@ -40,7 +40,7 @@ from gui.browser import ProjectBrowser
 from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.log_panel import LogPanel
-
+from modeling.brep_utils import find_closest_face
 try:
     from ocp_tessellate.tessellator import tessellate
     HAS_OCP_TESSELLATE = True
@@ -1335,86 +1335,93 @@ class MainWindow(QMainWindow):
         
     def _extrude_body_face_build123d(self, face_data, height, operation):
         """
-        Robuste Extrusion einer Body-Fläche (Push/Pull) mit Scoring-System.
-        Findet die passende CAD-Fläche auch bei Ungenauigkeiten.
+        Extrem robuste Version 3.0:
+        - "Entpackt" verschachtelte Compounds/Shells (löst das 0-Faces Problem)
+        - Nutzt BRepExtrema für exakte Distanz
         """
         try:
             body_id = face_data.get('body_id')
             target_body = next((b for b in self.document.bodies if b.id == body_id), None)
             
-            if not target_body:
-                print("Fehler: Body ID nicht gefunden.")
-                return False
-                
-            if not hasattr(target_body, '_build123d_solid') or target_body._build123d_solid is None:
-                print(f"WARNUNG: Körper '{target_body.name}' hat keine BREP-Daten.")
+            if not target_body or not hasattr(target_body, '_build123d_solid') or target_body._build123d_solid is None:
+                print(f"Fehler: Body oder BREP-Daten fehlen.")
                 return False
 
-            from build123d import Vector, extrude, Face
+            from build123d import Vector, extrude, Shape, Compound
+            from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+            from OCP.gp import gp_Pnt
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.TopoDS import TopoDS
+
+            # --- SCHRITT 1: Faces robust extrahieren (Der Fix für "0 Faces") ---
+            b3d_obj = target_body._build123d_solid
             
-            # Daten aus dem Viewport
+            # Versuch 1: Standard Build123d Zugriff
+            candidate_faces = b3d_obj.faces()
+            
+            # Versuch 2: Wenn leer (passiert oft bei importierten Compounds), OCP Explorer nutzen
+            if not candidate_faces:
+                print(f"Warnung: Standard .faces() ist leer (Typ: {type(b3d_obj)}). Versuche Deep-Scan...")
+                explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
+                candidate_faces = []
+                while explorer.More():
+                    # Face in Build123d Wrapper packen
+                    from build123d import Face
+                    candidate_faces.append(Face(TopoDS.Face_s(explorer.Current())))
+                    explorer.Next()
+
+            print(f"--- Debug: Suche Fläche nahe {face_data['center_3d']} ---")
+            print(f"Anzahl Faces gefunden: {len(candidate_faces)}")
+            
+            if not candidate_faces:
+                print("ABBRUCH: Body enthält topologisch keine Faces (Mesh Import fehlgeschlagen?).")
+                return False
+
+            # --- SCHRITT 2: Distanz-Messung ---
             mesh_center = Vector(face_data['center_3d'])
-            mesh_normal = Vector(face_data['normal'])
+            ocp_pt_vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(mesh_center.X, mesh_center.Y, mesh_center.Z)).Vertex()
             
-            print(f"Suche CAD-Face für Mesh-Center {mesh_center}...")
-
-            # --- SCORING SYSTEM ---
             best_face = None
-            best_score = -float('inf')
+            best_dist = float('inf')
             
-            for face in target_body._build123d_solid.faces():
+            for i, face in enumerate(candidate_faces):
                 try:
-                    cad_center = face.center()
-                    cad_normal = face.normal_at(cad_center)
-                    
-                    align = cad_normal.dot(mesh_normal)
-                    if align < 0.8: continue 
-                    
-                    dist = (cad_center - mesh_center).length
-                    score = (align * 1000) - dist
-                    
-                    if face.is_inside(mesh_center):
-                        score += 5000 
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_face = face
-                except Exception:
-                    continue
+                    extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, face.wrapped)
+                    if extrema.IsDone():
+                        dist = extrema.Value()
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_face = face
+                except: pass
             
-            if best_face is None:
-                print("Keine passende CAD-Fläche gefunden.")
+            print(f"Suche beendet. Bester Abstand: {best_dist}")
+
+            # Toleranz: Bei konvertierten Meshes darf der Klick auch mal 2mm daneben liegen
+            if best_face is None or best_dist > 2.0:
+                print(f"FEHLER: Keine Fläche in Reichweite gefunden.")
                 return False
-                
-            # --- EXTRUSION ---
+
+            print(f"Treffer! Extrudiere Face...")
+            
+            # --- AB HIER: Extrusion wie gehabt ---
             new_geo = extrude(best_face, amount=height)
             
             # --- BOOLEAN / NEW BODY LOGIC ---
             final_solid = None
             
             if operation == "New Body":
-                # FIX 1: Nutze Standard new_body() ohne Namen, damit er "Body X" heißt
                 new_body = self.document.new_body() 
-                
-                # FIX 2: Füge ein Feature hinzu, damit der Browser es gleich darstellt
-                # Wir haben keinen Sketch, daher sketch=None, aber wir setzen die Werte
                 from modeling import ExtrudeFeature
-                feat = ExtrudeFeature(
-                    sketch=None, 
-                    distance=height, 
-                    operation="New Body", 
-                    name="Extrude (Face)"
-                )
+                feat = ExtrudeFeature(sketch=None, distance=height, operation="New Body", name="Extrude (Face)")
                 new_body.features.append(feat)
-                
                 new_body._build123d_solid = new_geo
                 self._update_body_from_build123d(new_body, new_geo)
                 return True
                 
             elif operation == "Join":
                 final_solid = target_body._build123d_solid + new_geo
-                # Optional: Auch hier ein Feature hinzufügen für History? 
-                # Das ist komplizierter bei bestehenden Bodies, lassen wir erstmal.
             elif operation == "Cut":
                 final_solid = target_body._build123d_solid - new_geo
             elif operation == "Intersect":
@@ -1423,13 +1430,12 @@ class MainWindow(QMainWindow):
             if final_solid is not None:
                 target_body._build123d_solid = final_solid
                 self._update_body_from_build123d(target_body, final_solid)
-                print("BREP Update erfolgreich.")
                 return True
             
             return False
             
         except Exception as e:
-            print(f"CRITICAL ERROR in _extrude_body_face_build123d: {e}")
+            print(f"CRITICAL ERROR: {e}")
             import traceback
             traceback.print_exc()
             return False

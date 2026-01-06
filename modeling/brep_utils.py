@@ -2,6 +2,8 @@ import numpy as np
 from build123d import *
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
 from OCP.gp import gp_Lin, gp_Pnt, gp_Dir
+from OCP.BRep import BRep_Tool
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 
 def pick_face_by_ray(solid_obj, ray_origin, ray_direction):
     """
@@ -39,3 +41,48 @@ def pick_face_by_ray(solid_obj, ray_origin, ray_direction):
             return Face(ocp_face), min_u
             
     return None, None
+    
+    
+def find_closest_face(solid_obj, target_point, tolerance=2.0):
+    """
+    Findet die CAD-Fläche, die einem Punkt am nächsten liegt.
+    Löst das Problem bei importierten STLs, wo Mesh und BREP leicht abweichen.
+    """
+    if not solid_obj:
+        return None
+
+    # Sicherstellen, dass target_point ein Vektor ist
+    if not isinstance(target_point, Vector):
+        target_point = Vector(target_point)
+
+    best_face = None
+    min_dist = float('inf')
+    
+    # OCP Punkt Konvertierung
+    ocp_point = gp_Pnt(target_point.X, target_point.Y, target_point.Z)
+
+    # Durch alle Faces iterieren
+    for face in solid_obj.faces():
+        try:
+            # Hole die zugrundeliegende Geometrie (Surface)
+            surf = BRep_Tool.Surface_s(face.wrapped)
+            
+            # Projiziere Punkt auf Surface
+            proj = GeomAPI_ProjectPointOnSurf(ocp_point, surf)
+            
+            # Prüfen ob Projektion erfolgreich war
+            if proj.NbPoints() > 0:
+                dist = proj.LowerDistance()
+                
+                # Wir suchen das Minimum
+                if dist < min_dist:
+                    min_dist = dist
+                    best_face = face
+        except Exception:
+            continue
+
+    # Wenn der Abstand klein genug ist (Toleranz), Treffer zurückgeben
+    if best_face and min_dist <= tolerance:
+        return best_face
+    
+    return None

@@ -53,7 +53,7 @@ class MeshToBREPConverter:
             logger.warning(f"Simplifizierung fehlgeschlagen: {e}")
             return ocp_shape
 
-    def _sew_mesh_to_brep(self, verts, faces, tolerance=1e-3) -> Shape:
+    def _sew_mesh_to_brep(self, verts, faces, tolerance=0.1) -> Shape:
         """Kern-Logik: Erzeugt OCP Shell aus Vertices/Faces via Sewing."""
         try:
             sewing = BRepBuilderAPI_Sewing(tolerance)
