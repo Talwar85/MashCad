@@ -599,29 +599,51 @@ class MainWindow(QMainWindow):
         
     def _update_viewport_all_impl(self):
         """Das eigentliche Update, wird vom Timer aufgerufen"""
-        # Sketches
-        self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
+        # 1. Sketches updaten
+        visible_sketches = self.browser.get_visible_sketches()
+        self.viewport_3d.set_sketches(visible_sketches)
         
-        # Bodies
+        # 2. Bodies updaten
+        # Wir löschen nicht alles (clear_bodies), da PyVista smart ist, 
+        # aber für den Anfang ist clear sicherer gegen Geisterobjekte.
         self.viewport_3d.clear_bodies()
+        
         colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
         
-        for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
-            if visible and hasattr(b, '_mesh_vertices'):
-                # Hier übergeben wir jetzt AUCH Normals und Edges, falls vorhanden!
+        visible_bodies = self.browser.get_visible_bodies()
+        
+        for i, (b, visible) in enumerate(visible_bodies):
+            if not visible:
+                continue
+
+            # === NEUER PFAD: Prüfen auf VTK/PyVista Objekte ===
+            if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
+                # Hier übergeben wir direkt das PolyData Objekt!
                 self.viewport_3d.add_body(
-                    b.id, 
-                    b.name, 
-                    b._mesh_vertices, 
-                    b._mesh_triangles, 
-                    color=colors[i%3],
-                    normals=getattr(b, '_mesh_normals', None),
-                    edges=getattr(b, '_mesh_edges', None)
+                    bid=b.id, 
+                    name=b.name, 
+                    mesh_obj=b.vtk_mesh,      # <--- Das ist neu
+                    edge_mesh_obj=b.vtk_edges, # <--- Das ist neu
+                    color=colors[i%3]
                 )
+                
+            # === LEGACY PFAD: Fallback für alte Listen (falls vtk_mesh fehlt) ===
+            elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
+                self.viewport_3d.add_body(
+                    bid=b.id, 
+                    name=b.name, 
+                    verts=b._mesh_vertices, 
+                    faces=b._mesh_triangles, 
+                    color=colors[i%3],
+                    normals=getattr(b, '_mesh_normals', None)
+                )
+        
+        self.viewport_3d.update()
 
     def _update_viewport_all(self):
         """Legacy Wrapper: Ruft sofortiges Update auf (wenn nötig) oder Trigger"""
-        self._trigger_viewport_update()                                        
+        self._trigger_viewport_update()  
+        
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
         actions = {
@@ -1200,99 +1222,20 @@ class MainWindow(QMainWindow):
     
     
     def _update_body_from_build123d(self, body, solid):
-        """Generiert Mesh mit korrekter Kanten-Extraktion für OCP"""
-        # print(f"DEBUG: _update_body_from_build123d START für '{body.name}'", flush=True)
+        """
+        Delegiert die Berechnung an die Body-Klasse (modeling.py),
+        welche den CADTessellator nutzt.
+        """
+        # 1. Solid im Body speichern
+        body._build123d_solid = solid
         
-        try:
-            success = False
-            
-            # Speicher initialisieren
-            body._mesh_vertices = []
-            body._mesh_triangles = []
-            body._mesh_normals = []
-            body._mesh_edges = []      # Für Indizes (Standard)
-            body._mesh_edge_lines = [] # NEU: Für Koordinaten (OCP)
-            
-            body._build123d_solid = solid
-            
-            shape = solid
-            if hasattr(solid, 'wrapped'): shape = solid.wrapped
-
-            # --- OPTION A: OCP Tessellate ---
-            if HAS_OCP_TESSELLATE:
-                try:
-                    from ocp_tessellate.tessellator import tessellate
-                    
-                    result = tessellate(
-                        shape, f"{id(shape)}", 0.1, quality=0.1,
-                        angular_tolerance=0.2, compute_faces=True, compute_edges=True, debug=False
-                    )
-                    
-                    # Entpacken
-                    verts_flat = None; tris_flat = None; norms_flat = None; edges_flat = None
-                    if isinstance(result, dict):
-                        verts_flat = result.get("vertices")
-                        tris_flat = result.get("triangles")
-                        norms_flat = result.get("normals")
-                        edges_flat = result.get("edges")
-                    elif isinstance(result, tuple):
-                        if len(result) >= 3: verts_flat, tris_flat, norms_flat = result[0], result[1], result[2]
-                        if len(result) >= 4: edges_flat = result[3]
-                    
-                    import numpy as np
-
-                    # 1. Vertices
-                    if verts_flat is not None:
-                        if isinstance(verts_flat, np.ndarray): body._mesh_vertices = verts_flat.reshape(-1, 3).tolist()
-                        else: body._mesh_vertices = [tuple(verts_flat[i:i+3]) for i in range(0, len(verts_flat), 3)]
-                    
-                    # 2. Normals
-                    if norms_flat is not None:
-                        if isinstance(norms_flat, np.ndarray): body._mesh_normals = norms_flat.reshape(-1, 3).tolist()
-                        else: body._mesh_normals = [tuple(norms_flat[i:i+3]) for i in range(0, len(norms_flat), 3)]
-
-                    # 3. Triangles
-                    if tris_flat is not None:
-                        if isinstance(tris_flat, np.ndarray): body._mesh_triangles = tris_flat.reshape(-1, 3).tolist()
-                        else: body._mesh_triangles = [tuple(tris_flat[i:i+3]) for i in range(0, len(tris_flat), 3)]
-                        
-                    # 4. Edges (FIX: Als Koordinaten behandeln!)
-                    if edges_flat is not None and len(edges_flat) > 0:
-                        # OCP liefert Segmente: [P1x, P1y, P1z, P2x, P2y, P2z, ...]
-                        if isinstance(edges_flat, np.ndarray):
-                            body._mesh_edge_lines = edges_flat.reshape(-1, 3).tolist()
-                        else:
-                            body._mesh_edge_lines = [tuple(edges_flat[i:i+3]) for i in range(0, len(edges_flat), 3)]
-                    
-                    success = True
-
-                except Exception as e:
-                    print(f"DEBUG: OCP Tessellation Exception: {e}", flush=True)
-            
-            # --- OPTION B: Fallback ---
-            if not success:
-                mesh = solid.tessellate(tolerance=0.1)
-                body._mesh_vertices = [(v.X, v.Y, v.Z) for v in mesh[0]]
-                body._mesh_triangles = [tuple(t) for t in mesh[1]]
-            
-            # --- VIEWPORT UPDATE ---
-            if not body._mesh_vertices or not body._mesh_triangles:
-                return
-
-            self.viewport_3d.add_body(
-                body.id, 
-                body.name, 
-                body._mesh_vertices, 
-                body._mesh_triangles, 
-                color=getattr(body, 'color', None),
-                normals=getattr(body, '_mesh_normals', None),
-                edges=getattr(body, '_mesh_edges', None),          # Indizes
-                edge_lines=getattr(body, '_mesh_edge_lines', None) # NEU: Koordinaten
-            )
-            
-        except Exception as e:
-            print(f"DEBUG: MESHING ERROR: {e}", flush=True)
-            import traceback; traceback.print_exc()
+        # 2. Mesh zentral generieren lassen (nutzt Cache & OCP)
+        # Dies füllt body.vtk_mesh und body.vtk_edges
+        if hasattr(body, '_update_mesh_from_solid'):
+            body._update_mesh_from_solid(solid)
+        
+        # 3. Viewport aktualisieren
+        self._update_body_mesh(body)
 
     def _show_extrude_input_dialog(self):
         """Legacy Dialog - wird durch Panel ersetzt"""
@@ -1515,29 +1458,47 @@ class MainWindow(QMainWindow):
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
         
-        # Wenn wir manuelles Mesh übergeben (Legacy Fallback)
+        # 1. Fallback für manuelles Mesh (z.B. aus Boolean-Preview)
         if mesh_override:
-             points = mesh_override.points.tolist()
-             faces = []
-             i = 0
-             while i < len(mesh_override.faces):
-                n = mesh_override.faces[i]
-                faces.append(tuple(mesh_override.faces[i+1 : i+1+n]))
-                i += n + 1
-             body._mesh_vertices = points
-             body._mesh_triangles = faces
-        
-        # Normale Route: Daten aus dem Body nehmen (wurden von _rebuild berechnet)
-        if body._mesh_vertices and body._mesh_triangles:
-             # Farbe bestimmen
-             col_idx = self.document.bodies.index(body) % 3
+             import numpy as np
+             if hasattr(mesh_override, 'points'): # PyVista Mesh
+                 self.viewport_3d.add_body(
+                     bid=body.id,
+                     name=body.name,
+                     mesh_obj=mesh_override,
+                     color=getattr(body, 'color', None)
+                 )
+             return
+
+        # 2. NEUER PFAD: Prüfen auf VTK/PyVista Cache (aus cad_tessellator)
+        if hasattr(body, 'vtk_mesh') and body.vtk_mesh is not None:
+             # Farbe bestimmen (Round Robin)
+             try:
+                 col_idx = self.document.bodies.index(body) % 3
+             except: col_idx = 0
              colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
              
              self.viewport_3d.add_body(
-                 body.id, 
-                 body.name, 
-                 body._mesh_vertices, 
-                 body._mesh_triangles,
+                 bid=body.id, 
+                 name=body.name, 
+                 mesh_obj=body.vtk_mesh, 
+                 edge_mesh_obj=body.vtk_edges,
+                 color=colors[col_idx]
+             )
+             return
+
+        # 3. LEGACY PFAD: Alte Listen (nur Fallback)
+        if hasattr(body, '_mesh_vertices') and body._mesh_vertices:
+             try:
+                 col_idx = self.document.bodies.index(body) % 3
+             except: col_idx = 0
+             colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
+             
+             self.viewport_3d.add_body(
+                 bid=body.id, 
+                 name=body.name, 
+                 verts=body._mesh_vertices, 
+                 faces=body._mesh_triangles,
                  color=colors[col_idx]
              )
 
