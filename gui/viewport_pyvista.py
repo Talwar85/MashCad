@@ -604,22 +604,16 @@ class PyVistaViewport(QWidget):
             self._cache_drag_direction_for_face(list(self.selected_faces)[0])
     
     def _calculate_extrude_delta(self, current_pos):
-        """
-        Berechnet delta basierend auf der Projektion der Mausbewegung auf den Normalen-Vektor.
-        """
-        # Maus Vektor seit Start
+        """Berechnet delta mit reduzierter Empfindlichkeit für bessere Präzision."""
         dx = current_pos.x() - self.drag_start_pos.x()
         dy = current_pos.y() - self.drag_start_pos.y()
         mouse_vec = np.array([dx, dy])
         
-        # Skalarprodukt (Dot Product): Projiziert Mausbewegung auf die Extrusions-Richtung
-        # Wenn man in Richtung der Extrusion zieht -> Positiv
-        # Wenn man entgegen zieht -> Negativ
         projection = np.dot(mouse_vec, self._drag_screen_vector)
         
-        # Scaling Faktor für angenehme Geschwindigkeit (Pixel zu mm)
-        scaling = 0.5 
-        
+        # Reduzierter Scaling-Faktor (0.2 statt 0.5) für feinere Kontrolle
+        scaling = 0.2 
+        return projection * scaling
         return projection * scaling
 
     # ==================== PICKING ====================
@@ -1604,41 +1598,36 @@ class PyVistaViewport(QWidget):
         return []
     
     def show_extrude_preview(self, height):
-        """Zeigt eine dynamische 3D-Vorschau für alle selektierten Flächen (Sketch & Body)"""
+        """Erzeugt die 3D-Vorschau auch für Körperflächen (Push/Pull)."""
         self._clear_preview()
         self.extrude_height = height
         
-        if not self.selected_face_ids or abs(height) < 0.1: 
-            return
+        # Prüfe sowohl Sketch-Daten als auch Body-Flächen aus dem Detector
+        if not self.selected_face_ids or abs(height) < 0.1: return
 
         try:
-            import pyvista as pv
             preview_meshes = []
-            
             for fid in self.selected_face_ids:
-                # Hole Face-Daten vom Detector
+                # Suche das Face im Detector (deckt Sketch und Body ab)
                 face = next((f for f in self.detector.faces if f.id == fid), None)
+                
                 if face and face.display_mesh:
                     normal = np.array(face.plane_normal)
-                    # Erzeuge temporäres Extrusions-Mesh
-                    # Da display_mesh bereits die korrekte 3D-Lage hat, reicht einfaches .extrude()
+                    # Extrudiere das vorhandene Display-Mesh entlang der Normalen
                     p_mesh = face.display_mesh.extrude(normal * height, capping=True)
                     preview_meshes.append(p_mesh)
 
             if preview_meshes:
-                # Alle Vorschau-Meshes zu einem Actor kombinieren
                 combined = preview_meshes[0]
                 for i in range(1, len(preview_meshes)):
                     combined = combined.merge(preview_meshes[i])
                 
-                # Farbe basierend auf Richtung (Blau für Positiv, Rot für Negativ/Cut)
                 col = '#6699ff' if height > 0 else '#ff6666'
                 self.plotter.add_mesh(combined, color=col, opacity=0.5, name='prev', pickable=False)
                 self._preview_actor = 'prev'
                 self.plotter.render()
-                
         except Exception as e:
-            print(f"Viewport Preview Error: {e}")
+            print(f"Preview Error: {e}")
     
     def _calculate_body_face_extrusion(self, face, height):
         """Berechnet vollständige Extrusion für eine Body-Fläche inkl. Seitenwände"""
