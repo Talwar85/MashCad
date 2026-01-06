@@ -39,6 +39,7 @@ from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
 from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
+from gui.log_panel import LogPanel
 
 try:
     from ocp_tessellate.tessellator import tessellate
@@ -264,30 +265,50 @@ class MainWindow(QMainWindow):
         logger.info("Ready. PyVista & Build123d active.")
         
     def _setup_logging(self):
-        # Entferne Standard-Logger und füge Qt-Handler hinzu
         logger.remove()
         self.qt_log_handler = QtLogHandler()
-        self.qt_log_handler.new_message.connect(self._show_notification)
+        # Verbinde Signal mit neuer zentraler Log-Methode
+        self.qt_log_handler.new_message.connect(self._handle_log_message)
         
-        # Format: Zeit | Level | Nachricht
+        # Konsole (stderr) für Debugging
         logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
+        # Qt Handler für GUI
         logger.add(self.qt_log_handler.write, format="{message}", level="INFO")
 
-    def _show_notification(self, level, message):
-        """Erstellt ein Toast-Popup"""
-        # Mapping von Loguru levels
+    def _handle_log_message(self, level, message):
+        """
+        Zentrale Stelle für alle Nachrichten.
+        1. Fügt IMMER einen Eintrag ins Log-Panel hinzu.
+        2. Zeigt NUR bei Success/Error/Warning ein Overlay an.
+        """
+        # 1. Ins persistente Log schreiben
+        self.log_panel.add_message(level, message)
+        
+        # 2. Overlay Entscheidung
+        show_overlay = False
+        if level in ["success", "error", "critical"]:
+            show_overlay = True
+        elif level == "warning":
+            # Warnings auch zeigen, aber vielleicht kürzer (optional)
+            show_overlay = True
+            
+        if show_overlay:
+            self._show_toast_overlay(level, message)
+            
+    def _show_toast_overlay(self, level, message):
+        """Erstellt das Toast-Popup (ehemals _show_notification)"""
+        # Mapping von Loguru levels für Style
         if level in ["critical", "error"]: style = "error"
         elif level == "warning": style = "warning"
         elif level == "success": style = "success"
         else: style = "info"
         
-        # Widget erstellen (Parent ist self, damit es im Fenster bleibt)
+        # Widget erstellen
         notif = NotificationWidget(message, style, self)
-        
         self.notifications.append(notif)
-        
-        # Position berechnen
         self._reposition_notifications()
+        
+    
 
     def _cleanup_notification(self, notif):
         if notif in self.notifications:
@@ -414,21 +435,31 @@ class MainWindow(QMainWindow):
         self.main_splitter.setStyleSheet("QSplitter { background: #1e1e1e; }")
         
         # === LINKE SEITE: Browser + Tools horizontal ===
-        left_widget = QWidget()
-        left_widget.setStyleSheet("background-color: #1e1e1e;")
-        left_layout = QHBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_container = QWidget()  # <--- Hier heißt die Variable "left_container"
+        left_layout = QHBoxLayout(left_container)
+        left_layout.setContentsMargins(0,0,0,0)
         left_layout.setSpacing(0)
+
+        # 1. Spalte: Browser (oben) + Log (unten)
+        browser_log_splitter = QSplitter(Qt.Vertical)
+        browser_log_splitter.setHandleWidth(1)
         
-        # Project Browser (collapsible)
         self.browser = ProjectBrowser()
         self.browser.set_document(self.document)
-        left_layout.addWidget(self.browser)
+        browser_log_splitter.addWidget(self.browser)
+        
+        self.log_panel = LogPanel() # Log Panel Instanz
+        browser_log_splitter.addWidget(self.log_panel)
+        
+        # Verhältnisse setzen (Browser groß, Log klein)
+        browser_log_splitter.setStretchFactor(0, 3)
+        browser_log_splitter.setStretchFactor(1, 1)
+
+        left_layout.addWidget(browser_log_splitter)
         
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
-        self.tool_stack.setMinimumWidth(140)
-        self.tool_stack.setMaximumWidth(200)
+        self.tool_stack.setMinimumWidth(220)
         self.tool_stack.setStyleSheet("background-color: #1e1e1e;")
         
         self.transform_panel = TransformPanel(self)
@@ -448,8 +479,8 @@ class MainWindow(QMainWindow):
         
         left_layout.addWidget(self.tool_stack)
         
-        # Left Widget zum Splitter hinzufügen
-        self.main_splitter.addWidget(left_widget)
+        # === FIX: left_container statt left_widget ===
+        self.main_splitter.addWidget(left_container) 
         
         # === MITTE: Viewport / Sketch Editor ===
         self.center_stack = QStackedWidget()
@@ -540,30 +571,31 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
         
         # Datei-Menü
-        file_menu = mb.addMenu(tr("&Datei"))
-        file_menu.addAction(tr("Neu"), self._new_project, QKeySequence.New)
-        file_menu.addAction(tr("Öffnen..."), lambda: None, QKeySequence.Open)
-        file_menu.addAction(tr("Speichern"), lambda: None, QKeySequence.Save)
+        file_menu = mb.addMenu(tr("File"))
+        file_menu.addAction(tr("New Project"), self._new_project, QKeySequence.New)
+        file_menu.addAction(tr("Open..."), lambda: None, QKeySequence.Open)
+        file_menu.addAction(tr("Save..."), lambda: None, QKeySequence.Save)
         file_menu.addSeparator()
-        file_menu.addAction(tr("STL exportieren..."), self._export_stl)
+        file_menu.addAction(tr("Export STL..."), self._export_stl)
+        file_menu.addAction("Export STEP...", self._export_step)
         file_menu.addSeparator()
-        file_menu.addAction(tr("Beenden"), self.close, QKeySequence.Quit)
+        file_menu.addAction(tr("Quit"), self.close, QKeySequence.Quit)
         
         # Bearbeiten-Menü
-        edit_menu = mb.addMenu(tr("&Bearbeiten"))
-        edit_menu.addAction(tr("Rückgängig"), lambda: None, QKeySequence.Undo)
-        edit_menu.addAction(tr("Wiederholen"), lambda: None, QKeySequence.Redo)
+        edit_menu = mb.addMenu(tr("Edit"))
+        edit_menu.addAction(tr("Undo"), lambda: None, QKeySequence.Undo)
+        edit_menu.addAction(tr("Redo"), lambda: None, QKeySequence.Redo)
         
         # Ansicht-Menü
-        view_menu = mb.addMenu(tr("&Ansicht"))
-        view_menu.addAction(tr("Isometrisch"), lambda: self.viewport_3d.set_view('iso') if hasattr(self.viewport_3d, 'set_view') else None)
-        view_menu.addAction(tr("Oben (XY)"), lambda: self.viewport_3d.set_view('top') if hasattr(self.viewport_3d, 'set_view') else None)
-        view_menu.addAction(tr("Vorne (XZ)"), lambda: self.viewport_3d.set_view('front') if hasattr(self.viewport_3d, 'set_view') else None)
-        view_menu.addAction(tr("Rechts (YZ)"), lambda: self.viewport_3d.set_view('right') if hasattr(self.viewport_3d, 'set_view') else None)
+        view_menu = mb.addMenu(tr("View"))
+        view_menu.addAction("Isometric", lambda: self.viewport_3d.set_view('iso'))
+        view_menu.addAction(tr("Top"), lambda: self.viewport_3d.set_view('top'))
+        view_menu.addAction(tr("Front"), lambda: self.viewport_3d.set_view('front'))
+        view_menu.addAction(tr("Right"), lambda: self.viewport_3d.set_view('right'))
         
         # Hilfe-Menü
-        help_menu = mb.addMenu(tr("&Hilfe"))
-        help_menu.addAction(tr("Über LiteCAD"), self._show_about)
+        help_menu = mb.addMenu(tr("Help"))
+        help_menu.addAction(tr("About LiteCAD"), self._show_about)
 
     def _connect_signals(self):
         # 2D Tool Panel

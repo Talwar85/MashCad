@@ -1,4 +1,6 @@
 import os
+from i18n import tr # Import hinzufügen
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QToolButton, QGroupBox, 
                                QGridLayout, QLabel, QScrollArea, QFrame, QSizePolicy)
 from PySide6.QtCore import QSize, Qt, Signal
@@ -8,6 +10,8 @@ class ToolPanel3D(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Keine Max-Width Einschränkung
+        self.setMinimumWidth(220)
         self.setStyleSheet("""
             QWidget { background-color: #1e1e1e; color: #e0e0e0; font-family: Segoe UI, sans-serif; font-size: 11px; }
             QGroupBox { 
@@ -34,59 +38,65 @@ class ToolPanel3D(QWidget):
         
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("background: transparent;")
         
+        # WICHTIG: Horizontalen Scrollbar ausblenden, Widget passt sich Breite an
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
         content_widget = QWidget()
+        content_widget.setStyleSheet("background: transparent;")
+        
         self.layout = QVBoxLayout(content_widget)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(15)
+        # Etwas kompaktere Ränder
+        self.layout.setContentsMargins(6, 6, 6, 6)
+        self.layout.setSpacing(10) # Reduziert von 15
         
         # --- Sketch & Base ---
         self._add_group("Sketch & Base", [
-            ("New Sketch", "new_sketch"),
-            ("Extrude", "extrude"),
+            (tr("New Sketch"), tr("Press S for new Sketch"), "new_sketch"),
+            (tr("Extrude..."), tr("Extrude"), "extrude"),
         ])
         
         # --- Modify ---
-        self._add_group("Modify", [
-            ("Fillet", "fillet"),
-            ("Chamfer", "chamfer"),
+        self._add_group(tr("Modify"), [
+            (tr("Fillet"), "fillet"),
+            (tr("Chamfer"), "chamfer"),
         ])
 
         # --- Transform ---
         self._add_group("Transform", [
-            ("Move", "Move", "move_body"),
-            ("Rot", "Rotate", "rotate_body"),
-            ("Scale", "Scale", "scale_body"),
-            ("Mirr", "Mirror", "mirror_body"),
-            ("Copy", "Copy", "copy_body"),
+            (tr("Move"), tr("Move"), "move_body"),
+            (tr("Rotate"), tr("Rotate"), "rotate_body"),
+            (tr("Scale"), tr("Scale"), "scale_body"),
+            (tr("Mirror"), tr("Mirror"), "mirror_body"),
+            (tr("Copy"), tr("Copy"), "copy_body"),
         ], grid=True)
         
         # --- Boolean ---
         self._add_group("Boolean", [
-            ("Union", "boolean_union"),
-            ("Cut", "boolean_cut"),
-            ("Intersect", "boolean_intersect"),
+            (tr("Union") if tr("Union") != "Union" else "Union", "boolean_union"),
+            (tr("Cut") if tr("Cut") != "Cut" else "Cut", "boolean_cut"),
+            (tr("Intersect") if tr("Intersect") != "Intersect" else "Intersect", "boolean_intersect"),
         ])
         
         # --- Tools ---
-        # FIX: Now works with 3 elements (Label, Tooltip, Action)
-        self._add_group("Tools", [
-            ("Convert Mesh to CAD", "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"), 
-            ("Measure", "Messen", "measure"),
+        self._add_group(tr("TOOLS"), [
+            (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"), 
+            (tr("Measure") if tr("Measure") != "Measure" else "Measure", "measure"),
         ])
         
-        # --- Import/Export (Updated) ---
-        self._add_group("File", [
-            ("Import Mesh", "Lade STL/OBJ Datei", "import_mesh"),  # <--- NEU
-            ("STL Export", "export_stl"),
-            ("STEP Export", "export_step"),
+        # --- Import/Export ---
+        self._add_group(tr("File"), [
+            (tr("Import Mesh") if tr("Import Mesh") != "Import Mesh" else "Import Mesh", "Lade STL/OBJ Datei", "import_mesh"),
+            (tr("Export STL..."), "export_stl"),
+            ("Export STEP...", "export_step"),
         ])
         
         self.layout.addStretch()
@@ -105,7 +115,6 @@ class ToolPanel3D(QWidget):
             lay.setContentsMargins(5, 10, 5, 5)
             
         for i, btn_data in enumerate(buttons):
-            # FIX: Flexible unpacking for 2 or 3 elements
             if len(btn_data) == 3:
                 label, tip, action = btn_data
             else:
