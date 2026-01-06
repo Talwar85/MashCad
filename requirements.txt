@@ -7,3 +7,4 @@ ezdxf>=1.0.0
 build123d>=0.5.0
 ocp-tessellate=3.10
 pymeshlab
+meshlib

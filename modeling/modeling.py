@@ -1,3 +1,4 @@
+
 """
 LiteCAD - 3D Modeling
 Robust B-Rep Implementation with Build123d & Smart Failure Recovery
@@ -176,7 +177,8 @@ class Body:
         converter = MeshToBREPConverter()
         
         # Wir zielen auf 2000-5000 Faces, damit OCP nicht abstürzt
-        solid = converter.convert(self.vtk_mesh, target_faces=3000, smooth=True)
+        # FIX: Parameter 'smooth' entfernt, stattdessen 'method="auto"' genutzt
+        solid = converter.convert(self.vtk_mesh, target_faces=3000, method="auto")
 
         if solid:
             self._build123d_solid = solid
