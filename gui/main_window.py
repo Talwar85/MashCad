@@ -1163,24 +1163,41 @@ class MainWindow(QMainWindow):
         self._set_mode("sketch")
         self.browser.refresh()
     
-    def _set_sketch_body_references(self, origin, normal):
-        """Sammelt Body-Daten und übergibt sie an den SketchEditor"""
+    def _set_sketch_body_references(self, origin, normal, x_dir_override=None):
+        """
+        Sammelt Body-Daten und übergibt sie an den SketchEditor.
+        FIX: Nutzt set_reference_bodies statt set_background_geometry.
+        """
         bodies_data = []
         
-        for body in self.document.bodies:
-            mesh = self.viewport_3d.get_body_mesh(body.id)
+        # Alle sichtbaren Körper durchgehen
+        for bid, body in self.viewport_3d.bodies.items():
+            if not self.viewport_3d.is_body_visible(bid): continue
+            
+            # Mesh holen (PyVista PolyData)
+            mesh = self.viewport_3d.get_body_mesh(bid)
+            
             if mesh is not None:
-                # Hole Farbe aus viewport
-                body_info = self.viewport_3d.bodies.get(body.id, {})
-                color = body_info.get('color', (0.6, 0.6, 0.8))
+                # Farbe holen (oder Default)
+                color = body.get('color', (0.6, 0.6, 0.8))
+                
                 bodies_data.append({
                     'mesh': mesh,
                     'color': color
                 })
         
-        # Übergebe an SketchEditor
+        # WICHTIG: Achsen berechnen, falls nicht übergeben
+        if x_dir_override is None:
+            x_dir_override, _ = self._calculate_plane_axes(normal)
+
+        # Übergebe an SketchEditor (mit der korrekten Methode!)
         if hasattr(self.sketch_editor, 'set_reference_bodies'):
-            self.sketch_editor.set_reference_bodies(bodies_data, normal, origin)
+            self.sketch_editor.set_reference_bodies(
+                bodies_data, 
+                normal, 
+                origin, 
+                plane_x=x_dir_override  # Das verhindert die Rotation!
+            )
 
     def _finish_sketch(self):
         """Beendet den Sketch-Modus und räumt auf."""
@@ -1922,8 +1939,37 @@ class MainWindow(QMainWindow):
         #return super().eventFilter(obj, event)
 
     def _on_opt_change(self, o, v): pass
+    
     def _edit_feature(self, d): 
-        if d[0]=='sketch': self.active_sketch=d[1]; self.sketch_editor.sketch=d[1]; self._set_mode("sketch")
+        """
+        Wird aufgerufen durch Doppelklick im Browser.
+        FIX: Lädt jetzt auch die Referenz-Geometrie für den Hintergrund!
+        """
+        if d[0] == 'sketch':
+            sketch = d[1]
+            self.active_sketch = sketch
+            self.sketch_editor.sketch = sketch
+            
+            # 1. Gespeicherte Achsen holen (oder Fallback berechnen)
+            origin = sketch.plane_origin
+            normal = sketch.plane_normal
+            x_dir = getattr(sketch, 'plane_x_dir', None)
+            
+            if x_dir is None:
+                # Fallback für alte Skizzen ohne gespeicherte X-Achse
+                x_dir, _ = self._calculate_plane_axes(normal)
+
+            # 2. Hintergrund-Referenzen laden (LÖST PROBLEM 2)
+            # Wir übergeben explizit x_dir, damit der Hintergrund nicht verdreht ist
+            self._set_sketch_body_references(origin, normal, x_dir)
+            
+            # 3. Modus wechseln
+            self._set_mode("sketch")
+            
+            # 4. Statusmeldung
+            self.statusBar().showMessage(f"Bearbeite Skizze: {sketch.name}")
+        
+        
     def _new_project(self): 
         self.document = Document("Projekt1")
         self.browser.set_document(self.document)

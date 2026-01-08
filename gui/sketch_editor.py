@@ -424,11 +424,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.view_offset = QPointF(self.width() / 2, self.height() / 2)
         self.update()
     
-    def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0)):
+    def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         """
         Setzt die Body-Referenzen für transparente Anzeige.
-        bodies_data: Liste von {'mesh': pyvista_mesh, 'color': (r,g,b)} 
-        plane_normal/origin: Die Sketch-Ebene für 2D-Projektion
+        FIX: Akzeptiert jetzt plane_x für korrekte Rotation!
         """
         self.reference_bodies = []
         self.sketch_plane_normal = plane_normal
@@ -442,15 +441,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # Berechne lokales Koordinatensystem für die Ebene
         n = np.array(plane_normal)
-        n = n / np.linalg.norm(n) if np.linalg.norm(n) > 0 else np.array([0,0,1])
+        norm = np.linalg.norm(n)
+        n = n / norm if norm > 0 else np.array([0,0,1])
         
-        # U und V Vektoren (lokal X und Y auf der Ebene)
-        if abs(n[2]) < 0.9:
-            u = np.cross(n, [0, 0, 1])
+        # FIX: Nutze übergebene X-Achse, falls vorhanden
+        if plane_x:
+            u = np.array(plane_x)
+            u = u / np.linalg.norm(u)
         else:
-            u = np.cross(n, [1, 0, 0])
-        u = u / np.linalg.norm(u)
-        v = np.cross(n, u)
+            # Fallback: Raten (kann zu Rotation führen)
+            if abs(n[2]) < 0.9:
+                u = np.cross(n, [0, 0, 1])
+            else:
+                u = np.cross(n, [1, 0, 0])
+            u = u / np.linalg.norm(u)
+            
+        v = np.cross(n, u) # Y-Achse
         
         origin = np.array(plane_origin)
         
@@ -458,8 +464,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             mesh = body_info.get('mesh')
             color = body_info.get('color', (0.6, 0.6, 0.8))
             
-            if mesh is None:
-                continue
+            if mesh is None: continue
             
             try:
                 # Extrahiere Kanten für Drahtgitter-Darstellung

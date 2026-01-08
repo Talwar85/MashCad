@@ -526,8 +526,84 @@ class GeometryDetector:
         pz = oz + x * uz + y * vz
         
         return (px, py, pz)
+    
+    def _shapely_to_pv_mesh(self, poly, o, n, x_dir, plane_y_dir=None):
+        """
+        Erstellt ein PyVista Mesh aus einem Shapely Polygon.
+        FIX: Mit Puffer-Logik, damit Kreise sauber erkannt werden.
+        """
+        if not HAS_VTK: return None
+        
+        # Vektoren vorbereiten
+        import numpy as np
+        
+        if plane_y_dir is None:
+             n_vec = np.array(n)
+             x_vec = np.array(x_dir)
+             y_vec = np.cross(n_vec, x_vec)
+        else:
+             x_vec = np.array(x_dir)
+             y_vec = np.array(plane_y_dir)
 
-    def _shapely_to_pv_mesh(self, poly, o, n, x_dir, plane_y_dir=None): # <--- plane_y_dir hinzugefügt
+        import shapely.ops
+        try:
+            # FIX 1: Polygon bereinigen (Selbstüberschneidungen reparieren)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+
+            # Triangulierung im 2D Raum
+            tris = shapely.ops.triangulate(poly)
+            
+            # FIX 2: Robustere Prüfung für Kreise/Rundungen
+            # Wir nutzen einen minimalen Puffer (1e-5), um Rundungsfehler 
+            # an den Rändern abzufangen.
+            buffered_poly = poly.buffer(1e-5)
+            
+            valid_tris = []
+            for t in tris:
+                # Prüfen, ob der Schwerpunkt im (gepufferten) Polygon liegt
+                if buffered_poly.contains(t.centroid):
+                    valid_tris.append(t)
+                # Fallback: Wenn Schwerpunkt knapp draußen, aber Dreieck schneidet
+                # (Wichtig für schmale Randstücke bei Kreisen)
+                elif buffered_poly.intersects(t):
+                    valid_tris.append(t)
+            
+            # Notfall-Fallback: Wenn Filterung alles gelöscht hat (z.B. bei sehr kleinen Kreisen),
+            # aber Dreiecke da waren, nehmen wir alle.
+            if not valid_tris and len(tris) > 0 and poly.area > 0:
+                 valid_tris = tris
+            
+            if not valid_tris:
+                return None
+            
+            points = []
+            faces = []
+            c = 0
+            
+            for t in valid_tris:
+                # 2D Koordinaten des Dreiecks holen
+                xx, yy = t.exterior.coords.xy
+                
+                # Die ersten 3 Punkte des Dreiecks transformieren
+                p1 = self._transform_2d_3d(xx[0], yy[0], o, x_vec, y_vec)
+                p2 = self._transform_2d_3d(xx[1], yy[1], o, x_vec, y_vec)
+                p3 = self._transform_2d_3d(xx[2], yy[2], o, x_vec, y_vec)
+                
+                points.extend([p1, p2, p3])
+                # PyVista Face Format: [AnzahlPunkte, id1, id2, id3]
+                faces.extend([3, c, c+1, c+2])
+                c += 3
+            
+            # Mesh erstellen
+            mesh = pv.PolyData(points, faces)
+            return mesh
+
+        except Exception as e:
+            print(f"Mesh generation error: {e}")
+            return None
+            
+    def _shapely_to_pv_mesh_old(self, poly, o, n, x_dir, plane_y_dir=None): # <--- plane_y_dir hinzugefügt
         """
         Erstellt ein PyVista Mesh aus einem Shapely Polygon.
         FIX: Nutzt explizit übergebene X/Y Vektoren für exakte Deckungsgleichheit mit der Skizze.
