@@ -259,6 +259,7 @@ class MainWindow(QMainWindow):
         self._create_ui()
         self._create_menus()
         self._connect_signals()
+       
         QApplication.instance().installEventFilter(self)
         self._set_mode("3d")
         self.selection_mode = "all" 
@@ -536,6 +537,10 @@ class MainWindow(QMainWindow):
         self._fillet_mode = None  # 'fillet' or 'chamfer'
         self._fillet_target_body = None
         
+        self.tool_panel.option_changed.connect(self.sketch_editor.handle_option_changed)
+        # 2. Vom Editor zum Panel (Wenn man 'X' oder 'G' drückt -> Checkbox Update)
+        self.sketch_editor.construction_mode_changed.connect(self.tool_panel.set_construction)
+        self.sketch_editor.grid_snap_mode_changed.connect(self.tool_panel.set_grid_snap)
         self._create_toolbar()
      
     def resizeEvent(self, event):

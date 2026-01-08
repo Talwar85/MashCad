@@ -253,6 +253,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     sketched_changed = Signal()
     tool_changed = Signal(SketchTool)
     status_message = Signal(str)
+    construction_mode_changed = Signal(bool)
+    grid_snap_mode_changed = Signal(bool)
     
     # Farben
     BG_COLOR = QColor(28, 28, 28)
@@ -380,7 +382,23 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketch_plane_origin = (0, 0, 0)  # Ursprung der Sketch-Ebene
         
         QTimer.singleShot(100, self._center_view)
-        
+    
+    def handle_option_changed(self, option: str, value):
+        """Reagiert auf Änderungen aus dem ToolPanel (Checkboxen)"""
+        if option == "construction":
+            self.construction_mode = bool(value)
+            # Optional: Feedback in Statuszeile, wenn per Klick geändert
+            state = tr("ON") if self.construction_mode else tr("OFF")
+            self.status_message.emit(tr("Construction: {state}").format(state=state))
+            
+        elif option == "grid_snap":
+            self.grid_snap = bool(value)
+            
+        elif option == "grid_size":
+            self.grid_size = float(value)
+            
+        self.update()
+    
     def _calculate_plane_axes(self, normal_vec):
         """
         Berechnet stabile X- und Y-Achsen für eine Ebene basierend auf der Normalen.
@@ -2042,11 +2060,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _toggle_grid_snap(self):
         self.grid_snap = not self.grid_snap
-        self.status_message.emit(tr("Grid snap: {state}").format(state=tr("ON") if self.grid_snap else tr("OFF")))
+        state = tr("ON") if self.grid_snap else tr("OFF")
+        self.status_message.emit(tr("Grid snap: {state}").format(state=state))
+        
+        # WICHTIG: Signal senden, damit die Checkbox im ToolPanel aktualisiert wird
+        self.grid_snap_mode_changed.emit(self.grid_snap)
+        self.update()
     
     def _toggle_construction(self):
         self.construction_mode = not self.construction_mode
-        self.status_message.emit(tr("Construction: {state}").format(state=tr("ON") if self.construction_mode else tr("OFF")))
+        state = tr("ON") if self.construction_mode else tr("OFF")
+        self.status_message.emit(tr("Construction: {state}").format(state=state))
+        
+        # WICHTIG: Signal senden, damit die Checkbox im ToolPanel aktualisiert wird
+        self.construction_mode_changed.emit(self.construction_mode)
+        self.update()
     
     def _increase_tolerance(self):
         """Toleranz für Muttern erhöhen"""
