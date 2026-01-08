@@ -1133,6 +1133,7 @@ class MainWindow(QMainWindow):
         self._set_sketch_body_references(origin, normal)
         
         self._set_mode("sketch")
+        
         self.browser.refresh()
     
     def _set_sketch_body_references(self, origin, normal):
@@ -1818,27 +1819,35 @@ class MainWindow(QMainWindow):
 
         if event.type() == QEvent.KeyPress:
             k = event.key()
+             # Tab - fokussiert Input-Felder
+            if k == Qt.Key_Tab:
+                if self.mode == "sketch":
+                    self.sketch_editor.keyPressEvent(event)
+                    return True
+                if self.viewport_3d.extrude_mode:
+                    # Fokussiere das Extrude-Panel
+                    self.extrude_panel.height_input.setFocus()
+                    self.extrude_panel.height_input.selectAll()
+                    return True
+            
             if k == Qt.Key_E:
                 if not self.viewport_3d.extrude_mode:
                     self._extrude_dialog()
                 return True
                 
             # Selektions-Modi umschalten (Pipeline an Viewport senden)
-            if not getattr(self.viewport_3d, 'is_dragging', False):
+            if self.mode == "3d":
                 if k == Qt.Key_1:
-                    self.selection_mode = "face"
                     self.viewport_3d.set_selection_mode("face")
-                    self.statusBar().showMessage("Selektions-Filter: FLÄCHEN")
-                    return True
+                    self.statusBar().showMessage("Modus: Flächen")
+                    return True # Event konsumiert
                 elif k == Qt.Key_2:
-                    self.selection_mode = "hole"
                     self.viewport_3d.set_selection_mode("hole")
-                    self.statusBar().showMessage("Selektions-Filter: LÖCHER")
+                    self.statusBar().showMessage("Modus: Löcher")
                     return True
                 elif k == Qt.Key_3:
-                    self.selection_mode = "sketch"
                     self.viewport_3d.set_selection_mode("sketch")
-                    self.statusBar().showMessage("Selektions-Filter: SKIZZE")
+                    self.statusBar().showMessage("Modus: Skizze")
                     return True
 
             # Bestätigung für Extrude
@@ -1854,8 +1863,36 @@ class MainWindow(QMainWindow):
                 elif self.mode == "sketch":
                     self._finish_sketch()
                     return True
-
-        return super().eventFilter(obj, event)
+                    
+            # F - Flip Richtung im Extrude-Modus
+            if k == Qt.Key_F and self.viewport_3d.extrude_mode:
+                self.extrude_panel._flip_direction()
+                return True
+            
+            
+            # Plane Selection Shortcuts
+            if self.viewport_3d.plane_select_mode:
+                if k in [Qt.Key_1, Qt.Key_T]:
+                    self._on_plane_selected('xy')
+                    return True
+                if k in [Qt.Key_2, Qt.Key_F]:
+                    self._on_plane_selected('xz')
+                    return True
+                if k in [Qt.Key_3, Qt.Key_R]:
+                    self._on_plane_selected('yz')
+                    return True
+                    
+                    
+            # 3D Mode Shortcuts
+            if self.mode == "3d" and not self.viewport_3d.extrude_mode:
+                if k == Qt.Key_E:
+                    self._extrude_dialog()
+                    return True
+                if k == Qt.Key_S:
+                    self._new_sketch()
+                    return True        
+        return False            
+        #return super().eventFilter(obj, event)
 
     def _on_opt_change(self, o, v): pass
     def _edit_feature(self, d): 

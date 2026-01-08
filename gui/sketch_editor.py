@@ -1492,6 +1492,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
     
     def _on_dim_confirmed(self):
+        
         values = self.dim_input.get_values()
         
         if self.viewport and getattr(self.viewport, 'extrude_mode', False):
@@ -1586,7 +1587,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketch.solve()
             self.sketched_changed.emit()
             self._find_closed_profiles()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.RECTANGLE_CENTER:
             w, h = values.get("width", 50), values.get("height", 30)
@@ -1599,7 +1600,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketch.solve()
             self.sketched_changed.emit()
             self._find_closed_profiles()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.CIRCLE:
             # WICHTIG: Wenn gelockt, verwende live_radius!
@@ -1617,7 +1618,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
             self.sketched_changed.emit()
             self._find_closed_profiles()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.POLYGON:
             # WICHTIG: Wenn gelockt, verwende live_radius!
@@ -1637,26 +1638,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketch.solve()
             self.sketched_changed.emit()
             self._find_closed_profiles()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             dx, dy = values.get("dx", 0), values.get("dy", 0)
             self._save_undo()
             self._move_selection(dx, dy)
             self.sketched_changed.emit()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.ROTATE and self.tool_step >= 1:
             self._save_undo()
             self._rotate_selection(self.tool_points[0], values.get("angle", 0))
             self.sketched_changed.emit()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
             
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
             self._save_undo()
             self._scale_selection(self.tool_points[0], values.get("factor", 1.0))
             self.sketched_changed.emit()
-            self._cancel_tool()
+            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
         
         # SLOT: Tab-Eingabe
         elif self.current_tool == SketchTool.SLOT:
@@ -1679,7 +1680,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self._create_slot(p1, p2, width)
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
-                self._cancel_tool()
+                QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
         
         # OFFSET, FILLET, CHAMFER: Nur Wert speichern, nicht anwenden
         elif self.current_tool == SketchTool.OFFSET:
@@ -1827,32 +1828,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
         
+        # 1. Basis-Interaktionen (Pan, Drag, Box)
         if self.is_panning:
             self.view_offset += pos - self.pan_start
             self.pan_start = pos
         elif self.spline_dragging:
-            # Spline-Element ziehen
             self._drag_spline_element(event.modifiers() & Qt.ShiftModifier)
         elif self.selection_box_start:
             self.selection_box_end = pos
         else:
+            # 2. Snapping und Hover-Logik
             snapped, snap_type = self.snap_point(self.mouse_world)
             self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
             self.hovered_entity = self._find_entity_at(self.mouse_world)
             self.hovered_face = self._find_face_at(self.mouse_world)
             
-            # Spline-Element-Hover für Cursor-Feedback
+            # Cursor-Feedback
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
                 self.hovered_spline_element = spline_elem
+                self.setCursor(Qt.OpenHandCursor) 
                 if spline_elem:
                     self.setCursor(Qt.OpenHandCursor)
                 else:
                     self._update_cursor()
-            
+            # 3. Live-Werte berechnen (schreibt in self.live_length etc.)
             self._update_live_values(snapped)
+
+        
         self.update()
-    
+        
+          
     def _drag_spline_element(self, shift_pressed):
         """Zieht ein Spline-Element und aktualisiert die Vorschau sofort"""
         if not self.spline_drag_spline or self.spline_drag_cp_index is None:
@@ -1949,6 +1955,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                    -(world_after.y() - world_before.y()) * self.view_scale)
         self.update()
     
+    
     def keyPressEvent(self, event):
         key, mod = event.key(), event.modifiers()
         if self.dim_input_active and self.dim_input.isVisible():
@@ -1961,8 +1968,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.dim_input.next_field()
                 return
             elif key in (Qt.Key_Return, Qt.Key_Enter):
-                # Enter bestätigt den aktuellen Wert
-                self.dim_input._confirm()
+                # FIX: Enter wird bereits vom LineEdit-Signal (returnPressed) verarbeitet.
+                # Ein manueller Aufruf von _confirm() hier führt zur doppelten Erstellung 
+                # (einmal korrekt, einmal als "Geister-Objekt" an der Mausposition).
+                # Wir konsumieren das Event nur, damit es nicht weitergereicht wird.
+                # self.dim_input._confirm() <--- ENTFERNT
                 return
             return
         
@@ -2016,6 +2026,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         }
         if key in shortcuts: shortcuts[key](); self.update()
     
+
+  
+            
     def _finish_current_operation(self):
         if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
             self._finish_spline()

@@ -684,7 +684,8 @@ class PyVistaViewport(QWidget):
                 self.is_dragging = False
                 self._is_potential_drag = False
         
-        return super().eventFilter(obj, event)
+        return False
+        #return super().eventFilter(obj, event)
     
     def _handle_3d_click(self, x, y):
         """Erkennt Klick auf 3D Körper und sendet Signal"""
