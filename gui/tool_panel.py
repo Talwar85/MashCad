@@ -1,5 +1,5 @@
 """
-LiteCAD - Tool Panel
+MashCad - Tool Panel
 Übersichtliche Werkzeugpalette für den Sketcher
 """
 
@@ -19,46 +19,6 @@ from PySide6.QtWidgets import (
     QGroupBox, QCheckBox, QSlider, QToolButton, QButtonGroup,
     QSizePolicy
 )
-
-class ToolButton(QToolButton):
-    """Einzelner Werkzeug-Button - Style angepasst an 3D Panel"""
-    
-    def __init__(self, text: str, shortcut: str = "", tooltip: str = "", parent=None):
-        super().__init__(parent)
-        self.setText(text)
-        # i18n: Tooltip zusammensetzen
-        clean_tooltip = tr(tooltip) if tooltip else text
-        self.setToolTip(f"{clean_tooltip} [{shortcut}]" if shortcut else clean_tooltip)
-        
-        self.setCheckable(True)
-        self.setMinimumSize(60, 32) # Größer als vorher (50, 26)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFocusPolicy(Qt.NoFocus)
-        # CSS Update: Angeglichen an tool_panel_3d
-        self.setStyleSheet("""
-            QToolButton {
-                background-color: #2d2d30;
-                border: 1px solid #3e3e3e;
-                border-radius: 3px;
-                color: #e0e0e0;
-                font-family: Segoe UI, sans-serif;
-                font-size: 11px;
-                padding: 4px;
-            }
-            QToolButton:hover {
-                background-color: #3e3e42;
-                border-color: #555;
-                color: white;
-            }
-            QToolButton:checked {
-                background-color: #0078d4;
-                border-color: #0078d4;
-                color: white;
-            }
-            QToolButton:pressed {
-                background-color: #094771;
-            }
-        """)
 
 class ToolButton(QToolButton):
     """Einzelner Werkzeug-Button"""

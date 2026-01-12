@@ -1,5 +1,5 @@
 """
-LiteCAD - Sketch Dialogs
+MashCad - Sketch Dialogs
 DimensionInput and ToolOptionsPopup for the 2D sketch editor
 """
 

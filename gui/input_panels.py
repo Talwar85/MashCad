@@ -1,5 +1,5 @@
 """
-LiteCAD - Input Panels
+MashCad - Input Panels
 Fixed: TransformPanel Signal Blocking for circular updates.
 """
 
@@ -41,12 +41,14 @@ class ExtrudeInputPanel(QFrame):
     confirmed = Signal()
     cancelled = Signal()
     bodies_visibility_toggled = Signal(bool)
+    operation_changed = Signal(str)  # NEU: Signal wenn Operation geändert wird
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._height = 0.0
         self._bodies_hidden = False
         self._direction = 1  # 1 or -1
+        self._current_operation = "New Body"
         self.setMinimumWidth(520)
         self.setFixedHeight(60)
         
@@ -91,8 +93,15 @@ class ExtrudeInputPanel(QFrame):
         
         layout.addWidget(self.height_input)
         
+        # Operation mit Farb-Indikator
+        self.op_indicator = QLabel("●")
+        self.op_indicator.setFixedWidth(20)
+        self.op_indicator.setStyleSheet("color: #6699ff; font-size: 16px;")
+        layout.addWidget(self.op_indicator)
+        
         self.op_combo = QComboBox()
         self.op_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        self.op_combo.currentTextChanged.connect(self._on_operation_changed)
         layout.addWidget(self.op_combo)
 
         # Flip Direction Button
@@ -137,6 +146,34 @@ class ExtrudeInputPanel(QFrame):
         layout.addWidget(self.btn_cancel)
         
         self.hide()
+        
+    def _on_operation_changed(self, op_text):
+        """Aktualisiert Farb-Indikator und emittiert Signal"""
+        self._current_operation = op_text
+        colors = {
+            "New Body": "#6699ff",  # Blau
+            "Join": "#66ff66",      # Grün
+            "Cut": "#ff6666",       # Rot
+            "Intersect": "#ffaa66"  # Orange
+        }
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_text, '#6699ff')}; font-size: 16px;")
+        self.operation_changed.emit(op_text)
+        
+    def set_suggested_operation(self, operation: str):
+        """Setzt die vorgeschlagene Operation automatisch"""
+        idx = self.op_combo.findText(operation)
+        if idx >= 0:
+            self.op_combo.setCurrentIndex(idx)
+            
+    def get_operation_color(self) -> str:
+        """Gibt die Farbe für die aktuelle Operation zurück"""
+        colors = {
+            "New Body": "#6699ff",
+            "Join": "#66ff66", 
+            "Cut": "#ff6666",
+            "Intersect": "#ffaa66"
+        }
+        return colors.get(self._current_operation, "#6699ff")
 
     def set_height(self, h):
         """Setzt den Wert von außen (z.B. durch Ziehen im Viewport)"""

@@ -1,5 +1,5 @@
 """
-LiteCAD - Sketch Renderer Mixin
+MashCad - Sketch Renderer Mixin
 All _draw_* methods for sketch visualization
 Extracted from sketch_editor.py for better maintainability
 """
@@ -894,7 +894,8 @@ class SketchRendererMixin:
         elif self.current_tool == SketchTool.CIRCLE and self.tool_step == 1:
             ctr = self.world_to_screen(self.tool_points[0])
             p.setPen(QPen(self.DIM_COLOR))
-            p.drawText(int(ctr.x())+10, int(ctr.y())-int(self.live_radius*self.view_scale)-8, f"R {self.live_radius:.1f} mm")
+            diameter = self.live_radius * 2
+            p.drawText(int(ctr.x())+10, int(ctr.y())-int(self.live_radius*self.view_scale)-8, f"R {self.live_radius:.1f} / Ø {diameter:.1f} mm")
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             ctr = self.world_to_screen(self.tool_points[0])
             p.setPen(QPen(self.DIM_COLOR))

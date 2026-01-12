@@ -1,6 +1,6 @@
 """
-LiteCAD - Unified Main Window
-V2.7: Refactored - PyVista required, no OpenGL fallback
+MashCad - Unified Main Window
+V3.0: Refactored with MessageManager, modular structure
 """
 
 import sys
@@ -32,7 +32,9 @@ if _project_root not in sys.path:
 from i18n import tr
 from sketcher import Sketch
 from modeling import Document, Body, ExtrudeFeature, FilletFeature, ChamferFeature, FeatureType
-from modeling.brep_utils import pick_face_by_ray
+from modeling.brep_utils import pick_face_by_ray, find_closest_face
+
+# GUI Module
 from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
@@ -40,210 +42,35 @@ from gui.browser import ProjectBrowser
 from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.log_panel import LogPanel
-from modeling.brep_utils import find_closest_face
+from gui.widgets import NotificationWidget, QtLogHandler
+from gui.dialogs import VectorInputDialog, BooleanDialog
+
 try:
     from ocp_tessellate.tessellator import tessellate
     HAS_OCP_TESSELLATE = True
 except ImportError:
     HAS_OCP_TESSELLATE = False
-    print("! ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
+    logger.warning("ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
 
 
 if not HAS_PYVISTA:
-    print("ERROR: PyVista is required! Install with: pip install pyvista pyvistaqt")
+    logger.critical("PyVista is required! Install with: pip install pyvista pyvistaqt")
     sys.exit(1)
-    
-    
-class NotificationWidget(QFrame):
-    """Modernes Overlay für Nachrichten (Robust über PyVista)"""
-    def __init__(self, text, level="info", parent=None):
-        super().__init__(parent)
-        self.setFixedWidth(300)
-        
-        # --- WICHTIGE FLAGS FÜR SICHTBARKEIT ---
-        # 1. Tool & Frameless: Macht es zu einem unabhängigen Overlay ohne Fensterrahmen
-        # 2. WindowStaysOnTopHint: Zwingt es über das PyVista/OpenGL Fenster
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        
-        # 3. ShowWithoutActivating: Klaut dem Hauptfenster nicht den Fokus (Tastatur geht weiter)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        
-        # 4. StyledBackground: Zwingt Qt, den Hintergrund aus dem Stylesheet zu malen! (DER FIX)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        
-        # Styles basierend auf Level
-        colors = {
-            "info": "#0078d4",      # Blau
-            "success": "#107c10",   # Grün
-            "warning": "#ffb900",   # Gelb/Orange
-            "error": "#d13438"      # Rot
-        }
-        accent = colors.get(level, "#0078d4")
-        bg_color = "#252526" # Etwas heller als der Hintergrund damit es sich abhebt
-        
-        # Explizites CSS mit ID-Selektor Simulation
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {bg_color};
-                border: 1px solid #454545;
-                border-left: 5px solid {accent};
-                border-radius: 4px;
-            }}
-            QLabel {{ 
-                border: none; 
-                background: transparent; 
-                color: #f0f0f0; 
-                font-family: Segoe UI, sans-serif;
-                font-size: 13px;
-            }}
-            QPushButton {{
-                color: #aaa;
-                background: transparent;
-                border: none;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ color: white; }}
-        """)
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(10)
-        
-        # Icon
-        icons = {"info": "ℹ", "success": "✓", "warning": "⚠", "error": "✕"}
-        lbl_icon = QLabel(icons.get(level, "ℹ"))
-        lbl_icon.setStyleSheet(f"font-size: 18px; color: {accent}; font-weight: bold; border: none;")
-        layout.addWidget(lbl_icon)
-        
-        # Text
-        lbl_text = QLabel(text)
-        lbl_text.setWordWrap(True)
-        # Wichtig: Background transparent setzen, damit er nicht grau wird
-        lbl_text.setStyleSheet("background-color: transparent; border: none;") 
-        layout.addWidget(lbl_text, 1)
-        
-        # Close Button
-        btn_close = QPushButton("✕")
-        btn_close.setFlat(True)
-        btn_close.setFixedSize(24, 24)
-        btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.clicked.connect(self.close_anim)
-        layout.addWidget(btn_close)
-        
-        # Animation Setup
-        self.anim = QPropertyAnimation(self, b"pos")
-        self.target_pos = None 
-        
-        # Auto-Close Timer
-        self.timer = QTimer(self)
-        self.timer.setSingleShot(True)
-        self.timer.timeout.connect(self.close_anim)
-        
-        duration = 5000 if level == "error" else 3000
-        self.timer.start(duration)
-        
-    def show_anim(self, target_pos):
-        """Startet Slide-In Animation"""
-        self.target_pos = target_pos
-        start_pos = QPoint(target_pos.x(), target_pos.y() - 20)
-        
-        self.move(start_pos)
-        self.show()
-        self.raise_()
-        
-        self.anim.setDuration(250)
-        self.anim.setStartValue(start_pos)
-        self.anim.setEndValue(target_pos)
-        self.anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.anim.start()
-        
-    def close_anim(self):
-        """Slide-Out Animation"""
-        if not self.target_pos:
-            self.close()
-            return
-            
-        end_pos = QPoint(self.target_pos.x(), self.target_pos.y() - 20)
-        
-        self.anim.setDuration(200)
-        self.anim.setStartValue(self.pos())
-        self.anim.setEndValue(end_pos)
-        self.anim.finished.connect(self.close)
-        self.anim.start()
 
-class QtLogHandler(QObject):
-    """Verbindet Loguru mit Qt Signals"""
-    new_message = Signal(str, str) # Level, Text
-
-    def write(self, message):
-        record = message.record
-        level = record["level"].name.lower()
-        text = record["message"]
-        self.new_message.emit(level, text)
-        
-        
-class VectorInputDialog(QDialog):
-    def __init__(self, title="Eingabe", labels=("X:", "Y:", "Z:"), defaults=(0.0, 0.0, 0.0), parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        layout = QVBoxLayout(self)
-        self.inputs = []
-        
-        for label, default in zip(labels, defaults):
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
-            spin.setRange(-99999.0, 99999.0)
-            spin.setDecimals(2)
-            spin.setValue(default)
-            row.addWidget(spin)
-            layout.addLayout(row)
-            self.inputs.append(spin)
-            
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def get_values(self):
-        return [spin.value() for spin in self.inputs]
-
-class BooleanDialog(QDialog):
-    """Dialog für Boolesche Operationen: Wähle Target und Tool"""
-    def __init__(self, bodies, operation="Cut", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"Boolean: {operation}")
-        self.bodies = bodies
-        layout = QFormLayout(self)
-        
-        self.cb_target = QComboBox()
-        self.cb_tool = QComboBox()
-        
-        for b in bodies:
-            self.cb_target.addItem(b.name, b.id)
-            self.cb_tool.addItem(b.name, b.id)
-            
-        # Standard: Letzter ist Tool, Vorletzter ist Target (typischer Workflow)
-        if len(bodies) >= 2:
-            self.cb_target.setCurrentIndex(len(bodies)-2)
-            self.cb_tool.setCurrentIndex(len(bodies)-1)
-            
-        layout.addRow("Ziel-Körper (bleibt):", self.cb_target)
-        layout.addRow("Werkzeug-Körper (wird benutzt):", self.cb_tool)
-        
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addRow(btns)
-        
-    def get_ids(self):
-        return self.cb_target.currentData(), self.cb_tool.currentData()
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MashCAD")
         self.setMinimumSize(1400, 900)
+        
+        # Cache leeren beim Start (für saubere B-Rep Edges)
+        try:
+            from modeling.cad_tessellator import CADTessellator
+            CADTessellator.clear_cache()
+        except:
+            pass
+        
         self._setup_logging()
         self.document = Document("Projekt1")
         self.mode = "3d"
@@ -263,7 +90,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
         self._set_mode("3d")
         self.selection_mode = "all" 
-        self.statusBar().showMessage(tr("Ready"))
+        logger.info(tr("Ready"))
         logger.info("Ready. PyVista & Build123d active.")
         
     def _setup_logging(self):
@@ -527,6 +354,7 @@ class MainWindow(QMainWindow):
         self.extrude_panel.confirmed.connect(self._on_extrude_confirmed)
         self.extrude_panel.cancelled.connect(self._on_extrude_cancelled)
         self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
+        self.extrude_panel.operation_changed.connect(self._on_extrude_operation_changed)
         
         # Fillet/Chamfer Panel
         self.fillet_panel = FilletChamferPanel(self)
@@ -609,7 +437,7 @@ class MainWindow(QMainWindow):
         
         # Hilfe-Menü
         help_menu = mb.addMenu(tr("Help"))
-        help_menu.addAction(tr("About LiteCAD"), self._show_about)
+        help_menu.addAction(tr("About MashCad"), self._show_about)
 
     def _connect_signals(self):
         # 2D Tool Panel
@@ -637,6 +465,14 @@ class MainWindow(QMainWindow):
             
         self.viewport_3d.extrude_requested.connect(self._on_extrusion_finished)
         self.viewport_3d.height_changed.connect(self._on_viewport_height_changed)
+        
+        # NEU: Transform-Signal vom neuen Gizmo-System
+        if hasattr(self.viewport_3d, 'body_transform_requested'):
+            self.viewport_3d.body_transform_requested.connect(self._on_body_transform_requested)
+        
+        # NEU: Face-Selection für automatische Operation-Erkennung
+        if hasattr(self.viewport_3d, 'face_selected'):
+            self.viewport_3d.face_selected.connect(self._on_face_selected_for_extrude)
     
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
@@ -668,7 +504,7 @@ class MainWindow(QMainWindow):
             
             # FIX: n_cells statt n_faces nutzen (PyVista Update)
             if not mesh or mesh.n_cells == 0:
-                self.statusBar().showMessage("Fehler: Leeres Mesh oder ungültiges Format.")
+                logger.warning("Fehler: Leeres Mesh oder ungültiges Format.")
                 return
 
             # 2. Neuen Body im Dokument anlegen
@@ -690,7 +526,7 @@ class MainWindow(QMainWindow):
             self.browser.refresh()
             
             # FIX: n_cells statt n_faces für die Anzeige
-            self.statusBar().showMessage(f"Importiert: {filename} ({mesh.n_cells} Faces)")
+            logger.info(f"Importiert: {filename} ({mesh.n_cells} Faces)")
             
             # Optional: Alles zeigen
             # self.viewport_3d.plotter.reset_camera()
@@ -698,7 +534,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             from loguru import logger
             logger.error(f"Import Fehler: {e}")
-            self.statusBar().showMessage(f"Import fehlgeschlagen: {str(e)}")
+            logger.error(f"Import fehlgeschlagen: {str(e)}")
     
     def _update_viewport_all_impl(self):
         """Das eigentliche Update, wird vom Timer aufgerufen"""
@@ -747,7 +583,7 @@ class MainWindow(QMainWindow):
                         color=colors[i % 3]
                     )
             except Exception as e:
-                print(f"Fehler beim Laden von Body {b.name}: {e}")
+                logger.exception(f"Fehler beim Laden von Body {b.name}: {e}")
 
         # Finales Rendering erzwingen
         if hasattr(self.viewport_3d, 'plotter'):
@@ -823,7 +659,7 @@ class MainWindow(QMainWindow):
         if action in actions:
             actions[action]()
         else:
-            print(f"Unbekannte 3D-Aktion: {action}")
+            logger.warning(f"Unbekannte 3D-Aktion: {action}")
             
     def _convert_selected_body_to_brep(self):
         from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
@@ -831,13 +667,14 @@ class MainWindow(QMainWindow):
 
         body = self._get_active_body()
         if not body: 
-            self.statusBar().showMessage("Kein Körper ausgewählt.")
+            logger.warning("Kein Körper ausgewählt.")
             return
 
-        # --- NEU: Parameter-Abfrage ---
+        # --- Parameter-Abfrage ---
         options = [
-            "V1: Standard (Schnell, Sewing - für saubere Meshes)",
-            "V5: Reverse Engineering (Smart - für 3D Scans, Rundungen & Löcher)"
+            "V1: Standard (Schnell - alle Dreiecke zusammennähen)",
+            "V5: Gmsh Quads (Mesh neu generieren mit Vierecken)",
+            "V6: Smart (NEU - Erkennt planare Flächen automatisch)"
         ]
         
         # Dialog anzeigen
@@ -846,7 +683,7 @@ class MainWindow(QMainWindow):
             "Konvertierungsmethode wählen", 
             "Strategie:", 
             options, 
-            0, # Standard-Auswahl (Index 0 = V1)
+            2, # Standard-Auswahl (Index 2 = V6)
             False # Nicht editierbar
         )
 
@@ -857,9 +694,11 @@ class MainWindow(QMainWindow):
         mode_param = "v1"
         if "V5" in item:
             mode_param = "v5"
+        elif "V6" in item:
+            mode_param = "v6"
         # ------------------------------
 
-        self.statusBar().showMessage(f"Konvertiere '{body.name}' mit [{mode_param.upper()}] (bitte warten)...")
+        logger.info(f"Konvertiere '{body.name}' mit [{mode_param.upper()}] (bitte warten)...")
         
         # UI updaten und Cursor auf "Warten" setzen (da V5 dauern kann)
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -870,7 +709,7 @@ class MainWindow(QMainWindow):
             success = body.convert_to_brep(mode=mode_param)
             
             if success:
-                self.statusBar().showMessage(f"Erfolg! '{body.name}' ist jetzt ein CAD-Solid.")
+                logger.success(f"Erfolg! '{body.name}' ist jetzt ein CAD-Solid.")
                 
                 # 3. Browser aktualisieren
                 self.browser.refresh()
@@ -899,7 +738,7 @@ class MainWindow(QMainWindow):
                     error_msg = "Standard-Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen?"
                 
                 QMessageBox.warning(self, "Fehler", error_msg)
-                self.statusBar().showMessage("Konvertierung fehlgeschlagen.")
+                logger.error("Konvertierung fehlgeschlagen.")
 
         except Exception as e:
             QApplication.restoreOverrideCursor()
@@ -912,7 +751,7 @@ class MainWindow(QMainWindow):
             
     def _show_not_implemented(self, feature: str):
         """Zeigt Hinweis für noch nicht implementierte Features"""
-        self.statusBar().showMessage(f"⚠ {feature} - {tr('Coming soon!')}", 3000)
+        logger.warning(f"{feature} - {tr('Coming soon!')}", 3000)
     
     def _on_sketch_tool_selected(self, tool_name: str):
         """Verarbeitet Tool-Auswahl aus dem Sketch-ToolPanel"""
@@ -962,7 +801,7 @@ class MainWindow(QMainWindow):
         
         # Fall 1: Kein Körper gewählt -> Warte auf Klick im Viewport
         if not body:
-            self.statusBar().showMessage(f"{mode.capitalize()}: Klicke jetzt auf einen Körper im 3D-Fenster...")
+            logger.info(f"{mode.capitalize()}: Klicke jetzt auf einen Körper im 3D-Fenster...")
             self._pending_transform_mode = mode 
             self.viewport_3d.setCursor(Qt.CrossCursor)
             return
@@ -991,7 +830,7 @@ class MainWindow(QMainWindow):
             # Neu verbinden
             self.viewport_3d.transform_changed.connect(self._on_viewport_transform_update)
             
-        self.statusBar().showMessage(f"{mode.capitalize()}: Ziehe am Kasten oder gib Werte ein | Enter=OK")
+        logger.info(f"{mode.capitalize()}: Ziehe am Kasten oder gib Werte ein | Enter=OK")
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -1040,10 +879,10 @@ class MainWindow(QMainWindow):
                     
                 # Mesh aktualisieren
                 self._update_body_from_build123d(body, body._build123d_solid)
-                print(f"Transform {self._transform_mode} applied via Build123d")
+                logger.success(f"Transform {self._transform_mode} applied via Build123d")
                 
             except Exception as e:
-                print(f"Transform Error: {e}")
+                logger.exception(f"Transform Error: {e}")
                 
         else:
             # Fallback Mesh-Only (wenn kein Build123d Objekt da ist)
@@ -1069,6 +908,70 @@ class MainWindow(QMainWindow):
         self._update_viewport_all()
         self._active_transform_body = None
         self._transform_mode = None
+        
+    def _on_body_transform_requested(self, body_id: str, mode: str, data):
+        """
+        Handler für das neue Gizmo-basierte Transform-System.
+        Wird vom TransformController aufgerufen wenn Apply bestätigt wird.
+        """
+        # Body finden
+        body = next((b for b in self.browser.bodies if b.id == body_id), None)
+        if not body:
+            logger.error(f"Body {body_id} nicht gefunden für Transform")
+            return
+            
+        if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+            logger.error("Build123d nicht verfügbar für Transform")
+            return
+            
+        from build123d import Location, Axis
+        
+        try:
+            if mode == "move":
+                # Translation aus data (ist bereits eine Liste)
+                if isinstance(data, list):
+                    dx, dy, dz = data
+                else:
+                    dx, dy, dz = data.get("translation", [0, 0, 0])
+                body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+                logger.success(f"Move ({dx:.2f}, {dy:.2f}, {dz:.2f}) auf {body.name}")
+                
+            elif mode == "rotate":
+                # Rotation aus data
+                if isinstance(data, dict):
+                    rx, ry, rz = data.get("rotation", [0, 0, 0])
+                else:
+                    rx, ry, rz = 0, 0, 0
+                solid = body._build123d_solid
+                if rx != 0: solid = solid.rotate(Axis.X, rx)
+                if ry != 0: solid = solid.rotate(Axis.Y, ry)
+                if rz != 0: solid = solid.rotate(Axis.Z, rz)
+                body._build123d_solid = solid
+                logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) auf {body.name}")
+                
+            elif mode == "scale":
+                # Scale aus data
+                if isinstance(data, dict):
+                    sx, sy, sz = data.get("scale", [1, 1, 1])
+                else:
+                    sx, sy, sz = 1, 1, 1
+                # Uniform scale (Build123d unterstützt nur uniform)
+                factor = sx  # Nehme X als Faktor
+                if factor > 0:
+                    body._build123d_solid = body._build123d_solid.scale(factor)
+                logger.success(f"Scale ({factor:.2f}) auf {body.name}")
+                
+            # Mesh aktualisieren
+            self._update_body_from_build123d(body, body._build123d_solid)
+            
+            # UI aufräumen
+            self.transform_panel.hide()
+            self._active_transform_body = None
+            self._transform_mode = None
+            self.browser.refresh()
+            
+        except Exception as e:
+            logger.exception(f"Transform Error: {e}")
         
     def _update_viewport_all(self):
         """Aktualisiert ALLES im Viewport"""
@@ -1102,7 +1005,7 @@ class MainWindow(QMainWindow):
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
-        self.statusBar().showMessage(tr("Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche"))
+        logger.info(tr("Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche"))
         self.setFocus()
 
     def _on_browser_plane_selected(self, plane):
@@ -1225,7 +1128,7 @@ class MainWindow(QMainWindow):
         self._update_detector() 
         
         if not self.viewport_3d.detector.selection_faces:
-            self.statusBar().showMessage("Keine geschlossenen Flächen gefunden!", 3000)
+            logger.error("Keine geschlossenen Flächen gefunden!", 3000)
             return
 
         # 2. Modus aktivieren
@@ -1241,17 +1144,142 @@ class MainWindow(QMainWindow):
         # Ohne Timer ist width() oft 0 oder falsch, daher landet es oben.
         QTimer.singleShot(10, self._position_extrude_panel)
         
-        self.statusBar().showMessage("Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.")
+        logger.info("Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.")
 
     def _on_viewport_height_changed(self, h):
         """Wird aufgerufen wenn sich die Höhe durch Maus-Drag ändert"""
         # Update das Input-Panel mit dem aktuellen Wert
         self.extrude_panel.set_height(h)
+        
+        # Dynamische Operation-Anpassung für Body-Faces
+        self._update_operation_from_height(h)
+    
+    def _update_operation_from_height(self, height):
+        """
+        Passt die Operation dynamisch an die Extrusionsrichtung an.
+        - Positive Höhe (weg von Oberfläche) = Join
+        - Negative Höhe (in Oberfläche) = Cut
+        """
+        # Nur wenn im Extrude-Modus und Faces ausgewählt
+        if not self.viewport_3d.extrude_mode:
+            return
+            
+        if not self.viewport_3d.selected_face_ids:
+            return
+        
+        # Prüfe ob es sich um Body-Faces handelt
+        face_id = next(iter(self.viewport_3d.selected_face_ids))
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        
+        if not face:
+            return
+            
+        # Nur für Body-Faces automatisch anpassen
+        if face.domain_type.startswith('body'):
+            # Body-Face: Positive Höhe = raus aus Body = Join
+            #           Negative Höhe = in Body hinein = Cut
+            if height >= 0:
+                suggested = "Join"
+            else:
+                suggested = "Cut"
+            
+            current = self.extrude_panel.get_operation()
+            if current != suggested and current in ["Join", "Cut"]:
+                self.extrude_panel.set_suggested_operation(suggested)
     
     def _on_extrude_panel_height_changed(self, height):
         """Live-Vorschau wenn Wert im Panel geändert wird"""
         if hasattr(self.viewport_3d, 'show_extrude_preview'):
-            self.viewport_3d.show_extrude_preview(height)
+            operation = self.extrude_panel.get_operation()
+            self.viewport_3d.extrude_operation = operation  # Sync
+            self.viewport_3d.show_extrude_preview(height, operation)
+    
+    def _on_extrude_operation_changed(self, operation):
+        """Wird aufgerufen wenn die Operation im Panel geändert wird"""
+        # Operation im Viewport speichern für Drag-Farbe
+        self.viewport_3d.extrude_operation = operation
+        
+        height = self.extrude_panel.get_height()
+        if hasattr(self.viewport_3d, 'show_extrude_preview'):
+            self.viewport_3d.show_extrude_preview(height, operation)
+    
+    def _on_face_selected_for_extrude(self, face_id):
+        """
+        Automatische Operation-Erkennung wenn eine Fläche ausgewählt wird.
+        """
+        if not self.viewport_3d.extrude_mode:
+            return
+            
+        # Finde die selektierte Fläche
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return
+            
+        # Body-Face: Start mit "Join" (positive Extrusion = Material hinzufügen)
+        # Die dynamische Anpassung erfolgt in _update_operation_from_height
+        if face.domain_type.startswith('body'):
+            self.extrude_panel.set_suggested_operation("Join")
+            return
+        
+        # Sketch-Face: Prüfe ob auf einem Body
+        if face.domain_type.startswith('sketch'):
+            suggested_op = self._detect_extrude_operation(face)
+            self.extrude_panel.set_suggested_operation(suggested_op)
+        
+    def _detect_extrude_operation(self, sketch_face) -> str:
+        """
+        Erkennt automatisch welche Operation sinnvoll ist.
+        Returns: "New Body", "Join", oder "Cut"
+        """
+        # Wenn keine Bodies existieren -> New Body
+        if not self.document.bodies:
+            return "New Body"
+        
+        # Hole die Ebene der Sketch-Fläche
+        face_origin = np.array(sketch_face.plane_origin)
+        face_normal = np.array(sketch_face.plane_normal)
+        
+        # Prüfe für jeden sichtbaren Body ob die Fläche darauf liegt
+        for body in self.document.bodies:
+            if not self.viewport_3d.is_body_visible(body.id):
+                continue
+                
+            mesh = self.viewport_3d.get_body_mesh(body.id)
+            if mesh is None:
+                continue
+            
+            # Prüfe ob ein Punkt der Sketch-Fläche nahe am Body ist
+            # Nutze das Zentrum des Sketch-Polygons
+            if sketch_face.shapely_poly:
+                centroid = sketch_face.shapely_poly.centroid
+                # Transformiere 2D Zentrum zu 3D
+                ox, oy, oz = sketch_face.plane_origin
+                ux, uy, uz = sketch_face.plane_x
+                vx, vy, vz = sketch_face.plane_y
+                center_3d = np.array([
+                    ox + centroid.x * ux + centroid.y * vx,
+                    oy + centroid.x * uy + centroid.y * vy,
+                    oz + centroid.x * uz + centroid.y * vz
+                ])
+                
+                # Finde nächsten Punkt auf dem Body
+                try:
+                    closest_idx = mesh.find_closest_point(center_3d)
+                    closest_pt = mesh.points[closest_idx]
+                    distance = np.linalg.norm(closest_pt - center_3d)
+                    
+                    # Wenn sehr nah (< 1mm), liegt die Fläche auf dem Body
+                    if distance < 1.0:
+                        # Ray-Cast in Normalenrichtung um zu prüfen ob wir "ins" Body zeigen
+                        # Vereinfacht: Wenn nah, ist es wahrscheinlich Join oder Cut
+                        # Positives Extrudieren = Join, Negatives = Cut
+                        return "Join"  # Default: Join, User kann auf Cut wechseln
+                        
+                except Exception:
+                    pass
+        
+        # Kein Body in der Nähe -> New Body
+        return "New Body"
     
     def _on_extrude_confirmed(self):
         """Wird aufgerufen, wenn im Panel OK oder Enter gedrückt wurde"""
@@ -1273,26 +1301,28 @@ class MainWindow(QMainWindow):
         self.viewport_3d.selected_face_ids.clear()
         self.viewport_3d.hover_face_id = -1
         self.viewport_3d._draw_selectable_faces_from_detector()
-        self.statusBar().showMessage(tr("Extrude abgebrochen"), 2000)
+        logger.info(tr("Extrude abgebrochen"), 2000)
     
     def _on_toggle_bodies_visibility(self, hide: bool):
         """Toggle alle Bodies sichtbar/unsichtbar im Extrude-Modus"""
         self.viewport_3d.set_all_bodies_visible(not hide)
         
+        # NEU: Detector aktualisieren wenn Sichtbarkeit geändert wird
+        if self.viewport_3d.extrude_mode:
+            self._update_detector()
+            self.viewport_3d._draw_selectable_faces_from_detector()
+        
     
     def _update_detector(self):
         """
-        Lädt ALLE Geometrien in den Detector und gibt Debug-Infos aus.
+        Lädt ALLE sichtbaren Geometrien in den Detector.
         """
         if not hasattr(self.viewport_3d, 'detector'): return
         
         self.viewport_3d.detector.clear()
-        print("DEBUG: Detector Clear. Starte Sketch-Processing...")
         
         # A) Sketches verarbeiten
         visible_sketches = self.browser.get_visible_sketches()
-        if not visible_sketches:
-            print("DEBUG: Keine sichtbaren Sketches gefunden.")
 
         for sketch, visible in visible_sketches:
             if visible:
@@ -1303,8 +1333,6 @@ class MainWindow(QMainWindow):
                 if x_dir is None:
                      x_dir, y_dir = self.viewport_3d._calculate_plane_axes(sketch.plane_normal)
                 
-                print(f"DEBUG: Process Sketch '{sketch.name}' mit Normal {sketch.plane_normal}")
-                
                 self.viewport_3d.detector.process_sketch(
                     sketch, 
                     sketch.plane_origin, 
@@ -1313,7 +1341,7 @@ class MainWindow(QMainWindow):
                     y_dir 
                 )
         
-        # B) Body-Flächen verarbeiten
+        # B) Body-Flächen verarbeiten (NUR sichtbare!)
         for body in self.document.bodies:
             if self.viewport_3d.is_body_visible(body.id):
                 mesh = self.viewport_3d.get_body_mesh(body.id)
@@ -1321,9 +1349,8 @@ class MainWindow(QMainWindow):
                     self.viewport_3d.detector.process_body_mesh(body.id, mesh)
 
         count = len(self.viewport_3d.detector.selection_faces)
-        print(f"DEBUG: Detector Update fertig. {count} selektierbare Flächen gefunden.")
         if count == 0:
-            self.statusBar().showMessage("Warnung: Keine geschlossenen Flächen erkannt!")
+            logger.warning("Keine geschlossenen Flächen erkannt!")
     
     def _get_plane_from_sketch(self, sketch):
         """Erstellt ein build123d Plane Objekt aus den Sketch-Metadaten"""
@@ -1350,7 +1377,7 @@ class MainWindow(QMainWindow):
                 if face: selection_data.append(face)
             
             if not selection_data: 
-                self.statusBar().showMessage("Nichts selektiert.")
+                logger.warning("Nichts selektiert.")
                 return
 
             first_face = selection_data[0]
@@ -1360,32 +1387,67 @@ class MainWindow(QMainWindow):
                 try:
                     source_id = first_face.owner_id
                     target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
-                    
                     polys = [f.shapely_poly for f in selection_data]
 
+                    # --- ZIEL-KÖRPER LOGIK (Der wichtige Fix) ---
+                    target_bodies = []
+                    
+                    # 1. Hat der User explizit einen Body im Browser angeklickt?
+                    active_body = self._get_active_body()
+                    
+                    if operation == "New Body":
+                        # Neuer Körper wird immer erstellt
+                        target_bodies = [self.document.new_body()]
+                        
+                    elif active_body:
+                        # User hat explizit EINEN Körper gewählt -> Nur den bearbeiten
+                        target_bodies = [active_body]
+                        
+                    else:
+                        # Nichts gewählt -> Auto-Detection
+                        if operation == "Cut":
+                            # CUT SPECIAL: Schneide durch ALLE sichtbaren Körper!
+                            target_bodies = [b for b in self.document.bodies if self.viewport_3d.is_body_visible(b.id)]
+                            if not target_bodies: logger.warning("Keine sichtbaren Körper zum Schneiden.")
+                        else:
+                            # Join/Intersect: Standardmäßig den letzten Körper nehmen (vermeidet versehentliches Mergen von allem)
+                            if self.document.bodies:
+                                target_bodies = [self.document.bodies[-1]]
+
+                    # --- FEATURE ANWENDEN ---
+                    success_count = 0
+                    
                     from modeling import ExtrudeFeature
-                    feature = ExtrudeFeature(
-                        sketch=target_sketch,
-                        distance=height,
-                        operation=operation,
-                        precalculated_polys=polys
-                    )
                     
-                    target_body = self._get_active_body()
-                    if operation == "New Body" or not target_body:
-                        target_body = self.document.new_body()
-                    
-                    # WICHTIG: add_feature ruft intern bereits _rebuild() auf!
-                    target_body.add_feature(feature)
-                    
-                    # --- GELÖSCHT: Doppelter Rebuild entfernt ---
-                    # if hasattr(target_body, '_rebuild'):
-                    #    target_body._rebuild()
-                    
-                    # FIX 2: Visuelles Update erzwingen
-                    self._update_body_mesh(target_body)
-                    
-                    self._finish_extrusion_ui(msg=f"Extrusion erstellt: {target_body.name}")
+                    for body in target_bodies:
+                        # WICHTIG: Wir brauchen für jeden Body ein eigenes Feature-Objekt
+                        # da es dort in die History eingefügt wird.
+                        feature = ExtrudeFeature(
+                            sketch=target_sketch,
+                            distance=height,
+                            operation=operation,
+                            precalculated_polys=polys
+                        )
+                        
+                        try:
+                            # Fügt Feature hinzu und triggert _rebuild()
+                            body.add_feature(feature)
+                            
+                            # Visuelles Update
+                            self._update_body_mesh(body)
+                            success_count += 1
+                            
+                        except Exception as e:
+                            # Wenn der Schnitt fehlschlägt (z.B. Luft geschnitten), nicht abstürzen!
+                            logger.warning(f"Warnung: Operation an {body.name} wirkungslos oder fehlgeschlagen: {e}")
+                            # Optional: Feature wieder entfernen, wenn es nichts bewirkt hat?
+                            # body.features.remove(feature) 
+
+                    if success_count > 0:
+                        self._finish_extrusion_ui(msg=f"Extrusion ({operation}) auf {success_count} Körper angewendet.")
+                    else:
+                        logger.error("Operation fehlgeschlagen (Keine Schnittmenge?).")
+
                 except Exception as e:
                     from loguru import logger
                     logger.error(f"Sketch Extrude Error: {e}")
@@ -1403,7 +1465,7 @@ class MainWindow(QMainWindow):
                 if success:
                     self._finish_extrusion_ui(msg="Push/Pull erfolgreich.")
                 else:
-                    self.statusBar().showMessage("Push/Pull fehlgeschlagen.")
+                    logger.error("Push/Pull fehlgeschlagen.")
         
         finally:
             self._is_processing_extrusion = False
@@ -1422,21 +1484,22 @@ class MainWindow(QMainWindow):
             
         if success:
             self.browser.refresh()
-            if msg: self.statusBar().showMessage(msg)
+            if msg: logger.success(msg)
         
         
     def _extrude_body_face_build123d(self, face_data, height, operation):
         """
-        Extrem robuste Version 3.0:
-        - "Entpackt" verschachtelte Compounds/Shells (löst das 0-Faces Problem)
-        - Nutzt BRepExtrema für exakte Distanz
+        Version 4.0: Multi-Body Support!
+        - "Entpackt" verschachtelte Compounds (0-Faces Fix)
+        - Unterstützt "Cut" durch mehrere Körper (nicht nur den eigenen)
         """
         try:
-            body_id = face_data.get('body_id')
-            target_body = next((b for b in self.document.bodies if b.id == body_id), None)
+            # 1. Source Body finden (der, dem die Fläche gehört)
+            source_body_id = face_data.get('body_id')
+            source_body = next((b for b in self.document.bodies if b.id == source_body_id), None)
             
-            if not target_body or not hasattr(target_body, '_build123d_solid') or target_body._build123d_solid is None:
-                print(f"Fehler: Body oder BREP-Daten fehlen.")
+            if not source_body or not hasattr(source_body, '_build123d_solid') or source_body._build123d_solid is None:
+                logger.error(f"Fehler: Body oder BREP-Daten fehlen.")
                 return False
 
             from build123d import Vector, extrude, Shape, Compound
@@ -1447,63 +1510,49 @@ class MainWindow(QMainWindow):
             from OCP.TopAbs import TopAbs_FACE
             from OCP.TopoDS import TopoDS
 
-            # --- SCHRITT 1: Faces robust extrahieren (Der Fix für "0 Faces") ---
-            b3d_obj = target_body._build123d_solid
-            
-            # Versuch 1: Standard Build123d Zugriff
+            # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
+            b3d_obj = source_body._build123d_solid
             candidate_faces = b3d_obj.faces()
             
-            # Versuch 2: Wenn leer (passiert oft bei importierten Compounds), OCP Explorer nutzen
             if not candidate_faces:
-                print(f"Warnung: Standard .faces() ist leer (Typ: {type(b3d_obj)}). Versuche Deep-Scan...")
                 explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
                 candidate_faces = []
                 while explorer.More():
-                    # Face in Build123d Wrapper packen
                     from build123d import Face
                     candidate_faces.append(Face(TopoDS.Face_s(explorer.Current())))
                     explorer.Next()
 
-            print(f"--- Debug: Suche Fläche nahe {face_data['center_3d']} ---")
-            print(f"Anzahl Faces gefunden: {len(candidate_faces)}")
-            
-            if not candidate_faces:
-                print("ABBRUCH: Body enthält topologisch keine Faces (Mesh Import fehlgeschlagen?).")
-                return False
-
-            # --- SCHRITT 2: Distanz-Messung ---
             mesh_center = Vector(face_data['center_3d'])
             ocp_pt_vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(mesh_center.X, mesh_center.Y, mesh_center.Z)).Vertex()
             
             best_face = None
             best_dist = float('inf')
             
-            for i, face in enumerate(candidate_faces):
+            for f in candidate_faces:
                 try:
-                    extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, face.wrapped)
+                    extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, f.wrapped)
                     if extrema.IsDone():
                         dist = extrema.Value()
                         if dist < best_dist:
                             best_dist = dist
-                            best_face = face
+                            best_face = f
                 except: pass
             
-            print(f"Suche beendet. Bester Abstand: {best_dist}")
-
-            # Toleranz: Bei konvertierten Meshes darf der Klick auch mal 2mm daneben liegen
             if best_face is None or best_dist > 2.0:
-                print(f"FEHLER: Keine Fläche in Reichweite gefunden.")
+                logger.error(f"FEHLER: Keine Fläche in Reichweite gefunden.")
                 return False
 
-            print(f"Treffer! Extrudiere Face...")
-            
-            # --- AB HIER: Extrusion wie gehabt ---
+            # --- SCHRITT B: Extrusions-Werkzeug erstellen ---
+            # Das ist der "Stempel", mit dem wir schneiden oder joinen
             new_geo = extrude(best_face, amount=height)
             
-            # --- BOOLEAN / NEW BODY LOGIC ---
-            final_solid = None
+            # --- SCHRITT C: Multi-Body Operationen (DER FIX!) ---
+            
+            # 1. Ziele definieren
+            targets = []
             
             if operation == "New Body":
+                # Neuer Body -> Keine Modifikation existierender Bodies
                 new_body = self.document.new_body() 
                 from modeling import ExtrudeFeature
                 feat = ExtrudeFeature(sketch=None, distance=height, operation="New Body", name="Extrude (Face)")
@@ -1512,22 +1561,51 @@ class MainWindow(QMainWindow):
                 self._update_body_from_build123d(new_body, new_geo)
                 return True
                 
-            elif operation == "Join":
-                final_solid = target_body._build123d_solid + new_geo
             elif operation == "Cut":
-                final_solid = target_body._build123d_solid - new_geo
-            elif operation == "Intersect":
-                final_solid = target_body._build123d_solid & new_geo
+                # CUT: Wir schneiden ALLES was sichtbar ist!
+                # (Auch den Source Body, falls wir 'in ihn hinein' extrudieren)
+                targets = [b for b in self.document.bodies if self.viewport_3d.is_body_visible(b.id)]
+                
+            else: # Join / Intersect
+                # Normalerweise joinen wir nur mit dem Körper, von dem wir gestartet sind
+                targets = [source_body]
+
+            # 2. Operation auf alle Ziele anwenden
+            success_count = 0
             
-            if final_solid is not None:
-                target_body._build123d_solid = final_solid
-                self._update_body_from_build123d(target_body, final_solid)
-                return True
-            
-            return False
+            for target in targets:
+                try:
+                    if not hasattr(target, '_build123d_solid') or target._build123d_solid is None:
+                        continue
+                        
+                    old_solid = target._build123d_solid
+                    new_solid = None
+                    
+                    if operation == "Cut":
+                        new_solid = old_solid - new_geo
+                    elif operation == "Join":
+                        new_solid = old_solid + new_geo
+                    elif operation == "Intersect":
+                        new_solid = old_solid & new_geo
+                        
+                    # Nur speichern, wenn das Ergebnis valide ist und nicht leer
+                    if new_solid is not None and not new_solid.is_null():
+                        # Dummy Feature für History (da Face-Op keine Parameter hat)
+                        from modeling import ExtrudeFeature
+                        feat = ExtrudeFeature(sketch=None, distance=height, operation=operation, name=f"{operation} (Face)")
+                        target.features.append(feat)
+                        
+                        target._build123d_solid = new_solid
+                        self._update_body_from_build123d(target, new_solid)
+                        success_count += 1
+                        
+                except Exception as e:
+                    logger.exeption(f"Body-Face Op '{operation}' an {target.name} gescheitert: {e}")
+
+            return success_count > 0
             
         except Exception as e:
-            print(f"CRITICAL ERROR: {e}")
+            logger.exception(f"CRITICAL ERROR: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1539,7 +1617,7 @@ class MainWindow(QMainWindow):
             solid, verts, faces = self.sketch_editor.get_build123d_part(height, operation)
             
             if solid is None or not verts:
-                print("Build123d: Keine Geometrie erzeugt.")
+                logger.error("Build123d: Keine Geometrie erzeugt.")
                 return False
 
             # 2. Neuen Body im Dokument anlegen
@@ -1557,11 +1635,11 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'browser'):
                 self.browser.refresh()  # <--- DIESE ZEILE HAT GEFEHLT
             
-            print(f"Extrusion erfolgreich. Solid gespeichert.")
+            logger.success(f"Extrusion erfolgreich. Solid gespeichert.")
             return True
             
         except Exception as e:
-            print(f"Build123d Extrude Error: {e}")
+            logger.exception(f"Build123d Extrude Error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1618,7 +1696,7 @@ class MainWindow(QMainWindow):
             )
 
             if face:
-                self.statusBar().showMessage(
+                logger.debug(
                     f"Selection: {face.domain_type} ({face.owner_id})"
                 )
 
@@ -1634,7 +1712,7 @@ class MainWindow(QMainWindow):
                 self.viewport_3d.highlight_selection(face.id)
 
         else:
-            self.statusBar().showMessage("Nichts getroffen")
+            logger.error("Nichts getroffen")
             self.selected_face_id = None
             self.selected_body = None
 
@@ -1675,7 +1753,7 @@ class MainWindow(QMainWindow):
                     self._update_body_mesh(target_body, result)
                     return
                 else:
-                    print(f"Boolean operation '{operation}' failed - creating new body instead")
+                    logger.warning(f"Boolean operation '{operation}' failed - creating new body instead")
 
         # Neuer Body
         b = self.document.new_body(f"Body{len(self.document.bodies)+1}")
@@ -1721,11 +1799,11 @@ class MainWindow(QMainWindow):
             
             # Konvertiere neues Mesh zu Build123d (schwierig - braucht Solid)
             # Für jetzt: Fallback zu PyVista
-            print("Build123d Boolean: Target hat kein BREP - verwende PyVista")
+            logger.warning("Build123d Boolean: Target hat kein BREP - verwende PyVista")
             return None
             
         except Exception as e:
-            print(f"Build123d Boolean error: {e}")
+            logger.exception(f"Build123d Boolean error: {e}")
             return None
     
     def _prepare_mesh_for_boolean(self, mesh):
@@ -1752,7 +1830,7 @@ class MainWindow(QMainWindow):
                 
             return mesh
         except Exception as e:
-            print(f"Mesh preparation error: {e}")
+            logger.exception(f"Mesh preparation error: {e}")
             return mesh
     
     def _perform_boolean_operation(self, target, tool, operation):
@@ -1777,13 +1855,13 @@ class MainWindow(QMainWindow):
                 return result
                 
         except Exception as e:
-            print(f"PyVista boolean failed: {e}")
+            logger.exception(f"PyVista boolean failed: {e}")
             
             # Fallback: Versuche mit vtkBooleanOperationPolyDataFilter direkt
             try:
                 return self._vtk_boolean_fallback(target, tool, operation)
             except Exception as e2:
-                print(f"VTK fallback also failed: {e2}")
+                logger.exception(f"VTK fallback also failed: {e2}")
         
         return None
     
@@ -1818,7 +1896,11 @@ class MainWindow(QMainWindow):
 
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
-        
+        if hasattr(body, 'vtk_mesh') and body.vtk_mesh is not None:
+            if body.vtk_mesh.n_points == 0:
+                logger.warning(f"Warnung: Body '{body.name}' ist leer (0 Punkte). Überspringe Rendering.")
+                return
+
         # 1. Fallback für manuelles Mesh (z.B. aus Boolean-Preview)
         if mesh_override:
              import numpy as np
@@ -1885,18 +1967,23 @@ class MainWindow(QMainWindow):
                 return True
                 
             # Selektions-Modi umschalten (Pipeline an Viewport senden)
-            if self.mode == "3d":
-                if k == Qt.Key_1:
-                    self.viewport_3d.set_selection_mode("face")
-                    self.statusBar().showMessage("Modus: Flächen")
-                    return True # Event konsumiert
-                elif k == Qt.Key_2:
-                    self.viewport_3d.set_selection_mode("hole")
-                    self.statusBar().showMessage("Modus: Löcher")
+            if self.mode == "3d" :
+                 # F - Flip Richtung im Extrude-Modus
+                if k == Qt.Key_F and self.viewport_3d.extrude_mode:
+                    self.extrude_panel._flip_direction()
                     return True
-                elif k == Qt.Key_3:
+            
+                if k == Qt.Key_U:
+                    self.viewport_3d.set_selection_mode("face")
+                    logger.success("Modus: Flächen")
+                    return True # Event konsumiert
+                elif k == Qt.Key_I:
+                    self.viewport_3d.set_selection_mode("hole")
+                    logger.success("Modus: Löcher")
+                    return True
+                elif k == Qt.Key_O:
                     self.viewport_3d.set_selection_mode("sketch")
-                    self.statusBar().showMessage("Modus: Skizze")
+                    logger.success("Modus: Skizze")
                     return True
 
             # Bestätigung für Extrude
@@ -1906,17 +1993,21 @@ class MainWindow(QMainWindow):
                     return True
             
             if k == Qt.Key_Escape:
+                # Priorität 1: Extrude abbrechen
                 if self.viewport_3d.extrude_mode:
                     self._on_extrude_cancelled()
                     return True
+                # Priorität 2: Plane-Select abbrechen
+                elif self.viewport_3d.plane_select_mode:
+                    self.viewport_3d.set_plane_select_mode(False)
+                    logger.info("Ebenen-Auswahl abgebrochen")
+                    return True
+                # Priorität 3: Sketch beenden
                 elif self.mode == "sketch":
                     self._finish_sketch()
                     return True
                     
-            # F - Flip Richtung im Extrude-Modus
-            if k == Qt.Key_F and self.viewport_3d.extrude_mode:
-                self.extrude_panel._flip_direction()
-                return True
+           
             
             
             # Plane Selection Shortcuts
@@ -1972,7 +2063,7 @@ class MainWindow(QMainWindow):
             self._set_mode("sketch")
             
             # 4. Statusmeldung
-            self.statusBar().showMessage(f"Bearbeite Skizze: {sketch.name}")
+            logger.success(f"Bearbeite Skizze: {sketch.name}")
         
         
     def _new_project(self): 
@@ -2082,8 +2173,8 @@ class MainWindow(QMainWindow):
         
     def _show_about(self):
         """Über-Dialog"""
-        QMessageBox.about(self, tr("Über LiteCAD"),
-            f"<h2>LiteCAD</h2>"
+        QMessageBox.about(self, tr("Über MashCad"),
+            f"<h2>MashCad</h2>"
             f"<p>Version 2.6</p>"
             f"<p>Schlankes parametrisches CAD für 3D-Druck</p>"
             f"<p>© 2024-2025</p>"
@@ -2100,11 +2191,11 @@ class MainWindow(QMainWindow):
     def _start_fillet(self):
         body = self._get_active_body()
         if not body:
-            self.statusBar().showMessage("Bitte Körper auswählen!")
+            logger.success("Bitte Körper auswählen!")
             return
             
         if not hasattr(body, '_build123d_solid'):
-             self.statusBar().showMessage("Warnung: Nur Mesh-Daten.")
+             logger.warning("Warnung: Nur Mesh-Daten.")
              
         self.selected_edges = []
         self._fillet_mode = "fillet"  # <--- WICHTIG: Wir merken uns den Modus hier
@@ -2117,7 +2208,7 @@ class MainWindow(QMainWindow):
         
         self.viewport_3d.clicked_3d_point.connect(self._on_fillet_click)
         
-        self.statusBar().showMessage(f"Fillet: Klicke auf Kanten von '{body.name}'...")
+        logger.info(f"Fillet: Klicke auf Kanten von '{body.name}'...")
         self.fillet_panel.set_target_body(body)
         self.fillet_panel.set_mode("fillet")
         self.fillet_panel.show_at(self.viewport_3d)
@@ -2273,7 +2364,7 @@ class MainWindow(QMainWindow):
 
     def _move_body(self):
         body = self._get_active_body()
-        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        if not body: return logger.warning("Kein Körper ausgewählt!")
         
         dlg = VectorInputDialog("Verschieben", ("X (mm):", "Y (mm):", "Z (mm):"), (0,0,0), self)
         if dlg.exec():
@@ -2294,11 +2385,11 @@ class MainWindow(QMainWindow):
                     self._update_body_mesh(body, mesh)
             
             self.browser.refresh()
-            self.statusBar().showMessage(f"Körper verschoben: {dx}, {dy}, {dz}")
+            logger.success(f"Körper verschoben: {dx}, {dy}, {dz}")
 
     def _scale_body(self):
         body = self._get_active_body()
-        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        if not body: return logger.warning("Kein Körper ausgewählt!")
         
         dlg = VectorInputDialog("Skalieren", ("Faktor:",), (1.0,), self)
         if dlg.exec():
@@ -2317,7 +2408,7 @@ class MainWindow(QMainWindow):
 
     def _rotate_body(self):
         body = self._get_active_body()
-        if not body: return self.statusBar().showMessage("Kein Körper ausgewählt!")
+        if not body: return logger.warning("Kein Körper ausgewählt!")
         
         # Einfacher Dialog: Achse + Winkel
         dlg = VectorInputDialog("Rotieren", ("X-Achse (0/1):", "Y-Achse (0/1):", "Z-Achse (0/1):", "Winkel (°):"), (0,0,1,90), self)
@@ -2360,7 +2451,7 @@ class MainWindow(QMainWindow):
         # Anzeigen
         self.viewport_3d.add_body(new_b.id, new_b.name, new_b._mesh_vertices, new_b._mesh_triangles)
         self.browser.refresh()
-        self.statusBar().showMessage(f"Kopie erstellt: {new_b.name}")
+        logger.success(f"Kopie erstellt: {new_b.name}")
 
     def _mirror_body(self):
         body = self._get_active_body()
@@ -2417,7 +2508,7 @@ class MainWindow(QMainWindow):
                             self.viewport_3d.set_body_visibility(tool.id, False)
                             success = True
                 except Exception as e:
-                    print(f"Build123d Boolean Error: {e}")
+                    logger.exception(f"Build123d Boolean Error: {e}")
 
             # 2. Versuch: PyVista Mesh Boolean (Fallback)
             if not success:
@@ -2432,7 +2523,7 @@ class MainWindow(QMainWindow):
                         success = True
             
             if success:
-                self.statusBar().showMessage(f"Boolean {op_type} erfolgreich.")
+                logger.success(f"Boolean {op_type} erfolgreich.")
                 self.browser.refresh()
             else:
                 QMessageBox.warning(self, "Fehler", "Operation fehlgeschlagen (Geometrie Fehler).")

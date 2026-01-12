@@ -1,5 +1,5 @@
 """
-LiteCAD - Sketch Tools Enums
+MashCad - Sketch Tools Enums
 Tool types and snap types for the 2D sketch editor
 """
 

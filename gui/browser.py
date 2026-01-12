@@ -1,5 +1,5 @@
 """
-LiteCAD - Project Browser (Fusion360-Style)
+MashCad - Project Browser (Fusion360-Style)
 Collapsible tree with Origin planes, Components, Sketches, Bodies
 """
 

@@ -1,16 +1,22 @@
 """
-LiteCAD - PyVista 3D Viewport
-COMPLETE BUILD: FXAA, Matte Look, Robust Picking, No crashes
+MashCad - PyVista 3D Viewport
+V3.0: Modular mit Mixins für bessere Wartbarkeit
 """
 
 import math
 import numpy as np
 from typing import Optional, List, Tuple, Dict, Any
 import uuid
+from loguru import logger
 from gui.geometry_detector import GeometryDetector
 
+# Mixins importieren
+from gui.viewport.extrude_mixin import ExtrudeMixin
+from gui.viewport.picking_mixin import PickingMixin
+from gui.viewport.body_mixin import BodyRenderingMixin
+from gui.viewport.transform_mixin import TransformMixin
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
 from PySide6.QtGui import QCursor, QColor
 
@@ -21,9 +27,9 @@ try:
     from pyvistaqt import QtInteractor
     import vtk 
     HAS_PYVISTA = True
-    print("✓ PyVista & VTK erfolgreich geladen.")
+    logger.success("PyVista & VTK erfolgreich geladen.")
 except ImportError as e:
-    print(f"! PyVista Import-Fehler: {e}")
+    logger.error(f"PyVista Import-Fehler: {e}")
 
 HAS_BUILD123D = False
 try:
@@ -63,7 +69,8 @@ class OverlayHomeButton(QToolButton):
             }
         """)
 
-class PyVistaViewport(QWidget):
+
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -72,6 +79,7 @@ class PyVistaViewport(QWidget):
     face_selected = Signal(int)
     transform_changed = Signal(float, float, float) # sendet delta während drag
     clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
+    body_transform_requested = Signal(str, str, object)  # body_id, mode, data
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,6 +111,7 @@ class PyVistaViewport(QWidget):
         self.extrude_mode = False
         self.edge_select_mode = False
         self.extrude_height = 0.0
+        self.extrude_operation = "New Body"  # NEU: Aktuelle Operation für Farbe
         self.is_dragging = False
         self.drag_start_pos = QPoint()
         self.drag_start_height = 0.0
@@ -235,7 +244,7 @@ class PyVistaViewport(QWidget):
                     pass # Labels werden ignoriert, wenn nicht unterstützt
                 self._cam_widget = widget
         except Exception as e:
-            print(f"ViewCube creation warning: {e}")
+            logger.warning(f"ViewCube creation warning: {e}")
         
         # Home-Button als Overlay
         self.btn_home = OverlayHomeButton(self)
@@ -290,38 +299,7 @@ class PyVistaViewport(QWidget):
         # WICHTIG: Dies hat gefehlt!
         return tuple(x_dir), tuple(y_dir)
         
-    def start_transform(self, body_id, mode="move"):
-        import vtk
-        self.clear_highlight()
-        self.end_transform() 
-        
-        if body_id not in self._body_actors: return
-        
-        # FIX: Tuple unpack error vermeiden
-        actors = self._body_actors[body_id]
-        if not actors: return
-        mesh_name = actors[0]
-        
-        actor = self.plotter.renderer.actors.get(mesh_name)
-        if not actor: return
-        
-        self.transform_actor = actor
-        self._transform_start_matrix = vtk.vtkMatrix4x4()
-        self.transform_actor.GetMatrix(self._transform_start_matrix)
-        
-        bounds = actor.GetBounds()
-        self._transform_mode = mode
-
-        if mode == "move":
-            self.transform_widget = self.plotter.add_box_widget(actor, bounds=bounds, rotation_enabled=False)
-        elif mode == "rotate":
-            self.transform_widget = self.plotter.add_box_widget(actor, bounds=bounds, rotation_enabled=True)
-        elif mode == "scale":
-            self.transform_widget = self.plotter.add_box_widget(actor, bounds=bounds, rotation_enabled=False)
-        
-        self.transform_widget.AddObserver('InteractionEvent', self._on_widget_transform)
-        self.plotter.render()
-        
+    # start_transform ist jetzt im TransformMixin definiert
         
     def select_body_at(self, x, y):
         """Picking Logik für Bodies"""
@@ -337,15 +315,6 @@ class PyVistaViewport(QWidget):
                     if self.plotter.renderer.actors.get(name) == actor:
                         return bid
         return None
-        
-    def end_transform(self):
-        """Entfernt das Gizmo und säubert den Status"""
-        try:
-            self.plotter.disable_box_widget()
-            self.plotter.clear_box_widgets()
-        except: pass
-        self.transform_actor = None
-        self.transform_widget = None
         
     def highlight_edge(self, p1, p2):
         """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""
@@ -371,92 +340,20 @@ class PyVistaViewport(QWidget):
         # Zur Sicherheit Rendern
         self.plotter.render()
         
-    def apply_transform_values(self, x, y, z, mode):
-        """Wird vom Panel aufgerufen (Zahleneingabe) -> Bewegt Gizmo/Actor"""
-        if not self.transform_actor: return
-        import vtk
-
-        # Reset auf Start
-        self.transform_actor.SetUserMatrix(self._transform_start_matrix)
-        
-        if mode == "move":
-            # Neue Translation anwenden
-            self.transform_actor.AddPosition(x, y, z)
-            
-        elif mode == "scale":
-            # Scale anwenden
-            self.transform_actor.SetScale(x, y, z)
-            
-        elif mode == "rotate":
-            # Rotation anwenden (XYZ Euler)
-            self.transform_actor.RotateX(x)
-            self.transform_actor.RotateY(y)
-            self.transform_actor.RotateZ(z)
-
-        self.plotter.render()
-
-    def _on_widget_transform(self, widget, event):
-        """Callback wenn User am Gizmo zieht"""
-        if not self.transform_actor: return
-        
-        # Matrix des transformierten Actors holen (BoxWidget ändert den Actor direkt)
-        matrix = self.transform_actor.GetMatrix()
-        
-        # Delta berechnen basierend auf Modus
-        if self._transform_mode == "move":
-            # Translation extrahieren (Spalte 3)
-            tx = matrix.GetElement(0, 3)
-            ty = matrix.GetElement(1, 3)
-            tz = matrix.GetElement(2, 3)
-            
-            # Start Translation
-            sx = self._transform_start_matrix.GetElement(0, 3)
-            sy = self._transform_start_matrix.GetElement(1, 3)
-            sz = self._transform_start_matrix.GetElement(2, 3)
-            
-            # Delta senden
-            self.transform_changed.emit(tx - sx, ty - sy, tz - sz)
-            
-        elif self._transform_mode == "scale":
-            # Scale aus der Diagonalen der Matrix schätzen (grob)
-            # BoxWidget skaliert den Actor. 
-            # Wir nehmen scale factor relativ zum Start
-            
-            # Einfachheitshalber: Wir extrahieren Scale X aus (0,0) Element der Matrix
-            # Das ist nicht perfekt bei Rotation, aber für LiteCAD BoxWidget ok
-            current_scale_x = (matrix.GetElement(0,0)**2 + matrix.GetElement(0,1)**2 + matrix.GetElement(0,2)**2)**0.5
-            start_scale_x = (self._transform_start_matrix.GetElement(0,0)**2 + self._transform_start_matrix.GetElement(0,1)**2 + self._transform_start_matrix.GetElement(0,2)**2)**0.5
-            
-            if start_scale_x > 0.0001:
-                factor = current_scale_x / start_scale_x
-                self.transform_changed.emit(factor, factor, factor)
+    # Transform-Methoden sind jetzt im TransformMixin
+    # (start_transform, end_transform, apply_transform_values, etc.)
 
     def get_current_transform_matrix(self):
         """Gibt die aktuelle Matrix des transformierten Objekts zurück (für Apply)"""
-        if self.transform_actor:
-            vtk_mat = self.transform_actor.GetMatrix()
-            mat = []
-            for i in range(4):
-                row = []
-                for j in range(4):
-                    row.append(vtk_mat.GetElement(i, j))
-                mat.append(row)
-            return mat
-        return None
-        
-    def select_body_at(self, x, y):
-        """Picking Logik für Bodies"""
-        picker = self.plotter.renderer.GetPicker() # Standard picker
-        # Wir nutzen einen CellPicker für genauigkeit
-        import vtk
-        picker = vtk.vtkCellPicker()
-        picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
-        actor = picker.GetActor()
-        
-        if actor:
-            for bid, (name, _) in self._body_actors.items():
-                if self.plotter.renderer.actors.get(name) == actor:
-                    return bid
+        if hasattr(self, '_transform_controller') and self._transform_controller.state:
+            vals = self._transform_controller.get_values()
+            # Einfache 4x4 Identity mit Translation
+            return [
+                [1, 0, 0, vals[0]],
+                [0, 1, 0, vals[1]],
+                [0, 0, 1, vals[2]],
+                [0, 0, 0, 1]
+            ]
         return None
         
     def _draw_grid(self, size=200, spacing=10):
@@ -524,7 +421,7 @@ class PyVistaViewport(QWidget):
                 self._drag_screen_vector = vec / length
                 
         except Exception as e:
-            print(f"Drag Vector Calc Error: {e}")
+            logger.error(f" {e}")
             self._drag_screen_vector = np.array([0.0, -1.0])
             self._drag_anchor_3d = np.array([0,0,0])
 
@@ -596,6 +493,39 @@ class PyVistaViewport(QWidget):
         from PySide6.QtCore import QEvent, Qt
         from PySide6.QtWidgets import QApplication
         
+        # --- TRANSFORM MODE (Neues Gizmo-System) ---
+        # NUR bei relevanten Mouse-Events verarbeiten!
+        if hasattr(self, '_transform_controller') and self._transform_controller.state:
+            event_type = event.type()
+            
+            # Nur Mouse-Events haben position()
+            if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                screen_pos = (int(pos.x()), int(pos.y()))
+                
+                if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                    if self._handle_transform_mouse_press(event):
+                        return True
+                        
+                elif event_type == QEvent.MouseMove:
+                    if self._handle_transform_mouse_move(event):
+                        return True
+                        
+                elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                    if self._handle_transform_mouse_release(event):
+                        return True
+                    
+            # ESC zum Abbrechen (KeyPress hat keine pos)
+            elif event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+                self.end_transform()
+                return True
+                
+            # Enter zum Bestätigen
+            elif event_type == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if hasattr(self, '_transform_controller'):
+                    self._transform_controller.apply_transform()
+                return True
+        
         # --- PLANE SELECT MODE ---
         if self.plane_select_mode:
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
@@ -630,7 +560,7 @@ class PyVistaViewport(QWidget):
             # Dragging Logik (Extrude Höhe ziehen)
             if self.extrude_mode and getattr(self, 'is_dragging', False):
                 delta = self._calculate_extrude_delta(pos)
-                self.show_extrude_preview(self.drag_start_height + delta)
+                self.show_extrude_preview(self.drag_start_height + delta, self.extrude_operation)
                 self.height_changed.emit(self.extrude_height)
                 return True
             
@@ -663,10 +593,16 @@ class PyVistaViewport(QWidget):
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
             
             if hit_id != -1:
-                # Multi-Select mit STRG
-                if not (QApplication.keyboardModifiers() & Qt.ControlModifier):
+                # Multi-Select mit STRG/Shift
+                is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
+                if not is_multi:
                     self.selected_face_ids.clear()
-                self.selected_face_ids.add(hit_id)
+                    
+                # Toggle bei Multi-Select
+                if is_multi and hit_id in self.selected_face_ids:
+                    self.selected_face_ids.discard(hit_id)
+                else:
+                    self.selected_face_ids.add(hit_id)
                 
                 # Extrude Drag vorbereiten
                 if self.extrude_mode:
@@ -676,6 +612,9 @@ class PyVistaViewport(QWidget):
                     if face: self._cache_drag_direction_for_face_v2(face)
                 
                 self._draw_selectable_faces_from_detector()
+                
+                # NEU: Signal für automatische Operation-Erkennung
+                self.face_selected.emit(hit_id)
                 return True
 
         # --- MOUSE RELEASE ---
@@ -711,7 +650,7 @@ class PyVistaViewport(QWidget):
                     pos = picker.GetPickPosition()
                     self.clicked_3d_point.emit(body_id, pos)
         except Exception as e:
-            print(f"3D Click Error: {e}")
+            logger.error(f" {e}")
             
     def _cache_drag_direction_for_face(self, face_idx):
         """Hilfsfunktion um Richtung basierend auf einem Face zu setzen"""
@@ -884,7 +823,7 @@ class PyVistaViewport(QWidget):
             # Face Objekt holen
             face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
             if face:
-                print(f"Sketch Plane gewählt: Face {face.id} auf Body {face.owner_id}")
+                logger.info(f"Sketch Plane gewählt: Face {face.id} auf Body {face.owner_id}")
                 
                 # Sende Origin und Normal
                 self.custom_plane_clicked.emit(
@@ -1028,14 +967,14 @@ class PyVistaViewport(QWidget):
             if result_mesh and result_mesh.n_points > 0:
                 # Körper aktualisieren
                 self._add_mesh_as_body(target_id, result_mesh, color=self.bodies[target_id]['color'])
-                print(f"Boolean {operation} success.")
+                logger.success(f"Boolean success.")
             else:
-                print("Boolean Operation failed (empty result).")
+                logger.warning("Boolean Operation failed (empty result).")
                 # Fallback: Als neuen Körper hinzufügen, damit Arbeit nicht verloren geht
                 self._apply_boolean_operation(new_mesh, "New Body")
 
         except Exception as e:
-            print(f"Boolean Error: {e}")
+            logger.error(f" {e}")
             self._apply_boolean_operation(new_mesh, "New Body")
             
     def _add_mesh_as_body(self, bid, mesh, color=None):
@@ -1200,7 +1139,7 @@ class PyVistaViewport(QWidget):
                                          name=name, opacity=0.7)
             self.plotter.update()
         except Exception as e:
-            print(f"Edge highlight error: {e}")
+            logger.error(f" {e}")
     
     def _clear_edge_highlights(self):
         """Entfernt alle Edge-Highlights"""
@@ -1275,7 +1214,7 @@ class PyVistaViewport(QWidget):
         if not self.bodies:
             return
             
-        print(f"DEBUG: Starte Face-Detection für {len(self.bodies)} Bodies...", flush=True)
+        logger.debug(f" Starte Face-Detection für {len(self.bodies)} Bodies...")
         count_before = len(self.detected_faces)
             
         for bid, body_data in self.bodies.items():
@@ -1285,7 +1224,7 @@ class PyVistaViewport(QWidget):
             try:
                 # Prüfen ob Mesh Zellen hat
                 if mesh.n_cells == 0:
-                    print(f"DEBUG: Body {bid} hat keine Zellen (Faces).", flush=True)
+                    logger.debug(f" Body {bid} hat keine Zellen (Faces).")
                     continue
 
                 # Normalen berechnen falls nötig
@@ -1294,7 +1233,7 @@ class PyVistaViewport(QWidget):
                 
                 cell_normals = mesh.cell_data.get('Normals')
                 if cell_normals is None or len(cell_normals) == 0:
-                    print(f"DEBUG: Keine Normalen für Body {bid} gefunden.", flush=True)
+                    logger.debug(f" Keine Normalen für Body {bid} gefunden.")
                     continue
                 
                 # Gruppiere Zellen nach Normale (für planare Flächen)
@@ -1354,15 +1293,15 @@ class PyVistaViewport(QWidget):
                             'mesh': mesh
                         })
                     except Exception as e:
-                         print(f"DEBUG: Fehler bei Face-Gruppe {normal_key}: {e}", flush=True)
+                         logger.debug(f" Fehler bei Face-Gruppe {normal_key}: {e}")
 
             except Exception as e:
-                print(f"DEBUG: Body face detection error for body {bid}: {e}", flush=True)
+                logger.debug(f" Body face detection error for body {bid}: {e}")
                 import traceback
                 traceback.print_exc()
 
         added = len(self.detected_faces) - count_before
-        print(f"DEBUG: Detection fertig. {added} Body-Faces gefunden.", flush=True)
+        logger.debug(f" Detection fertig. {added} Body-Faces gefunden.")
 
     def set_sketches(self, sketches):
         """Zeichnet 2D-Sketches im 3D-Raum"""
@@ -1470,7 +1409,7 @@ class PyVistaViewport(QWidget):
             #self.plotter.render()
             
         except Exception as e:
-            print(f"Viewport Add Body Error: {e}")
+            logger.error(f" {e}")
 
     def set_body_visibility(self, body_id, visible):
         if body_id not in self._body_actors: return
@@ -1636,7 +1575,7 @@ class PyVistaViewport(QWidget):
                                 'center_2d': (pt[0], pt[1]) # HIER IST DER FIX
                             })
                 except Exception as e:
-                    print(f"3D Face Detection Error: {e}")
+                    logger.error(f" {e}")
         
         # Sortieren: Kleine Flächen zuerst
         self.detected_faces.sort(key=lambda x: x['shapely_poly'].area)
@@ -1770,8 +1709,8 @@ class PyVistaViewport(QWidget):
             return result
         return []
     
-    def show_extrude_preview(self, height):
-        """Erzeugt die 3D-Vorschau."""
+    def show_extrude_preview(self, height, operation="New Body"):
+        """Erzeugt die 3D-Vorschau mit operation-basierter Farbe."""
         self._clear_preview()
         self.extrude_height = height
         
@@ -1797,12 +1736,20 @@ class PyVistaViewport(QWidget):
                 for i in range(1, len(preview_meshes)):
                     combined = combined.merge(preview_meshes[i])
                 
-                col = '#6699ff' if height > 0 else '#ff6666'
+                # Farbe basierend auf Operation (nicht mehr auf Vorzeichen)
+                op_colors = {
+                    "New Body": '#6699ff',  # Blau
+                    "Join": '#66ff66',      # Grün  
+                    "Cut": '#ff6666',       # Rot
+                    "Intersect": '#ffaa66'  # Orange
+                }
+                col = op_colors.get(operation, '#6699ff')
+                
                 self.plotter.add_mesh(combined, color=col, opacity=0.5, name='prev', pickable=False)
                 self._preview_actor = 'prev'
                 self.plotter.render()
         except Exception as e:
-            print(f"Preview Error: {e}")
+            logger.error(f" {e}")
     
     def _calculate_body_face_extrusion(self, face, height):
         """Berechnet vollständige Extrusion für eine Body-Fläche inkl. Seitenwände"""
@@ -1922,7 +1869,7 @@ class PyVistaViewport(QWidget):
             return verts, faces
             
         except Exception as e:
-            print(f"Body face extrusion error: {e}")
+            logger.error(f" {e}")
             import traceback
             traceback.print_exc()
             return [], []
@@ -2163,7 +2110,7 @@ class PyVistaViewport(QWidget):
             
             self.plotter.update()
         except Exception as e:
-            print(f"Draw highlight error: {e}")
+            logger.error(f" {e}")
     
     def _clear_body_face_highlight(self):
         """Entfernt Body-Face-Highlight"""
@@ -2198,7 +2145,7 @@ class PyVistaViewport(QWidget):
         self.selected_faces.clear()
         self.selected_faces.add(-1)  # Special marker für Body-Face
         
-        print(f"Body face selected: body={body_id}, normal={normal}, pos={pos}")
+        logger.info(f"Body face selected: body={body_id}, normal={normal}, pos={pos}")
         
         # Zeige Preview
         self._draw_body_face_selection(pos, normal)
@@ -2290,7 +2237,7 @@ class PyVistaViewport(QWidget):
                                   name=n, pickable=True, show_edges=False)
             self._face_actors.append(n)
         except Exception as e:
-            print(f"Body face overlay error: {e}")
+            logger.error(f" {e}")
 
     def _clear_face_actors(self):
         for n in self._face_actors:

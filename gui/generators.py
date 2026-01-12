@@ -1,5 +1,5 @@
 """
-LiteCAD - Spezial-Generatoren
+MashCad - Spezial-Generatoren
 Zahnräder, Sterne, Muster und mehr
 """
 

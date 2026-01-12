@@ -1,5 +1,5 @@
 """
-LiteCAD - 2D Sketch Editor v4
+MashCad - 2D Sketch Editor v4
 Fusion360-Style mit Tab-Eingabe, geschlossene Profile, professionelle UX
 Mit Build123d Backend für parametrische CAD-Operationen
 """
@@ -18,7 +18,8 @@ from typing import Optional, List, Tuple, Set
 import math
 import sys
 import os
-import numpy as np                  
+import numpy as np
+from loguru import logger
 
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,9 +43,9 @@ try:
         Mode
     )
     HAS_BUILD123D = True
-    print("✓ Build123d erfolgreich geladen für Sketch-Editor")
+    logger.success("Build123d erfolgreich geladen für Sketch-Editor")
 except ImportError as e:
-    print(f"! Build123d nicht verfügbar: {e}")
+    logger.warning(f"Build123d nicht verfügbar: {e}")
 
 # Importiere Dialoge und Tools - mehrere Fallback-Versuche
 _import_ok = False
@@ -84,8 +85,8 @@ if not _import_ok:
         _import_error = f"relative: {e}"
 
 if not _import_ok:
-    print(f"CRITICAL: Sketch-Module nicht gefunden! Letzter Fehler: {_import_error}")
-    print("Bitte stelle sicher, dass sketch_handlers.py, sketch_renderer.py, sketch_tools.py und sketch_dialogs.py im gui/ Ordner liegen!")
+    logger.critical(f" Sketch-Module nicht gefunden! Letzter Fehler: {_import_error}")
+    logger.critical("Bitte stelle sicher, dass sketch_handlers.py, sketch_renderer.py, sketch_tools.py und sketch_dialogs.py im gui/ Ordner liegen!")
     # Leere Fallback-Mixins damit es nicht crasht
     class SketchHandlersMixin: pass
     class SketchRendererMixin: pass
@@ -173,7 +174,7 @@ class DXFImportWorker(QThread):
                         if math.hypot(p2[0]-p1[0], p2[1]-p1[1]) > 0.001:
                             new_lines.append((p1[0], p1[1], p2[0], p2[1]))
                 except Exception as e:
-                    print(f"Path Error: {e}")
+                    logger.error(f"Path Error: {e}")
 
             def process_entity(entity, matrix=None):
                 dxftype = entity.dxftype()
@@ -529,7 +530,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     })
                     
             except Exception as e:
-                print(f"Body reference error: {e}")
+                logger.error(f"Body reference error: {e}")
         
         self.update()
     
@@ -637,8 +638,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         for circle in circles:
             cx, cy, r = circle.center.x, circle.center.y, circle.radius
             poly_points = []
-            for j in range(64):
-                a = 2 * math.pi * j / 64
+            # 128 Punkte für bessere Kreis-Approximation
+            for j in range(128):
+                a = 2 * math.pi * j / 128
                 poly_points.append((cx + r * math.cos(a), cy + r * math.sin(a)))
             standalone_circle_polys.append(ShapelyPolygon(poly_points))
             standalone_circles.append(circle)
@@ -651,24 +653,40 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     if poly.area > 0.1:
                         self.closed_profiles.append(('polygon', poly))
             except Exception as e:
-                print(f"Polygonize error: {e}")
+                logger.warning(f"Polygonize error: {e}")
 
-        # 5. Standalone Kreise & Löcher hinzufügen
-        # (Einfache Version: Füge einfach alle vollen Kreise als Profile hinzu)
-        # Wenn du komplexe Loch-Logik brauchst, nimm den alten Block 5, 
-        # aber meistens reicht es, Flächen zu finden.
-        for i, poly in enumerate(standalone_circle_polys):
-            # Prüfen ob dieser Kreis schon Teil einer Fläche ist (Loch)
-            is_hole = False
-            for p_type, p_data in self.closed_profiles:
-                if p_type == 'polygon' and p_data.contains(poly):
-                    # Es ist ein Loch in einem Polygon -> Polygon ausstanzen
-                    # (Hier vereinfacht: Wir markieren es nur)
-                    # Um Löcher korrekt darzustellen, muss man difference() nutzen
-                    pass 
+        # 5. Kreise verarbeiten: Löcher in Polygone einfügen ODER als standalone hinzufügen
+        circles_as_holes = set()  # Indizes der Kreise die Löcher sind
+        
+        for i, circle_poly in enumerate(standalone_circle_polys):
+            circle = standalone_circles[i]
             
-            # Füge Kreis hinzu (als echtes Kreis-Objekt für perfektes Rendering)
-            self.closed_profiles.append(('circle', standalone_circles[i]))
+            # Prüfen ob dieser Kreis in einem Polygon liegt
+            for j, (p_type, p_data) in enumerate(self.closed_profiles):
+                if p_type == 'polygon' and p_data.contains(circle_poly):
+                    # Der Kreis ist ein LOCH in diesem Polygon!
+                    logger.debug(f"Kreis r={circle.radius:.2f} als Loch in Polygon erkannt")
+                    
+                    # Polygon mit Loch erstellen
+                    new_poly = p_data.difference(circle_poly)
+                    
+                    # DEBUG: Prüfen ob das Loch tatsächlich erstellt wurde
+                    n_interiors = len(list(new_poly.interiors)) if hasattr(new_poly, 'interiors') else 0
+                    logger.info(f"  → Polygon nach difference(): area={new_poly.area:.1f}, interiors={n_interiors}")
+                    
+                    if n_interiors > 0:
+                        interior = list(new_poly.interiors)[0]
+                        logger.debug(f"  → Interior hat {len(list(interior.coords))} Punkte")
+                    
+                    self.closed_profiles[j] = ('polygon', new_poly)
+                    circles_as_holes.add(i)
+                    break
+        
+        # Nur Kreise hinzufügen die KEINE Löcher sind
+        for i, circle in enumerate(standalone_circles):
+            if i not in circles_as_holes:
+                self.closed_profiles.append(('circle', circle))
+                logger.debug(f"Standalone Kreis r={circle.radius:.2f} hinzugefügt")
             
         self._build_profile_hierarchy()
         
@@ -993,6 +1011,48 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     # ==================== BUILD123D INTEGRATION ====================
     
+    def _detect_circle_from_points(self, points, tolerance=0.02):
+        """
+        Erkennt ob ein Polygon eigentlich ein Kreis ist.
+        
+        Args:
+            points: Liste von (x, y) Tupeln
+            tolerance: Relative Toleranz für Radius-Varianz (2% default, erhöht von 1%)
+            
+        Returns:
+            (cx, cy, radius) wenn es ein Kreis ist, sonst None
+        """
+        if len(points) < 8:  # Minimum für Kreis-Erkennung
+            logger.debug(f"_detect_circle: Zu wenig Punkte ({len(points)})")
+            return None
+        
+        import numpy as np
+        pts = np.array(points)
+        
+        # Schwerpunkt berechnen
+        cx = np.mean(pts[:, 0])
+        cy = np.mean(pts[:, 1])
+        
+        # Abstände zum Schwerpunkt
+        distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
+        
+        # Mittlerer Radius
+        radius = np.mean(distances)
+        
+        if radius < 0.1:  # Zu klein
+            logger.debug(f"_detect_circle: Radius zu klein ({radius:.4f})")
+            return None
+        
+        # Varianz prüfen (sollte sehr klein sein für Kreis)
+        variance = np.std(distances) / radius
+        logger.debug(f"_detect_circle: {len(points)} Punkte, r={radius:.2f}, varianz={variance:.6f} (tol={tolerance})")
+        
+        if variance < tolerance:
+            # Es ist ein Kreis!
+            return (float(cx), float(cy), float(radius))
+        
+        return None
+    
     def get_build123d_plane(self):
         """Sichere Methode um die Plane zu holen"""
         if not HAS_BUILD123D: return None
@@ -1018,7 +1078,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             BuildSketch oder None wenn Build123d nicht verfügbar
         """
         if not HAS_BUILD123D:
-            print("Build123d nicht verfügbar!")
+            logger.warning("Build123d nicht verfügbar!")
             return None
         
         if plane is None:
@@ -1031,7 +1091,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             arcs = [a for a in self.sketch.arcs if not a.construction]
             
             if not lines and not circles and not arcs:
-                print("Keine Geometrie im Sketch!")
+                logger.warning("Keine Geometrie im Sketch!")
                 return None
             
             # Erstelle Build123d Sketch
@@ -1073,7 +1133,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return sketch
             
         except Exception as e:
-            print(f"Build123d Sketch Konvertierung fehlgeschlagen: {e}")
+            logger.error(f"Build123d Sketch Konvertierung fehlgeschlagen: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -1090,8 +1150,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._find_closed_profiles()
         
         if not self.closed_profiles:
-            print("Keine geschlossenen Profile gefunden.")
+            logger.warning("Keine geschlossenen Profile gefunden.")
             return None, None, None
+        
+        # DEBUG: Zeige alle gefundenen Profile
+        logger.debug(f"=== {len(self.closed_profiles)} Profile gefunden ===")
+        for i, (p_type, p_data) in enumerate(self.closed_profiles):
+            if p_type == 'polygon':
+                n_holes = len(list(p_data.interiors)) if hasattr(p_data, 'interiors') else 0
+                logger.debug(f"  [{i}] Polygon: area={p_data.area:.1f}, holes={n_holes}")
+            elif p_type == 'circle':
+                logger.debug(f"  [{i}] Circle: r={p_data.radius:.2f} at ({p_data.center.x:.1f}, {p_data.center.y:.1f})")
             
         plane = self.get_build123d_plane()
         
@@ -1111,22 +1180,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                 pts.pop() # Letzten Punkt weg, wenn doppelt
                             
                             if len(pts) >= 3:
+                                logger.debug(f"Erstelle Polygon mit {len(pts)} Punkten")
                                 Polygon(*pts, align=None)
                                 created_any = True
                                 
                                 # Löcher (Interiors)
                                 if hasattr(p_data, 'interiors'):
-                                    for interior in p_data.interiors:
+                                    for idx, interior in enumerate(p_data.interiors):
                                         hole_coords = list(interior.coords)
                                         h_pts = [(float(c[0]), float(c[1])) for c in hole_coords]
                                         if len(h_pts)>0 and h_pts[0]==h_pts[-1]: h_pts.pop()
                                         
+                                        logger.debug(f"  Loch {idx}: {len(h_pts)} Punkte")
+                                        
                                         if len(h_pts) >= 3:
-                                            with Mode.SUBTRACT:
-                                                Polygon(*h_pts, align=None)
+                                            # FIX: Prüfen ob das Loch ein Kreis ist
+                                            circle_info = self._detect_circle_from_points(h_pts)
+                                            
+                                            if circle_info:
+                                                # Echten Kreis verwenden!
+                                                cx, cy, radius = circle_info
+                                                logger.info(f"  → Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+                                                with Locations([(cx, cy)]):
+                                                    B3DCircle(radius=radius, mode=Mode.SUBTRACT)
+                                            else:
+                                                # Normales Polygon-Loch
+                                                logger.warning(f"  → Loch als POLYGON ({len(h_pts)} Punkte)")
+                                                Polygon(*h_pts, align=None, mode=Mode.SUBTRACT)
 
                         # Fall 2: Kreis
                         elif p_type == 'circle':
+                            logger.debug(f"Erstelle Kreis r={p_data.radius:.2f}")
                             with Locations((p_data.center.x, p_data.center.y)):
                                 B3DCircle(radius=p_data.radius)
                             created_any = True
@@ -1148,7 +1232,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
         except Exception as e:
             # Statt GUI-Absturz nur Log-Ausgabe
-            print(f"Extrude Fehler (abgefangen): {e}")
+            logger.error(f"Extrude Fehler: {e}")
             return None, None, None
     
     def _build123d_direct(self, height: float, plane):
@@ -1160,7 +1244,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         circles = [c for c in self.sketch.circles if not c.construction]
         
         if not lines and not circles:
-            print("Build123d: Keine Geometrie!")
+            logger.warning("Build123d: Keine Geometrie!")
             return None, None, None
         
         try:
@@ -1186,14 +1270,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             center_x = (min_x + max_x) / 2
                             center_y = (min_y + max_y) / 2
                             
-                            print(f"  Rechteck erkannt: {width}x{height_rect} at ({center_x}, {center_y})")
+                            logger.debug(f"Rechteck erkannt: {width}x{height_rect} at ({center_x}, {center_y})")
                             
                             with Locations([(center_x, center_y)]):
                                 Rectangle(width, height_rect)
                     
                     # Kreise hinzufügen
                     for circle in circles:
-                        print(f"  Kreis: r={circle.radius} at ({circle.center.x}, {circle.center.y})")
+                        logger.debug(f"Kreis: r={circle.radius} at ({circle.center.x}, {circle.center.y})")
                         with Locations([(circle.center.x, circle.center.y)]):
                             B3DCircle(radius=circle.radius)
                 
@@ -1203,7 +1287,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if solid is None:
                 return None, None, None
             
-            print(f"Build123d Direct: Solid erstellt!")
+            logger.success(f"Build123d Direct: Solid erstellt!")
             
             mesh_data = solid.tessellate(tolerance=0.1)
             verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
@@ -1212,7 +1296,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return solid, verts, faces
             
         except Exception as e:
-            print(f"Build123d Direct fehlgeschlagen: {e}")
+            logger.error(f"Build123d Direct fehlgeschlagen: {e}")
             import traceback
             traceback.print_exc()
             return None, None, None
@@ -1265,7 +1349,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return solid, verts, faces
             
         except Exception as e:
-            print(f"Build123d Fehler: {e}")
+            logger.error(f"Build123d Fehler: {e}")
             return None, None, None
     
     def has_build123d(self) -> bool:
@@ -1919,7 +2003,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             spline._preview_lines = spline.to_lines(segments_per_span=10)
             self.update() # Wichtig: PaintEvent neu triggern
         except Exception as e:
-            print(f"Spline preview error: {e}")
+            logger.error(f"Spline preview error: {e}")
     
     def _update_live_values(self, snapped):
         """Aktualisiert Live-Werte NUR wenn die Felder nicht manuell editiert wurden"""

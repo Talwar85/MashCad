@@ -1,10 +1,11 @@
 """
-LiteCAD - Sketch Handlers Mixin
+MashCad - Sketch Handlers Mixin
 All _handle_* methods for sketch tools
 Extracted from sketch_editor.py for better maintainability
 """
 
 import math
+from loguru import logger
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication, QInputDialog
 
@@ -329,7 +330,7 @@ class SketchHandlersMixin:
             self._find_closed_profiles()
             self.status_message.emit(tr("Spline created - drag points/handles to edit"))
         except Exception as e:
-            print(f"Spline error: {e}")
+            logger.error(f"Spline error: {e}")
         self._cancel_tool()
     
     def _handle_move(self, pos, snap_type):

@@ -1,7 +1,13 @@
+"""
+MashCad - Geometry Detector
+Face and Edge detection for 3D viewport
+"""
+
 import numpy as np
 import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
+from loguru import logger
 
 # Optional Imports
 try:
@@ -87,6 +93,7 @@ class GeometryDetector:
 
         # 1. Linien in Shapely konvertieren
         lines = []
+        standalone_circles = []  # Kreise die eigenständig sind
         def rnd(val): return round(val, 5)
 
         # Lines
@@ -94,22 +101,91 @@ class GeometryDetector:
             if not l.construction:
                 lines.append(LineString([(rnd(l.start.x), rnd(l.start.y)), (rnd(l.end.x), rnd(l.end.y))]))
         
-        # Circles / Arcs / Splines müssen hier auch rein (verkürzt dargestellt, nimm deinen existierenden Code für die Punkt-Generierung)
-        # ... (Füge hier die Logik für Circles/Arcs aus deinem alten Modeling-Code ein, um `lines` zu füllen) ...
-        # WICHTIG: Um den Code kurz zu halten, nutze ich hier Platzhalter. 
-        # Du musst sicherstellen, dass ALLE Geometrie-Typen in `lines` landen.
+        # Circles - Mit mehr Segmenten für bessere Präzision
         for c in getattr(sketch, 'circles', []):
-             if not c.construction:
-                 pts = [(c.center.x + c.radius * math.cos(i*2*math.pi/64), c.center.y + c.radius * math.sin(i*2*math.pi/64)) for i in range(65)]
-                 lines.append(LineString(pts))
+            if not c.construction:
+                # 128 Segmente für glattere Kreise
+                num_segments = 128
+                pts = []
+                for i in range(num_segments + 1):
+                    angle = i * 2 * math.pi / num_segments
+                    pts.append((
+                        rnd(c.center.x + c.radius * math.cos(angle)),
+                        rnd(c.center.y + c.radius * math.sin(angle))
+                    ))
+                circle_line = LineString(pts)
+                lines.append(circle_line)
+                
+                # Speichere als eigenständiges Polygon für den Fall dass polygonize fehlschlägt
+                standalone_circles.append(Polygon(pts[:-1]))
+        
+        # Arcs
+        for a in getattr(sketch, 'arcs', []):
+            if not a.construction:
+                # Arc-Winkel berechnen
+                start_angle = getattr(a, 'start_angle', 0)
+                end_angle = getattr(a, 'end_angle', 360)
+                
+                # Falls arc_size statt end_angle
+                if hasattr(a, 'arc_size'):
+                    end_angle = start_angle + a.arc_size
+                
+                # Normalisiere Winkel
+                if end_angle < start_angle:
+                    end_angle += 360
+                    
+                num_segments = max(32, int(abs(end_angle - start_angle) / 3))
+                pts = []
+                for i in range(num_segments + 1):
+                    angle = math.radians(start_angle + (end_angle - start_angle) * i / num_segments)
+                    pts.append((
+                        rnd(a.center.x + a.radius * math.cos(angle)),
+                        rnd(a.center.y + a.radius * math.sin(angle))
+                    ))
+                if len(pts) >= 2:
+                    lines.append(LineString(pts))
+        
+        # Splines
+        for s in getattr(sketch, 'splines', []):
+            if not s.construction and hasattr(s, 'points') and len(s.points) >= 2:
+                pts = [(rnd(p.x), rnd(p.y)) for p in s.points]
+                lines.append(LineString(pts))
+        
+        # Polygons (falls vorhanden)
+        for p in getattr(sketch, 'polygons', []):
+            if not p.construction and hasattr(p, 'points') and len(p.points) >= 3:
+                pts = [(rnd(pt.x), rnd(pt.y)) for pt in p.points]
+                pts.append(pts[0])  # Schließen
+                lines.append(LineString(pts))
 
-        if not lines: return
+        if not lines and not standalone_circles: 
+            return
 
         # 2. Polygonize -> Findet alle geschlossenen Loops
+        raw_polys = []
         try:
-            merged = unary_union(lines)
-            raw_polys = list(polygonize(merged))
-        except Exception:
+            if lines:
+                merged = unary_union(lines)
+                raw_polys = list(polygonize(merged))
+        except Exception as e:
+            logger.debug(f"Polygonize failed: {e}")
+        
+        # WICHTIG: Wenn polygonize keine Ergebnisse liefert aber wir eigenständige Kreise haben
+        if not raw_polys and standalone_circles:
+            raw_polys = standalone_circles
+        elif standalone_circles:
+            # Füge Kreise hinzu die nicht in raw_polys sind
+            for circle in standalone_circles:
+                already_found = False
+                for poly in raw_polys:
+                    # Prüfe ob der Kreis bereits als Polygon existiert (ähnliche Fläche)
+                    if abs(poly.area - circle.area) < circle.area * 0.1:
+                        already_found = True
+                        break
+                if not already_found:
+                    raw_polys.append(circle)
+        
+        if not raw_polys:
             return
 
         # 3. Containment Analyse (Wer liegt in wem?)
@@ -159,8 +235,19 @@ class GeometryDetector:
 
             # B. Erzeuge die "Ring"-Fläche (Parent minus alle direkten Holes)
             shell_poly = parent
+            logger.debug(f"Parent Polygon {i}: area={parent.area:.1f}, holes_found={len(holes)}")
+            
             for h in holes:
+                logger.debug(f"  Subtrahiere Loch: area={h.area:.1f}")
                 shell_poly = shell_poly.difference(h)
+            
+            # DEBUG: Prüfen ob Interiors erstellt wurden
+            n_interiors = len(list(shell_poly.interiors)) if hasattr(shell_poly, 'interiors') else 0
+            logger.info(f"  → Shell nach difference: area={shell_poly.area:.1f}, interiors={n_interiors}")
+            
+            if n_interiors > 0:
+                for idx, interior in enumerate(shell_poly.interiors):
+                    logger.debug(f"    Interior {idx}: {len(list(interior.coords))} Punkte")
             
             # Erzeuge SelectionFace für den Ring (Hexagon ohne Kreis)
             self.selection_faces.append(
@@ -308,11 +395,11 @@ class GeometryDetector:
     
     def pick(self, ray_origin, ray_dir, selection_filter=SelectionFilter.ALL):
         hits = []
-        print(f"Pick Ray: {ray_origin} -> {ray_dir}")
-        print(f"Active Filter: {selection_filter}")
+        logger.debug(f"Pick Ray: {ray_origin} -> {ray_dir}")
+        logger.debug(f"Active Filter: {selection_filter}")
         for face in self.selection_faces:
             if face.domain_type not in selection_filter:
-                print(f"Ignoriere Face {face.id} ({face.domain_type}) wegen Filter")
+                logger.debug(f"Ignoriere Face {face.id} ({face.domain_type}) wegen Filter")
                 continue
 
             # Sketch-Faces → analytisch
@@ -410,7 +497,7 @@ class GeometryDetector:
     def process_body_mesh(self, body_id, vtk_mesh):
         """
         Zerlegt das Body-Mesh in planare Flächen.
-        FIX: Korrigierter Zugriff auf RegionId (vermeidet Connectivity Warning)
+        FIX: Bessere Normalen-Gruppierung für zylindrische Flächen
         """
         if not HAS_VTK or vtk_mesh is None:
             return
@@ -421,9 +508,12 @@ class GeometryDetector:
         if 'Normals' not in vtk_mesh.cell_data:
             vtk_mesh.compute_normals(cell_normals=True, inplace=True)
 
-        # 1. Zellen nach Normalen gruppieren
-        normals = np.round(vtk_mesh.cell_data['Normals'], 3)
+        # FIX: Gröbere Rundung (1 Dezimalstelle) für bessere Gruppierung
+        # Das fasst Dreiecke mit ähnlicher Normale zusammen (z.B. Zylinder-Mantel)
+        normals = np.round(vtk_mesh.cell_data['Normals'], 1)
         unique_normals, groups = np.unique(normals, axis=0, return_inverse=True)
+        
+        logger.debug(f"Body {body_id}: {len(unique_normals)} Normalen-Gruppen aus {vtk_mesh.n_cells} Dreiecken")
 
         for group_idx, normal in enumerate(unique_normals):
             cell_ids = np.where(groups == group_idx)[0]
@@ -461,7 +551,7 @@ class GeometryDetector:
 
             except Exception as e:
                 # Fallback bei Fehler
-                print(f"Connectivity Fallback: {e}")
+                logger.warning(f"Connectivity Fallback: {e}")
                 self._add_single_face(body_id, group_mesh, normal)
 
     def _add_single_face(self, body_id, mesh, normal):
@@ -600,7 +690,7 @@ class GeometryDetector:
             return mesh
 
         except Exception as e:
-            print(f"Mesh generation error: {e}")
+            logger.error(f"Mesh generation error: {e}")
             return None
             
     def _shapely_to_pv_mesh_old(self, poly, o, n, x_dir, plane_y_dir=None): # <--- plane_y_dir hinzugefügt
@@ -655,5 +745,5 @@ class GeometryDetector:
             mesh = pv.PolyData(points, faces)
             return mesh
         except Exception as e:
-            print(f"Mesh generation error: {e}")
+            logger.error(f"Mesh generation error: {e}")
             return None

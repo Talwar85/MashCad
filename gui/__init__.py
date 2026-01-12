@@ -1,3 +1,1 @@
-"""
-LiteCAD GUI Module
-"""
+"""MashCad GUI Module"""

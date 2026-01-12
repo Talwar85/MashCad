@@ -205,4 +205,4 @@ if __name__ == "__main__":
     if s: 
         out = sys.argv[1].replace(".ply", "").replace(".stl", "") + "_v34.step"
         s.export_step(out)
-        print(f"Exportiert: {out}")
+        logger.info(f"Exportiert: {out}")
