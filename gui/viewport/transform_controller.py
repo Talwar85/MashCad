@@ -313,8 +313,11 @@ class TransformController(QObject):
             
             if current_pos is not None and self._drag_start_pos is not None:
                 delta = current_pos - self._drag_start_pos
-                self._apply_drag_delta(delta)
-                self._drag_start_pos = current_pos
+                
+                # Nur updaten wenn signifikantes Delta
+                if np.linalg.norm(delta) > 0.001:
+                    self._apply_drag_delta(delta)
+                    self._drag_start_pos = current_pos
                 
             return True
         else:
@@ -449,7 +452,7 @@ class TransformController(QObject):
         axis = self.gizmo.active_axis
         
         if self.state.mode == GizmoMode.MOVE:
-            # Delta zur Translation addieren
+            # Delta zur Translation addieren - NUR auf der aktiven Achse
             if axis == GizmoAxis.X:
                 self.state.total_translation[0] += delta[0]
             elif axis == GizmoAxis.Y:
@@ -547,16 +550,19 @@ class TransformController(QObject):
                     if self.state.mode == GizmoMode.MOVE:
                         # Translation relativ zur Startposition
                         t = self.state.total_translation
-                        # UserTransform verwenden für relative Bewegung
+                        
+                        # WICHTIG: Neues Transform-Objekt erstellen
+                        # (nicht akkumulieren, sondern absolut setzen)
                         transform = vtk.vtkTransform()
+                        transform.Identity()
                         transform.Translate(t[0], t[1], t[2])
                         actor.SetUserTransform(transform)
                         
                     elif self.state.mode == GizmoMode.ROTATE:
-                        # Rotation um das Zentrum
                         r = self.state.total_rotation
                         pivot = self.state.start_center
                         transform = vtk.vtkTransform()
+                        transform.Identity()
                         transform.Translate(pivot[0], pivot[1], pivot[2])
                         transform.RotateX(r[0])
                         transform.RotateY(r[1])
@@ -565,10 +571,10 @@ class TransformController(QObject):
                         actor.SetUserTransform(transform)
                         
                     elif self.state.mode == GizmoMode.SCALE:
-                        # Scale um das Zentrum
                         s = self.state.total_scale
                         pivot = self.state.start_center
                         transform = vtk.vtkTransform()
+                        transform.Identity()
                         transform.Translate(pivot[0], pivot[1], pivot[2])
                         transform.Scale(s[0], s[1], s[2])
                         transform.Translate(-pivot[0], -pivot[1], -pivot[2])

@@ -131,7 +131,10 @@ class CADTessellator:
         cache_key = f"{shape_id}_{quality}_{angular_tolerance}_v{_TESSELLATOR_VERSION}"
 
         if cache_key in CADTessellator._mesh_cache:
+            logger.debug(f"Tessellator: Cache HIT für {cache_key[:20]}...")
             return CADTessellator._mesh_cache[cache_key]
+        
+        logger.debug(f"Tessellator: Cache MISS - generiere neu für {cache_key[:20]}...")
 
         mesh = None
         edge_mesh = None

@@ -185,23 +185,20 @@ class TransformGizmo:
         """Aktualisiert die Gizmo-Position während des Drags"""
         if not self.visible:
             return
-            
-        delta = new_center - self.center
-        self.center = new_center
         
-        # Alle Actors verschieben
-        for name in self._actor_names:
-            try:
-                actor = self.plotter.renderer.actors.get(name)
-                if actor:
-                    pos = actor.GetPosition()
-                    actor.SetPosition(pos[0] + delta[0], pos[1] + delta[1], pos[2] + delta[2])
-            except:
-                pass
-                
-        # Pick-Geometrien auch updaten
-        for axis, mesh in self._pick_geometries.items():
-            mesh.points += delta
+        # EINFACHER: Gizmo komplett neu erstellen an neuer Position
+        # Das ist sicherer als Actors zu verschieben
+        old_mode = self.mode
+        old_active = self.active_axis
+        old_hover = self.hovered_axis
+        
+        self.hide()
+        self.show(new_center, old_mode)
+        
+        # Zustand wiederherstellen
+        self.active_axis = old_active
+        self.hovered_axis = old_hover
+        self._update_colors()
             
     # ==================== PRIVATE METHODS ====================
     

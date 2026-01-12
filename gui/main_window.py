@@ -812,25 +812,11 @@ class MainWindow(QMainWindow):
         self._pending_transform_mode = None
         self.viewport_3d.setCursor(Qt.ArrowCursor)
         
-        # Panel anzeigen
-        self.transform_panel.set_mode(mode)
-        self.transform_panel.show_at(self.viewport_3d)
-        
-        # Gizmo aktivieren
-        if hasattr(self.viewport_3d, 'start_transform'):
-            self.viewport_3d.start_transform(body.id, mode)
+        # Gizmo anzeigen (Onshape-Style V2)
+        if hasattr(self.viewport_3d, 'show_transform_gizmo'):
+            self.viewport_3d.show_transform_gizmo(body.id)
             
-            # --- FIX FÜR DEN FEHLER ---
-            # Wir trennen explizit NUR unsere Callback-Methode
-            try:
-                self.viewport_3d.transform_changed.disconnect(self._on_viewport_transform_update)
-            except Exception:
-                pass # War noch nicht verbunden, das ist okay.
-            
-            # Neu verbinden
-            self.viewport_3d.transform_changed.connect(self._on_viewport_transform_update)
-            
-        logger.info(f"{mode.capitalize()}: Ziehe am Kasten oder gib Werte ein | Enter=OK")
+        logger.info(f"{mode.capitalize()}: Ziehe am Pfeil | Loslassen = Anwenden")
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -914,8 +900,10 @@ class MainWindow(QMainWindow):
         Handler für das neue Gizmo-basierte Transform-System.
         Wird vom TransformController aufgerufen wenn Apply bestätigt wird.
         """
-        # Body finden
-        body = next((b for b in self.browser.bodies if b.id == body_id), None)
+        logger.debug(f"Transform requested: {mode} auf {body_id} mit data={data}")
+        
+        # Body finden - Bodies sind im document, nicht im browser
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
         if not body:
             logger.error(f"Body {body_id} nicht gefunden für Transform")
             return
@@ -925,6 +913,10 @@ class MainWindow(QMainWindow):
             return
             
         from build123d import Location, Axis
+        from modeling.cad_tessellator import CADTessellator
+        
+        # WICHTIG: Cache leeren damit neues Mesh generiert wird!
+        CADTessellator.clear_cache()
         
         try:
             if mode == "move":
@@ -933,8 +925,30 @@ class MainWindow(QMainWindow):
                     dx, dy, dz = data
                 else:
                     dx, dy, dz = data.get("translation", [0, 0, 0])
-                body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
-                logger.success(f"Move ({dx:.2f}, {dy:.2f}, {dz:.2f}) auf {body.name}")
+                    
+                logger.debug(f"Move delta: dx={dx:.2f}, dy={dy:.2f}, dz={dz:.2f}")
+                    
+                # Nur wenn signifikante Bewegung
+                if abs(dx) > 0.001 or abs(dy) > 0.001 or abs(dz) > 0.001:
+                    # Altes Zentrum loggen
+                    old_bounds = body._build123d_solid.bounding_box()
+                    old_center = ((old_bounds.min.X + old_bounds.max.X) / 2,
+                                  (old_bounds.min.Y + old_bounds.max.Y) / 2,
+                                  (old_bounds.min.Z + old_bounds.max.Z) / 2)
+                    logger.debug(f"Altes Zentrum: {old_center}")
+                    
+                    body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+                    
+                    # Neues Zentrum loggen
+                    new_bounds = body._build123d_solid.bounding_box()
+                    new_center = ((new_bounds.min.X + new_bounds.max.X) / 2,
+                                  (new_bounds.min.Y + new_bounds.max.Y) / 2,
+                                  (new_bounds.min.Z + new_bounds.max.Z) / 2)
+                    logger.debug(f"Neues Zentrum: {new_center}")
+                    
+                    logger.success(f"Move ({dx:.2f}, {dy:.2f}, {dz:.2f}) auf {body.name}")
+                else:
+                    logger.debug("Move delta zu klein, übersprungen")
                 
             elif mode == "rotate":
                 # Rotation aus data
@@ -962,12 +976,17 @@ class MainWindow(QMainWindow):
                 logger.success(f"Scale ({factor:.2f}) auf {body.name}")
                 
             # Mesh aktualisieren
+            logger.debug("Aktualisiere Mesh...")
             self._update_body_from_build123d(body, body._build123d_solid)
+            logger.debug("Mesh aktualisiert")
             
-            # UI aufräumen
-            self.transform_panel.hide()
-            self._active_transform_body = None
-            self._transform_mode = None
+            # Gizmo an neuer Position anzeigen (bleibt aktiv für weitere Transforms)
+            if hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                self.viewport_3d.show_transform_gizmo(body_id)
+            
+            # UI aufräumen (kein transform_panel mehr nötig im Onshape-Style)
+            if hasattr(self, 'transform_panel'):
+                self.transform_panel.hide()
             self.browser.refresh()
             
         except Exception as e:
@@ -1896,6 +1915,8 @@ class MainWindow(QMainWindow):
 
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
+        logger.debug(f"_update_body_mesh aufgerufen für '{body.name}' (id={body.id})")
+        
         if hasattr(body, 'vtk_mesh') and body.vtk_mesh is not None:
             if body.vtk_mesh.n_points == 0:
                 logger.warning(f"Warnung: Body '{body.name}' ist leer (0 Punkte). Überspringe Rendering.")
@@ -1904,6 +1925,7 @@ class MainWindow(QMainWindow):
         # 1. Fallback für manuelles Mesh (z.B. aus Boolean-Preview)
         if mesh_override:
              import numpy as np
+             logger.debug(f"Verwende mesh_override")
              if hasattr(mesh_override, 'points'): # PyVista Mesh
                  self.viewport_3d.add_body(
                      bid=body.id,
@@ -1915,6 +1937,7 @@ class MainWindow(QMainWindow):
 
         # 2. NEUER PFAD: Prüfen auf VTK/PyVista Cache (aus cad_tessellator)
         if hasattr(body, 'vtk_mesh') and body.vtk_mesh is not None:
+             logger.debug(f"Verwende vtk_mesh: {body.vtk_mesh.n_points} Punkte, vtk_edges: {body.vtk_edges.n_lines if body.vtk_edges else 'None'}")
              # Farbe bestimmen (Round Robin)
              try:
                  col_idx = self.document.bodies.index(body) % 3
@@ -1932,6 +1955,7 @@ class MainWindow(QMainWindow):
 
         # 3. LEGACY PFAD: Alte Listen (nur Fallback)
         if hasattr(body, '_mesh_vertices') and body._mesh_vertices:
+             logger.debug(f"Verwende Legacy _mesh_vertices")
              try:
                  col_idx = self.document.bodies.index(body) % 3
              except: col_idx = 0
@@ -1944,6 +1968,8 @@ class MainWindow(QMainWindow):
                  faces=body._mesh_triangles,
                  color=colors[col_idx]
              )
+        else:
+            logger.warning(f"Body '{body.name}' hat keine Mesh-Daten!")
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent, Qt

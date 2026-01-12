@@ -14,7 +14,7 @@ from gui.geometry_detector import GeometryDetector
 from gui.viewport.extrude_mixin import ExtrudeMixin
 from gui.viewport.picking_mixin import PickingMixin
 from gui.viewport.body_mixin import BodyRenderingMixin
-from gui.viewport.transform_mixin import TransformMixin
+from gui.viewport.transform_mixin_v2 import TransformMixinV2
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -70,14 +70,14 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixin):
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV2):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
     extrude_requested = Signal(list, float, str)
     height_changed = Signal(float)
     face_selected = Signal(int)
-    transform_changed = Signal(float, float, float) # sendet delta während drag
+    transform_changed = Signal(float, float, float) # für UI-Panel Update
     clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
     body_transform_requested = Signal(str, str, object)  # body_id, mode, data
     
@@ -493,9 +493,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         from PySide6.QtCore import QEvent, Qt
         from PySide6.QtWidgets import QApplication
         
-        # --- TRANSFORM MODE (Neues Gizmo-System) ---
-        # NUR bei relevanten Mouse-Events verarbeiten!
-        if hasattr(self, '_transform_controller') and self._transform_controller.state:
+        # --- TRANSFORM MODE (Onshape-Style Gizmo V2) ---
+        if self.is_transform_active():
             event_type = event.type()
             
             # Nur Mouse-Events haben position()
@@ -504,26 +503,20 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 screen_pos = (int(pos.x()), int(pos.y()))
                 
                 if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                    if self._handle_transform_mouse_press(event):
+                    if self.handle_transform_mouse_press(screen_pos):
                         return True
                         
                 elif event_type == QEvent.MouseMove:
-                    if self._handle_transform_mouse_move(event):
+                    if self.handle_transform_mouse_move(screen_pos):
                         return True
                         
                 elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-                    if self._handle_transform_mouse_release(event):
+                    if self.handle_transform_mouse_release(screen_pos):
                         return True
                     
-            # ESC zum Abbrechen (KeyPress hat keine pos)
+            # ESC zum Abbrechen
             elif event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
-                self.end_transform()
-                return True
-                
-            # Enter zum Bestätigen
-            elif event_type == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                if hasattr(self, '_transform_controller'):
-                    self._transform_controller.apply_transform()
+                self.hide_transform_gizmo()
                 return True
         
         # --- PLANE SELECT MODE ---
@@ -1340,11 +1333,27 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             mesh_obj = None           
             edge_mesh_obj = None
 
-        # Alten Actor entfernen (Cleanup)
+        # Alten Actor entfernen (Cleanup) - EXPLIZIT und mit Logging
+        n_mesh_old = f"body_{bid}_m"
+        n_edge_old = f"body_{bid}_e"
+        
+        # Zuerst explizit nach Namen entfernen
+        for old_name in [n_mesh_old, n_edge_old]:
+            try:
+                if old_name in self.plotter.renderer.actors:
+                    self.plotter.remove_actor(old_name)
+                    logger.debug(f"Actor '{old_name}' entfernt")
+            except Exception as e:
+                logger.warning(f"Konnte Actor '{old_name}' nicht entfernen: {e}")
+        
+        # Dann aus der Liste entfernen
         if bid in self._body_actors:
             for n in self._body_actors[bid]: 
-                try: self.plotter.remove_actor(n)
-                except: pass
+                try: 
+                    self.plotter.remove_actor(n)
+                except: 
+                    pass
+            del self._body_actors[bid]
         
         actors_list = []
         if color is None: 
@@ -1362,6 +1371,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 n_mesh = f"body_{bid}_m"
                 has_normals = "Normals" in mesh_obj.point_data
                 
+                logger.debug(f"Füge Mesh hinzu: {n_mesh}, {mesh_obj.n_points} Punkte")
+                
                 self.plotter.add_mesh(mesh_obj, color=col_rgb, name=n_mesh, show_edges=False, 
                                       smooth_shading=has_normals, pbr=not has_normals, 
                                       metallic=0.1, roughness=0.6, pickable=True)
@@ -1369,11 +1380,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # Explizit sichtbar machen
                 if n_mesh in self.plotter.renderer.actors:
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)
+                    logger.debug(f"Actor '{n_mesh}' sichtbar gesetzt")
                     
                 actors_list.append(n_mesh)
                 
                 if edge_mesh_obj is not None:
                     n_edge = f"body_{bid}_e"
+                    logger.debug(f"Füge Edges hinzu: {n_edge}, {edge_mesh_obj.n_lines} Linien")
                     self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
                     actors_list.append(n_edge)
                 
@@ -1405,11 +1418,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 
             self._body_actors[bid] = tuple(actors_list)
             
-            # WICHTIG: Erzwinge Update direkt nach dem Hinzufügen
-            #self.plotter.render()
+            # WICHTIG: Erzwinge Render nach dem Hinzufügen
+            self.plotter.render()
             
         except Exception as e:
-            logger.error(f" {e}")
+            logger.error(f"add_body error: {e}")
 
     def set_body_visibility(self, body_id, visible):
         if body_id not in self._body_actors: return
