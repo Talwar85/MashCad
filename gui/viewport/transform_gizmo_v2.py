@@ -504,15 +504,17 @@ class SimpleTransformController:
         
         logger.debug(f"Mouse release: total_delta={total_delta}")
         
-        # WICHTIG: UserTransform NICHT zurücksetzen!
-        # Das neue Mesh von Build123d ersetzt den Actor sowieso komplett.
-        # Wenn wir hier resetten, springt der Body kurz zurück bevor das neue Mesh da ist.
-        
         # Gizmo verstecken
         self.gizmo.hide()
         
         # Transform anwenden (Build123d)
         if self._apply_transform and np.linalg.norm(total_delta) > 0.001:
+            # KRITISCH: UserTransform zurücksetzen VOR dem Apply!
+            # Sonst kann PyVista den Actor mit UserTransform nicht korrekt entfernen
+            # und es entsteht ein "Ghost-Actor" an der alten Position.
+            # Das neue Mesh aus Build123d hat bereits die korrekten Koordinaten.
+            self._reset_body_preview(body_id)
+            
             logger.debug(f"Applying transform: {total_delta.tolist()}")
             self._apply_transform(
                 body_id,

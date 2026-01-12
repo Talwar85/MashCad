@@ -1333,20 +1333,60 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             mesh_obj = None           
             edge_mesh_obj = None
 
-        # Alten Actor entfernen (Cleanup) - EXPLIZIT und mit Logging
+        # Alten Actor entfernen (Cleanup) - MAXIMAL AGGRESSIV
         n_mesh_old = f"body_{bid}_m"
         n_edge_old = f"body_{bid}_e"
         
-        # Zuerst explizit nach Namen entfernen
+        # METHODE 1: Direkt aus VTK Renderer Collection entfernen
+        # Das ist der zuverlässigste Weg, unabhängig von PyVista's Dictionary
+        try:
+            vtk_renderer = self.plotter.renderer
+            actors_collection = vtk_renderer.GetActors()
+            actors_collection.InitTraversal()
+            actors_to_remove = []
+            
+            for i in range(actors_collection.GetNumberOfItems()):
+                actor = actors_collection.GetNextActor()
+                if actor:
+                    # UserTransform zurücksetzen
+                    actor.SetUserTransform(None)
+                    actors_to_remove.append(actor)
+            
+            # Jetzt die markierten Actors entfernen
+            # (Wir entfernen ALLE und fügen sie dann neu hinzu, außer die body_bid Actors)
+            for actor in actors_to_remove:
+                # Prüfe ob dieser Actor zu unserem Body gehört
+                # PyVista speichert den Namen im actors Dictionary
+                actor_name = None
+                for name, a in self.plotter.renderer.actors.items():
+                    if a is actor:
+                        actor_name = name
+                        break
+                
+                if actor_name and actor_name.startswith(f"body_{bid}"):
+                    vtk_renderer.RemoveActor(actor)
+                    logger.debug(f"VTK: Actor '{actor_name}' aus Renderer entfernt")
+        except Exception as e:
+            logger.warning(f"VTK Cleanup fehlgeschlagen: {e}")
+        
+        # METHODE 2: PyVista Dictionary bereinigen
         for old_name in [n_mesh_old, n_edge_old]:
             try:
                 if old_name in self.plotter.renderer.actors:
-                    self.plotter.remove_actor(old_name)
-                    logger.debug(f"Actor '{old_name}' entfernt")
+                    # Aus PyVista Dictionary entfernen
+                    del self.plotter.renderer.actors[old_name]
+                    logger.debug(f"PyVista Dict: '{old_name}' entfernt")
             except Exception as e:
-                logger.warning(f"Konnte Actor '{old_name}' nicht entfernen: {e}")
+                pass
         
-        # Dann aus der Liste entfernen
+        # METHODE 3: Standard PyVista API als Fallback
+        for old_name in [n_mesh_old, n_edge_old]:
+            try:
+                self.plotter.remove_actor(old_name)
+            except:
+                pass
+        
+        # Aus der internen Liste entfernen
         if bid in self._body_actors:
             for n in self._body_actors[bid]: 
                 try: 
@@ -1354,6 +1394,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 except: 
                     pass
             del self._body_actors[bid]
+        
+        # KRITISCH: Erzwinge Render nach dem Cleanup um sicherzustellen
+        # dass der alte Actor wirklich weg ist bevor wir den neuen hinzufügen
+        self.plotter.render()
         
         actors_list = []
         if color is None: 
@@ -1371,7 +1415,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 n_mesh = f"body_{bid}_m"
                 has_normals = "Normals" in mesh_obj.point_data
                 
+                # DEBUG: Mesh-Koordinaten loggen
+                bounds = mesh_obj.bounds
+                center = mesh_obj.center
                 logger.debug(f"Füge Mesh hinzu: {n_mesh}, {mesh_obj.n_points} Punkte")
+                logger.debug(f"  Mesh bounds: X({bounds[0]:.1f} to {bounds[1]:.1f}), Y({bounds[2]:.1f} to {bounds[3]:.1f}), Z({bounds[4]:.1f} to {bounds[5]:.1f})")
+                logger.debug(f"  Mesh center: ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f})")
                 
                 self.plotter.add_mesh(mesh_obj, color=col_rgb, name=n_mesh, show_edges=False, 
                                       smooth_shading=has_normals, pbr=not has_normals, 

@@ -3,15 +3,21 @@ MashCad - CAD Tessellator
 Handles optimized conversion from Build123d Solids to PyVista PolyData with Caching.
 FIX: Auto-Fallback für korrupte Edge-Daten
 FIX: Echte B-Rep Kanten statt Tessellations-Kanten
-VERSION: 3 - Cache wird bei Version-Änderung geleert
+FIX: Transform invalidiert jetzt auch ocp_tessellate Cache
+VERSION: 4 - Cache wird bei Version-Änderung geleert
 """
 import numpy as np
 import pyvista as pv
 from loguru import logger
 from typing import Tuple, Optional
+import time
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
-_TESSELLATOR_VERSION = 3
+_TESSELLATOR_VERSION = 4
+
+# GLOBAL COUNTER für Cache-Invalidierung bei Transforms
+# Wird bei jedem clear_cache() erhöht um ocp_tessellate Cache zu invalidieren
+_CACHE_INVALIDATION_COUNTER = 0
 
 HAS_OCP_TESSELLATE = False
 try:
@@ -43,9 +49,11 @@ class CADTessellator:
 
     @staticmethod
     def clear_cache():
+        global _CACHE_INVALIDATION_COUNTER
+        _CACHE_INVALIDATION_COUNTER += 1
         CADTessellator._mesh_cache.clear()
         CADTessellator._cache_cleared = True
-        logger.info(f"CADTessellator Cache geleert (Version {_TESSELLATOR_VERSION})")
+        logger.info(f"CADTessellator Cache geleert (Version {_TESSELLATOR_VERSION}, Counter {_CACHE_INVALIDATION_COUNTER})")
 
     @staticmethod
     def extract_brep_edges(solid, deflection=0.1) -> Optional[pv.PolyData]:
@@ -127,8 +135,9 @@ class CADTessellator:
             return None, None
 
         shape_id = id(solid.wrapped)
-        # Cache-Key mit Version für Auto-Invalidierung
-        cache_key = f"{shape_id}_{quality}_{angular_tolerance}_v{_TESSELLATOR_VERSION}"
+        # Cache-Key mit Version UND Counter für Auto-Invalidierung
+        # Der Counter stellt sicher dass ocp_tessellate auch neu berechnet
+        cache_key = f"{shape_id}_{quality}_{angular_tolerance}_v{_TESSELLATOR_VERSION}_c{_CACHE_INVALIDATION_COUNTER}"
 
         if cache_key in CADTessellator._mesh_cache:
             logger.debug(f"Tessellator: Cache HIT für {cache_key[:20]}...")
