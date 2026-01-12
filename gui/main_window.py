@@ -43,6 +43,7 @@ from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPan
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler
+from gui.widgets.transform_panel import TransformInputPanel, SelectionInfoWidget, CenterHintWidget
 from gui.dialogs import VectorInputDialog, BooleanDialog
 
 try:
@@ -356,6 +357,22 @@ class MainWindow(QMainWindow):
         self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
         self.extrude_panel.operation_changed.connect(self._on_extrude_operation_changed)
         
+        # Transform Input Panel (NEU)
+        self.transform_input_panel = TransformInputPanel(self)
+        self.transform_input_panel.transform_confirmed.connect(self._on_transform_panel_confirmed)
+        self.transform_input_panel.transform_cancelled.connect(self._on_transform_panel_cancelled)
+        self.transform_input_panel.mode_changed.connect(self._on_transform_mode_changed)
+        self.transform_input_panel.hide()  # Initial versteckt
+        
+        # Selection Info Widget (zeigt aktuell selektierten Body)
+        self.selection_info = SelectionInfoWidget(self)
+        self.selection_info.move(10, 60)  # Oben links, unter Toolbar
+        self.selection_info.hide()
+        
+        # Center Hint Widget (große zentrale Hinweise)
+        self.center_hint = CenterHintWidget(self)
+        self.center_hint.hide()
+        
         # Fillet/Chamfer Panel
         self.fillet_panel = FilletChamferPanel(self)
         self.fillet_panel.radius_changed.connect(self._on_fillet_radius_changed)
@@ -374,6 +391,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_extrude_panel()
+        self._position_transform_panel()
         self._reposition_notifications()
     
     def _position_extrude_panel(self):
@@ -391,6 +409,81 @@ class MainWindow(QMainWindow):
             
             self.extrude_panel.move(x, y)
             self.extrude_panel.raise_() # Sicherstellen, dass es vorne ist
+
+    def _position_transform_panel(self):
+        """Positioniert das Transform-Panel am unteren Rand, zentriert."""
+        if hasattr(self, 'transform_input_panel') and self.transform_input_panel.isVisible():
+            pw = self.transform_input_panel.width() if self.transform_input_panel.width() > 10 else 600
+            ph = self.transform_input_panel.height() if self.transform_input_panel.height() > 10 else 50
+            
+            x = (self.width() - pw) // 2
+            y = self.height() - ph - 30
+            
+            self.transform_input_panel.move(x, y)
+            self.transform_input_panel.raise_()
+            
+    def _on_transform_panel_confirmed(self, mode: str, data):
+        """Handler wenn Transform im Panel bestätigt wird"""
+        # Finde selektierten Body
+        body_id = self._get_selected_body_id()
+        if not body_id:
+            logger.warning("Kein Body selektiert für Transform")
+            return
+            
+        self._on_body_transform_requested(body_id, mode, data)
+        self.transform_input_panel.reset_values()
+        
+    def _on_transform_panel_cancelled(self):
+        """Handler wenn Transform abgebrochen wird"""
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+        self.transform_input_panel.hide()
+        self.selection_info.clear_selection()
+        self._selected_body_for_transform = None
+        
+    def _on_transform_mode_changed(self, mode: str):
+        """Handler wenn Transform-Modus geändert wird"""
+        if hasattr(self.viewport_3d, 'set_transform_mode'):
+            self.viewport_3d.set_transform_mode(mode)
+        logger.info(f"Transform Mode: {mode.capitalize()}")
+        
+    def _get_selected_body_id(self) -> str:
+        """Gibt ID des aktuell für Transform selektierten Bodies zurück"""
+        if hasattr(self, '_selected_body_for_transform') and self._selected_body_for_transform:
+            return self._selected_body_for_transform
+        return None
+        
+    def _show_transform_ui(self, body_id: str, body_name: str):
+        """Zeigt Transform-UI für einen Body"""
+        self._selected_body_for_transform = body_id
+        
+        # Selection-Info aktualisieren
+        self.selection_info.set_selection(body_name)
+        self.selection_info.show()
+        
+        # Transform-Panel zeigen
+        self.transform_input_panel.reset_values()
+        self.transform_input_panel.show()
+        self._position_transform_panel()
+        
+        # Gizmo zeigen
+        if hasattr(self.viewport_3d, 'show_transform_gizmo'):
+            self.viewport_3d.show_transform_gizmo(body_id)
+            
+        logger.info(f"Transform: {body_name} | G=Move R=Rotate S=Scale | Tab=Eingabe | Esc=Abbrechen")
+        
+    def _hide_transform_ui(self):
+        """Versteckt Transform-UI"""
+        self._selected_body_for_transform = None
+        self.selection_info.clear_selection()
+        self.transform_input_panel.hide()
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+            
+    def _on_transform_values_live_update(self, x: float, y: float, z: float):
+        """Handler für Live-Update der Transform-Werte während Drag"""
+        if hasattr(self, 'transform_input_panel') and self.transform_input_panel.isVisible():
+            self.transform_input_panel.set_values(x, y, z)
 
     def _create_toolbar(self):
         """Minimale Toolbar - nur Modus-Umschaltung"""
@@ -469,6 +562,22 @@ class MainWindow(QMainWindow):
         # NEU: Transform-Signal vom neuen Gizmo-System
         if hasattr(self.viewport_3d, 'body_transform_requested'):
             self.viewport_3d.body_transform_requested.connect(self._on_body_transform_requested)
+            
+        # NEU: Live-Update der Transform-Werte für Panel
+        if hasattr(self.viewport_3d, 'transform_changed'):
+            self.viewport_3d.transform_changed.connect(self._on_transform_values_live_update)
+            
+        # NEU: Copy-Signal (Shift+Drag)
+        if hasattr(self.viewport_3d, 'body_copy_requested'):
+            self.viewport_3d.body_copy_requested.connect(self._on_body_copy_requested)
+            
+        # NEU: Mirror-Signal
+        if hasattr(self.viewport_3d, 'body_mirror_requested'):
+            self.viewport_3d.body_mirror_requested.connect(self._on_body_mirror_requested)
+            
+        # NEU: Mirror-Dialog Signal
+        if hasattr(self.viewport_3d, 'mirror_requested'):
+            self.viewport_3d.mirror_requested.connect(self._show_mirror_dialog)
         
         # NEU: Face-Selection für automatische Operation-Erkennung
         if hasattr(self.viewport_3d, 'face_selected'):
@@ -791,19 +900,35 @@ class MainWindow(QMainWindow):
         """Wird aufgerufen wenn ein Feature im Tree ausgewählt wird"""
         if data and len(data) >= 2:
             if data[0] == 'body':
-                self.body_properties.update_body(data[1])
+                body = data[1]
+                self.body_properties.update_body(body)
+                
+                # NEU: Transform-UI zeigen wenn Body selektiert wird
+                if hasattr(body, 'id') and hasattr(body, 'name'):
+                    self._show_transform_ui(body.id, body.name)
             else:
                 self.body_properties.clear()
+                # Bei Nicht-Body-Selektion Transform-UI verstecken
+                self._hide_transform_ui()
     
     def _start_transform_mode(self, mode):
         """Startet den Modus. Wenn kein Body gewählt ist, wartet er auf Klick."""
         body = self._get_active_body()
         
-        # Fall 1: Kein Körper gewählt -> Warte auf Klick im Viewport
+        # Fall 1: Kein Körper gewählt -> Zeige zentralen Hinweis
         if not body:
-            logger.info(f"{mode.capitalize()}: Klicke jetzt auf einen Körper im 3D-Fenster...")
             self._pending_transform_mode = mode 
             self.viewport_3d.setCursor(Qt.CrossCursor)
+            
+            # Zentraler Hinweis
+            self.center_hint.show_hint(
+                f"Wähle einen Body für {mode.capitalize()}",
+                "Klicke auf einen Body im Browser oder 3D-Ansicht",
+                "👆",
+                duration_ms=5000,
+                color="rgba(0, 120, 212, 220)"
+            )
+            logger.info(f"{mode.capitalize()}: Wähle einen Body im Browser...")
             return
             
         # Fall 2: Körper ist da -> Los geht's
@@ -812,11 +937,24 @@ class MainWindow(QMainWindow):
         self._pending_transform_mode = None
         self.viewport_3d.setCursor(Qt.ArrowCursor)
         
-        # Gizmo anzeigen (Onshape-Style V2)
-        if hasattr(self.viewport_3d, 'show_transform_gizmo'):
-            self.viewport_3d.show_transform_gizmo(body.id)
+        # Transform-UI zeigen
+        self._show_transform_ui(body.id, body.name)
+        
+        # Zentraler Hinweis für Modus
+        mode_hints = {
+            "move": ("↔️", "Ziehe an den Pfeilen oder gib Werte ein"),
+            "rotate": ("🔄", "Ziehe am Ring oder gib Winkel ein"),
+            "scale": ("📐", "Ziehe oder gib Skalierung ein"),
+        }
+        icon, hint = mode_hints.get(mode, ("🎯", ""))
+        self.center_hint.show_hint(
+            f"{mode.capitalize()}: {body.name}",
+            hint,
+            icon,
+            duration_ms=2000
+        )
             
-        logger.info(f"{mode.capitalize()}: Ziehe am Pfeil | Loslassen = Anwenden")
+        logger.info(f"{mode.capitalize()}: Ziehe am Gizmo oder Tab für Eingabe")
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -951,17 +1089,26 @@ class MainWindow(QMainWindow):
                     logger.debug("Move delta zu klein, übersprungen")
                 
             elif mode == "rotate":
-                # Rotation aus data
+                # Rotation aus data - neues Format: {axis: "X/Y/Z", angle: float}
                 if isinstance(data, dict):
-                    rx, ry, rz = data.get("rotation", [0, 0, 0])
+                    axis_name = data.get("axis", "Z")
+                    angle = data.get("angle", 0)
+                    
+                    # Nur eine Achse rotieren
+                    if angle != 0:
+                        axis_map = {"X": Axis.X, "Y": Axis.Y, "Z": Axis.Z}
+                        axis = axis_map.get(axis_name, Axis.Z)
+                        body._build123d_solid = body._build123d_solid.rotate(axis, angle)
+                        logger.success(f"Rotate ({axis_name}, {angle:.1f}°) auf {body.name}")
                 else:
-                    rx, ry, rz = 0, 0, 0
-                solid = body._build123d_solid
-                if rx != 0: solid = solid.rotate(Axis.X, rx)
-                if ry != 0: solid = solid.rotate(Axis.Y, ry)
-                if rz != 0: solid = solid.rotate(Axis.Z, rz)
-                body._build123d_solid = solid
-                logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) auf {body.name}")
+                    # Legacy-Format: [rx, ry, rz]
+                    rx, ry, rz = data if isinstance(data, (list, tuple)) else (0, 0, 0)
+                    solid = body._build123d_solid
+                    if rx != 0: solid = solid.rotate(Axis.X, rx)
+                    if ry != 0: solid = solid.rotate(Axis.Y, ry)
+                    if rz != 0: solid = solid.rotate(Axis.Z, rz)
+                    body._build123d_solid = solid
+                    logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) auf {body.name}")
                 
             elif mode == "scale":
                 # Scale aus data
@@ -991,6 +1138,152 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             logger.exception(f"Transform Error: {e}")
+            
+    def _on_body_copy_requested(self, body_id: str, mode: str, data):
+        """
+        Handler für Copy+Transform (Shift+Drag).
+        Kopiert den Body und wendet dann den Transform an.
+        """
+        logger.debug(f"Copy+Transform requested: {mode} auf {body_id}")
+        
+        # Original Body finden
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.error(f"Body {body_id} nicht gefunden für Copy")
+            return
+            
+        if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+            logger.error("Build123d nicht verfügbar für Copy")
+            return
+            
+        from build123d import Location, Axis, copy as b123d_copy
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import Body
+        
+        try:
+            # 1. Neuen Body erstellen
+            new_body = Body(name=f"{body.name}_copy")
+            
+            # 2. Solid kopieren
+            new_body._build123d_solid = body._build123d_solid.copy()
+            
+            # 3. Cache leeren
+            CADTessellator.clear_cache()
+            
+            # 4. Transform anwenden auf die Kopie
+            if mode == "move":
+                if isinstance(data, list):
+                    dx, dy, dz = data
+                else:
+                    dx, dy, dz = data.get("translation", [0, 0, 0])
+                new_body._build123d_solid = new_body._build123d_solid.move(Location((dx, dy, dz)))
+                logger.success(f"Copy+Move ({dx:.2f}, {dy:.2f}, {dz:.2f}) → {new_body.name}")
+                
+            elif mode == "rotate":
+                if isinstance(data, dict):
+                    axis_name = data.get("axis", "Z")
+                    angle = data.get("angle", 0)
+                else:
+                    axis_name, angle = "Z", 0
+                    
+                axis_map = {"X": Axis.X, "Y": Axis.Y, "Z": Axis.Z}
+                axis = axis_map.get(axis_name, Axis.Z)
+                new_body._build123d_solid = new_body._build123d_solid.rotate(axis, angle)
+                logger.success(f"Copy+Rotate ({axis_name}, {angle:.1f}°) → {new_body.name}")
+                
+            elif mode == "scale":
+                if isinstance(data, dict):
+                    factor = data.get("factor", 1.0)
+                else:
+                    factor = 1.0
+                new_body._build123d_solid = new_body._build123d_solid.scale(factor)
+                logger.success(f"Copy+Scale ({factor:.2f}) → {new_body.name}")
+            
+            # 5. Mesh generieren
+            self._update_body_from_build123d(new_body, new_body._build123d_solid)
+            
+            # 6. Zum Document hinzufügen
+            self.document.bodies.append(new_body)
+            
+            # 7. UI aktualisieren
+            self.browser.refresh()
+            
+            # 8. Neuen Body selektieren
+            if hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                self.viewport_3d.show_transform_gizmo(new_body.id)
+                
+        except Exception as e:
+            logger.exception(f"Copy+Transform Error: {e}")
+            
+    def _on_body_mirror_requested(self, body_id: str, plane: str):
+        """
+        Handler für Mirror-Operation.
+        Spiegelt den Body an der angegebenen Ebene.
+        """
+        logger.debug(f"Mirror requested: {plane} auf {body_id}")
+        
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.error(f"Body {body_id} nicht gefunden für Mirror")
+            return
+            
+        if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+            logger.error("Build123d nicht verfügbar für Mirror")
+            return
+            
+        from build123d import Plane as B123Plane, mirror as b123d_mirror
+        from modeling.cad_tessellator import CADTessellator
+        
+        try:
+            CADTessellator.clear_cache()
+            
+            # Ebene bestimmen
+            plane_map = {
+                "XY": B123Plane.XY,
+                "XZ": B123Plane.XZ,
+                "YZ": B123Plane.YZ,
+            }
+            mirror_plane = plane_map.get(plane.upper(), B123Plane.XY)
+            
+            # Mirror anwenden
+            body._build123d_solid = b123d_mirror(body._build123d_solid, about=mirror_plane)
+            
+            logger.success(f"Mirror ({plane}) auf {body.name}")
+            
+            # Mesh aktualisieren
+            self._update_body_from_build123d(body, body._build123d_solid)
+            
+            # UI aktualisieren
+            if hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                self.viewport_3d.show_transform_gizmo(body_id)
+            self.browser.refresh()
+            
+        except Exception as e:
+            logger.exception(f"Mirror Error: {e}")
+            
+    def _show_mirror_dialog(self, body_id: str):
+        """Zeigt Dialog zur Auswahl der Mirror-Ebene"""
+        from PySide6.QtWidgets import QMessageBox, QPushButton
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Mirror")
+        msg.setText("Spiegelebene wählen:")
+        msg.setIcon(QMessageBox.Question)
+        
+        btn_xy = msg.addButton("XY (Horizontal)", QMessageBox.ActionRole)
+        btn_xz = msg.addButton("XZ (Frontal)", QMessageBox.ActionRole)
+        btn_yz = msg.addButton("YZ (Seitlich)", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Cancel)
+        
+        msg.exec()
+        
+        clicked = msg.clickedButton()
+        if clicked == btn_xy:
+            self._on_body_mirror_requested(body_id, "XY")
+        elif clicked == btn_xz:
+            self._on_body_mirror_requested(body_id, "XZ")
+        elif clicked == btn_yz:
+            self._on_body_mirror_requested(body_id, "YZ")
         
     def _update_viewport_all(self):
         """Aktualisiert ALLES im Viewport"""

@@ -212,8 +212,12 @@ class SimpleTransformGizmo:
         """Erstellt einen Pfeil für eine Achse"""
         dir_vec = np.array(direction, dtype=float)
         
-        # Schaft (Zylinder)
-        shaft_center = self.center + dir_vec * (self._arrow_length / 2)
+        # OFFSET vom Body-Zentrum weg, damit Pfeile nicht im Body stecken
+        offset = self._arrow_length * 0.1
+        start_pos = self.center + dir_vec * offset
+        
+        # Schaft (Zylinder) - startet mit Offset
+        shaft_center = start_pos + dir_vec * (self._arrow_length / 2)
         shaft = pv.Cylinder(
             center=shaft_center,
             direction=dir_vec,
@@ -222,7 +226,7 @@ class SimpleTransformGizmo:
         )
         
         # Spitze (Kegel)
-        tip_center = self.center + dir_vec * (self._arrow_length + self._tip_length / 2)
+        tip_center = start_pos + dir_vec * (self._arrow_length + self._tip_length / 2)
         tip = pv.Cone(
             center=tip_center,
             direction=dir_vec,
@@ -235,31 +239,39 @@ class SimpleTransformGizmo:
         combined = shaft + tip
         self._pick_meshes[axis] = combined
         
-        # Rendern
+        # Rendern mit ALWAYS ON TOP
         name_shaft = f"gizmo_{axis.name}_shaft"
         name_tip = f"gizmo_{axis.name}_tip"
         
-        actor_shaft = self.plotter.add_mesh(
-            shaft, color=color, name=name_shaft, pickable=False,
-            ambient=1.0, diffuse=0.0  # Voll beleuchtet, unabhängig von Licht
-        )
-        actor_tip = self.plotter.add_mesh(
-            tip, color=color, name=name_tip, pickable=False,
-            ambient=1.0, diffuse=0.0
-        )
-        
-        # WICHTIG: Depth-Test deaktivieren damit Gizmo IMMER sichtbar ist
-        for actor in [actor_shaft, actor_tip]:
+        # Spezielle Render-Einstellungen für "Always on Top"
+        for mesh, name in [(shaft, name_shaft), (tip, name_tip)]:
+            actor = self.plotter.add_mesh(
+                mesh, 
+                color=color, 
+                name=name, 
+                pickable=False,
+                ambient=0.8,      # Stark ambient für gute Sichtbarkeit
+                diffuse=0.3,
+                specular=0.2,
+                opacity=0.95      # Leicht transparent für bessere Wahrnehmung
+            )
+            
+            # KRITISCH: Depth-Test deaktivieren für "Always on Top"
             if actor:
                 try:
-                    prop = actor.GetProperty()
-                    # Immer im Vordergrund rendern
-                    actor.SetPickable(False)
-                    # Polygon Offset für Z-Fighting
-                    actor.GetMapper().SetResolveCoincidentTopologyToPolygonOffset()
-                    actor.GetMapper().SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
-                except:
-                    pass
+                    # Methode 1: Render in separatem Layer
+                    actor.GetProperty().SetAmbient(0.9)
+                    actor.GetProperty().SetDiffuse(0.3)
+                    
+                    # Methode 2: Depth-Test manipulieren
+                    mapper = actor.GetMapper()
+                    if mapper:
+                        mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                        # Negative Werte = näher zur Kamera
+                        mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-10, -10)
+                        
+                except Exception as e:
+                    logger.debug(f"Gizmo render setup: {e}")
                     
         self._actor_names.extend([name_shaft, name_tip])
         
@@ -328,11 +340,19 @@ class SimpleTransformController:
         # Callbacks
         self._get_body_center = None
         self._apply_transform = None
+        self._on_values_changed = None  # NEU: Callback für Live-Update der Werte
         
-    def set_callbacks(self, get_body_center, apply_transform):
-        """Setzt die Callbacks für Body-Operationen"""
+    def set_callbacks(self, get_body_center, apply_transform, on_values_changed=None):
+        """Setzt die Callbacks für Body-Operationen
+        
+        Args:
+            get_body_center: Callback(body_id) -> np.ndarray
+            apply_transform: Callback(body_id, mode, data)
+            on_values_changed: Callback(x, y, z) - Live-Update während Drag
+        """
         self._get_body_center = get_body_center
         self._apply_transform = apply_transform
+        self._on_values_changed = on_values_changed
         
     def select_body(self, body_id: str, force_refresh: bool = False):
         """Selektiert einen Body und zeigt das Gizmo
@@ -476,6 +496,14 @@ class SimpleTransformController:
             
             # Total Translation updaten
             self._total_translation += delta_3d
+            
+            # NEU: Live-Update an UI senden
+            if self._on_values_changed:
+                self._on_values_changed(
+                    self._total_translation[0],
+                    self._total_translation[1],
+                    self._total_translation[2]
+                )
             
             # Neue Zentrum-Position
             new_center = self.gizmo.center + self._total_translation

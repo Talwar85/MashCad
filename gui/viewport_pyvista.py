@@ -14,7 +14,7 @@ from gui.geometry_detector import GeometryDetector
 from gui.viewport.extrude_mixin import ExtrudeMixin
 from gui.viewport.picking_mixin import PickingMixin
 from gui.viewport.body_mixin import BodyRenderingMixin
-from gui.viewport.transform_mixin_v2 import TransformMixinV2
+from gui.viewport.transform_mixin_v3 import TransformMixinV3
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -70,7 +70,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV2):
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -80,6 +80,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     transform_changed = Signal(float, float, float) # für UI-Panel Update
     clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
     body_transform_requested = Signal(str, str, object)  # body_id, mode, data
+    body_copy_requested = Signal(str, str, object)  # body_id, mode, data - Kopiert Body und transformiert
+    body_mirror_requested = Signal(str, str)  # body_id, plane (XY/XZ/YZ)
+    mirror_requested = Signal(str)  # body_id - Öffnet Mirror-Dialog
     
     def __init__(self, parent=None):
         super().__init__(parent)

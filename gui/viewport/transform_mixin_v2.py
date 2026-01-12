@@ -25,7 +25,8 @@ class TransformMixinV2:
         self._transform_ctrl = SimpleTransformController(self)
         self._transform_ctrl.set_callbacks(
             get_body_center=self._get_body_center_for_gizmo,
-            apply_transform=self._apply_transform_from_gizmo
+            apply_transform=self._apply_transform_from_gizmo,
+            on_values_changed=self._on_transform_values_changed
         )
         self._transform_enabled = True
         logger.debug("Transform System V2 initialisiert")
@@ -103,3 +104,8 @@ class TransformMixinV2:
         if hasattr(self, 'body_transform_requested'):
             self.body_transform_requested.emit(body_id, mode, data)
             logger.debug(f"Transform Signal gesendet: {mode} auf {body_id}")
+            
+    def _on_transform_values_changed(self, x: float, y: float, z: float):
+        """Callback: Live-Update der Transform-Werte während Drag"""
+        if hasattr(self, 'transform_changed'):
+            self.transform_changed.emit(x, y, z)
