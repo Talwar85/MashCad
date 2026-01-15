@@ -1,7 +1,7 @@
 # MashCAD
 
 A lightweight CAD application focused on 2D sketching for 3D printing workflows.
-Not everything is working. more a prove of concept
+Not everything is working. more a proof of concept
 
 ## Features
 

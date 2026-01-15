@@ -456,20 +456,24 @@ class MainWindow(QMainWindow):
     def _show_transform_ui(self, body_id: str, body_name: str):
         """Zeigt Transform-UI für einen Body"""
         self._selected_body_for_transform = body_id
-        
+
+        # NEU: Extrude-Panel explizit verstecken (Fix 2)
+        if hasattr(self, 'extrude_panel'):
+            self.extrude_panel.hide()
+
         # Selection-Info aktualisieren
         self.selection_info.set_selection(body_name)
         self.selection_info.show()
-        
+
         # Transform-Panel zeigen
         self.transform_input_panel.reset_values()
         self.transform_input_panel.show()
         self._position_transform_panel()
-        
+
         # Gizmo zeigen
         if hasattr(self.viewport_3d, 'show_transform_gizmo'):
             self.viewport_3d.show_transform_gizmo(body_id)
-            
+
         logger.info(f"Transform: {body_name} | G=Move R=Rotate S=Scale | Tab=Eingabe | Esc=Abbrechen")
         
     def _hide_transform_ui(self):
