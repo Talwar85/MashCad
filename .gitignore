@@ -47,4 +47,4 @@ temp/
 *.log
 
 # PyInstaller
-*.spec
+# Note: MashCAD.spec is intentionally tracked as it's our build configuration
