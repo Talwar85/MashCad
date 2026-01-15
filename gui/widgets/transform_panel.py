@@ -33,65 +33,61 @@ class TransformInputPanel(QWidget):
         self._connect_signals()
         
     def _setup_ui(self):
-        """Erstellt die UI"""
-        self.setMinimumHeight(55)
+        """Erstellt die UI - Styling wie Extrude-Panel"""
+        self.setMinimumHeight(60)
         self.setMinimumWidth(700)
+        self.setFixedHeight(60)
         self.setStyleSheet("""
-            QWidget {
+            TransformInputPanel {
                 background-color: #2d2d30;
-                color: #e0e0e0;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }
+            QLabel {
+                color: #ffffff;
+                font-weight: bold;
+                border: none;
                 font-size: 12px;
             }
             QLineEdit {
-                background-color: #3c3c3c;
+                background: #1e1e1e;
+                color: #fff;
                 border: 1px solid #555;
-                border-radius: 3px;
-                padding: 5px 8px;
-                min-width: 70px;
-                max-width: 90px;
-                font-size: 12px;
+                border-radius: 4px;
+                padding: 4px;
+                font-weight: bold;
+                min-width: 90px;
+                font-size: 13px;
             }
             QLineEdit:focus {
                 border-color: #0078d4;
             }
             QPushButton {
-                background-color: #0078d4;
-                border: none;
-                border-radius: 3px;
-                padding: 6px 15px;
-                min-width: 70px;
+                background: #444;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-weight: bold;
                 font-size: 12px;
             }
             QPushButton:hover {
-                background-color: #1084d8;
-            }
-            QPushButton#cancelBtn {
-                background-color: #555;
-            }
-            QPushButton#cancelBtn:hover {
-                background-color: #666;
+                background: #555;
+                border-color: #777;
             }
             QComboBox {
-                background-color: #3c3c3c;
+                background: #1e1e1e;
                 border: 1px solid #555;
-                border-radius: 3px;
-                padding: 5px 10px;
+                border-radius: 4px;
+                color: #fff;
+                padding: 4px;
                 min-width: 90px;
-                font-size: 12px;
-            }
-            QLabel {
-                color: #aaa;
-                font-size: 12px;
-            }
-            QLabel#modeLabel {
-                font-weight: bold;
-                color: #e0e0e0;
             }
         """)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(10)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(12)
         
         # Mode-Auswahl
         self.mode_combo = QComboBox()

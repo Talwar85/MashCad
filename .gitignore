@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+clean_pycache.sh
 
 # Virtual environments
 venv/

@@ -457,17 +457,20 @@ class MainWindow(QMainWindow):
         """Zeigt Transform-UI für einen Body"""
         self._selected_body_for_transform = body_id
 
-        # NEU: Extrude-Panel explizit verstecken (Fix 2)
+        # NEU: Extrude-Panel KOMPLETT deaktivieren (Fix 2 - verstärkt)
         if hasattr(self, 'extrude_panel'):
+            self.extrude_panel.setVisible(False)
             self.extrude_panel.hide()
+            self.extrude_panel.lower()  # Z-Index runter
 
         # Selection-Info aktualisieren
         self.selection_info.set_selection(body_name)
         self.selection_info.show()
 
-        # Transform-Panel zeigen
+        # Transform-Panel zeigen UND nach vorne bringen
         self.transform_input_panel.reset_values()
         self.transform_input_panel.show()
+        self.transform_input_panel.setVisible(True)
         self._position_transform_panel()
 
         # Gizmo zeigen
@@ -582,7 +585,15 @@ class MainWindow(QMainWindow):
         # NEU: Mirror-Dialog Signal
         if hasattr(self.viewport_3d, 'mirror_requested'):
             self.viewport_3d.mirror_requested.connect(self._show_mirror_dialog)
-        
+
+        # NEU: Body-Click für pending transform mode (Fix 1)
+        if hasattr(self.viewport_3d, 'body_clicked'):
+            self.viewport_3d.body_clicked.connect(self._on_viewport_body_clicked)
+
+        # NEU: Point-to-Point Move (Fusion 360-Style)
+        if hasattr(self.viewport_3d, 'point_to_point_move'):
+            self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
+
         # NEU: Face-Selection für automatische Operation-Erkennung
         if hasattr(self.viewport_3d, 'face_selected'):
             self.viewport_3d.face_selected.connect(self._on_face_selected_for_extrude)
@@ -745,6 +756,7 @@ class MainWindow(QMainWindow):
             'rotate_body': lambda: self._start_transform_mode("rotate"),
             'mirror_body': self._mirror_body,
             'scale_body': lambda: self._start_transform_mode("scale"),
+            'point_to_point_move': self._start_point_to_point_move,
             
             # --- Implementierte Booleans ---
             'boolean_union': lambda: self._boolean_operation_dialog("Union"),
@@ -918,47 +930,133 @@ class MainWindow(QMainWindow):
     def _start_transform_mode(self, mode):
         """Startet den Modus. Wenn kein Body gewählt ist, wartet er auf Klick."""
         body = self._get_active_body()
-        
-        # Fall 1: Kein Körper gewählt -> Zeige zentralen Hinweis
+
+        # WICHTIG: Extrude-Panel KOMPLETT deaktivieren, auch im pending mode
+        if hasattr(self, 'extrude_panel'):
+            self.extrude_panel.setVisible(False)
+            self.extrude_panel.hide()
+            self.extrude_panel.lower()  # Z-Index runter
+
+        # Fall 1: Kein Körper gewählt -> Warte auf Selektion
         if not body:
-            self._pending_transform_mode = mode 
+            self._pending_transform_mode = mode
             self.viewport_3d.setCursor(Qt.CrossCursor)
-            
-            # Zentraler Hinweis
-            self.center_hint.show_hint(
-                f"Wähle einen Body für {mode.capitalize()}",
-                "Klicke auf einen Body im Browser oder 3D-Ansicht",
-                "👆",
-                duration_ms=5000,
-                color="rgba(0, 120, 212, 220)"
-            )
-            logger.info(f"{mode.capitalize()}: Wähle einen Body im Browser...")
+            # Aktiviere Body-Highlighting im Viewport
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info(f"{mode.capitalize()}: Wähle einen Body im Browser oder 3D-Ansicht")
             return
-            
+
         # Fall 2: Körper ist da -> Los geht's
         self._transform_mode = mode
         self._active_transform_body = body
         self._pending_transform_mode = None
         self.viewport_3d.setCursor(Qt.ArrowCursor)
-        
+
         # Transform-UI zeigen
         self._show_transform_ui(body.id, body.name)
-        
-        # Zentraler Hinweis für Modus
-        mode_hints = {
-            "move": ("↔️", "Ziehe an den Pfeilen oder gib Werte ein"),
-            "rotate": ("🔄", "Ziehe am Ring oder gib Winkel ein"),
-            "scale": ("📐", "Ziehe oder gib Skalierung ein"),
-        }
-        icon, hint = mode_hints.get(mode, ("🎯", ""))
-        self.center_hint.show_hint(
-            f"{mode.capitalize()}: {body.name}",
-            hint,
-            icon,
-            duration_ms=2000
-        )
-            
-        logger.info(f"{mode.capitalize()}: Ziehe am Gizmo oder Tab für Eingabe")
+
+        logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
+
+    def _start_point_to_point_move(self):
+        """Startet Point-to-Point Move Modus (Fusion 360-Style) - OHNE Body-Selektion möglich"""
+        body = self._get_active_body()
+
+        if not body:
+            # Warte auf Body-Selektion (wie bei Move/Rotate/Scale)
+            self._pending_transform_mode = "point_to_point"
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Point-to-Point Move: Wähle einen Body im Browser oder 3D-Ansicht")
+            return
+
+        # Body vorhanden -> Starte Point-to-Point Modus
+        if hasattr(self.viewport_3d, 'start_point_to_point_mode'):
+            self.viewport_3d.start_point_to_point_mode(body.id)
+            logger.success(f"Point-to-Point Move für {body.name}: Wähle Start-Punkt, dann Ziel-Punkt")
+
+    def _on_viewport_body_clicked(self, body_id: str):
+        """Handler für Body-Klick im Viewport (für pending transform mode UND point-to-point)"""
+        # Nur reagieren wenn wir auf Body-Selektion warten
+        if not self._pending_transform_mode:
+            return
+
+        # Body in der Document-Liste finden
+        body = None
+        for b in self.document.bodies:
+            if b.id == body_id:
+                body = b
+                break
+
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        mode = self._pending_transform_mode
+        self._pending_transform_mode = None
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+
+        # Deaktiviere Body-Highlighting im Viewport
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Spezial-Fall: Point-to-Point Move
+        if mode == "point_to_point":
+            if hasattr(self.viewport_3d, 'start_point_to_point_mode'):
+                self.viewport_3d.start_point_to_point_mode(body.id)
+                logger.success(f"Point-to-Point Move für {body.name}: Wähle Start-Punkt, dann Ziel-Punkt")
+            return
+
+        # Normaler Transform-Modus (Move/Rotate/Scale)
+        self._transform_mode = mode
+        self._active_transform_body = body
+
+        # Transform-UI zeigen
+        self._show_transform_ui(body.id, body.name)
+
+        logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
+
+    def _on_point_to_point_move(self, body_id: str, start_point: tuple, end_point: tuple):
+        """Handler für Point-to-Point Move (Fusion 360-Style)"""
+        # Body finden
+        body = None
+        for b in self.document.bodies:
+            if b.id == body_id:
+                body = b
+                break
+
+        if not body or not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+            logger.error("Body nicht gefunden für Point-to-Point Move")
+            return
+
+        from build123d import Location
+        from modeling.cad_tessellator import CADTessellator
+
+        # Cache leeren
+        CADTessellator.clear_cache()
+
+        try:
+            # Berechne Verschiebungs-Vektor
+            dx = end_point[0] - start_point[0]
+            dy = end_point[1] - start_point[1]
+            dz = end_point[2] - start_point[2]
+
+            logger.info(f"Point-to-Point Move: {start_point} → {end_point}")
+            logger.info(f"Verschiebung: dx={dx:.2f}, dy={dy:.2f}, dz={dz:.2f}")
+
+            # Verschiebe Body
+            body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+
+            # Mesh aktualisieren
+            self._update_body_from_build123d(body, body._build123d_solid)
+
+            logger.success(f"Point-to-Point Move auf {body.name} durchgeführt")
+
+        except Exception as e:
+            logger.error(f"Point-to-Point Move fehlgeschlagen: {e}")
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -1093,47 +1191,92 @@ class MainWindow(QMainWindow):
                     logger.debug("Move delta zu klein, übersprungen")
                 
             elif mode == "rotate":
+                # WICHTIG: Rotation um Body-Zentrum, nicht um Ursprung!
+                # 1. Berechne Zentrum des Bodies
+                bounds = body._build123d_solid.bounding_box()
+                center_x = (bounds.min.X + bounds.max.X) / 2
+                center_y = (bounds.min.Y + bounds.max.Y) / 2
+                center_z = (bounds.min.Z + bounds.max.Z) / 2
+                center = (center_x, center_y, center_z)
+
                 # Rotation aus data - neues Format: {axis: "X/Y/Z", angle: float}
                 if isinstance(data, dict):
                     axis_name = data.get("axis", "Z")
                     angle = data.get("angle", 0)
-                    
+
                     # Nur eine Achse rotieren
                     if angle != 0:
                         axis_map = {"X": Axis.X, "Y": Axis.Y, "Z": Axis.Z}
                         axis = axis_map.get(axis_name, Axis.Z)
-                        body._build123d_solid = body._build123d_solid.rotate(axis, angle)
-                        logger.success(f"Rotate ({axis_name}, {angle:.1f}°) auf {body.name}")
+
+                        # 2. Verschiebe zum Ursprung
+                        solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
+                        # 3. Rotiere um Ursprung
+                        solid = solid.rotate(axis, angle)
+                        # 4. Verschiebe zurück
+                        solid = solid.move(Location(center))
+                        body._build123d_solid = solid
+
+                        logger.success(f"Rotate ({axis_name}, {angle:.1f}°) um Zentrum {center} auf {body.name}")
                 else:
                     # Legacy-Format: [rx, ry, rz]
                     rx, ry, rz = data if isinstance(data, (list, tuple)) else (0, 0, 0)
-                    solid = body._build123d_solid
+
+                    # Verschiebe zum Ursprung
+                    solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
+                    # Rotiere
                     if rx != 0: solid = solid.rotate(Axis.X, rx)
                     if ry != 0: solid = solid.rotate(Axis.Y, ry)
                     if rz != 0: solid = solid.rotate(Axis.Z, rz)
+                    # Verschiebe zurück
+                    solid = solid.move(Location(center))
                     body._build123d_solid = solid
-                    logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) auf {body.name}")
+
+                    logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) um Zentrum auf {body.name}")
                 
             elif mode == "scale":
+                # WICHTIG: Scale um Body-Zentrum, nicht um Ursprung!
+                # 1. Berechne Zentrum des Bodies
+                bounds = body._build123d_solid.bounding_box()
+                center_x = (bounds.min.X + bounds.max.X) / 2
+                center_y = (bounds.min.Y + bounds.max.Y) / 2
+                center_z = (bounds.min.Z + bounds.max.Z) / 2
+                center = (center_x, center_y, center_z)
+
                 # Scale aus data
                 if isinstance(data, dict):
                     sx, sy, sz = data.get("scale", [1, 1, 1])
                 else:
                     sx, sy, sz = 1, 1, 1
+
                 # Uniform scale (Build123d unterstützt nur uniform)
                 factor = sx  # Nehme X als Faktor
-                if factor > 0:
-                    body._build123d_solid = body._build123d_solid.scale(factor)
-                logger.success(f"Scale ({factor:.2f}) auf {body.name}")
+                if factor > 0 and abs(factor - 1.0) > 0.001:  # Nur wenn signifikante Änderung
+                    # 2. Verschiebe zum Ursprung
+                    solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
+                    # 3. Skaliere um Ursprung
+                    solid = solid.scale(factor)
+                    # 4. Verschiebe zurück
+                    solid = solid.move(Location(center))
+                    body._build123d_solid = solid
+
+                    logger.success(f"Scale ({factor:.2f}) um Zentrum auf {body.name}")
+                else:
+                    logger.debug("Scale factor zu nahe an 1.0, übersprungen")
                 
-            # Mesh aktualisieren
-            logger.debug("Aktualisiere Mesh...")
+            # Mesh aktualisieren (kann bei komplexen Bodies kurz dauern)
+            logger.info(f"Aktualisiere Mesh für {body.name}...")
+
+            # WICHTIG: Gizmo-Status speichern BEVOR Mesh aktualisiert wird
+            gizmo_was_active = hasattr(self.viewport_3d, 'is_transform_active') and self.viewport_3d.is_transform_active()
+
             self._update_body_from_build123d(body, body._build123d_solid)
-            logger.debug("Mesh aktualisiert")
-            
-            # Gizmo an neuer Position anzeigen (bleibt aktiv für weitere Transforms)
-            if hasattr(self.viewport_3d, 'show_transform_gizmo'):
-                self.viewport_3d.show_transform_gizmo(body_id)
+            logger.success(f"Mesh für {body.name} aktualisiert")
+
+            # Gizmo OHNE Flicker an neuer Position anzeigen
+            # Nur wenn es vorher aktiv war
+            if gizmo_was_active and hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                self.viewport_3d.show_transform_gizmo(body_id, force_refresh=False)
             
             # UI aufräumen (kein transform_panel mehr nötig im Onshape-Style)
             if hasattr(self, 'transform_panel'):
@@ -1441,19 +1584,27 @@ class MainWindow(QMainWindow):
     def _extrude_dialog(self):
         """Startet den Extrude-Modus."""
         # 1. Detector leeren und füllen
-        self._update_detector() 
-        
+        self._update_detector()
+
         if not self.viewport_3d.detector.selection_faces:
             logger.error("Keine geschlossenen Flächen gefunden!", 3000)
             return
 
+        # NEU: Transform-Panel und Gizmo KOMPLETT verstecken (Fix 2 - verstärkt)
+        if hasattr(self, 'transform_input_panel'):
+            self.transform_input_panel.setVisible(False)
+            self.transform_input_panel.hide()
+            self.transform_input_panel.lower()  # Z-Index runter
+        self._hide_transform_ui()
+
         # 2. Modus aktivieren
         self.viewport_3d.set_extrude_mode(True)
         self.viewport_3d.set_selection_mode("face")
-        
-        # 3. Panel anzeigen
+
+        # 3. Panel anzeigen UND nach vorne bringen
         self.extrude_panel.reset()
         self.extrude_panel.setVisible(True)
+        self.extrude_panel.show()
         
         # FIX PROBLEM 1: Panel Positionierung verzögern!
         # Qt braucht ein paar Millisekunden, um die Breite des Panels zu berechnen.

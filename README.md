@@ -1,7 +1,7 @@
 # MashCAD
 
 A lightweight CAD application focused on 2D sketching for 3D printing workflows.
-Not everything is working. more a proof of concept
+Not everything is working. more a prove of concept
 
 ## Features
 
@@ -32,10 +32,16 @@ Not everything is working. more a proof of concept
 
 ## Installation
 
+### From Source
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
+
+### Standalone Executables
+Pre-built executables for Windows, macOS, and Linux are available in the [Releases](../../releases) section.
+
+To build executables yourself, see [Building Documentation](docs/BUILDING.md).
 
 ## Keyboard Shortcuts
 

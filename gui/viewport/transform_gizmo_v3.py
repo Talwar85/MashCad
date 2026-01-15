@@ -108,7 +108,46 @@ class FullTransformGizmo:
         self._transform_offset = np.array([0.0, 0.0, 0.0])
         self._rotation_angle = 0.0
         self._scale_factor = np.array([1.0, 1.0, 1.0])
-        
+
+    def _improve_actor_visibility(self, actor_name: str):
+        """
+        Verbessert die Sichtbarkeit eines Gizmo-Actors (Fix 3).
+        Setzt Actor-Properties für bessere Z-Order und Rendering.
+        """
+        try:
+            actor = self.plotter.renderer.actors.get(actor_name)
+            if not actor:
+                return
+
+            # Verbesserte Linien-Darstellung
+            prop = actor.GetProperty()
+            prop.SetRenderLinesAsTubes(True)
+            prop.SetLineWidth(4)
+
+            # WICHTIG: Immer im Vordergrund rendern (kein Depth-Test)
+            # Dies stellt sicher, dass das Gizmo IMMER sichtbar ist
+            mapper = actor.GetMapper()
+            if mapper:
+                # Polygon-Offset für bessere Tiefendarstellung
+                mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-10, -10)
+
+            # Alternative: Depth-Test komplett deaktivieren (sehr aggressiv)
+            # Nur für Gizmo-Elemente sinnvoll, die IMMER sichtbar sein müssen
+            try:
+                # Setze höchste Render-Priorität
+                actor.GetProperty().SetOpacity(1.0)
+                # Deaktiviere Depth-Buffering für diesen Actor
+                # ACHTUNG: Kann bei einigen VTK-Versionen zu Problemen führen
+                if hasattr(mapper, 'SetResolveCoincidentTopologyToOff'):
+                    pass  # Nutzen wir Polygon-Offset stattdessen
+            except:
+                pass
+
+            logger.debug(f"Gizmo-Actor visibility improved: {actor_name}")
+        except Exception as e:
+            logger.warning(f"Konnte Visibility für {actor_name} nicht verbessern: {e}")
+
     def set_mode(self, mode: TransformMode):
         """Wechselt den Transform-Modus"""
         if mode == self.mode:
@@ -125,16 +164,18 @@ class FullTransformGizmo:
         self._reset_transforms()
         self.visible = True
         
-        # Größe anpassen
+        # Größe anpassen (Fix: Größer machen, damit Gizmo besser sichtbar ist)
         if body_size and body_size > 0:
-            self._size = max(body_size * 0.4, 15.0)
+            # Mindestens 80% der Body-Größe, aber nicht kleiner als 40 Units
+            self._size = max(body_size * 0.8, 40.0)
         else:
             try:
                 cam_pos = np.array(self.plotter.camera.position)
                 distance = np.linalg.norm(cam_pos - self.center)
-                self._size = max(distance * 0.12, 15.0)
+                # Größerer Faktor für bessere Sichtbarkeit
+                self._size = max(distance * 0.20, 40.0)
             except:
-                self._size = 30.0
+                self._size = 60.0
         
         self._create_all_elements()
         self._update_visibility()
@@ -306,9 +347,10 @@ class FullTransformGizmo:
             # Kombinieren
             arrow = shaft + tip
             name = f"gizmo_arrow_{element.name}"
-            
-            self.plotter.add_mesh(arrow, color=color, name=name, 
+
+            self.plotter.add_mesh(arrow, color=color, name=name,
                                   pickable=False, render_lines_as_tubes=True)
+            self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
             self._move_actors.append(name)
             self._pick_meshes[element] = arrow
             
@@ -339,10 +381,11 @@ class FullTransformGizmo:
             
             # Verschieben zum Zentrum
             ring = ring.translate(self.center, inplace=False)
-            
+
             name = f"gizmo_ring_{element.name}"
             self.plotter.add_mesh(ring, color=color, name=name,
                                   pickable=False, opacity=0.8)
+            self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
             self._rotate_actors.append(name)
             self._pick_meshes[element] = ring
             
@@ -362,16 +405,18 @@ class FullTransformGizmo:
             
             cube = pv.Cube(center=cube_center, x_length=cube_size,
                           y_length=cube_size, z_length=cube_size)
-            
+
             name = f"gizmo_scale_{element.name}"
             self.plotter.add_mesh(cube, color=color, name=name, pickable=False)
+            self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
             self._scale_actors.append(name)
             self._pick_meshes[element] = cube
-            
+
         # Zentrum für Uniform Scale
         center_sphere = pv.Sphere(center=self.center, radius=self._size * 0.08)
         name = "gizmo_scale_center"
         self.plotter.add_mesh(center_sphere, color=COLORS["center"], name=name, pickable=False)
+        self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
         self._scale_actors.append(name)
         self._pick_meshes[GizmoElement.SCALE_CENTER] = center_sphere
         

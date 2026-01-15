@@ -77,6 +77,7 @@ class ToolPanel3D(QWidget):
             (tr("Scale"), tr("Scale"), "scale_body"),
             (tr("Mirror"), tr("Mirror"), "mirror_body"),
             (tr("Copy"), tr("Copy"), "copy_body"),
+            ("📍 Point Move", "Point-to-Point Move (wie Fusion 360)", "point_to_point_move"),
         ], grid=True)
         
         # --- Boolean ---

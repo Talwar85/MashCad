@@ -79,10 +79,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     face_selected = Signal(int)
     transform_changed = Signal(float, float, float) # für UI-Panel Update
     clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
+    body_clicked = Signal(str)  # body_id - NEU: Für pending transform mode (Fix 1)
     body_transform_requested = Signal(str, str, object)  # body_id, mode, data
     body_copy_requested = Signal(str, str, object)  # body_id, mode, data - Kopiert Body und transformiert
     body_mirror_requested = Signal(str, str)  # body_id, plane (XY/XZ/YZ)
     mirror_requested = Signal(str)  # body_id - Öffnet Mirror-Dialog
+    point_to_point_move = Signal(str, tuple, tuple)  # body_id, start_point, end_point - NEU: Point-to-Point Move
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,6 +115,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.plane_select_mode = False
         self.extrude_mode = False
         self.edge_select_mode = False
+        self.pending_transform_mode = False  # NEU: Für Body-Highlighting
+        self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
+        self.point_to_point_start = None  # Erster ausgewählter Punkt (x, y, z)
+        self.point_to_point_body_id = None  # Body, der verschoben wird
         self.extrude_height = 0.0
         self.extrude_operation = "New Body"  # NEU: Aktuelle Operation für Farbe
         self.is_dragging = False
@@ -129,6 +135,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.detector = GeometryDetector()
         self.selected_face_ids = set()
         self.hover_face_id = None
+        self.hover_body_id = None  # NEU: Für Body-Highlighting im pending transform mode
         
         self.setFocusPolicy(Qt.StrongFocus)
         
@@ -318,7 +325,142 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if self.plotter.renderer.actors.get(name) == actor:
                         return bid
         return None
-        
+
+    def highlight_body(self, body_id: str):
+        """Hebt einen Body farblich hervor (für pending transform mode)"""
+        if not body_id or body_id not in self._body_actors:
+            return
+
+        # Ändere die Farbe des Body-Meshes zu einem hellen Blau
+        mesh_name = f"body_{body_id}_m"
+        try:
+            actor = self.plotter.renderer.actors.get(mesh_name)
+            if actor:
+                actor.GetProperty().SetColor(0.4, 0.7, 1.0)  # Helles Blau
+                actor.GetProperty().SetOpacity(0.8)
+                self.plotter.render()
+        except Exception as e:
+            logger.debug(f"Konnte Body {body_id} nicht highlighten: {e}")
+
+    def unhighlight_body(self, body_id: str):
+        """Entfernt das Highlighting von einem Body"""
+        if not body_id or body_id not in self._body_actors:
+            return
+
+        # Setze die Farbe zurück auf Standard
+        mesh_name = f"body_{body_id}_m"
+        try:
+            actor = self.plotter.renderer.actors.get(mesh_name)
+            if actor:
+                # Standard-Farbe (grau)
+                actor.GetProperty().SetColor(0.6, 0.6, 0.8)
+                actor.GetProperty().SetOpacity(1.0)
+                self.plotter.render()
+        except Exception as e:
+            logger.debug(f"Konnte Body {body_id} nicht unhighlighten: {e}")
+
+    def set_pending_transform_mode(self, active: bool):
+        """Aktiviert/deaktiviert den pending transform mode für Body-Highlighting"""
+        self.pending_transform_mode = active
+        if not active and self.hover_body_id:
+            # Highlighting zurücksetzen wenn mode endet
+            self.unhighlight_body(self.hover_body_id)
+            self.hover_body_id = None
+        logger.debug(f"Pending transform mode: {active}")
+
+    def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True):
+        """
+        Picked einen 3D-Punkt auf der Geometrie (Fusion 360-Style).
+        Gibt (body_id, point) zurück oder (None, None) wenn nichts getroffen.
+
+        Args:
+            screen_x, screen_y: Screen-Koordinaten
+            snap_to_vertex: Wenn True, snapped auf nächstgelegenen Vertex (Fusion-Style)
+
+        Returns:
+            (body_id, point) oder (None, None)
+        """
+        import vtk
+        import numpy as np
+
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(0.005)
+
+        # Pick durchführen
+        picker.Pick(screen_x, self.plotter.interactor.height() - screen_y, 0, self.plotter.renderer)
+
+        # Prüfe ob etwas getroffen wurde
+        actor = picker.GetActor()
+        if not actor:
+            return None, None
+
+        # Finde Body-ID
+        body_id = None
+        for bid, actors in self._body_actors.items():
+            for name in actors:
+                if self.plotter.renderer.actors.get(name) == actor:
+                    body_id = bid
+                    break
+            if body_id:
+                break
+
+        if not body_id:
+            return None, None
+
+        # Hole den genauen 3D-Punkt
+        picked_point = picker.GetPickPosition()
+        point = np.array([picked_point[0], picked_point[1], picked_point[2]])
+
+        # SNAP TO VERTEX (Fusion 360-Style)
+        if snap_to_vertex:
+            mesh_name = f"body_{body_id}_m"
+            mesh_actor = self.plotter.renderer.actors.get(mesh_name)
+            if mesh_actor:
+                mapper = mesh_actor.GetMapper()
+                if mapper:
+                    polydata = mapper.GetInput()
+                    points = polydata.GetPoints()
+
+                    # Finde nächstgelegenen Vertex
+                    min_dist = float('inf')
+                    nearest_vertex = None
+                    snap_threshold = 5.0  # 5 Einheiten max
+
+                    for i in range(points.GetNumberOfPoints()):
+                        vertex = np.array(points.GetPoint(i))
+                        dist = np.linalg.norm(point - vertex)
+                        if dist < min_dist and dist < snap_threshold:
+                            min_dist = dist
+                            nearest_vertex = vertex
+
+                    if nearest_vertex is not None:
+                        point = nearest_vertex
+                        logger.debug(f"Snapped to vertex (dist={min_dist:.2f})")
+
+        point_tuple = (float(point[0]), float(point[1]), float(point[2]))
+        logger.debug(f"Picked point: {point_tuple} on body {body_id}")
+        return body_id, point_tuple
+
+    def start_point_to_point_mode(self, body_id: str):
+        """Startet den Point-to-Point Move Modus für einen Body"""
+        self.point_to_point_mode = True
+        self.point_to_point_start = None
+        self.point_to_point_body_id = body_id
+        self.setCursor(Qt.CrossCursor)
+        logger.info("Point-to-Point Mode: Wähle Start-Punkt auf Geometrie")
+
+    def cancel_point_to_point_mode(self):
+        """Bricht den Point-to-Point Modus ab"""
+        self.point_to_point_mode = False
+        self.point_to_point_start = None
+        self.point_to_point_body_id = None
+        self.setCursor(Qt.ArrowCursor)
+        # Entferne ALLE Visualisierungen
+        self.plotter.remove_actor("p2p_start_marker", render=False)
+        self.plotter.remove_actor("p2p_hover_marker", render=False)
+        self.plotter.remove_actor("p2p_line", render=True)
+        logger.info("Point-to-Point Mode abgebrochen")
+
     def highlight_edge(self, p1, p2):
         """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""
         import uuid
@@ -522,13 +664,62 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.hide_transform_gizmo()
                 return True
         
+        # --- POINT-TO-POINT MOVE MODE (Fusion 360-Style) ---
+        if self.point_to_point_mode:
+            # Mouse Move: Zeige Hover-Vertex
+            if event.type() == QEvent.MouseMove:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+
+                body_id, point = self.pick_point_on_geometry(x, y, snap_to_vertex=True)
+                if point:
+                    # Zeige Hover-Marker (Orange)
+                    import pyvista as pv
+                    sphere = pv.Sphere(center=point, radius=1.5)
+                    self.plotter.remove_actor('p2p_hover_marker', render=False)
+                    self.plotter.add_mesh(sphere, color='orange', opacity=0.8, name='p2p_hover_marker')
+                else:
+                    # Entferne Hover-Marker wenn kein Treffer
+                    self.plotter.remove_actor('p2p_hover_marker', render=True)
+                return True
+
+            # Mouse Click: Wähle Punkt
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+
+                body_id, point = self.pick_point_on_geometry(x, y)
+                if point:
+                    if not self.point_to_point_start:
+                        # Erster Punkt ausgewählt
+                        self.point_to_point_start = point
+                        # Visualisiere Start-Punkt (Gelb)
+                        import pyvista as pv
+                        sphere = pv.Sphere(center=point, radius=2.0)
+                        self.plotter.add_mesh(sphere, color='yellow', name='p2p_start_marker')
+                        logger.success(f"Start-Punkt gewählt: {point}. Wähle Ziel-Punkt.")
+                    else:
+                        # Zweiter Punkt ausgewählt - führe Move durch
+                        end_point = point
+                        # Emittiere Signal für MainWindow
+                        self.point_to_point_move.emit(self.point_to_point_body_id, self.point_to_point_start, end_point)
+                        # Reset
+                        self.cancel_point_to_point_mode()
+                return True
+
+            # ESC zum Abbrechen
+            if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+                self.cancel_point_to_point_mode()
+                return True
+            return False
+
         # --- PLANE SELECT MODE ---
         if self.plane_select_mode:
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 self._pick_plane_at_position(int(pos.x()), int(pos.y()))
                 return True
-            
+
             if event.type() == QEvent.MouseMove:
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 self._highlight_plane_at_position(int(pos.x()), int(pos.y()))
@@ -573,8 +764,21 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             elif not (event.buttons() & Qt.LeftButton):
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 x, y = int(pos.x()), int(pos.y())
-            
-            # ÄNDERUNG:
+
+                # NEU: Body-Hover für pending transform mode
+                if self.pending_transform_mode:
+                    body_id = self.select_body_at(x, y)
+                    if body_id != self.hover_body_id:
+                        # Altes Highlighting entfernen
+                        if self.hover_body_id:
+                            self.unhighlight_body(self.hover_body_id)
+                        # Neues Highlighting setzen
+                        self.hover_body_id = body_id
+                        if body_id:
+                            self.highlight_body(body_id)
+                    return False
+
+                # ÄNDERUNG: Face-Hovering (nur wenn NICHT im pending transform mode)
                 hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
                 if hit_id != getattr(self, 'hover_face_id', -1):
                     self._update_hover(hit_id)
@@ -584,10 +788,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             pos = event.position() if hasattr(event, 'position') else event.pos()
             x, y = int(pos.x()), int(pos.y())
-            
-            # ÄNDERUNG:
+
+            # NEU (Fix 1): Body-Picking NUR für pending transform mode
+            # WICHTIG: Nur wenn MainWindow explizit auf Body-Klick wartet!
+            if self.pending_transform_mode:
+                body_id = self.select_body_at(x, y)
+                if body_id:
+                    self.body_clicked.emit(body_id)
+                    return True
+
+            # Face-Selection (für Extrude etc.)
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
-            
+
             if hit_id != -1:
                 # Multi-Select mit STRG/Shift
                 is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
@@ -1351,10 +1563,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             for i in range(actors_collection.GetNumberOfItems()):
                 actor = actors_collection.GetNextActor()
                 if actor:
-                    # UserTransform zurücksetzen
-                    actor.SetUserTransform(None)
                     actors_to_remove.append(actor)
-            
+
             # Jetzt die markierten Actors entfernen
             # (Wir entfernen ALLE und fügen sie dann neu hinzu, außer die body_bid Actors)
             for actor in actors_to_remove:
@@ -1365,8 +1575,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if a is actor:
                         actor_name = name
                         break
-                
+
+                # WICHTIG: Gizmo-Actors NICHT entfernen!
                 if actor_name and actor_name.startswith(f"body_{bid}"):
+                    # UserTransform zurücksetzen NUR für Body-Actors
+                    actor.SetUserTransform(None)
                     vtk_renderer.RemoveActor(actor)
                     logger.debug(f"VTK: Actor '{actor_name}' aus Renderer entfernt")
         except Exception as e:
