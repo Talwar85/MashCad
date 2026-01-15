@@ -32,10 +32,16 @@ Not everything is working. more a prove of concept
 
 ## Installation
 
+### From Source
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
+
+### Standalone Executables
+Pre-built executables for Windows, macOS, and Linux are available in the [Releases](../../releases) section.
+
+To build executables yourself, see [Building Documentation](docs/BUILDING.md).
 
 ## Keyboard Shortcuts
 
