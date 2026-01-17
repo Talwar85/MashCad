@@ -6,11 +6,9 @@ Kombiniert parametrisches 3D-Modeling mit einem intuitiven UI, gebaut auf Build1
 ## Highlights
 
 - ✅ **Transform-System**: Gizmo-basiert mit Live-Preview
-- ✅ **Parametrische Feature-History**: Alle Operationen editierbar
 - ✅ **Undo/Redo**: Vollständig für alle Transform/Edit-Operationen
 - ✅ **Shortcuts**: G (Move), R (Rotate), S (Scale) + Achsen-Locks (X/Y/Z)
-- ✅ **Pattern/Array**: Linear & Circular Patterns
-- ✅ **Mesh-zu-BREP**: Intelligente Converter für STL/PLY → CAD-Solids
+
 
 ## Features
 
@@ -22,7 +20,7 @@ Kombiniert parametrisches 3D-Modeling mit einem intuitiven UI, gebaut auf Build1
 - **Modale Numerische Eingabe** (G→5→Enter = Move 5mm, wie Blender)
 - **Mirror**: Planare Spiegelung (XY/XZ/YZ)
 - **Copy+Transform**: Shift+Drag für Kopien
-- **Pattern/Array**: Linear (N Kopien mit Abstand) & Circular (360° Verteilung)
+
 
 ### Parametrisches Modeling
 - **Feature-History**: Alle Operationen im Browser sichtbar & editierbar
@@ -135,87 +133,17 @@ pip install -r requirements-ml.txt  # PyTorch + Dependencies (~1.5 GB)
 
 
 
-## Workflow-Beispiele
-
-### Präzise Move auf X-Achse
-```
-1. Wähle Body im Browser
-2. Drücke G (Move-Modus startet)
-3. Drücke X (Locked auf X-Achse, roter Indikator erscheint)
-4. Tippe 10 (numerische Eingabe)
-5. Drücke Enter (Body bewegt sich 10mm auf X)
-```
-
-### Circular Pattern (8 Kopien um 360°)
-```
-1. Wähle Body
-2. Menu: Transform → Create Pattern
-3. Wähle "Circular"
-4. Count: 8, Axis: Z, Full Circle: Yes
-5. Create Pattern (8 Kopien gleichmäßig verteilt)
-```
-
-### Mesh zu CAD konvertieren
-```
-1. Menu: File → Import Mesh (STL/OBJ/PLY)
-2. Mesh erscheint grau im Viewport
-3. Menu: 3D → Konvertierung zu BREP
-4. Wähle: "Auto (Hybrid)" (empfohlen - automatische Wahl)
-5. Body wird zu editierbarem Solid (10-200 Faces statt 10k)
-6. Teste: Fillet/Extrude/Boolean funktionieren ✅
-```
-
-## Projekt-Struktur
-```
-MashCad/
-├── main.py                           # Entry Point
-├── gui/
-│   ├── main_window.py                # Hauptfenster, zentrale Logik
-│   ├── viewport_pyvista.py           # 3D-Viewport (PyVista/VTK)
-│   ├── browser.py                    # Feature-History Browser
-│   ├── sketch_editor.py              # 2D Sketch-Editor
-│   ├── commands/
-│   │   └── transform_command.py      # Undo/Redo Commands
-│   ├── dialogs/
-│   │   ├── transform_edit_dialog.py  # Feature-Edit UI
-│   │   └── pattern_dialog.py         # Pattern/Array Dialog
-│   └── viewport/
-│       ├── transform_gizmo_v3.py     # 3D Transform-Gizmo
-│       └── transform_mixin_v3.py     # Viewport Integration
-├── modeling/
-│   ├── __init__.py                   # Body, Document, Feature-Klassen
-│   ├── cad_tessellator.py            # Build123d → PyVista Rendering
-│   ├── mesh_converter.py             # V1: Sewing
-│   ├── mesh_converter_v6.py          # Smart (planare Regionen)
-│   ├── mesh_converter_primitives.py  # Primitives (RANSAC)
-│   └── mesh_converter_hybrid.py      # Auto/Hybrid (automatische Wahl)
-├── sketcher/                         # 2D Geometrie & Constraints
-└── i18n/                             # Internationalization (DE/EN)
-```
-
-## Roadmap
 
 ### Abgeschlossen
-- [x] Transform-System (Fusion 360-Level)
-- [x] Undo/Redo (QUndoStack)
-- [x] Pattern/Array
-- [x] 2D Sketch Editor mit Constraints
-- [x] 3D Extrude mit Boolean Operations
-- [x] Mesh-Converter: Auto/Hybrid, Primitives (RANSAC), Smart (Planar)
+- Proof of Concept. --> 2D Sketches
+- Proof of Concept. --> Extrude
+- Proof of Concept. --> 3D Transform
 
-### Kommende Features
-- [ ] Loft & Sweep Operations
-- [ ] Assembly-Modus (Multi-Body-Constraints)
-- [ ] Parametric Dimensions (Smart Constraints)
-- [ ] Sketcher: Mehr Constraint-Typen
-- [ ] Native .masc Project-File-Format (Persistence)
 
-### Known Issues
-- [ ] Gizmo-Pfeile werden teilweise von Bodies verdeckt (Z-Buffer)
-- [ ] Body-Klick im Viewport für Transform (aktuell nur Browser)
 
 ### ⚠️ Boolean Operations (Join/Cut/Intersect)
 - Boolean Operations können bei komplexen Geometrien fehlschlagen
+- Mesh-zu-BREP-Konvertierung schlagen aktuell immer fehl. Prüfe verschiedene ansätze
 
 ## License
 MIT
