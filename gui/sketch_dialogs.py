@@ -4,9 +4,11 @@ DimensionInput and ToolOptionsPopup for the 2D sketch editor
 """
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QPushButton
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, 
+    QPushButton, QComboBox, QGraphicsDropShadowEffect, QWidget
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QColor, QPalette, QBrush
 
 
 class DimensionInput(QFrame):
@@ -18,94 +20,189 @@ class DimensionInput(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Modernes Styling: Dunkel, abgerundet, schwebend
+        self.setAttribute(Qt.WA_ShowWithoutActivating) # Fokus nicht stehlen, wenn nicht nötig
+        
+        # Schatten für Tiefenwirkung
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 150))
+        shadow.setOffset(0, 4)
+        self.setGraphicsEffect(shadow)
+
         self.setStyleSheet("""
-            QFrame { background: #1e1e1e; border: 2px solid #0078d4; border-radius: 6px; }
-            QLineEdit, QComboBox { 
-                background: #2d2d30; border: 1px solid #555; border-radius: 3px;
-                color: #fff; font-size: 14px; font-family: Consolas, monospace; font-weight: bold;
-                padding: 4px; selection-background-color: #0078d4;
+            QFrame { 
+                background-color: rgba(35, 35, 35, 245); 
+                border: 1px solid rgba(80, 80, 80, 150); 
+                border-radius: 8px; 
             }
-            QLineEdit:focus, QComboBox:focus { border: 2px solid #0078d4; background: #333; }
-            QLabel { color: #0af; font-size: 12px; font-weight: bold; }
+            QLineEdit { 
+                background: rgba(20, 20, 20, 100); 
+                border: 1px solid #444; 
+                border-radius: 4px;
+                color: #fff; 
+                font-size: 13px; 
+                font-family: 'Segoe UI', sans-serif; 
+                font-weight: 600;
+                padding: 4px 6px; 
+                selection-background-color: #0078d4;
+            }
+            QLineEdit:focus { 
+                border: 1px solid #0078d4; 
+                background: rgba(0, 0, 0, 80); 
+            }
+            QComboBox {
+                background: #333;
+                border: 1px solid #555;
+                border-radius: 4px;
+                color: white;
+                padding: 3px;
+            }
+            QLabel { 
+                color: #ccc; 
+                font-size: 12px; 
+                font-weight: normal;
+                background: transparent;
+                border: none;
+            }
+            /* Label für den Feldnamen (L, R, Angle) */
+            QLabel#NameLabel {
+                color: #0078d4;
+                font-weight: bold;
+            }
+            /* Label für die Einheit */
+            QLabel#UnitLabel {
+                color: #777;
+                font-size: 11px;
+            }
         """)
+        
         self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(12, 10, 12, 10)
-        self.layout.setSpacing(15)
+        self.layout.setContentsMargins(10, 8, 10, 8)
+        self.layout.setSpacing(12)
+        
         self.fields = {}
         self.field_order = []
-        self.field_types = {} # 'float' oder 'choice'
+        self.field_types = {} 
         self.active_field = 0
         self.locked_fields = set()
+        
         self.hide()
     
     def setup(self, fields):
         """
-        fields: Liste von Tupeln.
-        Für Zahlen: (Label, Key, DefaultValue, Suffix)
-        Für Auswahl: (Label, Key, DefaultIndex, [Option1, Option2, ...])
+        Erstellt die Eingabefelder dynamisch.
+        fields: Liste von Tupeln (Label, Key, DefaultValue, Suffix/Options)
         """
+        # Layout bereinigen
         while self.layout.count():
             child = self.layout.takeAt(0)
             if child.widget(): child.widget().deleteLater()
+            elif child.layout(): 
+                # Rekursives Löschen für verschachtelte Layouts
+                while child.layout().count():
+                    sub = child.layout().takeAt(0)
+                    if sub.widget(): sub.widget().deleteLater()
+                child.layout().deleteLater()
+
         self.fields.clear()
         self.field_order.clear()
         self.field_types.clear()
         self.locked_fields.clear()
         
-        from PySide6.QtWidgets import QComboBox # Import hier oder oben
-        
         for item in fields:
-            label, key = item[0], item[1]
+            label_text, key = item[0], item[1]
             val = item[2]
             
-            container = QHBoxLayout()
-            container.setSpacing(6)
-            lbl = QLabel(label)
-            lbl.setFixedWidth(20)
+            # Container für ein Feld-Paar (Label + Input + Einheit)
+            field_container = QVBoxLayout()
+            field_container.setSpacing(2)
+            field_container.setContentsMargins(0, 0, 0, 0)
             
-            if isinstance(item[3], list): # Es ist eine Auswahl-Box
+            # Zeile für Input + Einheit
+            input_row = QHBoxLayout()
+            input_row.setSpacing(4)
+            
+            # Name Label (klein über dem Feld oder links davor - hier links davor für Kompaktheit)
+            lbl = QLabel(label_text)
+            lbl.setObjectName("NameLabel")
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            lbl.setFixedWidth(15) # Feste Breite für Ausrichtung
+            
+            widget = None
+            is_combo = isinstance(item[3], list)
+            
+            if is_combo:
                 self.field_types[key] = 'choice'
                 options = item[3]
                 widget = QComboBox()
                 widget.addItems(options)
-                widget.setCurrentIndex(int(val))
-                widget.setFixedWidth(110)
-                # Signal weiterleiten
+                if isinstance(val, int) and 0 <= val < len(options):
+                    widget.setCurrentIndex(val)
+                elif isinstance(val, str) and val in options:
+                    widget.setCurrentText(val)
+                
+                widget.setMinimumWidth(90)
                 widget.currentTextChanged.connect(lambda t, k=key: self.choice_changed.emit(k, t))
-                # Enter im Combo triggert Confirm
-                # (QComboBox fängt Enter oft ab, wir müssen eventuell keyPressEvent nutzen)
-            else: # Es ist ein Zahlenfeld
+                # Combo Styling
+                widget.setStyleSheet("QComboBox { min-height: 22px; }")
+                
+                input_row.addWidget(lbl)
+                input_row.addWidget(widget)
+                
+            else: # Float Input
                 self.field_types[key] = 'float'
                 suffix = item[3]
+                
                 widget = QLineEdit()
-                widget.setFixedWidth(90)
+                widget.setMinimumWidth(60)
+                widget.setMaximumWidth(80)
                 widget.setText(f"{val:.2f}")
+                
+                # Events verbinden
                 widget.returnPressed.connect(self._on_confirm)
                 widget.textEdited.connect(lambda t, k=key: self._on_user_edit(k, t))
                 widget.textChanged.connect(lambda t, k=key: self._on_text_changed(k, t))
                 
-                suf = QLabel(suffix)
-                suf.setFixedWidth(25)
-                suf.setStyleSheet("color: #888;")
-                container.addWidget(lbl)
-                container.addWidget(widget)
-                container.addWidget(suf)
-            
-            if self.field_types[key] == 'choice':
-                container.addWidget(lbl)
-                container.addWidget(widget)
+                unit_lbl = QLabel(suffix)
+                unit_lbl.setObjectName("UnitLabel")
+                
+                input_row.addWidget(lbl)
+                input_row.addWidget(widget)
+                input_row.addWidget(unit_lbl)
 
-            self.layout.addLayout(container)
+            # Das Input-Widget speichern
             self.fields[key] = widget
             self.field_order.append(key)
+            
+            # Zum Hauptlayout hinzufügen
+            self.layout.addLayout(input_row)
+            
+            # Kleiner vertikaler Separator wenn nicht das letzte Element
+            if item != fields[-1]:
+                line = QFrame()
+                line.setFrameShape(QFrame.VLine)
+                line.setFrameShadow(QFrame.Sunken)
+                line.setStyleSheet("background: rgba(255,255,255,0.1); border: none; max-height: 20px;")
+                self.layout.addWidget(line)
             
         self.active_field = 0
         self.adjustSize()
     
     def _on_user_edit(self, key, text):
+        """Markiert ein Feld als vom User 'gelockt' (manuell überschrieben)"""
         self.locked_fields.add(key)
         if key in self.fields:
-            self.fields[key].setStyleSheet("border: 2px solid #0a0; background: #1a3a1a; color: #0f0;")
+            # Visuelles Feedback für Locked State (Fusion Style: dunkleres Feld, goldener/weißer Text)
+            self.fields[key].setStyleSheet("""
+                QLineEdit {
+                    background: rgba(0, 0, 0, 150);
+                    border: 1px solid #dba600;
+                    color: #fff;
+                    font-weight: bold;
+                }
+            """)
 
     def _on_text_changed(self, key, text):
         try: self.value_changed.emit(key, float(text.replace(',', '.')))
@@ -178,49 +275,60 @@ class ToolOptionsPopup(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Schatten hinzufügen
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(10)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 2)
+        self.setGraphicsEffect(shadow)
+
         self.setStyleSheet("""
             ToolOptionsPopup {
-                background: rgba(45, 45, 48, 240);
-                border: 2px solid #0078d4;
-                border-radius: 8px;
+                background: rgba(40, 40, 45, 240);
+                border: 1px solid rgba(80, 80, 80, 180);
+                border-radius: 6px;
             }
             QPushButton {
-                background: #3c3c3c;
-                border: 2px solid transparent;
-                border-radius: 6px;
-                padding: 6px 4px;
-                min-width: 60px;
-                min-height: 45px;
-                color: #ccc;
-                font-size: 10px;
+                background: transparent;
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-width: 40px;
+                min-height: 40px;
+                color: #ddd;
+                font-size: 11px;
+                text-align: center;
             }
             QPushButton:hover {
-                background: #4a4a4a;
-                border-color: #0078d4;
+                background: rgba(255, 255, 255, 0.1);
+                border: 1px solid rgba(255,255,255,0.3);
             }
             QPushButton:checked {
-                background: #0078d4;
-                border-color: #0af;
-                color: white;
+                background: rgba(0, 120, 212, 0.3); /* Accent Color Background */
+                border: 1px solid #0078d4;
+                color: #fff;
             }
             QLabel {
-                color: #888;
+                color: #aaa;
                 font-size: 11px;
-                padding: 2px;
+                font-weight: bold;
+                padding-bottom: 4px;
                 background: transparent;
+                border: none;
             }
         """)
         
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(10, 8, 10, 8)
-        self.layout.setSpacing(6)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(4)
         
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("color: #0af; font-weight: bold; font-size: 12px;")
+        self.title_label.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.title_label)
         
         self.button_layout = QHBoxLayout()
-        self.button_layout.setSpacing(8)
+        self.button_layout.setSpacing(6)
         self.layout.addLayout(self.button_layout)
         
         self.buttons = []

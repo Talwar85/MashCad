@@ -31,6 +31,13 @@ class TransformCommand(QUndoCommand):
         self.main_window = main_window
         self.old_feature_count = len(body.features)
 
+    def _update_gizmo_position(self):
+        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
+        viewport = self.main_window.viewport_3d
+        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
+            if hasattr(viewport, 'show_transform_gizmo'):
+                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
+
     def redo(self):
         """
         Apply transform by adding feature to body.
@@ -72,6 +79,9 @@ class TransformCommand(QUndoCommand):
                 )
                 self.main_window.browser.refresh()
 
+            # Gizmo an neue Position verschieben falls aktiv
+            self._update_gizmo_position()
+
 
 class DeleteFeatureCommand(QUndoCommand):
     """
@@ -86,6 +96,13 @@ class DeleteFeatureCommand(QUndoCommand):
         self.feature = feature
         self.feature_index = feature_index
         self.main_window = main_window
+
+    def _update_gizmo_position(self):
+        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
+        viewport = self.main_window.viewport_3d
+        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
+            if hasattr(viewport, 'show_transform_gizmo'):
+                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
 
     def redo(self):
         """Remove feature"""
@@ -120,6 +137,9 @@ class DeleteFeatureCommand(QUndoCommand):
                 )
                 self.main_window.browser.refresh()
 
+            # Gizmo an neue Position verschieben falls aktiv
+            self._update_gizmo_position()
+
 
 class EditFeatureCommand(QUndoCommand):
     """
@@ -135,6 +155,13 @@ class EditFeatureCommand(QUndoCommand):
         self.old_data = old_data.copy()
         self.new_data = new_data.copy()
         self.main_window = main_window
+
+    def _update_gizmo_position(self):
+        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
+        viewport = self.main_window.viewport_3d
+        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
+            if hasattr(viewport, 'show_transform_gizmo'):
+                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
 
     def redo(self):
         """Apply new data"""
@@ -165,3 +192,6 @@ class EditFeatureCommand(QUndoCommand):
                 self.body._build123d_solid
             )
             self.main_window.browser.refresh()
+
+        # Gizmo an neue Position verschieben falls aktiv
+        self._update_gizmo_position()

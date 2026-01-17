@@ -1,19 +1,23 @@
 """
 LiteCAD Sketcher - Constraint Solver
-Numerischer Solver für geometrische Constraints
-Verwendet Gradientenabstieg und Newton-Raphson
+Numerischer Solver für geometrische Constraints mit SciPy least_squares
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Set, Tuple, Optional
-import math
+from dataclasses import dataclass
+from typing import List, Optional
 import numpy as np
 
 from .geometry import Point2D, Line2D, Circle2D, Arc2D
-from scipy.optimize import least_squares
+
+try:
+    from scipy.optimize import least_squares
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
 from .constraints import (
     Constraint, ConstraintType, ConstraintStatus,
-    calculate_constraint_error, is_constraint_satisfied
+    calculate_constraint_error
 )
 
 
@@ -29,145 +33,158 @@ class SolverResult:
 
 class ConstraintSolver:
     """
-    Numerischer Constraint-Solver
-    
-    Verwendet einen iterativen Ansatz:
-    1. Sammle alle variablen Punkte
-    2. Berechne Fehler aller Constraints
-    3. Berechne Gradienten
-    4. Update Punkte
-    5. Wiederhole bis konvergiert
+    Numerischer Constraint-Solver mit SciPy least_squares.
+
+    Verwendet Levenberg-Marquardt mit Regularisierung, um das Problem
+    "mehr Residuen als Variablen" zu lösen.
     """
-    
+
     def __init__(self):
         self.tolerance = 1e-6
-        
-    def solve(self, 
-              points: List[Point2D],
-              lines: List[Line2D],
-              circles: List[Circle2D],
-              arcs: List[Arc2D],
-              constraints: List[Constraint]) -> SolverResult:
-        
+        self.regularization = 0.01  # Dämpfungsfaktor für Regularisierung
+
+    def solve(self, points, lines, circles, arcs, constraints) -> SolverResult:
+        """
+        Löst das Constraint-System.
+
+        Args:
+            points: Liste aller Punkte
+            lines: Liste aller Linien
+            circles: Liste aller Kreise
+            arcs: Liste aller Bögen
+            constraints: Liste aller Constraints
+
+        Returns:
+            SolverResult mit Erfolg/Misserfolg und Details
+        """
         if not constraints:
             return SolverResult(True, 0, 0.0, ConstraintStatus.UNDER_CONSTRAINED, "Keine Constraints")
 
-        # 1. Identifiziere variable (nicht fixierte) Parameter
-        # Wir sammeln alle x, y Koordinaten von nicht-fixierten Punkten
-        # und Radien von Kreisen/Bögen in einem flachen Array 'x0'
-        
-        variable_refs = [] # Liste von Objekten und Attributen: (obj, 'x') oder (obj, 'y') oder (obj, 'radius')
-        initial_values = []
+        if not HAS_SCIPY:
+            return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, "SciPy nicht installiert!")
 
-        # Punkte sammeln (auch die von Linien etc.)
-        processed_points = set()
-        
-        # Hilfsfunktion zum Sammeln
-        def add_point_vars(p):
-            if p.id in processed_points or p.fixed: return
-            variable_refs.append((p, 'x'))
-            initial_values.append(p.x)
-            variable_refs.append((p, 'y'))
-            initial_values.append(p.y)
-            processed_points.add(p.id)
+        # 1. Variablen sammeln (Referenzen auf bewegliche Teile)
+        refs = []  # Liste von (Objekt, AttributName)
+        x0_vals = []  # Startwerte
+        processed_ids = set()
 
-        # Alle Punkte durchgehen
-        for p in points: add_point_vars(p)
-        for l in lines: add_point_vars(l.start); add_point_vars(l.end)
-        for c in circles: 
-            add_point_vars(c.center)
-            # Radius ist auch eine Variable!
-            variable_refs.append((c, 'radius'))
-            initial_values.append(c.radius)
-            
-        for a in arcs: add_point_vars(a.center) # Radius bei Arcs ggf. auch
+        def add_point(p):
+            """Fügt Punkt-Koordinaten als Variablen hinzu"""
+            if p.id in processed_ids or p.fixed:
+                return
+            refs.append((p, 'x'))
+            x0_vals.append(p.x)
+            refs.append((p, 'y'))
+            x0_vals.append(p.y)
+            processed_ids.add(p.id)
 
-        if not variable_refs:
-            # Nichts zu bewegen, prüfe nur Fehler
-            err = sum(calculate_constraint_error(c)**2 for c in constraints)
-            return SolverResult(err < self.tolerance, 0, err, ConstraintStatus.FULLY_CONSTRAINED, "Statisch geprüft")
+        # Punkte aus allen Quellen sammeln
+        for p in points:
+            add_point(p)
 
-        x0 = np.array(initial_values)
+        for line in lines:
+            add_point(line.start)
+            add_point(line.end)
 
-        # 2. Definiere die Fehlerfunktion für Scipy
-        # Diese Funktion schreibt die Werte aus dem Solver zurück in die Objekte
-        # und berechnet dann, wie weit die Constraints verletzt sind.
-        def error_function(x_new):
-            # A. Werte zurückschreiben
-            for i, (obj, attr) in enumerate(variable_refs):
-                setattr(obj, attr, x_new[i])
-            
-            # B. Fehler berechnen (Residuen)
+        for circle in circles:
+            add_point(circle.center)
+            # Radius als Variable
+            refs.append((circle, 'radius'))
+            x0_vals.append(circle.radius)
+
+        for arc in arcs:
+            add_point(arc.center)
+            # Radius und Winkel als Variablen
+            refs.append((arc, 'radius'))
+            x0_vals.append(arc.radius)
+            refs.append((arc, 'start_angle'))
+            x0_vals.append(arc.start_angle)
+            refs.append((arc, 'end_angle'))
+            x0_vals.append(arc.end_angle)
+
+        if not x0_vals:
+            # Keine beweglichen Teile - prüfen ob Constraints erfüllt
+            total_error = sum(calculate_constraint_error(c) for c in constraints)
+            if total_error < self.tolerance:
+                return SolverResult(True, 0, total_error, ConstraintStatus.FULLY_CONSTRAINED, "Statisch bestimmt")
+            else:
+                return SolverResult(False, 0, total_error, ConstraintStatus.INCONSISTENT, "Keine Variablen, aber Fehler")
+
+        x0 = np.array(x0_vals, dtype=np.float64)
+        n_vars = len(x0)
+
+        # 2. Fehlerfunktion mit Regularisierung
+        def error_function(x):
+            """
+            Berechnet Residuen für least_squares.
+            Enthält Constraint-Fehler + Regularisierung.
+            """
+            # A. Werte in Objekte zurückschreiben
+            for i, (obj, attr) in enumerate(refs):
+                setattr(obj, attr, x[i])
+
+            # B. Constraint-Fehler berechnen
             residuals = []
             for c in constraints:
-                # Gewichtung: Coincident Constraints sind wichtiger als Längen
-                weight = 1.0
-                if c.type == ConstraintType.COINCIDENT: weight = 10.0
-                
-                err = calculate_constraint_error(c)
-                residuals.append(err * weight)
+                # Gewichtung je nach Constraint-Typ
+                if c.type == ConstraintType.COINCIDENT:
+                    weight = 10.0
+                elif c.type == ConstraintType.TANGENT:
+                    weight = 5.0
+                elif c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
+                    weight = 3.0
+                else:
+                    weight = 1.0
+
+                error = calculate_constraint_error(c)
+                residuals.append(error * weight)
+
+            # C. Regularisierung: Verhindere zu starke Abweichung von Startwerten
+            # Dies löst auch das Problem "mehr Residuen als Variablen" für 'lm'
+            for i in range(n_vars):
+                regularization_term = (x[i] - x0[i]) * self.regularization
+                residuals.append(regularization_term)
+
             return residuals
 
-        # 3. Lösen mit Levenberg-Marquardt (oder TRF)
+        # 3. Lösen mit Levenberg-Marquardt
         try:
-            res = least_squares(error_function, x0, method='trf', ftol=self.tolerance, xtol=self.tolerance, verbose=0)
-            
-            success = res.success and (np.mean(np.abs(res.fun)) < 1e-3)
+            result = least_squares(
+                error_function,
+                x0,
+                method='lm',  # Levenberg-Marquardt
+                ftol=1e-8,
+                xtol=1e-8,
+                gtol=1e-8,
+                max_nfev=1000
+            )
+
+            # Finale Werte übernehmen
+            for i, (obj, attr) in enumerate(refs):
+                setattr(obj, attr, result.x[i])
+
+            # Erfolg prüfen (nur Constraint-Fehler, nicht Regularisierung)
+            constraint_error = sum(calculate_constraint_error(c) for c in constraints)
+            success = result.success and constraint_error < 1e-3
+
             status = ConstraintStatus.FULLY_CONSTRAINED if success else ConstraintStatus.INCONSISTENT
-            
-            # Finales Zurückschreiben ist durch den letzten Aufruf von error_function implizit passiert,
-            # aber sicherheitshalber schreiben wir das Ergebnis 'res.x' nochmal rein.
-            for i, (obj, attr) in enumerate(variable_refs):
-                setattr(obj, attr, res.x[i])
-                
+
             return SolverResult(
                 success=success,
-                iterations=res.nfev,
-                final_error=np.sum(np.abs(res.fun)),
+                iterations=result.nfev,
+                final_error=constraint_error,
                 status=status,
-                message=f"Scipy: {res.message}"
+                message=result.message if hasattr(result, 'message') else ""
             )
-            
+
         except Exception as e:
-            return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, f"Solver Error: {e}")
-    
-    
-    
-    def _determine_status(self, 
-                          constraints: List[Constraint],
-                          variable_points: List[Point2D]) -> ConstraintStatus:
-        """Bestimmt den Status des Constraint-Systems"""
-        
-        # Freiheitsgrade: 2 pro Punkt (x, y)
-        dof = len(variable_points) * 2
-        
-        # Jeder Constraint reduziert Freiheitsgrade
-        constraint_dof = 0
-        for c in constraints:
-            if c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL,
-                         ConstraintType.LENGTH, ConstraintType.RADIUS,
-                         ConstraintType.DIAMETER]:
-                constraint_dof += 1
-            elif c.type in [ConstraintType.COINCIDENT, ConstraintType.DISTANCE,
-                           ConstraintType.CONCENTRIC]:
-                constraint_dof += 2
-            elif c.type == ConstraintType.FIXED:
-                constraint_dof += 2
-            else:
-                constraint_dof += 1
-        
-        if constraint_dof < dof:
-            return ConstraintStatus.UNDER_CONSTRAINED
-        elif constraint_dof == dof:
-            return ConstraintStatus.FULLY_CONSTRAINED
-        else:
-            return ConstraintStatus.OVER_CONSTRAINED
+            return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, f"Solver-Fehler: {e}")
 
 
 # === Utility-Funktionen ===
 
 def auto_constrain_horizontal(line: Line2D, tolerance: float = 5.0) -> Optional[Constraint]:
-    """Automatisch Horizontal-Constraint wenn fast horizontal"""
+    """Automatisch Horizontal-Constraint wenn Linie fast horizontal"""
     if abs(line.end.y - line.start.y) < tolerance:
         from .constraints import make_horizontal
         return make_horizontal(line)
@@ -175,7 +192,7 @@ def auto_constrain_horizontal(line: Line2D, tolerance: float = 5.0) -> Optional[
 
 
 def auto_constrain_vertical(line: Line2D, tolerance: float = 5.0) -> Optional[Constraint]:
-    """Automatisch Vertikal-Constraint wenn fast vertikal"""
+    """Automatisch Vertikal-Constraint wenn Linie fast vertikal"""
     if abs(line.end.x - line.start.x) < tolerance:
         from .constraints import make_vertical
         return make_vertical(line)
@@ -185,7 +202,7 @@ def auto_constrain_vertical(line: Line2D, tolerance: float = 5.0) -> Optional[Co
 def auto_constrain_coincident(points: List[Point2D], tolerance: float = 5.0) -> List[Constraint]:
     """Findet und erstellt Coincident-Constraints für nahe Punkte"""
     from .constraints import make_coincident
-    
+
     constraints = []
     for i, p1 in enumerate(points):
         for p2 in points[i+1:]:

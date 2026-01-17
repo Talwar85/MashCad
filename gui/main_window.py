@@ -39,11 +39,10 @@ from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
-from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel
+from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler
-from gui.widgets.transform_panel import TransformInputPanel, SelectionInfoWidget, CenterHintWidget
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.transform_state import TransformState
 
@@ -369,20 +368,14 @@ class MainWindow(QMainWindow):
         self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
         self.extrude_panel.operation_changed.connect(self._on_extrude_operation_changed)
         
-        # Transform Input Panel (NEU)
-        self.transform_input_panel = TransformInputPanel(self)
-        self.transform_input_panel.transform_confirmed.connect(self._on_transform_panel_confirmed)
-        self.transform_input_panel.transform_cancelled.connect(self._on_transform_panel_cancelled)
-        self.transform_input_panel.mode_changed.connect(self._on_transform_mode_changed)
-        self.transform_input_panel.grid_size_changed.connect(self._on_grid_size_changed)
-        self.transform_input_panel.pivot_mode_changed.connect(self._on_pivot_mode_changed)
-        self.transform_input_panel.hide()  # Initial versteckt
-        
-        # Selection Info Widget (zeigt aktuell selektierten Body)
-        self.selection_info = SelectionInfoWidget(self)
-        self.selection_info.move(10, 60)  # Oben links, unter Toolbar
-        self.selection_info.hide()
-        
+        # Transform Panel
+        self.transform_panel = TransformPanel(self)
+        self.transform_panel.transform_confirmed.connect(self._on_transform_panel_confirmed)
+        self.transform_panel.transform_cancelled.connect(self._on_transform_panel_cancelled)
+        self.transform_panel.mode_changed.connect(self._on_transform_mode_changed)
+        self.transform_panel.grid_size_changed.connect(self._on_grid_size_changed)
+        self.transform_panel.hide()
+
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
         self.center_hint.hide()
@@ -426,33 +419,31 @@ class MainWindow(QMainWindow):
 
     def _position_transform_panel(self):
         """Positioniert das Transform-Panel am unteren Rand, zentriert."""
-        if hasattr(self, 'transform_input_panel') and self.transform_input_panel.isVisible():
-            pw = self.transform_input_panel.width() if self.transform_input_panel.width() > 10 else 600
-            ph = self.transform_input_panel.height() if self.transform_input_panel.height() > 10 else 50
-            
+        if hasattr(self, 'transform_panel') and self.transform_panel.isVisible():
+            pw = self.transform_panel.width() if self.transform_panel.width() > 10 else 520
+            ph = self.transform_panel.height() if self.transform_panel.height() > 10 else 60
+
             x = (self.width() - pw) // 2
-            y = self.height() - ph - 30
-            
-            self.transform_input_panel.move(x, y)
-            self.transform_input_panel.raise_()
-            
+            y = self.height() - ph - 40
+
+            self.transform_panel.move(x, y)
+            self.transform_panel.raise_()
+
     def _on_transform_panel_confirmed(self, mode: str, data):
         """Handler wenn Transform im Panel bestätigt wird"""
-        # Finde selektierten Body
         body_id = self._get_selected_body_id()
         if not body_id:
             logger.warning("Kein Body selektiert für Transform")
             return
-            
+
         self._on_body_transform_requested(body_id, mode, data)
-        self.transform_input_panel.reset_values()
-        
+        self.transform_panel.reset_values()
+
     def _on_transform_panel_cancelled(self):
         """Handler wenn Transform abgebrochen wird"""
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
-        self.transform_input_panel.hide()
-        self.selection_info.clear_selection()
+        self.transform_panel.hide()
         self._selected_body_for_transform = None
         
     def _on_transform_mode_changed(self, mode: str):
@@ -494,15 +485,10 @@ class MainWindow(QMainWindow):
             self.extrude_panel.hide()
             self.extrude_panel.lower()  # Z-Index runter
 
-        # Selection-Info aktualisieren
-        self.selection_info.set_selection(body_name)
-        self.selection_info.show()
-
-        # Transform-Panel zeigen UND nach vorne bringen
-        self.transform_input_panel.reset_values()
-        self.transform_input_panel.show()
-        self.transform_input_panel.setVisible(True)
-        self.transform_input_panel.raise_()  # FIX Bug 1.3: Panel nach vorne bringen
+        # Transform-Panel zeigen
+        self.transform_panel.reset_values()
+        self.transform_panel.show()
+        self.transform_panel.raise_()
         self._position_transform_panel()
 
         # Gizmo zeigen
@@ -510,19 +496,18 @@ class MainWindow(QMainWindow):
             self.viewport_3d.show_transform_gizmo(body_id)
 
         logger.info(f"Transform: {body_name} | G=Move R=Rotate S=Scale | Tab=Eingabe | Esc=Abbrechen")
-        
+
     def _hide_transform_ui(self):
         """Versteckt Transform-UI"""
         self._selected_body_for_transform = None
-        self.selection_info.clear_selection()
-        self.transform_input_panel.hide()
+        self.transform_panel.hide()
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
-            
+
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
-        if hasattr(self, 'transform_input_panel') and self.transform_input_panel.isVisible():
-            self.transform_input_panel.set_values(x, y, z)
+        if hasattr(self, 'transform_panel') and self.transform_panel.isVisible():
+            self.transform_panel.set_values(x, y, z)
 
     def _create_toolbar(self):
         """Minimale Toolbar - nur Modus-Umschaltung"""
@@ -976,13 +961,11 @@ class MainWindow(QMainWindow):
             if data[0] == 'body':
                 body = data[1]
                 self.body_properties.update_body(body)
-                
-                # NEU: Transform-UI zeigen wenn Body selektiert wird
-                if hasattr(body, 'id') and hasattr(body, 'name'):
-                    self._show_transform_ui(body.id, body.name)
+                # Body merken für späteren Transform (G/R/S Taste)
+                if hasattr(body, 'id'):
+                    self._selected_body_for_transform = body.id
             else:
                 self.body_properties.clear()
-                # Bei Nicht-Body-Selektion Transform-UI verstecken
                 self._hide_transform_ui()
     
     def _start_transform_mode(self, mode):
@@ -1715,11 +1698,7 @@ class MainWindow(QMainWindow):
             logger.error("Keine geschlossenen Flächen gefunden!", 3000)
             return
 
-        # NEU: Transform-Panel und Gizmo KOMPLETT verstecken (Fix 2 - verstärkt)
-        if hasattr(self, 'transform_input_panel'):
-            self.transform_input_panel.setVisible(False)
-            self.transform_input_panel.hide()
-            self.transform_input_panel.lower()  # Z-Index runter
+        # Transform-Panel verstecken
         self._hide_transform_ui()
 
         # 2. Modus aktivieren

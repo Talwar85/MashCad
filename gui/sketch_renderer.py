@@ -193,20 +193,33 @@ class SketchRendererMixin:
 
             sel = line in self.selected_lines
             hov = self.hovered_entity == line
-            col = self.GEO_CONSTRUCTION if line.construction else (QColor(50, 200, 255) if sel else (self.GEO_HOVER if hov else self.GEO_COLOR))
+            if line.construction:
+                col = self.GEO_CONSTRUCTION
+            elif sel:
+                col = QColor(50, 200, 255)
+            elif hov:
+                col = self.GEO_HOVER
+            else:
+                col = self.GEO_COLOR
             w = 3.0 if sel else (2.5 if hov else 1.5)
             style = Qt.DashLine if line.construction else Qt.SolidLine
-            
+
             p.setPen(QPen(col, w, style))
             p1 = self.world_to_screen(QPointF(line.start.x, line.start.y))
             p2 = self.world_to_screen(QPointF(line.end.x, line.end.y))
             p.drawLine(p1, p2)
-            
-            # Endpunkte
-            p.setBrush(QBrush(self.BG_COLOR))
-            p.setPen(QPen(col, 1))
-            p.drawEllipse(p1, 2, 2)
-            p.drawEllipse(p2, 2, 2)
+
+            # Endpunkte - Rot wenn fixiert
+            for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
+                if hasattr(pt, 'fixed') and pt.fixed:
+                    # Fixierter Punkt = Rot
+                    p.setBrush(QBrush(QColor(220, 50, 50)))
+                    p.setPen(QPen(QColor(255, 100, 100), 2))
+                    p.drawEllipse(screen_pt, 4, 4)
+                else:
+                    p.setBrush(QBrush(self.BG_COLOR))
+                    p.setPen(QPen(col, 1))
+                    p.drawEllipse(screen_pt, 2, 2)
 
         # 3. Kreise zeichnen
         for c in self.sketch.circles:
@@ -313,7 +326,12 @@ class SketchRendererMixin:
     def _draw_constraints(self, p):
         """Zeichnet Constraint-Icons an den betroffenen Elementen (Fusion360-Style)"""
         p.setFont(QFont("Arial", 9, QFont.Bold))
-        
+
+        # Speichere Bounding-Boxes für Constraint-Klick-Erkennung
+        if not hasattr(self, 'constraint_icon_rects'):
+            self.constraint_icon_rects = []
+        self.constraint_icon_rects.clear()
+
         # Sammle Constraints pro Linie für Offset
         line_constraint_count = {}
         
@@ -324,21 +342,31 @@ class SketchRendererMixin:
                     mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
                     offset = line_constraint_count.get(line.id, 0) * 15
                     line_constraint_count[line.id] = line_constraint_count.get(line.id, 0) + 1
+                    # Bounding-Box speichern
+                    icon_rect = QRectF(int(mid.x())-10, int(mid.y())-18-offset, 20, 14)
+                    self.constraint_icon_rects.append((c, icon_rect))
+                    # Highlight wenn selektiert
+                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
                     # Hintergrund-Box für bessere Lesbarkeit
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(QColor(30, 30, 30, 180)))
-                    p.drawRoundedRect(int(mid.x())-10, int(mid.y())-18-offset, 20, 14, 3, 3)
+                    p.setBrush(QBrush(bg_color))
+                    p.drawRoundedRect(icon_rect, 3, 3)
                     p.setPen(QPen(self.CONSTRAINT_COLOR))
                     p.drawText(int(mid.x())-5, int(mid.y())-7-offset, "H")
-                    
+
                 elif c.type == ConstraintType.VERTICAL and c.entities:
                     line = c.entities[0]
                     mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
                     offset = line_constraint_count.get(line.id, 0) * 15
                     line_constraint_count[line.id] = line_constraint_count.get(line.id, 0) + 1
+                    icon_rect = QRectF(int(mid.x())+5, int(mid.y())-5-offset, 20, 14)
+                    self.constraint_icon_rects.append((c, icon_rect))
+                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(QColor(30, 30, 30, 180)))
-                    p.drawRoundedRect(int(mid.x())+5, int(mid.y())-5-offset, 20, 14, 3, 3)
+                    p.setBrush(QBrush(bg_color))
+                    p.drawRoundedRect(icon_rect, 3, 3)
                     p.setPen(QPen(self.CONSTRAINT_COLOR))
                     p.drawText(int(mid.x())+10, int(mid.y())+6-offset, "V")
                     
@@ -348,31 +376,43 @@ class SketchRendererMixin:
                         mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
                         offset = line_constraint_count.get(line.id, 0) * 15
                         line_constraint_count[line.id] = line_constraint_count.get(line.id, 0) + 1
+                        icon_rect = QRectF(int(mid.x())-10, int(mid.y())-18-offset, 20, 14)
+                        self.constraint_icon_rects.append((c, icon_rect))
+                        is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                        bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
                         p.setPen(Qt.NoPen)
-                        p.setBrush(QBrush(QColor(30, 30, 30, 180)))
-                        p.drawRoundedRect(int(mid.x())-10, int(mid.y())-18-offset, 20, 14, 3, 3)
+                        p.setBrush(QBrush(bg_color))
+                        p.drawRoundedRect(icon_rect, 3, 3)
                         p.setPen(QPen(QColor(100, 180, 255)))
                         p.drawText(int(mid.x())-5, int(mid.y())-7-offset, "∥")
-                        
+
                 elif c.type == ConstraintType.PERPENDICULAR and len(c.entities) >= 2:
                     for line in c.entities[:2]:
                         mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
                         offset = line_constraint_count.get(line.id, 0) * 15
                         line_constraint_count[line.id] = line_constraint_count.get(line.id, 0) + 1
+                        icon_rect = QRectF(int(mid.x())-10, int(mid.y())-18-offset, 20, 14)
+                        self.constraint_icon_rects.append((c, icon_rect))
+                        is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                        bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
                         p.setPen(Qt.NoPen)
-                        p.setBrush(QBrush(QColor(30, 30, 30, 180)))
-                        p.drawRoundedRect(int(mid.x())-10, int(mid.y())-18-offset, 20, 14, 3, 3)
+                        p.setBrush(QBrush(bg_color))
+                        p.drawRoundedRect(icon_rect, 3, 3)
                         p.setPen(QPen(QColor(255, 180, 100)))
                         p.drawText(int(mid.x())-5, int(mid.y())-7-offset, "⊥")
-                        
+
                 elif c.type == ConstraintType.EQUAL_LENGTH and len(c.entities) >= 2:
                     for line in c.entities[:2]:
                         mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
                         offset = line_constraint_count.get(line.id, 0) * 15
                         line_constraint_count[line.id] = line_constraint_count.get(line.id, 0) + 1
+                        icon_rect = QRectF(int(mid.x())-10, int(mid.y())-18-offset, 20, 14)
+                        self.constraint_icon_rects.append((c, icon_rect))
+                        is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                        bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
                         p.setPen(Qt.NoPen)
-                        p.setBrush(QBrush(QColor(30, 30, 30, 180)))
-                        p.drawRoundedRect(int(mid.x())-10, int(mid.y())-18-offset, 20, 14, 3, 3)
+                        p.setBrush(QBrush(bg_color))
+                        p.drawRoundedRect(icon_rect, 3, 3)
                         p.setPen(QPen(QColor(200, 100, 255)))
                         p.drawText(int(mid.x())-4, int(mid.y())-7-offset, "=")
                         
@@ -410,22 +450,26 @@ class SketchRendererMixin:
                         p.drawLine(mid, text_pos)
 
                     text = f"{c.value:.1f}"
-                    
+
                     # Box zeichnen
                     fm = QFontMetrics(p.font())
                     rect = fm.boundingRect(text)
                     box_w = rect.width() + 10
                     box_h = rect.height() + 4
-                    
+
+                    icon_rect = QRectF(int(text_pos.x() - box_w/2), int(text_pos.y() - box_h/2), box_w, box_h)
+                    self.constraint_icon_rects.append((c, icon_rect))
+                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(QColor(30, 30, 30, 200)))
+                    p.setBrush(QBrush(bg_color))
                     # Zentrierte Box am neuen Ort
-                    p.drawRoundedRect(int(text_pos.x() - box_w/2), int(text_pos.y() - box_h/2), 
-                                      box_w, box_h, 3, 3)
-                    
+                    p.drawRoundedRect(icon_rect, 3, 3)
+
                     p.setPen(QPen(self.DIM_COLOR))
                     # Text zentrieren
-                    p.drawText(int(text_pos.x() - rect.width()/2), 
+                    p.drawText(int(text_pos.x() - rect.width()/2),
                                int(text_pos.y() + rect.height()/2 - 3), text)
                     
                 elif c.type == ConstraintType.RADIUS and c.value and c.entities:
@@ -467,17 +511,22 @@ class SketchRendererMixin:
                     text = f"R{c.value:.1f}"
                     fm = QFontMetrics(p.font())
                     rect = fm.boundingRect(text)
-                    
+
+                    icon_rect = QRectF(int(p_text.x() - rect.width()/2 - 4),
+                                       int(p_text.y() - rect.height()/2 - 2),
+                                       rect.width()+8, rect.height()+4)
+                    self.constraint_icon_rects.append((c, icon_rect))
+                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+
                     # Hintergrund für Text
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(QColor(30, 30, 30, 200)))
-                    p.drawRoundedRect(int(p_text.x() - rect.width()/2 - 4), 
-                                      int(p_text.y() - rect.height()/2 - 2), 
-                                      rect.width()+8, rect.height()+4, 3, 3)
-                    
+                    p.setBrush(QBrush(bg_color))
+                    p.drawRoundedRect(icon_rect, 3, 3)
+
                     # Text selbst
                     p.setPen(QPen(self.DIM_COLOR))
-                    p.drawText(int(p_text.x() - rect.width()/2), 
+                    p.drawText(int(p_text.x() - rect.width()/2),
                                int(p_text.y() + rect.height()/2 - 2), text)
                     
                 elif c.type == ConstraintType.CONCENTRIC and len(c.entities) >= 2:
@@ -1064,4 +1113,54 @@ class SketchRendererMixin:
         if not self.grid_snap:
             p.setPen(QPen(QColor(180, 100, 100)))
             p.drawText(self.width()-100, y, "Grid: AUS (G)")
+
+        # HUD-Nachricht zeichnen (zentraler Toast)
+        self._draw_hud_message(p)
+
+    def _draw_hud_message(self, p):
+        """Zeichnet die zentrale HUD-Nachricht (Toast-Style)"""
+        import time
+        if not hasattr(self, '_hud_message') or not self._hud_message:
+            return
+
+        # Prüfe ob Nachricht noch gültig
+        elapsed = (time.time() * 1000) - self._hud_message_time
+        if elapsed > self._hud_duration:
+            self._hud_message = ""
+            return
+
+        # Fade-out Effekt
+        alpha = 255
+        if elapsed > self._hud_duration - 500:
+            alpha = int(255 * (self._hud_duration - elapsed) / 500)
+
+        # Box-Größe berechnen
+        p.setFont(QFont("Arial", 14, QFont.Bold))
+        fm = p.fontMetrics()
+        text_rect = fm.boundingRect(self._hud_message)
+        box_w = text_rect.width() + 40
+        box_h = text_rect.height() + 20
+
+        # Zentriert oben
+        x = (self.width() - box_w) // 2
+        y = 60
+
+        # Hintergrund
+        bg_color = QColor(30, 30, 35, min(220, alpha))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(bg_color))
+        p.drawRoundedRect(x, y, box_w, box_h, 8, 8)
+
+        # Border
+        border_color = QColor(self._hud_color)
+        border_color.setAlpha(alpha)
+        p.setPen(QPen(border_color, 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(x, y, box_w, box_h, 8, 8)
+
+        # Text
+        text_color = QColor(self._hud_color)
+        text_color.setAlpha(alpha)
+        p.setPen(text_color)
+        p.drawText(x + 20, y + box_h - 10, self._hud_message)
     

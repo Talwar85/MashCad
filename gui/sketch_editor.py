@@ -6,7 +6,7 @@ Mit Build123d Backend für parametrische CAD-Operationen
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QApplication, QFrame, QInputDialog, QPushButton
+    QMenu, QApplication, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer, QThread
 from PySide6.QtGui import (
@@ -298,7 +298,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_circles = []
         self.selected_arcs = []
         self.selected_points = []  # Standalone Punkte
+        self.selected_constraints = []  # Für Constraint-Selektion
         self.hovered_entity = None
+
+        # Editing State für Dimension-Input statt QInputDialog
+        self.editing_entity = None  # Objekt das gerade bearbeitet wird (Line, Circle, Constraint)
+        self.editing_mode = None    # "length", "radius", "angle", "dimension" etc.
+
+        # HUD-Nachrichten System
+        self._hud_message = ""
+        self._hud_message_time = 0
+        self._hud_duration = 3000
+        self._hud_color = QColor(255, 255, 255)
         
         self.selection_box_start = None
         self.selection_box_end = None
@@ -442,7 +453,27 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _center_view(self):
         self.view_offset = QPointF(self.width() / 2, self.height() / 2)
         self.update()
-    
+
+    def show_message(self, text: str, duration: int = 3000, color: QColor = None):
+        """
+        Zeigt eine HUD-Nachricht als zentralen Toast an.
+
+        Args:
+            text: Die anzuzeigende Nachricht
+            duration: Anzeigedauer in ms (Standard: 3000)
+            color: Textfarbe (Standard: weiß)
+        """
+        import time
+        self._hud_message = text
+        self._hud_message_time = time.time() * 1000
+        self._hud_duration = duration
+        self._hud_color = color if color else QColor(255, 255, 255)
+        self.update()
+
+        # Timer für Refresh während Fade-out
+        QTimer.singleShot(duration - 500, self.update)
+        QTimer.singleShot(duration, self.update)
+
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         """
         Setzt die Body-Referenzen für transparente Anzeige.
@@ -896,26 +927,28 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def undo(self):
         if not self.undo_stack:
-            self.status_message.emit(tr("Nothing to undo"))
+            self.show_message(tr("Nothing to undo"), 1500, QColor(255, 200, 100))
             return
         self.redo_stack.append(self.sketch.to_dict())
         self.sketch = Sketch.from_dict(self.undo_stack.pop())
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
-        self.status_message.emit(tr("Undone"))
+        self.show_message(tr("Undone"), 1500)
+        logger.debug("Undo performed")
         self.update()
-    
+
     def redo(self):
         if not self.redo_stack:
-            self.status_message.emit(tr("Nothing to redo"))
+            self.show_message(tr("Nothing to redo"), 1500, QColor(255, 200, 100))
             return
         self.undo_stack.append(self.sketch.to_dict())
         self.sketch = Sketch.from_dict(self.redo_stack.pop())
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
-        self.status_message.emit(tr("Redone"))
+        self.show_message(tr("Redone"), 1500)
+        logger.debug("Redo performed")
         self.update()
     
     def import_dxf(self, filepath=None):
@@ -1602,9 +1635,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
     
     def _on_dim_confirmed(self):
-        
+        from sketcher.constraints import ConstraintType
+        from sketcher.geometry import Line2D, Circle2D, Arc2D
+
         values = self.dim_input.get_values()
-        
+
+        # === EDITING MODE: Constraint/Geometrie bearbeiten ===
+        if self.editing_entity is not None:
+            self._save_undo()
+
+            if self.editing_mode == "constraint":
+                # Constraint-Wert ändern
+                new_val = values.get("value", 0.0)
+                self.editing_entity.value = new_val
+                self.sketch.solve()
+                self.show_message(f"Constraint auf {new_val:.2f} geändert", 2000, QColor(100, 255, 100))
+                logger.debug(f"Constraint {self.editing_entity.type.name} geändert auf {new_val}")
+
+            elif self.editing_mode == "line_length":
+                # Längen-Constraint zu Linie hinzufügen
+                new_length = values.get("length", 10.0)
+                self.sketch.add_length(self.editing_entity, new_length)
+                self.sketch.solve()
+                self.show_message(f"Länge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+                logger.debug(f"Length Constraint {new_length} hinzugefügt")
+
+            elif self.editing_mode == "circle_radius":
+                # Radius-Constraint zu Kreis/Bogen hinzufügen
+                new_radius = values.get("radius", 10.0)
+                self.sketch.add_radius(self.editing_entity, new_radius)
+                self.sketch.solve()
+                self.show_message(f"Radius {new_radius:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+                logger.debug(f"Radius Constraint {new_radius} hinzugefügt")
+
+            # Editing-State zurücksetzen
+            self.editing_entity = None
+            self.editing_mode = None
+            self.dim_input.hide()
+            self.dim_input.unlock_all()
+            self.dim_input_active = False
+            self.sketched_changed.emit()
+            self.update()
+            return
+
+        # === EXTRUDE MODE ===
         if self.viewport and getattr(self.viewport, 'extrude_mode', False):
             height = values.get("height", 0.0)
             # Hier holen wir "Join", "Cut" oder "New Body" aus dem Dropdown
@@ -1866,6 +1940,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
         
         if event.button() == Qt.LeftButton:
+            # Constraint-Icon-Klick prüfen (höchste Priorität im SELECT-Modus)
+            if self.current_tool == SketchTool.SELECT:
+                clicked_constraint = self._find_constraint_at(pos)
+                if clicked_constraint:
+                    ctrl = event.modifiers() & Qt.ControlModifier
+                    if not ctrl:
+                        self.selected_constraints.clear()
+                    if clicked_constraint not in self.selected_constraints:
+                        self.selected_constraints.append(clicked_constraint)
+                    else:
+                        self.selected_constraints.remove(clicked_constraint)
+                    self.status_message.emit(f"Constraint ausgewählt: {clicked_constraint.type.name}")
+                    self.update()
+                    return
+
             # Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
@@ -1913,6 +2002,82 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if self.selection_box_start:
                 self._finish_selection_box()
         self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        """Doppelklick auf Constraint-Icon oder Geometrie öffnet DimensionInput-Editor"""
+        from sketcher.constraints import ConstraintType
+        from sketcher.geometry import Line2D, Circle2D, Arc2D
+
+        pos = event.position()
+        constraint = self._find_constraint_at(pos)
+
+        if constraint and constraint.type in [ConstraintType.LENGTH, ConstraintType.RADIUS,
+                                               ConstraintType.DIAMETER, ConstraintType.ANGLE,
+                                               ConstraintType.DISTANCE]:
+            # Constraint bearbeiten mit DimensionInput
+            current_val = constraint.value if constraint.value else 0.0
+            type_name = constraint.type.name
+
+            # Editing-State setzen
+            self.editing_entity = constraint
+            self.editing_mode = "constraint"
+
+            # Unit-Label basierend auf Typ
+            if constraint.type == ConstraintType.ANGLE:
+                unit = "°"
+                label = "∠"
+            elif constraint.type == ConstraintType.DIAMETER:
+                unit = "mm"
+                label = "Ø"
+            elif constraint.type == ConstraintType.RADIUS:
+                unit = "mm"
+                label = "R"
+            else:
+                unit = "mm"
+                label = "L"
+
+            # DimensionInput Setup
+            fields = [(label, "value", current_val, unit)]
+            self.dim_input.setup(fields)
+            self.dim_input.move(int(pos.x()) + 20, int(pos.y()) + 10)
+            self.dim_input.show()
+            self.dim_input.focus_field(0)
+            self.dim_input_active = True
+            self.show_message(f"{type_name}: Enter = Bestätigen, Esc = Abbrechen", 2000)
+            return
+
+        # Wenn kein Constraint getroffen: Prüfe auf Geometrie für Quick-Dimension
+        world_pos = self.screen_to_world(pos)
+        entity = self._find_entity_at(world_pos)
+
+        if entity:
+            if isinstance(entity, Line2D):
+                # Quick-Length mit DimensionInput
+                current_length = entity.length
+                self.editing_entity = entity
+                self.editing_mode = "line_length"
+
+                fields = [("L", "length", current_length, "mm")]
+                self.dim_input.setup(fields)
+                self.dim_input.move(int(pos.x()) + 20, int(pos.y()) + 10)
+                self.dim_input.show()
+                self.dim_input.focus_field(0)
+                self.dim_input_active = True
+                self.show_message("Länge: Enter = Constraint hinzufügen, Esc = Abbrechen", 2000)
+
+            elif isinstance(entity, (Circle2D, Arc2D)):
+                # Quick-Radius mit DimensionInput
+                current_radius = entity.radius
+                self.editing_entity = entity
+                self.editing_mode = "circle_radius"
+
+                fields = [("R", "radius", current_radius, "mm")]
+                self.dim_input.setup(fields)
+                self.dim_input.move(int(pos.x()) + 20, int(pos.y()) + 10)
+                self.dim_input.show()
+                self.dim_input.focus_field(0)
+                self.dim_input_active = True
+                self.show_message("Radius: Enter = Constraint hinzufügen, Esc = Abbrechen", 2000)
     
     def _finish_spline_drag(self):
         """Beendet das Spline-Dragging und aktualisiert die Linien-Approximation"""
@@ -2202,6 +2367,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_circles.clear()
         self.selected_arcs.clear()
         self.selected_points.clear()
+        self.selected_constraints.clear()
         self.selected_spline = None
     
     def _select_all(self):
@@ -2265,20 +2431,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return used
     
     def _delete_selected(self):
-        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points: return
+        # Zuerst Constraints löschen
+        if self.selected_constraints:
+            self._save_undo()
+            count = len(self.selected_constraints)
+            for c in self.selected_constraints[:]:
+                if c in self.sketch.constraints:
+                    self.sketch.constraints.remove(c)
+            self.selected_constraints.clear()
+            self.sketch.solve()
+            self.sketched_changed.emit()
+            self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
+            logger.debug(f"Deleted {count} constraints")
+            self.update()
+            return
+
+        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points:
+            return
         self._save_undo()
-        for line in self.selected_lines[:]: self.sketch.delete_line(line)
-        for circle in self.selected_circles[:]: self.sketch.delete_circle(circle)
-        for arc in self.selected_arcs[:]: self.sketch.delete_arc(arc)
+        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points)
+        for line in self.selected_lines[:]:
+            self.sketch.delete_line(line)
+        for circle in self.selected_circles[:]:
+            self.sketch.delete_circle(circle)
+        for arc in self.selected_arcs[:]:
+            self.sketch.delete_arc(arc)
         for pt in self.selected_points[:]:
             if pt in self.sketch.points:
                 self.sketch.points.remove(pt)
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
-        self.status_message.emit(tr("Deleted"))
+        self.show_message(f"{deleted_count} Element(e) gelöscht", 2000, QColor(100, 255, 100))
+        logger.debug(f"Deleted {deleted_count} elements")
         self.update()
-    
+
+    def _find_constraint_at(self, screen_pos):
+        """Findet einen Constraint dessen Icon an der Screen-Position liegt"""
+        if not hasattr(self, 'constraint_icon_rects'):
+            return None
+        for constraint, rect in self.constraint_icon_rects:
+            if rect.contains(screen_pos):
+                return constraint
+        return None
+
     def _find_entity_at(self, pos):
         r = self.snap_radius / self.view_scale
         pt = Point2D(pos.x(), pos.y())
@@ -2484,17 +2680,110 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; } QMenu::item { padding: 6px 20px; } QMenu::item:selected { background: #094771; }")
+        menu.setStyleSheet("""
+            QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background: #094771; }
+            QMenu::separator { background: #3f3f46; height: 1px; margin: 4px 8px; }
+        """)
+
+        has_selection = self.selected_lines or self.selected_circles or self.selected_arcs
+
+        # === Constraint-Optionen ===
         if self.selected_lines:
             menu.addAction("Horizontal (H)", lambda: self._apply_constraint('horizontal'))
             menu.addAction("Vertikal (V)", lambda: self._apply_constraint('vertical'))
+            if len(self.selected_lines) >= 2:
+                menu.addAction("Parallel (P)", lambda: self._apply_constraint('parallel'))
+                menu.addAction("Senkrecht", lambda: self._apply_constraint('perpendicular'))
+                menu.addAction("Gleiche Länge (E)", lambda: self._apply_constraint('equal'))
             menu.addSeparator()
-        if self.selected_lines or self.selected_circles:
+
+        if len(self.selected_circles) >= 2:
+            menu.addAction("Konzentrisch", lambda: self._apply_constraint('concentric'))
+            menu.addAction("Gleicher Radius", lambda: self._apply_constraint('equal_radius'))
+            menu.addSeparator()
+
+        # === Constraint-Verwaltung ===
+        if has_selection:
+            # Constraints der Auswahl sammeln
+            selection_constraints = self._get_constraints_for_selection()
+            if selection_constraints:
+                constraint_menu = menu.addMenu(f"⚙ Constraints ({len(selection_constraints)})")
+                constraint_menu.addAction(
+                    f"Constraints der Auswahl löschen ({len(selection_constraints)})",
+                    lambda: self._delete_constraints_of_selection()
+                )
+            menu.addSeparator()
+
+        # Globale Constraint-Verwaltung
+        if self.sketch.constraints:
+            menu.addAction(
+                f"Alle Constraints löschen ({len(self.sketch.constraints)})",
+                self._delete_all_constraints
+            )
+            menu.addSeparator()
+
+        # === Standard-Aktionen ===
+        if has_selection:
             menu.addAction("Löschen (Del)", self._delete_selected)
             menu.addSeparator()
+
         menu.addAction("Alles auswählen (Ctrl+A)", self._select_all)
         menu.addAction("Ansicht einpassen (F)", self._fit_view)
         menu.exec(self.mapToGlobal(pos.toPoint()))
+
+    def _get_constraints_for_selection(self):
+        """Sammelt alle Constraints die zur aktuellen Auswahl gehören"""
+        selected_entities = set()
+        for line in self.selected_lines:
+            selected_entities.add(id(line))
+        for circle in self.selected_circles:
+            selected_entities.add(id(circle))
+        for arc in self.selected_arcs:
+            selected_entities.add(id(arc))
+
+        matching = []
+        for c in self.sketch.constraints:
+            for entity in c.entities:
+                if id(entity) in selected_entities:
+                    if c not in matching:
+                        matching.append(c)
+                    break
+        return matching
+
+    def _delete_constraints_of_selection(self):
+        """Löscht alle Constraints der aktuell ausgewählten Elemente"""
+        constraints_to_delete = self._get_constraints_for_selection()
+        if not constraints_to_delete:
+            self.show_message("Keine Constraints zu löschen", 2000, QColor(255, 200, 100))
+            return
+
+        self._save_undo()
+        count = len(constraints_to_delete)
+        for c in constraints_to_delete:
+            if c in self.sketch.constraints:
+                self.sketch.constraints.remove(c)
+
+        self.sketch.solve()
+        self.sketched_changed.emit()
+        self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
+        logger.info(f"Deleted {count} constraints from selection")
+        self.update()
+
+    def _delete_all_constraints(self):
+        """Löscht alle Constraints im Sketch"""
+        if not self.sketch.constraints:
+            self.show_message("Keine Constraints vorhanden", 2000, QColor(255, 200, 100))
+            return
+
+        self._save_undo()
+        count = len(self.sketch.constraints)
+        self.sketch.constraints.clear()
+        self.sketched_changed.emit()
+        self.show_message(f"Alle {count} Constraints gelöscht", 2000, QColor(100, 255, 100))
+        logger.info(f"Deleted all {count} constraints")
+        self.update()
     
     def _fit_view(self):
         if not self.sketch.lines and not self.sketch.circles:

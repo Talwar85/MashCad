@@ -236,182 +236,276 @@ class Sketch:
         return lines, circle
 
     # === Constraint-Erstellung ===
-    
-    def add_fixed(self, point: Point2D) -> Constraint:
+
+    def _constraint_exists(self, c_type: ConstraintType, entities: list) -> bool:
+        """
+        Prüft ob ein Constraint mit gleichem Typ und gleichen Entities bereits existiert.
+        Verhindert doppelte Constraints.
+        """
+        entity_ids = set(e.id for e in entities if hasattr(e, 'id'))
+
+        for existing in self.constraints:
+            if existing.type != c_type:
+                continue
+            existing_ids = set(e.id for e in existing.entities if hasattr(e, 'id'))
+            if entity_ids == existing_ids:
+                return True
+        return False
+
+    def add_fixed(self, point: Point2D) -> Optional[Constraint]:
         """Fixiert einen Punkt"""
+        if self._constraint_exists(ConstraintType.FIXED, [point]):
+            return None
         c = make_fixed(point)
         self.constraints.append(c)
         return c
-    
-    def add_coincident(self, p1: Point2D, p2: Point2D) -> Constraint:
+
+    def add_coincident(self, p1: Point2D, p2: Point2D) -> Optional[Constraint]:
         """Lässt zwei Punkte zusammenfallen"""
+        if self._constraint_exists(ConstraintType.COINCIDENT, [p1, p2]):
+            return None
         c = make_coincident(p1, p2)
         self.constraints.append(c)
         return c
-    
-    def add_horizontal(self, line: Line2D) -> Constraint:
+
+    def add_horizontal(self, line: Line2D) -> Optional[Constraint]:
         """Macht eine Linie horizontal"""
+        if self._constraint_exists(ConstraintType.HORIZONTAL, [line]):
+            return None
         c = make_horizontal(line)
         self.constraints.append(c)
         return c
-    
-    def add_vertical(self, line: Line2D) -> Constraint:
+
+    def add_vertical(self, line: Line2D) -> Optional[Constraint]:
         """Macht eine Linie vertikal"""
+        if self._constraint_exists(ConstraintType.VERTICAL, [line]):
+            return None
         c = make_vertical(line)
         self.constraints.append(c)
         return c
-    
-    def add_parallel(self, l1: Line2D, l2: Line2D) -> Constraint:
+
+    def add_parallel(self, l1: Line2D, l2: Line2D) -> Optional[Constraint]:
         """Macht zwei Linien parallel"""
+        if self._constraint_exists(ConstraintType.PARALLEL, [l1, l2]):
+            return None
         c = make_parallel(l1, l2)
         self.constraints.append(c)
         return c
-    
-    def add_perpendicular(self, l1: Line2D, l2: Line2D) -> Constraint:
+
+    def add_perpendicular(self, l1: Line2D, l2: Line2D) -> Optional[Constraint]:
         """Macht zwei Linien senkrecht"""
+        if self._constraint_exists(ConstraintType.PERPENDICULAR, [l1, l2]):
+            return None
         c = make_perpendicular(l1, l2)
         self.constraints.append(c)
         return c
-    
-    def add_equal_length(self, line1: Line2D, line2: Line2D) -> Constraint:
+
+    def add_equal_length(self, line1: Line2D, line2: Line2D) -> Optional[Constraint]:
         """Zwingt zwei Linien dazu, die gleiche Länge zu haben"""
+        if self._constraint_exists(ConstraintType.EQUAL_LENGTH, [line1, line2]):
+            return None
         c = Constraint(ConstraintType.EQUAL_LENGTH, [line1, line2])
         self.constraints.append(c)
         return c
     
-    def add_length(self, line: Line2D, length: float) -> Constraint:
+    def add_length(self, line: Line2D, length: float) -> Optional[Constraint]:
         """Setzt die Länge einer Linie"""
+        if self._constraint_exists(ConstraintType.LENGTH, [line]):
+            return None
         c = make_length(line, length)
         self.constraints.append(c)
         return c
-    
-    def add_distance(self, p1: Point2D, p2: Point2D, distance: float) -> Constraint:
+
+    def add_distance(self, p1: Point2D, p2: Point2D, distance: float) -> Optional[Constraint]:
         """Setzt den Abstand zwischen zwei Punkten"""
+        if self._constraint_exists(ConstraintType.DISTANCE, [p1, p2]):
+            return None
         c = make_distance(p1, p2, distance)
         self.constraints.append(c)
         return c
-    
-    def add_radius(self, circle: Circle2D, radius: float) -> Constraint:
+
+    def add_radius(self, circle: Circle2D, radius: float) -> Optional[Constraint]:
         """Setzt den Radius eines Kreises"""
+        if self._constraint_exists(ConstraintType.RADIUS, [circle]):
+            return None
         c = make_radius(circle, radius)
         self.constraints.append(c)
         return c
-    
-    def add_diameter(self, circle: Circle2D, diameter: float) -> Constraint:
+
+    def add_diameter(self, circle: Circle2D, diameter: float) -> Optional[Constraint]:
         """Setzt den Durchmesser eines Kreises"""
+        if self._constraint_exists(ConstraintType.DIAMETER, [circle]):
+            return None
         c = make_diameter(circle, diameter)
         self.constraints.append(c)
         return c
-    
-    def add_angle(self, l1: Line2D, l2: Line2D, angle: float) -> Constraint:
+
+    def add_angle(self, l1: Line2D, l2: Line2D, angle: float) -> Optional[Constraint]:
         """Setzt den Winkel zwischen zwei Linien"""
+        if self._constraint_exists(ConstraintType.ANGLE, [l1, l2]):
+            return None
         c = make_angle(l1, l2, angle)
         self.constraints.append(c)
         return c
-    
-    def add_point_on_line(self, point: Point2D, line: Line2D) -> Constraint:
+
+    def add_point_on_line(self, point: Point2D, line: Line2D) -> Optional[Constraint]:
         """Legt einen Punkt auf eine Linie"""
+        if self._constraint_exists(ConstraintType.POINT_ON_LINE, [point, line]):
+            return None
         c = make_point_on_line(point, line)
         self.constraints.append(c)
         return c
-    
-    def add_midpoint(self, point: Point2D, line: Line2D) -> Constraint:
+
+    def add_midpoint(self, point: Point2D, line: Line2D) -> Optional[Constraint]:
         """Legt einen Punkt auf den Mittelpunkt einer Linie"""
+        if self._constraint_exists(ConstraintType.MIDPOINT, [point, line]):
+            return None
         c = make_midpoint(point, line)
         self.constraints.append(c)
         return c
-    
-    def add_point_on_circle(self, point: Point2D, circle: Circle2D) -> Constraint:
+
+    def add_point_on_circle(self, point: Point2D, circle_or_arc) -> Optional[Constraint]:
         """Zwingt einen Punkt auf die Kreisbahn"""
-        c = Constraint(ConstraintType.POINT_ON_CIRCLE, [point, circle])
+        if self._constraint_exists(ConstraintType.POINT_ON_CIRCLE, [point, circle_or_arc]):
+            return None
+        c = Constraint(ConstraintType.POINT_ON_CIRCLE, entities=[point, circle_or_arc])
         self.constraints.append(c)
         return c
     
     def add_slot(self, x1: float, y1: float, x2: float, y2: float, radius: float, construction: bool = False):
-        """Erstellt ein parametrisches Langloch (Slot)"""
+        """
+        Erstellt ein robustes Langloch mit 'Skelett'-Struktur.
+        Verhindert das Verzerren beim Rotieren durch interne Konstruktionslinien.
+        """
+        import math
         
-        # 1. Mittellinie (Konstruktion) - Das "Rückgrat" des Langlochs
-        # Wir erstellen zuerst die Punkte explizit, damit wir Referenzen haben
+        # 1. Mittellinie (Konstruktion)
         p_start = self.add_point(x1, y1, construction=True)
         p_end = self.add_point(x2, y2, construction=True)
         line_center = self.add_line_from_points(p_start, p_end, construction=True)
         
-        # Vektor für die Initiale Positionierung der Außenlinien (damit der Solver es leichter hat)
+        # Vektor für Offset berechnen
         dx, dy = x2 - x1, y2 - y1
-        length = math.hypot(dx, dy)
-        if length < 1e-6: length = 1.0
+        len_sq = dx*dx + dy*dy
+        if len_sq < 1e-9: dx, dy = 1, 0 # Fallback
+        else:
+            length = math.sqrt(len_sq)
+            dx /= length
+            dy /= length
+            
+        nx, ny = -dy * radius, dx * radius # Normale skalieren
         
-        # Normale berechnen (-dy, dx)
-        nx, ny = -dy / length * radius, dx / length * radius
-        
-        # 2. Außenpunkte berechnen
+        # 2. Die 4 Eckpunkte berechnen
         t1 = self.add_point(x1 + nx, y1 + ny, construction=construction)
-        t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
         b1 = self.add_point(x1 - nx, y1 - ny, construction=construction)
+        t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
         b2 = self.add_point(x2 - nx, y2 - ny, construction=construction)
         
-        # 3. Linien und Bögen erstellen
-        # Oben und Unten
+        # 3. Das "Skelett" bauen (Konstruktionslinien an den Enden)
+        # Diese Linien sind entscheidend für die Stabilität beim Rotieren!
+        cap1 = self.add_line_from_points(t1, b1, construction=True)
+        cap2 = self.add_line_from_points(t2, b2, construction=True)
+        
+        # 4. Außenlinien verbinden
         line_top = self.add_line_from_points(t1, t2, construction=construction)
         line_bot = self.add_line_from_points(b1, b2, construction=construction)
         
-        # Bögen (Links und Rechts)
-        # add_arc_from_3_points ist hier schwierig, wir nutzen add_arc mit Center
-        # Aber wir müssen die Start/Endpunkte manuell verknüpfen
+        # 5. Bögen erstellen
+        angle_deg = math.degrees(math.atan2(dy, dx))
+        arc1 = self.add_arc(x1, y1, radius, angle_deg + 90, angle_deg + 270, construction=construction)
+        arc2 = self.add_arc(x2, y2, radius, angle_deg - 90, angle_deg + 90, construction=construction)
         
-        # Wir erstellen die Arcs direkt
-        # Winkel berechnen
-        angle = math.degrees(math.atan2(dy, dx))
+        # === CONSTRAINTS (Die Magie für die Stabilität) ===
         
-        # Bogen 1 (Startseite): Geht von Unten (b1) nach Oben (t1) -> "Hinten rum"
-        arc1 = self.add_arc(x1, y1, radius, angle + 90, angle + 270, construction=construction)
-        # Constraints: Zentrum muss p_start sein
+        # A. Kappen rechtwinklig zur Mittellinie zwingen (Verhindert Shearing)
+        self.add_perpendicular(cap1, line_center)
+        self.add_perpendicular(cap2, line_center)
+        
+        # B. Mittellinie zentriert auf Kappen (Midpoint)
+        self.add_midpoint(p_start, cap1)
+        self.add_midpoint(p_end, cap2)
+        
+        # C. Symmetrie/Länge der Kappen
+        # Wir setzen den Abstand der Eckpunkte zur Mitte fest (definiert die Breite)
+        self.add_distance(p_start, t1, radius)
+        self.add_distance(p_start, b1, radius)
+        self.add_distance(p_end, t2, radius)
+        self.add_distance(p_end, b2, radius)
+        
+        # D. Bögen mit dem Skelett verbinden
         self.add_coincident(arc1.center, p_start)
-        # Endpunkte des Bogens mit den Linienenden verknüpfen
-        # Hinweis: Das setzt voraus, dass add_arc Punkte erstellt. 
-        # Falls Arc Start/End-Punkte hat, müssen wir diese mit t1/b1 mergen (Coincident)
-        # Wir erzwingen Coincident zwischen Arc-Enden und unseren Punkten:
-        self.add_coincident(arc1.start_point, t1) # Start bei 90deg (oben) oder 270? 
-        # ACHTUNG: Winkelrichtung beachten. Bei math.atan2 ist es CCW.
-        # Wir machen es robuster: Coincident auf die Punkte, die am nächsten liegen.
-        self.add_coincident(arc1.start_point, t1) 
-        self.add_coincident(arc1.end_point, b1)
-
-        # Bogen 2 (Endseite): Geht von Oben (t2) nach Unten (b2) -> "Vorne rum"
-        arc2 = self.add_arc(x2, y2, radius, angle - 90, angle + 90, construction=construction)
         self.add_coincident(arc2.center, p_end)
-        self.add_coincident(arc2.start_point, b2)
-        self.add_coincident(arc2.end_point, t2)
         
-        # 4. Geometrische Constraints (Die Magie)
+        # WICHTIG: Die Bogen-Enden müssen an den Kappen-Enden kleben
+        # Da Arc-Endpunkte berechnet sind, nutzen wir PointOnCircle für die Eckpunkte
+        self.add_point_on_circle(t1, arc1)
+        self.add_point_on_circle(b1, arc1)
+        self.add_point_on_circle(t2, arc2)
+        self.add_point_on_circle(b2, arc2)
         
-        # Tangenten (Linie an Bogen)
+        # E. Optional: Tangenten (für doppelte Sicherheit)
         self.add_tangent(line_top, arc1)
-        self.add_tangent(line_top, arc2)
-        self.add_tangent(line_bot, arc1)
-        self.add_tangent(line_bot, arc2)
         
-        # Parallelität zur Mittellinie (Hält das Langloch gerade)
-        self.add_parallel(line_top, line_center)
+        # Speichere Referenzen in den Arcs, damit wir die Winkel später updaten können!
+        # Wir fügen dynamisch Attribute hinzu, die wir später auslesen
+        arc1._start_marker = t1  # Startet oben (CCW +90)
+        arc1._end_marker = b1    # Endet unten
         
-        # Gleicher Radius für beide Bögen
-        self.add_equal_radius(arc1, arc2)
+        arc2._start_marker = b2  # Startet unten (CCW -90)
+        arc2._end_marker = t2    # Endet oben
+        
+        return line_center, arc1
 
-        return line_center, arc1  # Rückgabe für Bemaßung
-        
-    # Hilfsmethoden für Constraints (in sketch.py ergänzen falls fehlen)
-    def add_tangent(self, line, arc):
-        c = Constraint(ConstraintType.TANGENT, [line, arc])
+
+    def _update_arc_angles(self):
+        """
+        Aktualisiert die Winkel von Bögen basierend auf ihren Marker-Punkten.
+        Muss nach jedem solve() aufgerufen werden.
+        """
+        for arc in self.arcs:
+            # Prüfen ob wir Marker für diesen Bogen gespeichert haben (siehe add_slot)
+            p_start = getattr(arc, '_start_marker', None)
+            p_end = getattr(arc, '_end_marker', None)
+            
+            if p_start and p_end:
+                # Vektoren vom Zentrum zu den Markern
+                dx_s = p_start.x - arc.center.x
+                dy_s = p_start.y - arc.center.y
+                dx_e = p_end.x - arc.center.x
+                dy_e = p_end.y - arc.center.y
+                
+                # Winkel berechnen
+                ang_s = math.degrees(math.atan2(dy_s, dx_s))
+                ang_e = math.degrees(math.atan2(dy_e, dx_e))
+                
+                # Winkel setzen
+                arc.start_angle = ang_s
+                arc.end_angle = ang_e
+
+    # Hilfsmethoden für Constraints
+    def add_tangent(self, entity1, entity2) -> Optional[Constraint]:
+        """Erstellt eine Tangente zwischen Linie und Kreis/Bogen"""
+        if self._constraint_exists(ConstraintType.TANGENT, [entity1, entity2]):
+            return None
+        from .constraints import make_tangent
+        c = make_tangent(entity1, entity2)
         self.constraints.append(c)
         return c
-        
-    def add_equal_radius(self, c1, c2):
-        c = Constraint(ConstraintType.EQUAL_RADIUS, [c1, c2])
+
+    def add_equal_radius(self, c1, c2) -> Optional[Constraint]:
+        """Zwingt zwei Kreise/Bögen zum gleichen Radius"""
+        if self._constraint_exists(ConstraintType.EQUAL_RADIUS, [c1, c2]):
+            return None
+        c = Constraint(ConstraintType.EQUAL_RADIUS, entities=[c1, c2])
         self.constraints.append(c)
         return c
-        
-    def add_parallel(self, l1, l2):
-        c = Constraint(ConstraintType.PARALLEL, [l1, l2])
+
+    def add_concentric(self, c1, c2) -> Optional[Constraint]:
+        """Macht zwei Kreise/Bögen konzentrisch"""
+        if self._constraint_exists(ConstraintType.CONCENTRIC, [c1, c2]):
+            return None
+        from .constraints import Constraint
+        c = Constraint(ConstraintType.CONCENTRIC, entities=[c1, c2])
         self.constraints.append(c)
         return c
     
@@ -419,37 +513,30 @@ class Sketch:
     # === Constraint-Solver ===
     
     def solve(self) -> SolverResult:
-        """Löst alle Constraints mit dem ParametricSolver"""
+        """Löst alle Constraints"""
+        
+        # 1. Versuche C++ Solver (falls vorhanden)
         try:
             from .parametric_solver import ParametricSolver, check_solvespace_available
-            
             if check_solvespace_available():
-                solver = ParametricSolver(self)
-                result = solver.solve()
-                return SolverResult(
-                    status=ConstraintStatus.FULLY_CONSTRAINED if result.success else ConstraintStatus.UNDER_CONSTRAINED,
-                    success=result.success,
-                    message=result.message,
-                    dof=result.dof
-                )
-            else:
-                # Fallback zum alten Solver wenn python-solvespace nicht verfügbar
-                return self._solver.solve(
-                    self.points,
-                    self.lines,
-                    self.circles,
-                    self.arcs,
-                    self.constraints
-                )
-        except Exception as e:
-            # Bei Fehler: alten Solver verwenden
-            return self._solver.solve(
-                self.points,
-                self.lines,
-                self.circles,
-                self.arcs,
-                self.constraints
-            )
+                res = ParametricSolver(self).solve()
+                # Winkel-Update für Arcs ist wichtig nach dem Solve!
+                if res.success: 
+                    self._update_arc_angles() # (Methode aus vorherigem Schritt)
+                    return res
+        except ImportError:
+            pass
+
+        # 2. Fallback auf Scipy Solver (NEU)
+        res = self._solver.solve(
+            self.points, self.lines, self.circles, self.arcs, self.constraints
+        )
+        
+        # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
+        if res.success:
+            self._update_arc_angles()
+            
+        return res
     
     def is_fully_constrained(self) -> bool:
         """Prüft ob der Sketch vollständig bestimmt ist"""

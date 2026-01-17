@@ -645,14 +645,35 @@ class GeometryDetector:
             tris = shapely.ops.triangulate(poly)
             
             # FIX 2: Robustere Prüfung für Kreise/Rundungen
-            # Wir nutzen einen minimalen Puffer (1e-5), um Rundungsfehler 
+            # Wir nutzen einen minimalen Puffer (1e-5), um Rundungsfehler
             # an den Rändern abzufangen.
             buffered_poly = poly.buffer(1e-5)
-            
+
+            # FIX 3: Holes (Interior-Ringe) als Exclusion-Zonen
+            # Dreiecke die im Hole liegen, müssen ausgeschlossen werden
+            from shapely.geometry import Polygon as ShapelyPolygon
+            hole_polys = []
+            for interior in poly.interiors:
+                hole_poly = ShapelyPolygon(interior).buffer(-1e-5)  # Leicht nach innen puffern
+                if hole_poly.is_valid and not hole_poly.is_empty:
+                    hole_polys.append(hole_poly)
+
             valid_tris = []
             for t in tris:
+                centroid = t.centroid
+
+                # Prüfen ob Zentroid in einem Hole liegt -> SKIP
+                in_hole = False
+                for hole in hole_polys:
+                    if hole.contains(centroid):
+                        in_hole = True
+                        break
+
+                if in_hole:
+                    continue  # Dreieck liegt im Hole, nicht hinzufügen
+
                 # Prüfen, ob der Schwerpunkt im (gepufferten) Polygon liegt
-                if buffered_poly.contains(t.centroid):
+                if buffered_poly.contains(centroid):
                     valid_tris.append(t)
                 # Fallback: Wenn Schwerpunkt knapp draußen, aber Dreieck schneidet
                 # (Wichtig für schmale Randstücke bei Kreisen)

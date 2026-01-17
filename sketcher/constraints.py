@@ -242,26 +242,38 @@ def calculate_constraint_error(constraint: Constraint) -> float:
         target = constraint.value
         return abs(line.length - target)
     elif ct == ConstraintType.TANGENT:
-        # Entity 1 ist Linie, Entity 2 ist Kreis/Bogen (oder umgekehrt)
         obj1, obj2 = entities
-        
-        # Sortieren: Linie zuerst, dann Kreis
-        if isinstance(obj1, Line2D): l, c = obj1, obj2
-        else: l, c = obj2, obj1
-        
+
+        # Fall 1: Kreis-Kreis Tangente
+        is_circle1 = isinstance(obj1, (Circle2D, Arc2D))
+        is_circle2 = isinstance(obj2, (Circle2D, Arc2D))
+
+        if is_circle1 and is_circle2:
+            # Abstand der Zentren muss gleich Summe der Radien sein (externe Tangente)
+            # oder Differenz der Radien (interne Tangente)
+            c1, c2 = obj1, obj2
+            center_dist = c1.center.distance_to(c2.center)
+            sum_radii = c1.radius + c2.radius
+            # Externe Tangente: dist = r1 + r2
+            return abs(center_dist - sum_radii)
+
+        # Fall 2: Linie-Kreis Tangente
+        if isinstance(obj1, Line2D):
+            l, c = obj1, obj2
+        else:
+            l, c = obj2, obj1
+
         # Abstand vom Kreismittelpunkt zur Linie muss gleich dem Radius sein
-        # Formel Abstand Punkt(x0,y0) zu Linie(p1, p2):
-        # |(y2-y1)x0 - (x2-x1)y0 + x2y1 - y2x1| / length
-        
         dx = l.end.x - l.start.x
         dy = l.end.y - l.start.y
         len_sq = dx*dx + dy*dy
-        
-        if len_sq < 1e-8: return 0.0
-        
+
+        if len_sq < 1e-8:
+            return 0.0
+
         cross = abs(dy * c.center.x - dx * c.center.y + l.end.x * l.start.y - l.end.y * l.start.x)
         dist = cross / math.sqrt(len_sq)
-        
+
         return abs(dist - c.radius)
     elif ct == ConstraintType.DISTANCE:
         if len(entities) == 2:
@@ -276,17 +288,30 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     
     elif ct == ConstraintType.PARALLEL:
         l1, l2 = entities
-        d1 = l1.direction
-        d2 = l2.direction
-        cross = abs(d1[0] * d2[1] - d1[1] * d2[0])
-        return cross
+        dx1, dy1 = l1.end.x - l1.start.x, l1.end.y - l1.start.y
+        dx2, dy2 = l2.end.x - l2.start.x, l2.end.y - l2.start.y
+        
+        # Kreuzprodukt (Cross Product) muss 0 sein
+        len1 = math.hypot(dx1, dy1)
+        len2 = math.hypot(dx2, dy2)
+        if len1 < 1e-9 or len2 < 1e-9: return 0.0
+
+        cross = (dx1 * dy2 - dy1 * dx2) / (len1 * len2)
+        return abs(cross)
     
     elif ct == ConstraintType.PERPENDICULAR:
         l1, l2 = entities
-        d1 = l1.direction
-        d2 = l2.direction
-        dot = abs(d1[0] * d2[0] + d1[1] * d2[1])
-        return dot
+        dx1, dy1 = l1.end.x - l1.start.x, l1.end.y - l1.start.y
+        dx2, dy2 = l2.end.x - l2.start.x, l2.end.y - l2.start.y
+        
+        # Skalarprodukt (Dot Product) muss 0 sein
+        # Wir normalisieren, damit die Linienlänge das Gewicht nicht verfälscht
+        len1 = math.hypot(dx1, dy1)
+        len2 = math.hypot(dx2, dy2)
+        if len1 < 1e-9 or len2 < 1e-9: return 0.0
+        
+        dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2)
+        return abs(dot)
     
     elif ct == ConstraintType.EQUAL_LENGTH:
         l1, l2 = entities
@@ -316,6 +341,11 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     elif ct == ConstraintType.CONCENTRIC:
         c1, c2 = entities
         return c1.center.distance_to(c2.center)
+    elif ct == ConstraintType.POINT_ON_CIRCLE and isinstance(entities[1], Arc2D):
+        # Punkt muss auf dem Bogenradius liegen
+        point, arc = entities
+        dist = point.distance_to(arc.center)
+        return abs(dist - arc.radius)
     
     elif ct == ConstraintType.POINT_ON_CIRCLE:
         point, circle = entities
@@ -326,10 +356,37 @@ def calculate_constraint_error(constraint: Constraint) -> float:
         point, line = entities
         mid = line.midpoint
         return point.distance_to(mid)
-    
+
+    elif ct == ConstraintType.COLLINEAR:
+        l1, l2 = entities
+        # Beide Linien müssen auf derselben Geraden liegen
+        # = Parallel + Startpunkt von l2 auf l1
+        d1 = l1.direction
+        d2 = l2.direction
+        cross = abs(d1[0] * d2[1] - d1[1] * d2[0])  # Parallel-Check
+        dist = l1.distance_to_point(l2.start)  # Punkt-auf-Linie
+        return cross + dist
+
+    elif ct == ConstraintType.SYMMETRIC:
+        p1, p2, axis = entities
+        # Mittelpunkt von p1-p2 muss auf Achse liegen
+        mid_x = (p1.x + p2.x) / 2
+        mid_y = (p1.y + p2.y) / 2
+        mid = Point2D(mid_x, mid_y)
+        mid_dist = axis.distance_to_point(mid)
+        # Verbindungslinie p1-p2 muss senkrecht zur Achse sein
+        dx, dy = p2.x - p1.x, p2.y - p1.y
+        ax, ay = axis.direction
+        dot = abs(dx * ax + dy * ay)  # Sollte 0 sein für senkrecht
+        return mid_dist + dot
+
+    elif ct == ConstraintType.EQUAL_RADIUS:
+        c1, c2 = entities
+        return abs(c1.radius - c2.radius)
+
     elif ct == ConstraintType.FIXED:
         return 0.0  # Fixed wird durch den Solver behandelt
-    
+
     return 0.0
 
 

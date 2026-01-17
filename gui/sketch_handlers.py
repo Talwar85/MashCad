@@ -7,6 +7,7 @@ Extracted from sketch_editor.py for better maintainability
 import math
 from loguru import logger
 from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
@@ -49,9 +50,34 @@ class SketchHandlersMixin:
             self.status_message.emit(tr("Endpoint | Tab=Length/Angle | Right=Finish"))
         else:
             start = self.tool_points[-1]
-            if math.hypot(pos.x()-start.x(), pos.y()-start.y()) > 0.01:
+            dx = pos.x() - start.x()
+            dy = pos.y() - start.y()
+            length = math.hypot(dx, dy)
+
+            if length > 0.01:
                 self._save_undo()
-                self.sketch.add_line(start.x(), start.y(), pos.x(), pos.y(), construction=self.construction_mode)
+                line = self.sketch.add_line(start.x(), start.y(), pos.x(), pos.y(), construction=self.construction_mode)
+
+                # Auto-Constraints: Horizontal/Vertikal wenn fast gerade
+                h_tolerance = 3.0  # Pixel-Toleranz
+                if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
+                    # Fast horizontal -> Horizontal Constraint
+                    self.sketch.add_horizontal(line)
+                elif abs(dx) < h_tolerance and abs(dy) > h_tolerance:
+                    # Fast vertikal -> Vertical Constraint
+                    self.sketch.add_vertical(line)
+
+                # Auto-Constraint: Point-on-Line wenn Endpunkt auf anderer Linie liegt
+                if snap_type and 'LINE' in str(snap_type):
+                    for other_line in self.sketch.lines:
+                        if other_line == line:
+                            continue
+                        dist = other_line.distance_to_point(line.end)
+                        if dist < 1.0:
+                            self.sketch.add_point_on_line(line.end, other_line)
+                            break
+
+                self.sketch.solve()
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 self.tool_points.append(pos)
@@ -291,88 +317,85 @@ class SketchHandlersMixin:
         return (ux, uy, r, start, end)
     
     def _handle_slot(self, pos, snap_type):
-        """Erstellt ein parametrisches Langloch"""
+        """
+        Handler für das Langloch-Werkzeug.
+        Ablauf: 
+        1. Klick: Startpunkt der Mittellinie
+        2. Klick: Endpunkt der Mittellinie
+        3. Klick: Radius (Breite) festlegen
+        """
+        
+        # --- Schritt 1: Startpunkt ---
         if self.tool_step == 0:
-            # 1. Klick: Startpunkt der Mittellinie
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Endpoint center line | Tab=Length/Angle"))
             
+        # --- Schritt 2: Endpunkt der Mittellinie ---
         elif self.tool_step == 1:
-            # 2. Klick: Endpunkt der Mittellinie
             self.tool_points.append(pos)
             self.tool_step = 2
             self.status_message.emit(tr("Width | Tab=Enter width"))
             
+        # --- Schritt 3: Breite/Radius und Erstellung ---
         else:
-            # 3. Mausbewegung: Breite bestimmen
-            p1, p2 = self.tool_points[0], self.tool_points[1]
+            p1 = self.tool_points[0]
+            p2 = self.tool_points[1]
             
-            # Vektorrechnung für Abstand (Breite/2)
-            dx = p2.x() - p1.x()
-            dy = p2.y() - p1.y()
-            length = math.hypot(dx, dy)
+            # Vektor der Mittellinie berechnen
+            dx_line = p2.x() - p1.x()
+            dy_line = p2.y() - p1.y()
+            length = math.hypot(dx_line, dy_line)
             
+            # Verhindern von Null-Längen
             if length > 0.01:
-                # Abstand Punkt zu Linie berechnen für Breite
-                # Normalisierter Vektor der Linie
-                nx, ny = -dy/length, dx/length
-                # Projektion
-                width_half = abs((pos.x()-p1.x())*nx + (pos.y()-p1.y())*ny)
+                # Radius berechnen (Senkrechter Abstand Maus zur Mittellinie)
                 
-                if width_half > 0.01:
+                # 1. Normalisierter Richtungsvektor der Linie (Einheitsvektor)
+                ux = dx_line / length
+                uy = dy_line / length
+                
+                # 2. Normalenvektor dazu (-y, x)
+                nx, ny = -uy, ux
+                
+                # 3. Vektor vom Startpunkt zur Maus
+                vx = pos.x() - p1.x()
+                vy = pos.y() - p1.y()
+                
+                # 4. Skalarprodukt mit der Normalen ergibt den Abstand (Radius)
+                radius = abs(vx * nx + vy * ny)
+                
+                # Nur erstellen, wenn Radius sinnvoll ist
+                if radius > 0.01:
                     self._save_undo()
                     
-                    # 1. Parametrischen Slot erstellen
+                    # A. Robustes Slot erstellen (ruft die Methode in sketch.py auf)
+                    # WICHTIG: add_slot muss (center_line, main_arc) zurückgeben!
                     center_line, main_arc = self.sketch.add_slot(
-                        p1.x(), p1.y(), p2.x(), p2.y(), width_half, 
+                        p1.x(), p1.y(), p2.x(), p2.y(), radius, 
                         construction=self.construction_mode
                     )
                     
-                    # 2. Maße hinzufügen (Constraints)
+                    # B. Bemaßungen hinzufügen (Constraints)
                     
-                    # Länge der Mittellinie
+                    # 1. Länge der Mittellinie fixieren
                     self.sketch.add_length(center_line, length)
                     
-                    # Radius (definiert die Breite des Slots)
-                    self.sketch.add_radius(main_arc, width_half)
+                    # 2. Radius (Breite) fixieren
+                    self.sketch.add_radius(main_arc, radius)
                     
-                    # 3. Solver
+                    # C. Solver anstoßen
+                    # Das rückt alles gerade und aktualisiert Winkel
                     self.sketch.solve()
+                    
+                    # D. UI Updates
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
                     
+            # Werkzeug zurücksetzen
             self._cancel_tool()
     
-    def _create_slot(self, p1, p2, width):
-        dx, dy = p2.x()-p1.x(), p2.y()-p1.y()
-        length = math.hypot(dx, dy)
-        if length < 0.01: return
-        
-        # Senkrechte Vektoren
-        ux, uy = dx/length, dy/length
-        nx, ny = -uy, ux
-        r = width / 2
-        
-        # Eckpunkte
-        t1x, t1y = p1.x() + nx*r, p1.y() + ny*r
-        t2x, t2y = p2.x() + nx*r, p2.y() + ny*r
-        b1x, b1y = p1.x() - nx*r, p1.y() - ny*r
-        b2x, b2y = p2.x() - nx*r, p2.y() - ny*r
-        
-        # Linien hinzufügen
-        self.sketch.add_line(t1x, t1y, t2x, t2y, construction=self.construction_mode)
-        self.sketch.add_line(b1x, b1y, b2x, b2y, construction=self.construction_mode)
-        
-        # Winkel der Achse
-        base_angle = math.degrees(math.atan2(dy, dx))
-        
-        # Bögen hinzufügen (CCW definiert)
-        # Linker Bogen: Startet "Unten" (-90 relativ) und geht nach "Oben" (+90 relativ) -> Hinten rum
-        self.sketch.add_arc(p1.x(), p1.y(), r, base_angle + 90, base_angle + 270, construction=self.construction_mode)
-        
-        # Rechter Bogen: Startet "Oben" (+90 relativ) und geht nach "Unten" (-90 relativ) -> Vorne rum
-        self.sketch.add_arc(p2.x(), p2.y(), r, base_angle - 90, base_angle + 90, construction=self.construction_mode)
+    
     
     def _handle_spline(self, pos, snap_type):
         self.tool_points.append(pos)
@@ -632,51 +655,93 @@ class SketchHandlersMixin:
         self.status_message.emit(tr("Mirrored: {lines} lines, {circles} circles").format(lines=len(new_lines), circles=len(new_circles)))
     
     def _handle_pattern_linear(self, pos, snap_type):
-        """Lineares Muster: Auswahl → Richtung → Anzahl"""
-        if not self.selected_lines and not self.selected_circles:
-            self.status_message.emit(tr("Select elements first!"))
+        """
+        Lineares Muster: Vollständig interaktiv mit DimensionInput.
+
+        Schritt 0: Startpunkt wählen (Basis für Richtung)
+        Schritt 1: Maus bestimmt Richtung, Tab für Count/Spacing, Klick/Enter = Anwenden
+        """
+        if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
+            if hasattr(self, 'show_message'):
+                self.show_message("Erst Elemente auswählen!", 2000, QColor(255, 200, 100))
+            else:
+                self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Startpunkt (Basis)
+            # Schritt 0: Startpunkt (Basis) wählen
             self.tool_points = [pos]
             self.tool_step = 1
-            # Default-Werte
+
+            # Default-Werte initialisieren
             self.tool_data['pattern_count'] = 3
             self.tool_data['pattern_spacing'] = 20.0
-            self.status_message.emit(tr("Choose direction | Tab=Count/Spacing"))
+            self.tool_data['pattern_direction'] = (1.0, 0.0)  # Default: nach rechts
+
+            # DimensionInput automatisch anzeigen
+            self._show_pattern_linear_input()
+
+            if hasattr(self, 'show_message'):
+                self.show_message("Richtung mit Maus | Tab = Anzahl/Abstand | Enter/Klick = Anwenden", 3000)
+            else:
+                self.status_message.emit(tr("Choose direction | Tab=Count/Spacing"))
+
         elif self.tool_step == 1:
-            # Schritt 2: Anwenden
+            # Schritt 1: Klick wendet Muster an
             self._apply_linear_pattern(pos)
-    
+
+    def _show_pattern_linear_input(self):
+        """Zeigt DimensionInput für Linear Pattern"""
+        count = self.tool_data.get('pattern_count', 3)
+        spacing = self.tool_data.get('pattern_spacing', 20.0)
+        fields = [("N", "count", float(count), "×"), ("D", "spacing", spacing, "mm")]
+        self.dim_input.setup(fields)
+
+        # Position neben Maus
+        pos = self.mouse_screen
+        x = min(int(pos.x()) + 30, self.width() - self.dim_input.width() - 10)
+        y = min(int(pos.y()) - 50, self.height() - self.dim_input.height() - 10)
+        self.dim_input.move(max(10, x), max(10, y))
+        self.dim_input.show()
+        self.dim_input_active = True
+
     def _apply_linear_pattern(self, end_pos):
         """Wendet lineares Muster an"""
         start = self.tool_points[0]
         dx = end_pos.x() - start.x()
         dy = end_pos.y() - start.y()
-        
+
         count = self.tool_data.get('pattern_count', 3)
-        
-        # Distanz pro Einheit
+
+        # Distanz berechnen
         total_dist = math.hypot(dx, dy)
         if total_dist < 0.01:
+            # Keine Richtung - benutze gespeicherte oder Default
+            ux, uy = self.tool_data.get('pattern_direction', (1.0, 0.0))
+        else:
+            # Normierte Richtung
+            ux, uy = dx / total_dist, dy / total_dist
+            self.tool_data['pattern_direction'] = (ux, uy)
+
+        spacing = self.tool_data.get('pattern_spacing', 20.0)
+
+        if count < 2:
+            if hasattr(self, 'show_message'):
+                self.show_message("Anzahl muss mindestens 2 sein", 2000, QColor(255, 200, 100))
             self._cancel_tool()
             return
-        
-        # Normierte Richtung
-        ux, uy = dx / total_dist, dy / total_dist
-        spacing = self.tool_data.get('pattern_spacing', total_dist / (count - 1) if count > 1 else total_dist)
-        
+
         self._save_undo()
-        
+
         # Kopien erstellen (ab Index 1, Index 0 ist Original)
         created_lines = 0
         created_circles = 0
-        
+        created_arcs = 0
+
         for i in range(1, count):
             offset_x = ux * spacing * i
             offset_y = uy * spacing * i
-            
+
             for line in self.selected_lines:
                 self.sketch.add_line(
                     line.start.x + offset_x, line.start.y + offset_y,
@@ -684,82 +749,155 @@ class SketchHandlersMixin:
                     construction=line.construction
                 )
                 created_lines += 1
-            
+
             for c in self.selected_circles:
                 self.sketch.add_circle(
                     c.center.x + offset_x, c.center.y + offset_y,
                     c.radius, construction=c.construction
                 )
                 created_circles += 1
-        
+
+            for arc in self.selected_arcs:
+                # Arc kopieren mit Offset
+                self.sketch.add_arc(
+                    arc.center.x + offset_x, arc.center.y + offset_y,
+                    arc.radius, arc.start_angle, arc.end_angle,
+                    construction=arc.construction
+                )
+                created_arcs += 1
+
         self.sketched_changed.emit()
         self._find_closed_profiles()
+
+        total_created = created_lines + created_circles + created_arcs
+        if hasattr(self, 'show_message'):
+            self.show_message(f"Linear Pattern: {total_created} Elemente erstellt ({count}×)", 2500, QColor(100, 255, 100))
+        else:
+            self.status_message.emit(tr("Linear pattern: {lines} lines, {circles} circles created").format(
+                lines=created_lines, circles=created_circles))
+
+        logger.info(f"Linear pattern created: {created_lines} lines, {created_circles} circles, {created_arcs} arcs")
         self._cancel_tool()
-        self.status_message.emit(tr("Linear pattern: {lines} lines, {circles} circles created").format(lines=created_lines, circles=created_circles))
     
     def _handle_pattern_circular(self, pos, snap_type):
-        """Kreisförmiges Muster: Auswahl → Zentrum → Anzahl"""
-        if not self.selected_lines and not self.selected_circles:
-            self.status_message.emit(tr("Select elements first!"))
+        """
+        Kreisförmiges Muster: Vollständig interaktiv mit DimensionInput.
+
+        Schritt 0: Rotationszentrum wählen
+        Schritt 1: Tab für Count/Angle, Klick/Enter = Anwenden
+        """
+        if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
+            if hasattr(self, 'show_message'):
+                self.show_message("Erst Elemente auswählen!", 2000, QColor(255, 200, 100))
+            else:
+                self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Zentrum wählen
+            # Schritt 0: Rotationszentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
-            # Default-Werte
+
+            # Default-Werte initialisieren
             self.tool_data['pattern_count'] = 6
             self.tool_data['pattern_angle'] = 360.0  # Vollkreis
-            self.status_message.emit(tr("Center selected | Click=Apply | Tab=Count/Angle"))
+
+            # DimensionInput automatisch anzeigen
+            self._show_pattern_circular_input()
+
+            if hasattr(self, 'show_message'):
+                self.show_message("Zentrum gewählt | Tab = Anzahl/Winkel | Enter/Klick = Anwenden", 3000)
+            else:
+                self.status_message.emit(tr("Center selected | Click=Apply | Tab=Count/Angle"))
+
         elif self.tool_step == 1:
-            # Klick zum Anwenden
+            # Klick wendet Muster an
             self._apply_circular_pattern()
-    
+
+    def _show_pattern_circular_input(self):
+        """Zeigt DimensionInput für Circular Pattern"""
+        count = self.tool_data.get('pattern_count', 6)
+        angle = self.tool_data.get('pattern_angle', 360.0)
+        fields = [("N", "count", float(count), "×"), ("∠", "angle", angle, "°")]
+        self.dim_input.setup(fields)
+
+        # Position neben Maus
+        pos = self.mouse_screen
+        x = min(int(pos.x()) + 30, self.width() - self.dim_input.width() - 10)
+        y = min(int(pos.y()) - 50, self.height() - self.dim_input.height() - 10)
+        self.dim_input.move(max(10, x), max(10, y))
+        self.dim_input.show()
+        self.dim_input_active = True
+
     def _apply_circular_pattern(self):
         """Wendet kreisförmiges Muster an"""
         center = self.tool_points[0]
         count = self.tool_data.get('pattern_count', 6)
         total_angle = self.tool_data.get('pattern_angle', 360.0)
-        
+
         if count < 2:
+            if hasattr(self, 'show_message'):
+                self.show_message("Anzahl muss mindestens 2 sein", 2000, QColor(255, 200, 100))
             self._cancel_tool()
             return
-        
+
         self._save_undo()
-        
-        # Winkelschritt
+
+        # Winkelschritt (gleichmäßig verteilt)
+        # Bei 360° und count=6: 0°, 60°, 120°, 180°, 240°, 300°
         angle_step = math.radians(total_angle / count)
-        
-        # Kopien erstellen (ab Index 1)
+
+        # Kopien erstellen (ab Index 1, Index 0 ist Original)
         created_lines = 0
         created_circles = 0
-        
+        created_arcs = 0
+
         for i in range(1, count):
             angle = angle_step * i
             cos_a, sin_a = math.cos(angle), math.sin(angle)
-            
+
             for line in self.selected_lines:
                 # Rotiere Start- und Endpunkt um Zentrum
                 sx = center.x() + (line.start.x - center.x()) * cos_a - (line.start.y - center.y()) * sin_a
                 sy = center.y() + (line.start.x - center.x()) * sin_a + (line.start.y - center.y()) * cos_a
                 ex = center.x() + (line.end.x - center.x()) * cos_a - (line.end.y - center.y()) * sin_a
                 ey = center.y() + (line.end.x - center.x()) * sin_a + (line.end.y - center.y()) * cos_a
-                
+
                 self.sketch.add_line(sx, sy, ex, ey, construction=line.construction)
                 created_lines += 1
-            
+
             for c in self.selected_circles:
                 # Rotiere Kreiszentrum um Musterzentrum
                 cx = center.x() + (c.center.x - center.x()) * cos_a - (c.center.y - center.y()) * sin_a
                 cy = center.y() + (c.center.x - center.x()) * sin_a + (c.center.y - center.y()) * cos_a
-                
+
                 self.sketch.add_circle(cx, cy, c.radius, construction=c.construction)
                 created_circles += 1
-        
+
+            for arc in self.selected_arcs:
+                # Rotiere Arc-Zentrum und passe Winkel an
+                acx = center.x() + (arc.center.x - center.x()) * cos_a - (arc.center.y - center.y()) * sin_a
+                acy = center.y() + (arc.center.x - center.x()) * sin_a + (arc.center.y - center.y()) * cos_a
+
+                # Arc-Winkel um den gleichen Betrag rotieren
+                new_start = arc.start_angle + math.degrees(angle)
+                new_end = arc.end_angle + math.degrees(angle)
+
+                self.sketch.add_arc(acx, acy, arc.radius, new_start, new_end, construction=arc.construction)
+                created_arcs += 1
+
         self.sketched_changed.emit()
         self._find_closed_profiles()
+
+        total_created = created_lines + created_circles + created_arcs
+        if hasattr(self, 'show_message'):
+            self.show_message(f"Circular Pattern: {total_created} Elemente ({count}× über {total_angle:.0f}°)", 2500, QColor(100, 255, 100))
+        else:
+            self.status_message.emit(tr("Circular pattern: {lines} lines, {circles} circles created").format(
+                lines=created_lines, circles=created_circles))
+
+        logger.info(f"Circular pattern created: {created_lines} lines, {created_circles} circles, {created_arcs} arcs")
         self._cancel_tool()
-        self.status_message.emit(tr("Circular pattern: {lines} lines, {circles} circles created").format(lines=created_lines, circles=created_circles))
     
     def _handle_scale(self, pos, snap_type):
         """Skalieren: Zentrum → Faktor (wie Fusion360)"""
@@ -1657,22 +1795,88 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _handle_perpendicular(self, pos, snap_type):
+        """
+        Perpendicular Constraint mit Pre-Rotation.
+        Rotiert die zweite Linie VOR dem Constraint ungefähr senkrecht,
+        damit der Solver besser konvergiert und keine Ecken "wegrutschen".
+        """
         line = self._find_line_at(pos)
-        if not line: self.status_message.emit(tr("Select first line")); return
+        if not line:
+            if hasattr(self, 'show_message'):
+                self.show_message("Linie auswählen", 2000)
+            else:
+                self.status_message.emit(tr("Select first line"))
+            return
+
         if self.tool_step == 0:
-            self.tool_data['line1'] = line; self.tool_step = 1
-            self.status_message.emit(tr("Select second line"))
+            self.tool_data['line1'] = line
+            self.tool_step = 1
+            if hasattr(self, 'show_message'):
+                self.show_message("Zweite Linie auswählen", 2000)
+            else:
+                self.status_message.emit(tr("Select second line"))
         else:
             l1 = self.tool_data.get('line1')
             if l1 and line != l1:
                 self._save_undo()
+
+                # === PRE-ROTATION: Linie 2 ungefähr senkrecht zu Linie 1 rotieren ===
+                # Berechne aktuellen Winkel von l1
+                dx1 = l1.end.x - l1.start.x
+                dy1 = l1.end.y - l1.start.y
+                angle1 = math.atan2(dy1, dx1)
+
+                # Berechne aktuellen Winkel von l2
+                dx2 = line.end.x - line.start.x
+                dy2 = line.end.y - line.start.y
+                angle2 = math.atan2(dy2, dx2)
+                length2 = math.hypot(dx2, dy2)
+
+                # Zielwinkel: 90° zu l1 (nehme den näheren der beiden Möglichkeiten)
+                target_angle_a = angle1 + math.pi / 2
+                target_angle_b = angle1 - math.pi / 2
+
+                # Normalisiere Winkel auf [-pi, pi]
+                def normalize_angle(a):
+                    while a > math.pi: a -= 2 * math.pi
+                    while a < -math.pi: a += 2 * math.pi
+                    return a
+
+                diff_a = abs(normalize_angle(target_angle_a - angle2))
+                diff_b = abs(normalize_angle(target_angle_b - angle2))
+
+                # Wähle den Winkel mit kleinerer Rotation
+                target_angle = target_angle_a if diff_a < diff_b else target_angle_b
+
+                # Rotiere l2 um seinen Startpunkt auf den Zielwinkel
+                # (nur wenn Abweichung > 5°, um unnötige Änderungen zu vermeiden)
+                rotation_needed = abs(normalize_angle(target_angle - angle2))
+                if rotation_needed > math.radians(5):
+                    new_end_x = line.start.x + length2 * math.cos(target_angle)
+                    new_end_y = line.start.y + length2 * math.sin(target_angle)
+                    line.end.x = new_end_x
+                    line.end.y = new_end_y
+                    logger.debug(f"Pre-rotated line by {math.degrees(rotation_needed):.1f}° for perpendicular")
+
+                # Constraint hinzufügen und lösen
                 self.sketch.add_perpendicular(l1, line)
                 result = self.sketch.solve()
+                logger.debug(f"Solver Result: Success={result.success}, Message={result.message}")
+
+                if not result.success:
+                    if hasattr(self, 'show_message'):
+                        self.show_message(f"Solver: {result.message}", 3000, QColor(255, 150, 100))
+                    else:
+                        self.status_message.emit(f"Fehler: {result.message}")
+                else:
+                    if hasattr(self, 'show_message'):
+                        self.show_message("Senkrecht-Constraint angewendet", 2000, QColor(100, 255, 100))
+                    else:
+                        self.status_message.emit(tr("Perpendicular constraint applied (DOF: {dof})").format(dof=getattr(result, "dof", -1)))
+
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 self.update()
-                if hasattr(result, 'success') and result.success:
-                    self.status_message.emit(tr("Perpendicular constraint applied (DOF: {dof})").format(dof=getattr(result, "dof", -1)))
             self._cancel_tool()
     
     def _handle_equal(self, pos, snap_type):
