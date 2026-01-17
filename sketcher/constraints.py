@@ -241,7 +241,28 @@ def calculate_constraint_error(constraint: Constraint) -> float:
         line = entities[0]
         target = constraint.value
         return abs(line.length - target)
-    
+    elif ct == ConstraintType.TANGENT:
+        # Entity 1 ist Linie, Entity 2 ist Kreis/Bogen (oder umgekehrt)
+        obj1, obj2 = entities
+        
+        # Sortieren: Linie zuerst, dann Kreis
+        if isinstance(obj1, Line2D): l, c = obj1, obj2
+        else: l, c = obj2, obj1
+        
+        # Abstand vom Kreismittelpunkt zur Linie muss gleich dem Radius sein
+        # Formel Abstand Punkt(x0,y0) zu Linie(p1, p2):
+        # |(y2-y1)x0 - (x2-x1)y0 + x2y1 - y2x1| / length
+        
+        dx = l.end.x - l.start.x
+        dy = l.end.y - l.start.y
+        len_sq = dx*dx + dy*dy
+        
+        if len_sq < 1e-8: return 0.0
+        
+        cross = abs(dy * c.center.x - dx * c.center.y + l.end.x * l.start.y - l.end.y * l.start.x)
+        dist = cross / math.sqrt(len_sq)
+        
+        return abs(dist - c.radius)
     elif ct == ConstraintType.DISTANCE:
         if len(entities) == 2:
             e1, e2 = entities
@@ -295,6 +316,11 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     elif ct == ConstraintType.CONCENTRIC:
         c1, c2 = entities
         return c1.center.distance_to(c2.center)
+    
+    elif ct == ConstraintType.POINT_ON_CIRCLE:
+        point, circle = entities
+        dist = point.distance_to(circle.center)
+        return abs(dist - circle.radius)
     
     elif ct == ConstraintType.MIDPOINT:
         point, line = entities

@@ -45,6 +45,7 @@ from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler
 from gui.widgets.transform_panel import TransformInputPanel, SelectionInfoWidget, CenterHintWidget
 from gui.dialogs import VectorInputDialog, BooleanDialog
+from gui.transform_state import TransformState
 
 try:
     from ocp_tessellate.tessellator import tessellate
@@ -74,6 +75,12 @@ class MainWindow(QMainWindow):
         
         self._setup_logging()
         self.document = Document("Projekt1")
+
+        # NEU: Undo/Redo System
+        from PySide6.QtGui import QUndoStack
+        self.undo_stack = QUndoStack(self)
+        self.undo_stack.setUndoLimit(50)  # Max 50 Undo-Schritte
+
         self.mode = "3d"
         self.active_sketch = None
         self.selected_edges = [] # Liste der Indizes für Fillet
@@ -296,8 +303,13 @@ class MainWindow(QMainWindow):
         self.transform_panel.values_changed.connect(self._on_transform_val_change)
         self.transform_panel.confirmed.connect(self._on_transform_confirmed)
         self.transform_panel.cancelled.connect(self._on_transform_cancelled)
+
+        # NEU: Zentrale Transform-State-Machine
+        self.transform_state = TransformState()
+        # Legacy-Aliases für Kompatibilität (werden nach und nach ersetzt)
         self._active_transform_body = None
         self._transform_mode = None
+        self._pending_transform_mode = None
         
         # 3D-ToolPanel (Index 0)
         self.tool_panel_3d = ToolPanel3D()
@@ -362,6 +374,8 @@ class MainWindow(QMainWindow):
         self.transform_input_panel.transform_confirmed.connect(self._on_transform_panel_confirmed)
         self.transform_input_panel.transform_cancelled.connect(self._on_transform_panel_cancelled)
         self.transform_input_panel.mode_changed.connect(self._on_transform_mode_changed)
+        self.transform_input_panel.grid_size_changed.connect(self._on_grid_size_changed)
+        self.transform_input_panel.pivot_mode_changed.connect(self._on_pivot_mode_changed)
         self.transform_input_panel.hide()  # Initial versteckt
         
         # Selection Info Widget (zeigt aktuell selektierten Body)
@@ -446,7 +460,24 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'set_transform_mode'):
             self.viewport_3d.set_transform_mode(mode)
         logger.info(f"Transform Mode: {mode.capitalize()}")
-        
+
+    def _on_grid_size_changed(self, grid_size: float):
+        """Handler wenn Grid-Size geändert wird"""
+        # Update TransformState
+        if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
+            self.viewport_3d.transform_state.snap_grid_size = grid_size
+            logger.info(f"Grid-Size aktualisiert: {grid_size}mm (Ctrl+Drag für Snap)")
+
+    def _on_pivot_mode_changed(self, mode: str):
+        """Handler wenn Pivot-Mode geändert wird"""
+        # Update TransformState
+        if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
+            self.viewport_3d.transform_state.pivot_mode = mode
+            logger.info(f"Pivot-Mode aktualisiert: {mode}")
+
+            # Info: Bei 'origin' oder 'cursor' müsste Gizmo neu positioniert werden
+            # Für jetzt: Nur bei Rotate/Scale relevant
+
     def _get_selected_body_id(self) -> str:
         """Gibt ID des aktuell für Transform selektierten Bodies zurück"""
         if hasattr(self, '_selected_body_for_transform') and self._selected_body_for_transform:
@@ -471,6 +502,7 @@ class MainWindow(QMainWindow):
         self.transform_input_panel.reset_values()
         self.transform_input_panel.show()
         self.transform_input_panel.setVisible(True)
+        self.transform_input_panel.raise_()  # FIX Bug 1.3: Panel nach vorne bringen
         self._position_transform_panel()
 
         # Gizmo zeigen
@@ -525,9 +557,23 @@ class MainWindow(QMainWindow):
         
         # Bearbeiten-Menü
         edit_menu = mb.addMenu(tr("Edit"))
-        edit_menu.addAction(tr("Undo"), lambda: None, QKeySequence.Undo)
-        edit_menu.addAction(tr("Redo"), lambda: None, QKeySequence.Redo)
-        
+        # NEU: Verbinde mit UndoStack
+        undo_action = self.undo_stack.createUndoAction(self, tr("Undo"))
+        undo_action.setShortcut(QKeySequence.Undo)
+        edit_menu.addAction(undo_action)
+
+        redo_action = self.undo_stack.createRedoAction(self, tr("Redo"))
+        redo_action.setShortcut(QKeySequence.Redo)
+        edit_menu.addAction(redo_action)
+
+        # Transform-Menü
+        transform_menu = mb.addMenu("Transform")
+        transform_menu.addAction("Move (G)", lambda: self._start_transform_mode("move"), "G")
+        transform_menu.addAction("Rotate (R)", lambda: self._start_transform_mode("rotate"), "R")
+        transform_menu.addAction("Scale (S)", lambda: self._start_transform_mode("scale"), "S")
+        transform_menu.addSeparator()
+        transform_menu.addAction("Create Pattern...", self._create_pattern)
+
         # Ansicht-Menü
         view_menu = mb.addMenu(tr("View"))
         view_menu.addAction("Isometric", lambda: self.viewport_3d.set_view('iso'))
@@ -550,6 +596,7 @@ class MainWindow(QMainWindow):
         # Browser
         self.browser.feature_double_clicked.connect(self._edit_feature)
         self.browser.feature_selected.connect(self._on_feature_selected)
+        self.browser.feature_deleted.connect(self._on_feature_deleted)  # NEU
         self.browser.plane_selected.connect(self._on_browser_plane_selected)
         
         # WICHTIG: Visibility changed muss ALLES neu laden (Sketches + Bodies)
@@ -593,6 +640,12 @@ class MainWindow(QMainWindow):
         # NEU: Point-to-Point Move (Fusion 360-Style)
         if hasattr(self.viewport_3d, 'point_to_point_move'):
             self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
+
+        # NEU: TransformState-Referenz im Viewport setzen
+        self.viewport_3d.transform_state = self.transform_state
+        # NEU: TransformState-Referenz im Transform-Controller setzen
+        if hasattr(self.viewport_3d, '_transform_ctrl'):
+            self.viewport_3d._transform_ctrl.transform_state = self.transform_state
 
         # NEU: Face-Selection für automatische Operation-Erkennung
         if hasattr(self.viewport_3d, 'face_selected'):
@@ -797,18 +850,18 @@ class MainWindow(QMainWindow):
 
         # --- Parameter-Abfrage ---
         options = [
-            "V1: Standard (Schnell - alle Dreiecke zusammennähen)",
-            "V5: Gmsh Quads (Mesh neu generieren mit Vierecken)",
-            "V6: Smart (NEU - Erkennt planare Flächen automatisch)"
+            "Auto (Hybrid - Automatische Wahl der besten Methode)",
+            "Primitives (RANSAC - Erkennt Zylinder, Kugeln, Ebenen)",
+            "Smart (Planare Flächen - Für prismatische Teile)"
         ]
-        
+
         # Dialog anzeigen
         item, ok = QInputDialog.getItem(
-            self, 
-            "Konvertierungsmethode wählen", 
-            "Strategie:", 
-            options, 
-            2, # Standard-Auswahl (Index 2 = V6)
+            self,
+            "Konvertierungsmethode wählen",
+            "Strategie:",
+            options,
+            0, # Standard-Auswahl (Index 0 = Auto/Hybrid)
             False # Nicht editierbar
         )
 
@@ -816,10 +869,10 @@ class MainWindow(QMainWindow):
             return # Nutzer hat Abbrechen geklickt
 
         # Auswahl in technischen Parameter übersetzen
-        mode_param = "v1"
-        if "V5" in item:
-            mode_param = "v5"
-        elif "V6" in item:
+        mode_param = "hybrid"  # Default zu Hybrid
+        if "Primitives" in item:
+            mode_param = "v7"
+        elif "Smart" in item:
             mode_param = "v6"
         # ------------------------------
 
@@ -856,14 +909,19 @@ class MainWindow(QMainWindow):
                 
             else:
                 QApplication.restoreOverrideCursor() # Cursor zurücksetzen vor der Box
-                error_msg = "Unbekannter Fehler."
-                if mode_param == "v5":
-                    error_msg = "V5 Reverse Engineering fehlgeschlagen.\nSind Open3D/RANSAC installiert und das Mesh sauber?"
+
+                # Spezifische Fehlermeldung basierend auf Modus
+                if mode_param == "hybrid":
+                    error_msg = "Hybrid-Konvertierung fehlgeschlagen.\nAlle Fallback-Methoden haben versagt."
+                elif mode_param == "v7":
+                    error_msg = "RANSAC-Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und hat klare geometrische Primitive?"
+                elif mode_param == "v6":
+                    error_msg = "Smart-Konvertierung fehlgeschlagen.\nEnthält das Mesh planare Flächen?"
                 else:
-                    error_msg = "Standard-Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen?"
-                
+                    error_msg = "Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und valide?"
+
                 QMessageBox.warning(self, "Fehler", error_msg)
-                logger.error("Konvertierung fehlgeschlagen.")
+                logger.error(f"Konvertierung fehlgeschlagen: {mode_param}")
 
         except Exception as e:
             QApplication.restoreOverrideCursor()
@@ -928,36 +986,119 @@ class MainWindow(QMainWindow):
                 self._hide_transform_ui()
     
     def _start_transform_mode(self, mode):
-        """Startet den Modus. Wenn kein Body gewählt ist, wartet er auf Klick."""
-        body = self._get_active_body()
-
+        """
+        Startet den Transform-Modus.
+        Unterstützt Multi-Select aus Browser.
+        """
         # WICHTIG: Extrude-Panel KOMPLETT deaktivieren, auch im pending mode
         if hasattr(self, 'extrude_panel'):
             self.extrude_panel.setVisible(False)
             self.extrude_panel.hide()
             self.extrude_panel.lower()  # Z-Index runter
 
-        # Fall 1: Kein Körper gewählt -> Warte auf Selektion
-        if not body:
+        # NEU: Prüfe Multi-Select im Browser
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt -> Warte auf Selektion
+        if not selected_bodies:
+            # NEU: State-Machine verwenden
+            self.transform_state.start_pending_transform(mode)
+            # Legacy-Kompatibilität
             self._pending_transform_mode = mode
+
             self.viewport_3d.setCursor(Qt.CrossCursor)
             # Aktiviere Body-Highlighting im Viewport
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
 
-            logger.info(f"{mode.capitalize()}: Wähle einen Body im Browser oder 3D-Ansicht")
+            logger.info(f"{mode.capitalize()}: Wähle einen oder mehrere Bodies im Browser oder 3D-Ansicht")
             return
 
-        # Fall 2: Körper ist da -> Los geht's
-        self._transform_mode = mode
-        self._active_transform_body = body
-        self._pending_transform_mode = None
-        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        # Fall 2: Single-Body -> Standard-Verhalten mit Gizmo
+        if len(selected_bodies) == 1:
+            body = selected_bodies[0]
+            # NEU: State-Machine verwenden
+            self.transform_state.start_transform(mode, body.id)
+            # Legacy-Kompatibilität
+            self._transform_mode = mode
+            self._active_transform_body = body
+            self._pending_transform_mode = None
 
-        # Transform-UI zeigen
-        self._show_transform_ui(body.id, body.name)
+            self.viewport_3d.setCursor(Qt.ArrowCursor)
 
-        logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
+            # Transform-UI zeigen
+            self._show_transform_ui(body.id, body.name)
+
+            logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
+
+        # Fall 3: Multi-Body -> Zeige Dialog für numerische Eingabe (kein Gizmo)
+        else:
+            # NEU: Multi-Select Transform via Dialog
+            self._start_multi_body_transform(mode, selected_bodies)
+
+    def _start_multi_body_transform(self, mode: str, bodies: list):
+        """
+        Startet Multi-Body Transform mit numerischer Eingabe-Dialog.
+
+        Args:
+            mode: "move", "rotate", "scale"
+            bodies: Liste von Body-Objekten
+        """
+        from PySide6.QtWidgets import QInputDialog
+
+        body_count = len(bodies)
+        body_names = ", ".join([b.name for b in bodies[:3]]) + (f" +{body_count-3} mehr" if body_count > 3 else "")
+
+        logger.info(f"{mode.capitalize()}: {body_count} Bodies selektiert - {body_names}")
+
+        # Zeige Input-Dialog basierend auf Modus
+        if mode == "move":
+            text, ok = QInputDialog.getText(
+                self,
+                f"Multi-Body Move ({body_count} Bodies)",
+                f"Verschiebung (X, Y, Z in mm):\nFormat: 10, 0, 5\n\nBodies: {body_names}",
+                text="0, 0, 0"
+            )
+            if ok and text:
+                try:
+                    coords = [float(x.strip()) for x in text.split(",")]
+                    if len(coords) == 3:
+                        body_ids = [b.id for b in bodies]
+                        self._on_body_transform_requested(body_ids, "move", {"translation": coords})
+                except ValueError:
+                    logger.error(f"Ungültige Eingabe: {text}")
+
+        elif mode == "rotate":
+            text, ok = QInputDialog.getText(
+                self,
+                f"Multi-Body Rotate ({body_count} Bodies)",
+                f"Rotation (Achse, Winkel):\nFormat: Z, 45\n\nBodies: {body_names}",
+                text="Z, 0"
+            )
+            if ok and text:
+                try:
+                    parts = [x.strip() for x in text.split(",")]
+                    axis = parts[0].upper()
+                    angle = float(parts[1])
+                    if axis in ["X", "Y", "Z"]:
+                        body_ids = [b.id for b in bodies]
+                        self._on_body_transform_requested(body_ids, "rotate", {"axis": axis, "angle": angle})
+                except (ValueError, IndexError):
+                    logger.error(f"Ungültige Eingabe: {text}")
+
+        elif mode == "scale":
+            factor, ok = QInputDialog.getDouble(
+                self,
+                f"Multi-Body Scale ({body_count} Bodies)",
+                f"Skalierungs-Faktor:\n\nBodies: {body_names}",
+                value=1.0,
+                min=0.01,
+                max=100.0,
+                decimals=2
+            )
+            if ok:
+                body_ids = [b.id for b in bodies]
+                self._on_body_transform_requested(body_ids, "scale", {"factor": factor})
 
     def _start_point_to_point_move(self):
         """Startet Point-to-Point Move Modus (Fusion 360-Style) - OHNE Body-Selektion möglich"""
@@ -1135,157 +1276,141 @@ class MainWindow(QMainWindow):
         self._active_transform_body = None
         self._transform_mode = None
         
-    def _on_body_transform_requested(self, body_id: str, mode: str, data):
+    def _on_body_transform_requested(self, body_ids, mode: str, data):
         """
         Handler für das neue Gizmo-basierte Transform-System.
-        Wird vom TransformController aufgerufen wenn Apply bestätigt wird.
+        Erstellt TransformFeature statt direkter Mutation (Feature-History).
+
+        Args:
+            body_ids: str (single body) oder List[str] (multi-select)
+            mode: "move", "rotate", "scale", "mirror"
+            data: Transform-Daten (Liste oder Dict)
         """
-        logger.debug(f"Transform requested: {mode} auf {body_id} mit data={data}")
-        
-        # Body finden - Bodies sind im document, nicht im browser
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if not body:
-            logger.error(f"Body {body_id} nicht gefunden für Transform")
-            return
-            
-        if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
-            logger.error("Build123d nicht verfügbar für Transform")
-            return
-            
-        from build123d import Location, Axis
+        # Normalisiere zu Liste
+        if isinstance(body_ids, str):
+            body_ids = [body_ids]
+
+        logger.debug(f"Transform requested: {mode} auf {len(body_ids)} Bodies mit data={data}")
+
+        from modeling import TransformFeature
         from modeling.cad_tessellator import CADTessellator
-        
+
         # WICHTIG: Cache leeren damit neues Mesh generiert wird!
-        CADTessellator.clear_cache()
-        
-        try:
-            if mode == "move":
-                # Translation aus data (ist bereits eine Liste)
-                if isinstance(data, list):
-                    dx, dy, dz = data
+        with CADTessellator.invalidate_cache():
+            try:
+                # Normalisiere data-Format
+                transform_data = self._normalize_transform_data(mode, data)
+
+                # Wende Transform auf alle selektierten Bodies an
+                success_count = 0
+                for body_id in body_ids:
+                    body = next((b for b in self.document.bodies if b.id == body_id), None)
+                    if not body:
+                        logger.warning(f"Body {body_id} nicht gefunden für Transform")
+                        continue
+
+                    if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+                        logger.warning(f"Build123d nicht verfügbar für Body {body_id}")
+                        continue
+
+                    # Berechne Body-Zentrum für Rotate/Scale
+                    body_transform_data = transform_data.copy()
+                    if mode in ["rotate", "scale"]:
+                        bounds = body._build123d_solid.bounding_box()
+                        center = [
+                            (bounds.min.X + bounds.max.X) / 2,
+                            (bounds.min.Y + bounds.max.Y) / 2,
+                            (bounds.min.Z + bounds.max.Z) / 2
+                        ]
+                        body_transform_data["center"] = center
+
+                    # Erstelle TransformFeature
+                    feature = TransformFeature(
+                        mode=mode,
+                        data=body_transform_data,
+                        name=f"Transform: {mode.capitalize()}"
+                    )
+
+                    # NEU: Push to Undo Stack (calls redo() automatically)
+                    from gui.commands.transform_command import TransformCommand
+                    cmd = TransformCommand(body, feature, self)
+                    self.undo_stack.push(cmd)
+                    success_count += 1
+
+                # Gizmo an neuer Position anzeigen (nur bei Single-Select)
+                if len(body_ids) == 1:
+                    gizmo_was_active = hasattr(self.viewport_3d, 'is_transform_active') and self.viewport_3d.is_transform_active()
+                    if gizmo_was_active and hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                        self.viewport_3d.show_transform_gizmo(body_ids[0], force_refresh=False)
+
+                # UI aufräumen
+                if hasattr(self, 'transform_panel'):
+                    self.transform_panel.hide()
+
+                if success_count > 0:
+                    logger.success(f"Transform-Feature auf {success_count} Bodies angewendet (Undo: Ctrl+Z)")
                 else:
-                    dx, dy, dz = data.get("translation", [0, 0, 0])
-                    
-                logger.debug(f"Move delta: dx={dx:.2f}, dy={dy:.2f}, dz={dz:.2f}")
-                    
-                # Nur wenn signifikante Bewegung
-                if abs(dx) > 0.001 or abs(dy) > 0.001 or abs(dz) > 0.001:
-                    # Altes Zentrum loggen
-                    old_bounds = body._build123d_solid.bounding_box()
-                    old_center = ((old_bounds.min.X + old_bounds.max.X) / 2,
-                                  (old_bounds.min.Y + old_bounds.max.Y) / 2,
-                                  (old_bounds.min.Z + old_bounds.max.Z) / 2)
-                    logger.debug(f"Altes Zentrum: {old_center}")
-                    
-                    body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
-                    
-                    # Neues Zentrum loggen
-                    new_bounds = body._build123d_solid.bounding_box()
-                    new_center = ((new_bounds.min.X + new_bounds.max.X) / 2,
-                                  (new_bounds.min.Y + new_bounds.max.Y) / 2,
-                                  (new_bounds.min.Z + new_bounds.max.Z) / 2)
-                    logger.debug(f"Neues Zentrum: {new_center}")
-                    
-                    logger.success(f"Move ({dx:.2f}, {dy:.2f}, {dz:.2f}) auf {body.name}")
+                    logger.warning("Keine Bodies transformiert")
+
+            except Exception as e:
+                logger.exception(f"Transform Error: {e}")
+
+    def _normalize_transform_data(self, mode: str, data) -> dict:
+        """
+        Normalisiert Transform-Daten in einheitliches Dict-Format.
+
+        Args:
+            mode: "move", "rotate", "scale", "mirror"
+            data: Liste oder Dict mit Transform-Parametern
+
+        Returns:
+            Dict mit standardisierten Keys
+        """
+        if mode == "move":
+            if isinstance(data, list):
+                return {"translation": data}
+            else:
+                return {"translation": data.get("translation", [0, 0, 0])}
+
+        elif mode == "rotate":
+            if isinstance(data, dict):
+                return {
+                    "axis": data.get("axis", "Z"),
+                    "angle": data.get("angle", 0)
+                }
+            else:
+                # Legacy: [rx, ry, rz] - nehme nur erste Achse
+                angles = data if isinstance(data, (list, tuple)) else [0, 0, 0]
+                if angles[0] != 0:
+                    return {"axis": "X", "angle": angles[0]}
+                elif angles[1] != 0:
+                    return {"axis": "Y", "angle": angles[1]}
                 else:
-                    logger.debug("Move delta zu klein, übersprungen")
-                
-            elif mode == "rotate":
-                # WICHTIG: Rotation um Body-Zentrum, nicht um Ursprung!
-                # 1. Berechne Zentrum des Bodies
-                bounds = body._build123d_solid.bounding_box()
-                center_x = (bounds.min.X + bounds.max.X) / 2
-                center_y = (bounds.min.Y + bounds.max.Y) / 2
-                center_z = (bounds.min.Z + bounds.max.Z) / 2
-                center = (center_x, center_y, center_z)
+                    return {"axis": "Z", "angle": angles[2]}
 
-                # Rotation aus data - neues Format: {axis: "X/Y/Z", angle: float}
-                if isinstance(data, dict):
-                    axis_name = data.get("axis", "Z")
-                    angle = data.get("angle", 0)
-
-                    # Nur eine Achse rotieren
-                    if angle != 0:
-                        axis_map = {"X": Axis.X, "Y": Axis.Y, "Z": Axis.Z}
-                        axis = axis_map.get(axis_name, Axis.Z)
-
-                        # 2. Verschiebe zum Ursprung
-                        solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
-                        # 3. Rotiere um Ursprung
-                        solid = solid.rotate(axis, angle)
-                        # 4. Verschiebe zurück
-                        solid = solid.move(Location(center))
-                        body._build123d_solid = solid
-
-                        logger.success(f"Rotate ({axis_name}, {angle:.1f}°) um Zentrum {center} auf {body.name}")
+        elif mode == "scale":
+            # FIX Bug 1.4: Prüfe "factor" ZUERST, dann "scale"
+            if isinstance(data, dict):
+                # Panel sendet {"factor": 0.5}, Gizmo sendet auch {"factor": ...}
+                if "factor" in data:
+                    factor = data["factor"]
+                elif "scale" in data:
+                    scale = data["scale"]
+                    factor = scale[0] if isinstance(scale, list) else scale
                 else:
-                    # Legacy-Format: [rx, ry, rz]
-                    rx, ry, rz = data if isinstance(data, (list, tuple)) else (0, 0, 0)
+                    factor = 1.0
+            else:
+                factor = float(data) if data else 1.0
+            return {"factor": factor}
 
-                    # Verschiebe zum Ursprung
-                    solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
-                    # Rotiere
-                    if rx != 0: solid = solid.rotate(Axis.X, rx)
-                    if ry != 0: solid = solid.rotate(Axis.Y, ry)
-                    if rz != 0: solid = solid.rotate(Axis.Z, rz)
-                    # Verschiebe zurück
-                    solid = solid.move(Location(center))
-                    body._build123d_solid = solid
+        elif mode == "mirror":
+            if isinstance(data, dict):
+                return {"plane": data.get("plane", "XY")}
+            else:
+                return {"plane": "XY"}
 
-                    logger.success(f"Rotate ({rx:.1f}°, {ry:.1f}°, {rz:.1f}°) um Zentrum auf {body.name}")
-                
-            elif mode == "scale":
-                # WICHTIG: Scale um Body-Zentrum, nicht um Ursprung!
-                # 1. Berechne Zentrum des Bodies
-                bounds = body._build123d_solid.bounding_box()
-                center_x = (bounds.min.X + bounds.max.X) / 2
-                center_y = (bounds.min.Y + bounds.max.Y) / 2
-                center_z = (bounds.min.Z + bounds.max.Z) / 2
-                center = (center_x, center_y, center_z)
+        return {}
 
-                # Scale aus data
-                if isinstance(data, dict):
-                    sx, sy, sz = data.get("scale", [1, 1, 1])
-                else:
-                    sx, sy, sz = 1, 1, 1
-
-                # Uniform scale (Build123d unterstützt nur uniform)
-                factor = sx  # Nehme X als Faktor
-                if factor > 0 and abs(factor - 1.0) > 0.001:  # Nur wenn signifikante Änderung
-                    # 2. Verschiebe zum Ursprung
-                    solid = body._build123d_solid.move(Location((-center_x, -center_y, -center_z)))
-                    # 3. Skaliere um Ursprung
-                    solid = solid.scale(factor)
-                    # 4. Verschiebe zurück
-                    solid = solid.move(Location(center))
-                    body._build123d_solid = solid
-
-                    logger.success(f"Scale ({factor:.2f}) um Zentrum auf {body.name}")
-                else:
-                    logger.debug("Scale factor zu nahe an 1.0, übersprungen")
-                
-            # Mesh aktualisieren (kann bei komplexen Bodies kurz dauern)
-            logger.info(f"Aktualisiere Mesh für {body.name}...")
-
-            # WICHTIG: Gizmo-Status speichern BEVOR Mesh aktualisiert wird
-            gizmo_was_active = hasattr(self.viewport_3d, 'is_transform_active') and self.viewport_3d.is_transform_active()
-
-            self._update_body_from_build123d(body, body._build123d_solid)
-            logger.success(f"Mesh für {body.name} aktualisiert")
-
-            # Gizmo OHNE Flicker an neuer Position anzeigen
-            # Nur wenn es vorher aktiv war
-            if gizmo_was_active and hasattr(self.viewport_3d, 'show_transform_gizmo'):
-                self.viewport_3d.show_transform_gizmo(body_id, force_refresh=False)
-            
-            # UI aufräumen (kein transform_panel mehr nötig im Onshape-Style)
-            if hasattr(self, 'transform_panel'):
-                self.transform_panel.hide()
-            self.browser.refresh()
-            
-        except Exception as e:
-            logger.exception(f"Transform Error: {e}")
-            
     def _on_body_copy_requested(self, body_id: str, mode: str, data):
         """
         Handler für Copy+Transform (Shift+Drag).
@@ -1881,11 +2006,12 @@ class MainWindow(QMainWindow):
                             if self.document.bodies:
                                 target_bodies = [self.document.bodies[-1]]
 
-                    # --- FEATURE ANWENDEN ---
+                    # --- FEATURE ANWENDEN (mit Undo-Support) ---
                     success_count = 0
-                    
+
                     from modeling import ExtrudeFeature
-                    
+                    from gui.commands.feature_commands import AddFeatureCommand
+
                     for body in target_bodies:
                         # WICHTIG: Wir brauchen für jeden Body ein eigenes Feature-Objekt
                         # da es dort in die History eingefügt wird.
@@ -1895,23 +2021,22 @@ class MainWindow(QMainWindow):
                             operation=operation,
                             precalculated_polys=polys
                         )
-                        
+
                         try:
-                            # Fügt Feature hinzu und triggert _rebuild()
-                            body.add_feature(feature)
-                            
-                            # Visuelles Update
-                            self._update_body_mesh(body)
+                            # NEU: Über Undo-Command hinzufügen
+                            cmd = AddFeatureCommand(
+                                body, feature, self,
+                                description=f"Extrude ({operation})"
+                            )
+                            self.undo_stack.push(cmd)  # Ruft automatisch redo() auf
                             success_count += 1
-                            
+
                         except Exception as e:
                             # Wenn der Schnitt fehlschlägt (z.B. Luft geschnitten), nicht abstürzen!
                             logger.warning(f"Warnung: Operation an {body.name} wirkungslos oder fehlgeschlagen: {e}")
-                            # Optional: Feature wieder entfernen, wenn es nichts bewirkt hat?
-                            # body.features.remove(feature) 
 
                     if success_count > 0:
-                        self._finish_extrusion_ui(msg=f"Extrusion ({operation}) auf {success_count} Körper angewendet.")
+                        self._finish_extrusion_ui(msg=f"Extrusion ({operation}) auf {success_count} Körper angewendet. (Undo: Ctrl+Z)")
                     else:
                         logger.error("Operation fehlgeschlagen (Keine Schnittmenge?).")
 
@@ -2538,8 +2663,59 @@ class MainWindow(QMainWindow):
             
             # 4. Statusmeldung
             logger.success(f"Bearbeite Skizze: {sketch.name}")
-        
-        
+
+        elif d[0] == 'feature':
+            # NEU: Transform-Feature editieren
+            feature = d[1]
+            body = d[2]
+
+            from modeling import TransformFeature, FeatureType
+            if isinstance(feature, TransformFeature) or feature.type == FeatureType.TRANSFORM:
+                self._edit_transform_feature(feature, body)
+            else:
+                logger.info(f"Feature '{feature.name}' kann nicht editiert werden (Typ: {feature.type})")
+
+
+    def _edit_transform_feature(self, feature, body):
+        """
+        Öffnet den Transform-Edit-Dialog und aktualisiert den Body nach Änderung.
+        """
+        from gui.dialogs.transform_edit_dialog import TransformEditDialog
+        from gui.commands.feature_commands import EditFeatureCommand
+
+        # Speichere alte Daten für Undo
+        old_data = feature.data.copy()
+
+        dialog = TransformEditDialog(feature, body, self)
+
+        if dialog.exec():
+            # Feature wurde geändert
+            new_data = feature.data.copy()
+
+            # Push to Undo Stack
+            cmd = EditFeatureCommand(body, feature, old_data, new_data, self)
+            self.undo_stack.push(cmd)
+
+            logger.success(f"Transform-Feature '{feature.name}' aktualisiert (Undo: Ctrl+Z)")
+
+    def _on_feature_deleted(self, feature, body):
+        """
+        Handler für Feature-Löschung aus dem Browser.
+        Triggert Rebuild des betroffenen Bodies.
+        """
+        from gui.commands.feature_commands import DeleteFeatureCommand
+
+        logger.info(f"Lösche Feature '{feature.name}' aus {body.name}...")
+
+        # Speichere Index für Undo
+        feature_index = body.features.index(feature) if feature in body.features else 0
+
+        # Push to Undo Stack
+        cmd = DeleteFeatureCommand(body, feature, feature_index, self)
+        self.undo_stack.push(cmd)
+
+        logger.success(f"Feature '{feature.name}' gelöscht (Undo: Ctrl+Z)")
+
     def _new_project(self): 
         self.document = Document("Projekt1")
         self.browser.set_document(self.document)
@@ -2641,7 +2817,115 @@ class MainWindow(QMainWindow):
             logger.error(f"STEP Export Fehler: {e}")
             import traceback
             traceback.print_exc()
-    
+
+    def _create_pattern(self):
+        """
+        Erstellt Linear oder Circular Pattern (Fusion 360-Style).
+        Erzeugt N Kopien des selektierten Bodies mit Transform-Features.
+        """
+        # Body-Selektion prüfen
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if len(selected_bodies) != 1:
+            logger.warning("Bitte genau einen Body für Pattern auswählen")
+            return
+
+        body = selected_bodies[0]
+
+        # Pattern-Dialog öffnen
+        from gui.dialogs.pattern_dialog import PatternDialog
+
+        dialog = PatternDialog(body, self)
+        if not dialog.exec():
+            return  # Abgebrochen
+
+        pattern_data = dialog.get_pattern_data()
+        if not pattern_data:
+            return
+
+        from modeling import TransformFeature
+        from modeling.cad_tessellator import CADTessellator
+
+        pattern_type = pattern_data["type"]
+        count = pattern_data["count"]
+
+        logger.info(f"Erstelle {pattern_type} Pattern mit {count} Kopien für {body.name}")
+
+        with CADTessellator.invalidate_cache():
+            try:
+                new_bodies = []
+
+                for i in range(1, count):  # Start bei 1 (Original bleibt)
+                    # Kopiere Body
+                    import copy
+                    new_body = copy.deepcopy(body)
+                    new_body.id = f"{body.id}_pattern_{i}"
+                    new_body.name = f"{body.name} (Pattern {i})"
+
+                    # Erstelle Transform-Feature basierend auf Pattern-Typ
+                    if pattern_type == "linear":
+                        spacing = pattern_data["spacing"]
+                        axis = pattern_data["axis"]
+
+                        # Offset für dieses Element
+                        offset = spacing * i
+
+                        translation = [0, 0, 0]
+                        if axis == "X":
+                            translation[0] = offset
+                        elif axis == "Y":
+                            translation[1] = offset
+                        elif axis == "Z":
+                            translation[2] = offset
+
+                        transform_feature = TransformFeature(
+                            mode="move",
+                            data={"translation": translation},
+                            name=f"Pattern Move {i}"
+                        )
+
+                    elif pattern_type == "circular":
+                        axis = pattern_data["axis"]
+                        angle_per_copy = pattern_data["angle"]
+
+                        # Rotation für dieses Element
+                        total_angle = angle_per_copy * i
+
+                        # Berechne Body-Center als Rotation-Center
+                        if hasattr(new_body, '_build123d_solid') and new_body._build123d_solid:
+                            bounds = new_body._build123d_solid.bounding_box()
+                            center = [
+                                (bounds.min.X + bounds.max.X) / 2,
+                                (bounds.min.Y + bounds.max.Y) / 2,
+                                (bounds.min.Z + bounds.max.Z) / 2
+                            ]
+                        else:
+                            center = [0, 0, 0]
+
+                        transform_feature = TransformFeature(
+                            mode="rotate",
+                            data={"axis": axis, "angle": total_angle, "center": center},
+                            name=f"Pattern Rotate {i}"
+                        )
+
+                    # Feature zum Body hinzufügen
+                    new_body.add_feature(transform_feature)
+
+                    # Body zum Dokument hinzufügen
+                    self.document.bodies.append(new_body)
+                    new_bodies.append(new_body)
+
+                # UI aktualisieren
+                for new_body in new_bodies:
+                    self._update_body_from_build123d(new_body, new_body._build123d_solid)
+
+                self.browser.refresh()
+
+                logger.success(f"Pattern erstellt: {count} Kopien von {body.name}")
+
+            except Exception as e:
+                logger.exception(f"Pattern-Error: {e}")
+
     def _show_not_implemented(self, feature: str):
         logger.info(f"{feature} - Coming soon!")
         
@@ -2907,23 +3191,35 @@ class MainWindow(QMainWindow):
             self.browser.refresh()
 
     def _copy_body(self):
+        """Kopiert den aktiven Body als neuen Body."""
         body = self._get_active_body()
-        if not body: return
-        
-        import copy
+        if not body:
+            return
+
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import Body
+
         # Neuen Body erstellen
-        new_b = self.document.new_body(f"{body.name}_Kopie")
-        
-        # Daten kopieren
-        if hasattr(body, '_mesh_vertices'):
-            new_b._mesh_vertices = copy.deepcopy(body._mesh_vertices)
-            new_b._mesh_triangles = copy.deepcopy(body._mesh_triangles)
-            
+        new_b = Body(name=f"{body.name}_Kopie")
+
+        # Build123d Solid kopieren (NICHT deepcopy - das funktioniert nicht für OCP!)
         if hasattr(body, '_build123d_solid') and body._build123d_solid:
-             new_b._build123d_solid = copy.deepcopy(body._build123d_solid)
-        
-        # Anzeigen
-        self.viewport_3d.add_body(new_b.id, new_b.name, new_b._mesh_vertices, new_b._mesh_triangles)
+            try:
+                # Build123d.copy() ist die korrekte Methode
+                new_b._build123d_solid = body._build123d_solid.copy()
+                logger.debug(f"Build123d Solid kopiert für {new_b.name}")
+            except Exception as e:
+                logger.error(f"Solid-Kopie fehlgeschlagen: {e}")
+                return
+
+        # Mesh generieren
+        CADTessellator.clear_cache()
+        self._update_body_from_build123d(new_b, new_b._build123d_solid)
+
+        # Zum Document hinzufügen
+        self.document.bodies.append(new_b)
+
+        # UI aktualisieren
         self.browser.refresh()
         logger.success(f"Kopie erstellt: {new_b.name}")
 

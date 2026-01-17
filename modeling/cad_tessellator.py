@@ -10,6 +10,7 @@ import numpy as np
 import pyvista as pv
 from loguru import logger
 from typing import Tuple, Optional
+from contextlib import contextmanager
 import time
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
@@ -54,6 +55,24 @@ class CADTessellator:
         CADTessellator._mesh_cache.clear()
         CADTessellator._cache_cleared = True
         logger.info(f"CADTessellator Cache geleert (Version {_TESSELLATOR_VERSION}, Counter {_CACHE_INVALIDATION_COUNTER})")
+
+    @staticmethod
+    @contextmanager
+    def invalidate_cache():
+        """
+        Context Manager für automatische Cache-Invalidierung.
+
+        Usage:
+            with CADTessellator.invalidate_cache():
+                # Transform operations
+                body._build123d_solid = body._build123d_solid.move(...)
+        """
+        CADTessellator.clear_cache()
+        try:
+            yield
+        finally:
+            # Optional: Post-processing hier möglich
+            pass
 
     @staticmethod
     def extract_brep_edges(solid, deflection=0.1) -> Optional[pv.PolyData]:

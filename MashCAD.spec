@@ -1,3 +1,5 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec file for MashCAD

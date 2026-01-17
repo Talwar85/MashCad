@@ -157,6 +157,16 @@ class ExtrudeInputPanel(QFrame):
             "Intersect": "#ffaa66"  # Orange
         }
         self.op_indicator.setStyleSheet(f"color: {colors.get(op_text, '#6699ff')}; font-size: 16px;")
+
+        # Tooltip-Warnung für Boolean Operations
+        if op_text in ["Join", "Cut", "Intersect"]:
+            self.op_combo.setToolTip(
+                f"⚠️ {op_text}: Boolean Operations können bei komplexen Geometrien fehlschlagen.\n"
+                f"Tipp: 'New Body' ist sicherer - Bodies können später manuell kombiniert werden."
+            )
+        else:
+            self.op_combo.setToolTip("Erstellt einen neuen unabhängigen Body (empfohlen)")
+
         self.operation_changed.emit(op_text)
         
     def set_suggested_operation(self, operation: str):

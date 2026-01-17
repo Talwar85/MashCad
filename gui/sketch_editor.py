@@ -1529,6 +1529,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             fields = [("X", "dx", 0.0, "mm"), ("Y", "dy", 0.0, "mm")]
+        elif self.current_tool == SketchTool.COPY and self.tool_step == 1:
+            # COPY benutzt die gleichen Felder wie MOVE
+            fields = [("X", "dx", 0.0, "mm"), ("Y", "dy", 0.0, "mm")]
         elif self.current_tool == SketchTool.ROTATE and self.tool_step >= 1:
             fields = [("∠", "angle", 0.0, "°")]
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
@@ -1749,23 +1752,43 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             dx, dy = values.get("dx", 0), values.get("dy", 0)
+            logger.debug(f"MOVE Tab-Eingabe: dx={dx}, dy={dy}")
             self._save_undo()
             self._move_selection(dx, dy)
             self.sketched_changed.emit()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
-            
+            self._find_closed_profiles()
+            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+
         elif self.current_tool == SketchTool.ROTATE and self.tool_step >= 1:
+            center = self.tool_points[0] if self.tool_points else QPointF(0, 0)
+            angle = values.get("angle", 0)
+            logger.debug(f"ROTATE Tab-Eingabe: center=({center.x()}, {center.y()}), angle={angle}°")
             self._save_undo()
-            self._rotate_selection(self.tool_points[0], values.get("angle", 0))
+            self._rotate_selection(center, angle)
             self.sketched_changed.emit()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
-            
+            self._find_closed_profiles()
+            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
+            center = self.tool_points[0] if self.tool_points else QPointF(0, 0)
+            factor = values.get("factor", 1.0)
+            logger.debug(f"SCALE Tab-Eingabe: center=({center.x()}, {center.y()}), factor={factor}")
             self._save_undo()
-            self._scale_selection(self.tool_points[0], values.get("factor", 1.0))
+            self._scale_selection(center, factor)
             self.sketched_changed.emit()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
-        
+            self._find_closed_profiles()
+            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+
+        elif self.current_tool == SketchTool.COPY and self.tool_step == 1:
+            # COPY per Tab-Eingabe: Wie MOVE, aber erstellt Kopien
+            dx, dy = values.get("dx", 0), values.get("dy", 0)
+            logger.debug(f"COPY Tab-Eingabe: dx={dx}, dy={dy}")
+            self._save_undo()
+            self._copy_selection_with_offset(dx, dy)
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            self._cancel_tool()
+
         # SLOT: Tab-Eingabe
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:

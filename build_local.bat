@@ -17,6 +17,9 @@ echo Cleaning previous builds...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
+REM Fix OpenMP conflict during analysis
+set KMP_DUPLICATE_LIB_OK=TRUE
+
 REM Build the executable
 echo Building MashCAD executable...
 pyinstaller MashCAD.spec

@@ -17,6 +17,17 @@ except ImportError:
     except ImportError:
         from .sketch_tools import SketchTool, SnapType
 
+try:
+    # Versuche ConstraintType aus dem sketcher Paket zu laden
+    from sketcher import ConstraintType
+except ImportError:
+    try:
+        # Fallback: Direkt aus constraints
+        from constraints import ConstraintType
+    except ImportError:
+        pass
+  
+
 
 class SketchRendererMixin:
     """Mixin containing all drawing methods for SketchEditor"""
@@ -367,23 +378,107 @@ class SketchRendererMixin:
                         
                 elif c.type == ConstraintType.LENGTH and c.value and c.entities:
                     line = c.entities[0]
-                    mid = self.world_to_screen(QPointF(line.midpoint.x, line.midpoint.y))
+                    
+                    # 1. Bildschirm-Koordinaten berechnen
+                    s_start = self.world_to_screen(QPointF(line.start.x, line.start.y))
+                    s_end = self.world_to_screen(QPointF(line.end.x, line.end.y))
+                    
+                    # 2. Mittelpunkt auf dem Bildschirm
+                    mid = (s_start + s_end) / 2
+                    
+                    # 3. Normalenvektor berechnen (Senkrecht zur Linie)
+                    dx = s_end.x() - s_start.x()
+                    dy = s_end.y() - s_start.y()
+                    length_screen = math.hypot(dx, dy)
+                    
+                    text_pos = mid
+                    
+                    if length_screen > 0:
+                        # Einheitsvektor der Normalen (-dy, dx) ist 90° rotiert
+                        # Wir nutzen einen Offset von 30 Pixeln
+                        offset_dist = 30 
+                        
+                        # Einfache Heuristik: Wir schieben immer in eine bestimmte relative Richtung,
+                        # damit es bei Rechtecken meistens "außen" landet (hängt von der Zeichenrichtung ab)
+                        nx = -dy / length_screen
+                        ny = dx / length_screen
+                        
+                        text_pos = QPointF(mid.x() + nx * offset_dist, mid.y() + ny * offset_dist)
+                        
+                        # Eine dünne Hilfslinie zeichnen (Dimension Line Style)
+                        p.setPen(QPen(QColor(100, 100, 100, 100), 1, Qt.DashLine))
+                        p.drawLine(mid, text_pos)
+
                     text = f"{c.value:.1f}"
+                    
+                    # Box zeichnen
+                    fm = QFontMetrics(p.font())
+                    rect = fm.boundingRect(text)
+                    box_w = rect.width() + 10
+                    box_h = rect.height() + 4
+                    
                     p.setPen(Qt.NoPen)
                     p.setBrush(QBrush(QColor(30, 30, 30, 200)))
-                    p.drawRoundedRect(int(mid.x())+3, int(mid.y())-20, len(text)*8+6, 16, 3, 3)
+                    # Zentrierte Box am neuen Ort
+                    p.drawRoundedRect(int(text_pos.x() - box_w/2), int(text_pos.y() - box_h/2), 
+                                      box_w, box_h, 3, 3)
+                    
                     p.setPen(QPen(self.DIM_COLOR))
-                    p.drawText(int(mid.x())+6, int(mid.y())-8, text)
+                    # Text zentrieren
+                    p.drawText(int(text_pos.x() - rect.width()/2), 
+                               int(text_pos.y() + rect.height()/2 - 3), text)
                     
                 elif c.type == ConstraintType.RADIUS and c.value and c.entities:
-                    circ = c.entities[0]
-                    pos = self.world_to_screen(QPointF(circ.center.x + circ.radius*0.7, circ.center.y + circ.radius*0.7))
+                    circle = c.entities[0]
+                    r_screen = circle.radius * self.view_scale
+                    
+                    # Mittelpunkt im Screen-Space
+                    center = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
+                    
+                    # Wir zeichnen die Bemaßung immer in einem festen Winkel (z.B. 45° nach rechts oben)
+                    # Das sieht meistens am saubersten aus.
+                    angle_deg = -45 
+                    angle_rad = math.radians(angle_deg)
+                    
+                    # Richtung berechnen
+                    dir_x = math.cos(angle_rad)
+                    dir_y = math.sin(angle_rad)
+                    
+                    # Punkt auf dem Kreisring
+                    rim_x = center.x() + dir_x * r_screen
+                    rim_y = center.y() + dir_y * r_screen
+                    p_rim = QPointF(rim_x, rim_y)
+                    
+                    # Punkt für den Text (etwas weiter draußen)
+                    offset = 40 # Länge der Linie nach außen
+                    text_x = rim_x + dir_x * offset
+                    text_y = rim_y + dir_y * offset
+                    p_text = QPointF(text_x, text_y)
+                    
+                    # 1. Linie vom Zentrum zum Text
+                    p.setPen(QPen(self.DIM_COLOR, 1, Qt.DashLine))
+                    p.drawLine(center, p_text)
+                    
+                    # 2. Optional: Kleiner Punkt oder Pfeil am Kreisring
+                    p.setBrush(QBrush(self.DIM_COLOR))
+                    p.drawEllipse(p_rim, 2, 2)
+                    
+                    # 3. Text Box
                     text = f"R{c.value:.1f}"
+                    fm = QFontMetrics(p.font())
+                    rect = fm.boundingRect(text)
+                    
+                    # Hintergrund für Text
                     p.setPen(Qt.NoPen)
                     p.setBrush(QBrush(QColor(30, 30, 30, 200)))
-                    p.drawRoundedRect(int(pos.x())-2, int(pos.y())-12, len(text)*8+4, 16, 3, 3)
+                    p.drawRoundedRect(int(p_text.x() - rect.width()/2 - 4), 
+                                      int(p_text.y() - rect.height()/2 - 2), 
+                                      rect.width()+8, rect.height()+4, 3, 3)
+                    
+                    # Text selbst
                     p.setPen(QPen(self.DIM_COLOR))
-                    p.drawText(int(pos.x()), int(pos.y()), text)
+                    p.drawText(int(p_text.x() - rect.width()/2), 
+                               int(p_text.y() + rect.height()/2 - 2), text)
                     
                 elif c.type == ConstraintType.CONCENTRIC and len(c.entities) >= 2:
                     # Symbol am Mittelpunkt
@@ -644,8 +739,19 @@ class SketchRendererMixin:
         
         # COPY Preview
         elif self.current_tool == SketchTool.COPY and self.tool_step == 1:
-            dx = snap.x() - self.tool_points[0].x()
-            dy = snap.y() - self.tool_points[0].y()
+            # Bei aktiver Tab-Eingabe: Werte aus dim_input verwenden
+            if self.dim_input_active and self.dim_input.isVisible():
+                try:
+                    vals = self.dim_input.get_values()
+                    dx = vals.get("dx", 0)
+                    dy = vals.get("dy", 0)
+                except:
+                    dx = snap.x() - self.tool_points[0].x()
+                    dy = snap.y() - self.tool_points[0].y()
+            else:
+                dx = snap.x() - self.tool_points[0].x()
+                dy = snap.y() - self.tool_points[0].y()
+
             p.setPen(QPen(QColor(100, 200, 255), 2, Qt.DashLine))
             for line in self.selected_lines:
                 s = self.world_to_screen(QPointF(line.start.x + dx, line.start.y + dy))
@@ -655,8 +761,17 @@ class SketchRendererMixin:
                 ctr = self.world_to_screen(QPointF(c.center.x + dx, c.center.y + dy))
                 r = c.radius * self.view_scale
                 p.drawEllipse(ctr, r, r)
+            # Verschiebungspfeil und Offset-Text
             p.setPen(QPen(QColor(255, 200, 0), 2))
-            p.drawLine(self.world_to_screen(self.tool_points[0]), self.world_to_screen(snap))
+            base_screen = self.world_to_screen(self.tool_points[0])
+            target_screen = self.world_to_screen(QPointF(self.tool_points[0].x() + dx, self.tool_points[0].y() + dy))
+            p.drawLine(base_screen, target_screen)
+            # Offset-Anzeige
+            p.setFont(QFont("Arial", 10, QFont.Bold))
+            offset_text = f"ΔX: {dx:.1f}  ΔY: {dy:.1f}"
+            text_pos = QPointF((base_screen.x() + target_screen.x()) / 2,
+                               (base_screen.y() + target_screen.y()) / 2 - 15)
+            p.drawText(int(text_pos.x()) - 50, int(text_pos.y()), offset_text)
         
         # ROTATE Preview
         elif self.current_tool == SketchTool.ROTATE and self.tool_step == 1:

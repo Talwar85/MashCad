@@ -173,10 +173,11 @@ class TransformMixinV3:
             
     def _copy_body_from_gizmo(self, body_id: str, mode: str, data):
         """Callback: Kopiert Body und wendet Transform an"""
-        if hasattr(self, 'body_copy_requested'):
+        # FIX Bug 1.5: Signal direkt emittieren (hasattr kann bei Qt Signals fehlschlagen)
+        try:
             self.body_copy_requested.emit(body_id, mode, data)
             logger.debug(f"Copy+Transform Signal: {mode} auf {body_id}")
-        else:
+        except AttributeError:
             logger.warning("body_copy_requested Signal nicht verfügbar")
             
     def _mirror_body_from_gizmo(self, body_id: str, plane: str):

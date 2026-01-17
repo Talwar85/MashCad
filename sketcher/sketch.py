@@ -136,38 +136,30 @@ class Sketch:
     
     def add_rectangle(self, x: float, y: float, width: float, height: float, construction: bool = False) -> List[Line2D]:
         """Fügt ein Rechteck hinzu (4 Linien mit geteilten Eckpunkten)"""
-        # 4 Eckpunkte erstellen (werden geteilt!)
-        p1 = Point2D(x, y)              # Unten links (Ursprung)
-        p2 = Point2D(x + width, y)      # Unten rechts
-        p3 = Point2D(x + width, y + height)  # Oben rechts
-        p4 = Point2D(x, y + height)     # Oben links
+        # 4 Eckpunkte erstellen
+        p1 = self.add_point(x, y, construction)               # Unten links
+        p2 = self.add_point(x + width, y, construction)       # Unten rechts
+        p3 = self.add_point(x + width, y + height, construction) # Oben rechts
+        p4 = self.add_point(x, y + height, construction)      # Oben links
         
-        # Ersten Punkt fixieren (Ursprungspunkt)
-        p1.fixed = True
+        # 4 Linien verbinden
+        l1 = self.add_line_from_points(p1, p2, construction) # Unten
+        l2 = self.add_line_from_points(p2, p3, construction) # Rechts
+        l3 = self.add_line_from_points(p3, p4, construction) # Oben
+        l4 = self.add_line_from_points(p4, p1, construction) # Links
         
-        # Punkte zur Liste hinzufügen
-        self.points.extend([p1, p2, p3, p4])
-        
-        # 4 Linien mit GETEILTEN Punkten
-        l1 = Line2D(p1, p2)  # Unten
-        l2 = Line2D(p2, p3)  # Rechts
-        l3 = Line2D(p3, p4)  # Oben
-        l4 = Line2D(p4, p1)  # Links
-        
-        lines = [l1, l2, l3, l4]
-        
-        for line in lines:
-            line.construction = construction
-            self.lines.append(line)
-        
-        # Constraints: Horizontal/Vertikal
-        # KEINE Coincident nötig - Punkte sind bereits geteilt!
+        # Constraints: Geometrisch (Form erhalten)
         self.add_horizontal(l1)
         self.add_horizontal(l3)
         self.add_vertical(l2)
         self.add_vertical(l4)
         
-        return lines
+        # Coincident ist implizit durch geteilte Punkte (add_line_from_points), 
+        # aber Punkte müssen auch logisch verbunden bleiben im Solver.
+        # Da wir 'add_line_from_points' nutzen und p1, p2 etc. wiederverwenden,
+        # behandelt der Solver (Scipy) die Parameter (x,y) von p1 als geteilt.
+        
+        return [l1, l2, l3, l4]
     
     def add_polygon(self, points: List[Tuple[float, float]], closed: bool = True, construction: bool = False) -> List[Line2D]:
         """Fügt ein Polygon hinzu"""
@@ -197,6 +189,52 @@ class Sketch:
         
         return lines
     
+    def add_regular_polygon(self, cx: float, cy: float, r: float, sides: int, angle_offset: float = 0, construction: bool = False):
+        """
+        Erstellt ein parametrisches reguläres Polygon.
+        Basiert auf einem (unsichtbaren) Konstruktionskreis.
+        """
+        import math
+        
+        # 1. Konstruktionskreis erstellen (dieser steuert das Polygon)
+        # construction=True sorgt dafür, dass er gestrichelt dargestellt wird
+        circle = self.add_circle(cx, cy, r, construction=True)
+        
+        points = []
+        lines = []
+        step = 2 * math.pi / sides
+        
+        # 2. Punkte erstellen und auf dem Kreis fixieren
+        for i in range(sides):
+            angle = angle_offset + i * step
+            # Startkoordinaten berechnen
+            px = cx + r * math.cos(angle)
+            py = cy + r * math.sin(angle)
+            
+            p = self.add_point(px, py, construction=construction)
+            points.append(p)
+            
+            # WICHTIG: Constraint hinzufügen, damit der Punkt am Kreis "klebt"
+            self.add_point_on_circle(p, circle)
+
+        # 3. Linien verbinden
+        for i in range(sides):
+            p1 = points[i]
+            p2 = points[(i + 1) % sides] # Modulo verbindet den letzten mit dem ersten
+            
+            # Hier nutzen wir add_line_from_points, damit die Punkte geteilt werden
+            line = self.add_line_from_points(p1, p2, construction=construction)
+            lines.append(line)
+
+        # 4. Seitenlängen gleichsetzen (Equal Length Constraint)
+        # Das sorgt dafür, dass alle Seiten gleich lang bleiben, auch wenn man zieht
+        for i in range(len(lines)):
+            l1 = lines[i]
+            l2 = lines[(i + 1) % len(lines)]
+            self.add_equal_length(l1, l2)
+
+        return lines, circle
+
     # === Constraint-Erstellung ===
     
     def add_fixed(self, point: Point2D) -> Constraint:
@@ -235,9 +273,9 @@ class Sketch:
         self.constraints.append(c)
         return c
     
-    def add_equal_length(self, l1: Line2D, l2: Line2D) -> Constraint:
-        """Macht zwei Linien gleich lang"""
-        c = make_equal_length(l1, l2)
+    def add_equal_length(self, line1: Line2D, line2: Line2D) -> Constraint:
+        """Zwingt zwei Linien dazu, die gleiche Länge zu haben"""
+        c = Constraint(ConstraintType.EQUAL_LENGTH, [line1, line2])
         self.constraints.append(c)
         return c
     
@@ -282,6 +320,101 @@ class Sketch:
         c = make_midpoint(point, line)
         self.constraints.append(c)
         return c
+    
+    def add_point_on_circle(self, point: Point2D, circle: Circle2D) -> Constraint:
+        """Zwingt einen Punkt auf die Kreisbahn"""
+        c = Constraint(ConstraintType.POINT_ON_CIRCLE, [point, circle])
+        self.constraints.append(c)
+        return c
+    
+    def add_slot(self, x1: float, y1: float, x2: float, y2: float, radius: float, construction: bool = False):
+        """Erstellt ein parametrisches Langloch (Slot)"""
+        
+        # 1. Mittellinie (Konstruktion) - Das "Rückgrat" des Langlochs
+        # Wir erstellen zuerst die Punkte explizit, damit wir Referenzen haben
+        p_start = self.add_point(x1, y1, construction=True)
+        p_end = self.add_point(x2, y2, construction=True)
+        line_center = self.add_line_from_points(p_start, p_end, construction=True)
+        
+        # Vektor für die Initiale Positionierung der Außenlinien (damit der Solver es leichter hat)
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy)
+        if length < 1e-6: length = 1.0
+        
+        # Normale berechnen (-dy, dx)
+        nx, ny = -dy / length * radius, dx / length * radius
+        
+        # 2. Außenpunkte berechnen
+        t1 = self.add_point(x1 + nx, y1 + ny, construction=construction)
+        t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
+        b1 = self.add_point(x1 - nx, y1 - ny, construction=construction)
+        b2 = self.add_point(x2 - nx, y2 - ny, construction=construction)
+        
+        # 3. Linien und Bögen erstellen
+        # Oben und Unten
+        line_top = self.add_line_from_points(t1, t2, construction=construction)
+        line_bot = self.add_line_from_points(b1, b2, construction=construction)
+        
+        # Bögen (Links und Rechts)
+        # add_arc_from_3_points ist hier schwierig, wir nutzen add_arc mit Center
+        # Aber wir müssen die Start/Endpunkte manuell verknüpfen
+        
+        # Wir erstellen die Arcs direkt
+        # Winkel berechnen
+        angle = math.degrees(math.atan2(dy, dx))
+        
+        # Bogen 1 (Startseite): Geht von Unten (b1) nach Oben (t1) -> "Hinten rum"
+        arc1 = self.add_arc(x1, y1, radius, angle + 90, angle + 270, construction=construction)
+        # Constraints: Zentrum muss p_start sein
+        self.add_coincident(arc1.center, p_start)
+        # Endpunkte des Bogens mit den Linienenden verknüpfen
+        # Hinweis: Das setzt voraus, dass add_arc Punkte erstellt. 
+        # Falls Arc Start/End-Punkte hat, müssen wir diese mit t1/b1 mergen (Coincident)
+        # Wir erzwingen Coincident zwischen Arc-Enden und unseren Punkten:
+        self.add_coincident(arc1.start_point, t1) # Start bei 90deg (oben) oder 270? 
+        # ACHTUNG: Winkelrichtung beachten. Bei math.atan2 ist es CCW.
+        # Wir machen es robuster: Coincident auf die Punkte, die am nächsten liegen.
+        self.add_coincident(arc1.start_point, t1) 
+        self.add_coincident(arc1.end_point, b1)
+
+        # Bogen 2 (Endseite): Geht von Oben (t2) nach Unten (b2) -> "Vorne rum"
+        arc2 = self.add_arc(x2, y2, radius, angle - 90, angle + 90, construction=construction)
+        self.add_coincident(arc2.center, p_end)
+        self.add_coincident(arc2.start_point, b2)
+        self.add_coincident(arc2.end_point, t2)
+        
+        # 4. Geometrische Constraints (Die Magie)
+        
+        # Tangenten (Linie an Bogen)
+        self.add_tangent(line_top, arc1)
+        self.add_tangent(line_top, arc2)
+        self.add_tangent(line_bot, arc1)
+        self.add_tangent(line_bot, arc2)
+        
+        # Parallelität zur Mittellinie (Hält das Langloch gerade)
+        self.add_parallel(line_top, line_center)
+        
+        # Gleicher Radius für beide Bögen
+        self.add_equal_radius(arc1, arc2)
+
+        return line_center, arc1  # Rückgabe für Bemaßung
+        
+    # Hilfsmethoden für Constraints (in sketch.py ergänzen falls fehlen)
+    def add_tangent(self, line, arc):
+        c = Constraint(ConstraintType.TANGENT, [line, arc])
+        self.constraints.append(c)
+        return c
+        
+    def add_equal_radius(self, c1, c2):
+        c = Constraint(ConstraintType.EQUAL_RADIUS, [c1, c2])
+        self.constraints.append(c)
+        return c
+        
+    def add_parallel(self, l1, l2):
+        c = Constraint(ConstraintType.PARALLEL, [l1, l2])
+        self.constraints.append(c)
+        return c
+    
     
     # === Constraint-Solver ===
     

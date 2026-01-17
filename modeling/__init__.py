@@ -32,34 +32,48 @@ from modeling.mesh_converter_v6 import SmartMeshConverter # V6 - Feature Detecti
 HAS_BUILD123D = False
 HAS_OCP = False
 
+# OCP wird IMMER geladen (für robuste Boolean Operations)
+try:
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
+    from OCP.BRepBuilderAPI import (
+        BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
+        BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+    )
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common
+    from OCP.BOPAlgo import BOPAlgo_GlueEnum
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
+    from OCP.StlAPI import StlAPI_Writer
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopoDS import TopoDS_Shape, TopoDS_Solid, TopoDS_Face, TopoDS_Edge, TopoDS_Wire
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_SOLID
+    from OCP.gp import gp_Pnt, gp_Vec, gp_Dir, gp_Ax1, gp_Ax2, gp_Pln, gp_Trsf
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    HAS_OCP = True
+    logger.success("✓ OCP (OpenCASCADE) geladen.")
+except ImportError as e:
+    logger.warning(f"! OCP nicht gefunden: {e}")
+
+# Build123d als High-Level API (optional, aber empfohlen)
 try:
     from build123d import (
         Box, Cylinder, Sphere, Solid, Shape,
         extrude, revolve, fillet, chamfer,
         Axis, Plane, Locations, Vector,
         BuildPart, BuildSketch, BuildLine,
-        Part, Sketch as B123Sketch, 
+        Part, Sketch as B123Sketch,
         Rectangle as B123Rect, Circle as B123Circle,
         Polyline, Polygon, make_face, Mode,
         export_stl, export_step,
         GeomType
     )
     HAS_BUILD123D = True
-    logger.success("✓ build123d geladen (Modeling).")
+    logger.success("✓ build123d geladen (High-Level API).")
 except ImportError as e:
-    logger.error(f"! build123d nicht gefunden: {e}")
-
-# Fallback OCP Imports
-if not HAS_BUILD123D:
-    try:
-        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common
-        from OCP.StlAPI import StlAPI_Writer
-        from OCP.BRepMesh import BRepMesh_IncrementalMesh
-        HAS_OCP = True
-    except Exception:
-        pass
+    logger.warning(f"! build123d nicht gefunden: {e}")
 
 # Projektpfad
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,6 +90,7 @@ class FeatureType(Enum):
     REVOLVE = auto()
     FILLET = auto()
     CHAMFER = auto()
+    TRANSFORM = auto()  # NEU: Für Move/Rotate/Scale/Mirror
 
 @dataclass
 class Feature:
@@ -123,10 +138,34 @@ class FilletFeature(Feature):
 class ChamferFeature(Feature):
     distance: float = 2.0
     edge_selectors: List = None
-    
+
     def __post_init__(self):
         self.type = FeatureType.CHAMFER
         if not self.name or self.name == "Feature": self.name = "Chamfer"
+
+@dataclass
+class TransformFeature(Feature):
+    """
+    Parametric transform stored in feature history.
+
+    Enables:
+    - Undo/Redo support
+    - Parametric editing
+    - Feature tree visibility
+    - Body rebuild consistency
+    """
+    mode: str = "move"  # "move", "rotate", "scale", "mirror"
+    data: dict = field(default_factory=dict)
+    # data examples:
+    # Move: {"translation": [10.0, 0.0, 5.0]}
+    # Rotate: {"axis": "Z", "angle": 45.0, "center": [0.0, 0.0, 0.0]}
+    # Scale: {"factor": 1.5, "center": [0.0, 0.0, 0.0]}
+    # Mirror: {"plane": "XY"}
+
+    def __post_init__(self):
+        self.type = FeatureType.TRANSFORM
+        if not self.name or self.name == "Feature":
+            self.name = f"Transform: {self.mode.capitalize()}"
 
 
 # ==================== CORE LOGIC ====================
@@ -165,10 +204,10 @@ class Body:
             self.features.remove(feature)
             self._rebuild()
             
-    def convert_to_brep(self, mode: str = "v1"):
+    def convert_to_brep(self, mode: str = "hybrid"):
         """
         Wandelt Mesh in CAD-Solid um.
-        :param mode: 'v1' (Schnell/Sewing), 'v5' (Gmsh/Quads), 'v6' (Smart/Feature Detection)
+        :param mode: 'hybrid' (Auto - EMPFOHLEN), 'v7' (RANSAC Primitives), 'v6' (Smart/Planar)
         """
         if self._build123d_solid is not None:
             logger.info(f"Body '{self.name}' ist bereits BREP.")
@@ -180,8 +219,45 @@ class Body:
 
         solid = None
 
-        # --- MODUS V6: SMART / FEATURE DETECTION (NEU) ---
-        if mode == "v6":
+        # --- MODUS HYBRID: AUTOMATISCHE WAHL (EMPFOHLEN) ---
+        if mode == "hybrid":
+            logger.info("Starte Konvertierung mit Hybrid (Automatische Wahl)...")
+            try:
+                from modeling.mesh_converter_hybrid import HybridMeshConverter
+                converter = HybridMeshConverter(
+                    ransac_min_coverage=0.80,   # 80% Coverage für RANSAC-Erfolg
+                    use_v7=True,                # V7 (RANSAC) aktiviert
+                    use_v6_fallback=True,       # V6 als Fallback
+                    use_v1_fallback=True        # V1 als letzter Fallback
+                )
+                solid = converter.convert(self.vtk_mesh)
+
+            except Exception as e:
+                logger.error(f"Hybrid Konvertierung fehlgeschlagen: {e}")
+                traceback.print_exc()
+                return False
+
+        # --- MODUS V7: RANSAC PRIMITIVES ---
+        elif mode == "v7":
+            logger.info("Starte Konvertierung mit V7 (RANSAC Primitives)...")
+            try:
+                from modeling.mesh_converter_primitives import RANSACPrimitiveConverter
+                converter = RANSACPrimitiveConverter(
+                    angle_tolerance=5.0,        # 5° für Region-Clustering
+                    ransac_threshold=0.5,       # 0.5mm Inlier-Toleranz
+                    min_inlier_ratio=0.70,      # 70% Inliers minimum
+                    min_region_faces=10,
+                    sewing_tolerance=0.1
+                )
+                solid = converter.convert(self.vtk_mesh)
+
+            except Exception as e:
+                logger.error(f"V7 Konvertierung fehlgeschlagen: {e}")
+                traceback.print_exc()
+                return False
+
+        # --- MODUS V6: SMART / FEATURE DETECTION ---
+        elif mode == "v6":
             logger.info("Starte Konvertierung mit V6 (Smart Feature Detection)...")
             try:
                 converter = SmartMeshConverter(
@@ -191,47 +267,17 @@ class Body:
                     sewing_tolerance=0.1
                 )
                 solid = converter.convert(self.vtk_mesh, method="smart")
-                
+
             except Exception as e:
                 logger.error(f"V6 Konvertierung fehlgeschlagen: {e}")
                 traceback.print_exc()
                 return False
 
-        # --- MODUS V5: GMSH QUADS (Reverse Engineering) ---
-        elif mode == "v5":
-            logger.info("Starte Konvertierung mit V5 (Gmsh Quads)...")
-            try:
-                converter = MeshToBREPV5()
-                
-                # Brücke: PyVista (Memory) -> Temporäre Datei -> Open3D (V5)
-                # Wir nutzen .ply, das speichert Koordinaten präzise
-                with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as tmp:
-                    temp_path = tmp.name
-                
-                try:
-                    self.vtk_mesh.save(temp_path)
-                    # V5 aufrufen
-                    solid = converter.convert(temp_path)
-                finally:
-                    # Aufräumen
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-
-            except Exception as e:
-                logger.error(f"V5 Konvertierung fehlgeschlagen: {e}")
-                traceback.print_exc()
-                return False
-
-        # --- MODUS V1: CLASSIC / SEWING ---
-        else: # v1 oder auto
-            logger.info("Starte Konvertierung mit V1 (Sewing/Slicing)...")
-            try:
-                converter = MeshToBREPConverter()
-                # Wir zielen auf 2000-5000 Faces, damit OCP nicht abstürzt
-                solid = converter.convert(self.vtk_mesh, target_faces=3000, method="auto")
-            except Exception as e:
-                logger.error(f"V1 Konvertierung fehlgeschlagen: {e}")
-                return False
+        # --- UNGÜLTIGER MODUS ---
+        else:
+            logger.error(f"Ungültiger Modus: {mode}")
+            logger.info("Verfügbare Modi: 'hybrid', 'v7', 'v6'")
+            return False
 
         # --- ERGEBNIS VERARBEITEN ---
         if solid and hasattr(solid, 'wrapped') and not solid.wrapped.IsNull():
@@ -278,6 +324,539 @@ class Body:
             
             return None, "ERROR"
 
+    def _safe_boolean_operation(self, solid1, solid2, operation: str):
+        """
+        Robuste Boolean Operation mit direkter OCP-API (wie Fusion360/OnShape).
+
+        Args:
+            solid1: Erstes Solid (aktueller Body)
+            solid2: Zweites Solid (neues Teil)
+            operation: "Join", "Cut", oder "Intersect"
+
+        Returns:
+            (result_solid, success: bool)
+        """
+        if not HAS_OCP:
+            logger.error("OCP nicht verfügbar - Boolean Operations nicht möglich")
+            return solid1, False
+
+        try:
+            # 1. Validiere Eingaben
+            if solid1 is None or solid2 is None:
+                logger.error(f"Boolean {operation}: Eines der Solids ist None")
+                return solid1, False
+
+            # 2. Extrahiere TopoDS_Shape (OCP-Kern)
+            shape1 = solid1.wrapped if hasattr(solid1, 'wrapped') else solid1
+            shape2 = solid2.wrapped if hasattr(solid2, 'wrapped') else solid2
+
+            # 3. Repariere Shapes VOR Boolean (kritisch für Erfolg!)
+            shape1 = self._fix_shape_ocp(shape1)
+            shape2 = self._fix_shape_ocp(shape2)
+
+            if shape1 is None or shape2 is None:
+                logger.error("Shape-Reparatur fehlgeschlagen")
+                return solid1, False
+
+            # 4. Führe Boolean Operation aus (OCP-API)
+            logger.info(f"OCP Boolean: {operation}...")
+            result_shape = None
+
+            # Toleranzen für robuste Operationen
+            FUZZY_VALUE = 1e-5  # 0.01mm - größer = toleranter
+
+            if operation == "Join":
+                result_shape = self._ocp_fuse(shape1, shape2, FUZZY_VALUE)
+            elif operation == "Cut":
+                result_shape = self._ocp_cut(shape1, shape2, FUZZY_VALUE)
+            elif operation == "Intersect":
+                result_shape = self._ocp_common(shape1, shape2, FUZZY_VALUE)
+            else:
+                logger.error(f"Unbekannte Operation: {operation}")
+                return solid1, False
+
+            # 5. Validiere und repariere Resultat
+            if result_shape is None:
+                logger.error(f"{operation} produzierte None")
+                return solid1, False
+
+            # Repariere Resultat
+            result_shape = self._fix_shape_ocp(result_shape)
+
+            if result_shape is None:
+                logger.error(f"{operation} Resultat-Reparatur fehlgeschlagen")
+                return solid1, False
+
+            # 6. Wrap zurück zu Build123d Solid
+            try:
+                from build123d import Solid, Shape
+                try:
+                    result = Solid(result_shape)
+                except:
+                    result = Shape(result_shape)
+
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.success(f"✅ {operation} erfolgreich")
+                    return result, True
+                else:
+                    logger.warning(f"{operation} Resultat invalid nach Wrap")
+                    # Versuche Build123d fix()
+                    try:
+                        result = result.fix()
+                        if result.is_valid():
+                            logger.success(f"✅ {operation} erfolgreich (nach fix)")
+                            return result, True
+                    except:
+                        pass
+                    return solid1, False
+            except Exception as e:
+                logger.error(f"Wrap zu Build123d fehlgeschlagen: {e}")
+                return solid1, False
+
+        except Exception as e:
+            logger.error(f"Boolean {operation} Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return solid1, False
+
+    def _fix_shape_ocp(self, shape):
+        """Repariert einen TopoDS_Shape mit OCP ShapeFix."""
+        try:
+            from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
+            from OCP.BRepCheck import BRepCheck_Analyzer
+
+            # Prüfe ob Shape valide ist
+            analyzer = BRepCheck_Analyzer(shape)
+            if analyzer.IsValid():
+                return shape
+
+            logger.debug("Shape invalid, starte Reparatur...")
+
+            # ShapeFix_Shape für allgemeine Reparaturen
+            fixer = ShapeFix_Shape(shape)
+            fixer.SetPrecision(1e-6)
+            fixer.SetMaxTolerance(1e-3)
+            fixer.SetMinTolerance(1e-7)
+
+            # Aktiviere alle Reparaturen
+            fixer.FixSolidMode()
+            fixer.FixShellMode()
+            fixer.FixFaceMode()
+            fixer.FixWireMode()
+            fixer.FixEdgeMode()
+
+            if fixer.Perform():
+                fixed_shape = fixer.Shape()
+
+                # Validiere repariertes Shape
+                analyzer2 = BRepCheck_Analyzer(fixed_shape)
+                if analyzer2.IsValid():
+                    logger.debug("✓ Shape repariert")
+                    return fixed_shape
+                else:
+                    logger.warning("Shape nach Reparatur immer noch invalid")
+                    # Gib es trotzdem zurück - manchmal funktioniert es dennoch
+                    return fixed_shape
+            else:
+                logger.warning("ShapeFix Perform() fehlgeschlagen")
+                return shape  # Gib Original zurück
+
+        except Exception as e:
+            logger.warning(f"Shape-Reparatur Fehler: {e}")
+            return shape  # Gib Original zurück
+
+    def _ocp_fuse(self, shape1, shape2, fuzzy_value):
+        """OCP Fuse (Join) mit optimalen Parametern."""
+        try:
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+            from OCP.BOPAlgo import BOPAlgo_GlueEnum
+            from OCP.TopTools import TopTools_ListOfShape
+
+            # Methode 1: Standard Fuse mit Fuzzy
+            fuse_op = BRepAlgoAPI_Fuse()
+
+            # Setze Argumente (WICHTIG: VOR Build!)
+            args = TopTools_ListOfShape()
+            args.Append(shape1)
+            fuse_op.SetArguments(args)
+
+            tools = TopTools_ListOfShape()
+            tools.Append(shape2)
+            fuse_op.SetTools(tools)
+
+            # Setze Parameter für robustes Fuse
+            fuse_op.SetFuzzyValue(fuzzy_value)
+            fuse_op.SetRunParallel(True)
+            fuse_op.SetNonDestructive(True)  # Behält Original-Shapes
+            fuse_op.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueFull)  # Besseres Gluing
+
+            # Build
+            fuse_op.Build()
+
+            if fuse_op.IsDone():
+                return fuse_op.Shape()
+            else:
+                # Fallback: Einfacher Konstruktor
+                logger.info("Versuche Fuse Fallback...")
+                fuse_simple = BRepAlgoAPI_Fuse(shape1, shape2)
+                fuse_simple.Build()
+                if fuse_simple.IsDone():
+                    return fuse_simple.Shape()
+
+                return None
+        except Exception as e:
+            logger.error(f"OCP Fuse Fehler: {e}")
+            return None
+
+    def _ocp_cut(self, shape1, shape2, fuzzy_value):
+        """OCP Cut mit optimalen Parametern (wie Fusion360)."""
+        try:
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+            from OCP.BOPAlgo import BOPAlgo_GlueEnum
+            from OCP.TopTools import TopTools_ListOfShape
+
+            # Methode 1: Erweiterte Cut-API
+            cut_op = BRepAlgoAPI_Cut()
+
+            # Setze Argumente (shape1 = Basis, shape2 = Tool zum Schneiden)
+            args = TopTools_ListOfShape()
+            args.Append(shape1)
+            cut_op.SetArguments(args)
+
+            tools = TopTools_ListOfShape()
+            tools.Append(shape2)
+            cut_op.SetTools(tools)
+
+            # Parameter für robustes Cut
+            cut_op.SetFuzzyValue(fuzzy_value)
+            cut_op.SetRunParallel(True)
+            cut_op.SetNonDestructive(True)
+
+            # GlueShift ist wichtig für koplanare Flächen!
+            cut_op.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueShift)
+
+            # Build
+            cut_op.Build()
+
+            if cut_op.IsDone():
+                return cut_op.Shape()
+
+            # Fallback 1: Ohne GlueShift
+            logger.info("Versuche Cut Fallback 1 (ohne GlueShift)...")
+            cut_op2 = BRepAlgoAPI_Cut()
+            args2 = TopTools_ListOfShape()
+            args2.Append(shape1)
+            cut_op2.SetArguments(args2)
+            tools2 = TopTools_ListOfShape()
+            tools2.Append(shape2)
+            cut_op2.SetTools(tools2)
+            cut_op2.SetFuzzyValue(fuzzy_value * 10)  # Größere Toleranz
+            cut_op2.Build()
+
+            if cut_op2.IsDone():
+                return cut_op2.Shape()
+
+            # Fallback 2: Einfacher Konstruktor
+            logger.info("Versuche Cut Fallback 2 (simple)...")
+            cut_simple = BRepAlgoAPI_Cut(shape1, shape2)
+            cut_simple.Build()
+            if cut_simple.IsDone():
+                return cut_simple.Shape()
+
+            return None
+        except Exception as e:
+            logger.error(f"OCP Cut Fehler: {e}")
+            return None
+
+    def _ocp_common(self, shape1, shape2, fuzzy_value):
+        """OCP Common (Intersect) mit optimalen Parametern."""
+        try:
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+            from OCP.TopTools import TopTools_ListOfShape
+
+            common_op = BRepAlgoAPI_Common()
+
+            args = TopTools_ListOfShape()
+            args.Append(shape1)
+            common_op.SetArguments(args)
+
+            tools = TopTools_ListOfShape()
+            tools.Append(shape2)
+            common_op.SetTools(tools)
+
+            common_op.SetFuzzyValue(fuzzy_value)
+            common_op.SetRunParallel(True)
+            common_op.SetNonDestructive(True)
+
+            common_op.Build()
+
+            if common_op.IsDone():
+                return common_op.Shape()
+
+            # Fallback
+            logger.info("Versuche Common Fallback...")
+            common_simple = BRepAlgoAPI_Common(shape1, shape2)
+            common_simple.Build()
+            if common_simple.IsDone():
+                return common_simple.Shape()
+
+            return None
+        except Exception as e:
+            logger.error(f"OCP Common Fehler: {e}")
+            return None
+
+    def _ocp_fillet(self, solid, edges, radius):
+        """
+        OCP-basiertes Fillet (robuster als Build123d).
+
+        Args:
+            solid: Build123d Solid
+            edges: Liste von Edges
+            radius: Fillet-Radius
+
+        Returns:
+            Build123d Solid oder None
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+            from OCP.BRepCheck import BRepCheck_Analyzer
+
+            # Extrahiere TopoDS_Shape
+            shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+
+            # Erstelle Fillet-Operator
+            fillet_op = BRepFilletAPI_MakeFillet(shape)
+
+            # Füge Edges hinzu
+            for edge in edges:
+                edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
+                fillet_op.Add(radius, edge_shape)
+
+            # Build
+            fillet_op.Build()
+
+            if not fillet_op.IsDone():
+                logger.warning("OCP Fillet IsDone() = False")
+                return None
+
+            result_shape = fillet_op.Shape()
+
+            # Validiere
+            analyzer = BRepCheck_Analyzer(result_shape)
+            if not analyzer.IsValid():
+                logger.warning("OCP Fillet produzierte ungültiges Shape, versuche Reparatur...")
+                result_shape = self._fix_shape_ocp(result_shape)
+
+            # Wrap zu Build123d
+            try:
+                from build123d import Solid, Shape
+                try:
+                    result = Solid(result_shape)
+                except:
+                    result = Shape(result_shape)
+
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.debug("OCP Fillet erfolgreich")
+                    return result
+                else:
+                    return None
+            except:
+                return None
+
+        except Exception as e:
+            logger.debug(f"OCP Fillet Fehler: {e}")
+            return None
+
+    def _ocp_chamfer(self, solid, edges, distance):
+        """
+        OCP-basiertes Chamfer (robuster als Build123d).
+
+        Args:
+            solid: Build123d Solid
+            edges: Liste von Edges
+            distance: Chamfer-Distanz
+
+        Returns:
+            Build123d Solid oder None
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer
+            from OCP.BRepCheck import BRepCheck_Analyzer
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+
+            # Extrahiere TopoDS_Shape
+            shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+
+            # Erstelle Chamfer-Operator
+            chamfer_op = BRepFilletAPI_MakeChamfer(shape)
+
+            # Für Chamfer brauchen wir auch angrenzende Faces
+            for edge in edges:
+                edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
+
+                # Finde angrenzende Face
+                explorer = TopExp_Explorer(shape, TopAbs_FACE)
+                while explorer.More():
+                    face = explorer.Current()
+                    # Versuche Chamfer mit symmetrischer Distanz
+                    try:
+                        chamfer_op.Add(distance, edge_shape, face)
+                        break
+                    except:
+                        pass
+                    explorer.Next()
+
+            # Build
+            chamfer_op.Build()
+
+            if not chamfer_op.IsDone():
+                logger.warning("OCP Chamfer IsDone() = False")
+                return None
+
+            result_shape = chamfer_op.Shape()
+
+            # Validiere
+            analyzer = BRepCheck_Analyzer(result_shape)
+            if not analyzer.IsValid():
+                logger.warning("OCP Chamfer produzierte ungültiges Shape")
+                result_shape = self._fix_shape_ocp(result_shape)
+
+            # Wrap zu Build123d
+            try:
+                from build123d import Solid, Shape
+                try:
+                    result = Solid(result_shape)
+                except:
+                    result = Shape(result_shape)
+
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.debug("OCP Chamfer erfolgreich")
+                    return result
+                else:
+                    return None
+            except:
+                return None
+
+        except Exception as e:
+            logger.debug(f"OCP Chamfer Fehler: {e}")
+            return None
+
+    def _ocp_extrude_face(self, face, amount, direction):
+        """
+        Extrusion eines Faces - nutzt Build123d primär, OCP als Fallback.
+
+        Args:
+            face: Build123d Face oder TopoDS_Face
+            amount: Extrusions-Distanz (positiv oder negativ)
+            direction: Richtungsvektor (Build123d Vector oder Tuple)
+
+        Returns:
+            Build123d Solid oder None
+        """
+        # PRIMÄR: Build123d extrude (bewährt und stabil)
+        try:
+            from build123d import extrude
+            result = extrude(face, amount=amount, dir=direction)
+            if result and hasattr(result, 'is_valid') and result.is_valid():
+                return result
+            elif result:
+                # Versuche Reparatur
+                try:
+                    result = result.fix()
+                    if result.is_valid():
+                        return result
+                except:
+                    pass
+        except Exception as e:
+            logger.debug(f"Build123d extrude fehlgeschlagen: {e}")
+
+        # FALLBACK: OCP MakePrism
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+            from OCP.gp import gp_Vec
+            from OCP.BRepCheck import BRepCheck_Analyzer
+
+            logger.debug("Versuche OCP Extrude Fallback...")
+
+            # Extrahiere TopoDS_Face
+            if hasattr(face, 'wrapped'):
+                topo_face = face.wrapped
+            else:
+                topo_face = face
+
+            # Erstelle Richtungsvektor
+            try:
+                if hasattr(direction, 'X'):
+                    # Build123d Vector (property mit Großbuchstaben)
+                    vec = gp_Vec(direction.X * amount, direction.Y * amount, direction.Z * amount)
+                elif hasattr(direction, 'x'):
+                    # Objekt mit x, y, z Attributen (Kleinbuchstaben)
+                    vec = gp_Vec(direction.x * amount, direction.y * amount, direction.z * amount)
+                elif isinstance(direction, (list, tuple)) and len(direction) == 3:
+                    vec = gp_Vec(direction[0] * amount, direction[1] * amount, direction[2] * amount)
+                else:
+                    logger.error(f"Unbekannter direction-Typ: {type(direction)}")
+                    return None
+            except Exception as e:
+                logger.error(f"Fehler bei Vektor-Konvertierung: {e}")
+                return None
+
+            # OCP Prism (Extrusion)
+            prism = BRepPrimAPI_MakePrism(topo_face, vec)
+            prism.Build()
+
+            if not prism.IsDone():
+                logger.warning("OCP MakePrism IsDone() = False")
+                return None
+
+            result_shape = prism.Shape()
+
+            # Validiere
+            analyzer = BRepCheck_Analyzer(result_shape)
+            if not analyzer.IsValid():
+                logger.warning("OCP Extrude produzierte ungültiges Shape, versuche Reparatur...")
+                result_shape = self._fix_shape_ocp(result_shape)
+
+            # Wrap zu Build123d Solid
+            try:
+                from build123d import Solid, Shape
+                try:
+                    result = Solid(result_shape)
+                except:
+                    result = Shape(result_shape)
+
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    return result
+                else:
+                    # Versuche fix()
+                    try:
+                        result = result.fix()
+                        if result.is_valid():
+                            return result
+                    except:
+                        pass
+                    logger.warning("OCP Extrude Resultat invalid")
+                    return None
+            except Exception as e:
+                logger.error(f"Wrap zu Build123d fehlgeschlagen: {e}")
+                return None
+
+        except Exception as e:
+            logger.error(f"OCP Extrude Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _rebuild(self):
         """
         Robuster Rebuild-Prozess (History-basiert).
@@ -306,53 +885,82 @@ class Body:
                     return self._compute_extrude_part(feature)
                 
                 part_geometry, status = self._safe_operation(f"Extrude_{i}", op_extrude)
-                
+
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                     else:
-                        try:
-                            if feature.operation == "Join":
-                                new_solid = current_solid + part_geometry
-                            elif feature.operation == "Cut":
-                                new_solid = current_solid - part_geometry
-                            elif feature.operation == "Intersect":
-                                new_solid = current_solid & part_geometry
-                        except Exception as e:
-                            logger.error(f"Boolean {feature.operation} failed: {e}")
+                        # Boolean Operation mit sicherer Helper-Methode
+                        result, success = self._safe_boolean_operation(
+                            current_solid, part_geometry, feature.operation
+                        )
+
+                        if success:
+                            new_solid = result
+                        else:
+                            logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
                             status = "ERROR"
+                            # Behalte current_solid (keine Änderung)
+                            continue
 
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
                 if current_solid:
                     def op_fillet(rad=feature.radius):
                         edges_to_fillet = self._resolve_edges(current_solid, feature.edge_selectors)
-                        if not edges_to_fillet: raise ValueError("No edges selected")
+                        if not edges_to_fillet:
+                            raise ValueError("No edges selected")
+                        # Versuche OCP Fillet
+                        result = self._ocp_fillet(current_solid, edges_to_fillet, rad)
+                        if result is not None:
+                            return result
+                        # Fallback zu Build123d
                         return fillet(edges_to_fillet, radius=rad)
-                    
+
                     def fallback_fillet():
-                        try: return op_fillet(feature.radius * 0.99)
-                        except: return op_fillet(feature.radius * 0.5)
+                        try:
+                            return op_fillet(feature.radius * 0.99)
+                        except:
+                            return op_fillet(feature.radius * 0.5)
 
                     new_solid, status = self._safe_operation(f"Fillet_{i}", op_fillet, fallback_fillet)
                     if new_solid is None:
-                        new_solid = current_solid 
-                        status = "ERROR" 
+                        new_solid = current_solid
+                        status = "ERROR"
 
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
                 if current_solid:
                     def op_chamfer(dist=feature.distance):
                         edges = self._resolve_edges(current_solid, feature.edge_selectors)
-                        if not edges: raise ValueError("No edges")
+                        if not edges:
+                            raise ValueError("No edges")
+                        # Versuche OCP Chamfer
+                        result = self._ocp_chamfer(current_solid, edges, dist)
+                        if result is not None:
+                            return result
+                        # Fallback zu Build123d
                         return chamfer(edges, length=dist)
-                    
+
                     def fallback_chamfer():
                         return op_chamfer(feature.distance * 0.5)
 
                     new_solid, status = self._safe_operation(f"Chamfer_{i}", op_chamfer, fallback_chamfer)
-                    if new_solid is None: new_solid = current_solid; status = "ERROR"
-            
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= TRANSFORM (NEU) =================
+            elif isinstance(feature, TransformFeature):
+                if current_solid:
+                    def op_transform():
+                        return self._apply_transform_feature(current_solid, feature)
+
+                    new_solid, status = self._safe_operation(f"Transform_{i}", op_transform)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
             feature.status = status
             
             if new_solid is not None:
@@ -406,6 +1014,86 @@ class Body:
                 
         return found_edges
 
+    def _apply_transform_feature(self, solid, feature: TransformFeature):
+        """
+        Wendet ein TransformFeature auf einen Solid an.
+
+        Args:
+            solid: build123d Solid
+            feature: TransformFeature mit mode und data
+
+        Returns:
+            Transformierter Solid
+        """
+        from build123d import Location, Axis, Plane as B123Plane
+
+        mode = feature.mode
+        data = feature.data
+
+        try:
+            if mode == "move":
+                # Translation: [dx, dy, dz]
+                translation = data.get("translation", [0, 0, 0])
+                tx, ty, tz = translation
+                return solid.move(Location((tx, ty, tz)))
+
+            elif mode == "rotate":
+                # Rotation: {"axis": "X/Y/Z", "angle": degrees, "center": [x, y, z]}
+                axis_name = data.get("axis", "Z")
+                angle = data.get("angle", 0)
+                center = data.get("center", [0, 0, 0])
+
+                # Build123d Axis Mapping
+                axis_map = {
+                    "X": Axis.X,
+                    "Y": Axis.Y,
+                    "Z": Axis.Z
+                }
+                axis = axis_map.get(axis_name, Axis.Z)
+
+                # Rotation um beliebigen Punkt:
+                # 1. Move to origin
+                # 2. Rotate
+                # 3. Move back
+                cx, cy, cz = center
+                solid = solid.move(Location((-cx, -cy, -cz)))
+                solid = solid.rotate(axis, angle)
+                solid = solid.move(Location((cx, cy, cz)))
+                return solid
+
+            elif mode == "scale":
+                # Scale: {"factor": float, "center": [x, y, z]}
+                factor = data.get("factor", 1.0)
+                center = data.get("center", [0, 0, 0])
+
+                cx, cy, cz = center
+                solid = solid.move(Location((-cx, -cy, -cz)))
+                solid = solid.scale(factor)
+                solid = solid.move(Location((cx, cy, cz)))
+                return solid
+
+            elif mode == "mirror":
+                # Mirror: {"plane": "XY/XZ/YZ"}
+                plane_name = data.get("plane", "XY")
+
+                # Build123d Plane Mapping
+                plane_map = {
+                    "XY": B123Plane.XY,
+                    "XZ": B123Plane.XZ,
+                    "YZ": B123Plane.YZ
+                }
+                plane = plane_map.get(plane_name, B123Plane.XY)
+
+                return solid.mirror(plane)
+
+            else:
+                logger.warning(f"Unbekannter Transform-Modus: {mode}")
+                return solid
+
+        except Exception as e:
+            logger.error(f"Transform-Feature-Fehler ({mode}): {e}")
+            raise
+
     def _compute_extrude_part(self, feature: ExtrudeFeature):
         """
         Kombiniert "What you see is what you get" (Detector) mit 
@@ -414,7 +1102,7 @@ class Body:
         if not HAS_BUILD123D or not feature.sketch: return None
         
         try:
-            from build123d import make_face, Wire, extrude, Compound, Vector
+            from build123d import make_face, Wire, Compound
             from shapely.geometry import Polygon as ShapelyPoly
             
             sketch = feature.sketch
@@ -489,11 +1177,12 @@ class Body:
                         import traceback
                         traceback.print_exc()
 
-                # Extrudieren
+                # Extrudieren mit OCP für bessere Robustheit
                 amount = feature.distance * feature.direction
                 for f in faces_to_extrude:
-                    s = extrude(f, amount=amount, dir=plane.z_dir)
-                    if s and s.is_valid(): solids.append(s)
+                    s = self._ocp_extrude_face(f, amount, plane.z_dir)
+                    if s is not None:
+                        solids.append(s)
 
             # === PFAD B: Fallback auf "Alten Code" (Rebuild / Scripting) ===
             if not solids:
@@ -563,7 +1252,7 @@ class Body:
         try:
             from shapely.geometry import LineString, Point, Polygon as ShapelyPoly
             from shapely.ops import unary_union, polygonize
-            from build123d import make_face, Vector, Wire, extrude, Compound, Shape
+            from build123d import make_face, Vector, Wire, Compound, Shape
             import math
             
             logger.info(f"--- Starte Legacy Extrusion: {feature.name} ---")
@@ -722,27 +1411,17 @@ class Body:
 
             if not faces_to_extrude: return None
 
-            # --- 5. Extrudieren ---
+            # --- 5. Extrudieren mit OCP ---
             solids = []
             amount = feature.distance * feature.direction
-            direction_vec = plane.z_dir 
-            
+            direction_vec = plane.z_dir
+
             for f in faces_to_extrude:
-                try:
-                    # Versuche globale Funktion mit Keywords
-                    s = extrude(f, amount=amount, dir=direction_vec)
-                    if s and s.is_valid():
-                        solids.append(s)
-                    else:
-                        raise ValueError("Invalid result")
-                except Exception:
-                    # Fallback: Methoden-Aufruf mit expliziten Keywords
-                    try:
-                        if hasattr(f, 'extrude'):
-                             s = f.extrude(amount=amount, dir=direction_vec)
-                             if s: solids.append(s)
-                    except Exception as ex2:
-                        logger.error(f"Extrude failed for face: {ex2}")
+                s = self._ocp_extrude_face(f, amount, direction_vec)
+                if s is not None:
+                    solids.append(s)
+                else:
+                    logger.warning(f"Extrude für Face fehlgeschlagen")
 
             if not solids: 
                 logger.warning("Keine Solids erzeugt!")

@@ -90,11 +90,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         super().__init__(parent)
         self.setMouseTracking(True)
         self._viewcube_created = False  # VOR _setup_plotter initialisieren
-        
+
+        # NEU: Referenz auf zentrale TransformState (wird später von MainWindow gesetzt)
+        self.transform_state = None
+
         # Dunkler Hintergrund für das Widget selbst
         self.setStyleSheet("background-color: #1e1e1e;")
         self.setAutoFillBackground(True)
-        
+
         self._setup_ui()
         
         if HAS_PYVISTA:
@@ -659,11 +662,119 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if self.handle_transform_mouse_release(screen_pos):
                         return True
                     
-            # ESC zum Abbrechen
-            elif event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
-                self.hide_transform_gizmo()
-                return True
-        
+            # NEU: ACHSEN-LOCKING (X/Y/Z Keys während Transform)
+            elif event_type == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.hide_transform_gizmo()
+                    return True
+
+                # Achsen-Lock mit X/Y/Z Keys
+                if self.transform_state:
+                    if event.key() == Qt.Key_X:
+                        # Toggle X-Achsen-Lock
+                        if event.modifiers() & Qt.ShiftModifier:
+                            # Shift+X = YZ-Ebene (bewege auf Y und Z)
+                            self.transform_state.toggle_plane_lock("YZ")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.plane_lock == "YZ":
+                                    self._transform_ctrl.gizmo.show_plane_constraint_indicator("YZ")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info("Ebenen-Lock: YZ (bewege auf Y und Z)")
+                        else:
+                            # X = X-Achse
+                            self.transform_state.toggle_axis_lock("X")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.axis_lock == "X":
+                                    self._transform_ctrl.gizmo.show_axis_constraint_indicator("X")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info(f"Achsen-Lock: {'X' if self.transform_state.axis_lock == 'X' else 'Aus'}")
+                        return True
+
+                    elif event.key() == Qt.Key_Y:
+                        if event.modifiers() & Qt.ShiftModifier:
+                            # Shift+Y = XZ-Ebene
+                            self.transform_state.toggle_plane_lock("XZ")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.plane_lock == "XZ":
+                                    self._transform_ctrl.gizmo.show_plane_constraint_indicator("XZ")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info("Ebenen-Lock: XZ (bewege auf X und Z)")
+                        else:
+                            self.transform_state.toggle_axis_lock("Y")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.axis_lock == "Y":
+                                    self._transform_ctrl.gizmo.show_axis_constraint_indicator("Y")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info(f"Achsen-Lock: {'Y' if self.transform_state.axis_lock == 'Y' else 'Aus'}")
+                        return True
+
+                    elif event.key() == Qt.Key_Z:
+                        if event.modifiers() & Qt.ShiftModifier:
+                            # Shift+Z = XY-Ebene
+                            self.transform_state.toggle_plane_lock("XY")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.plane_lock == "XY":
+                                    self._transform_ctrl.gizmo.show_plane_constraint_indicator("XY")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info("Ebenen-Lock: XY (bewege auf X und Y)")
+                        else:
+                            self.transform_state.toggle_axis_lock("Z")
+                            # Visueller Indikator
+                            if hasattr(self, '_transform_ctrl') and self._transform_ctrl.gizmo:
+                                if self.transform_state.axis_lock == "Z":
+                                    self._transform_ctrl.gizmo.show_axis_constraint_indicator("Z")
+                                else:
+                                    self._transform_ctrl.gizmo.hide_constraint_indicators()
+                            logger.info(f"Achsen-Lock: {'Z' if self.transform_state.axis_lock == 'Z' else 'Aus'}")
+                        return True
+
+                    # NEU: MODALE NUMERISCHE EINGABE (Blender-Style)
+                    # Während Drag: Tippe Zahl → Enter zum Anwenden
+                    text = event.text()
+
+                    # Ziffern, Dezimalpunkt, Minus-Zeichen
+                    if text and (text.isdigit() or text in ['.', '-']):
+                        self.transform_state.numeric_input += text
+                        self._show_numeric_input_overlay(self.transform_state.numeric_input)
+                        logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
+                        return True
+
+                    # Enter: Wert anwenden
+                    elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+                        if self.transform_state.numeric_input:
+                            try:
+                                value = float(self.transform_state.numeric_input)
+                                self._apply_numeric_transform(value)
+                                self.transform_state.numeric_input = ""
+                                self._hide_numeric_input_overlay()
+                                logger.success(f"Numerischer Wert angewendet: {value}")
+                            except ValueError:
+                                logger.warning(f"Ungültige Eingabe: {self.transform_state.numeric_input}")
+                                self.transform_state.numeric_input = ""
+                                self._hide_numeric_input_overlay()
+                        return True
+
+                    # Backspace: Letztes Zeichen löschen
+                    elif event.key() == Qt.Key_Backspace:
+                        if self.transform_state.numeric_input:
+                            self.transform_state.numeric_input = self.transform_state.numeric_input[:-1]
+                            if self.transform_state.numeric_input:
+                                self._show_numeric_input_overlay(self.transform_state.numeric_input)
+                            else:
+                                self._hide_numeric_input_overlay()
+                            logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
+                        return True
+
         # --- POINT-TO-POINT MOVE MODE (Fusion 360-Style) ---
         if self.point_to_point_mode:
             # Mouse Move: Zeige Hover-Vertex
@@ -2640,6 +2751,107 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self.plotter.view_yz()
                 self.plotter.reset_camera()
                 self.view_changed.emit()
+
+    # ==================== MODALE NUMERISCHE EINGABE ====================
+    def _show_numeric_input_overlay(self, text: str):
+        """Zeigt Floating-Label für numerische Eingabe während Transform"""
+        from PySide6.QtWidgets import QLabel
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QCursor
+
+        # Entferne altes Overlay (falls vorhanden)
+        self._hide_numeric_input_overlay()
+
+        # Erstelle neues Label
+        self._numeric_overlay = QLabel(f"Value: {text}", self)
+        self._numeric_overlay.setStyleSheet("""
+            QLabel {
+                background: rgba(0, 120, 212, 220);
+                color: white;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+                border: 2px solid rgba(255, 255, 255, 100);
+            }
+        """)
+        self._numeric_overlay.setWindowFlags(Qt.ToolTip)  # Bleibt über allem
+        self._numeric_overlay.adjustSize()
+
+        # Position nahe Cursor (leicht versetzt nach rechts unten)
+        cursor_pos = QCursor.pos()
+        overlay_pos = self.mapFromGlobal(cursor_pos)
+        self._numeric_overlay.move(overlay_pos.x() + 20, overlay_pos.y() + 20)
+        self._numeric_overlay.show()
+
+        logger.debug(f"Numeric overlay shown: {text}")
+
+    def _hide_numeric_input_overlay(self):
+        """Versteckt Floating-Label für numerische Eingabe"""
+        if hasattr(self, '_numeric_overlay') and self._numeric_overlay:
+            self._numeric_overlay.deleteLater()
+            self._numeric_overlay = None
+
+    def _apply_numeric_transform(self, value: float):
+        """
+        Wendet numerischen Wert auf aktiven Transform an.
+
+        Verhalten basierend auf Modus:
+        - Move: Bewegt um 'value' Einheiten (auf gesperrter Achse falls aktiv)
+        - Rotate: Rotiert um 'value' Grad
+        - Scale: Skaliert mit Faktor 'value'
+        """
+        if not self.transform_state or not self.transform_state.active_body_id:
+            logger.warning("Kein aktiver Transform - numerischer Wert ignoriert")
+            return
+
+        mode = self.transform_state.mode
+        body_id = self.transform_state.active_body_id
+
+        # Bestimme Transform-Data basierend auf Modus
+        if mode == "move":
+            # Move: Nutze axis_lock falls vorhanden
+            axis_lock = self.transform_state.axis_lock
+
+            if axis_lock == "X":
+                translation = [value, 0, 0]
+            elif axis_lock == "Y":
+                translation = [0, value, 0]
+            elif axis_lock == "Z":
+                translation = [0, 0, value]
+            else:
+                # Kein Lock: Bewege entlang Kamera-Blickrichtung (oder X als Default)
+                logger.warning("Keine Achse gesperrt - verwende X-Achse als Default")
+                translation = [value, 0, 0]
+
+            data = {"translation": translation}
+            logger.info(f"Move mit numerischem Wert: {translation}")
+
+        elif mode == "rotate":
+            # Rotate: Winkel in Grad
+            axis_lock = self.transform_state.axis_lock or "Z"  # Default Z-Achse
+            data = {"axis": axis_lock, "angle": value}
+            logger.info(f"Rotate um {value}° auf {axis_lock}-Achse")
+
+        elif mode == "scale":
+            # Scale: Faktor (1.0 = keine Änderung)
+            if value <= 0:
+                logger.error("Scale-Faktor muss > 0 sein")
+                return
+            data = {"factor": value}
+            logger.info(f"Scale mit Faktor {value}")
+
+        else:
+            logger.error(f"Unbekannter Transform-Modus: {mode}")
+            return
+
+        # Emittiere Transform-Signal
+        self.body_transform_requested.emit(body_id, mode, data)
+
+        # Reset Transform-State
+        self.transform_state.reset()
+        self.hide_transform_gizmo()
+
     def update(self): self.plotter.update(); super().update()
 
 

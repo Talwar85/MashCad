@@ -57,60 +57,63 @@ class SketchHandlersMixin:
                 self.tool_points.append(pos)
     
     def _handle_rectangle(self, pos, snap_type):
-        """Rechteck mit Modus-Unterstützung (0=2-Punkt, 1=Center)"""
+        """Rechteck mit Modus-Unterstützung (0=2-Punkt, 1=Center) und Auto-Constraints"""
+        
+        # Berechnung der Geometrie basierend auf dem Modus
         if self.rect_mode == 1:
             # Center-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
                 self.status_message.emit(tr("Corner | Tab=Width/Height"))
+                return
             else:
                 c = self.tool_points[0]
-                w, h = abs(pos.x()-c.x())*2, abs(pos.y()-c.y())*2
-                if w > 0.01 and h > 0.01:
-                    self._save_undo()
-                    self.sketch.add_rectangle(c.x()-w/2, c.y()-h/2, w, h, construction=self.construction_mode)
-                    self.sketch.solve()
-                    self.sketched_changed.emit()
-                    self._find_closed_profiles()
-                self._cancel_tool()
+                w = abs(pos.x() - c.x()) * 2
+                h = abs(pos.y() - c.y()) * 2
+                x = c.x() - w / 2
+                y = c.y() - h / 2
         else:
             # 2-Punkt-Modus (Standard)
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
                 self.status_message.emit(tr("Opposite corner | Tab=Width/Height"))
+                return
             else:
                 p1, p2 = self.tool_points[0], pos
-                w, h = abs(p2.x()-p1.x()), abs(p2.y()-p1.y())
-                if w > 0.01 and h > 0.01:
-                    self._save_undo()
-                    self.sketch.add_rectangle(min(p1.x(),p2.x()), min(p1.y(),p2.y()), w, h, construction=self.construction_mode)
-                    self.sketch.solve()
-                    self.sketched_changed.emit()
-                    self._find_closed_profiles()
-                self._cancel_tool()
-    
-    def _handle_rectangle_center(self, pos, snap_type):
-        if self.tool_step == 0:
-            self.tool_points = [pos]
-            self.tool_step = 1
-            self.status_message.emit(tr("Corner | Tab=Width/Height"))
-        else:
-            c = self.tool_points[0]
-            w, h = abs(pos.x()-c.x())*2, abs(pos.y()-c.y())*2
-            if w > 0.01 and h > 0.01:
-                self._save_undo()
-                self.sketch.add_rectangle(c.x()-w/2, c.y()-h/2, w, h, construction=self.construction_mode)
-                self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-            self._cancel_tool()
+                x = min(p1.x(), p2.x())
+                y = min(p1.y(), p2.y())
+                w = abs(p2.x() - p1.x())
+                h = abs(p2.y() - p1.y())
+
+        # Erstellung und Bemaßung
+        if w > 0.01 and h > 0.01:
+            self._save_undo()
+            
+            # 1. Rechteck erstellen (gibt [Unten, Rechts, Oben, Links] zurück)
+            # Hinweis: add_rectangle muss in sketch.py return [l1, l2, l3, l4] haben!
+            lines = self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
+            
+            # 2. Automatische Bemaßung hinzufügen (Constraints)
+            # Wir bemaßen die untere Linie (Breite) und die linke Linie (Höhe)
+            if lines and len(lines) >= 4:
+                # Breite (Index 0 = Unten)
+                self.sketch.add_length(lines[0], w)
+                # Höhe (Index 3 = Links)
+                self.sketch.add_length(lines[3], h)
+
+            # 3. Lösen & Update
+            self.sketch.solve()
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            
+        self._cancel_tool()
     
     def _handle_circle(self, pos, snap_type):
-        """Kreis mit Modus-Unterstützung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt)"""
+        """Kreis mit Modus-Unterstützung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt) und Auto-Constraints"""
         if self.circle_mode == 1:
-            # 2-Punkt-Modus (Durchmesser)
+            # === 2-Punkt-Modus (Durchmesser) ===
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
@@ -119,14 +122,22 @@ class SketchHandlersMixin:
                 p1, p2 = self.tool_points[0], pos
                 cx, cy = (p1.x()+p2.x())/2, (p1.y()+p2.y())/2
                 r = math.hypot(p2.x()-p1.x(), p2.y()-p1.y()) / 2
+                
                 if r > 0.01:
                     self._save_undo()
-                    self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
+                    # 1. Kreis erstellen
+                    circle = self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
+                    # 2. Radius Constraint hinzufügen
+                    self.sketch.add_radius(circle, r)
+                    # 3. Solver
+                    self.sketch.solve()
+                    
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
                 self._cancel_tool()
+                
         elif self.circle_mode == 2:
-            # 3-Punkt-Modus
+            # === 3-Punkt-Modus ===
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
@@ -138,14 +149,22 @@ class SketchHandlersMixin:
             else:
                 p1, p2, p3 = self.tool_points[0], self.tool_points[1], pos
                 center, r = self._calc_circle_3points(p1, p2, p3)
+                
                 if center and r > 0.01:
                     self._save_undo()
-                    self.sketch.add_circle(center.x(), center.y(), r, construction=self.construction_mode)
+                    # 1. Kreis erstellen
+                    circle = self.sketch.add_circle(center.x(), center.y(), r, construction=self.construction_mode)
+                    # 2. Radius Constraint hinzufügen (fixiert die Größe)
+                    self.sketch.add_radius(circle, r)
+                    # 3. Solver
+                    self.sketch.solve()
+                    
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
                 self._cancel_tool()
+                
         else:
-            # Center-Radius-Modus (Standard)
+            # === Center-Radius-Modus (Standard) ===
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
@@ -153,13 +172,20 @@ class SketchHandlersMixin:
             else:
                 c = self.tool_points[0]
                 r = math.hypot(pos.x()-c.x(), pos.y()-c.y())
+                
                 if r > 0.01:
                     self._save_undo()
-                    self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
+                    # 1. Kreis erstellen
+                    circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
+                    # 2. Radius Constraint hinzufügen
+                    self.sketch.add_radius(circle, r)
+                    # 3. Solver
+                    self.sketch.solve()
+                    
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
                 self._cancel_tool()
-    
+
     def _calc_circle_3points(self, p1, p2, p3):
         """Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte"""
         x1, y1 = p1.x(), p1.y()
@@ -169,18 +195,19 @@ class SketchHandlersMixin:
         # Determinante für Kollinearitäts-Check
         d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
         if abs(d) < 1e-10:
-            return None, 0  # Punkte sind kollinear
+            return None, 0  # Punkte sind kollinear (liegen auf einer Linie)
         
-        # Mittelpunkt berechnen
+        # Mittelpunkt berechnen (Umkreisformel)
         ux = ((x1*x1 + y1*y1) * (y2 - y3) + (x2*x2 + y2*y2) * (y3 - y1) + (x3*x3 + y3*y3) * (y1 - y2)) / d
         uy = ((x1*x1 + y1*y1) * (x3 - x2) + (x2*x2 + y2*y2) * (x1 - x3) + (x3*x3 + y3*y3) * (x2 - x1)) / d
         
-        # Radius
+        # Radius berechnen
         r = math.hypot(x1 - ux, y1 - uy)
         
         return QPointF(ux, uy), r
     
     def _handle_circle_2point(self, pos, snap_type):
+        """Separater Handler für reinen 2-Punkt-Modus (falls als eigenes Tool genutzt)"""
         if self.tool_step == 0:
             self.tool_points = [pos]
             self.tool_step = 1
@@ -189,30 +216,53 @@ class SketchHandlersMixin:
             p1, p2 = self.tool_points[0], pos
             cx, cy = (p1.x()+p2.x())/2, (p1.y()+p2.y())/2
             r = math.hypot(p2.x()-p1.x(), p2.y()-p1.y()) / 2
+            
             if r > 0.01:
                 self._save_undo()
-                self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
+                circle = self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
+                self.sketch.add_radius(circle, r)  # <--- Constraint
+                self.sketch.solve()                # <--- Solve
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
             self._cancel_tool()
     
     def _handle_polygon(self, pos, snap_type):
+        """Erstellt ein parametrisches Polygon"""
         if self.tool_step == 0:
+            # Erster Klick: Zentrum
             self.tool_points = [pos]
             self.tool_step = 1
-            self.status_message.emit(tr("Radius") + f" ({self.polygon_sides} " + tr("{n} sides").format(n="") + ") | Tab")
+            # Info-Text aktualisieren
+            self.status_message.emit(tr("Radius") + f" ({self.polygon_sides} " + tr("sides") + ") | Tab")
+        
         else:
+            # Zweiter Klick: Radius und Rotation
             c = self.tool_points[0]
-            r = math.hypot(pos.x()-c.x(), pos.y()-c.y())
-            angle = math.atan2(pos.y()-c.y(), pos.x()-c.x())
+            
+            # Aktueller Radius und Winkel der Maus
+            r = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+            angle = math.atan2(pos.y() - c.y(), pos.x() - c.x())
+            
             if r > 0.01:
                 self._save_undo()
-                pts = [(c.x() + r*math.cos(angle + 2*math.pi*i/self.polygon_sides),
-                        c.y() + r*math.sin(angle + 2*math.pi*i/self.polygon_sides)) for i in range(self.polygon_sides)]
-                self.sketch.add_polygon(pts, closed=True, construction=self.construction_mode)
+                
+                # 1. Parametrisches Polygon erstellen (ruft unsere neue Methode auf)
+                lines, const_circle = self.sketch.add_regular_polygon(
+                    c.x(), c.y(), r, 
+                    self.polygon_sides, 
+                    angle_offset=angle, 
+                    construction=self.construction_mode
+                )
+                
+                # 2. Radius-Bemaßung hinzufügen
+                # Das erlaubt dir, den Radius später per Doppelklick zu ändern!
+                self.sketch.add_radius(const_circle, r)
+                
+                # 3. Lösen
                 self.sketch.solve()
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
+                
             self._cancel_tool()
     
     def _handle_arc_3point(self, pos, snap_type):
@@ -241,24 +291,57 @@ class SketchHandlersMixin:
         return (ux, uy, r, start, end)
     
     def _handle_slot(self, pos, snap_type):
+        """Erstellt ein parametrisches Langloch"""
         if self.tool_step == 0:
-            self.tool_points = [pos]; self.tool_step = 1
+            # 1. Klick: Startpunkt der Mittellinie
+            self.tool_points = [pos]
+            self.tool_step = 1
             self.status_message.emit(tr("Endpoint center line | Tab=Length/Angle"))
+            
         elif self.tool_step == 1:
-            self.tool_points.append(pos); self.tool_step = 2
+            # 2. Klick: Endpunkt der Mittellinie
+            self.tool_points.append(pos)
+            self.tool_step = 2
             self.status_message.emit(tr("Width | Tab=Enter width"))
+            
         else:
+            # 3. Mausbewegung: Breite bestimmen
             p1, p2 = self.tool_points[0], self.tool_points[1]
-            dx, dy = p2.x()-p1.x(), p2.y()-p1.y()
+            
+            # Vektorrechnung für Abstand (Breite/2)
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
             length = math.hypot(dx, dy)
+            
             if length > 0.01:
+                # Abstand Punkt zu Linie berechnen für Breite
+                # Normalisierter Vektor der Linie
                 nx, ny = -dy/length, dx/length
-                width = abs((pos.x()-p1.x())*nx + (pos.y()-p1.y())*ny) * 2
-                if width > 0.01:
+                # Projektion
+                width_half = abs((pos.x()-p1.x())*nx + (pos.y()-p1.y())*ny)
+                
+                if width_half > 0.01:
                     self._save_undo()
-                    self._create_slot(p1, p2, width)
+                    
+                    # 1. Parametrischen Slot erstellen
+                    center_line, main_arc = self.sketch.add_slot(
+                        p1.x(), p1.y(), p2.x(), p2.y(), width_half, 
+                        construction=self.construction_mode
+                    )
+                    
+                    # 2. Maße hinzufügen (Constraints)
+                    
+                    # Länge der Mittellinie
+                    self.sketch.add_length(center_line, length)
+                    
+                    # Radius (definiert die Breite des Slots)
+                    self.sketch.add_radius(main_arc, width_half)
+                    
+                    # 3. Solver
+                    self.sketch.solve()
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
+                    
             self._cancel_tool()
     
     def _create_slot(self, p1, p2, width):
@@ -413,7 +496,35 @@ class SketchHandlersMixin:
             self._find_closed_profiles()
             self._cancel_tool()
             self.status_message.emit(tr("Copied: {lines} lines, {circles} circles").format(lines=len(new_lines), circles=len(new_circles)))
-    
+
+    def _copy_selection_with_offset(self, dx, dy):
+        """Kopiert alle ausgewählten Elemente mit gegebenem Offset (für Tab-Eingabe)"""
+        new_lines = []
+        new_circles = []
+
+        for line in self.selected_lines:
+            new_line = self.sketch.add_line(
+                line.start.x + dx, line.start.y + dy,
+                line.end.x + dx, line.end.y + dy,
+                construction=line.construction
+            )
+            new_lines.append(new_line)
+
+        for c in self.selected_circles:
+            new_circle = self.sketch.add_circle(
+                c.center.x + dx, c.center.y + dy,
+                c.radius, construction=c.construction
+            )
+            new_circles.append(new_circle)
+
+        # Neue Elemente auswählen
+        self._clear_selection()
+        self.selected_lines = new_lines
+        self.selected_circles = new_circles
+
+        self.status_message.emit(tr("Copied: {lines} lines, {circles} circles").format(
+            lines=len(new_lines), circles=len(new_circles)))
+
     def _handle_rotate(self, pos, snap_type):
         """Drehen: Zentrum → Winkel (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:

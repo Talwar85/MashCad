@@ -19,6 +19,7 @@ class ProjectBrowser(QFrame):
     
     feature_selected = Signal(object)
     feature_double_clicked = Signal(object)
+    feature_deleted = Signal(object, object)  # NEU: (feature, body)
     visibility_changed = Signal()
     body_vis_changed = Signal(str, bool)
     plane_selected = Signal(str)
@@ -74,6 +75,7 @@ class ProjectBrowser(QFrame):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
+        self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)  # Multi-Select aktivieren
         self.tree.setStyleSheet("""
             QTreeWidget { 
                 background: #1e1e1e; 
@@ -273,7 +275,16 @@ class ProjectBrowser(QFrame):
         elif data[0] == 'component':
             menu.addAction(tr("New Sketch"), lambda: self.plane_selected.emit('xy'))
             menu.addAction(tr("New Component"), lambda: None)  # TODO
-        
+
+        elif data[0] == 'feature':
+            # NEU: Feature-Kontext-Menü (Edit, Delete)
+            feature = data[1]
+            body = data[2]
+
+            menu.addAction(tr("Edit"), lambda: self.feature_double_clicked.emit(data))
+            menu.addSeparator()
+            menu.addAction(tr("Delete"), lambda: self._del_feature(feature, body))
+
         menu.exec(self.tree.mapToGlobal(pos))
     
     def _toggle_vis(self, obj, type_):
@@ -297,3 +308,47 @@ class ProjectBrowser(QFrame):
             self.document.bodies.remove(b)
             self.refresh()
             self.visibility_changed.emit()
+
+    def _del_feature(self, feature, body):
+        """Löscht ein Feature aus einem Body und triggert Rebuild"""
+        if feature in body.features:
+            body.features.remove(feature)
+            # Signal emittieren für MainWindow-Rebuild
+            self.feature_deleted.emit(feature, body)
+            self.refresh()
+
+    def get_selected_body_ids(self):
+        """
+        Gibt Liste aller selektierten Body-IDs zurück (für Multi-Select).
+
+        Returns:
+            List[str]: Liste von Body-IDs
+        """
+        selected_items = self.tree.selectedItems()
+        body_ids = []
+
+        for item in selected_items:
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'body':
+                body = data[1]
+                body_ids.append(body.id)
+
+        return body_ids
+
+    def get_selected_bodies(self):
+        """
+        Gibt Liste aller selektierten Body-Objekte zurück.
+
+        Returns:
+            List[Body]: Liste von Body-Objekten
+        """
+        selected_items = self.tree.selectedItems()
+        bodies = []
+
+        for item in selected_items:
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'body':
+                body = data[1]
+                bodies.append(body)
+
+        return bodies

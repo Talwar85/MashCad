@@ -203,7 +203,113 @@ class FullTransformGizmo:
         self._transform_offset = np.array([0.0, 0.0, 0.0])
         self._rotation_angle = 0.0
         self._scale_factor = np.array([1.0, 1.0, 1.0])
-        
+
+    # ==================== CONSTRAINT INDICATORS ====================
+
+    def show_axis_constraint_indicator(self, axis: str):
+        """
+        Zeigt visuellen Indikator für Achsen-Lock.
+
+        Args:
+            axis: "X", "Y", oder "Z"
+        """
+        # Alte Indikatoren entfernen
+        self.hide_constraint_indicators()
+
+        # Farbe und Richtung basierend auf Achse
+        axis_config = {
+            "X": (np.array([1.0, 0.0, 0.0]), "#FF0000"),  # Rot
+            "Y": (np.array([0.0, 1.0, 0.0]), "#00FF00"),  # Grün
+            "Z": (np.array([0.0, 0.0, 1.0]), "#0000FF"),  # Blau
+        }
+
+        if axis not in axis_config:
+            return
+
+        direction, color = axis_config[axis]
+        center = self.get_current_center()
+
+        # Erstelle lange Linie entlang der Achse (500 Einheiten in beide Richtungen)
+        line_length = 500.0
+        start = center - direction * line_length
+        end = center + direction * line_length
+
+        line = pv.Line(start, end)
+
+        name = "constraint_indicator_axis"
+        self.plotter.add_mesh(
+            line,
+            color=color,
+            line_width=3,
+            name=name,
+            pickable=False,
+            opacity=0.7
+        )
+
+        # Verbesserte Sichtbarkeit
+        self._improve_actor_visibility(name)
+
+        logger.debug(f"Achsen-Constraint-Indikator angezeigt: {axis} (Farbe: {color})")
+
+    def show_plane_constraint_indicator(self, plane: str):
+        """
+        Zeigt visuellen Indikator für Ebenen-Lock.
+
+        Args:
+            plane: "XY", "XZ", oder "YZ"
+        """
+        # Alte Indikatoren entfernen
+        self.hide_constraint_indicators()
+
+        # Ebenen-Konfiguration
+        plane_config = {
+            "XY": (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]), "#FFFF00"),  # Gelb
+            "XZ": (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]), "#FF00FF"),  # Magenta
+            "YZ": (np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0]), "#00FFFF"),  # Cyan
+        }
+
+        if plane not in plane_config:
+            return
+
+        axis1_dir, axis2_dir, color = plane_config[plane]
+        center = self.get_current_center()
+        line_length = 500.0
+
+        # Zwei Linien für die Ebene
+        for i, direction in enumerate([axis1_dir, axis2_dir]):
+            start = center - direction * line_length
+            end = center + direction * line_length
+            line = pv.Line(start, end)
+
+            name = f"constraint_indicator_plane_{i}"
+            self.plotter.add_mesh(
+                line,
+                color=color,
+                line_width=3,
+                name=name,
+                pickable=False,
+                opacity=0.5
+            )
+            self._improve_actor_visibility(name)
+
+        logger.debug(f"Ebenen-Constraint-Indikator angezeigt: {plane} (Farbe: {color})")
+
+    def hide_constraint_indicators(self):
+        """Entfernt alle Constraint-Indikatoren"""
+        indicator_names = [
+            "constraint_indicator_axis",
+            "constraint_indicator_plane_0",
+            "constraint_indicator_plane_1"
+        ]
+
+        for name in indicator_names:
+            try:
+                self.plotter.remove_actor(name)
+            except:
+                pass
+
+    # ==================== TRANSFORM METHODS ====================
+
     def move_to(self, new_center: np.ndarray):
         """Bewegt das Gizmo (für Move-Preview)"""
         if not self.visible:
@@ -313,7 +419,7 @@ class FullTransformGizmo:
         self._create_scale_cubes()
         
     def _create_move_arrows(self):
-        """Erstellt die Move-Pfeile"""
+        """Erstellt moderne, feine Move-Pfeile (Line statt Zylinder)"""
         axes = [
             (GizmoElement.ARROW_X, [1, 0, 0], COLORS[GizmoAxis.X]),
             (GizmoElement.ARROW_Y, [0, 1, 0], COLORS[GizmoAxis.Y]),
@@ -323,25 +429,23 @@ class FullTransformGizmo:
         for element, direction, color in axes:
             dir_vec = np.array(direction, dtype=float)
             
-            # Schaft
-            shaft_len = self._size * 0.7
-            shaft_center = self.center + dir_vec * (shaft_len / 2)
-            shaft = pv.Cylinder(
-                center=shaft_center,
-                direction=dir_vec,
-                radius=self._size * 0.03,
-                height=shaft_len
-            )
+            # Schaft: Eine einfache Linie wirkt viel präziser als ein Zylinder
+            # Wir machen sie etwas länger für besseres Handling
+            shaft_len = self._size * 1.0 
+            start_pt = self.center
+            end_pt = self.center + dir_vec * shaft_len
             
-            # Spitze
-            tip_len = self._size * 0.25
-            tip_center = self.center + dir_vec * (shaft_len + tip_len / 2)
+            shaft = pv.Line(start_pt, end_pt)
+            
+            # Spitze: Ein schlanker Kegel
+            tip_len = self._size * 0.2
+            tip_center = end_pt # Spitze beginnt am Ende des Schafts
             tip = pv.Cone(
-                center=tip_center,
+                center=tip_center + dir_vec * (tip_len * 0.5), # Offset korrigieren
                 direction=dir_vec,
                 height=tip_len,
-                radius=self._size * 0.08,
-                resolution=16
+                radius=self._size * 0.06, # Schlanker
+                resolution=24 # Runder
             )
             
             # Kombinieren
@@ -349,43 +453,48 @@ class FullTransformGizmo:
             name = f"gizmo_arrow_{element.name}"
 
             self.plotter.add_mesh(arrow, color=color, name=name,
-                                  pickable=False, render_lines_as_tubes=True)
-            self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
+                                  pickable=False, 
+                                  render_lines_as_tubes=True, 
+                                  line_width=3) # Dickere Linie für Sichtbarkeit
+            
+            self._improve_actor_visibility(name)
             self._move_actors.append(name)
             self._pick_meshes[element] = arrow
             
     def _create_rotate_rings(self):
-        """Erstellt die Rotations-Ringe"""
+        """Erstellt moderne, dünne Rotations-Ringe"""
         axes = [
             (GizmoElement.RING_X, [1, 0, 0], COLORS[GizmoAxis.X]),
             (GizmoElement.RING_Y, [0, 1, 0], COLORS[GizmoAxis.Y]),
             (GizmoElement.RING_Z, [0, 0, 1], COLORS[GizmoAxis.Z]),
         ]
         
-        ring_radius = self._size * 0.8
-        tube_radius = self._size * 0.025
+        # Ring Radius etwas kleiner als die Pfeile, damit sie sich nicht schneiden
+        ring_radius = self._size * 1.2
+        # Sehr dünner Querschnitt für modernen Look
+        tube_radius = self._size * 0.015 
         
         for element, direction, color in axes:
-            # Torus (Ring) erstellen
+            # Höhere Auflösung für "runde" Optik
             ring = pv.ParametricTorus(
                 ringradius=ring_radius,
                 crosssectionradius=tube_radius
             )
             
-            # Rotieren zur richtigen Orientierung
-            if direction == [1, 0, 0]:  # X-Ring: rotiert um Y
+            # Orientierung (wie gehabt)
+            if direction == [1, 0, 0]:
                 ring = ring.rotate_y(90, inplace=False)
-            elif direction == [0, 1, 0]:  # Y-Ring: rotiert um X
+            elif direction == [0, 1, 0]:
                 ring = ring.rotate_x(90, inplace=False)
-            # Z-Ring ist bereits korrekt orientiert
             
-            # Verschieben zum Zentrum
             ring = ring.translate(self.center, inplace=False)
 
             name = f"gizmo_ring_{element.name}"
+            # Opacity leicht verringern, damit Geometrie dahinter sichtbar bleibt
             self.plotter.add_mesh(ring, color=color, name=name,
-                                  pickable=False, opacity=0.8)
-            self._improve_actor_visibility(name)  # Fix 3: Bessere Sichtbarkeit
+                                  pickable=False, opacity=0.9, smooth_shading=True)
+            
+            self._improve_actor_visibility(name)
             self._rotate_actors.append(name)
             self._pick_meshes[element] = ring
             
@@ -514,18 +623,21 @@ class FullTransformController:
         self.viewport = viewport
         self.plotter = viewport.plotter
         self.gizmo = FullTransformGizmo(self.plotter)
-        
+
+        # NEU: Referenz auf zentrale TransformState (für Achsen-Lock)
+        self.transform_state = None  # Wird von viewport gesetzt
+
         # Callbacks
         self._get_body_center: Optional[Callable] = None
         self._apply_transform: Optional[Callable] = None
         self._copy_body: Optional[Callable] = None
         self._mirror_body: Optional[Callable] = None
         self._on_values_changed: Optional[Callable] = None  # Live-Update während Drag
-        
+
         # Zustand
         self.selected_body_id: Optional[str] = None
         self.is_dragging = False
-        self.drag_state: Optional[TransformState] = None
+        self.drag_state: Optional['DragState'] = None  # Renamed to avoid conflict
         self.copy_mode = False  # Shift gedrückt?
         
         # Akkumulierte Werte
@@ -674,16 +786,17 @@ class FullTransformController:
         """Verarbeitet Maus-Loslassen"""
         if not self.is_dragging or not self.drag_state:
             return False
-            
+
         body_id = self.drag_state.body_id
         mode = self.drag_state.mode
-        
+
         # Transform zurücksetzen vor Apply
         self._reset_body_preview(body_id)
-        
-        # Gizmo verstecken
-        self.gizmo.hide()
-        
+
+        # FIX Bug 1.2 + Gizmo-Position: Speichere neue Position
+        # Das Gizmo wird nach dem Transform an der neuen Position neu erstellt
+        new_center = self.gizmo.get_current_center()
+
         # Transform anwenden
         if self._apply_transform:
             if mode == TransformMode.MOVE:
@@ -717,7 +830,23 @@ class FullTransformController:
         self.copy_mode = False
         self.gizmo.set_active(GizmoElement.NONE)
         self.drag_state = None
-        
+
+        # NEU: Constraint-Indikatoren entfernen beim Release
+        self.gizmo.hide_constraint_indicators()
+
+        # NEU: TransformState zurücksetzen
+        if self.transform_state:
+            self.transform_state.axis_lock = None
+            self.transform_state.plane_lock = None
+
+        # FIX Gizmo-Position: Gizmo an neuer Position neu erstellen
+        # Das löst das Problem, dass das Gizmo nur an der alten Position klickbar war
+        self.gizmo.center = new_center.copy()
+        self.gizmo._reset_transforms()
+        self.gizmo._create_all_elements()  # Neu erstellen mit korrekten Pick-Meshes
+        self.gizmo._update_visibility()
+        self.gizmo.plotter.render()
+
         return True
         
     def _handle_move_drag(self, dx_screen: int, dy_screen: int):
@@ -756,8 +885,40 @@ class FullTransformController:
         except Exception as e:
             logger.warning(f"Move projection failed: {e}")
             delta_3d = np.array([0.0, 0.0, 0.0])
-            
+
+        # NEU: Achsen/Ebenen-Constraints anwenden
+        if self.transform_state:
+            if self.transform_state.axis_lock:
+                axis_lock = self.transform_state.axis_lock
+                if axis_lock == "X":
+                    delta_3d = np.array([delta_3d[0], 0.0, 0.0])
+                elif axis_lock == "Y":
+                    delta_3d = np.array([0.0, delta_3d[1], 0.0])
+                elif axis_lock == "Z":
+                    delta_3d = np.array([0.0, 0.0, delta_3d[2]])
+            elif self.transform_state.plane_lock:
+                plane_lock = self.transform_state.plane_lock
+                if plane_lock == "XY":
+                    delta_3d = np.array([delta_3d[0], delta_3d[1], 0.0])
+                elif plane_lock == "XZ":
+                    delta_3d = np.array([delta_3d[0], 0.0, delta_3d[2]])
+                elif plane_lock == "YZ":
+                    delta_3d = np.array([0.0, delta_3d[1], delta_3d[2]])
+
         self._total_translation += delta_3d
+
+        # NEU: Snap to Grid (Ctrl-Modifier)
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt
+        if QApplication.keyboardModifiers() & Qt.ControlModifier:
+            if self.transform_state and self.transform_state.snap_enabled:
+                grid_size = self.transform_state.snap_grid_size
+                self._total_translation = np.array([
+                    round(self._total_translation[0] / grid_size) * grid_size,
+                    round(self._total_translation[1] / grid_size) * grid_size,
+                    round(self._total_translation[2] / grid_size) * grid_size
+                ])
+                logger.debug(f"Snapped to grid: {self._total_translation}")
         
         # Live-Update an UI senden
         if self._on_values_changed:

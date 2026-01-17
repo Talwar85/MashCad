@@ -10,6 +10,7 @@ import math
 import numpy as np
 
 from .geometry import Point2D, Line2D, Circle2D, Arc2D
+from scipy.optimize import least_squares
 from .constraints import (
     Constraint, ConstraintType, ConstraintStatus,
     calculate_constraint_error, is_constraint_satisfied
@@ -39,10 +40,7 @@ class ConstraintSolver:
     """
     
     def __init__(self):
-        self.max_iterations = 500
-        self.tolerance = 1e-8
-        self.step_size = 0.5
-        self.damping = 0.9
+        self.tolerance = 1e-6
         
     def solve(self, 
               points: List[Point2D],
@@ -50,323 +48,90 @@ class ConstraintSolver:
               circles: List[Circle2D],
               arcs: List[Arc2D],
               constraints: List[Constraint]) -> SolverResult:
-        """
-        Löst das Constraint-System
         
-        Args:
-            points: Liste aller Punkte
-            lines: Liste aller Linien (referenzieren Punkte)
-            circles: Liste aller Kreise
-            arcs: Liste aller Bögen
-            constraints: Liste aller Constraints
-        
-        Returns:
-            SolverResult mit Erfolg/Misserfolg und Details
-        """
         if not constraints:
-            return SolverResult(
-                success=True,
-                iterations=0,
-                final_error=0.0,
-                status=ConstraintStatus.UNDER_CONSTRAINED,
-                message="Keine Constraints vorhanden"
-            )
+            return SolverResult(True, 0, 0.0, ConstraintStatus.UNDER_CONSTRAINED, "Keine Constraints")
+
+        # 1. Identifiziere variable (nicht fixierte) Parameter
+        # Wir sammeln alle x, y Koordinaten von nicht-fixierten Punkten
+        # und Radien von Kreisen/Bögen in einem flachen Array 'x0'
         
-        # Sammle alle variablen (nicht-fixierten) Punkte
-        variable_points = [p for p in points if not p.fixed]
+        variable_refs = [] # Liste von Objekten und Attributen: (obj, 'x') oder (obj, 'y') oder (obj, 'radius')
+        initial_values = []
+
+        # Punkte sammeln (auch die von Linien etc.)
+        processed_points = set()
         
-        # Füge Punkte aus Linien hinzu
-        for line in lines:
-            if not line.start.fixed and line.start not in variable_points:
-                variable_points.append(line.start)
-            if not line.end.fixed and line.end not in variable_points:
-                variable_points.append(line.end)
-        
-        # Füge Kreismittelpunkte hinzu
-        for circle in circles:
-            if not circle.center.fixed and circle.center not in variable_points:
-                variable_points.append(circle.center)
-        
-        if not variable_points and not circles and not arcs:
-            # Alles fixiert - prüfe nur ob Constraints erfüllt
-            total_error = sum(calculate_constraint_error(c) for c in constraints)
-            if total_error < self.tolerance:
-                return SolverResult(
-                    success=True,
-                    iterations=0,
-                    final_error=total_error,
-                    status=ConstraintStatus.FULLY_CONSTRAINED,
-                    message="Alle Punkte fixiert, Constraints erfüllt"
-                )
-            else:
-                return SolverResult(
-                    success=False,
-                    iterations=0,
-                    final_error=total_error,
-                    status=ConstraintStatus.INCONSISTENT,
-                    message="Constraints nicht erfüllbar mit fixierten Punkten"
-                )
-        
-        # Iterativer Solver
-        for iteration in range(self.max_iterations):
-            # Berechne Gesamtfehler
-            total_error = 0.0
+        # Hilfsfunktion zum Sammeln
+        def add_point_vars(p):
+            if p.id in processed_points or p.fixed: return
+            variable_refs.append((p, 'x'))
+            initial_values.append(p.x)
+            variable_refs.append((p, 'y'))
+            initial_values.append(p.y)
+            processed_points.add(p.id)
+
+        # Alle Punkte durchgehen
+        for p in points: add_point_vars(p)
+        for l in lines: add_point_vars(l.start); add_point_vars(l.end)
+        for c in circles: 
+            add_point_vars(c.center)
+            # Radius ist auch eine Variable!
+            variable_refs.append((c, 'radius'))
+            initial_values.append(c.radius)
+            
+        for a in arcs: add_point_vars(a.center) # Radius bei Arcs ggf. auch
+
+        if not variable_refs:
+            # Nichts zu bewegen, prüfe nur Fehler
+            err = sum(calculate_constraint_error(c)**2 for c in constraints)
+            return SolverResult(err < self.tolerance, 0, err, ConstraintStatus.FULLY_CONSTRAINED, "Statisch geprüft")
+
+        x0 = np.array(initial_values)
+
+        # 2. Definiere die Fehlerfunktion für Scipy
+        # Diese Funktion schreibt die Werte aus dem Solver zurück in die Objekte
+        # und berechnet dann, wie weit die Constraints verletzt sind.
+        def error_function(x_new):
+            # A. Werte zurückschreiben
+            for i, (obj, attr) in enumerate(variable_refs):
+                setattr(obj, attr, x_new[i])
+            
+            # B. Fehler berechnen (Residuen)
+            residuals = []
             for c in constraints:
-                error = calculate_constraint_error(c)
-                c.error = error
-                c.satisfied = error < self.tolerance
-                total_error += error ** 2
+                # Gewichtung: Coincident Constraints sind wichtiger als Längen
+                weight = 1.0
+                if c.type == ConstraintType.COINCIDENT: weight = 10.0
+                
+                err = calculate_constraint_error(c)
+                residuals.append(err * weight)
+            return residuals
+
+        # 3. Lösen mit Levenberg-Marquardt (oder TRF)
+        try:
+            res = least_squares(error_function, x0, method='trf', ftol=self.tolerance, xtol=self.tolerance, verbose=0)
             
-            total_error = math.sqrt(total_error)
+            success = res.success and (np.mean(np.abs(res.fun)) < 1e-3)
+            status = ConstraintStatus.FULLY_CONSTRAINED if success else ConstraintStatus.INCONSISTENT
             
-            # Konvergiert?
-            if total_error < self.tolerance:
-                return SolverResult(
-                    success=True,
-                    iterations=iteration + 1,
-                    final_error=total_error,
-                    status=self._determine_status(constraints, variable_points),
-                    message="Konvergiert"
-                )
-            
-            # Berechne und wende Gradienten an
-            self._apply_gradients(variable_points, circles, arcs, constraints)
-        
-        # Maximale Iterationen erreicht
-        final_error = sum(calculate_constraint_error(c) ** 2 for c in constraints)
-        final_error = math.sqrt(final_error)
-        
-        return SolverResult(
-            success=final_error < self.tolerance * 10,
-            iterations=self.max_iterations,
-            final_error=final_error,
-            status=ConstraintStatus.INCONSISTENT if final_error > 1 else ConstraintStatus.UNDER_CONSTRAINED,
-            message="Max Iterationen erreicht"
-        )
-    
-    def _apply_gradients(self,
-                         points: List[Point2D],
-                         circles: List[Circle2D],
-                         arcs: List[Arc2D],
-                         constraints: List[Constraint]):
-        """Wendet Gradienten-Updates auf alle Variablen an"""
-        
-        # Punkt-Gradienten
-        point_gradients: Dict[str, Tuple[float, float]] = {}
-        for p in points:
-            point_gradients[p.id] = (0.0, 0.0)
-        
-        # Radius-Gradienten
-        radius_gradients: Dict[str, float] = {}
-        for c in circles:
-            radius_gradients[c.id] = 0.0
-        for a in arcs:
-            radius_gradients[a.id] = 0.0
-        
-        # Berechne Gradienten für jeden Constraint
-        for constraint in constraints:
-            self._compute_constraint_gradient(
-                constraint, point_gradients, radius_gradients
+            # Finales Zurückschreiben ist durch den letzten Aufruf von error_function implizit passiert,
+            # aber sicherheitshalber schreiben wir das Ergebnis 'res.x' nochmal rein.
+            for i, (obj, attr) in enumerate(variable_refs):
+                setattr(obj, attr, res.x[i])
+                
+            return SolverResult(
+                success=success,
+                iterations=res.nfev,
+                final_error=np.sum(np.abs(res.fun)),
+                status=status,
+                message=f"Scipy: {res.message}"
             )
-        
-        # Wende Gradienten an
-        for p in points:
-            if p.id in point_gradients:
-                gx, gy = point_gradients[p.id]
-                magnitude = math.sqrt(gx**2 + gy**2)
-                if magnitude > 0.001:
-                    # Normalisiere und skaliere
-                    scale = min(self.step_size, magnitude) / magnitude
-                    p.x -= gx * scale * self.damping
-                    p.y -= gy * scale * self.damping
-        
-        for c in circles:
-            if c.id in radius_gradients:
-                grad = radius_gradients[c.id]
-                c.radius -= grad * self.step_size * self.damping
-                c.radius = max(0.001, c.radius)  # Radius muss positiv sein
+            
+        except Exception as e:
+            return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, f"Solver Error: {e}")
     
-    def _compute_constraint_gradient(self,
-                                      constraint: Constraint,
-                                      point_grads: Dict[str, Tuple[float, float]],
-                                      radius_grads: Dict[str, float]):
-        """Berechnet den Gradienten für einen einzelnen Constraint"""
-        
-        ct = constraint.type
-        entities = constraint.entities
-        
-        if ct == ConstraintType.COINCIDENT:
-            p1, p2 = entities
-            dx = p1.x - p2.x
-            dy = p1.y - p2.y
-            
-            if not p1.fixed and p1.id in point_grads:
-                gx, gy = point_grads[p1.id]
-                point_grads[p1.id] = (gx + dx, gy + dy)
-            if not p2.fixed and p2.id in point_grads:
-                gx, gy = point_grads[p2.id]
-                point_grads[p2.id] = (gx - dx, gy - dy)
-        
-        elif ct == ConstraintType.HORIZONTAL:
-            line = entities[0]
-            dy = line.end.y - line.start.y
-            
-            if not line.start.fixed and line.start.id in point_grads:
-                gx, gy = point_grads[line.start.id]
-                point_grads[line.start.id] = (gx, gy - dy * 0.5)
-            if not line.end.fixed and line.end.id in point_grads:
-                gx, gy = point_grads[line.end.id]
-                point_grads[line.end.id] = (gx, gy + dy * 0.5)
-        
-        elif ct == ConstraintType.VERTICAL:
-            line = entities[0]
-            dx = line.end.x - line.start.x
-            
-            if not line.start.fixed and line.start.id in point_grads:
-                gx, gy = point_grads[line.start.id]
-                point_grads[line.start.id] = (gx - dx * 0.5, gy)
-            if not line.end.fixed and line.end.id in point_grads:
-                gx, gy = point_grads[line.end.id]
-                point_grads[line.end.id] = (gx + dx * 0.5, gy)
-        
-        elif ct == ConstraintType.LENGTH:
-            line = entities[0]
-            target = constraint.value
-            current = line.length
-            
-            if current < 0.001:
-                return
-            
-            error = current - target
-            dx = (line.end.x - line.start.x) / current
-            dy = (line.end.y - line.start.y) / current
-            
-            if not line.start.fixed and line.start.id in point_grads:
-                gx, gy = point_grads[line.start.id]
-                point_grads[line.start.id] = (gx - dx * error, gy - dy * error)
-            if not line.end.fixed and line.end.id in point_grads:
-                gx, gy = point_grads[line.end.id]
-                point_grads[line.end.id] = (gx + dx * error, gy + dy * error)
-        
-        elif ct == ConstraintType.DISTANCE:
-            if len(entities) == 2 and isinstance(entities[0], Point2D) and isinstance(entities[1], Point2D):
-                p1, p2 = entities
-                target = constraint.value
-                current = p1.distance_to(p2)
-                
-                if current < 0.001:
-                    return
-                
-                error = current - target
-                dx = (p1.x - p2.x) / current
-                dy = (p1.y - p2.y) / current
-                
-                if not p1.fixed and p1.id in point_grads:
-                    gx, gy = point_grads[p1.id]
-                    point_grads[p1.id] = (gx + dx * error, gy + dy * error)
-                if not p2.fixed and p2.id in point_grads:
-                    gx, gy = point_grads[p2.id]
-                    point_grads[p2.id] = (gx - dx * error, gy - dy * error)
-        
-        elif ct == ConstraintType.PARALLEL:
-            l1, l2 = entities
-            d1 = l1.direction
-            d2 = l2.direction
-            
-            # Kreuzprodukt = sin(Winkel)
-            cross = d1[0] * d2[1] - d1[1] * d2[0]
-            
-            # Rotiere l2 um den Winkel zu reduzieren
-            if abs(cross) > 0.001 and not l2.end.fixed and l2.end.id in point_grads:
-                # Vereinfachter Gradient
-                gx, gy = point_grads[l2.end.id]
-                point_grads[l2.end.id] = (gx - cross * d2[1], gy + cross * d2[0])
-        
-        elif ct == ConstraintType.PERPENDICULAR:
-            l1, l2 = entities
-            d1 = l1.direction
-            d2 = l2.direction
-            
-            # Skalarprodukt = cos(Winkel)
-            dot = d1[0] * d2[0] + d1[1] * d2[1]
-            
-            if abs(dot) > 0.001 and not l2.end.fixed and l2.end.id in point_grads:
-                gx, gy = point_grads[l2.end.id]
-                point_grads[l2.end.id] = (gx + dot * d2[0], gy + dot * d2[1])
-        
-        elif ct == ConstraintType.EQUAL_LENGTH:
-            l1, l2 = entities
-            len1 = l1.length
-            len2 = l2.length
-            error = len2 - len1
-            
-            if len2 > 0.001:
-                dx = (l2.end.x - l2.start.x) / len2
-                dy = (l2.end.y - l2.start.y) / len2
-                
-                if not l2.end.fixed and l2.end.id in point_grads:
-                    gx, gy = point_grads[l2.end.id]
-                    point_grads[l2.end.id] = (gx + dx * error, gy + dy * error)
-        
-        elif ct == ConstraintType.POINT_ON_LINE:
-            point, line = entities
-            
-            # Projektion des Punktes auf die Linie
-            dx = line.end.x - line.start.x
-            dy = line.end.y - line.start.y
-            length_sq = dx*dx + dy*dy
-            
-            if length_sq < 0.001:
-                return
-            
-            t = ((point.x - line.start.x)*dx + (point.y - line.start.y)*dy) / length_sq
-            t = max(0, min(1, t))
-            
-            proj_x = line.start.x + t * dx
-            proj_y = line.start.y + t * dy
-            
-            error_x = point.x - proj_x
-            error_y = point.y - proj_y
-            
-            if not point.fixed and point.id in point_grads:
-                gx, gy = point_grads[point.id]
-                point_grads[point.id] = (gx + error_x, gy + error_y)
-        
-        elif ct == ConstraintType.RADIUS:
-            circle = entities[0]
-            target = constraint.value
-            error = circle.radius - target
-            
-            if circle.id in radius_grads:
-                radius_grads[circle.id] += error
-        
-        elif ct == ConstraintType.DIAMETER:
-            circle = entities[0]
-            target = constraint.value / 2  # Durchmesser -> Radius
-            error = circle.radius - target
-            
-            if circle.id in radius_grads:
-                radius_grads[circle.id] += error
-        
-        elif ct == ConstraintType.CONCENTRIC:
-            c1, c2 = entities
-            dx = c2.center.x - c1.center.x
-            dy = c2.center.y - c1.center.y
-            
-            if not c2.center.fixed and c2.center.id in point_grads:
-                gx, gy = point_grads[c2.center.id]
-                point_grads[c2.center.id] = (gx - dx, gy - dy)
-        
-        elif ct == ConstraintType.MIDPOINT:
-            point, line = entities
-            mid = line.midpoint
-            
-            dx = point.x - mid.x
-            dy = point.y - mid.y
-            
-            if not point.fixed and point.id in point_grads:
-                gx, gy = point_grads[point.id]
-                point_grads[point.id] = (gx + dx, gy + dy)
+    
     
     def _determine_status(self, 
                           constraints: List[Constraint],

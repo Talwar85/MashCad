@@ -13,7 +13,7 @@ from PySide6.QtGui import QDoubleValidator, QKeyEvent
 from loguru import logger
 
 
-class TransformInputPanel(QWidget):
+class TransformInputPanel(QFrame):
     """
     Kompaktes Panel für Transform-Eingabe.
     Zeigt aktuelle Werte und erlaubt numerische Eingabe.
@@ -25,20 +25,24 @@ class TransformInputPanel(QWidget):
     transform_confirmed = Signal(str, object)  # mode, data
     transform_cancelled = Signal()
     mode_changed = Signal(str)  # "move", "rotate", "scale"
+    grid_size_changed = Signal(float)  # grid_size in mm
+    pivot_mode_changed = Signal(str)  # "center", "origin", "cursor"
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_mode = "move"
+        self.setFrameShape(QFrame.StyledPanel)
         self._setup_ui()
         self._connect_signals()
         
     def _setup_ui(self):
         """Erstellt die UI - Styling wie Extrude-Panel"""
         self.setMinimumHeight(60)
-        self.setMinimumWidth(700)
+        self.setMinimumWidth(600) 
+        self.setMaximumWidth(900)
         self.setFixedHeight(60)
         self.setStyleSheet("""
-            TransformInputPanel {
+            QFrame {
                 background-color: #2d2d30;
                 border: 2px solid #0078d4;
                 border-radius: 8px;
@@ -48,6 +52,7 @@ class TransformInputPanel(QWidget):
                 font-weight: bold;
                 border: none;
                 font-size: 12px;
+                background: transparent; /* Wichtig gegen Grafikfehler */
             }
             QLineEdit {
                 background: #1e1e1e;
@@ -56,7 +61,7 @@ class TransformInputPanel(QWidget):
                 border-radius: 4px;
                 padding: 4px;
                 font-weight: bold;
-                min-width: 90px;
+                min-width: 70px; /* Etwas schmaler damit 3 passen */
                 font-size: 13px;
             }
             QLineEdit:focus {
@@ -85,14 +90,15 @@ class TransformInputPanel(QWidget):
             }
         """)
         
+        # Alles in EINER Zeile (QHBoxLayout)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 5, 15, 5)
         layout.setSpacing(12)
         
-        # Mode-Auswahl
+        
+        # Mode Auswahl
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Move", "Rotate", "Scale"])
-        self.mode_combo.setToolTip("Transform-Modus (G/R/S)")
         layout.addWidget(self.mode_combo)
         
         # Separator
@@ -136,7 +142,43 @@ class TransformInputPanel(QWidget):
         sep2.setFrameShape(QFrame.VLine)
         sep2.setStyleSheet("background-color: #555;")
         layout.addWidget(sep2)
-        
+
+        # Grid-Size Konfiguration (Snap to Grid)
+        grid_label = QLabel("Grid:")
+        grid_label.setToolTip("Grid-Größe für Snap (Ctrl-Taste während Drag)")
+        layout.addWidget(grid_label)
+
+        self.grid_size_combo = QComboBox()
+        self.grid_size_combo.addItems(["0.1mm", "0.5mm", "1mm", "5mm", "10mm"])
+        self.grid_size_combo.setCurrentText("1mm")
+        self.grid_size_combo.setToolTip("Ctrl+Drag für Snap-to-Grid")
+        self.grid_size_combo.currentTextChanged.connect(self._on_grid_size_changed)
+        layout.addWidget(self.grid_size_combo)
+
+        # Separator
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.VLine)
+        sep3.setStyleSheet("background-color: #555;")
+        layout.addWidget(sep3)
+
+        # Pivot-Point Konfiguration
+        pivot_label = QLabel("Pivot:")
+        pivot_label.setToolTip("Pivot-Punkt für Rotation und Skalierung")
+        layout.addWidget(pivot_label)
+
+        self.pivot_mode_combo = QComboBox()
+        self.pivot_mode_combo.addItems(["Body Center", "World Origin", "Cursor"])
+        self.pivot_mode_combo.setCurrentText("Body Center")
+        self.pivot_mode_combo.setToolTip("Wähle Pivot-Punkt")
+        self.pivot_mode_combo.currentTextChanged.connect(self._on_pivot_mode_changed)
+        layout.addWidget(self.pivot_mode_combo)
+
+        # Separator
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.VLine)
+        sep4.setStyleSheet("background-color: #555;")
+        layout.addWidget(sep4)
+
         # Buttons
         self.apply_btn = QPushButton("Apply")
         self.apply_btn.setToolTip("Transform anwenden (Enter)")
@@ -220,7 +262,53 @@ class TransformInputPanel(QWidget):
         """Bricht Transform ab"""
         self.transform_cancelled.emit()
         self.reset_values()
-        
+
+    def _on_grid_size_changed(self, text: str):
+        """Handler für Grid-Size Änderung"""
+        # Parse Grid-Size (z.B. "1mm" → 1.0)
+        try:
+            size_str = text.replace("mm", "").strip()
+            grid_size = float(size_str)
+            logger.info(f"Grid-Size geändert: {grid_size}mm")
+
+            # Emittiere Signal für MainWindow
+            self.grid_size_changed.emit(grid_size)
+        except ValueError:
+            logger.warning(f"Ungültige Grid-Size: {text}")
+
+    def get_grid_size(self) -> float:
+        """Gibt aktuelle Grid-Size zurück"""
+        text = self.grid_size_combo.currentText()
+        size_str = text.replace("mm", "").strip()
+        try:
+            return float(size_str)
+        except ValueError:
+            return 1.0  # Default
+
+    def _on_pivot_mode_changed(self, text: str):
+        """Handler für Pivot-Mode Änderung"""
+        # Map UI-Text zu internem Modus
+        mode_map = {
+            "Body Center": "center",
+            "World Origin": "origin",
+            "Cursor": "cursor"
+        }
+        mode = mode_map.get(text, "center")
+        logger.info(f"Pivot-Mode geändert: {mode}")
+
+        # Emittiere Signal für MainWindow
+        self.pivot_mode_changed.emit(mode)
+
+    def get_pivot_mode(self) -> str:
+        """Gibt aktuellen Pivot-Mode zurück"""
+        text = self.pivot_mode_combo.currentText()
+        mode_map = {
+            "Body Center": "center",
+            "World Origin": "origin",
+            "Cursor": "cursor"
+        }
+        return mode_map.get(text, "center")
+
     def reset_values(self):
         """Setzt alle Werte zurück"""
         default = "0.0" if self.current_mode != "scale" else "1.0"
@@ -261,53 +349,57 @@ class TransformInputPanel(QWidget):
             super().keyPressEvent(event)
 
 
-class SelectionInfoWidget(QWidget):
-    """
-    Zeigt Info über die aktuelle Selektion.
-    Erscheint oben links im Viewport.
-    """
+class SelectionInfoWidget(QFrame): # QFrame statt QWidget für Styling
+    """Overlay Badge im Viewport"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._setup_ui()
         
     def _setup_ui(self):
-        self.setFixedSize(200, 30)
+        # Design als schwebende "Pille"
+        self.setFixedHeight(32)
         self.setStyleSheet("""
-            QWidget {
-                background-color: rgba(45, 45, 48, 200);
-                border-radius: 5px;
+            QFrame {
+                background-color: rgba(30, 30, 30, 0.9); /* Halb-transparent */
+                border: 1px solid #444;
+                border-radius: 16px; /* Pillenform */
             }
             QLabel {
                 color: #e0e0e0;
-                font-size: 11px;
-                padding: 5px;
+                font-size: 12px;
+                background: transparent;
+                border: none;
+                padding: 0 5px;
             }
         """)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setContentsMargins(10, 0, 10, 0)
         
-        self.icon_label = QLabel("🔲")
+        self.icon_label = QLabel("📦")
         layout.addWidget(self.icon_label)
         
-        self.name_label = QLabel("Kein Body selektiert")
+        self.name_label = QLabel("Selection")
         layout.addWidget(self.name_label)
         
-        layout.addStretch()
-        
-    def set_selection(self, body_name: str = None, body_count: int = 0):
-        """Aktualisiert die Anzeige"""
-        if body_name:
-            self.icon_label.setText("📦")
-            if body_count > 1:
-                self.name_label.setText(f"{body_name} (+{body_count-1})")
-            else:
-                self.name_label.setText(body_name)
+    def set_selection(self, name, count=1):
+        if name:
+            text = name if count <= 1 else f"{name} (+{count-1})"
+            self.name_label.setText(text)
+            self.adjustSize()
             self.show()
+            self._center_in_parent() # Automatisch positionieren
         else:
-            self.icon_label.setText("🔲")
-            self.name_label.setText("Kein Body selektiert")
+            self.hide()
+            
+    def _center_in_parent(self):
+        """Zentriert das Widget oben im Parent (Viewport)"""
+        if self.parent():
+            # 20px Abstand von oben, mittig zentriert
+            x = (self.parent().width() - self.width()) // 2
+            self.move(x, 20)
+            self.raise_() # In den Vordergrund
             
     def clear_selection(self):
         """Leert die Selektion"""
