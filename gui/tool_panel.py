@@ -145,6 +145,7 @@ class ToolPanel(QFrame):
             (f"⊂⊃ {tr('Slot')}", "slot", "", "Slot", 2, 1),
             (f"~ {tr('Spline')}", "spline", "", "Spline", 3, 0),
             (f"• {tr('Point')}", "point", "", "Point", 3, 1),
+            (f"⬅ {tr('Project')}", "project", "P", "Project", 4, 0),
         ]
         
         for text, name, shortcut, key, row, col in tools_draw:
@@ -209,6 +210,31 @@ class ToolPanel(QFrame):
         edit_group.setLayout(edit_layout)
         layout.addWidget(edit_group)
         
+        pattern_group = self._create_group(tr("Patterns"))
+        pattern_layout = QGridLayout()
+        pattern_layout.setSpacing(4)
+        
+        tools_pattern = [
+            (f"⋮⋮⋮ {tr('Linear Pattern')}", "pattern_linear", "", "Linear Pattern", 0, 0),
+            (f"⁕ {tr('Circular Pattern')}", "pattern_circular", "", "Circular Pattern", 0, 1),
+        ]
+        
+        for text, name, shortcut, key, row, col in tools_pattern:
+            # Tooltip erweitern
+            tooltip = tr(key)
+            if name == "pattern_linear": tooltip += " (Select -> Drag -> Tab)"
+            if name == "pattern_circular": tooltip += " (Select -> Click Center -> Tab)"
+            
+            btn = ToolButton(text, shortcut, tooltip)
+            btn.clicked.connect(lambda checked, n=name: self._on_tool_clicked(n))
+            self.buttons[name] = btn
+            self.button_group.addButton(btn)
+            pattern_layout.addWidget(btn, row, col)
+            
+        pattern_group.setLayout(pattern_layout)
+        layout.addWidget(pattern_group)
+
+
         # === CONSTRAINTS ===
         const_group = self._create_group(tr("Constraints"))
         const_layout = QGridLayout()

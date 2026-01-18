@@ -31,112 +31,159 @@ except ImportError:
 
 class SketchRendererMixin:
     """Mixin containing all drawing methods for SketchEditor"""
+    def _is_item_visible(self, item_rect, update_rect):
+        """
+        High-Performance Culling:
+        Prüft ob das Bounding-Rect des Items das Update-Rect berührt.
+        """
+        if update_rect is None: return True
+        return update_rect.intersects(item_rect)
     
-    def _draw_grid(self, p):
+    def _get_line_bounds(self, line):
+        """Berechnet Screen-Bounds für eine Linie inkl. Pen-Width Padding"""
+        p1 = self.world_to_screen(QPointF(line.start.x, line.start.y))
+        p2 = self.world_to_screen(QPointF(line.end.x, line.end.y))
+        # +10 Padding für Liniendicke, Punkte und Glow-Effekt
+        return QRectF(p1, p2).normalized().adjusted(-10, -10, 10, 10)
+
+    def _get_circle_bounds(self, circle):
+        """Berechnet Screen-Bounds für Kreis"""
+        c = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
+        r = circle.radius * self.view_scale
+        return QRectF(c.x() - r, c.y() - r, 2*r, 2*r).adjusted(-10, -10, 10, 10)
+
+    def _get_arc_bounds(self, arc):
+        """Berechnet Screen-Bounds für Arc (Vereinfacht als Rect des vollen Kreises)"""
+        # Optimierung: Man könnte genaues Arc-Rect berechnen, aber Kreis-Rect ist viel schneller
+        c = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
+        r = arc.radius * self.view_scale
+        return QRectF(c.x() - r, c.y() - r, 2*r, 2*r).adjusted(-10, -10, 10, 10)
+    
+
+    def _draw_grid(self, p, update_rect=None):
+        # Grid nur zeichnen, wenn es das Update-Rect berührt
+        # Da das Grid den ganzen Screen füllt, prüfen wir hier nur grob
+        # Wir könnten optimieren, indem wir nur die Linien innerhalb des Rects berechnen
+        
         tl = self.screen_to_world(QPointF(0, 0))
         br = self.screen_to_world(QPointF(self.width(), self.height()))
+        
+        # Falls update_rect klein ist, berechne Start/Ende genauer
+        if update_rect and update_rect.width() < self.width():
+             tl_rect = self.screen_to_world(update_rect.topLeft())
+             br_rect = self.screen_to_world(update_rect.bottomRight())
+             # Wir nehmen das Maximum, um sicherzugehen, aber clampen auf Viewport
+             start_x = max(tl.x(), tl_rect.x())
+             end_x = min(br.x(), br_rect.x())
+             start_y = min(tl.y(), tl_rect.y()) # Y ist invertiert
+             end_y = max(br.y(), br_rect.y())
+        else:
+             start_x, end_x = tl.x(), br.x()
+             start_y, end_y = br.y(), tl.y() # Y invertiert
+
         step = self.grid_size
         while step * self.view_scale < 15: step *= 2
         while step * self.view_scale > 80: step /= 2
+        
+        # Minor Grid
         p.setPen(QPen(self.GRID_MINOR, 1))
-        x = math.floor(tl.x() / step) * step
-        while x < br.x():
+        
+        # Vertikale Linien
+        x = math.floor(start_x / step) * step
+        while x < end_x + step:
             sx = self.world_to_screen(QPointF(x, 0)).x()
-            p.drawLine(int(sx), 0, int(sx), self.height())
+            # Nur zeichnen wenn im Update-Bereich (horizontal)
+            if update_rect is None or (sx >= update_rect.left() - 1 and sx <= update_rect.right() + 1):
+                p.drawLine(int(sx), 0, int(sx), self.height())
             x += step
-        y = math.floor(br.y() / step) * step
-        while y < tl.y():
+            
+        # Horizontale Linien
+        y = math.floor(start_y / step) * step
+        while y < end_y + step:
             sy = self.world_to_screen(QPointF(0, y)).y()
-            p.drawLine(0, int(sy), self.width(), int(sy))
+            if update_rect is None or (sy >= update_rect.top() - 1 and sy <= update_rect.bottom() + 1):
+                p.drawLine(0, int(sy), self.width(), int(sy))
             y += step
+
+        # Major Grid (ähnliche Logik, vereinfacht: immer zeichnen, da wenige Linien)
         p.setPen(QPen(self.GRID_MAJOR, 1))
         major_step = step * 5
         x = math.floor(tl.x() / major_step) * major_step
         while x < br.x():
             sx = self.world_to_screen(QPointF(x, 0)).x()
-            p.drawLine(int(sx), 0, int(sx), self.height())
+            if update_rect is None or (sx >= update_rect.left() - 5 and sx <= update_rect.right() + 5):
+                p.drawLine(int(sx), 0, int(sx), self.height())
             x += major_step
         y = math.floor(br.y() / major_step) * major_step
         while y < tl.y():
             sy = self.world_to_screen(QPointF(0, y)).y()
-            p.drawLine(0, int(sy), self.width(), int(sy))
+            if update_rect is None or (sy >= update_rect.top() - 5 and sy <= update_rect.bottom() + 5):
+                p.drawLine(0, int(sy), self.width(), int(sy))
             y += major_step
     
-    def _draw_profiles(self, p):
-        """Zeichnet alle erkannten Faces - Shapely hat Löcher bereits integriert"""
-        from PySide6.QtGui import QPainterPath
+    def _draw_profiles(self, p, update_rect=None):
+        if not self.closed_profiles: return
+
+        # Performance: Profile nur zeichnen, wenn ihr Bounding-Box sichtbar ist
+        # Da Polygon-Check teuer ist, machen wir das hier grob über world_to_screen des ersten Punktes
         
-        def profile_to_path(profile_data, scale, offset_func):
-            """Konvertiert ein Profil in einen QPainterPath"""
-            path = QPainterPath()
-            profile_type, data = profile_data
-            
-            if profile_type == 'circle':
-                circle = data
-                center = offset_func(QPointF(circle.center.x, circle.center.y))
-                radius = circle.radius * scale
-                path.addEllipse(center, radius, radius)
-                
-            elif profile_type == 'lines':
-                lines = data
-                if len(lines) >= 3:
-                    points = []
-                    for line in lines:
-                        points.append(offset_func(QPointF(line.start.x, line.start.y)))
-                    if points:
-                        path.moveTo(points[0])
-                        for pt in points[1:]:
-                            path.lineTo(pt)
-                        path.closeSubpath()
-            
-            elif profile_type == 'polygon':
-                # Shapely Polygon zu QPainterPath
-                # Exterior (äußerer Rand)
-                coords = list(data.exterior.coords)
-                if len(coords) >= 3:
-                    screen_pts = [offset_func(QPointF(c[0], c[1])) for c in coords]
-                    path.moveTo(screen_pts[0])
-                    for pt in screen_pts[1:]:
-                        path.lineTo(pt)
-                    path.closeSubpath()
-                
-                # Interiors (Löcher) - Shapely hat diese bereits erkannt!
-                for interior in data.interiors:
-                    hole_coords = list(interior.coords)
-                    if len(hole_coords) >= 3:
-                        hole_pts = [offset_func(QPointF(c[0], c[1])) for c in hole_coords]
-                        path.moveTo(hole_pts[0])
-                        for pt in hole_pts[1:]:
-                            path.lineTo(pt)
-                        path.closeSubpath()
-            
-            return path
-        
-        # Sicherheitscheck
-        if not self.closed_profiles:
-            return
-        
-        # EINFACH: Alle Profile zeichnen mit OddEvenFill
-        # Shapely hat die Löcher bereits in den Polygonen integriert!
         for profile_data in self.closed_profiles:
-            if not profile_data:
-                continue
+            # TODO: Culling für Profile implementieren
+            # Aktuell zeichnen wir alle, da Profile oft groß sind
+            # und QPainterPath Clipping effizient ist.
+            
+            # ... (Rest des Codes aus _draw_profiles hier einfügen, unverändert) ...
+            # Der Inhalt bleibt identisch zum originalen Code, wir ändern nur die Signatur
+            
+            # COPY-PASTE vom Original _draw_profiles Logik hier:
+            from PySide6.QtGui import QPainterPath
+            def profile_to_path(profile_data, scale, offset_func):
+                path = QPainterPath()
+                profile_type, data = profile_data
+                if profile_type == 'circle':
+                    circle = data
+                    center = offset_func(QPointF(circle.center.x, circle.center.y))
+                    radius = circle.radius * scale
+                    path.addEllipse(center, radius, radius)
+                elif profile_type == 'lines':
+                    lines = data
+                    if len(lines) >= 3:
+                        points = [offset_func(QPointF(l.start.x, l.start.y)) for l in lines]
+                        if points:
+                            path.moveTo(points[0])
+                            for pt in points[1:]: path.lineTo(pt)
+                            path.closeSubpath()
+                elif profile_type == 'polygon':
+                    coords = list(data.exterior.coords)
+                    if len(coords) >= 3:
+                        screen_pts = [offset_func(QPointF(c[0], c[1])) for c in coords]
+                        path.moveTo(screen_pts[0])
+                        for pt in screen_pts[1:]: path.lineTo(pt)
+                        path.closeSubpath()
+                    for interior in data.interiors:
+                        hole_coords = list(interior.coords)
+                        if len(hole_coords) >= 3:
+                            hole_pts = [offset_func(QPointF(c[0], c[1])) for c in hole_coords]
+                            path.moveTo(hole_pts[0])
+                            for pt in hole_pts[1:]: path.lineTo(pt)
+                            path.closeSubpath()
+                return path
+
+            if not profile_data: continue
             
             path = profile_to_path(profile_data, self.view_scale, self.world_to_screen)
-            path.setFillRule(Qt.OddEvenFill)  # Löcher werden automatisch leer
             
-            # Prüfe ob dieses Profil gehovert ist
+            # QUICK CHECK: Wenn Path komplett außerhalb Update-Rect -> Skip
+            if update_rect and not update_rect.intersects(path.boundingRect()):
+                continue
+
+            path.setFillRule(Qt.OddEvenFill)
             is_hovered = (profile_data == self.hovered_face)
-            
             p.setPen(Qt.NoPen)
-            if is_hovered:
-                p.setBrush(QBrush(self.PROFILE_HOVER))
-            else:
-                p.setBrush(QBrush(self.PROFILE_CLOSED))
-            
+            p.setBrush(QBrush(self.PROFILE_HOVER if is_hovered else self.PROFILE_CLOSED))
             p.drawPath(path)
-        
-        # Offset-Preview zeichnen
+
+        # Offset Preview
         if self.offset_preview_lines:
             p.setPen(QPen(QColor(0, 200, 100), 2, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
@@ -144,6 +191,10 @@ class SketchRendererMixin:
                 x1, y1, x2, y2 = line_data
                 p1 = self.world_to_screen(QPointF(x1, y1))
                 p2 = self.world_to_screen(QPointF(x2, y2))
+                # Check Visibility
+                if update_rect:
+                    line_rect = QRectF(p1, p2).normalized().adjusted(-2,-2,2,2)
+                    if not update_rect.intersects(line_rect): continue
                 p.drawLine(p1, p2)
     
     def _draw_axes(self, p):
@@ -207,42 +258,52 @@ class SketchRendererMixin:
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(screen_pos, 10, 10)
                 
-    def _draw_geometry(self, p):
-        # 1. Glow-Effekt für Auswahl
+    def _draw_geometry(self, p, update_rect=None):
+        """
+        Der Haupt-Performance-Boost:
+        Iteriert über alle Geometrien, berechnet deren Bounding Box auf dem Screen
+        und überspringt das Zeichnen, wenn sie nicht im update_rect liegen.
+        """
+        
+        # 1. Glow-Effekt (Selektion)
         if self.selected_lines or self.selected_circles or self.selected_arcs or self.selected_spline:
             glow_pen = QPen(QColor(0, 180, 255, 100), 8)
             p.setPen(glow_pen)
             p.setBrush(Qt.NoBrush)
             
             for line in self.selected_lines:
-                # FIX: Hier stand vorher Point2D -> muss QPointF sein
-                p.drawLine(self.world_to_screen(QPointF(line.start.x, line.start.y)), 
-                          self.world_to_screen(QPointF(line.end.x, line.end.y)))
+                bounds = self._get_line_bounds(line)
+                if self._is_item_visible(bounds, update_rect):
+                    p.drawLine(self.world_to_screen(QPointF(line.start.x, line.start.y)), 
+                              self.world_to_screen(QPointF(line.end.x, line.end.y)))
+            
             for arc in self.selected_arcs:
-                ctr = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
-                r = arc.radius * self.view_scale
-                start_deg = int(arc.start_angle * 16)
-                sweep = arc.end_angle - arc.start_angle
-                if sweep <= 0: sweep += 360 
-                sweep_deg = int(sweep * 16)
-                p.drawArc(QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r), -start_deg, -sweep_deg)
+                bounds = self._get_arc_bounds(arc)
+                if self._is_item_visible(bounds, update_rect):
+                    ctr = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
+                    r = arc.radius * self.view_scale
+                    start_deg = int(arc.start_angle * 16)
+                    sweep = arc.end_angle - arc.start_angle
+                    if sweep <= 0: sweep += 360 
+                    p.drawArc(QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r), -start_deg, -int(sweep*16))
 
-        # 2. Linien zeichnen
+        # 2. Linien
         for line in self.sketch.lines:
-            # Spline-Linien überspringen, wenn wir sie gerade bearbeiten
-            if self.spline_drag_spline and line in getattr(self.spline_drag_spline, '_lines', []):
+            if self.spline_drag_spline and line in getattr(self.spline_drag_spline, '_lines', []): continue
+            
+            # CULLING CHECK
+            bounds = self._get_line_bounds(line)
+            if not self._is_item_visible(bounds, update_rect):
                 continue
 
             sel = line in self.selected_lines
             hov = self.hovered_entity == line
-            if line.construction:
-                col = self.GEO_CONSTRUCTION
-            elif sel:
-                col = QColor(50, 200, 255)
-            elif hov:
-                col = self.GEO_HOVER
-            else:
-                col = self.GEO_COLOR
+            
+            if line.construction: col = self.GEO_CONSTRUCTION
+            elif sel: col = QColor(50, 200, 255)
+            elif hov: col = self.GEO_HOVER
+            else: col = self.GEO_COLOR
+            
             w = 3.0 if sel else (2.5 if hov else 1.5)
             style = Qt.DashLine if line.construction else Qt.SolidLine
 
@@ -251,10 +312,9 @@ class SketchRendererMixin:
             p2 = self.world_to_screen(QPointF(line.end.x, line.end.y))
             p.drawLine(p1, p2)
 
-            # Endpunkte - Rot wenn fixiert
+            # Endpunkte (sind in bounds enthalten)
             for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
                 if hasattr(pt, 'fixed') and pt.fixed:
-                    # Fixierter Punkt = Rot
                     p.setBrush(QBrush(QColor(220, 50, 50)))
                     p.setPen(QPen(QColor(255, 100, 100), 2))
                     p.drawEllipse(screen_pt, 4, 4)
@@ -263,8 +323,11 @@ class SketchRendererMixin:
                     p.setPen(QPen(col, 1))
                     p.drawEllipse(screen_pt, 2, 2)
 
-        # 3. Kreise zeichnen
+        # 3. Kreise
         for c in self.sketch.circles:
+            bounds = self._get_circle_bounds(c)
+            if not self._is_item_visible(bounds, update_rect): continue
+
             sel = c in self.selected_circles
             hov = self.hovered_entity == c
             col = self.GEO_CONSTRUCTION if c.construction else (QColor(50, 200, 255) if sel else (self.GEO_HOVER if hov else self.GEO_COLOR))
@@ -277,8 +340,11 @@ class SketchRendererMixin:
             r = c.radius * self.view_scale
             p.drawEllipse(ctr, r, r)
 
-        # 4. Arcs (Bögen) zeichnen
+        # 4. Arcs
         for arc in self.sketch.arcs:
+            bounds = self._get_arc_bounds(arc)
+            if not self._is_item_visible(bounds, update_rect): continue
+            
             sel = arc in self.selected_arcs
             hov = self.hovered_entity == arc
             col = self.GEO_CONSTRUCTION if arc.construction else (QColor(50, 200, 255) if sel else (self.GEO_HOVER if hov else self.GEO_COLOR))
@@ -287,7 +353,6 @@ class SketchRendererMixin:
             
             p.setPen(QPen(col, w, style))
             p.setBrush(Qt.NoBrush)
-            
             ctr = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
             r = arc.radius * self.view_scale
             rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
@@ -299,7 +364,7 @@ class SketchRendererMixin:
             
             p.drawArc(rect, int(-start_angle * 16), int(-sweep * 16))
             
-            # Endpunkte zeichnen
+            # Endpunkte
             sx = arc.center.x + arc.radius * math.cos(math.radians(start_angle))
             sy = arc.center.y + arc.radius * math.sin(math.radians(start_angle))
             ex = arc.center.x + arc.radius * math.cos(math.radians(end_angle))
@@ -310,11 +375,22 @@ class SketchRendererMixin:
             p.drawEllipse(self.world_to_screen(QPointF(sx, sy)), 3, 3)
             p.drawEllipse(self.world_to_screen(QPointF(ex, ey)), 3, 3)
 
-        # 5. Spline
+        # 5. Splines (Bounding Box Check für ganze Spline)
         for spline in self.sketch.splines:
+            # Einfaches Culling: Bounding Box der Kontrollpunkte
+            if update_rect:
+                min_x = min(cp.point.x for cp in spline.control_points)
+                max_x = max(cp.point.x for cp in spline.control_points)
+                min_y = min(cp.point.y for cp in spline.control_points)
+                max_y = max(cp.point.y for cp in spline.control_points)
+                p_tl = self.world_to_screen(QPointF(min_x, max_y)) # Y flip
+                p_br = self.world_to_screen(QPointF(max_x, min_y))
+                spline_rect = QRectF(p_tl, p_br).normalized().adjusted(-20,-20,20,20)
+                if not update_rect.intersects(spline_rect): continue
+            
+            # ... (Rest der Spline Logik unverändert) ...
             is_selected = spline == self.selected_spline
             is_dragging = (spline == self.spline_drag_spline)
-            
             col = self.GEO_CONSTRUCTION if spline.construction else self.GEO_COLOR
             if is_selected: col = QColor(50, 200, 255)
             
@@ -772,6 +848,24 @@ class SketchRendererMixin:
                     path.closeSubpath()
                     
                     p.drawPath(path)
+        elif self.current_tool == SketchTool.PROJECT and hasattr(self, 'hovered_ref_edge') and self.hovered_ref_edge:
+            x1, y1, x2, y2 = self.hovered_ref_edge
+            p1 = self.world_to_screen(QPointF(x1, y1))
+            p2 = self.world_to_screen(QPointF(x2, y2))
+            
+            # Fusion 360 Style: Magenta/Lila Highlight für Projektion
+            pen = QPen(QColor(255, 0, 255), 3) # Magenta, Dicke 3
+            p.setPen(pen)
+            p.drawLine(p1, p2)
+            
+            # Kleine Endpunkte zur Orientierung
+            p.setBrush(QBrush(QColor(255, 0, 255)))
+            p.drawEllipse(p1, 4, 4)
+            p.drawEllipse(p2, 4, 4)
+            
+            # Cursor-Text (Optional, aber cool)
+            p.setFont(QFont("Arial", 8))
+            p.drawText(int(p2.x()) + 10, int(p2.y()), "Project")
         elif self.current_tool == SketchTool.ARC_3POINT and self.tool_points:
             for pt in self.tool_points:
                 p.drawEllipse(self.world_to_screen(pt), 4, 4)

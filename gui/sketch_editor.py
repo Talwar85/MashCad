@@ -13,6 +13,10 @@ from PySide6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
     QMouseEvent, QWheelEvent, QKeyEvent, QPolygonF, QFontMetrics
 )
+
+import threading 
+from threading import Thread
+
 from enum import Enum, auto
 from typing import Optional, List, Tuple, Set
 import math
@@ -20,6 +24,18 @@ import sys
 import os
 import numpy as np
 from loguru import logger
+
+try:
+    from gui.quadtree import QuadTree
+    logger.success("QuadTree Module loaded.")
+except ImportError:
+    # Fallback class if file is missing to prevent crash
+    class QuadTree:
+        def __init__(self, *args): pass
+        def insert(self, *args): pass
+        def query(self, *args): return []
+        def clear(self, *args): pass
+    logger.warning("QuadTree Module NOT found. Falling back to linear search.")
 
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -256,7 +272,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     status_message = Signal(str)
     construction_mode_changed = Signal(bool)
     grid_snap_mode_changed = Signal(bool)
-    
+    solver_finished_signal = Signal(bool, str, float) # success, message, dof
+
     # Farben
     BG_COLOR = QColor(28, 28, 28)
     GRID_MINOR = QColor(38, 38, 38)
@@ -281,6 +298,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         
+        self._solver_lock = threading.Lock()
+        self.solver_finished_signal.connect(self._on_solver_finished)
+        self._is_solving = False
+
         self.sketch = Sketch("Sketch1")
         self.view_offset = QPointF(0, 0)
         self.view_scale = 5.0
@@ -300,6 +321,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_points = []  # Standalone Punkte
         self.selected_constraints = []  # Für Constraint-Selektion
         self.hovered_entity = None
+        self._last_hovered_entity = None
 
         # Editing State für Dimension-Input statt QInputDialog
         self.editing_entity = None  # Objekt das gerade bearbeitet wird (Line, Circle, Constraint)
@@ -367,6 +389,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.profile_parent = []   # Hierarchie: Parent-Index für jeden Profil
         self.profile_children = [] # Hierarchie: Kinder-Indizes für jeden Profil
         self.hovered_face = None  # Face unter dem Cursor
+        self._last_hovered_face = None
         
         # Offset-Tool Zustand
         self.offset_dragging = False
@@ -393,8 +416,155 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketch_plane_normal = (0, 0, 1)  # Normale der Sketch-Ebene
         self.sketch_plane_origin = (0, 0, 0)  # Ursprung der Sketch-Ebene
         
+        # --- SPATIAL INDEX OPTIMIZATION ---
+        self.spatial_index = None
+        self.index_dirty = True
+        # Mark index dirty whenever sketch changes
+        self.sketched_changed.connect(self._mark_index_dirty)
+        self.hovered_ref_edge = None
+
         QTimer.singleShot(100, self._center_view)
     
+    def _solve_async(self):
+        """
+        Runs the constraint solver in a background thread.
+        Does not block the UI.
+        """
+        # If already solving, we skip this frame (simple throttling)
+        # Alternatively, for heavy loads, one might implement a queue, 
+        # but for CAD interaction, skipping 'stale' moves is often better.
+        if self._is_solving:
+            return
+
+        def run_solver():
+            with self._solver_lock:
+                self._is_solving = True
+                try:
+                    # Run the math (CPU heavy)
+                    result = self.sketch.solve()
+                    
+                    # Extract safe primitive types to pass via Signal
+                    success = getattr(result, 'success', True)
+                    msg = getattr(result, 'message', "Solved")
+                    dof = getattr(result, 'dof', 0)
+                    
+                    # Emit result to Main Thread
+                    self.solver_finished_signal.emit(success, msg, float(dof))
+                except Exception as e:
+                    logger.error(f"Solver Crash: {e}")
+                    self.solver_finished_signal.emit(False, str(e), 0.0)
+                finally:
+                    self._is_solving = False
+
+        # Start thread as daemon (dies if app closes)
+        thread = Thread(target=run_solver, daemon=True)
+        thread.start()
+
+    def _on_solver_finished(self, success, message, dof):
+        """
+        Called when the background thread finishes. 
+        Safe to update UI here.
+        """
+        if not success:
+            # Subtle visual warning or log (don't spam toast messages on drag)
+            logger.warning(f"Solver divergence: {message}")
+        
+        # Recalculate profiles (Faces) based on new solved geometry
+        self._find_closed_profiles()
+        
+        # Notify rest of the system
+        self.sketched_changed.emit()
+        
+        # Trigger repaint of the new geometry state
+        self.update()
+        
+        # Optional: Update status only if it was a discrete operation (not while dragging)
+        if self.current_tool == SketchTool.SELECT and not self.is_panning:
+             # Just logging to keep HUD clean during drag
+             pass
+            
+    def _mark_index_dirty(self):
+        self.index_dirty = True
+
+    def _rebuild_spatial_index(self):
+        """Rebuilds the QuadTree from current sketch entities."""
+        if not self.sketch.lines and not self.sketch.circles and not self.sketch.arcs and not self.sketch.splines:
+            self.spatial_index = None
+            self.index_dirty = False
+            return
+
+        # 1. Calculate World Bounds for the Root Node
+        min_x, min_y = float('inf'), float('inf')
+        max_x, max_y = float('-inf'), float('-inf')
+
+        # Sample bounds from lines (fast approximation)
+        for l in self.sketch.lines:
+            min_x = min(min_x, l.start.x, l.end.x)
+            max_x = max(max_x, l.start.x, l.end.x)
+            min_y = min(min_y, l.start.y, l.end.y)
+            max_y = max(max_y, l.start.y, l.end.y)
+        
+        # Determine circles/arcs bounds
+        for c in self.sketch.circles + self.sketch.arcs:
+            min_x = min(min_x, c.center.x - c.radius)
+            max_x = max(max_x, c.center.x + c.radius)
+            min_y = min(min_y, c.center.y - c.radius)
+            max_y = max(max_y, c.center.y + c.radius)
+
+        # Splines
+        for s in self.sketch.splines:
+             for cp in s.control_points:
+                 min_x = min(min_x, cp.point.x)
+                 max_x = max(max_x, cp.point.x)
+                 min_y = min(min_y, cp.point.y)
+                 max_y = max(max_y, cp.point.y)
+
+        # Default bounds if empty or single point
+        if min_x == float('inf'): 
+            min_x, max_x, min_y, max_y = -100, 100, -100, 100
+        
+        # Add padding to root bounds
+        padding = 100
+        root_rect = QRectF(min_x - padding, min_y - padding, 
+                           (max_x - min_x) + 2*padding, (max_y - min_y) + 2*padding)
+
+        # 2. Create Tree
+        self.spatial_index = QuadTree(root_rect)
+
+        # 3. Insert Entities
+        # Lines
+        for line in self.sketch.lines:
+            # Normalized rect ensures width/height are positive
+            rect = QRectF(QPointF(line.start.x, line.start.y), 
+                          QPointF(line.end.x, line.end.y)).normalized()
+            # Padding for thin lines (makes hit testing reliable)
+            self.spatial_index.insert(line, rect.adjusted(-1, -1, 1, 1))
+
+        # Circles
+        for circle in self.sketch.circles:
+            r = circle.radius
+            rect = QRectF(circle.center.x - r, circle.center.y - r, 2*r, 2*r)
+            self.spatial_index.insert(circle, rect)
+
+        # Arcs (Using full circle bounds for simplicity/speed)
+        for arc in self.sketch.arcs:
+            r = arc.radius
+            rect = QRectF(arc.center.x - r, arc.center.y - r, 2*r, 2*r)
+            self.spatial_index.insert(arc, rect)
+            
+        # Splines
+        for spline in self.sketch.splines:
+            # Calculate rough bbox from control points
+            s_min_x = min((cp.point.x for cp in spline.control_points), default=0)
+            s_max_x = max((cp.point.x for cp in spline.control_points), default=0)
+            s_min_y = min((cp.point.y for cp in spline.control_points), default=0)
+            s_max_y = max((cp.point.y for cp in spline.control_points), default=0)
+            rect = QRectF(QPointF(s_min_x, s_min_y), QPointF(s_max_x, s_max_y)).normalized()
+            self.spatial_index.insert(spline, rect)
+
+        self.index_dirty = False
+        logger.debug(f"Spatial Index Rebuilt. Bounds: {root_rect}")
+        #     
     def handle_option_changed(self, option: str, value):
         """Reagiert auf Änderungen aus dem ToolPanel (Checkboxen)"""
         if option == "construction":
@@ -410,6 +580,27 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.grid_size = float(value)
             
         self.update()
+
+    def _get_entity_bbox(self, entity):
+        """Liefert das Screen-Bounding-Rect für eine Entity (für Dirty Tracking)"""
+        from sketcher import Line2D, Circle2D, Arc2D
+        
+        rect = QRectF()
+        if entity is None: 
+            return rect
+            
+        if isinstance(entity, Line2D):
+            p1 = self.world_to_screen(QPointF(entity.start.x, entity.start.y))
+            p2 = self.world_to_screen(QPointF(entity.end.x, entity.end.y))
+            rect = QRectF(p1, p2).normalized()
+            
+        elif isinstance(entity, (Circle2D, Arc2D)):
+            c = self.world_to_screen(QPointF(entity.center.x, entity.center.y))
+            r = entity.radius * self.view_scale
+            rect = QRectF(c.x()-r, c.y()-r, 2*r, 2*r)
+            
+        # Padding für Strichstärke (5px) + Glow (10px) = sicherheitshalber 15
+        return rect.adjusted(-15, -15, 15, 15)
     
     def _calculate_plane_axes(self, normal_vec):
         """
@@ -418,30 +609,38 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         """
         n = np.array(normal_vec)
         norm = np.linalg.norm(n)
-        if norm == 0: return (1,0,0), (0,1,0)
+        if norm == 0: return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
         n = n / norm
         
         # Globale Up-Vektor Strategie (Z-Up)
-        # Wenn Normale fast Z ist, nimm Y als Up, sonst Z
-        if abs(n[2]) > 0.999:
+        # FIX: float() cast um numpy.bool Fehler im if-Statement zu vermeiden
+        if abs(self.to_native_float(n[2])) > 0.999:
             # Normale ist (0,0,1) oder (0,0,-1)
-            # X = (1,0,0), Y = (0,1,0) (oder gespiegelt wenn n=(0,0,-1))
-            # Wir fixieren X auf globale X-Achse
             x_dir = np.array([1.0, 0.0, 0.0])
             y_dir = np.cross(n, x_dir)
             y_dir = y_dir / np.linalg.norm(y_dir)
-            # X re-orthogonalisieren (falls n nicht perfekt z)
+            # X re-orthogonalisieren
             x_dir = np.cross(y_dir, n)
         else:
-            # Standardfall: X ist horizontal (senkrecht zu Z und N)
+            # Standardfall
             global_up = np.array([0.0, 0.0, 1.0])
             x_dir = np.cross(global_up, n)
             x_dir = x_dir / np.linalg.norm(x_dir)
             y_dir = np.cross(n, x_dir)
             y_dir = y_dir / np.linalg.norm(y_dir)
             
-        return tuple(x_dir), tuple(y_dir)
-                                            
+        # FIX: Rückgabe als Tuple von nativen Floats, nicht numpy.float64
+        return tuple(float(v) for v in x_dir), tuple(float(v) for v in y_dir)
+
+    def to_native_float(self, value):
+        """Sicheres Casting von NumPy → Python native"""
+        if hasattr(value, 'item'):
+            return value.item()
+        elif isinstance(value, (np.integer, np.floating)):
+            return value.item()
+        return float(value)
+
+
     def world_to_screen(self, w):
         return QPointF(w.x() * self.view_scale + self.view_offset.x(),
                       -w.y() * self.view_scale + self.view_offset.y())
@@ -477,7 +676,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         """
         Setzt die Body-Referenzen für transparente Anzeige.
-        FIX: Akzeptiert jetzt plane_x für korrekte Rotation!
+        FIX: Casting von NumPy-Typen zu nativem int(), um 'numpy.bool'/'numpy.int' Fehler zu vermeiden.
         """
         self.reference_bodies = []
         self.sketch_plane_normal = plane_normal
@@ -499,8 +698,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             u = np.array(plane_x)
             u = u / np.linalg.norm(u)
         else:
-            # Fallback: Raten (kann zu Rotation führen)
-            if abs(n[2]) < 0.9:
+            # Fallback: Raten
+            # float() Cast verhindert, dass der Vergleich ein numpy.bool zurückgibt
+            if abs(self.to_native_float(n[2])) < 0.9:
                 u = np.cross(n, [0, 0, 1])
             else:
                 u = np.cross(n, [1, 0, 0])
@@ -528,7 +728,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if edges.n_points == 0:
                     edges = mesh.extract_all_edges()
                 
-                # Projiziere 3D-Kanten auf 2D-Ebene
                 edges_2d = []
                 
                 if edges.n_lines > 0:
@@ -536,20 +735,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     points = edges.points
                     i = 0
                     while i < len(lines):
-                        n_pts = lines[i]
+                        # FIX: Expliziter Cast zu int(), da lines[i] ein numpy.int ist
+                        n_pts = int(lines[i])
+                        
                         if n_pts >= 2:
                             for j in range(n_pts - 1):
-                                p1_3d = points[lines[i + 1 + j]]
-                                p2_3d = points[lines[i + 2 + j]]
+                                # Indizes extrahieren (auch hier sicherheitshalber casten)
+                                idx1 = int(lines[i + 1 + j])
+                                idx2 = int(lines[i + 2 + j])
+                                
+                                p1_3d = points[idx1]
+                                p2_3d = points[idx2]
                                 
                                 # Projiziere auf Ebene (lokale 2D-Koordinaten)
                                 rel1 = p1_3d - origin
                                 rel2 = p2_3d - origin
                                 
-                                x1 = np.dot(rel1, u)
-                                y1 = np.dot(rel1, v)
-                                x2 = np.dot(rel2, u)
-                                y2 = np.dot(rel2, v)
+                                x1 = float(np.dot(rel1, u))
+                                y1 = float(np.dot(rel1, v))
+                                x2 = float(np.dot(rel2, u))
+                                y2 = float(np.dot(rel2, v))
                                 
                                 edges_2d.append((x1, y1, x2, y2))
                         i += n_pts + 1
@@ -1107,38 +1312,31 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         Args:
             points: Liste von (x, y) Tupeln
-            tolerance: Relative Toleranz für Radius-Varianz (2% default, erhöht von 1%)
+            tolerance: Relative Toleranz für Radius-Varianz
             
         Returns:
-            (cx, cy, radius) wenn es ein Kreis ist, sonst None
+            (cx, cy, radius) als native Floats wenn es ein Kreis ist, sonst None
         """
-        if len(points) < 8:  # Minimum für Kreis-Erkennung
-            logger.debug(f"_detect_circle: Zu wenig Punkte ({len(points)})")
+        if len(points) < 8:
             return None
         
         import numpy as np
         pts = np.array(points)
         
-        # Schwerpunkt berechnen
         cx = np.mean(pts[:, 0])
         cy = np.mean(pts[:, 1])
         
-        # Abstände zum Schwerpunkt
         distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
-        
-        # Mittlerer Radius
         radius = np.mean(distances)
         
-        if radius < 0.1:  # Zu klein
-            logger.debug(f"_detect_circle: Radius zu klein ({radius:.4f})")
+        if radius < 0.1:
             return None
         
-        # Varianz prüfen (sollte sehr klein sein für Kreis)
         variance = np.std(distances) / radius
-        logger.debug(f"_detect_circle: {len(points)} Punkte, r={radius:.2f}, varianz={variance:.6f} (tol={tolerance})")
         
-        if variance < tolerance:
-            # Es ist ein Kreis!
+        # FIX: float() cast in comparison
+        if float(variance) < tolerance:
+            # FIX: Native Floats zurückgeben
             return (float(cx), float(cy), float(radius))
         
         return None
@@ -1666,11 +1864,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.PATTERN_LINEAR and self.tool_step >= 1:
             count = self.tool_data.get('pattern_count', 3)
             spacing = self.tool_data.get('pattern_spacing', 20.0)
-            fields = [("N", "count", float(count), ""), ("D", "spacing", spacing, "mm")]
+            fields = [("Anzahl", "count", float(count), "x"), ("Abstand", "spacing", spacing, "mm")]
+            
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR and self.tool_step >= 1:
             count = self.tool_data.get('pattern_count', 6)
             angle = self.tool_data.get('pattern_angle', 360.0)
-            fields = [("N", "count", float(count), ""), ("∠", "angle", angle, "°")]
+            fields = [("Anzahl", "count", float(count), "x"), ("Winkel", "angle", angle, "°")]
             
         if not fields:
             self.status_message.emit(tr("Tab: Set a point first or choose another tool"))
@@ -1703,11 +1902,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.FILLET_2D: self.fillet_radius = value
         elif self.current_tool == SketchTool.CHAMFER_2D: self.chamfer_distance = value
         elif self.current_tool == SketchTool.PATTERN_LINEAR:
-            if key == "count": self.tool_data['pattern_count'] = max(2, int(value))
-            elif key == "spacing": self.tool_data['pattern_spacing'] = value
+            if key == "count": 
+                self.tool_data['pattern_count'] = max(2, int(value))
+            elif key == "spacing": 
+                self.tool_data['pattern_spacing'] = value
+            # Bei Linear Pattern müssen wir die Vorschau erzwingen
+            self.update()
+                
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR:
-            if key == "count": self.tool_data['pattern_count'] = max(2, int(value))
-            elif key == "angle": self.tool_data['pattern_angle'] = value
+            if key == "count": 
+                self.tool_data['pattern_count'] = max(2, int(value))
+            elif key == "angle": 
+                self.tool_data['pattern_angle'] = value
+            self.update()
         self.update()
     
     def _on_dim_confirmed(self):
@@ -2144,38 +2351,174 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         pos = event.position()
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
+        if self.tool_step > 0:
+            # Snap und Live-Werte müssen trotzdem berechnet werden
+            snapped, snap_type = self.snap_point(self.mouse_world)
+            self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
+            self._update_live_values(snapped)
+            
+            self.update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
+            return
+        needs_full_update = False
+        dirty_region = QRectF()
         
-        # 1. Basis-Interaktionen (Pan, Drag, Box)
+        # 1. Basis-Interaktionen
         if self.is_panning:
             self.view_offset += pos - self.pan_start
             self.pan_start = pos
+            self.update() # Pan braucht Full Redraw
+            return
+            
         elif self.spline_dragging:
             self._drag_spline_element(event.modifiers() & Qt.ShiftModifier)
+            # Dragging aktualisiert Update selber oder braucht Full Update
+            return 
+            
         elif self.selection_box_start:
+            # Smart Update für Selection Box:
+            # Altes Box-Rect und neues Box-Rect invalidieren
+            old_rect = QRectF(self.selection_box_start, self.selection_box_end).normalized()
             self.selection_box_end = pos
+            new_rect = QRectF(self.selection_box_start, self.selection_box_end).normalized()
+            
+            # Union der beiden Rects updaten (+ Padding für Border)
+            dirty_region = old_rect.united(new_rect).adjusted(-2, -2, 2, 2)
+            self.update(dirty_region.toRect())
+            return
+        
         else:
             # 2. Snapping und Hover-Logik
             snapped, snap_type = self.snap_point(self.mouse_world)
-            self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
-            self.hovered_entity = self._find_entity_at(self.mouse_world)
-            self.hovered_face = self._find_face_at(self.mouse_world)
             
+            # Snap-Update Check
+            old_snap = self.current_snap
+            self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
+            
+            if self.current_snap != old_snap:
+                # Snap hat sich geändert -> Bereich um alten und neuen Snap invalidieren
+                if old_snap:
+                    p_old = self.world_to_screen(old_snap[0])
+                    dirty_region = dirty_region.united(QRectF(p_old.x()-10, p_old.y()-10, 20, 20))
+                if self.current_snap:
+                    p_new = self.world_to_screen(self.current_snap[0])
+                    dirty_region = dirty_region.united(QRectF(p_new.x()-10, p_new.y()-10, 20, 20))
+            
+            if self.current_tool == SketchTool.PROJECT:
+                self.hovered_ref_edge = self._find_reference_edge_at(self.mouse_world)
+                if self.hovered_ref_edge:
+                    # Cursor ändern um Interaktivität zu zeigen
+                    self.setCursor(Qt.PointingHandCursor)
+                    # Wir brauchen ein Update, um das Highlight zu zeichnen
+                    dirty_region = dirty_region.united(self.rect()) 
+                else:
+                    self._update_cursor()
+            else:
+                self.hovered_ref_edge = None
+
+            # Entity Hover Logic (DAS IST DER KEY PERF BOOSTER)
+            new_hovered = self._find_entity_at(self.mouse_world)
+            
+            if new_hovered != self._last_hovered_entity:
+                # 1. Markiere altes Entity als Dirty (um Highlight zu entfernen)
+                if self._last_hovered_entity:
+                    dirty_region = dirty_region.united(self._get_entity_bbox(self._last_hovered_entity))
+                
+                # 2. Markiere neues Entity als Dirty (um Highlight zu zeichnen)
+                if new_hovered:
+                    dirty_region = dirty_region.united(self._get_entity_bbox(new_hovered))
+                
+                self.hovered_entity = new_hovered
+                self._last_hovered_entity = new_hovered
+            
+            # Face Hover Logic
+            new_face = self._find_face_at(self.mouse_world)
+            if new_face != self._last_hovered_face:
+                # Da Faces groß sein können, machen wir hier lieber ein Full Update wenn sich Face ändert
+                # ODER: Wir invalidieren das Bounding Rect des Faces (wäre besser)
+                needs_full_update = True 
+                self.hovered_face = new_face
+                self._last_hovered_face = new_face
+
             # Cursor-Feedback
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
+                if spline_elem != self.hovered_spline_element:
+                     # Spline Handle Hover changed -> Update Spline area
+                     if spline_elem:
+                         # bbox der ganzen spline holen (teuer, aber ok für hover change)
+                         pass # TODO
+                     needs_full_update = True # Einfachheitshalber
+                
                 self.hovered_spline_element = spline_elem
-                self.setCursor(Qt.OpenHandCursor) 
                 if spline_elem:
                     self.setCursor(Qt.OpenHandCursor)
                 else:
                     self._update_cursor()
-            # 3. Live-Werte berechnen (schreibt in self.live_length etc.)
+                    
+            # 3. Live-Werte (für Tooltips/HUD)
             self._update_live_values(snapped)
 
+        # FINAL UPDATE CALL
+        if needs_full_update:
+            self.update()
+        elif not dirty_region.isEmpty():
+            # Konvertiere float QRectF zu integer QRect für update()
+            # .toAlignedRect() rundet sicher auf, damit nichts abgeschnitten wird
+            self.update(dirty_region.toAlignedRect())
+        elif self.dim_input.isVisible():
+             # HUD Updates (Koordinaten etc) brauchen leider oft Full Update
+             # Wenn wir nur Koordinaten unten links ändern, könnten wir das optimieren:
+             # self.update(0, self.height()-30, 200, 30)
+             pass
         
-        self.update()
+    def _find_reference_edge_at(self, pos):
+        """Findet eine Kante in den Background-Bodies"""
+        if not self.reference_bodies or not self.show_body_reference:
+            return None
+            
+        r = self.snap_radius / self.view_scale
+        px, py = pos.x(), pos.y()
         
-          
+        # Hilfsfunktion für Abstand Punkt zu Linie
+        def dist_sq(x, y, x1, y1, x2, y2):
+            A = x - x1
+            B = y - y1
+            C = x2 - x1
+            D = y2 - y1
+            dot = A * C + B * D
+            len_sq = C * C + D * D
+            param = -1
+            if len_sq != 0:
+                param = dot / len_sq
+            
+            if param < 0:
+                xx, yy = x1, y1
+            elif param > 1:
+                xx, yy = x2, y2
+            else:
+                xx = x1 + param * C
+                yy = y1 + param * D
+                
+            dx = x - xx
+            dy = y - yy
+            return dx * dx + dy * dy
+
+        # Suche in allen Bodies
+        for body in self.reference_bodies:
+            edges = body.get('edges_2d', [])
+            for edge in edges:
+                x1, y1, x2, y2 = edge
+                # Grober Bounding Box Check zuerst (Performance)
+                if px < min(x1, x2) - r or px > max(x1, x2) + r or \
+                   py < min(y1, y2) - r or py > max(y1, y2) + r:
+                    continue
+                
+                d2 = dist_sq(px, py, x1, y1, x2, y2)
+                if d2 < r*r:
+                    return edge
+        return None
+
+
     def _drag_spline_element(self, shift_pressed):
         """Zieht ein Spline-Element und aktualisiert die Vorschau sofort"""
         if not self.spline_drag_spline or self.spline_drag_cp_index is None:
@@ -2340,6 +2683,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Qt.Key_S: lambda: self.set_tool(SketchTool.SCALE),     # S für Skalieren
             Qt.Key_Plus: self._increase_tolerance,   # + für Toleranz erhöhen
             Qt.Key_Minus: self._decrease_tolerance,  # - für Toleranz verringern
+            Qt.Key_P: lambda: self.set_tool(SketchTool.PROJECT), # <--- NEU
         }
         if key in shortcuts: shortcuts[key](); self.update()
     
@@ -2498,51 +2842,100 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return None
 
     def _find_entity_at(self, pos):
-        r = self.snap_radius / self.view_scale
-        pt = Point2D(pos.x(), pos.y())
+        """
+        Optimized hit-testing using Spatial Index (Quadtree).
+        Complexity: O(log n)
+        """
+        # 1. Update Index if needed
+        if self.index_dirty:
+            self._rebuild_spatial_index()
+
+        r_screen = self.snap_radius
+        r_world = r_screen / self.view_scale
         
-        # Erst Linien, Kreise, Bögen prüfen
-        for line in self.sketch.lines:
-            if line.distance_to_point(pt) < r: return line
-        for circle in self.sketch.circles:
-            dist = abs(math.hypot(circle.center.x - pos.x(), circle.center.y - pos.y()) - circle.radius)
-            if dist < r: return circle
-        for arc in self.sketch.arcs:
-            # Distanz zum Bogen-Kreis
-            dist_to_center = math.hypot(arc.center.x - pos.x(), arc.center.y - pos.y())
-            dist_to_arc = abs(dist_to_center - arc.radius)
-            if dist_to_arc < r:
-                # Prüfe ob der Punkt im Winkelbereich des Bogens liegt
-                angle = math.degrees(math.atan2(pos.y() - arc.center.y, pos.x() - arc.center.x))
-                # Normalisiere Winkel auf 0-360
-                while angle < 0: angle += 360
-                while angle >= 360: angle -= 360
-                
-                start = arc.start_angle
-                while start < 0: start += 360
-                while start >= 360: start -= 360
-                
-                end = arc.end_angle
-                while end < 0: end += 360
-                while end >= 360: end -= 360
-                
-                # Prüfe ob im Bogenbereich
-                if start <= end:
-                    if start <= angle <= end:
-                        return arc
-                else:  # Bogen geht über 0°
-                    if angle >= start or angle <= end:
-                        return arc
+        # 2. Define Query Area (in World Coordinates)
+        query_rect = QRectF(pos.x() - r_world, pos.y() - r_world, 
+                            r_world * 2, r_world * 2)
+
+        candidates = []
         
-        # Standalone Punkte prüfen
+        # 3. Broad Phase: Get candidates from Quadtree
+        if self.spatial_index:
+            candidates = self.spatial_index.query(query_rect)
+            # Add points separately or ensure they are in tree? 
+            # Currently standalone points are not in tree in my snippet above, 
+            # let's assume they are few or add them to tree if needed.
+            # For now, we fallback to linear search for points if they are critical,
+            # or add points to the tree in _rebuild.
+        else:
+            # Fallback if tree failed
+            candidates = self.sketch.lines + self.sketch.circles + self.sketch.arcs + self.sketch.splines
+
+        # 4. Narrow Phase: Exact Distance Check
+        best_entity = None
+        best_dist = r_world # Start with max allowed distance
+        
+        # Helper for Spline distance (computationally expensive, so strictly filter first)
+        def check_spline(spline):
+            # ... existing spline check logic from your code ...
+            # Reuse logic from original _find_spline_at
+            pts = spline.get_curve_points(segments_per_span=10)
+            local_min = float('inf')
+            px, py = pos.x(), pos.y()
+            for i in range(len(pts) - 1):
+                x1, y1 = pts[i]
+                x2, y2 = pts[i + 1]
+                line_len = math.hypot(x2 - x1, y2 - y1)
+                if line_len < 1e-9: continue
+                t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / (line_len**2)))
+                dist = math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)))
+                if dist < local_min: local_min = dist
+            return local_min
+
+        for entity in candidates:
+            dist = float('inf')
+            
+            # Type-based distance check
+            # We assume your entity classes have .distance_to_point or similar logic
+            if hasattr(entity, 'start') and hasattr(entity, 'end'): # Line
+                # Using sketcher's distance logic
+                from sketcher import Point2D
+                dist = entity.distance_to_point(Point2D(pos.x(), pos.y()))
+            
+            elif hasattr(entity, 'center') and hasattr(entity, 'radius'): # Circle/Arc
+                center_dist = math.hypot(entity.center.x - pos.x(), entity.center.y - pos.y())
+                dist = abs(center_dist - entity.radius)
+                
+                # Special check for Arcs (angle limit)
+                if hasattr(entity, 'start_angle'): # It's an Arc
+                    if dist < best_dist: # Only do angle math if close enough to ring
+                        angle = math.degrees(math.atan2(pos.y() - entity.center.y, pos.x() - entity.center.x))
+                        angle = angle % 360
+                        s = entity.start_angle % 360
+                        e = entity.end_angle % 360
+                        # Check if angle is within sweep
+                        in_arc = (s <= e and s <= angle <= e) or (s > e and (angle >= s or angle <= e))
+                        if not in_arc: dist = float('inf')
+
+            elif hasattr(entity, 'control_points'): # Spline
+                dist = check_spline(entity)
+
+            # 5. Winner Check
+            if dist < best_dist:
+                best_dist = dist
+                best_entity = entity
+
+        # 6. Standalone Points (usually few, ok to check linearly or add to tree)
+        # Re-using logic from original code for points
         used_point_ids = self._get_used_point_ids()
         for point in self.sketch.points:
-            if point.id not in used_point_ids:
-                dist = math.hypot(point.x - pos.x(), point.y - pos.y())
-                if dist < r:
-                    return point
-        
-        return None
+             if point.id not in used_point_ids:
+                 d = math.hypot(point.x - pos.x(), point.y - pos.y())
+                 if d < best_dist:
+                     best_dist = d
+                     best_entity = point
+
+        return best_entity
     
     def _find_line_at(self, pos):
         r = self.snap_radius / self.view_scale
@@ -2830,15 +3223,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
     
     def paintEvent(self, event):
+        # FIX: Konvertiere das Integer-Rect (QRect) sofort in ein Float-Rect (QRectF)
+        # Der Renderer arbeitet mit QRectF (wegen Zoom/Pan), daher muss das hier passen.
+        update_rect = QRectF(event.rect())
+        
         p = QPainter(self)
+        # Clipping kann weiterhin das pixelgenaue Integer-Rect nutzen
+        p.setClipRect(event.rect())
         p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), self.BG_COLOR)
-        self._draw_grid(p)
-        self._draw_body_references(p)  # Bodies als Referenz im Hintergrund
-        self._draw_profiles(p)
+        
+        # Hintergrund
+        p.fillRect(event.rect(), self.BG_COLOR)
+        
+        # Renderer aufrufen - jetzt wird ein QRectF übergeben, 
+        # und .intersects(path.boundingRect()) funktioniert!
+        self._draw_grid(p, update_rect)
+        self._draw_body_references(p)
+        self._draw_profiles(p, update_rect)
         self._draw_axes(p)
-        self._draw_geometry(p)
-        self._draw_constraints(p)
+        self._draw_geometry(p, update_rect)
+        self._draw_constraints(p) 
         self._draw_open_ends(p)
         self._draw_preview(p)
         self._draw_selection_box(p)

@@ -556,14 +556,7 @@ def _try_fillet_single(solid, edge, radius: float):
 def _try_chamfer_batch(solid, edges: List, distance: float):
     """
     Versucht Chamfer auf alle Kanten gleichzeitig.
-
-    Args:
-        solid: build123d Solid
-        edges: Liste von build123d Edges
-        distance: Chamfer-Distanz
-
-    Returns:
-        build123d Solid oder None bei Fehler
+    FIX: Nutzt die einfache Signatur Add(dist, edge) für symmetrische Fasen.
     """
     shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
     chamfer_op = BRepFilletAPI_MakeChamfer(shape)
@@ -572,83 +565,60 @@ def _try_chamfer_batch(solid, edges: List, distance: float):
     for edge in edges:
         edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
 
-        # Finde angrenzende Face für Chamfer
-        face = _find_adjacent_face(shape, edge_shape)
-        if not face:
-            # Fallback: geometrische Suche
-            face = _find_face_by_edge_geometry(shape, edge_shape)
-
-        if face:
-            try:
-                chamfer_op.Add(distance, edge_shape, face)
-                added_count += 1
-            except Exception as e:
-                logger.debug(f"Chamfer.Add fehlgeschlagen: {e}")
-                continue
-        else:
-            logger.debug(f"Keine Face für Kante gefunden")
+        try:
+            # FIX: Keine Face übergeben! Das verursacht den Signatur-Fehler bei symmetrischen Fasen.
+            # OCP/Cascade errechnet die Fasen-Richtung automatisch.
+            chamfer_op.Add(distance, edge_shape)
+            added_count += 1
+        except Exception as e:
+            logger.debug(f"Chamfer.Add fehlgeschlagen für Kante: {e}")
+            continue
 
     if added_count == 0:
-        logger.debug("Keine Kanten zum Chamfern hinzugefügt")
         return None
 
-    chamfer_op.Build()
+    try:
+        chamfer_op.Build()
 
-    if not chamfer_op.IsDone():
-        logger.debug(f"Chamfer Build fehlgeschlagen (added {added_count} edges)")
+        if not chamfer_op.IsDone():
+            logger.debug(f"Chamfer Build fehlgeschlagen")
+            return None
+
+        result_shape = chamfer_op.Shape()
+        result_shape = _fix_shape(result_shape)
+
+        return _wrap_to_build123d(result_shape)
+    except Exception as e:
+        logger.debug(f"Chamfer Build Exception: {e}")
         return None
-
-    result_shape = chamfer_op.Shape()
-    result_shape = _fix_shape(result_shape)
-
-    return _wrap_to_build123d(result_shape)
 
 
 def _try_chamfer_single(solid, edge, distance: float):
     """
     Versucht Chamfer auf eine einzelne Kante.
-
-    Args:
-        solid: build123d Solid
-        edge: build123d Edge
-        distance: Chamfer-Distanz
-
-    Returns:
-        build123d Solid oder None bei Fehler
+    FIX: Signatur korrigiert.
     """
     shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
     edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
 
-    # Finde angrenzende Face
-    face = _find_adjacent_face(shape, edge_shape)
-
-    if not face:
-        logger.debug("Keine angrenzende Face gefunden für Chamfer")
-        # Fallback: Versuche die erste Face zu finden die diese Kante enthält
-        # durch direkten Vergleich auf dem Shape
-        face = _find_face_by_edge_geometry(shape, edge_shape)
-        if not face:
-            logger.debug("Auch geometrische Face-Suche fehlgeschlagen")
-            return None
-
     chamfer_op = BRepFilletAPI_MakeChamfer(shape)
 
     try:
-        chamfer_op.Add(distance, edge_shape, face)
+        # FIX: Nur Distanz und Edge
+        chamfer_op.Add(distance, edge_shape)
+        
+        chamfer_op.Build()
+
+        if not chamfer_op.IsDone():
+            return None
+
+        result_shape = chamfer_op.Shape()
+        result_shape = _fix_shape(result_shape)
+
+        return _wrap_to_build123d(result_shape)
     except Exception as e:
-        logger.debug(f"Chamfer.Add fehlgeschlagen: {e}")
+        logger.debug(f"Single Chamfer Exception: {e}")
         return None
-
-    chamfer_op.Build()
-
-    if not chamfer_op.IsDone():
-        logger.debug("Chamfer Build fehlgeschlagen")
-        return None
-
-    result_shape = chamfer_op.Shape()
-    result_shape = _fix_shape(result_shape)
-
-    return _wrap_to_build123d(result_shape)
 
 
 def _find_face_by_edge_geometry(shape, edge_shape):

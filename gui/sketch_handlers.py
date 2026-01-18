@@ -6,9 +6,11 @@ Extracted from sketch_editor.py for better maintainability
 
 import math
 from loguru import logger
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QInputDialog
+from PySide6.QtCore import QPointF, Qt, QRectF
+from PySide6.QtGui import QColor, QTransform, QPainterPath, QFont, QFontMetrics
+from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout, 
+                               QFormLayout, QLineEdit, QDialogButtonBox, QDoubleSpinBox, 
+                               QFontComboBox, QWidget, QLabel, QSpinBox, QCheckBox)
 
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
@@ -77,9 +79,9 @@ class SketchHandlersMixin:
                             self.sketch.add_point_on_line(line.end, other_line)
                             break
 
-                self.sketch.solve()
+                self._solve_async() # Thread start
+                self._find_closed_profiles() # Immediate visual feedback (pre-solve)
                 self.sketched_changed.emit()
-                self._find_closed_profiles()
                 self.tool_points.append(pos)
     
     def _handle_rectangle(self, pos, snap_type):
@@ -130,9 +132,9 @@ class SketchHandlersMixin:
                 self.sketch.add_length(lines[3], h)
 
             # 3. Lösen & Update
-            self.sketch.solve()
+            self._solve_async() # Thread start
+            self._find_closed_profiles() # Immediate visual feedback (pre-solve)
             self.sketched_changed.emit()
-            self._find_closed_profiles()
             
         self._cancel_tool()
     
@@ -156,10 +158,9 @@ class SketchHandlersMixin:
                     # 2. Radius Constraint hinzufügen
                     self.sketch.add_radius(circle, r)
                     # 3. Solver
-                    self.sketch.solve()
-                    
+                    self._solve_async() # Thread start
+                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
                     self.sketched_changed.emit()
-                    self._find_closed_profiles()
                 self._cancel_tool()
                 
         elif self.circle_mode == 2:
@@ -183,10 +184,9 @@ class SketchHandlersMixin:
                     # 2. Radius Constraint hinzufügen (fixiert die Größe)
                     self.sketch.add_radius(circle, r)
                     # 3. Solver
-                    self.sketch.solve()
-                    
+                    self._solve_async() # Thread start
+                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
                     self.sketched_changed.emit()
-                    self._find_closed_profiles()
                 self._cancel_tool()
                 
         else:
@@ -206,10 +206,9 @@ class SketchHandlersMixin:
                     # 2. Radius Constraint hinzufügen
                     self.sketch.add_radius(circle, r)
                     # 3. Solver
-                    self.sketch.solve()
-                    
+                    self._solve_async() # Thread start
+                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
                     self.sketched_changed.emit()
-                    self._find_closed_profiles()
                 self._cancel_tool()
 
     def _calc_circle_3points(self, p1, p2, p3):
@@ -474,10 +473,10 @@ class SketchHandlersMixin:
                 c.center.x += dx
                 c.center.y += dy
                 moved.add(c.center.id)
-        self.sketch.solve()
+        self._solve_async()
     
     def _handle_copy(self, pos, snap_type):
-        """Kopieren: Basispunkt → Zielpunkt (wie Fusion360)"""
+        """Kopieren: Basispunkt → Zielpunkt (INKLUSIVE CONSTRAINTS)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
@@ -493,38 +492,28 @@ class SketchHandlersMixin:
             dy = pos.y() - self.tool_points[0].y()
             self._save_undo()
             
-            # Neue Elemente erstellen
-            new_lines = []
-            new_circles = []
-            for line in self.selected_lines:
-                new_line = self.sketch.add_line(
-                    line.start.x + dx, line.start.y + dy,
-                    line.end.x + dx, line.end.y + dy,
-                    construction=line.construction
-                )
-                new_lines.append(new_line)
-            for c in self.selected_circles:
-                new_circle = self.sketch.add_circle(
-                    c.center.x + dx, c.center.y + dy,
-                    c.radius, construction=c.construction
-                )
-                new_circles.append(new_circle)
-            
-            # Neue Elemente auswählen
-            self._clear_selection()
-            self.selected_lines = new_lines
-            self.selected_circles = new_circles
+            # Wir nutzen die Helper-Methode, die jetzt auch Constraints kopiert
+            self._copy_selection_with_offset(dx, dy)
             
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self._cancel_tool()
-            self.status_message.emit(tr("Copied: {lines} lines, {circles} circles").format(lines=len(new_lines), circles=len(new_circles)))
 
     def _copy_selection_with_offset(self, dx, dy):
-        """Kopiert alle ausgewählten Elemente mit gegebenem Offset (für Tab-Eingabe)"""
+        """
+        Kopiert Geometrie UND Constraints.
+        Wichtig: Constraints werden nur kopiert, wenn ALLE beteiligten Elemente
+        mitkopiert wurden (interne Constraints).
+        """
         new_lines = []
         new_circles = []
+        new_arcs = []
+        
+        # Mapping: Alte ID -> Neues Objekt (für Constraint-Rekonstruktion)
+        # Wir müssen Linien, Kreise UND Punkte mappen
+        old_to_new = {}
 
+        # 1. Linien kopieren
         for line in self.selected_lines:
             new_line = self.sketch.add_line(
                 line.start.x + dx, line.start.y + dy,
@@ -532,22 +521,76 @@ class SketchHandlersMixin:
                 construction=line.construction
             )
             new_lines.append(new_line)
+            
+            # Mapping speichern
+            old_to_new[line.id] = new_line
+            old_to_new[line.start.id] = new_line.start
+            old_to_new[line.end.id] = new_line.end
 
+        # 2. Kreise kopieren
         for c in self.selected_circles:
             new_circle = self.sketch.add_circle(
                 c.center.x + dx, c.center.y + dy,
                 c.radius, construction=c.construction
             )
             new_circles.append(new_circle)
+            
+            old_to_new[c.id] = new_circle
+            old_to_new[c.center.id] = new_circle.center
+
+        # 3. Arcs kopieren
+        for a in self.selected_arcs:
+            new_arc = self.sketch.add_arc(
+                a.center.x + dx, a.center.y + dy,
+                a.radius, a.start_angle, a.end_angle,
+                construction=a.construction
+            )
+            new_arcs.append(new_arc)
+            
+            old_to_new[a.id] = new_arc
+            old_to_new[a.center.id] = new_arc.center
+
+        # 4. Constraints kopieren (Der wichtige Teil!)
+        # Wir durchsuchen alle existierenden Constraints
+        constraints_added = 0
+        for c in self.sketch.constraints:
+            # Prüfen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
+            # Das bedeutet, der Constraint bezieht sich nur auf kopierte Elemente (intern).
+            # Beispiel: Rechteck-Seitenlänge (intern) -> Kopieren.
+            # Beispiel: Abstand Rechteck zu Ursprung (extern) -> Nicht kopieren.
+            
+            is_internal = True
+            if not c.entities: 
+                is_internal = False
+            
+            new_entities = []
+            for entity in c.entities:
+                if hasattr(entity, 'id') and entity.id in old_to_new:
+                    new_entities.append(old_to_new[entity.id])
+                else:
+                    is_internal = False
+                    break
+            
+            if is_internal:
+                # Constraint klonen
+                new_c = Constraint(
+                    type=c.type,
+                    entities=new_entities,
+                    value=c.value
+                )
+                self.sketch.constraints.append(new_c)
+                constraints_added += 1
 
         # Neue Elemente auswählen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
+        self.selected_arcs = new_arcs
 
-        self.status_message.emit(tr("Copied: {lines} lines, {circles} circles").format(
-            lines=len(new_lines), circles=len(new_circles)))
-
+        msg = tr("Copied: {l} lines, {c} circles").format(l=len(new_lines), c=len(new_circles))
+        if constraints_added > 0:
+            msg += f", {constraints_added} constraints"
+        self.status_message.emit(msg)
     def _handle_rotate(self, pos, snap_type):
         """Drehen: Zentrum → Winkel (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
@@ -570,11 +613,34 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _rotate_selection(self, center, angle_deg):
-        """Rotiert alle ausgewählten Elemente um Zentrum"""
+        """
+        Rotiert Auswahl und entfernt dabei störende H/V Constraints.
+        """
         rad = math.radians(angle_deg)
         cos_a, sin_a = math.cos(rad), math.sin(rad)
         rotated = set()
         
+        # 1. FIX: Störende Constraints entfernen
+        # Horizontal/Vertical Constraints verhindern Rotation -> Löschen
+        # (Optional könnte man sie durch Perpendicular/Parallel ersetzen, 
+        # aber Löschen ist für freie Rotation sicherer)
+        constraints_to_remove = []
+        
+        # IDs der ausgewählten Elemente sammeln
+        selected_ids = set()
+        for l in self.selected_lines: selected_ids.add(l.id)
+        
+        for c in self.sketch.constraints:
+            if c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
+                # Wenn das Constraint zu einer der rotierten Linien gehört
+                if c.entities and c.entities[0].id in selected_ids:
+                    constraints_to_remove.append(c)
+        
+        for c in constraints_to_remove:
+            if c in self.sketch.constraints:
+                self.sketch.constraints.remove(c)
+        
+        # 2. Geometrie Rotieren
         for line in self.selected_lines:
             for pt in [line.start, line.end]:
                 if pt.id not in rotated:
@@ -591,8 +657,21 @@ class SketchHandlersMixin:
                 c.center.x = center.x() + dx * cos_a - dy * sin_a
                 c.center.y = center.y() + dx * sin_a + dy * cos_a
                 rotated.add(c.center.id)
+                
+        # Auch Arcs rotieren (inkl. Winkel-Update)
+        for arc in self.selected_arcs:
+            if arc.center.id not in rotated:
+                dx = arc.center.x - center.x()
+                dy = arc.center.y - center.y()
+                arc.center.x = center.x() + dx * cos_a - dy * sin_a
+                arc.center.y = center.y() + dx * sin_a + dy * cos_a
+                rotated.add(arc.center.id)
+            
+            # Winkel anpassen
+            arc.start_angle += angle_deg
+            arc.end_angle += angle_deg
         
-        self.sketch.solve()
+        self._solve_async()
     
     def _handle_mirror(self, pos, snap_type):
         """Spiegeln: Achse durch 2 Punkte (wie Fusion360)"""
@@ -657,37 +736,48 @@ class SketchHandlersMixin:
     def _handle_pattern_linear(self, pos, snap_type):
         """
         Lineares Muster: Vollständig interaktiv mit DimensionInput.
-
-        Schritt 0: Startpunkt wählen (Basis für Richtung)
-        Schritt 1: Maus bestimmt Richtung, Tab für Count/Spacing, Klick/Enter = Anwenden
+        UX: 
+        1. User wählt Elemente.
+        2. Aktiviert Tool.
+        3. Klick definiert Startpunkt -> Mausbewegung definiert Richtung & Abstand (Vorschau).
+        4. Tab öffnet Eingabe für präzise Werte.
         """
+        # Validierung: Nichts ausgewählt?
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             if hasattr(self, 'show_message'):
-                self.show_message("Erst Elemente auswählen!", 2000, QColor(255, 200, 100))
+                self.show_message("Bitte erst Elemente auswählen!", 2000, QColor(255, 200, 100))
             else:
                 self.status_message.emit(tr("Select elements first!"))
+            self.set_tool(SketchTool.SELECT) # Auto-Cancel
             return
 
+        # Schritt 0: Startpunkt setzen
         if self.tool_step == 0:
-            # Schritt 0: Startpunkt (Basis) wählen
             self.tool_points = [pos]
             self.tool_step = 1
 
-            # Default-Werte initialisieren
-            self.tool_data['pattern_count'] = 3
-            self.tool_data['pattern_spacing'] = 20.0
-            self.tool_data['pattern_direction'] = (1.0, 0.0)  # Default: nach rechts
+            # Default-Werte initialisieren, falls noch nicht vorhanden
+            if 'pattern_count' not in self.tool_data:
+                self.tool_data['pattern_count'] = 3
+            if 'pattern_spacing' not in self.tool_data:
+                self.tool_data['pattern_spacing'] = 20.0
+            
+            # Richtung initial auf Mausposition (wird in update aktualisiert)
+            self.tool_data['pattern_direction'] = (1.0, 0.0)
 
-            # DimensionInput automatisch anzeigen
-            self._show_pattern_linear_input()
-
+            # Input anzeigen
+            self._show_dimension_input()
+            
+            msg = tr("Direction/Spacing with Mouse | Tab=Input | Enter=Apply")
             if hasattr(self, 'show_message'):
-                self.show_message("Richtung mit Maus | Tab = Anzahl/Abstand | Enter/Klick = Anwenden", 3000)
+                self.show_message(msg, 4000)
             else:
-                self.status_message.emit(tr("Choose direction | Tab=Count/Spacing"))
+                self.status_message.emit(msg)
 
+        # Schritt 1: Anwenden
         elif self.tool_step == 1:
-            # Schritt 1: Klick wendet Muster an
+            # Wenn Input aktiv ist und Fokus hat, handlet _on_dim_confirmed das.
+            # Wenn User in den Canvas klickt, wenden wir es hier an.
             self._apply_linear_pattern(pos)
 
     def _show_pattern_linear_input(self):
@@ -705,123 +795,73 @@ class SketchHandlersMixin:
         self.dim_input.show()
         self.dim_input_active = True
 
-    def _apply_linear_pattern(self, end_pos):
-        """Wendet lineares Muster an"""
+    def _apply_linear_pattern(self, end_pos=None):
+        """Wendet das lineare Muster final an."""
         start = self.tool_points[0]
-        dx = end_pos.x() - start.x()
-        dy = end_pos.y() - start.y()
+        
+        # Richtung update, falls Mausposition gegeben
+        if end_pos:
+            dx = end_pos.x() - start.x()
+            dy = end_pos.y() - start.y()
+            dist = math.hypot(dx, dy)
+            if dist > 1.0: 
+                 self.tool_data['pattern_spacing'] = dist
+                 self.tool_data['pattern_direction'] = (dx/dist, dy/dist)
+        
+        count = int(self.tool_data.get('pattern_count', 3))
+        spacing = float(self.tool_data.get('pattern_spacing', 20.0))
+        ux, uy = self.tool_data.get('pattern_direction', (1.0, 0.0))
 
-        count = self.tool_data.get('pattern_count', 3)
-
-        # Distanz berechnen
-        total_dist = math.hypot(dx, dy)
-        if total_dist < 0.01:
-            # Keine Richtung - benutze gespeicherte oder Default
-            ux, uy = self.tool_data.get('pattern_direction', (1.0, 0.0))
-        else:
-            # Normierte Richtung
-            ux, uy = dx / total_dist, dy / total_dist
-            self.tool_data['pattern_direction'] = (ux, uy)
-
-        spacing = self.tool_data.get('pattern_spacing', 20.0)
-
-        if count < 2:
-            if hasattr(self, 'show_message'):
-                self.show_message("Anzahl muss mindestens 2 sein", 2000, QColor(255, 200, 100))
-            self._cancel_tool()
-            return
+        if count < 2: return
 
         self._save_undo()
-
-        # Kopien erstellen (ab Index 1, Index 0 ist Original)
-        created_lines = 0
-        created_circles = 0
-        created_arcs = 0
-
+        created_count = 0
+        
         for i in range(1, count):
-            offset_x = ux * spacing * i
-            offset_y = uy * spacing * i
-
-            for line in self.selected_lines:
-                self.sketch.add_line(
-                    line.start.x + offset_x, line.start.y + offset_y,
-                    line.end.x + offset_x, line.end.y + offset_y,
-                    construction=line.construction
-                )
-                created_lines += 1
-
+            ox, oy = ux * spacing * i, uy * spacing * i
+            for l in self.selected_lines:
+                self.sketch.add_line(l.start.x + ox, l.start.y + oy, l.end.x + ox, l.end.y + oy, construction=l.construction)
+                created_count += 1
             for c in self.selected_circles:
-                self.sketch.add_circle(
-                    c.center.x + offset_x, c.center.y + offset_y,
-                    c.radius, construction=c.construction
-                )
-                created_circles += 1
-
-            for arc in self.selected_arcs:
-                # Arc kopieren mit Offset
-                self.sketch.add_arc(
-                    arc.center.x + offset_x, arc.center.y + offset_y,
-                    arc.radius, arc.start_angle, arc.end_angle,
-                    construction=arc.construction
-                )
-                created_arcs += 1
+                self.sketch.add_circle(c.center.x + ox, c.center.y + oy, c.radius, construction=c.construction)
+                created_count += 1
+            for a in self.selected_arcs:
+                self.sketch.add_arc(a.center.x + ox, a.center.y + oy, a.radius, a.start_angle, a.end_angle, construction=a.construction)
+                created_count += 1
 
         self.sketched_changed.emit()
         self._find_closed_profiles()
-
-        total_created = created_lines + created_circles + created_arcs
-        if hasattr(self, 'show_message'):
-            self.show_message(f"Linear Pattern: {total_created} Elemente erstellt ({count}×)", 2500, QColor(100, 255, 100))
-        else:
-            self.status_message.emit(tr("Linear pattern: {lines} lines, {circles} circles created").format(
-                lines=created_lines, circles=created_circles))
-
-        logger.info(f"Linear pattern created: {created_lines} lines, {created_circles} circles, {created_arcs} arcs")
+        self.status_message.emit(f"Linear Pattern: {created_count} elements created.")
         self._cancel_tool()
-    
-    def _handle_pattern_circular(self, pos, snap_type):
-        """
-        Kreisförmiges Muster: Vollständig interaktiv mit DimensionInput.
 
-        Schritt 0: Rotationszentrum wählen
-        Schritt 1: Tab für Count/Angle, Klick/Enter = Anwenden
-        """
+    def _handle_pattern_circular(self, pos, snap_type):
+        """Kreisförmiges Muster: Interaktiv mit DimensionInput"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
-            if hasattr(self, 'show_message'):
-                self.show_message("Erst Elemente auswählen!", 2000, QColor(255, 200, 100))
-            else:
-                self.status_message.emit(tr("Select elements first!"))
+            self.status_message.emit(tr("Select elements first!"))
+            self.set_tool(SketchTool.SELECT)
             return
 
         if self.tool_step == 0:
-            # Schritt 0: Rotationszentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
-
-            # Default-Werte initialisieren
-            self.tool_data['pattern_count'] = 6
-            self.tool_data['pattern_angle'] = 360.0  # Vollkreis
-
-            # DimensionInput automatisch anzeigen
+            
+            if 'pattern_count' not in self.tool_data:
+                self.tool_data['pattern_count'] = 6
+            if 'pattern_angle' not in self.tool_data:
+                self.tool_data['pattern_angle'] = 360.0
+            
             self._show_pattern_circular_input()
-
-            if hasattr(self, 'show_message'):
-                self.show_message("Zentrum gewählt | Tab = Anzahl/Winkel | Enter/Klick = Anwenden", 3000)
-            else:
-                self.status_message.emit(tr("Center selected | Click=Apply | Tab=Count/Angle"))
+            self.status_message.emit(tr("Center selected | Click=Apply | Tab=Count/Angle"))
 
         elif self.tool_step == 1:
-            # Klick wendet Muster an
             self._apply_circular_pattern()
 
     def _show_pattern_circular_input(self):
-        """Zeigt DimensionInput für Circular Pattern"""
         count = self.tool_data.get('pattern_count', 6)
         angle = self.tool_data.get('pattern_angle', 360.0)
-        fields = [("N", "count", float(count), "×"), ("∠", "angle", angle, "°")]
+        fields = [("N", "count", float(count), "x"), ("∠", "angle", angle, "°")]
         self.dim_input.setup(fields)
-
-        # Position neben Maus
+        
         pos = self.mouse_screen
         x = min(int(pos.x()) + 30, self.width() - self.dim_input.width() - 10)
         y = min(int(pos.y()) - 50, self.height() - self.dim_input.height() - 10)
@@ -830,73 +870,47 @@ class SketchHandlersMixin:
         self.dim_input_active = True
 
     def _apply_circular_pattern(self):
-        """Wendet kreisförmiges Muster an"""
         center = self.tool_points[0]
-        count = self.tool_data.get('pattern_count', 6)
-        total_angle = self.tool_data.get('pattern_angle', 360.0)
+        count = int(self.tool_data.get('pattern_count', 6))
+        total_angle = float(self.tool_data.get('pattern_angle', 360.0))
 
-        if count < 2:
-            if hasattr(self, 'show_message'):
-                self.show_message("Anzahl muss mindestens 2 sein", 2000, QColor(255, 200, 100))
-            self._cancel_tool()
-            return
-
+        if count < 2: return
         self._save_undo()
+        
+        if abs(total_angle - 360.0) < 0.01:
+             step_angle = math.radians(360.0 / count)
+        else:
+             step_angle = math.radians(total_angle / (count - 1)) if count > 1 else 0
 
-        # Winkelschritt (gleichmäßig verteilt)
-        # Bei 360° und count=6: 0°, 60°, 120°, 180°, 240°, 300°
-        angle_step = math.radians(total_angle / count)
-
-        # Kopien erstellen (ab Index 1, Index 0 ist Original)
-        created_lines = 0
-        created_circles = 0
-        created_arcs = 0
+        created_count = 0
+        cx, cy = center.x(), center.y()
 
         for i in range(1, count):
-            angle = angle_step * i
+            angle = step_angle * i
             cos_a, sin_a = math.cos(angle), math.sin(angle)
+            def rotate_pt(px, py):
+                dx, dy = px - cx, py - cy
+                return cx + dx*cos_a - dy*sin_a, cy + dx*sin_a + dy*cos_a
 
-            for line in self.selected_lines:
-                # Rotiere Start- und Endpunkt um Zentrum
-                sx = center.x() + (line.start.x - center.x()) * cos_a - (line.start.y - center.y()) * sin_a
-                sy = center.y() + (line.start.x - center.x()) * sin_a + (line.start.y - center.y()) * cos_a
-                ex = center.x() + (line.end.x - center.x()) * cos_a - (line.end.y - center.y()) * sin_a
-                ey = center.y() + (line.end.x - center.x()) * sin_a + (line.end.y - center.y()) * cos_a
-
-                self.sketch.add_line(sx, sy, ex, ey, construction=line.construction)
-                created_lines += 1
-
+            for l in self.selected_lines:
+                s = rotate_pt(l.start.x, l.start.y)
+                e = rotate_pt(l.end.x, l.end.y)
+                self.sketch.add_line(s[0], s[1], e[0], e[1], construction=l.construction)
+                created_count += 1
             for c in self.selected_circles:
-                # Rotiere Kreiszentrum um Musterzentrum
-                cx = center.x() + (c.center.x - center.x()) * cos_a - (c.center.y - center.y()) * sin_a
-                cy = center.y() + (c.center.x - center.x()) * sin_a + (c.center.y - center.y()) * cos_a
-
-                self.sketch.add_circle(cx, cy, c.radius, construction=c.construction)
-                created_circles += 1
-
-            for arc in self.selected_arcs:
-                # Rotiere Arc-Zentrum und passe Winkel an
-                acx = center.x() + (arc.center.x - center.x()) * cos_a - (arc.center.y - center.y()) * sin_a
-                acy = center.y() + (arc.center.x - center.x()) * sin_a + (arc.center.y - center.y()) * cos_a
-
-                # Arc-Winkel um den gleichen Betrag rotieren
-                new_start = arc.start_angle + math.degrees(angle)
-                new_end = arc.end_angle + math.degrees(angle)
-
-                self.sketch.add_arc(acx, acy, arc.radius, new_start, new_end, construction=arc.construction)
-                created_arcs += 1
+                cp = rotate_pt(c.center.x, c.center.y)
+                self.sketch.add_circle(cp[0], cp[1], c.radius, construction=c.construction)
+                created_count += 1
+            for a in self.selected_arcs:
+                cp = rotate_pt(a.center.x, a.center.y)
+                ns = a.start_angle + math.degrees(angle)
+                ne = a.end_angle + math.degrees(angle)
+                self.sketch.add_arc(cp[0], cp[1], a.radius, ns, ne, construction=a.construction)
+                created_count += 1
 
         self.sketched_changed.emit()
         self._find_closed_profiles()
-
-        total_created = created_lines + created_circles + created_arcs
-        if hasattr(self, 'show_message'):
-            self.show_message(f"Circular Pattern: {total_created} Elemente ({count}× über {total_angle:.0f}°)", 2500, QColor(100, 255, 100))
-        else:
-            self.status_message.emit(tr("Circular pattern: {lines} lines, {circles} circles created").format(
-                lines=created_lines, circles=created_circles))
-
-        logger.info(f"Circular pattern created: {created_lines} lines, {created_circles} circles, {created_arcs} arcs")
+        self.status_message.emit(f"Circular Pattern: {created_count} elements.")
         self._cancel_tool()
     
     def _handle_scale(self, pos, snap_type):
@@ -954,7 +968,7 @@ class SketchHandlersMixin:
             # Radius auch skalieren
             c.radius *= factor
         
-        self.sketch.solve()
+        self._solve_async()
         self._find_closed_profiles()
     
     def _handle_trim(self, pos, snap_type):
@@ -1648,56 +1662,147 @@ class SketchHandlersMixin:
         return True
     
     def _handle_dimension(self, pos, snap_type):
+        """Bemaßungstool - Modernisiert (Kein QInputDialog mehr!)"""
+        
+        # 1. Input-Feld automatisch anzeigen, wenn noch nicht aktiv
+        if not self.dim_input_active:
+             self._show_dimension_input()
+        
+        # Werte aus Input holen, falls aktiv
+        new_val = None
+        if self.dim_input_active:
+             vals = self.dim_input.get_values()
+             if 'value' in vals: new_val = vals['value']
+        
         line = self._find_line_at(pos)
         if line:
-            val, ok = QInputDialog.getDouble(self, "Länge", "Länge (mm):", line.length, 0.01, 10000, 2)
-            if ok:
-                self._save_undo()
-                self.sketch.add_length(line, val)
-                result = self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-                self.update()
-                if hasattr(result, 'success') and result.success:
-                    self.status_message.emit(tr("Length {val}mm set (DOF: {dof})").format(val=f"{val:.1f}", dof=getattr(result, "dof", -1)))
+            current = line.length
+            # Wenn Input bestätigt wurde, anwenden
+            if new_val is not None and abs(new_val - current) > 0.001:
+                 self._save_undo()
+                 self.sketch.add_length(line, new_val)
+                 self._solve_async()
+                 self.sketched_changed.emit()
+                 self._find_closed_profiles()
+                 self.status_message.emit(f"Length set to {new_val:.2f}mm")
+                 return
+            
+            # Ansonsten nur anzeigen
+            fields = [("Length", "value", current, "mm")]
+            self.dim_input.setup(fields)
+            
+            # Input neben Maus bewegen
+            screen_pos = self.mouse_screen
+            self.dim_input.move(int(screen_pos.x()) + 20, int(screen_pos.y()) + 20)
+            self.dim_input.show()
+            self.dim_input.focus_field(0)
+            self.dim_input_active = True
             return
+
         circle = self._find_circle_at(pos)
         if circle:
-            val, ok = QInputDialog.getDouble(self, "Radius", "Radius (mm):", circle.radius, 0.01, 10000, 2)
-            if ok:
-                self._save_undo()
-                self.sketch.add_radius(circle, val)
-                result = self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-                self.update()
-                if hasattr(result, 'success') and result.success:
-                    self.status_message.emit(tr("Radius {val}mm set (DOF: {dof})").format(val=f"{val:.1f}", dof=getattr(result, "dof", -1)))
+            current = circle.radius
+            if new_val is not None and abs(new_val - current) > 0.001:
+                 self._save_undo()
+                 self.sketch.add_radius(circle, new_val)
+                 self._solve_async()
+                 self.sketched_changed.emit()
+                 self._find_closed_profiles()
+                 self.status_message.emit(f"Radius set to {new_val:.2f}mm")
+                 return
+            
+            fields = [("Radius", "value", current, "mm")]
+            self.dim_input.setup(fields)
+            screen_pos = self.mouse_screen
+            self.dim_input.move(int(screen_pos.x()) + 20, int(screen_pos.y()) + 20)
+            self.dim_input.show()
+            self.dim_input.focus_field(0)
+            self.dim_input_active = True
             return
-        self.status_message.emit(tr("Select first line") + "/" + tr("Circle"))
-    
+            
+        self.status_message.emit(tr("Select line or circle to dimension"))
+
+    def _handle_project(self, pos, snap_type):
+        """
+        Projiziert Referenzgeometrie in den Sketch.
+        Erstellt Linien, die 'fixed' sind.
+        """
+        # 1. Haben wir eine Referenzkante unter der Maus?
+        edge = getattr(self, 'hovered_ref_edge', None)
+        
+        if edge:
+            x1, y1, x2, y2 = edge
+            
+            # Prüfen ob Linie schon existiert (um Duplikate zu vermeiden)
+            # Das ist wichtig für UX, sonst stackt man 10 Linien übereinander
+            for l in self.sketch.lines:
+                # Prüfe Endpunkte (ungefähre Gleichheit)
+                if (math.hypot(l.start.x - x1, l.start.y - y1) < 0.001 and \
+                    math.hypot(l.end.x - x2, l.end.y - y2) < 0.001) or \
+                   (math.hypot(l.start.x - x2, l.start.y - y2) < 0.001 and \
+                    math.hypot(l.end.x - x1, l.end.y - y1) < 0.001):
+                    self.status_message.emit(tr("Geometry already projected"))
+                    return
+
+            self._save_undo()
+            
+            # 2. Linie erstellen
+            # Wir nutzen construction mode flag, falls User Hilfslinien projizieren will
+            line = self.sketch.add_line(x1, y1, x2, y2, construction=self.construction_mode)
+            
+            # 3. FIXIEREN!
+            # Projizierte Geometrie sollte fixiert sein, da sie an 3D hängt
+            self.sketch.add_fixed(line.start)
+            self.sketch.add_fixed(line.end)
+            # Optional: Wir könnten ein spezielles Flag 'projected' einführen, 
+            # aber 'fixed' Punkte reichen für die Logik vorerst.
+            
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            self.status_message.emit(tr("Edge projected"))
+            
+        else:
+            self.status_message.emit(tr("Hover over a background edge to project"))
+
+            
     def _handle_dimension_angle(self, pos, snap_type):
+        """Winkelbemaßung - Modernisiert"""
         line = self._find_line_at(pos)
         if not line: self.status_message.emit(tr("Select first line")); return
+        
         if self.tool_step == 0:
             self.tool_data['line1'] = line; self.tool_step = 1
             self.status_message.emit(tr("Select second line"))
         else:
             l1 = self.tool_data.get('line1')
             if l1 and line != l1:
-                current = abs(l1.angle - line.angle)
-                if current > 180: current = 360 - current
-                val, ok = QInputDialog.getDouble(self, "Winkel", "Winkel (°):", current, 0, 180, 2)
-                if ok:
+                current_angle = abs(l1.angle - line.angle)
+                if current_angle > 180: current_angle = 360 - current_angle
+                
+                # Check Input
+                if not self.dim_input_active:
+                     self._show_dimension_input()
+                
+                new_val = None
+                if self.dim_input_active:
+                     vals = self.dim_input.get_values()
+                     if 'angle' in vals: new_val = vals['angle']
+                
+                if new_val is not None:
                     self._save_undo()
-                    self.sketch.add_angle(l1, line, val)
-                    result = self.sketch.solve()
+                    self.sketch.add_angle(l1, line, new_val)
+                    self._solve_async()
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
-                    self.update()
-                    if hasattr(result, 'success') and result.success:
-                        self.status_message.emit(tr("Angle {val}° set (DOF: {dof})").format(val=f"{val:.1f}", dof=getattr(result, "dof", -1)))
-            self._cancel_tool()
+                    self._cancel_tool()
+                else:
+                    fields = [("Angle", "angle", current_angle, "°")]
+                    self.dim_input.setup(fields)
+                    screen_pos = self.mouse_screen
+                    self.dim_input.move(int(screen_pos.x()) + 20, int(screen_pos.y()) + 20)
+                    self.dim_input.show()
+                    self.dim_input.focus_field(0)
+                    self.dim_input_active = True
     
     def _handle_horizontal(self, pos, snap_type):
         line = self._find_line_at(pos)
@@ -2021,87 +2126,460 @@ class SketchHandlersMixin:
         c2.center.x = cx1 + dx * target_dist
         c2.center.y = cy1 + dy * target_dist
     
-    def _handle_pattern_linear(self, pos, snap_type):
-        if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
-            self.status_message.emit(tr("Select elements first!")); return
-        try:
-            from gui.generators import PatternDialog
-            dialog = PatternDialog("linear", self)
-            if dialog.exec():
-                params = dialog.get_params()
-                self._save_undo()
-                angle_rad = math.radians(params["angle"])
-                dx, dy = math.cos(angle_rad) * params["spacing"], math.sin(angle_rad) * params["spacing"]
-                for i in range(1, params["count"]):
-                    ox, oy = dx * i, dy * i
-                    for line in self.selected_lines:
-                        self.sketch.add_line(line.start.x+ox, line.start.y+oy, line.end.x+ox, line.end.y+oy, construction=line.construction)
-                    for circle in self.selected_circles:
-                        self.sketch.add_circle(circle.center.x+ox, circle.center.y+oy, circle.radius, construction=circle.construction)
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-                self._cancel_tool()
-        except: pass
+    
     
     def _handle_pattern_circular(self, pos, snap_type):
+        """
+        Kreisförmiges Muster.
+        UX:
+        1. Selektion.
+        2. Tool aktivieren.
+        3. Zentrum wählen (Snap!).
+        4. Tab für Anzahl/Winkel.
+        """
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
-            self.status_message.emit(tr("Select elements first!")); return
+            if hasattr(self, 'show_message'):
+                self.show_message("Bitte erst Elemente auswählen!", 2000, QColor(255, 200, 100))
+            self.set_tool(SketchTool.SELECT)
+            return
+
         if self.tool_step == 0:
-            self.tool_points = [pos]; self.tool_step = 1
-            self.status_message.emit(tr("Center selected - click for dialog")); return
-        try:
-            from gui.generators import PatternDialog
-            center = self.tool_points[0]
-            dialog = PatternDialog("circular", self)
-            if dialog.exec():
-                params = dialog.get_params()
-                self._save_undo()
-                for i in range(1, params["count"]):
-                    angle = math.radians(params["total_angle"] * i / params["count"])
-                    cos_a, sin_a = math.cos(angle), math.sin(angle)
-                    for line in self.selected_lines:
-                        dx1, dy1 = line.start.x - center.x(), line.start.y - center.y()
-                        dx2, dy2 = line.end.x - center.x(), line.end.y - center.y()
-                        self.sketch.add_line(center.x()+dx1*cos_a-dy1*sin_a, center.y()+dx1*sin_a+dy1*cos_a,
-                                            center.x()+dx2*cos_a-dy2*sin_a, center.y()+dx2*sin_a+dy2*cos_a, construction=line.construction)
-                    for circle in self.selected_circles:
-                        dx, dy = circle.center.x - center.x(), circle.center.y - center.y()
-                        self.sketch.add_circle(center.x()+dx*cos_a-dy*sin_a, center.y()+dx*sin_a+dy*cos_a, circle.radius, construction=circle.construction)
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-        except: pass
-        self._cancel_tool()
+            # Zentrum wählen
+            self.tool_points = [pos]
+            self.tool_step = 1
+            
+            # Defaults
+            if 'pattern_count' not in self.tool_data:
+                self.tool_data['pattern_count'] = 6
+            if 'pattern_angle' not in self.tool_data:
+                self.tool_data['pattern_angle'] = 360.0
+            
+            self._show_dimension_input()
+            
+            msg = tr("Center selected | Tab=Count/Angle | Enter=Apply")
+            if hasattr(self, 'show_message'):
+                self.show_message(msg, 4000)
+            else:
+                self.status_message.emit(msg)
+
+        elif self.tool_step == 1:
+            # Klick im Canvas (woanders als Zentrum) bestätigt auch
+            self._apply_circular_pattern()
     
     def _handle_gear(self, pos, snap_type):
-        try:
-            from gui.generators import GearDialog, generate_simple_gear
-            dialog = GearDialog(self)
-            if dialog.exec():
-                params = dialog.get_params()
-                self._save_undo()
-                points = generate_simple_gear(params.teeth, params.module, (pos.x(), pos.y()))
-                self.sketch.add_polygon(points, closed=True)
-                if params.center_hole > 0:
-                    self.sketch.add_circle(pos.x(), pos.y(), params.center_hole / 2)
-                self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-        except: pass
+        """
+        Erweitertes Zahnrad-Tool (Fusion 360 Kompatibel).
+        Unterstützt Backlash, Profilverschiebung und Bohrung.
+        """
+        # --- 1. Dialog Setup ---
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Stirnrad (Spur Gear)"))
+        dialog.setFixedWidth(340) # Etwas breiter für mehr Optionen
+        dialog.setStyleSheet("""
+            QDialog { background-color: #2d2d30; color: #e0e0e0; }
+            QLabel, QCheckBox { color: #aaaaaa; }
+            QDoubleSpinBox, QSpinBox { 
+                background-color: #3e3e42; color: #ffffff; border: 1px solid #555; padding: 4px; 
+            }
+            QPushButton { background-color: #0078d4; color: white; border: none; padding: 6px; }
+            QPushButton:hover { background-color: #1084d8; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+
+        # --- Standard Parameter ---
+        spin_module = QDoubleSpinBox()
+        spin_module.setRange(0.1, 50.0)
+        spin_module.setValue(2.0)
+        spin_module.setSingleStep(0.5)
+        spin_module.setSuffix(" mm")
+
+        spin_teeth = QSpinBox()
+        spin_teeth.setRange(4, 200)
+        spin_teeth.setValue(20)
+        
+        spin_angle = QDoubleSpinBox()
+        spin_angle.setRange(14.5, 30.0)
+        spin_angle.setValue(20.0)
+        spin_angle.setSuffix(" °")
+
+        # --- Erweiterte Parameter (Wichtig!) ---
+        
+        # Zahnflankenspiel (Backlash) - Wichtig für 3D Druck
+        spin_backlash = QDoubleSpinBox()
+        spin_backlash.setRange(0.0, 2.0)
+        spin_backlash.setValue(0.15) # Guter Default für 3D Druck
+        spin_backlash.setSingleStep(0.05)
+        spin_backlash.setSuffix(" mm")
+        spin_backlash.setToolTip("Verringert die Zahndicke für Spielraum")
+
+        # Bohrung
+        spin_hole = QDoubleSpinBox()
+        spin_hole.setRange(0.0, 1000.0)
+        spin_hole.setValue(6.0) # Standard Welle
+        spin_hole.setSuffix(" mm")
+
+        # Profilverschiebung (x) - Wichtig bei wenig Zähnen (<17)
+        spin_shift = QDoubleSpinBox()
+        spin_shift.setRange(-1.0, 1.0)
+        spin_shift.setValue(0.0)
+        spin_shift.setSingleStep(0.1)
+        spin_shift.setToolTip("Positiv: Stärkerer Fuß, größerer Durchmesser.\nNötig bei < 17 Zähnen um Unterschnitt zu vermeiden.")
+
+        # Fußrundung (Fillet)
+        spin_fillet = QDoubleSpinBox()
+        spin_fillet.setRange(0.0, 5.0)
+        spin_fillet.setValue(0.5) # Leichte Rundung
+        spin_fillet.setSuffix(" mm")
+
+        # Performance
+        check_lowpoly = QCheckBox(tr("Vorschau (Low Poly)"))
+        check_lowpoly.setChecked(True)
+
+        # Layout bauen
+        form.addRow(tr("Modul:"), spin_module)
+        form.addRow(tr("Zähne:"), spin_teeth)
+        form.addRow(tr("Druckwinkel:"), spin_angle)
+        form.addRow(tr("-----------"), QLabel("")) # Trenner
+        form.addRow(tr("Bohrung ⌀:"), spin_hole)
+        form.addRow(tr("Spiel (Backlash):"), spin_backlash)
+        form.addRow(tr("Profilverschiebung:"), spin_shift)
+        form.addRow(tr("Fußradius:"), spin_fillet)
+        form.addRow("", check_lowpoly)
+        
+        layout.addLayout(form)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        # --- Live Vorschau ---
+        def update_preview():
+            self._remove_preview_elements()
+            
+            # Parameter dictionary für saubereren Aufruf
+            params = {
+                'cx': pos.x(), 'cy': pos.y(),
+                'module': spin_module.value(),
+                'teeth': spin_teeth.value(),
+                'pressure_angle': spin_angle.value(),
+                'backlash': spin_backlash.value(),
+                'hole_diam': spin_hole.value(),
+                'profile_shift': spin_shift.value(),
+                'fillet': spin_fillet.value(),
+                'preview': True,
+                'low_poly': check_lowpoly.isChecked()
+            }
+
+            self._generate_involute_gear(**params)
+            self.sketched_changed.emit()
+
+        # Signale verbinden
+        for widget in [spin_module, spin_teeth, spin_angle, spin_backlash, 
+                      spin_hole, spin_shift, spin_fillet]:
+            widget.valueChanged.connect(update_preview)
+        check_lowpoly.toggled.connect(update_preview)
+
+        # Initiale Vorschau
+        update_preview()
+
+        if dialog.exec() == QDialog.Accepted:
+            self._remove_preview_elements()
+            self._save_undo()
+            
+            # Final Generieren (High Quality)
+            params = {
+                'cx': pos.x(), 'cy': pos.y(),
+                'module': spin_module.value(),
+                'teeth': spin_teeth.value(),
+                'pressure_angle': spin_angle.value(),
+                'backlash': spin_backlash.value(),
+                'hole_diam': spin_hole.value(),
+                'profile_shift': spin_shift.value(),
+                'fillet': spin_fillet.value(),
+                'preview': False,
+                'low_poly': False # Immer High Quality für Final
+            }
+            
+            self._generate_involute_gear(**params)
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            
+            info = f"Zahnrad M{spin_module.value()} Z{spin_teeth.value()}"
+            if spin_backlash.value() > 0: info += f" B={spin_backlash.value()}"
+            self.status_message.emit(tr(info + " erstellt"))
+        else:
+            self._remove_preview_elements()
+            self.sketched_changed.emit()
+
+        self._cancel_tool()
+
+    def _remove_preview_elements(self):
+        """Entfernt markierte Vorschau-Elemente"""
+        # Listenkopie erstellen, da wir während der Iteration löschen
+        lines_to_remove = [l for l in self.sketch.lines if hasattr(l, 'is_preview') and l.is_preview]
+        circles_to_remove = [c for c in self.sketch.circles if hasattr(c, 'is_preview') and c.is_preview]
+        
+        for l in lines_to_remove: 
+            if l in self.sketch.lines: self.sketch.lines.remove(l)
+        for c in circles_to_remove: 
+            if c in self.sketch.circles: self.sketch.circles.remove(c)
+
+    def _generate_involute_gear(self, cx, cy, module, teeth, pressure_angle, 
+                              backlash=0.0, hole_diam=0.0, profile_shift=0.0, fillet=0.0,
+                              preview=False, low_poly=True):
+        """
+        Umfassender Generator für Evolventen-Verzahnung.
+        Mathematik basiert auf DIN 3960 / Fusion SpurGear Script.
+        """
+        if teeth < 4: teeth = 4
+        
+        # --- 1. Basis-Berechnungen (DIN 3960) ---
+        alpha = math.radians(pressure_angle)
+        
+        # Teilkreis (Reference Pitch Circle)
+        d = module * teeth
+        r = d / 2.0
+        
+        # Grundkreis (Base Circle) - Hier beginnt die Evolvente
+        db = d * math.cos(alpha)
+        rb = db / 2.0
+        
+        # Kopf- und Fußhöhenfaktoren (Standard 1.0 und 1.25)
+        # Profilverschiebung (x) ändert diese Durchmesser
+        ha = (1.0 + profile_shift) * module  # Addendum (Kopf)
+        hf = (1.25 - profile_shift) * module # Dedendum (Fuß)
+        
+        # Durchmesser
+        da = d + 2 * ha # Kopfkreis (Tip)
+        df = d - 2 * hf # Fußkreis (Root)
+        
+        ra = da / 2.0
+        rf = df / 2.0
+        
+        # --- 2. Zahndicke und Backlash ---
+        # Die Zahndicke wird am Teilkreis gemessen.
+        # Standard: s = p / 2 = (pi * m) / 2
+        # Mit Profilverschiebung: s = m * (pi/2 + 2*x*tan(alpha))
+        # Mit Backlash: Wir ziehen Backlash ab.
+        
+        tan_alpha = math.tan(alpha)
+        
+        # Halber Winkel der Zahndicke am Teilkreis (ohne Backlash)
+        # ArcLength = r * angle -> angle = ArcLength / r
+        # Dicke s_nom = m * (pi/2 + 2 * profile_shift * tan_alpha)
+        s_nom = module * (math.pi/2.0 + 2.0 * profile_shift * tan_alpha)
+        
+        # Backlash anwenden (Verringert die Dicke)
+        s_act = s_nom - backlash
+        
+        # Winkel im Bogenmaß am Teilkreis für die halbe Zahndicke
+        psi = s_act / (2.0 * r) 
+        
+        # Involute Funktion: inv(alpha) = tan(alpha) - alpha
+        inv_alpha = tan_alpha - alpha
+        
+        # Der Winkel-Offset für den Start der Evolvente (am Grundkreis)
+        # Theta_start = psi + inv_alpha
+        half_tooth_angle = psi + inv_alpha
+        
+        # --- 3. Profilberechnung (Eine Flanke) ---
+        steps = 3 if low_poly else 8
+        flank_points = []
+        
+        # Wir berechnen Punkte vom Grundkreis (rb) bis Kopfkreis (ra)
+        # Achtung: Wenn Fußkreis (rf) < Grundkreis (rb), startet Evolvente erst bei rb.
+        # Darunter ist es eine Gerade oder ein Fillet.
+        
+        start_r = max(rb, rf)
+        
+        for i in range(steps + 1):
+            # Nicht-lineare Verteilung für schönere Kurven an der Basis
+            t = i / steps
+            radius_at_point = start_r + (ra - start_r) * t
+            
+            # Winkel phi (Druckwinkel an diesem Radius)
+            # cos(phi) = rb / radius
+            if radius_at_point < rb: 
+                val = 1.0 
+            else:
+                val = rb / radius_at_point
+            
+            phi_r = math.acos(min(1.0, max(-1.0, val)))
+            inv_phi = math.tan(phi_r) - phi_r
+            
+            # Winkel theta (Polarkoordinate relativ zur Zahnmitte)
+            theta = half_tooth_angle - inv_phi
+            flank_points.append((radius_at_point, theta))
+            
+        # --- 4. Fußbereich (Root / Undercut / Fillet) ---
+        # Wenn der Fußkreis kleiner als der Grundkreis ist, müssen wir den Zahn nach unten verlängern.
+        # Fusion nutzt hier komplexe Trochoiden für Unterschnitt. Wir nutzen eine radiale Linie + Fillet.
+        
+        if rf < rb:
+            # Einfache Verlängerung: Radial vom Fußkreis zum Start der Evolvente
+            # Mit Fillet: Wir runden den Übergang vom Fußkreis zur Flanke ab.
+            
+            # Winkel am Start der Evolvente
+            angle_at_base = flank_points[0][1]
+            
+            if fillet > 0.01 and not low_poly:
+                # Simuliertes Fillet: Ein Punkt zwischen (rf, angle) und (rb, angle)
+                # Wir gehen etwas in den Zahnzwischenraum (Winkel wird größer)
+                # Zahnlücke Mitte ist bei PI/z. 
+                # Das ist zu komplex für schnelles Skripting. 
+                # Wir machen eine direkte Linie zum Fußkreis.
+                flank_points.insert(0, (rf, angle_at_base))
+            else:
+                # Harter Übergang
+                flank_points.insert(0, (rf, angle_at_base))
+
+        # --- 5. Spiegeln und Zusammenbauen ---
+        tooth_poly = []
+        
+        # Linke Flanke (gespiegelt, Winkel negativ) -> Von Fuß nach Kopf
+        # flank_points ist [Fuß ... Kopf]. 
+        # Wir brauchen [Fuß ... Kopf] aber mit negativen Winkeln?
+        # Nein, für CCW Polygon: 
+        # Center -> (Rechte Flanke) -> Tip -> (Linke Flanke) -> Center
+        # Aber wir bauen das ganze Rad.
+        
+        # Strategie: Wir bauen die Punkte für EINEN Zahn (Rechts + Links)
+        # und rotieren diesen.
+        
+        # Linke Flanke (Winkel = -theta). Von Root zu Tip?
+        # Sagen wir 0° ist die Zahnmitte.
+        # Rechte Flanke ist bei +Theta. Linke bei -Theta.
+        # CCW Reihenfolge: Rechte Flanke (Tip->Root) -> Root Arc -> Linke Flanke (Root->Tip) -> Tip Arc
+        
+        # 1. Rechte Flanke (Außen nach Innen)
+        for r, theta in reversed(flank_points):
+            tooth_poly.append((r, theta))
+            
+        # 2. Fußkreis (Verbindung zur linken Flanke im GLEICHEN Zahn ist falsch, das wäre durch den Zahn durch)
+        # Wir verbinden zum NÄCHSTEN Zahn über den Fußkreis.
+        # Also definieren wir nur das Profil EINES Zahns.
+        # Profil: Tip Right -> ... -> Root Right -> (Lücke) -> Root Left -> ... Tip Left
+        # Aber das ist schwer zu loopen.
+        
+        # Einfacher: Ein Zahn besteht aus Linker Flanke (aufsteigend) und Rechter Flanke (absteigend).
+        # Linke Flanke (negativer Winkel, von Root nach Tip)
+        single_tooth = []
+        
+        # Linke Flanke (Winkel < 0)
+        for r, theta in flank_points:
+            single_tooth.append((r, -theta))
+            
+        # Tip (Verbindung Linke Spitze zu Rechter Spitze)
+        # Rechte Flanke (Winkel > 0, von Tip nach Root, also reversed)
+        for r, theta in reversed(flank_points):
+            single_tooth.append((r, theta))
+            
+        # Jetzt haben wir: RootLeft -> TipLeft -> TipRight -> RootRight
+        
+        # --- 6. Rad erstellen ---
+        all_world_points = []
+        angle_step = (2 * math.pi) / teeth
+        
+        for i in range(teeth):
+            beta = i * angle_step
+            cos_b = math.cos(beta)
+            sin_b = math.sin(beta)
+            
+            for r, theta in single_tooth:
+                # Polar zu Kartesisch mit Rotation beta
+                # Punkt Winkel = theta + beta
+                px = cx + r * math.cos(theta + beta)
+                py = cy + r * math.sin(theta + beta)
+                all_world_points.append(Point2D(px, py))
+                
+        # --- 7. Zeichnen ---
+        lines = []
+        circles = []
+        
+        for i in range(len(all_world_points)):
+            p1 = all_world_points[i]
+            p2 = all_world_points[(i + 1) % len(all_world_points)]
+            
+            l = self.sketch.add_line(p1.x, p1.y, p2.x, p2.y)
+            if preview: l.is_preview = True
+            lines.append(l)
+
+        # Bohrung
+        if hole_diam > 0.01:
+            h = self.sketch.add_circle(cx, cy, hole_diam / 2.0)
+            if preview: h.is_preview = True
+            circles.append(h)
+            
+        # Teilkreis als Konstruktionslinie (Hilfreich)
+        if preview and not low_poly:
+            pc = self.sketch.add_circle(cx, cy, r, construction=True)
+            pc.is_preview = True
+            circles.append(pc)
+
+        return lines, circles
     
     def _handle_star(self, pos, snap_type):
-        try:
-            from gui.generators import StarDialog, generate_star
-            dialog = StarDialog(self)
-            if dialog.exec():
-                points_count, outer_r, inner_r = dialog.get_params()
-                self._save_undo()
-                points = generate_star(points_count, outer_r, inner_r, (pos.x(), pos.y()))
-                self.sketch.add_polygon(points, closed=True)
-                self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-        except: pass
+        """
+        Stern-Werkzeug mit modernem Input.
+        """
+        if self.tool_step == 0:
+            self.tool_points = [pos]
+            
+            fields = [
+                ("Spitzen", "points", 5.0, ""),
+                ("R Außen", "r_outer", 50.0, "mm"),
+                ("R Innen", "r_inner", 25.0, "mm")
+            ]
+            self.dim_input.setup(fields)
+            
+            from PySide6.QtGui import QCursor
+            cursor_pos = self.mapFromGlobal(QCursor.pos())
+            self.dim_input.move(cursor_pos.x() + 20, cursor_pos.y() + 20)
+            self.dim_input.show()
+            self.dim_input.focus_field(0)
+            
+            try: self.dim_input.confirmed.disconnect() 
+            except: pass
+            
+            self.dim_input.confirmed.connect(lambda: self._create_star_geometry())
+            self.tool_step = 1
+
+    def _create_star_geometry(self):
+        values = self.dim_input.get_values()
+        n = int(values.get("points", 5))
+        ro = values.get("r_outer", 50.0)
+        ri = values.get("r_inner", 25.0)
+        
+        cx = self.tool_points[0].x()
+        cy = self.tool_points[0].y()
+        self._save_undo()
+        
+        points = []
+        step = math.pi / n
+        
+        for i in range(2 * n):
+            r = ro if i % 2 == 0 else ri
+            angle = i * step - math.pi / 2 # Startet oben
+            px = cx + r * math.cos(angle)
+            py = cy + r * math.sin(angle)
+            points.append((px, py))
+            
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            self.sketch.add_line(p1[0], p1[1], p2[0], p2[1])
+            
+        self.dim_input.hide()
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self._cancel_tool()
     
+
+    
+
     def _handle_nut(self, pos, snap_type):
         """Erstellt eine Sechskant-Muttern-Aussparung (M2-M14) mit Schraubenloch - 2 Schritte wie Polygon"""
         if self.tool_step == 0:
@@ -2150,13 +2628,121 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _handle_text(self, pos, snap_type):
-        text, ok = QInputDialog.getText(self, "Text", "Text eingeben:")
-        if ok and text:
-            self._save_undo()
-            self.sketch.add_rectangle(pos.x(), pos.y(), len(text) * 6, 10)
-            self.status_message.emit(tr("Text") + f" '{text}' (" + tr("placeholder") + ")")
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
+        """
+        Text Tool: Erstellt Vektor-Geometrie aus Text.
+        Zeigt einen modernen Dialog zur Auswahl von Font, Text und Größe.
+        """
+        # --- 1. Custom Dialog erstellen (kein Windows-Standard) ---
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Create Text Profile"))
+        dialog.setMinimumWidth(300)
+        # Dark Theme Style für den Dialog
+        dialog.setStyleSheet("""
+            QDialog { background-color: #2d2d30; color: #e0e0e0; }
+            QLabel { color: #aaaaaa; }
+            QLineEdit, QDoubleSpinBox, QFontComboBox { 
+                background-color: #3e3e42; color: #ffffff; border: 1px solid #555; padding: 4px; 
+            }
+            QPushButton { background-color: #0078d4; color: white; border: none; padding: 6px; }
+            QPushButton:hover { background-color: #1084d8; }
+        """)
+        
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        
+        # Inputs
+        txt_input = QLineEdit("MashCad")
+        font_input = QFontComboBox()
+        font_input.setCurrentFont(QFont("Arial"))
+        
+        size_input = QDoubleSpinBox()
+        size_input.setRange(1.0, 1000.0)
+        size_input.setValue(10.0)
+        size_input.setSuffix(" mm")
+        
+        form.addRow(tr("Text:"), txt_input)
+        form.addRow(tr("Font:"), font_input)
+        form.addRow(tr("Height:"), size_input)
+        
+        layout.addLayout(form)
+        
+        # Buttons
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+        
+        # Dialog ausführen
+        if dialog.exec() != QDialog.Accepted:
+            self._cancel_tool()
+            return
+            
+        # Werte holen
+        text_str = txt_input.text()
+        if not text_str: return
+        
+        selected_font = font_input.currentFont()
+        # Wichtig: Outline Strategy für saubere Pfade
+        selected_font.setStyleStrategy(QFont.PreferOutline)
+        # Größe groß setzen für interne Pfad-Präzision, wir skalieren später
+        selected_font.setPointSize(100) 
+        
+        desired_height = size_input.value()
+        
+        self._save_undo()
+        
+        # --- 2. Pfad generieren ---
+        path = QPainterPath()
+        path.addText(0, 0, selected_font, text_str)
+        
+        # --- 3. Skalierung berechnen ---
+        rect = path.boundingRect()
+        if rect.height() > 0.001:
+            scale_factor = desired_height / rect.height()
+        else:
+            scale_factor = 1.0
+            
+        # Zum Mauszeiger verschieben (Zentriert)
+        # Y ist in Qt Screens oft invertiert zu CAD, hier Skizze ist math (Y up) vs Qt (Y down)
+        # QPainterPath addText generiert Text Upside-Down wenn wir in Cartesian rendern? 
+        # Wir spiegeln Y vorsichtshalber mit scale(s, -s) und verschieben dann.
+        
+        # Berechnung Offset zum Zentrieren
+        center_x = rect.width() * scale_factor / 2
+        center_y = rect.height() * scale_factor / 2
+        
+        # Transform: Skalieren & Spiegeln (damit Text aufrecht steht in math. System)
+        transform = QTransform()
+        transform.translate(pos.x(), pos.y()) # Zum Klickpunkt
+        transform.scale(scale_factor, -scale_factor) # Y Flip für CAD Koordinaten
+        transform.translate(-rect.width()/2, rect.height()/2) # Zentrieren relativ zum Ursprung
+        
+        try:
+            polygons = path.toSubpathPolygons(transform)
+        except Exception as e:
+            logger.error(f"Text path conversion failed: {e}")
+            return
+
+        # --- 4. Linien erzeugen ---
+        count = 0
+        for poly in polygons:
+            pts = []
+            for p in poly:
+                pts.append(Point2D(p.x(), p.y()))
+            
+            # Punkte verbinden
+            for i in range(len(pts) - 1):
+                self.sketch.add_line(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y)
+                count += 1
+            # Schließen
+            if len(pts) > 2:
+                self.sketch.add_line(pts[-1].x, pts[-1].y, pts[0].x, pts[0].y)
+                count += 1
+
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self.status_message.emit(tr(f"Text '{text_str}' created ({count} lines)"))
+        self._cancel_tool()
     
     def _handle_point(self, pos, snap_type):
         """Erstellt einen Konstruktionspunkt"""

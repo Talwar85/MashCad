@@ -1466,15 +1466,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def set_edge_select_mode(self, enabled):
         """Aktiviert/deaktiviert den Edge-Selection-Modus für Fillet/Chamfer"""
         self.edge_select_mode = getattr(self, 'edge_select_mode', False)
-        self.edge_select_mode = enabled
-        self.selected_edges = getattr(self, 'selected_edges', set())
         
-        if enabled:
-            # Highlight alle Kanten
-            self._highlight_all_edges()
-        else:
-            # Entferne Edge-Highlights
-            self._clear_edge_highlights()
+        # Wenn wir umschalten
+        if enabled != self.edge_select_mode:
+            self.edge_select_mode = enabled
+            self.selected_edges = getattr(self, 'selected_edges', set())
+            
+            if enabled:
+                # WICHTIG für Face-Picking im Edge-Mode:
+                # Wir laden die Body-Faces in den Detector, damit _try_select_loop_from_face_click funktioniert
+                self._update_detector_for_picking()
+            else:
+                self._clear_edge_highlights()
     
     def _highlight_all_edges(self):
         """Zeigt alle Kanten der Bodies als selektierbar an"""
