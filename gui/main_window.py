@@ -385,9 +385,12 @@ class MainWindow(QMainWindow):
         self.fillet_panel.radius_changed.connect(self._on_fillet_radius_changed)
         self.fillet_panel.confirmed.connect(self._on_fillet_confirmed)
         self.fillet_panel.cancelled.connect(self._on_fillet_cancelled)
-        
+
         self._fillet_mode = None  # 'fillet' or 'chamfer'
         self._fillet_target_body = None
+
+        # Edge Selection Signal verbinden
+        self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
         
         self.tool_panel.option_changed.connect(self.sketch_editor.handle_option_changed)
         # 2. Vom Editor zum Panel (Wenn man 'X' oder 'G' drückt -> Checkbox Update)
@@ -1103,8 +1106,19 @@ class MainWindow(QMainWindow):
             logger.success(f"Point-to-Point Move für {body.name}: Wähle Start-Punkt, dann Ziel-Punkt")
 
     def _on_viewport_body_clicked(self, body_id: str):
-        """Handler für Body-Klick im Viewport (für pending transform mode UND point-to-point)"""
-        # Nur reagieren wenn wir auf Body-Selektion warten
+        """
+        Handler für Body-Klick im Viewport.
+        Unterstützt:
+        - Pending Transform Mode (Move/Rotate/Scale)
+        - Pending Fillet/Chamfer Mode
+        - Point-to-Point Move
+        """
+        # Prüfe auf Fillet/Chamfer Pending Mode (NEU)
+        if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
+            self._on_body_clicked_for_fillet(body_id)
+            return
+
+        # Nur reagieren wenn wir auf Body-Selektion warten (Transform)
         if not self._pending_transform_mode:
             return
 
@@ -1933,9 +1947,13 @@ class MainWindow(QMainWindow):
         )
     
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
-        """Erstellt die finale Geometrie basierend auf der Auswahl im Detector"""
+        """
+        Erstellt die finale Geometrie.
+        FIX V2: Robustes Targeting. Verhindert "Cut All" Katastrophen.
+        Wählt IMMER nur einen Ziel-Körper aus (den passendsten), anstatt alle zu schneiden.
+        """
         
-        # FIX 1: Verhindere doppelte Ausführung
+        # Debounce
         if getattr(self, '_is_processing_extrusion', False):
             return
         self._is_processing_extrusion = True
@@ -1948,7 +1966,7 @@ class MainWindow(QMainWindow):
                 if face: selection_data.append(face)
             
             if not selection_data: 
-                logger.warning("Nichts selektiert.")
+                logger.warning(tr("Nichts selektiert."))
                 return
 
             first_face = selection_data[0]
@@ -1960,40 +1978,47 @@ class MainWindow(QMainWindow):
                     target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
                     polys = [f.shapely_poly for f in selection_data]
 
-                    # --- ZIEL-KÖRPER LOGIK (Der wichtige Fix) ---
+                    # --- TARGETING LOGIK (STRIKT) ---
                     target_bodies = []
                     
-                    # 1. Hat der User explizit einen Body im Browser angeklickt?
+                    # 1. User hat explizit einen Body im Browser selektiert?
                     active_body = self._get_active_body()
-                    
+                    browser_selection = self.browser.tree.selectedItems()
+                    has_explicit_selection = len(browser_selection) > 0
+
                     if operation == "New Body":
-                        # Neuer Körper wird immer erstellt
+                        # Immer neuer Körper
                         target_bodies = [self.document.new_body()]
                         
-                    elif active_body:
-                        # User hat explizit EINEN Körper gewählt -> Nur den bearbeiten
+                    elif has_explicit_selection and active_body:
+                        # Explizite Wahl gewinnt immer
                         target_bodies = [active_body]
                         
                     else:
-                        # Nichts gewählt -> Auto-Detection
-                        if operation == "Cut":
-                            # CUT SPECIAL: Schneide durch ALLE sichtbaren Körper!
-                            target_bodies = [b for b in self.document.bodies if self.viewport_3d.is_body_visible(b.id)]
-                            if not target_bodies: logger.warning("Keine sichtbaren Körper zum Schneiden.")
-                        else:
-                            # Join/Intersect: Standardmäßig den letzten Körper nehmen (vermeidet versehentliches Mergen von allem)
-                            if self.document.bodies:
-                                target_bodies = [self.document.bodies[-1]]
+                        # AUTO-DETECTION
+                        # Suche den Körper, der der Skizze am nächsten ist.
+                        # Wir erzwingen hier fast immer einen Treffer, um "Cut All" zu vermeiden.
+                        priority_body = self._find_body_closest_to_sketch(target_sketch, selection_data)
+                        
+                        if priority_body:
+                            target_bodies = [priority_body]
+                        elif self.document.bodies and operation != "New Body":
+                            # Fallback: Wenn wir wirklich nichts finden (z.B. Skizze weit im Raum),
+                            # nehmen wir bei Join/Cut lieber den letzten Körper als gar keinen oder alle.
+                            # Das ist sicherer als "Alle schneiden".
+                            target_bodies = [self.document.bodies[-1]]
+                            logger.info(f"Targeting Fallback: Nutze '{target_bodies[0].name}'")
 
-                    # --- FEATURE ANWENDEN (mit Undo-Support) ---
+                    if not target_bodies and operation == "Cut":
+                         logger.warning("Kein Ziel-Körper gefunden. Bitte Körper im Browser auswählen.")
+                         return
+
+                    # --- FEATURE ANWENDEN ---
                     success_count = 0
-
                     from modeling import ExtrudeFeature
                     from gui.commands.feature_commands import AddFeatureCommand
 
                     for body in target_bodies:
-                        # WICHTIG: Wir brauchen für jeden Body ein eigenes Feature-Objekt
-                        # da es dort in die History eingefügt wird.
                         feature = ExtrudeFeature(
                             sketch=target_sketch,
                             distance=height,
@@ -2002,25 +2027,28 @@ class MainWindow(QMainWindow):
                         )
 
                         try:
-                            # NEU: Über Undo-Command hinzufügen
                             cmd = AddFeatureCommand(
                                 body, feature, self,
                                 description=f"Extrude ({operation})"
                             )
-                            self.undo_stack.push(cmd)  # Ruft automatisch redo() auf
-                            success_count += 1
+                            self.undo_stack.push(cmd)  
+                            
+                            # Safety Check: Hat die Operation den Body zerstört?
+                            if hasattr(body, 'vtk_mesh') and (body.vtk_mesh is None or body.vtk_mesh.n_points == 0):
+                                logger.warning(f"Operation ließ Body '{body.name}' verschwinden (Invalid Result). Undo.")
+                                self.undo_stack.undo()
+                            else:
+                                success_count += 1
 
                         except Exception as e:
-                            # Wenn der Schnitt fehlschlägt (z.B. Luft geschnitten), nicht abstürzen!
-                            logger.warning(f"Warnung: Operation an {body.name} wirkungslos oder fehlgeschlagen: {e}")
+                            logger.warning(f"Operation an {body.name} fehlgeschlagen: {e}")
 
                     if success_count > 0:
-                        self._finish_extrusion_ui(msg=f"Extrusion ({operation}) auf {success_count} Körper angewendet. (Undo: Ctrl+Z)")
+                        self._finish_extrusion_ui(msg=f"Extrusion ({operation}) auf '{target_bodies[0].name}' angewendet.")
                     else:
-                        logger.error("Operation fehlgeschlagen (Keine Schnittmenge?).")
+                        logger.warning("Operation hatte keinen Effekt.")
 
                 except Exception as e:
-                    from loguru import logger
                     logger.error(f"Sketch Extrude Error: {e}")
                     import traceback
                     traceback.print_exc()
@@ -2040,6 +2068,61 @@ class MainWindow(QMainWindow):
         
         finally:
             self._is_processing_extrusion = False
+
+    def _find_body_closest_to_sketch(self, sketch, faces):
+        """
+        Hilfsfunktion: Findet den Body, der der Skizze am nächsten ist.
+        FIX: Nutzt 'representative_point' statt Centroid für bessere Erkennung bei Ringen.
+        """
+        if not self.document.bodies: return None
+        
+        try:
+            face = faces[0]
+            
+            # Punkt AUF der Fläche finden (nicht Loch-Mitte!)
+            if face.shapely_poly:
+                # representative_point() garantiert einen Punkt INNERHALB des Polygons
+                # (wichtig bei Ringen/Donuts, wo centroid im Loch liegt)
+                pt2d = face.shapely_poly.representative_point()
+                
+                ox, oy, oz = sketch.plane_origin
+                ux, uy, uz = sketch.plane_x_dir if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else (1,0,0)
+                vx, vy, vz = sketch.plane_y_dir if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else (0,1,0)
+                
+                p_sketch = np.array([
+                    ox + pt2d.x * ux + pt2d.y * vx,
+                    oy + pt2d.x * uy + pt2d.y * vy,
+                    oz + pt2d.x * uz + pt2d.y * vz
+                ])
+            else:
+                p_sketch = np.array(face.plane_origin)
+            
+            best_body = None
+            min_dist = float('inf')
+            
+            # Suche den absolut nächsten Body (ohne strenges 1mm Limit)
+            for body in self.document.bodies:
+                if not self.viewport_3d.is_body_visible(body.id): continue
+                
+                mesh = self.viewport_3d.get_body_mesh(body.id)
+                if mesh and mesh.n_points > 0:
+                    idx = mesh.find_closest_point(p_sketch)
+                    closest = np.array(mesh.points[idx])
+                    dist = np.linalg.norm(closest - p_sketch)
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_body = body
+            
+            # Wenn wir einen Body gefunden haben, der halbwegs nah ist (< 50mm), nehmen wir ihn.
+            # Das ist besser als gar nichts zu finden.
+            if best_body and min_dist < 50.0:
+                return best_body
+                
+        except Exception as e:
+            logger.debug(f"Smart Target Error: {e}")
+            
+        return None
 
     def _finish_extrusion_ui(self, success=True, msg=""):
         """Hilfsfunktion zum Aufräumen der UI"""
@@ -2926,157 +3009,208 @@ class MainWindow(QMainWindow):
     # ==================== FILLET / CHAMFER ====================
     
     def _start_fillet(self):
-        body = self._get_active_body()
-        if not body:
-            logger.success("Bitte Körper auswählen!")
-            return
-            
-        if not hasattr(body, '_build123d_solid'):
-             logger.warning("Warnung: Nur Mesh-Daten.")
-             
-        self.selected_edges = []
-        self._fillet_mode = "fillet"  # <--- WICHTIG: Wir merken uns den Modus hier
-        
-        self.viewport_3d.clear_highlight()
-        
-        # Signal sauber trennen (verhindert Mehrfach-Verbindungen)
-        try: self.viewport_3d.clicked_3d_point.disconnect()
-        except: pass
-        
-        self.viewport_3d.clicked_3d_point.connect(self._on_fillet_click)
-        
-        logger.info(f"Fillet: Klicke auf Kanten von '{body.name}'...")
-        self.fillet_panel.set_target_body(body)
-        self.fillet_panel.set_mode("fillet")
-        self.fillet_panel.show_at(self.viewport_3d)
-    
+        """
+        Startet den neuen interaktiven Fillet-Workflow.
+        Verwendet EdgeSelectionMixin für Tube-basierte Kantenauswahl.
+
+        UX-Pattern wie Transform:
+        - Falls Body ausgewählt → sofort starten
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        self._start_fillet_chamfer_mode("fillet")
+
     def _start_chamfer(self):
-        body = self._get_active_body()
-        if not body: return
-        
-        self.selected_edges = []
-        self._fillet_mode = "chamfer" # <--- WICHTIG: Wir merken uns den Modus hier
-        
-        self.viewport_3d.clear_highlight()
-        
-        try: self.viewport_3d.clicked_3d_point.disconnect()
-        except: pass
-        
-        self.viewport_3d.clicked_3d_point.connect(self._on_fillet_click)
-        
-        self.fillet_panel.set_target_body(body)
-        self.fillet_panel.set_mode("chamfer")
-        self.fillet_panel.show_at(self.viewport_3d)
-        
-    def _on_fillet_click(self, body_id, pos):
-        """Findet die Kante in der Nähe des Klicks und markiert sie"""
-        body = self.fillet_panel.get_target_body()
-        if not body or body.id != body_id: return
-        
-        # Wir brauchen Vector für Distanzberechnung
-        from build123d import Vector
-        click_pt = Vector(pos)
-        
-        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+        """
+        Startet den neuen interaktiven Chamfer-Workflow.
+        Verwendet EdgeSelectionMixin für Tube-basierte Kantenauswahl.
+
+        UX-Pattern wie Transform:
+        - Falls Body ausgewählt → sofort starten
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        self._start_fillet_chamfer_mode("chamfer")
+
+    def _start_fillet_chamfer_mode(self, mode: str):
+        """
+        Gemeinsame Logik für Fillet/Chamfer mit Transform-ähnlicher UX.
+
+        Args:
+            mode: "fillet" oder "chamfer"
+        """
+        # Prüfe ob Body im Browser ausgewählt
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt → Pending-Mode (wie bei Transform)
+        if not selected_bodies:
+            self._pending_fillet_mode = mode
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            # Aktiviere Body-Highlighting im Viewport (gleiche Methode wie Transform)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info(f"{mode.capitalize()}: Klicke auf einen Körper in der 3D-Ansicht oder wähle im Browser")
             return
 
-        all_edges = body._build123d_solid.edges()
-        
-        best_dist = float('inf')
-        best_edge_idx = -1
-        
-        # Finde Kante mit geringstem Abstand zum Klick
-        for i, edge in enumerate(all_edges):
-            try:
-                # center() ist der Mittelpunkt der Kante
-                dist = (edge.center() - click_pt).length
-                if dist < best_dist: 
-                    best_dist = dist
-                    best_edge_idx = i
-            except: pass
-            
-        # Toleranz (15mm Kugel um Klick)
-        if best_dist < 15.0 and best_edge_idx != -1:
-            if best_edge_idx in self.selected_edges:
-                self.selected_edges.remove(best_edge_idx)
-            else:
-                self.selected_edges.append(best_edge_idx)
-                
-            # Visualisierung aktualisieren
-            self.viewport_3d.clear_highlight()
-            for idx in self.selected_edges:
-                if idx < len(all_edges):
-                    edge = all_edges[idx]
-                    # Linie zeichnen zur Markierung
-                    try:
-                        p1 = edge.position_at(0)
-                        p2 = edge.position_at(1)
-                        self.viewport_3d.highlight_edge((p1.X, p1.Y, p1.Z), (p2.X, p2.Y, p2.Z))
-                    except: pass
+        # Fall 2: Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_fillet_chamfer_for_body(body, mode)
+
+    def _on_body_clicked_for_fillet(self, body_id: str):
+        """
+        Callback wenn im Pending-Mode ein Body angeklickt wird.
+        Wird vom _on_viewport_body_clicked Handler aufgerufen.
+        """
+        mode = getattr(self, '_pending_fillet_mode', 'fillet')
+        self._pending_fillet_mode = None
+
+        # Pending-Mode deaktivieren (gleiche Methode wie Transform)
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Body finden
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_fillet_chamfer_for_body(body, mode)
+
+    def _activate_fillet_chamfer_for_body(self, body, mode: str):
+        """
+        Aktiviert Fillet/Chamfer für einen spezifischen Body.
+
+        Args:
+            body: Body-Objekt
+            mode: "fillet" oder "chamfer"
+        """
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
+            return
+
+        self._fillet_mode = mode
+        self._fillet_body = body
+        self._pending_fillet_mode = None
+
+        # Body-Lookup Callback setzen
+        self.viewport_3d.set_edge_selection_callbacks(
+            get_body_by_id=lambda bid: next((b for b in self.document.bodies if b.id == bid), None)
+        )
+
+        # Edge Selection Mode starten
+        self.viewport_3d.start_edge_selection_mode(body.id)
+
+        # Panel anzeigen
+        self.fillet_panel.set_target_body(body)
+        self.fillet_panel.set_mode(mode)
+        self.fillet_panel.show_at(self.viewport_3d)
+
+        logger.info(f"{mode.capitalize()}: Klicke auf Kanten von '{body.name}' (A = alle wählen, ESC = abbrechen)")
+
+    def _on_edge_selection_changed(self, count: int):
+        """
+        Callback wenn sich die Kantenauswahl ändert.
+        Aktualisiert das Panel mit der Anzahl selektierter Kanten.
+        """
+        if hasattr(self, 'fillet_panel') and self.fillet_panel.isVisible():
+            self.fillet_panel.update_edge_count(count)
 
     def _on_fillet_confirmed(self):
-        """Erstellt das parametrische Feature"""
+        """
+        Wendet Fillet/Chamfer mit robuster Fallback-Strategie an.
+        Verwendet edge_operations.py für intelligente Fehlerbehandlung.
+        """
+        from modeling.edge_operations import apply_robust_fillet, apply_robust_chamfer
+        from modeling.cad_tessellator import CADTessellator
+
         radius = self.fillet_panel.get_radius()
         body = self.fillet_panel.get_target_body()
-        
-        try:
-            selectors = []
-            # Prüfen ob wir CAD Daten haben
-            if hasattr(body, '_build123d_solid') and body._build123d_solid:
-                all_edges = body._build123d_solid.edges()
-                
-                if not self.selected_edges:
-                    # Wenn nichts gewählt: Warnung
-                     res = QMessageBox.question(self, "Alles?", "Keine Kanten gewählt. Ganzen Körper bearbeiten?")
-                     if res != QMessageBox.Yes: return
-                     selectors = None # None bedeutet "Alle Kanten"
-                else:
-                     # Wir speichern Punkte im Raum (Mittelpunkte der Kanten)
-                     # Das ist robuster als Indizes, wenn sich das Modell ändert
-                     for idx in self.selected_edges:
-                         if idx < len(all_edges):
-                             c = all_edges[idx].center()
-                             selectors.append((c.X, c.Y, c.Z))
-            
-            # HIER WAR DER FEHLER: Wir nutzen jetzt die Variable aus dem MainWindow
-            mode = getattr(self, '_fillet_mode', 'fillet') 
-            
-            if mode == "chamfer":
-                feat = ChamferFeature(distance=radius, edge_selectors=selectors)
+        mode = getattr(self, '_fillet_mode', 'fillet')
+
+        # Selektierte Kanten vom Viewport holen
+        edges = self.viewport_3d.get_selected_edges()
+
+        if not edges:
+            res = QMessageBox.question(
+                self, "Keine Kanten",
+                "Keine Kanten ausgewählt. Alle Kanten bearbeiten?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if res == QMessageBox.Yes:
+                # Alle Kanten nehmen
+                edges = list(body._build123d_solid.edges())
             else:
-                feat = FilletFeature(radius=radius, edge_selectors=selectors)
-            
-            # Feature zum Body hinzufügen -> Das triggert body._rebuild()
-            # Der Body kümmert sich jetzt um Error-Handling und Smart-Retries
-            body.add_feature(feat)
-            
-            # Mesh visualisieren
-            self._update_body_mesh(body, None)
-            
-            self.fillet_panel.hide()
-            self.viewport_3d.clear_highlight()
-            self.browser.refresh()
-            logger.success(f"{mode.capitalize()} Feature erstellt.")
-            
+                return
+
+        # Robuste Operation anwenden
+        logger.info(f"Wende {mode} auf {len(edges)} Kanten an (r={radius})...")
+
+        try:
+            if mode == "chamfer":
+                result = apply_robust_chamfer(body, edges, radius)
+            else:
+                result = apply_robust_fillet(body, edges, radius)
+
+            if result.success:
+                # Cache leeren und Body aktualisieren
+                CADTessellator.clear_cache()
+
+                body._build123d_solid = result.solid
+                if hasattr(result.solid, 'wrapped'):
+                    body.shape = result.solid.wrapped
+
+                # Mesh aktualisieren
+                body._update_mesh_from_solid(result.solid)
+
+                # Fehlgeschlagene Kanten markieren
+                for edge_idx in result.failed_edge_indices:
+                    self.viewport_3d.mark_edge_as_failed(edge_idx)
+
+                # Feature zur History hinzufügen
+                selectors = self.viewport_3d.get_edge_selectors()
+                if mode == "chamfer":
+                    feat = ChamferFeature(distance=radius, edge_selectors=selectors)
+                else:
+                    feat = FilletFeature(radius=radius, edge_selectors=selectors)
+                body.features.append(feat)
+
+                # Visualisierung aktualisieren
+                self._update_body_from_build123d(body, body._build123d_solid)
+
+                # Aufräumen
+                self.viewport_3d.stop_edge_selection_mode()
+                self.fillet_panel.hide()
+                self.browser.refresh()
+
+                logger.success(f"{mode.capitalize()}: {result.message}")
+
+            else:
+                QMessageBox.warning(
+                    self, "Fehler",
+                    f"{mode.capitalize()} fehlgeschlagen:\n{result.message}"
+                )
+                logger.error(f"{mode.capitalize()} fehlgeschlagen: {result.message}")
+
         except Exception as e:
             logger.error(f"Feature Creation Error: {e}")
             import traceback
             traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Unerwarteter Fehler:\n{str(e)}")
 
-            
     def _on_fillet_radius_changed(self, radius):
-        """Callback wenn der Slider bewegt wird (optional für Preview)"""
-        # Aktuell leer, verhindert aber den Crash
+        """
+        Callback wenn der Radius geändert wird.
+        Aktuell nur für spätere Preview-Funktionalität reserviert.
+        """
+        # TODO: Live-Preview wenn Performance es erlaubt
         pass
-        
-        
-        
-            
+
     def _on_fillet_cancelled(self):
-        self.fillet_panel.setVisible(False)
-        self.viewport_3d.clear_highlight()
-        try: self.viewport_3d.clicked_3d_point.disconnect()
-        except: pass
+        """Bricht die Fillet/Chamfer-Operation ab."""
+        self.viewport_3d.stop_edge_selection_mode()
+        self.fillet_panel.hide()
+        logger.info("Fillet/Chamfer abgebrochen")
         
     
     

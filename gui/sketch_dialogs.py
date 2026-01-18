@@ -5,82 +5,40 @@ DimensionInput and ToolOptionsPopup for the 2D sketch editor
 
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QComboBox, QGraphicsDropShadowEffect, QWidget
+    QPushButton, QComboBox, QGraphicsDropShadowEffect, QWidget,
+    QSizePolicy, QLayout, QGridLayout
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QPalette, QBrush
+from PySide6.QtCore import Qt, Signal, QSize, QPoint, QRectF
+from PySide6.QtGui import QColor, QPalette, QPainter, QBrush, QPen, QFont
 
 
 class DimensionInput(QFrame):
-    """Fusion360-style Eingabefeld mit Lock-Funktionalität und Options-Support"""
+    """
+    Fusion360-style Floating Input.
+    Dunkel, Semi-Transparent, mit Schatten und direktem Feedback.
+    """
     value_changed = Signal(str, float)
-    choice_changed = Signal(str, str) # Neu: Signal für Text-Auswahl
+    choice_changed = Signal(str, str)
     confirmed = Signal()
     cancelled = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Wichtig: Frameless und Tool-Flag, damit es über dem Canvas schwebt
+        # aber keine eigenen Fensterrahmen hat.
+        self.setWindowFlags(Qt.SubWindow | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground) 
         
-        # Modernes Styling: Dunkel, abgerundet, schwebend
-        self.setAttribute(Qt.WA_ShowWithoutActivating) # Fokus nicht stehlen, wenn nicht nötig
-        
-        # Schatten für Tiefenwirkung
+        # Schatten für Tiefenwirkung (Pop-out Effekt)
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(15)
         shadow.setColor(QColor(0, 0, 0, 150))
         shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
 
-        self.setStyleSheet("""
-            QFrame { 
-                background-color: rgba(35, 35, 35, 245); 
-                border: 1px solid rgba(80, 80, 80, 150); 
-                border-radius: 8px; 
-            }
-            QLineEdit { 
-                background: rgba(20, 20, 20, 100); 
-                border: 1px solid #444; 
-                border-radius: 4px;
-                color: #fff; 
-                font-size: 13px; 
-                font-family: 'Segoe UI', sans-serif; 
-                font-weight: 600;
-                padding: 4px 6px; 
-                selection-background-color: #0078d4;
-            }
-            QLineEdit:focus { 
-                border: 1px solid #0078d4; 
-                background: rgba(0, 0, 0, 80); 
-            }
-            QComboBox {
-                background: #333;
-                border: 1px solid #555;
-                border-radius: 4px;
-                color: white;
-                padding: 3px;
-            }
-            QLabel { 
-                color: #ccc; 
-                font-size: 12px; 
-                font-weight: normal;
-                background: transparent;
-                border: none;
-            }
-            /* Label für den Feldnamen (L, R, Angle) */
-            QLabel#NameLabel {
-                color: #0078d4;
-                font-weight: bold;
-            }
-            /* Label für die Einheit */
-            QLabel#UnitLabel {
-                color: #777;
-                font-size: 11px;
-            }
-        """)
-        
         self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(10, 8, 10, 8)
-        self.layout.setSpacing(12)
+        self.layout.setContentsMargins(8, 4, 8, 4)
+        self.layout.setSpacing(8)
         
         self.fields = {}
         self.field_order = []
@@ -89,138 +47,136 @@ class DimensionInput(QFrame):
         self.locked_fields = set()
         
         self.hide()
-    
+
+    def paintEvent(self, event):
+        """Custom Paint für abgerundeten, dunklen Hintergrund"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Hintergrund (Dunkelgrau, leicht transparent)
+        bg_color = QColor(35, 35, 35, 240)
+        border_color = QColor(60, 60, 60)
+        
+        painter.setBrush(QBrush(bg_color))
+        painter.setPen(QPen(border_color, 1))
+        
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.drawRoundedRect(rect, 6, 6)
+
     def setup(self, fields):
-        """
-        Erstellt die Eingabefelder dynamisch.
-        fields: Liste von Tupeln (Label, Key, DefaultValue, Suffix/Options)
-        """
-        # Layout bereinigen
+        # Altes Layout leeren
         while self.layout.count():
             child = self.layout.takeAt(0)
             if child.widget(): child.widget().deleteLater()
-            elif child.layout(): 
-                # Rekursives Löschen für verschachtelte Layouts
-                while child.layout().count():
-                    sub = child.layout().takeAt(0)
-                    if sub.widget(): sub.widget().deleteLater()
-                child.layout().deleteLater()
+            elif child.layout(): child.layout().deleteLater()
 
         self.fields.clear()
         self.field_order.clear()
         self.field_types.clear()
         self.locked_fields.clear()
         
-        for item in fields:
+        for i, item in enumerate(fields):
             label_text, key = item[0], item[1]
             val = item[2]
             
-            # Container für ein Feld-Paar (Label + Input + Einheit)
-            field_container = QVBoxLayout()
-            field_container.setSpacing(2)
-            field_container.setContentsMargins(0, 0, 0, 0)
+            # Container für Label + Input
+            vbox = QVBoxLayout()
+            vbox.setSpacing(1)
+            vbox.setContentsMargins(0,0,0,0)
             
-            # Zeile für Input + Einheit
-            input_row = QHBoxLayout()
-            input_row.setSpacing(4)
-            
-            # Name Label (klein über dem Feld oder links davor - hier links davor für Kompaktheit)
+            # Label (Klein über dem Feld, wie Fusion)
             lbl = QLabel(label_text)
-            lbl.setObjectName("NameLabel")
-            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            lbl.setFixedWidth(15) # Feste Breite für Ausrichtung
+            lbl.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold; margin-left: 2px;")
+            vbox.addWidget(lbl)
             
-            widget = None
-            is_combo = isinstance(item[3], list)
-            
-            if is_combo:
+            # Input Widget
+            if isinstance(item[3], list): # Dropdown
                 self.field_types[key] = 'choice'
-                options = item[3]
                 widget = QComboBox()
-                widget.addItems(options)
-                if isinstance(val, int) and 0 <= val < len(options):
+                widget.addItems(item[3])
+                if isinstance(val, int) and val < len(item[3]):
                     widget.setCurrentIndex(val)
-                elif isinstance(val, str) and val in options:
+                elif isinstance(val, str):
                     widget.setCurrentText(val)
                 
-                widget.setMinimumWidth(90)
+                # Styling für ComboBox
+                widget.setStyleSheet("""
+                    QComboBox {
+                        background: #2d2d30; border: 1px solid #444; border-radius: 3px;
+                        color: white; padding: 2px 4px; min-width: 70px;
+                    }
+                    QComboBox::drop-down { border: none; }
+                """)
                 widget.currentTextChanged.connect(lambda t, k=key: self.choice_changed.emit(k, t))
-                # Combo Styling
-                widget.setStyleSheet("QComboBox { min-height: 22px; }")
                 
-                input_row.addWidget(lbl)
-                input_row.addWidget(widget)
-                
-            else: # Float Input
+            else: # Float/Text Input
                 self.field_types[key] = 'float'
-                suffix = item[3]
-                
                 widget = QLineEdit()
-                widget.setMinimumWidth(60)
-                widget.setMaximumWidth(80)
                 widget.setText(f"{val:.2f}")
+                widget.setFixedWidth(70)
                 
-                # Events verbinden
+                # Styling für LineEdit
+                widget.setStyleSheet("""
+                    QLineEdit {
+                        background: #252526; border: 1px solid #444; border-radius: 3px;
+                        color: white; font-family: Consolas, monospace; font-weight: bold;
+                        padding: 3px; selection-background-color: #0078d4;
+                    }
+                    QLineEdit:focus { border: 1px solid #0078d4; background: #1e1e1e; }
+                """)
+                
                 widget.returnPressed.connect(self._on_confirm)
                 widget.textEdited.connect(lambda t, k=key: self._on_user_edit(k, t))
                 widget.textChanged.connect(lambda t, k=key: self._on_text_changed(k, t))
-                
-                unit_lbl = QLabel(suffix)
-                unit_lbl.setObjectName("UnitLabel")
-                
-                input_row.addWidget(lbl)
-                input_row.addWidget(widget)
-                input_row.addWidget(unit_lbl)
-
-            # Das Input-Widget speichern
+            
+            vbox.addWidget(widget)
+            self.layout.addLayout(vbox)
+            
             self.fields[key] = widget
             self.field_order.append(key)
             
-            # Zum Hauptlayout hinzufügen
-            self.layout.addLayout(input_row)
-            
-            # Kleiner vertikaler Separator wenn nicht das letzte Element
-            if item != fields[-1]:
+            # Separator (außer beim letzten)
+            if i < len(fields) - 1:
                 line = QFrame()
                 line.setFrameShape(QFrame.VLine)
-                line.setFrameShadow(QFrame.Sunken)
-                line.setStyleSheet("background: rgba(255,255,255,0.1); border: none; max-height: 20px;")
+                line.setStyleSheet("color: #444;")
                 self.layout.addWidget(line)
-            
-        self.active_field = 0
+
         self.adjustSize()
-    
+
     def _on_user_edit(self, key, text):
-        """Markiert ein Feld als vom User 'gelockt' (manuell überschrieben)"""
         self.locked_fields.add(key)
+        # Visuelles Feedback: Schloss-Symbol oder Farbe ändern
         if key in self.fields:
-            # Visuelles Feedback für Locked State (Fusion Style: dunkleres Feld, goldener/weißer Text)
             self.fields[key].setStyleSheet("""
                 QLineEdit {
-                    background: rgba(0, 0, 0, 150);
-                    border: 1px solid #dba600;
-                    color: #fff;
-                    font-weight: bold;
+                    background: #1e1e1e; border: 1px solid #dcdcaa; 
+                    color: #dcdcaa; font-weight: bold;
                 }
             """)
 
     def _on_text_changed(self, key, text):
-        try: self.value_changed.emit(key, float(text.replace(',', '.')))
-        except: pass
-    
+        try:
+            val = float(text.replace(',', '.'))
+            self.value_changed.emit(key, val)
+        except ValueError:
+            pass
+
     def _on_confirm(self):
         self.confirmed.emit()
-        
+
     def get_values(self):
         result = {}
         for key, widget in self.fields.items():
             if self.field_types[key] == 'float':
-                try: result[key] = float(widget.text().replace(',', '.'))
-                except: result[key] = 0.0
+                try: 
+                    result[key] = float(widget.text().replace(',', '.'))
+                except: 
+                    result[key] = 0.0
             elif self.field_types[key] == 'choice':
                 result[key] = widget.currentText()
         return result
-        
+
     def set_value(self, key, value):
         if key in self.fields and key not in self.locked_fields:
             if self.field_types[key] == 'float':
@@ -231,145 +187,173 @@ class DimensionInput(QFrame):
             self.active_field = index
             widget = self.fields[self.field_order[index]]
             widget.setFocus()
-            if isinstance(widget, QLineEdit): widget.selectAll()
-            elif hasattr(widget, 'showPopup'): widget.showPopup() # Optional: Dropdown öffnen
-            
+            if isinstance(widget, QLineEdit):
+                widget.selectAll()
+
     def next_field(self):
         self.active_field = (self.active_field + 1) % len(self.field_order)
         self.focus_field(self.active_field)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            self.cancelled.emit(); self.hide()
-        elif event.key() == Qt.Key_Tab:
-            self.next_field(); event.accept()
-        elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self._on_confirm(); event.accept()
-        else:
-            super().keyPressEvent(event)
 
     def is_locked(self, key):
         return key in self.locked_fields
 
     def unlock_all(self):
-        """Hebt alle Sperren auf und setzt das Aussehen zurück"""
         self.locked_fields.clear()
+        # Reset Styles
         for key, widget in self.fields.items():
-            # Style zurücksetzen (auf den Standard aus __init__)
             if isinstance(widget, QLineEdit):
                 widget.setStyleSheet("""
-                    background: #2d2d30; 
-                    border: 1px solid #555; 
-                    border-radius: 3px;
-                    color: #fff; 
-                    font-size: 14px; 
-                    font-family: Consolas, monospace; 
-                    font-weight: bold;
-                    padding: 4px; 
-                    selection-background-color: #0078d4;
+                    QLineEdit {
+                        background: #252526; border: 1px solid #444; border-radius: 3px;
+                        color: white; font-family: Consolas, monospace; font-weight: bold;
+                        padding: 3px; selection-background-color: #0078d4;
+                    }
+                    QLineEdit:focus { border: 1px solid #0078d4; background: #1e1e1e; }
                 """)
-                
+
 class ToolOptionsPopup(QFrame):
-    """Schwebende Optionen-Palette für Tools (wie Fusion360)"""
+    """
+    Kleine Kontext-Palette neben dem Mauszeiger (z.B. für Polygon-Seiten, Kreis-Typ).
+    """
     option_selected = Signal(str, int)
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowFlags(Qt.SubWindow | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
         
-        # Schatten hinzufügen
+        # Minimale Breite etwas erhöht für Text
+        self.setMinimumWidth(140) 
+        
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(10)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        shadow.setOffset(0, 2)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 150))
+        shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
-
-        self.setStyleSheet("""
-            ToolOptionsPopup {
-                background: rgba(40, 40, 45, 240);
-                border: 1px solid rgba(80, 80, 80, 180);
-                border-radius: 6px;
-            }
-            QPushButton {
-                background: transparent;
-                border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 4px;
-                padding: 4px 8px;
-                min-width: 40px;
-                min-height: 40px;
-                color: #ddd;
-                font-size: 11px;
-                text-align: center;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.1);
-                border: 1px solid rgba(255,255,255,0.3);
-            }
-            QPushButton:checked {
-                background: rgba(0, 120, 212, 0.3); /* Accent Color Background */
-                border: 1px solid #0078d4;
-                color: #fff;
-            }
-            QLabel {
-                color: #aaa;
-                font-size: 11px;
-                font-weight: bold;
-                padding-bottom: 4px;
-                background: transparent;
-                border: none;
-            }
-        """)
         
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(8, 8, 8, 8)
-        self.layout.setSpacing(4)
+        self.layout.setSpacing(6)
+        
+        # Größe passt sich Inhalt an
+        self.layout.setSizeConstraint(QLayout.SetFixedSize)
         
         self.title_label = QLabel("")
+        self.title_label.setStyleSheet("color: #ccc; font-size: 10px; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;")
         self.title_label.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.title_label)
         
-        self.button_layout = QHBoxLayout()
-        self.button_layout.setSpacing(6)
+        # ÄNDERUNG: Grid statt HBox für mehrreihiges Layout
+        self.button_layout = QGridLayout()
+        self.button_layout.setSpacing(4)
+        self.button_layout.setContentsMargins(0,0,0,0)
         self.layout.addLayout(self.button_layout)
         
         self.buttons = []
         self.current_option = None
         self.option_name = None
         self.hide()
-    
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QBrush(QColor(35, 35, 40, 250)))
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+
     def show_options(self, title, option_name, options, current_value=0):
-        """
-        Zeigt Optionen an.
-        options: Liste von (icon_text, label) Tupeln
-        """
         self.title_label.setText(title)
         self.option_name = option_name
         
+        # Buttons aufräumen (Grid Layout Items entfernen)
         while self.button_layout.count():
             item = self.button_layout.takeAt(0)
-            if item.widget():
+            if item.widget(): 
                 item.widget().deleteLater()
         self.buttons.clear()
         
+        # KONFIGURATION: Maximale Spalten bevor umgebrochen wird
+        # Bei langen Texten ist 2 gut. Bei kurzen Icons eher 3 oder 4.
+        MAX_COLUMNS = 2 
+        
         for i, (icon, label) in enumerate(options):
-            btn = QPushButton(f"{icon}\n{label}")
+            btn = QPushButton(f" {icon}  {label} ")
+            btn.setToolTip(label)
             btn.setCheckable(True)
-            btn.setChecked(i == current_value)
-            btn.setMinimumWidth(55)
-            btn.setMaximumWidth(70)
+            
+            # Damit Buttons im Grid den Platz füllen
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            is_active = False
+            if isinstance(current_value, int) and i == current_value: is_active = True
+            
+            btn.setChecked(is_active)
+            btn.setFixedHeight(32)
+            
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.05); 
+                    border: 1px solid rgba(255, 255, 255, 0.1); 
+                    border-radius: 4px;
+                    color: #e0e0e0; 
+                    font-size: 12px;
+                    font-weight: bold;
+                    padding: 0 10px;
+                    text-align: left; /* Text linksbündig sieht im Grid oft besser aus */
+                }
+                QPushButton:hover { background: rgba(255,255,255,0.15); border-color: #aaa; }
+                QPushButton:checked { 
+                    background: rgba(0, 120, 212, 1.0); 
+                    border: 1px solid #0078d4; 
+                    color: white; 
+                }
+            """)
+            
             btn.clicked.connect(lambda checked, idx=i: self._on_option_clicked(idx))
-            self.button_layout.addWidget(btn)
+            
+            # Gitter-Logik: Zeile und Spalte berechnen
+            row = i // MAX_COLUMNS
+            col = i % MAX_COLUMNS
+            self.button_layout.addWidget(btn, row, col)
+            
             self.buttons.append(btn)
         
-        self.button_layout.update()
-        self.adjustSize()
-        self.updateGeometry()
+        self.layout.activate()
+        self.adjustSize() 
+        
         self.show()
-    
+        self.raise_()
+
     def _on_option_clicked(self, index):
         for i, btn in enumerate(self.buttons):
+            btn.blockSignals(True)
             btn.setChecked(i == index)
+            btn.blockSignals(False)
         self.option_selected.emit(self.option_name, index)
-    
-    def position_near(self, widget, offset_x=10, offset_y=10):
-        self.move(offset_x, offset_y)
+
+    def position_smart(self, parent_widget, offset_x=15, offset_y=15):
+        # ... (diese Methode bleibt unverändert wie im vorherigen Schritt) ...
+        from PySide6.QtGui import QCursor
+        
+        self.adjustSize()
+        mouse_pos = QCursor.pos()
+        if parent_widget:
+            local_pos = parent_widget.mapFromGlobal(mouse_pos)
+        else:
+            local_pos = mouse_pos
+
+        x = local_pos.x() + offset_x
+        y = local_pos.y() + offset_y
+        
+        if parent_widget:
+            pw = parent_widget.width()
+            ph = parent_widget.height()
+            w = self.width()
+            h = self.height()
+            if x + w > pw - 10: x = local_pos.x() - w - offset_x
+            if y + h > ph - 10: y = local_pos.y() - h - offset_y
+            if x < 10: x = 10
+            if y < 10: y = 10
+
+        self.move(int(x), int(y))
         self.raise_()

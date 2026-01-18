@@ -26,6 +26,7 @@ from modeling.cad_tessellator import CADTessellator
 from modeling.mesh_converter import MeshToBREPConverter # NEU
 from modeling.mesh_converter_functional_parts import MeshToBREPV5 # NEU
 from modeling.mesh_converter_v6 import SmartMeshConverter # V6 - Feature Detection
+from modeling.result_types import OperationResult, BooleanResult, ResultStatus  # Result-Pattern
 
 
 # ==================== IMPORTS ====================
@@ -324,9 +325,174 @@ class Body:
             
             return None, "ERROR"
 
+    def _safe_boolean_operation_v2(self, solid1, solid2, operation: str) -> BooleanResult:
+        """
+        Robuste Boolean Operation mit Result-Pattern für klare Status-Unterscheidung.
+
+        Result Status:
+        - SUCCESS: Operation erfolgreich durchgeführt
+        - WARNING: Operation erfolgreich aber Validierung/Reparatur war nötig
+        - EMPTY: Operation produzierte leeres Ergebnis (z.B. Intersect ohne Überlappung)
+        - ERROR: Operation fehlgeschlagen
+
+        Args:
+            solid1: Erstes Solid (aktueller Body)
+            solid2: Zweites Solid (neues Teil)
+            operation: "Join", "Cut", oder "Intersect"
+
+        Returns:
+            BooleanResult mit klarem Status und Details
+        """
+        op_type = operation.lower()
+        warnings = []
+
+        # --- Validierung ---
+        if not HAS_OCP:
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message="OCP nicht verfügbar - Boolean Operations nicht möglich",
+                operation_type=op_type
+            )
+
+        if solid1 is None or solid2 is None:
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message=f"Boolean {operation}: Eines der Solids ist None",
+                operation_type=op_type,
+                details={"solid1_none": solid1 is None, "solid2_none": solid2 is None}
+            )
+
+        try:
+            # 1. Extrahiere TopoDS_Shape
+            shape1 = solid1.wrapped if hasattr(solid1, 'wrapped') else solid1
+            shape2 = solid2.wrapped if hasattr(solid2, 'wrapped') else solid2
+
+            # 2. Repariere Shapes VOR Boolean
+            fixed_shape1 = self._fix_shape_ocp(shape1)
+            fixed_shape2 = self._fix_shape_ocp(shape2)
+
+            if fixed_shape1 is None or fixed_shape2 is None:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message="Shape-Reparatur fehlgeschlagen",
+                    operation_type=op_type
+                )
+
+            # Prüfe ob Reparatur nötig war
+            if fixed_shape1 is not shape1:
+                warnings.append("solid1 wurde repariert")
+            if fixed_shape2 is not shape2:
+                warnings.append("solid2 wurde repariert")
+
+            # 3. Boolean Operation
+            FUZZY_VALUE = 1e-5
+            result_shape = None
+
+            if operation == "Join":
+                result_shape = self._ocp_fuse(fixed_shape1, fixed_shape2, FUZZY_VALUE)
+            elif operation == "Cut":
+                result_shape = self._ocp_cut(fixed_shape1, fixed_shape2, FUZZY_VALUE)
+            elif operation == "Intersect":
+                result_shape = self._ocp_common(fixed_shape1, fixed_shape2, FUZZY_VALUE)
+            else:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Unbekannte Operation: {operation}",
+                    operation_type=op_type
+                )
+
+            # 4. Prüfe Ergebnis
+            if result_shape is None:
+                # Bei Intersect kann leeres Ergebnis gültig sein
+                if operation == "Intersect":
+                    return BooleanResult(
+                        status=ResultStatus.EMPTY,
+                        message="Intersect produzierte kein Ergebnis (keine Überlappung)",
+                        operation_type=op_type,
+                        details={"reason": "no_overlap"}
+                    )
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"{operation} produzierte None",
+                    operation_type=op_type
+                )
+
+            # 5. Repariere Resultat
+            fixed_result = self._fix_shape_ocp(result_shape)
+            if fixed_result is not result_shape:
+                warnings.append("Resultat wurde repariert")
+
+            if fixed_result is None:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"{operation} Resultat-Reparatur fehlgeschlagen",
+                    operation_type=op_type
+                )
+
+            # 6. Wrap zu Build123d
+            try:
+                from build123d import Solid, Shape
+                try:
+                    result = Solid(fixed_result)
+                except:
+                    result = Shape(fixed_result)
+
+                is_valid = hasattr(result, 'is_valid') and result.is_valid()
+
+                if not is_valid:
+                    warnings.append("Resultat war nach Wrap invalid")
+                    try:
+                        result = result.fix()
+                        is_valid = result.is_valid()
+                        if is_valid:
+                            warnings.append("fix() hat geholfen")
+                    except:
+                        pass
+
+                if is_valid:
+                    if warnings:
+                        return BooleanResult(
+                            status=ResultStatus.WARNING,
+                            value=result,
+                            message=f"{operation} erfolgreich (mit Reparaturen)",
+                            operation_type=op_type,
+                            warnings=warnings,
+                            details={"fallback_used": "shape_repair"}
+                        )
+                    return BooleanResult(
+                        status=ResultStatus.SUCCESS,
+                        value=result,
+                        message=f"{operation} erfolgreich",
+                        operation_type=op_type
+                    )
+                else:
+                    return BooleanResult(
+                        status=ResultStatus.ERROR,
+                        message=f"{operation} Resultat invalid nach allen Reparatur-Versuchen",
+                        operation_type=op_type,
+                        warnings=warnings
+                    )
+
+            except Exception as e:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Wrap zu Build123d fehlgeschlagen: {e}",
+                    operation_type=op_type,
+                    details={"exception": str(e)}
+                )
+
+        except Exception as e:
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message=f"Boolean {operation} Fehler: {e}",
+                operation_type=op_type,
+                details={"exception": str(e), "traceback": traceback.format_exc()[:500]}
+            )
+
     def _safe_boolean_operation(self, solid1, solid2, operation: str):
         """
         Robuste Boolean Operation mit direkter OCP-API (wie Fusion360/OnShape).
+        Legacy-API - verwende _safe_boolean_operation_v2 für neue Implementierungen.
 
         Args:
             solid1: Erstes Solid (aktueller Body)
@@ -1248,30 +1414,46 @@ class Body:
         Entspricht exakt der alten, robusten Implementierung.
         """
         if not HAS_BUILD123D or not feature.sketch: return None
-        
+
         try:
             from shapely.geometry import LineString, Point, Polygon as ShapelyPoly
             from shapely.ops import unary_union, polygonize
             from build123d import make_face, Vector, Wire, Compound, Shape
             import math
-            
+
             logger.info(f"--- Starte Legacy Extrusion: {feature.name} ---")
-            
+
             sketch = feature.sketch
             # plane ist bereits übergeben
-            
+
             # --- 1. Segmente sammeln ---
             all_segments = []
+            # NEU: Separate Liste für geschlossene Ringe (Kreise)
+            closed_rings = []
             def rnd(val): return round(val, 5)
-            
+
             for l in sketch.lines:
                 if not l.construction:
                     all_segments.append(LineString([(rnd(l.start.x), rnd(l.start.y)), (rnd(l.end.x), rnd(l.end.y))]))
+
+            # NEU: Kreise separat als Polygone speichern (nicht als LineStrings!)
             for c in sketch.circles:
                 if not c.construction:
-                    pts = [(rnd(c.center.x + c.radius * math.cos(i * 2 * math.pi / 64)), 
+                    pts = [(rnd(c.center.x + c.radius * math.cos(i * 2 * math.pi / 64)),
                             rnd(c.center.y + c.radius * math.sin(i * 2 * math.pi / 64))) for i in range(65)]
-                    all_segments.append(LineString(pts))
+                    # WICHTIG: Geschlossenen Ring als Polygon speichern, NICHT als LineString
+                    # polygonize() funktioniert nicht mit isolierten geschlossenen Ringen!
+                    try:
+                        circle_poly = ShapelyPoly(pts)
+                        if circle_poly.is_valid:
+                            closed_rings.append(circle_poly)
+                            logger.debug(f"Kreis als geschlossener Ring: center=({c.center.x:.1f}, {c.center.y:.1f}), r={c.radius:.1f}")
+                        else:
+                            # Fallback: Als LineString für polygonize
+                            all_segments.append(LineString(pts))
+                    except:
+                        all_segments.append(LineString(pts))
+
             for arc in sketch.arcs:
                  if not arc.construction:
                     pts = []
@@ -1298,29 +1480,39 @@ class Body:
                      pts = [(rnd(p[0]), rnd(p[1])) for p in pts_raw]
                      if len(pts) >= 2: all_segments.append(LineString(pts))
 
-            if not all_segments: return None
+            if not all_segments and not closed_rings:
+                return None
 
             # --- 2. Polygonize & Deduplizierung ---
-            try:
-                merged = unary_union(all_segments)
-                raw_candidates = list(polygonize(merged))
-                
-                candidates = []
-                for rc in raw_candidates:
-                    clean_poly = rc.buffer(0) # Reparatur
-                    is_dup = False
-                    for existing in candidates:
-                        if abs(clean_poly.area - existing.area) < 1e-4 and clean_poly.centroid.distance(existing.centroid) < 1e-4:
-                            is_dup = True
-                            break
-                    if not is_dup:
-                        candidates.append(clean_poly)
-                
-                logger.info(f"Kandidaten (Unique): {len(candidates)}")
-            except Exception as e:
-                logger.error(f"Polygonize failed: {e}")
-                return None
-            
+            candidates = []
+
+            # 2a. Geschlossene Ringe (Kreise) direkt als Kandidaten hinzufügen
+            for ring in closed_rings:
+                candidates.append(ring)
+                logger.debug(f"Geschlossener Ring als Kandidat: area={ring.area:.1f}")
+
+            # 2b. Lineare Segmente mit polygonize verarbeiten
+            if all_segments:
+                try:
+                    merged = unary_union(all_segments)
+                    raw_candidates = list(polygonize(merged))
+
+                    for rc in raw_candidates:
+                        clean_poly = rc.buffer(0) # Reparatur
+                        is_dup = False
+                        for existing in candidates:
+                            if abs(clean_poly.area - existing.area) < 1e-4 and clean_poly.centroid.distance(existing.centroid) < 1e-4:
+                                is_dup = True
+                                break
+                        if not is_dup:
+                            candidates.append(clean_poly)
+
+                except Exception as e:
+                    logger.warning(f"Polygonize fehlgeschlagen: {e}")
+                    # Weiter mit geschlossenen Ringen falls vorhanden
+
+            logger.info(f"Kandidaten (Unique): {len(candidates)}")
+
             if not candidates: return None
 
             # --- 3. Selektion ---
@@ -1348,19 +1540,34 @@ class Body:
             faces_to_extrude = []
 
             def to_3d_wire(shapely_poly):
+                """Konvertiert Shapely Polygon zu Build123d Wire. Erkennt Kreise!"""
                 try:
                     pts_2d = list(shapely_poly.exterior.coords[:-1])
                     if len(pts_2d) < 3: return None
+
+                    # NEU: Prüfen ob es ein Kreis ist
+                    circle_info = self._detect_circle_from_points(pts_2d)
+                    if circle_info:
+                        cx, cy, radius = circle_info
+                        logger.debug(f"to_3d_wire: Erkenne Kreis r={radius:.2f}")
+                        center_3d = plane.from_local_coords((cx, cy))
+                        from build123d import Plane as B3DPlane
+                        circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                        return Wire.make_circle(radius, circle_plane)
+
+                    # Standard: Polygon-Wire
                     pts_3d = [plane.from_local_coords((p[0], p[1])) for p in pts_2d]
                     return Wire.make_polygon(pts_3d)
-                except: return None
+                except Exception as e:
+                    logger.debug(f"to_3d_wire error: {e}")
+                    return None
 
             for outer_idx in selected_indices:
                 try:
                     outer_poly = candidates[outer_idx]
                     outer_wire = to_3d_wire(outer_poly)
                     if not outer_wire: continue
-                    
+
                     main_face = make_face(outer_wire)
                     
                     # Löcher suchen

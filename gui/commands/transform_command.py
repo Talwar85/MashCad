@@ -42,16 +42,42 @@ class TransformCommand(QUndoCommand):
         """
         Apply transform by adding feature to body.
         Called automatically when command is pushed to stack.
+
+        WICHTIG: Transform-Features werden NICHT über _rebuild() angewendet,
+        sondern direkt auf das aktuelle Solid. Das verhindert, dass vorherige
+        Features (z.B. Extrudes mit precalculated_polys) fehlschlagen.
         """
         from modeling.cad_tessellator import CADTessellator
 
         # Only add if not already added
         if len(self.body.features) == self.old_feature_count:
-            self.body.add_feature(self.feature)
+            # Feature zur History hinzufügen (OHNE _rebuild!)
+            self.body.features.append(self.feature)
             logger.debug(f"Redo: Added {self.feature.name} to {self.body.name}")
 
-            # Rebuild & Update UI
+            # Transform direkt auf aktuelles Solid anwenden
             with CADTessellator.invalidate_cache():
+                try:
+                    new_solid = self.body._apply_transform_feature(
+                        self.body._build123d_solid,
+                        self.feature
+                    )
+                    if new_solid:
+                        self.body._build123d_solid = new_solid
+                        if hasattr(new_solid, 'wrapped'):
+                            self.body.shape = new_solid.wrapped
+                        # Mesh aktualisieren
+                        self.body._update_mesh_from_solid(new_solid)
+                        self.feature.status = "OK"
+                        logger.success(f"Transform direkt angewendet: {self.feature.mode}")
+                    else:
+                        self.feature.status = "ERROR"
+                        logger.error("Transform returned None")
+                except Exception as e:
+                    self.feature.status = "ERROR"
+                    logger.error(f"Transform Error: {e}")
+
+                # UI Update
                 self.main_window._update_body_from_build123d(
                     self.body,
                     self.body._build123d_solid
@@ -62,6 +88,9 @@ class TransformCommand(QUndoCommand):
         """
         Revert transform by removing feature from body.
         Called when user presses Ctrl+Z.
+
+        WICHTIG: Wendet die INVERSE Transform-Operation an, statt _rebuild().
+        Das verhindert Fehler bei vorherigen Extrude-Features.
         """
         from modeling.cad_tessellator import CADTessellator
 
@@ -70,9 +99,33 @@ class TransformCommand(QUndoCommand):
             removed_feature = self.body.features.pop()
             logger.debug(f"Undo: Removed {removed_feature.name} from {self.body.name}")
 
-            # Rebuild without this feature
+            # Inverse Transform anwenden statt _rebuild()
             with CADTessellator.invalidate_cache():
-                self.body._rebuild()
+                try:
+                    # Erstelle inverse TransformFeature
+                    inverse_feature = self._create_inverse_transform(removed_feature)
+                    if inverse_feature:
+                        new_solid = self.body._apply_transform_feature(
+                            self.body._build123d_solid,
+                            inverse_feature
+                        )
+                        if new_solid:
+                            self.body._build123d_solid = new_solid
+                            if hasattr(new_solid, 'wrapped'):
+                                self.body.shape = new_solid.wrapped
+                            self.body._update_mesh_from_solid(new_solid)
+                            logger.success(f"Undo: Inverse Transform angewendet")
+                        else:
+                            # Fallback zu _rebuild() wenn inverse Transform fehlschlägt
+                            logger.warning("Inverse Transform failed, using _rebuild()")
+                            self.body._rebuild()
+                    else:
+                        # Fallback für unbekannte Transform-Typen
+                        self.body._rebuild()
+                except Exception as e:
+                    logger.error(f"Undo Error: {e}, using _rebuild()")
+                    self.body._rebuild()
+
                 self.main_window._update_body_from_build123d(
                     self.body,
                     self.body._build123d_solid
@@ -81,6 +134,56 @@ class TransformCommand(QUndoCommand):
 
             # Gizmo an neue Position verschieben falls aktiv
             self._update_gizmo_position()
+
+    def _create_inverse_transform(self, feature):
+        """
+        Erstellt ein inverses TransformFeature für Undo.
+        """
+        from modeling import TransformFeature
+
+        mode = feature.mode
+        data = feature.data
+
+        if mode == "move":
+            # Inverse: Negative Translation
+            trans = data.get("translation", [0, 0, 0])
+            return TransformFeature(
+                mode="move",
+                data={"translation": [-trans[0], -trans[1], -trans[2]]}
+            )
+
+        elif mode == "rotate":
+            # Inverse: Negative Winkel, gleiche Achse/Center
+            return TransformFeature(
+                mode="rotate",
+                data={
+                    "axis": data.get("axis", "Z"),
+                    "angle": -data.get("angle", 0),
+                    "center": data.get("center", [0, 0, 0])
+                }
+            )
+
+        elif mode == "scale":
+            # Inverse: 1/factor, gleicher Center
+            factor = data.get("factor", 1.0)
+            if abs(factor) < 1e-6:
+                return None  # Division by zero protection
+            return TransformFeature(
+                mode="scale",
+                data={
+                    "factor": 1.0 / factor,
+                    "center": data.get("center", [0, 0, 0])
+                }
+            )
+
+        elif mode == "mirror":
+            # Mirror ist selbst-invers (mirror mirror = original)
+            return TransformFeature(
+                mode="mirror",
+                data={"plane": data.get("plane", "XY")}
+            )
+
+        return None
 
 
 class DeleteFeatureCommand(QUndoCommand):

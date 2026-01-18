@@ -22,6 +22,7 @@ wheels/
 clean_pycache.sh
 nul
 *.sh
+.claude
 
 # Virtual environments
 venv/

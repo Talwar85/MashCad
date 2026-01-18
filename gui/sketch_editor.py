@@ -605,120 +605,177 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _find_closed_profiles(self):
         """
-        Findet geschlossene Flächen mit Shapely.
-        FIX: Nutzt Koordinaten-Rundung, damit auch schräge Slots erkannt werden.
+        Kombinierte Logik: 
+        1. Welding (Punkte verschweißen) gegen Mikro-Lücken (für Slots/Langlöcher).
+        2. Hierarchie-Analyse (wie im 3D Modus) für korrekte Löcher/Inseln.
         """
-        from shapely.geometry import LineString, Polygon as ShapelyPolygon
+        from shapely.geometry import LineString, Polygon as ShapelyPolygon, Point
         from shapely.ops import polygonize, unary_union
-        
+        import numpy as np
+
         self.closed_profiles.clear()
         
-        lines = [l for l in self.sketch.lines if not l.construction]
-        arcs = [a for a in self.sketch.arcs if not a.construction]
-        circles = [c for c in self.sketch.circles if not c.construction]
+        # --- PHASE 1: Welding & Geometrie-Vorbereitung ---
         
+        # Snap-Map zum Schließen von Lücken < 0.05mm
+        snap_map = {}
+        SNAP_TOL = 0.05
+        
+        def get_welded_pt(x, y):
+            key = (round(x, 1), round(y, 1)) # Grobes Grid für schnelle Suche
+            search_keys = [
+                key, (key[0]+0.1, key[1]), (key[0]-0.1, key[1]),
+                (key[0], key[1]+0.1), (key[0], key[1]-0.1)
+            ]
+            for k in search_keys:
+                if k in snap_map:
+                    sx, sy = snap_map[k]
+                    if math.hypot(x - sx, y - sy) < SNAP_TOL:
+                        return (sx, sy)
+            snap_map[key] = (x, y)
+            return (x, y)
+
         shapely_lines = []
         
-        # Hilfsfunktion zum Runden von Koordinaten (löst das Slot-Problem)
-        def rnd(val):
-            return round(val, 5)
-
         # 1. Linien
+        lines = [l for l in self.sketch.lines if not l.construction]
         for line in lines:
-            shapely_lines.append(LineString([
-                (rnd(line.start.x), rnd(line.start.y)),
-                (rnd(line.end.x), rnd(line.end.y))
-            ]))
-            
-        # 2. Bögen (in Segmente zerlegen und runden)
+            p1 = get_welded_pt(line.start.x, line.start.y)
+            p2 = get_welded_pt(line.end.x, line.end.y)
+            if p1 != p2:
+                shapely_lines.append(LineString([p1, p2]))
+
+        # 2. Bögen (Arcs)
+        arcs = [a for a in self.sketch.arcs if not a.construction]
         for arc in arcs:
             points = []
+            # Start/Ende explizit welden (WICHTIG für Slots!)
+            start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
+            end_p = get_welded_pt(arc.end_point.x, arc.end_point.y)
+            
+            points.append(start_p)
+            
             sweep = abs(arc.end_angle - arc.start_angle)
             if sweep < 0.1: sweep += 360
-            steps = max(8, int(sweep / 5)) # Mindestens 8 Schritte für Genauigkeit
+            steps = max(16, int(sweep / 5)) # Genug Segmente für Smoothness
             
-            # Start/End Winkel normalisieren
-            start_rad = math.radians(arc.start_angle)
-            
-            # Wichtig: Winkelrichtung korrekt behandeln
             diff = arc.end_angle - arc.start_angle
-            # Wenn diff fast 0 ist, ist es wahrsch. ein Vollkreis-Fehler oder Konstruktionsfehler,
-            # aber hier nehmen wir an, die Winkel stimmen aus _create_slot
-            
-            for i in range(steps + 1):
+            for i in range(1, steps):
                 t = i / steps
                 angle = math.radians(arc.start_angle + diff * t)
                 px = arc.center.x + arc.radius * math.cos(angle)
                 py = arc.center.y + arc.radius * math.sin(angle)
-                points.append((rnd(px), rnd(py)))
+                points.append((px, py)) # Zwischenpunkte nicht welden
             
+            points.append(end_p)
             if len(points) >= 2:
                 shapely_lines.append(LineString(points))
 
-        # 3. Kreise (Code bleibt ähnlich, nur mit rnd)
-        circle_segments = []
-        standalone_circle_polys = []
-        standalone_circles = [] # Originale speichern
+        # 3. Kreise (als Polygone approximieren für Boolesche Operationen)
+        circles = [c for c in self.sketch.circles if not c.construction]
+        standalone_polys = []
         
-        # ... (Logik für Kreise hier gekürzt, da meist unproblematisch. 
-        # Wichtig ist, dass Linien und Bögen sich treffen.)
-        # Wir fügen die Kreise als Segmente hinzu, wenn sie Linien berühren
-        
-        # (Vereinfachte Kreis-Logik für Übersichtlichkeit, der alte Code war okay, 
-        # aber Linien/Bögen sind das Hauptproblem beim Slot)
         for circle in circles:
             cx, cy, r = circle.center.x, circle.center.y, circle.radius
-            poly_points = []
-            # 128 Punkte für bessere Kreis-Approximation
-            for j in range(128):
-                a = 2 * math.pi * j / 128
-                poly_points.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-            standalone_circle_polys.append(ShapelyPolygon(poly_points))
-            standalone_circles.append(circle)
+            pts = []
+            segments = 128 # Hohe Auflösung wie im 3D Mode
+            for i in range(segments):
+                a = 2 * math.pi * i / segments
+                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            standalone_polys.append(ShapelyPolygon(pts))
 
-        # 4. Polygonize
+        # --- PHASE 2: Polygonize & Raw Polygons ---
+        
+        raw_polys = []
+        
+        # Aus Linien/Bögen Flächen finden
         if shapely_lines:
             try:
                 merged = unary_union(shapely_lines)
                 for poly in polygonize(merged):
-                    if poly.area > 0.1:
-                        self.closed_profiles.append(('polygon', poly))
+                    if poly.area > 0.01:
+                        raw_polys.append(poly)
             except Exception as e:
                 logger.warning(f"Polygonize error: {e}")
 
-        # 5. Kreise verarbeiten: Löcher in Polygone einfügen ODER als standalone hinzufügen
-        circles_as_holes = set()  # Indizes der Kreise die Löcher sind
-        
-        for i, circle_poly in enumerate(standalone_circle_polys):
-            circle = standalone_circles[i]
-            
-            # Prüfen ob dieser Kreis in einem Polygon liegt
-            for j, (p_type, p_data) in enumerate(self.closed_profiles):
-                if p_type == 'polygon' and p_data.contains(circle_poly):
-                    # Der Kreis ist ein LOCH in diesem Polygon!
-                    logger.debug(f"Kreis r={circle.radius:.2f} als Loch in Polygon erkannt")
-                    
-                    # Polygon mit Loch erstellen
-                    new_poly = p_data.difference(circle_poly)
-                    
-                    # DEBUG: Prüfen ob das Loch tatsächlich erstellt wurde
-                    n_interiors = len(list(new_poly.interiors)) if hasattr(new_poly, 'interiors') else 0
-                    logger.info(f"  → Polygon nach difference(): area={new_poly.area:.1f}, interiors={n_interiors}")
-                    
-                    if n_interiors > 0:
-                        interior = list(new_poly.interiors)[0]
-                        logger.debug(f"  → Interior hat {len(list(interior.coords))} Punkte")
-                    
-                    self.closed_profiles[j] = ('polygon', new_poly)
-                    circles_as_holes.add(i)
+        # Eigenständige Kreise hinzufügen (wenn sie nicht schon durch Linien abgedeckt sind)
+        for c_poly in standalone_polys:
+            # Check auf Duplikate (falls Kreise auch als Arcs gezeichnet wurden)
+            is_duplicate = False
+            for existing in raw_polys:
+                if abs(existing.area - c_poly.area) < 0.1 and existing.intersection(c_poly).area > c_poly.area * 0.9:
+                    is_duplicate = True
                     break
+            if not is_duplicate:
+                raw_polys.append(c_poly)
+
+        if not raw_polys:
+            return
+
+        # --- PHASE 3: Hierarchie & Holes (Die Logic aus GeometryDetector) ---
         
-        # Nur Kreise hinzufügen die KEINE Löcher sind
-        for i, circle in enumerate(standalone_circles):
-            if i not in circles_as_holes:
-                self.closed_profiles.append(('circle', circle))
-                logger.debug(f"Standalone Kreis r={circle.radius:.2f} hinzugefügt")
+        # Sortieren nach Größe (Groß zuerst -> Parents)
+        raw_polys.sort(key=lambda p: p.area, reverse=True)
+        
+        # Wer enthält wen?
+        # hierarchy[i] = Liste von Indizes, die in Polygon i liegen
+        hierarchy = {i: [] for i in range(len(raw_polys))}
+        for i, parent in enumerate(raw_polys):
+            for j, child in enumerate(raw_polys):
+                if i == j: continue
+                # contains ist teuer, aber bei 2D Sketches ist N klein (<100)
+                if parent.contains(child):
+                    hierarchy[i].append(j)
+        
+        # Direkte Kinder finden (Direct Children)
+        # Ein Polygon K ist direktes Kind von P, wenn es keinen Zwischen-Parent Z gibt.
+        direct_children = {i: [] for i in range(len(raw_polys))}
+        
+        for parent_idx, children_indices in hierarchy.items():
+            for child_idx in children_indices:
+                is_direct = True
+                for other_child in children_indices:
+                    if child_idx == other_child: continue
+                    # Wenn ein anderes Kind mein Kind enthält, bin ich nicht der direkte Parent
+                    if raw_polys[other_child].contains(raw_polys[child_idx]):
+                        is_direct = False
+                        break
+                if is_direct:
+                    direct_children[parent_idx].append(child_idx)
+
+        # Profile erstellen (Parent minus direkte Kinder)
+        # Wir müssen vermeiden, dass Kinder doppelt gezeichnet werden.
+        # Im Sketch-Modus wollen wir ALLES zeichnen, aber Löcher sollen "leer" sein.
+        
+        processed = set()
+        
+        for i in range(len(raw_polys)):
+            # Wenn dieses Polygon ein direktes Kind von irgendwem ist, 
+            # wird es dort ausgeschnitten. Aber: Wenn es selbst Kinder hat (Insel),
+            # muss es später wieder als positiver Shape gezeichnet werden.
+            # Die einfache Regel für QPainterPath (OddEvenFill) ist:
+            # Wir brauchen das "End-Polygon" mit Löchern drin.
             
+            # Wir verarbeiten hier nur die "Top Level" Parents und die "Inseln" (Level 2, 4...)
+            # Aber noch einfacher: Wir berechnen einfach für JEDES Polygon die Differenz zu seinen direkten Kindern.
+            # Das Ergebnis ist ein Ring (oder eine Vollfläche).
+            
+            poly = raw_polys[i]
+            children = direct_children[i]
+            
+            final_shape = poly
+            for child_idx in children:
+                try:
+                    final_shape = final_shape.difference(raw_polys[child_idx])
+                except Exception as e:
+                    logger.warning(f"Difference error: {e}")
+            
+            # Speichern als Polygon
+            if not final_shape.is_empty and final_shape.area > 0.01:
+                self.closed_profiles.append(('polygon', final_shape))
+        
+        # Hinweis: Diese Methode erzeugt jetzt Shapely-Polygone, die Löcher enthalten können!
+        # Der Renderer muss das verstehen.
         self._build_profile_hierarchy()
         
     def _build_profile_hierarchy(self):
@@ -1401,48 +1458,67 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _show_tool_options(self):
         """Zeigt Optionen-Popup für Tools die Optionen haben"""
         tool = self.current_tool
+        has_options = False
         
         # Rechteck: 2-Punkt vs Center
         if tool == SketchTool.RECTANGLE:
             self.tool_options.show_options(
-                "Rechteck-Modus",
+                tr("RECTANGLE MODE"),
                 "rect_mode",
-                [("⬚", "2-Punkt"), ("⊞", "Center")],
+                [("⬚", tr("2-Point")), ("⊞", tr("Center"))],
                 self.rect_mode
             )
-            self.tool_options.position_near(self, 10, 10)
+            has_options = True
             
         # Kreis: Center vs 2-Punkt vs 3-Punkt
         elif tool == SketchTool.CIRCLE:
             self.tool_options.show_options(
-                "Kreis-Modus",
+                tr("CIRCLE TYPE"),
                 "circle_mode",
-                [("◎", "Center"), ("⌀", "2-Punkt"), ("◯", "3-Punkt")],
+                [("◎", tr("Center")), ("⌀", tr("2-Point")), ("◯", tr("3-Point"))],
                 self.circle_mode
             )
-            self.tool_options.position_near(self, 10, 10)
+            has_options = True
             
         # Polygon: Anzahl Seiten
         elif tool == SketchTool.POLYGON:
+            # Index finden oder Default 0
+            idx = 0
+            if self.polygon_sides in [3, 4, 5, 6, 8]:
+                idx = [3, 4, 5, 6, 8].index(self.polygon_sides)
+            
             self.tool_options.show_options(
-                "Polygon-Seiten",
+                tr("SIDES"),
                 "polygon_sides",
                 [("△", "3"), ("◇", "4"), ("⬠", "5"), ("⬡", "6"), ("⯃", "8")],
-                [3, 4, 5, 6, 8].index(self.polygon_sides) if self.polygon_sides in [3, 4, 5, 6, 8] else 3
+                idx
             )
-            self.tool_options.position_near(self, 10, 10)
+            has_options = True
             
         # Muttern-Aussparung: Größe M2-M14
         elif tool == SketchTool.NUT:
             self.tool_options.show_options(
-                f"Mutter (Tol: {self.nut_tolerance:.2f}mm)",
+                f"NUT: {self.nut_size_names[self.nut_size_index]}",
                 "nut_size",
                 [(f"⬡", s) for s in self.nut_size_names],
                 self.nut_size_index
             )
-            self.tool_options.position_near(self, 10, 10)
+            has_options = True
+        
         else:
             self.tool_options.hide()
+            return
+
+        # POSITIONIERUNG
+        if has_options:
+            # FIX: Nur neu positionieren, wenn es noch nicht sichtbar ist!
+            # Verhindert, dass das Fenster wegspringt, wenn man einen Button klickt.
+            if not self.tool_options.isVisible():
+                # Neue Smart-Positioning Methode verwenden
+                self.tool_options.position_smart(self, 20, 20)
+            
+            # Sicherstellen, dass es über allem liegt
+            self.tool_options.raise_()
     
     def _on_tool_option_selected(self, option_name, value):
         """Handler für Optionen-Auswahl"""
@@ -1640,6 +1716,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         values = self.dim_input.get_values()
 
+        # Helper für Solver-Check und Profil-Update
+        def run_solver_and_update():
+            result = self.sketch.solve()
+            self._find_closed_profiles()
+            self.sketched_changed.emit()
+            
+            # Prüfen ob der Solver erfolgreich war
+            if hasattr(result, 'success') and not result.success:
+                msg = getattr(result, 'message', 'Unbekannter Fehler')
+                self.show_message(f"⚠️ Geometrie-Konflikt: {msg}", 4000, QColor(255, 50, 50))
+            return result
+
         # === EDITING MODE: Constraint/Geometrie bearbeiten ===
         if self.editing_entity is not None:
             self._save_undo()
@@ -1648,7 +1736,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 # Constraint-Wert ändern
                 new_val = values.get("value", 0.0)
                 self.editing_entity.value = new_val
-                self.sketch.solve()
+                run_solver_and_update()
                 self.show_message(f"Constraint auf {new_val:.2f} geändert", 2000, QColor(100, 255, 100))
                 logger.debug(f"Constraint {self.editing_entity.type.name} geändert auf {new_val}")
 
@@ -1656,17 +1744,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 # Längen-Constraint zu Linie hinzufügen
                 new_length = values.get("length", 10.0)
                 self.sketch.add_length(self.editing_entity, new_length)
-                self.sketch.solve()
+                run_solver_and_update()
                 self.show_message(f"Länge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
-                logger.debug(f"Length Constraint {new_length} hinzugefügt")
 
             elif self.editing_mode == "circle_radius":
                 # Radius-Constraint zu Kreis/Bogen hinzufügen
                 new_radius = values.get("radius", 10.0)
                 self.sketch.add_radius(self.editing_entity, new_radius)
-                self.sketch.solve()
+                run_solver_and_update()
                 self.show_message(f"Radius {new_radius:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
-                logger.debug(f"Radius Constraint {new_radius} hinzugefügt")
 
             # Editing-State zurücksetzen
             self.editing_entity = None
@@ -1674,19 +1760,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.dim_input.hide()
             self.dim_input.unlock_all()
             self.dim_input_active = False
-            self.sketched_changed.emit()
             self.update()
             return
 
         # === EXTRUDE MODE ===
         if self.viewport and getattr(self.viewport, 'extrude_mode', False):
             height = values.get("height", 0.0)
-            # Hier holen wir "Join", "Cut" oder "New Body" aus dem Dropdown
             op = values.get("operation", "New Body") 
             
             self.viewport.extrude_height = height
-            
-            # WICHTIG: Wir übergeben 'op' an den Viewport!
             self.viewport.confirm_extrusion(operation=op)
             
             self.dim_input.hide()
@@ -1695,12 +1777,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.status_message.emit(f"Extrusion ({op}) angewendet.")
             return
             
-        # Debug: Zeige Lock-Status und Werte
+        # === SKETCH TOOLS ===
         
         if self.current_tool == SketchTool.LINE and self.tool_step >= 1:
             start = self.tool_points[-1]
             
-            # WICHTIG: Wenn Länge gelockt ist, verwende live_length statt get_values!
             if self.dim_input.is_locked('length'):
                 length = self.live_length
             else:
@@ -1712,161 +1793,102 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 angle_deg = values.get("angle", 0)
             
             angle = math.radians(angle_deg)
-            
-            
             end_x = start.x() + length * math.cos(angle)
             end_y = start.y() + length * math.sin(angle)
             
-            actual_length = math.hypot(end_x - start.x(), end_y - start.y())
-            
             self._save_undo()
-            self.sketch.add_line(start.x(), start.y(), end_x, end_y, construction=self.construction_mode)
+            line = self.sketch.add_line(start.x(), start.y(), end_x, end_y, construction=self.construction_mode)
+            
+            # Optional: Hier könnten wir direkt Constraints (Länge/Winkel) hinzufügen,
+            # wenn wir strikt parametrisch sein wollen. Aktuell setzen wir nur die Geometrie.
+            
             self.tool_points.append(QPointF(end_x, end_y))
+            self._find_closed_profiles() # Wichtig für Füllung
             self.sketched_changed.emit()
-            self._find_closed_profiles()
             
         elif self.current_tool == SketchTool.RECTANGLE:
-            # WICHTIG: Wenn gelockt, verwende live_width/live_height!
-            if self.dim_input.is_locked('width'):
-                w = self.live_width
-            else:
-                w = values.get("width", 50)
+            w = self.live_width if self.dim_input.is_locked('width') else values.get("width", 50)
+            h = self.live_height if self.dim_input.is_locked('height') else values.get("height", 30)
             
-            if self.dim_input.is_locked('height'):
-                h = self.live_height
-            else:
-                h = values.get("height", 30)
-            
-            if self.tool_step >= 1:
-                p1 = self.tool_points[0]
-            else:
-                p1 = self.mouse_world if self.mouse_world else QPointF(0, 0)
+            p1 = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
             self._save_undo()
             
-            # rect_mode berücksichtigen: 0=2-Punkt, 1=Center
-            if self.rect_mode == 1:
-                # Center-Modus: p1 ist Mittelpunkt
+            if self.rect_mode == 1: # Center
                 self.sketch.add_rectangle(p1.x() - w/2, p1.y() - h/2, w, h, construction=self.construction_mode)
-            else:
-                # 2-Punkt-Modus: p1 ist Ecke, Richtung von Mausposition bestimmen!
+            else: # 2-Point
                 mouse = self.mouse_world if self.mouse_world else p1
-                
-                # X-Richtung: Links oder Rechts?
-                if mouse.x() < p1.x():
-                    # Maus ist links vom Startpunkt -> Rechteck nach links
-                    x = p1.x() - w
-                else:
-                    # Maus ist rechts -> Rechteck nach rechts
-                    x = p1.x()
-                
-                # Y-Richtung: Oben oder Unten?
-                if mouse.y() < p1.y():
-                    # Maus ist unter dem Startpunkt -> Rechteck nach unten
-                    y = p1.y() - h
-                else:
-                    # Maus ist oben -> Rechteck nach oben
-                    y = p1.y()
-                
+                x = p1.x() - w if mouse.x() < p1.x() else p1.x()
+                y = p1.y() - h if mouse.y() < p1.y() else p1.y()
                 self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
-            self.sketch.solve()
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
+            
+            run_solver_and_update()
+            QTimer.singleShot(0, self._cancel_tool)
             
         elif self.current_tool == SketchTool.RECTANGLE_CENTER:
             w, h = values.get("width", 50), values.get("height", 30)
-            if self.tool_step >= 1:
-                c = self.tool_points[0]
-            else:
-                c = self.mouse_world if self.mouse_world else QPointF(0, 0)
+            c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
+            
             self._save_undo()
             self.sketch.add_rectangle(c.x() - w/2, c.y() - h/2, w, h, construction=self.construction_mode)
-            self.sketch.solve()
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
+            run_solver_and_update()
+            QTimer.singleShot(0, self._cancel_tool)
             
         elif self.current_tool == SketchTool.CIRCLE:
-            # WICHTIG: Wenn gelockt, verwende live_radius!
-            if self.dim_input.is_locked('radius'):
-                r = self.live_radius
-            else:
-                r = values.get("radius", 25)
+            r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
+            c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
             
-            if self.tool_step >= 1:
-                c = self.tool_points[0]
-            else:
-                c = self.mouse_world if self.mouse_world else QPointF(0, 0)
             self._save_undo()
-            # circle_mode berücksichtigen: 0=Center-Radius, 1=2-Punkt (aber bei Tab immer Center)
             self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
+            # Hinweis: Wenn wir hier Constraints wollen, müssten wir add_radius aufrufen
+            run_solver_and_update()
+            QTimer.singleShot(0, self._cancel_tool)
             
         elif self.current_tool == SketchTool.POLYGON:
-            # WICHTIG: Wenn gelockt, verwende live_radius!
-            if self.dim_input.is_locked('radius'):
-                r = self.live_radius
-            else:
-                r = values.get("radius", 25)
+            r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
             n = int(values.get("sides", self.polygon_sides))
+            c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
             
-            if self.tool_step >= 1:
-                c = self.tool_points[0]
-            else:
-                c = self.mouse_world if self.mouse_world else QPointF(0, 0)
             self._save_undo()
+            # Berechnung der Punkte
             pts = [(c.x() + r*math.cos(2*math.pi*i/n - math.pi/2), c.y() + r*math.sin(2*math.pi*i/n - math.pi/2)) for i in range(n)]
             self.sketch.add_polygon(pts, closed=True, construction=self.construction_mode)
-            self.sketch.solve()
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
+            run_solver_and_update()
+            QTimer.singleShot(0, self._cancel_tool)
             
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             dx, dy = values.get("dx", 0), values.get("dy", 0)
-            logger.debug(f"MOVE Tab-Eingabe: dx={dx}, dy={dy}")
             self._save_undo()
             self._move_selection(dx, dy)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+            # Move ruft intern oft solve() auf, aber sicherheitshalber:
+            run_solver_and_update()
+            self._cancel_tool()
 
         elif self.current_tool == SketchTool.ROTATE and self.tool_step >= 1:
             center = self.tool_points[0] if self.tool_points else QPointF(0, 0)
             angle = values.get("angle", 0)
-            logger.debug(f"ROTATE Tab-Eingabe: center=({center.x()}, {center.y()}), angle={angle}°")
             self._save_undo()
             self._rotate_selection(center, angle)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+            run_solver_and_update()
+            self._cancel_tool()
 
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
             center = self.tool_points[0] if self.tool_points else QPointF(0, 0)
             factor = values.get("factor", 1.0)
-            logger.debug(f"SCALE Tab-Eingabe: center=({center.x()}, {center.y()}), factor={factor}")
             self._save_undo()
             self._scale_selection(center, factor)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
-            self._cancel_tool()  # Sofort aufräumen um Doppel-Anwendung zu vermeiden
+            run_solver_and_update()
+            self._cancel_tool()
 
         elif self.current_tool == SketchTool.COPY and self.tool_step == 1:
-            # COPY per Tab-Eingabe: Wie MOVE, aber erstellt Kopien
             dx, dy = values.get("dx", 0), values.get("dy", 0)
-            logger.debug(f"COPY Tab-Eingabe: dx={dx}, dy={dy}")
             self._save_undo()
             self._copy_selection_with_offset(dx, dy)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
+            run_solver_and_update()
             self._cancel_tool()
 
         # SLOT: Tab-Eingabe
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:
-                # Länge und Winkel eingegeben -> berechne Endpunkt
                 p1 = self.tool_points[0]
                 length = values.get("length", 50.0)
                 angle = math.radians(values.get("angle", 0.0))
@@ -1874,23 +1896,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.tool_points.append(p2)
                 self.tool_step = 2
                 self.status_message.emit(tr("Width | Tab=Enter width"))
-                # Nicht _cancel_tool - wir brauchen noch die Breite
             elif self.tool_step == 2:
-                # Breite eingegeben -> erstelle Slot
                 p1, p2 = self.tool_points[0], self.tool_points[1]
                 width = values.get("width", 10.0)
                 if width > 0.01:
                     self._save_undo()
                     self._create_slot(p1, p2, width)
-                    self.sketched_changed.emit()
-                    self._find_closed_profiles()
-                QTimer.singleShot(0, self._cancel_tool) # <-- NEU: Verzögert aufräumen
+                    run_solver_and_update()
+                QTimer.singleShot(0, self._cancel_tool)
         
-        # OFFSET, FILLET, CHAMFER: Nur Wert speichern, nicht anwenden
+        # OFFSET, FILLET, CHAMFER: Nur Wert speichern
         elif self.current_tool == SketchTool.OFFSET:
             self.offset_distance = values.get("distance", 5.0)
-            
-            # Vorschau aktualisieren wenn Profil bereits gewählt
             if self.tool_step == 1 and self.offset_profile:
                 self._update_offset_preview()
                 self.status_message.emit(tr("Offset: {dist}mm | Tab=Change | Enter/Click=Apply | Esc=Cancel").format(dist=f"{self.offset_distance:+.2f}"))
@@ -1905,19 +1922,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.chamfer_distance = values.get("length", 5.0)
             self.status_message.emit(tr("Chamfer: {d}mm (click corner)").format(d=self.chamfer_distance))
         
-        # PATTERN: Werte speichern, Preview aktualisieren
+        # PATTERN LINEAR: Werte speichern und direkt anwenden bei Enter
         elif self.current_tool == SketchTool.PATTERN_LINEAR and self.tool_step >= 1:
             self.tool_data['pattern_count'] = max(2, int(values.get("count", 3)))
             self.tool_data['pattern_spacing'] = values.get("spacing", 20.0)
-            self.status_message.emit(tr("Lin. pattern: {n}x, spacing {s}mm | Click=Apply").format(n=self.tool_data["pattern_count"], s=f"{self.tool_data['pattern_spacing']:.1f}"))
-            
+            # Bei Enter: Direkt anwenden mit aktueller Mausposition als Richtung
+            self._apply_linear_pattern(self.mouse_world)
+            return  # _apply_linear_pattern ruft _cancel_tool auf
+
+        # PATTERN CIRCULAR: Werte speichern und direkt anwenden bei Enter
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR and self.tool_step >= 1:
             self.tool_data['pattern_count'] = max(2, int(values.get("count", 6)))
             self.tool_data['pattern_angle'] = values.get("angle", 360.0)
-            self.status_message.emit(tr("Circ. pattern: {n}x over {a}° | Click=Apply").format(n=self.tool_data["pattern_count"], a=f"{self.tool_data['pattern_angle']:.0f}"))
+            # Bei Enter: Direkt anwenden
+            self._apply_circular_pattern()
+            return  # _apply_circular_pattern ruft _cancel_tool auf
         
         self.dim_input.hide()
-        self.dim_input.unlock_all()  # Wichtig: Locks zurücksetzen!
+        self.dim_input.unlock_all()
         self.dim_input_active = False
         self.setFocus()
         self.update()
@@ -2817,6 +2839,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_axes(p)
         self._draw_geometry(p)
         self._draw_constraints(p)
+        self._draw_open_ends(p)
         self._draw_preview(p)
         self._draw_selection_box(p)
         self._draw_snap(p)

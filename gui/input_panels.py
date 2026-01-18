@@ -287,33 +287,45 @@ class FilletChamferPanel(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 5, 15, 5)
         layout.setSpacing(10)
-        
+
         self.label = QLabel("Fillet:")
         layout.addWidget(self.label)
-        
+
         self.radius_input = ActionSpinBox()
         self.radius_input.setRange(0.1, 1000.0)
         self.radius_input.setDecimals(2)
         self.radius_input.setSuffix(" mm")
         self.radius_input.setValue(2.0)
-        
+
         self.radius_input.valueChanged.connect(self._on_value_changed)
         self.radius_input.enterPressed.connect(self._confirm)
         self.radius_input.escapePressed.connect(self._cancel)
-            
+
         layout.addWidget(self.radius_input)
-        
+
+        # NEU: Kantenanzahl-Anzeige
+        self.edge_count_label = QLabel("0 Kanten")
+        self.edge_count_label.setStyleSheet("""
+            color: #888;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+            padding-left: 5px;
+        """)
+        self.edge_count_label.setMinimumWidth(80)
+        layout.addWidget(self.edge_count_label)
+
         self.ok_btn = QPushButton("OK")
         self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
         self.ok_btn.clicked.connect(self._confirm)
         layout.addWidget(self.ok_btn)
-        
+
         self.cancel_btn = QPushButton("X")
         self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
-        
+
         self.hide()
     
     def set_target_body(self, body):
@@ -325,6 +337,38 @@ class FilletChamferPanel(QFrame):
     def set_mode(self, mode: str):
         self._mode = mode
         self.label.setText("Fillet:" if mode == "fillet" else "Chamfer:")
+        # Kantenanzahl zurücksetzen
+        self.update_edge_count(0)
+
+    def update_edge_count(self, count: int):
+        """Aktualisiert die Anzeige der ausgewählten Kanten."""
+        if count == 0:
+            self.edge_count_label.setText("Keine Kanten")
+            self.edge_count_label.setStyleSheet("""
+                color: #ff6666;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
+        elif count == 1:
+            self.edge_count_label.setText("1 Kante")
+            self.edge_count_label.setStyleSheet("""
+                color: #66ff66;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
+        else:
+            self.edge_count_label.setText(f"{count} Kanten")
+            self.edge_count_label.setStyleSheet("""
+                color: #66ff66;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
     
     def _on_value_changed(self, value):
         self._radius = value

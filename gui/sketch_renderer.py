@@ -165,6 +165,48 @@ class SketchRendererMixin:
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(o, 5, 5)
     
+    def _draw_open_ends(self, p):
+        """
+        Zeichnet rote Markierungen an Punkten, die nicht geschlossen sind.
+        Hilft dem User zu erkennen, warum eine Fläche nicht gefüllt wird.
+        """
+        # Dictionary, um zu zählen, wie oft ein Punkt (Koordinaten) vorkommt
+        # Wir runden auf 4 Dezimalstellen, um Mikro-Lücken zu finden
+        coord_counts = {}
+        
+        # Alle Endpunkte von Linien und Bögen sammeln
+        endpoints = []
+        for l in self.sketch.lines:
+            if not l.construction:
+                endpoints.append(l.start)
+                endpoints.append(l.end)
+        for a in self.sketch.arcs:
+            if not a.construction:
+                # Start und Endpunkt berechnen
+                endpoints.append(a.start_point)
+                endpoints.append(a.end_point)
+                
+        # Koordinaten zählen
+        for pt in endpoints:
+            key = (round(pt.x, 3), round(pt.y, 3))
+            coord_counts[key] = coord_counts.get(key, 0) + 1
+            
+        # Zeichne rote Punkte für "einsame" Enden (Count == 1)
+        # Ein geschlossener Loop muss an jedem Punkt mind. 2 Verbindungen haben
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(255, 0, 50, 180))) # Leuchtendes Rot
+        
+        for pt in endpoints:
+            key = (round(pt.x, 3), round(pt.y, 3))
+            if coord_counts[key] == 1:
+                # Das ist ein offenes Ende!
+                screen_pos = self.world_to_screen(QPointF(pt.x, pt.y))
+                p.drawEllipse(screen_pos, 5, 5)
+                # Optional: Kleiner Kreis um die Lücke
+                p.setPen(QPen(QColor(255, 0, 0), 1))
+                p.setBrush(Qt.NoBrush)
+                p.drawEllipse(screen_pos, 10, 10)
+                
     def _draw_geometry(self, p):
         # 1. Glow-Effekt für Auswahl
         if self.selected_lines or self.selected_circles or self.selected_arcs or self.selected_spline:
@@ -939,35 +981,58 @@ class SketchRendererMixin:
             dx = snap.x() - start.x()
             dy = snap.y() - start.y()
             total_dist = math.hypot(dx, dy)
-            
+
+            # Werte aus tool_data (werden durch DimensionInput aktualisiert)
+            count = self.tool_data.get('pattern_count', 3)
+            spacing = self.tool_data.get('pattern_spacing', 20.0)
+
+            # Richtung berechnen
             if total_dist > 0.01:
-                count = self.tool_data.get('pattern_count', 3)
-                spacing = self.tool_data.get('pattern_spacing', total_dist / max(1, count - 1))
                 ux, uy = dx / total_dist, dy / total_dist
-                
-                p.setPen(QPen(QColor(100, 200, 255), 2, Qt.DashLine))
-                
-                # Zeichne Preview für jede Kopie
-                for i in range(1, count):
-                    offset_x = ux * spacing * i
-                    offset_y = uy * spacing * i
-                    
-                    for line in self.selected_lines:
-                        s = self.world_to_screen(QPointF(line.start.x + offset_x, line.start.y + offset_y))
-                        e = self.world_to_screen(QPointF(line.end.x + offset_x, line.end.y + offset_y))
-                        p.drawLine(s, e)
-                    
-                    for c in self.selected_circles:
-                        ctr = self.world_to_screen(QPointF(c.center.x + offset_x, c.center.y + offset_y))
-                        r = c.radius * self.view_scale
-                        p.drawEllipse(ctr, r, r)
-                
-                # Richtungspfeil und Info
-                p.setPen(QPen(QColor(255, 200, 0), 2))
+            else:
+                # Fallback: gespeicherte Richtung oder Default
+                direction = self.tool_data.get('pattern_direction', (1.0, 0.0))
+                ux, uy = direction
+
+            p.setPen(QPen(QColor(100, 200, 255), 2, Qt.DashLine))
+
+            # Zeichne Preview für jede Kopie (inkl. Arcs)
+            for i in range(1, count):
+                offset_x = ux * spacing * i
+                offset_y = uy * spacing * i
+
+                for line in self.selected_lines:
+                    s = self.world_to_screen(QPointF(line.start.x + offset_x, line.start.y + offset_y))
+                    e = self.world_to_screen(QPointF(line.end.x + offset_x, line.end.y + offset_y))
+                    p.drawLine(s, e)
+
+                for c in self.selected_circles:
+                    ctr = self.world_to_screen(QPointF(c.center.x + offset_x, c.center.y + offset_y))
+                    r = c.radius * self.view_scale
+                    p.drawEllipse(ctr, r, r)
+
+                for arc in self.selected_arcs:
+                    ctr = self.world_to_screen(QPointF(arc.center.x + offset_x, arc.center.y + offset_y))
+                    r = arc.radius * self.view_scale
+                    rect = QRectF(ctr.x() - r, ctr.y() - r, 2 * r, 2 * r)
+                    start_angle = arc.start_angle
+                    sweep = arc.end_angle - arc.start_angle
+                    if sweep <= 0:
+                        sweep += 360
+                    p.drawArc(rect, int(-start_angle * 16), int(-sweep * 16))
+
+            # Richtungspfeil und Info
+            p.setPen(QPen(QColor(255, 200, 0), 2))
+            if total_dist > 0.01:
                 p.drawLine(self.world_to_screen(start), self.world_to_screen(snap))
-                p.setFont(QFont("Arial", 10, QFont.Bold))
-                mid = self.world_to_screen(QPointF((start.x() + snap.x())/2, (start.y() + snap.y())/2))
-                p.drawText(int(mid.x()) + 10, int(mid.y()) - 10, f"{count}× @ {spacing:.1f}mm")
+            else:
+                # Zeige Richtung mit spacing
+                end_pt = QPointF(start.x() + ux * spacing, start.y() + uy * spacing)
+                p.drawLine(self.world_to_screen(start), self.world_to_screen(end_pt))
+
+            p.setFont(QFont("Arial", 10, QFont.Bold))
+            mid = self.world_to_screen(QPointF(start.x() + ux * spacing / 2, start.y() + uy * spacing / 2))
+            p.drawText(int(mid.x()) + 10, int(mid.y()) - 10, f"{count}× @ {spacing:.1f}mm")
         
         # PATTERN CIRCULAR Preview
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR and self.tool_step == 1:
@@ -975,34 +1040,48 @@ class SketchRendererMixin:
             count = self.tool_data.get('pattern_count', 6)
             total_angle = self.tool_data.get('pattern_angle', 360.0)
             angle_step = math.radians(total_angle / count)
-            
+
             p.setPen(QPen(QColor(255, 150, 100), 2, Qt.DashLine))
-            
-            # Zeichne Preview für jede Kopie
+
+            # Zeichne Preview für jede Kopie (inkl. Arcs)
             for i in range(1, count):
                 angle = angle_step * i
                 cos_a, sin_a = math.cos(angle), math.sin(angle)
-                
+
                 for line in self.selected_lines:
                     sx = center.x() + (line.start.x - center.x()) * cos_a - (line.start.y - center.y()) * sin_a
                     sy = center.y() + (line.start.x - center.x()) * sin_a + (line.start.y - center.y()) * cos_a
                     ex = center.x() + (line.end.x - center.x()) * cos_a - (line.end.y - center.y()) * sin_a
                     ey = center.y() + (line.end.x - center.x()) * sin_a + (line.end.y - center.y()) * cos_a
                     p.drawLine(self.world_to_screen(QPointF(sx, sy)), self.world_to_screen(QPointF(ex, ey)))
-                
+
                 for c in self.selected_circles:
                     cx = center.x() + (c.center.x - center.x()) * cos_a - (c.center.y - center.y()) * sin_a
                     cy = center.y() + (c.center.x - center.x()) * sin_a + (c.center.y - center.y()) * cos_a
                     ctr = self.world_to_screen(QPointF(cx, cy))
                     r = c.radius * self.view_scale
                     p.drawEllipse(ctr, r, r)
-            
+
+                for arc in self.selected_arcs:
+                    # Arc-Zentrum rotieren
+                    acx = center.x() + (arc.center.x - center.x()) * cos_a - (arc.center.y - center.y()) * sin_a
+                    acy = center.y() + (arc.center.x - center.x()) * sin_a + (arc.center.y - center.y()) * cos_a
+                    ctr = self.world_to_screen(QPointF(acx, acy))
+                    r = arc.radius * self.view_scale
+                    rect = QRectF(ctr.x() - r, ctr.y() - r, 2 * r, 2 * r)
+                    # Arc-Winkel um den gleichen Betrag rotieren
+                    new_start = arc.start_angle + math.degrees(angle)
+                    sweep = arc.end_angle - arc.start_angle
+                    if sweep <= 0:
+                        sweep += 360
+                    p.drawArc(rect, int(-new_start * 16), int(-sweep * 16))
+
             # Zentrum und Info
             p.setPen(QPen(QColor(255, 200, 0), 2))
             ctr_screen = self.world_to_screen(center)
             p.drawEllipse(ctr_screen, 8, 8)
-            p.drawLine(int(ctr_screen.x())-12, int(ctr_screen.y()), int(ctr_screen.x())+12, int(ctr_screen.y()))
-            p.drawLine(int(ctr_screen.x()), int(ctr_screen.y())-12, int(ctr_screen.x()), int(ctr_screen.y())+12)
+            p.drawLine(int(ctr_screen.x()) - 12, int(ctr_screen.y()), int(ctr_screen.x()) + 12, int(ctr_screen.y()))
+            p.drawLine(int(ctr_screen.x()), int(ctr_screen.y()) - 12, int(ctr_screen.x()), int(ctr_screen.y()) + 12)
             p.setFont(QFont("Arial", 10, QFont.Bold))
             p.drawText(int(ctr_screen.x()) + 15, int(ctr_screen.y()) - 15, f"{count}× über {total_angle:.0f}°")
     

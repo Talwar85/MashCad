@@ -1415,8 +1415,21 @@ class SketchHandlersMixin:
         self.dim_input.hide()
         self.dim_input_active = False
     
+    
     def _handle_fillet_2d(self, pos, snap_type):
-        """Fillet: Klicke auf eine Ecke (wo zwei Linien sich treffen)"""
+        """Fillet: Klicke auf eine Ecke. Zeigt Input automatisch an."""
+        
+        # 1. Input-Feld automatisch anzeigen, wenn noch nicht aktiv
+        if not self.dim_input_active:
+            self._show_dimension_input()
+        
+        # Radius aus Input übernehmen (Live-Update)
+        if self.dim_input_active:
+            # Holen ohne zu sperren, damit Tastatureingaben funktionieren
+            vals = self.dim_input.get_values()
+            if 'radius' in vals:
+                self.fillet_radius = vals['radius']
+
         r = self.snap_radius / self.view_scale
         
         # Suche Ecken (wo zwei Linien sich treffen)
@@ -1443,14 +1456,11 @@ class SketchHandlersMixin:
                                 self.update()
                             return
         
-        self.status_message.emit(tr("No corner found") + " | " + tr("Tab=Change radius"))
-    
+        self.status_message.emit(tr("Click corner to fillet") + f" (R={self.fillet_radius:.1f}mm)")
+
     def _create_fillet_v2(self, l1, l2, corner, other1, other2, attr1, attr2, radius):
         """
-        Erstellt ein Fillet zwischen zwei Linien.
-        corner: der gemeinsame Eckpunkt
-        other1/other2: die anderen Endpunkte der Linien
-        attr1/attr2: 'start' oder 'end' - welcher Punkt der Eckpunkt ist
+        Erstellt ein Fillet mit korrigierter Geometrie und fügt Radius-Constraint hinzu.
         """
         from sketcher.geometry import Point2D
         
@@ -1468,96 +1478,90 @@ class SketchHandlersMixin:
         d1 = (d1[0]/len1, d1[1]/len1)
         d2 = (d2[0]/len2, d2[1]/len2)
         
-        # Winkel zwischen den Linien (Innenwinkel)
+        # Winkel zwischen den Linien
         dot = d1[0]*d2[0] + d1[1]*d2[1]
-        dot = max(-1, min(1, dot))  # Clamp für acos
-        angle_between = math.acos(dot)  # Winkel in Radiant
+        dot = max(-1, min(1, dot))
+        angle_between = math.acos(dot)
         
-        if angle_between < 0.01 or angle_between > math.pi - 0.01:
-            self.status_message.emit(tr("Lines almost parallel"))
-            return False
-        
-        # Distanz vom Eckpunkt zu den Tangentenpunkten
+        # Geometrie-Check
         half_angle = angle_between / 2
         tan_dist = radius / math.tan(half_angle)
         
-        # Prüfe ob die Linien lang genug sind
-        if tan_dist > len1 * 0.9 or tan_dist > len2 * 0.9:
-            self.status_message.emit(tr("Radius too large (max ~{max}mm)").format(max=f"{min(len1, len2) * 0.9 * math.tan(half_angle):.1f}"))
+        if tan_dist > len1 * 0.99 or tan_dist > len2 * 0.99:
+            self.status_message.emit(tr("Radius too large"))
             return False
         
-        # Tangentenpunkte auf den Linien
+        # Tangentenpunkte (Start/Ende des Bogens)
         t1_x = corner.x + d1[0] * tan_dist
         t1_y = corner.y + d1[1] * tan_dist
         t2_x = corner.x + d2[0] * tan_dist
         t2_y = corner.y + d2[1] * tan_dist
         
-        # Bogenzentrum: liegt auf der Winkelhalbierenden
+        # Bogenzentrum berechnen
+        # Das Zentrum liegt auf der Winkelhalbierenden
         bisect = (d1[0] + d2[0], d1[1] + d2[1])
         bisect_len = math.hypot(bisect[0], bisect[1])
-        if bisect_len < 0.001:
-            return False
-        bisect = (bisect[0]/bisect_len, bisect[1]/bisect_len)
+        if bisect_len < 0.001: return False
         
+        bisect = (bisect[0]/bisect_len, bisect[1]/bisect_len)
         center_dist = radius / math.sin(half_angle)
+        
         center_x = corner.x + bisect[0] * center_dist
         center_y = corner.y + bisect[1] * center_dist
         
-        # WICHTIG: Bei geteilten Punkten müssen wir neue Punkte erstellen!
-        # Prüfe ob die Linien denselben Eckpunkt teilen
-        l1_corner = l1.start if attr1 == 'start' else l1.end
-        l2_corner = l2.start if attr2 == 'start' else l2.end
+        # Punkte aktualisieren (Linien verkürzen)
+        # Wir müssen neue Punkt-Objekte für die Tangentenpunkte erstellen
+        new_pt1 = Point2D(t1_x, t1_y)
+        new_pt2 = Point2D(t2_x, t2_y)
+        self.sketch.points.append(new_pt1)
+        self.sketch.points.append(new_pt2)
         
-        if l1_corner is l2_corner:
-            # Geteilter Punkt - erstelle neue separate Punkte
-            new_pt1 = Point2D(t1_x, t1_y)
-            new_pt2 = Point2D(t2_x, t2_y)
-            self.sketch.points.append(new_pt1)
-            self.sketch.points.append(new_pt2)
+        if attr1 == 'start': l1.start = new_pt1
+        else: l1.end = new_pt1
             
-            # Linien mit neuen Punkten aktualisieren
-            if attr1 == 'start':
-                l1.start = new_pt1
-            else:
-                l1.end = new_pt1
-                
-            if attr2 == 'start':
-                l2.start = new_pt2
-            else:
-                l2.end = new_pt2
-                
-            # Alten geteilten Punkt aus points entfernen (wenn nicht mehr verwendet)
-            # (Wir lassen ihn erstmal, cleanup passiert später)
-        else:
-            # Nicht geteilte Punkte - direkt modifizieren
-            if attr1 == 'start':
-                l1.start.x, l1.start.y = t1_x, t1_y
-            else:
-                l1.end.x, l1.end.y = t1_x, t1_y
-                
-            if attr2 == 'start':
-                l2.start.x, l2.start.y = t2_x, t2_y
-            else:
-                l2.end.x, l2.end.y = t2_x, t2_y
+        if attr2 == 'start': l2.start = new_pt2
+        else: l2.end = new_pt2
         
-        # Bogenwinkel berechnen
+        # Winkel für Bogen berechnen
         angle1 = math.degrees(math.atan2(t1_y - center_y, t1_x - center_x))
         angle2 = math.degrees(math.atan2(t2_y - center_y, t2_x - center_x))
         
-        # Bogen erstellen (von t1 nach t2, kürzester Weg)
-        self.sketch.add_arc(center_x, center_y, radius, angle1, angle2)
+        # FIX für invertierte Bögen: 
+        # Wir wollen immer den kurzen Weg herum gehen (den Innenwinkel)
+        diff = angle2 - angle1
+        while diff <= -180: diff += 360
+        while diff > 180: diff -= 360
+        
+        # arc erwartet start und end. Wenn diff negativ ist, müssen wir swapen oder sweep anpassen
+        # Sketch.add_arc(cx, cy, r, start, end)
+        if diff < 0:
+            arc = self.sketch.add_arc(center_x, center_y, radius, angle2, angle1)
+        else:
+            arc = self.sketch.add_arc(center_x, center_y, radius, angle1, angle2)
+            
+        # CONSTRAINT HINZUFÜGEN: Damit der Radius sichtbar bleibt!
+        self.sketch.add_radius(arc, radius)
         
         self.status_message.emit(tr("Fillet R={radius}mm created").format(radius=f"{radius:.1f}"))
         return True
-    
+
     def _handle_chamfer_2d(self, pos, snap_type):
-        """Chamfer: Klicke auf eine Ecke (wo zwei Linien sich treffen)"""
+        """Chamfer: Klicke auf eine Ecke. Zeigt Input automatisch an."""
+        
+        # 1. Input-Feld automatisch anzeigen
+        if not self.dim_input_active:
+            self._show_dimension_input()
+            
+        # Länge aus Input übernehmen
+        if self.dim_input_active:
+            vals = self.dim_input.get_values()
+            if 'length' in vals:
+                self.chamfer_distance = vals['length']
+
         r = self.snap_radius / self.view_scale
         
-        # Suche Ecken (wo zwei Linien sich treffen)
         for i, l1 in enumerate(self.sketch.lines):
             for l2 in self.sketch.lines[i+1:]:
-                # Prüfe alle Punkt-Kombinationen
                 corners = [
                     (l1.start, l1.end, l2.start, l2.end, 'start', 'start'),
                     (l1.start, l1.end, l2.end, l2.start, 'start', 'end'),
@@ -1566,9 +1570,7 @@ class SketchHandlersMixin:
                 ]
                 
                 for corner1, other1, corner2, other2, attr1, attr2 in corners:
-                    # Sind die Eckpunkte zusammen?
                     if corner1 is corner2 or math.hypot(corner1.x - corner2.x, corner1.y - corner2.y) < 1.0:
-                        # Ist der Klick nah an dieser Ecke?
                         if math.hypot(corner1.x - pos.x(), corner1.y - pos.y()) < r:
                             self._save_undo()
                             success = self._create_chamfer_v2(l1, l2, corner1, other1, other2, attr1, attr2, self.chamfer_distance)
@@ -1578,79 +1580,71 @@ class SketchHandlersMixin:
                                 self.update()
                             return
         
-        self.status_message.emit(tr("No corner found") + " | " + tr("Tab=Change length"))
-    
+        self.status_message.emit(tr("Click corner to chamfer") + f" (L={self.chamfer_distance:.1f}mm)")
+
     def _create_chamfer_v2(self, l1, l2, corner, other1, other2, attr1, attr2, dist):
         """
-        Erstellt eine Fase zwischen zwei Linien.
-        corner: der gemeinsame Eckpunkt
-        other1/other2: die anderen Endpunkte der Linien
-        attr1/attr2: 'start' oder 'end' - welcher Punkt der Eckpunkt ist
+        Erstellt eine Fase und fügt Längen-Constraint hinzu.
         """
         from sketcher.geometry import Point2D
         
-        # Richtungsvektoren VON der Ecke WEG
+        # Richtungsvektoren
         d1 = (other1.x - corner.x, other1.y - corner.y)
         d2 = (other2.x - corner.x, other2.y - corner.y)
         
-        # Normalisieren
         len1 = math.hypot(d1[0], d1[1])
         len2 = math.hypot(d2[0], d2[1])
-        if len1 < 0.01 or len2 < 0.01:
-            self.status_message.emit(tr("Lines too short"))
-            return False
+        if len1 < 0.01 or len2 < 0.01: return False
         
         d1 = (d1[0]/len1, d1[1]/len1)
         d2 = (d2[0]/len2, d2[1]/len2)
         
-        # Prüfe ob die Linien lang genug sind
         if dist > len1 * 0.9 or dist > len2 * 0.9:
-            self.status_message.emit(tr("Chamfer too large (max ~{max}mm)").format(max=f"{min(len1, len2) * 0.9:.1f}"))
+            self.status_message.emit(tr("Chamfer too large"))
             return False
         
-        # Neue Endpunkte (wo die Fase anfängt)
+        # Neue Endpunkte
         c1_x = corner.x + d1[0] * dist
         c1_y = corner.y + d1[1] * dist
         c2_x = corner.x + d2[0] * dist
         c2_y = corner.y + d2[1] * dist
         
-        # WICHTIG: Bei geteilten Punkten müssen wir neue Punkte erstellen!
-        l1_corner = l1.start if attr1 == 'start' else l1.end
-        l2_corner = l2.start if attr2 == 'start' else l2.end
+        # Neue Punkte erstellen
+        new_pt1 = Point2D(c1_x, c1_y)
+        new_pt2 = Point2D(c2_x, c2_y)
+        self.sketch.points.append(new_pt1)
+        self.sketch.points.append(new_pt2)
         
-        if l1_corner is l2_corner:
-            # Geteilter Punkt - erstelle neue separate Punkte
-            new_pt1 = Point2D(c1_x, c1_y)
-            new_pt2 = Point2D(c2_x, c2_y)
-            self.sketch.points.append(new_pt1)
-            self.sketch.points.append(new_pt2)
+        # Linien anpassen
+        if attr1 == 'start': l1.start = new_pt1
+        else: l1.end = new_pt1
             
-            # Linien mit neuen Punkten aktualisieren
-            if attr1 == 'start':
-                l1.start = new_pt1
-            else:
-                l1.end = new_pt1
-                
-            if attr2 == 'start':
-                l2.start = new_pt2
-            else:
-                l2.end = new_pt2
-        else:
-            # Nicht geteilte Punkte - direkt modifizieren
-            if attr1 == 'start':
-                l1.start.x, l1.start.y = c1_x, c1_y
-            else:
-                l1.end.x, l1.end.y = c1_x, c1_y
-                
-            if attr2 == 'start':
-                l2.start.x, l2.start.y = c2_x, c2_y
-            else:
-                l2.end.x, l2.end.y = c2_x, c2_y
+        if attr2 == 'start': l2.start = new_pt2
+        else: l2.end = new_pt2
         
         # Fase-Linie hinzufügen
-        self.sketch.add_line(c1_x, c1_y, c2_x, c2_y)
+        chamfer_line = self.sketch.add_line(c1_x, c1_y, c2_x, c2_y)
         
-        self.status_message.emit(tr("Chamfer L={length}mm created").format(length=f"{dist:.1f}"))
+        # CONSTRAINT HINZUFÜGEN: Länge der Fase anzeigen
+        # Wir berechnen die hypothetische Länge der Fasenlinie (Wurzel(dist^2 + dist^2) bei 90 Grad, 
+        # aber hier setzen wir einfach die Distanz an den Schenkeln fest, oder besser:
+        # Fusion360 zeigt meist die Schenkellänge an, aber hier haben wir keine "Chamfer Dimension".
+        # Wir fügen einfach die Länge der neuen Linie hinzu, damit man sie ändern kann.
+        
+        # Hinweis: Bei 'Equal Distance' Chamfer ist die Linienlänge = dist * sqrt(2 * (1 - cos(angle))).
+        # Das ist kompliziert zu bemaßen. 
+        # Besser: Wir fügen KEINE direkte Bemaßung an die schräge Linie an, da das oft krumme Werte sind,
+        # SONDERN wir lassen den Nutzer es sehen. 
+        # Aber die Anforderung war "sollte er auch hinschreiben".
+        # Da wir "Schenkel-Länge" (Distance) eingegeben haben, ist es am intuitivsten, 
+        # wenn wir nichts tun ODER eine Bemaßung hinzufügen.
+        # Da unsere Constraints aktuell nur "Line Length" können und nicht "Point to Point distance along vector",
+        # ist die Länge der Fasenlinie der einzige Wert, den wir anzeigen können.
+        
+        actual_len = math.hypot(c2_x - c1_x, c2_y - c1_y)
+        self.sketch.add_length(chamfer_line, actual_len)
+        
+        self.status_message.emit(tr("Chamfer created"))
         return True
     
     def _handle_dimension(self, pos, snap_type):

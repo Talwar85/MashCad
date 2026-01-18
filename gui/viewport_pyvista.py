@@ -15,6 +15,7 @@ from gui.viewport.extrude_mixin import ExtrudeMixin
 from gui.viewport.picking_mixin import PickingMixin
 from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
+from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -70,7 +71,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3):
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -85,6 +86,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     body_mirror_requested = Signal(str, str)  # body_id, plane (XY/XZ/YZ)
     mirror_requested = Signal(str)  # body_id - Öffnet Mirror-Dialog
     point_to_point_move = Signal(str, tuple, tuple)  # body_id, start_point, end_point - NEU: Point-to-Point Move
+    edge_selection_changed = Signal(int)  # NEU: Anzahl selektierter Kanten für Fillet/Chamfer
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,7 +119,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Modes
         self.plane_select_mode = False
         self.extrude_mode = False
-        self.edge_select_mode = False
+
+        # Edge Selection Mixin initialisieren
+        self._init_edge_selection()
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
         self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
         self.point_to_point_start = None  # Erster ausgewählter Punkt (x, y, z)
@@ -774,6 +778,32 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                 self._hide_numeric_input_overlay()
                             logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
                         return True
+
+        # --- EDGE SELECTION MODE (Fillet/Chamfer) ---
+        if self.edge_select_mode:
+            if event.type() == QEvent.MouseMove:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+                self.handle_edge_mouse_move(x, y)
+                return True
+
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+                is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
+                if self.handle_edge_click(x, y, is_multi):
+                    return True
+
+            if event.type() == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.stop_edge_selection_mode()
+                    return True
+                # A-Taste: Alle Kanten selektieren
+                if event.key() == Qt.Key_A:
+                    self.select_all_edges()
+                    return True
+
+            return False
 
         # --- POINT-TO-POINT MOVE MODE (Fusion 360-Style) ---
         if self.point_to_point_mode:
