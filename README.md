@@ -1,13 +1,18 @@
-# MashCAD - Professional Open-Source CAD Application
+# MashCAD - Open-Source CAD Application
 
 **MashCAD** ist eine protorypische CAD-Anwendung in Python.
 Kombiniert parametrisches 3D-Modeling mit einem intuitiven UI, gebaut auf Build123d (OpenCASCADE).
+Fokus der Entwicklung ist aktuell ein guter 2D-Sketcher und erste primitive 3D-Funktionen
+
+Es ist noch keine sinnvolle produktive Bedienbarkeit möglich.
 
 ## Highlights
 
-- ✅ **Transform-System**: Gizmo-basiert mit Live-Preview
+- ✅ **2D-Sketcher**: Gute Bedienbarkeit im 2D Sketcher.
+- ✅ **2D-Sketcher - Bearbeiten**: Fokus auf transparenz und leicht zugängliche Funktion. 
 - ✅ **Undo/Redo**: Vollständig für alle Transform/Edit-Operationen
 - ✅ **Shortcuts**: G (Move), R (Rotate), S (Scale) + Achsen-Locks (X/Y/Z)
+- ✅ **Transform-System**: Gizmo-basiert mit Live-Preview
 
 
 ## Features
@@ -44,41 +49,13 @@ Kombiniert parametrisches 3D-Modeling mit einem intuitiven UI, gebaut auf Build1
 - **ViewCube Navigation**
 - **Edge/Face Picking** für Fillet/Chamfer
 
-### Mesh-zu-BREP-Konvertierung (3 Modi)
-- **Auto (Hybrid - EMPFOHLEN)**: Automatische Methoden-Wahl
-  - Versucht RANSAC → Smart → Sewing (Fallbacks)
-  - Best for: Alle Geometrie-Typen
-  - Resultat: 10-200 Faces (vollständig editierbar)
-
-- **Primitives (RANSAC)**: Feature-Erkennung
-  - Erkennt: Planes, Cylinders, Spheres
-  - Best for: Funktionale mechanische Teile
-  - Resultat: 10-100 analytische Faces
-
-- **Smart (Planar)**: Planare Regionenerkennung
-  - Erkennt: Ebene Flächen
-  - Best for: Prismatische/eckige Teile
-  - Resultat: 6-200 Faces
 
 ### Export
 - **STL** (3D Druck)
 - **STEP** (CAD-Austausch)
 - **DXF** (2D Sketches)
 
-## Installation
-
-### From Source
-```bash
-git clone https://github.com/Talwar85/MashCad.git
-cd MashCad
-pip install -r requirements.txt
-python main.py
-```
-
-### Mit ML-Features (ParSeNet, optional)
-```bash
-pip install -r requirements-ml.txt  # PyTorch + Dependencies (~1.5 GB)
-```
+#
 
 
 ## Tech-Stack
@@ -90,47 +67,6 @@ pip install -r requirements-ml.txt  # PyTorch + Dependencies (~1.5 GB)
 - **ML (optional)**: PyTorch, ParSeNet
 
 ## Keyboard Shortcuts
-
-### Transform-System (3D)
-| Shortcut | Funktion | Beschreibung |
-|----------|----------|--------------|
-| **G** | Move Mode | Startet Move-Transform (Gizmo oder numerisch) |
-| **R** | Rotate Mode | Startet Rotate-Transform |
-| **S** | Scale Mode | Startet Scale-Transform |
-| **M** | Mirror | Öffnet Mirror-Dialog (Plane-Auswahl) |
-| **X/Y/Z** | Axis Lock | Während Transform: Lock auf Achse (rote/grüne/blaue Linie) |
-| **Shift+X/Y/Z** | Plane Lock | Während Transform: Lock auf Ebene (z.B. Shift+X = YZ-Ebene) |
-| **Ctrl+Drag** | Snap to Grid | Snap auf 1mm Grid (konfigurierbar) |
-| **Shift+Drag** | Copy+Transform | Erstellt Kopie während Transform |
-| **Tab** | Focus Input | Wechselt zu numerischer Eingabe-UI |
-| **Enter** | Apply | Wendet numerische Eingabe an |
-| **ESC** | Cancel | Bricht aktuellen Transform ab |
-| **Ctrl+Z / Ctrl+Y** | Undo / Redo | Rückgängig / Wiederholen |
-
-### Modale Numerische Eingabe (Blender-Style)
-| Workflow | Resultat |
-|----------|----------|
-| **G → 5 → Enter** | Move 5 Einheiten auf gesperrter Achse |
-| **R → 45 → Enter** | Rotate 45° |
-| **S → 1.5 → Enter** | Scale Factor 1.5 |
-| **G → X → 10 → Enter** | Move 10mm auf X-Achse |
-
-### Sketch Editor (2D)
-| Key | Action |
-|-----|--------|
-| **L** | Line \| **R** | Rectangle \| **C** | Circle \| **P** | Polygon |
-| **M** | Move \| **X** | Construction mode \| **G** | Grid snap |
-| **Tab** | Precision input \| **Enter** | Confirm \| **Escape** | Cancel |
-| **Delete** | Delete selected \| **Ctrl+Z/Y** | Undo/Redo |
-
-### Viewport Navigation
-| Key | Action |
-|-----|--------|
-| **F** | Fit view \| **E** | Extrude (3D) |
-| **1-7** | Standard-Ansichten (Front/Back/Right/Left/Top/Bottom/Iso) |
-| **Middle Mouse** | Rotate View \| **Shift+Middle Mouse** | Pan View |
-| **Mouse Wheel** | Zoom |
-
 
 
 
