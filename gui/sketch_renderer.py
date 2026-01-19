@@ -27,7 +27,10 @@ except ImportError:
     except ImportError:
         pass
   
-
+try:
+    from gui.design_tokens import DesignTokens
+except ImportError:
+    from design_tokens import DesignTokens
 
 class SketchRendererMixin:
     """Mixin containing all drawing methods for SketchEditor"""
@@ -86,7 +89,7 @@ class SketchRendererMixin:
         while step * self.view_scale > 80: step /= 2
         
         # Minor Grid
-        p.setPen(QPen(self.GRID_MINOR, 1))
+        p.setPen(DesignTokens.pen_grid_minor())
         
         # Vertikale Linien
         x = math.floor(start_x / step) * step
@@ -106,7 +109,7 @@ class SketchRendererMixin:
             y += step
 
         # Major Grid (ähnliche Logik, vereinfacht: immer zeichnen, da wenige Linien)
-        p.setPen(QPen(self.GRID_MAJOR, 1))
+        p.setPen(QPen(DesignTokens.COLOR_GRID_MAJOR, 1))
         major_step = step * 5
         x = math.floor(tl.x() / major_step) * major_step
         while x < br.x():
@@ -180,7 +183,8 @@ class SketchRendererMixin:
             path.setFillRule(Qt.OddEvenFill)
             is_hovered = (profile_data == self.hovered_face)
             p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(self.PROFILE_HOVER if is_hovered else self.PROFILE_CLOSED))
+            color = DesignTokens.COLOR_PROFILE_HOVER if is_hovered else DesignTokens.COLOR_PROFILE_FILL
+            p.setBrush(QBrush(color))
             p.drawPath(path)
 
         # Offset Preview
@@ -200,21 +204,15 @@ class SketchRendererMixin:
     def _draw_axes(self, p):
         o = self.world_to_screen(QPointF(0, 0))
         
-        # Achsen
-        p.setPen(QPen(self.AXIS_X, 2))
+        p.setPen(QPen(DesignTokens.COLOR_AXIS_X, 2))
         p.drawLine(int(o.x()), int(o.y()), self.width(), int(o.y()))
-        p.setPen(QPen(self.AXIS_Y, 2))
+        p.setPen(QPen(DesignTokens.COLOR_AXIS_Y, 2))
         p.drawLine(int(o.x()), int(o.y()), int(o.x()), 0)
         
-        # Origin-Punkt - deutlich sichtbar!
-        p.setPen(QPen(QColor(255, 200, 0), 2))  # Gelb/Orange
-        p.setBrush(Qt.NoBrush)
-        p.drawEllipse(o, 8, 8)  # Größerer Kreis
-        
-        # Kreuz im Origin
-        p.setPen(QPen(QColor(255, 200, 0), 1))
-        p.setBrush(Qt.NoBrush)
-        p.drawEllipse(o, 5, 5)
+        # Origin schön modern: Weißer Punkt mit dunklem Rand
+        p.setPen(QPen(DesignTokens.COLOR_BG_CANVAS, 2))
+        p.setBrush(QBrush(QColor(255, 255, 255)))
+        p.drawEllipse(o, 4, 4)
     
     def _draw_open_ends(self, p):
         """
@@ -260,155 +258,251 @@ class SketchRendererMixin:
                 
     def _draw_geometry(self, p, update_rect=None):
         """
-        Der Haupt-Performance-Boost:
-        Iteriert über alle Geometrien, berechnet deren Bounding Box auf dem Screen
-        und überspringt das Zeichnen, wenn sie nicht im update_rect liegen.
+        Ultimate Performance Render:
+        1. Culling: Ignoriert alles außerhalb von update_rect.
+        2. Batching: Sammelt Geometrie in QPainterPaths, um Draw-Calls zu minimieren.
         """
         
-        # 1. Glow-Effekt (Selektion)
-        if self.selected_lines or self.selected_circles or self.selected_arcs or self.selected_spline:
-            glow_pen = QPen(QColor(0, 180, 255, 100), 8)
-            p.setPen(glow_pen)
-            p.setBrush(Qt.NoBrush)
-            
-            for line in self.selected_lines:
-                bounds = self._get_line_bounds(line)
-                if self._is_item_visible(bounds, update_rect):
-                    p.drawLine(self.world_to_screen(QPointF(line.start.x, line.start.y)), 
-                              self.world_to_screen(QPointF(line.end.x, line.end.y)))
-            
-            for arc in self.selected_arcs:
-                bounds = self._get_arc_bounds(arc)
-                if self._is_item_visible(bounds, update_rect):
-                    ctr = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
-                    r = arc.radius * self.view_scale
-                    start_deg = int(arc.start_angle * 16)
-                    sweep = arc.end_angle - arc.start_angle
-                    if sweep <= 0: sweep += 360 
-                    p.drawArc(QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r), -start_deg, -int(sweep*16))
+        # --- 0. Vorbereitung der Pfade (Batching Container) ---
+        path_normal = QPainterPath()       # Standard Geometrie
+        path_construction = QPainterPath() # Gestrichelt
+        path_fixed = QPainterPath()        # <--- FIX: Initialisierung hinzugefügt (Magenta/Fixed)
+        path_selected = QPainterPath()     # Blau
+        path_hover = QPainterPath()        # Hellblau
+        
+        # Pfad für Glow (alles was selektiert ist)
+        path_glow = QPainterPath()
+        
+        # Pfad für Punkte (Endpunkte, Fixed Points)
+        path_endpoints = QPainterPath()
+        path_fixed_points = QPainterPath()
 
-        # 2. Linien
+        # Hilfsfunktion für Sichtbarkeitsprüfung
+        def is_visible(bounds):
+            if update_rect is None: return True
+            return update_rect.intersects(bounds)
+
+        # --- 1. Linien sammeln ---
         for line in self.sketch.lines:
-            if self.spline_drag_spline and line in getattr(self.spline_drag_spline, '_lines', []): continue
-            
-            # CULLING CHECK
-            bounds = self._get_line_bounds(line)
-            if not self._is_item_visible(bounds, update_rect):
+            # Spline-Linien überspringen wenn Dragging
+            if self.spline_drag_spline and line in getattr(self.spline_drag_spline, '_lines', []): 
                 continue
 
-            sel = line in self.selected_lines
-            hov = self.hovered_entity == line
-            
-            if line.construction: col = self.GEO_CONSTRUCTION
-            elif sel: col = QColor(50, 200, 255)
-            elif hov: col = self.GEO_HOVER
-            else: col = self.GEO_COLOR
-            
-            w = 3.0 if sel else (2.5 if hov else 1.5)
-            style = Qt.DashLine if line.construction else Qt.SolidLine
+            # Culling Check
+            bounds = self._get_line_bounds(line)
+            if not is_visible(bounds): continue
 
-            p.setPen(QPen(col, w, style))
-            p1 = self.world_to_screen(QPointF(line.start.x, line.start.y))
-            p2 = self.world_to_screen(QPointF(line.end.x, line.end.y))
-            p.drawLine(p1, p2)
+            # Koordinaten berechnen
+            p1 = self.world_to_screen(line.start)
+            p2 = self.world_to_screen(line.end)
+            
+            # Status bestimmen
+            is_sel = line in self.selected_lines
+            is_hov = self.hovered_entity == line
+            is_fixed = getattr(line, 'fixed', False) # Check auf Fixed Attribut
+            
+            # Zu passendem Pfad hinzufügen
+            if is_sel:
+                path_selected.moveTo(p1)
+                path_selected.lineTo(p2)
+                path_glow.moveTo(p1)
+                path_glow.lineTo(p2)
+            elif is_hov:
+                path_hover.moveTo(p1)
+                path_hover.lineTo(p2)
+            elif line.construction:
+                path_construction.moveTo(p1)
+                path_construction.lineTo(p2)
+            elif is_fixed: # <--- FIX: Logik für Fixed Lines
+                path_fixed.moveTo(p1)
+                path_fixed.lineTo(p2)
+            else:
+                path_normal.moveTo(p1)
+                path_normal.lineTo(p2)
 
-            # Endpunkte (sind in bounds enthalten)
+            # Endpunkte sammeln (Batching für Punkte!)
             for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
                 if hasattr(pt, 'fixed') and pt.fixed:
-                    p.setBrush(QBrush(QColor(220, 50, 50)))
-                    p.setPen(QPen(QColor(255, 100, 100), 2))
-                    p.drawEllipse(screen_pt, 4, 4)
+                    path_fixed_points.addEllipse(screen_pt, 4, 4)
                 else:
-                    p.setBrush(QBrush(self.BG_COLOR))
-                    p.setPen(QPen(col, 1))
-                    p.drawEllipse(screen_pt, 2, 2)
+                    path_endpoints.addEllipse(screen_pt, 2, 2)
 
-        # 3. Kreise
+        # --- 2. Kreise sammeln ---
         for c in self.sketch.circles:
             bounds = self._get_circle_bounds(c)
-            if not self._is_item_visible(bounds, update_rect): continue
+            if not is_visible(bounds): continue
 
-            sel = c in self.selected_circles
-            hov = self.hovered_entity == c
-            col = self.GEO_CONSTRUCTION if c.construction else (QColor(50, 200, 255) if sel else (self.GEO_HOVER if hov else self.GEO_COLOR))
-            w = 3.0 if sel else (2.5 if hov else 1.5)
-            style = Qt.DashLine if c.construction else Qt.SolidLine
-            
-            p.setPen(QPen(col, w, style))
-            p.setBrush(Qt.NoBrush)
-            ctr = self.world_to_screen(QPointF(c.center.x, c.center.y))
+            ctr = self.world_to_screen(c.center)
             r = c.radius * self.view_scale
-            p.drawEllipse(ctr, r, r)
+            
+            is_sel = c in self.selected_circles
+            is_hov = self.hovered_entity == c
+            is_fixed = getattr(c, 'fixed', False)
 
-        # 4. Arcs
+            if is_sel:
+                path_selected.addEllipse(ctr, r, r)
+                path_glow.addEllipse(ctr, r, r)
+            elif is_hov:
+                path_hover.addEllipse(ctr, r, r)
+            elif c.construction:
+                path_construction.addEllipse(ctr, r, r)
+            elif is_fixed: # <--- FIX
+                path_fixed.addEllipse(ctr, r, r)
+            else:
+                path_normal.addEllipse(ctr, r, r)
+
+        # --- 3. Arcs sammeln ---
         for arc in self.sketch.arcs:
             bounds = self._get_arc_bounds(arc)
-            if not self._is_item_visible(bounds, update_rect): continue
-            
-            sel = arc in self.selected_arcs
-            hov = self.hovered_entity == arc
-            col = self.GEO_CONSTRUCTION if arc.construction else (QColor(50, 200, 255) if sel else (self.GEO_HOVER if hov else self.GEO_COLOR))
-            w = 3.0 if sel else (2.5 if hov else 1.5)
-            style = Qt.DashLine if arc.construction else Qt.SolidLine
-            
-            p.setPen(QPen(col, w, style))
-            p.setBrush(Qt.NoBrush)
-            ctr = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
+            if not is_visible(bounds): continue
+
+            ctr = self.world_to_screen(arc.center)
             r = arc.radius * self.view_scale
             rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
             
             start_angle = arc.start_angle
-            end_angle = arc.end_angle
-            sweep = end_angle - start_angle
+            sweep = arc.end_angle - arc.start_angle
             if sweep <= 0: sweep += 360
             
-            p.drawArc(rect, int(-start_angle * 16), int(-sweep * 16))
+            is_sel = arc in self.selected_arcs
+            is_hov = self.hovered_entity == arc
+            is_fixed = getattr(arc, 'fixed', False)
             
-            # Endpunkte
+            temp_path = QPainterPath()
+            temp_path.arcMoveTo(rect, -start_angle)
+            temp_path.arcTo(rect, -start_angle, -sweep)
+
+            if is_sel:
+                path_selected.addPath(temp_path)
+                path_glow.addPath(temp_path)
+            elif is_hov:
+                path_hover.addPath(temp_path)
+            elif arc.construction:
+                path_construction.addPath(temp_path)
+            elif is_fixed: # <--- FIX
+                path_fixed.addPath(temp_path)
+            else:
+                path_normal.addPath(temp_path)
+
+            # Endpunkte für Arcs zeichnen
             sx = arc.center.x + arc.radius * math.cos(math.radians(start_angle))
             sy = arc.center.y + arc.radius * math.sin(math.radians(start_angle))
             ex = arc.center.x + arc.radius * math.cos(math.radians(end_angle))
             ey = arc.center.y + arc.radius * math.sin(math.radians(end_angle))
             
-            p.setBrush(QBrush(self.BG_COLOR))
-            p.setPen(QPen(col, 1))
-            p.drawEllipse(self.world_to_screen(QPointF(sx, sy)), 3, 3)
-            p.drawEllipse(self.world_to_screen(QPointF(ex, ey)), 3, 3)
+            path_endpoints.addEllipse(self.world_to_screen(QPointF(sx, sy)), 3, 3)
+            path_endpoints.addEllipse(self.world_to_screen(QPointF(ex, ey)), 3, 3)
 
-        # 5. Splines (Bounding Box Check für ganze Spline)
-        for spline in self.sketch.splines:
-            # Einfaches Culling: Bounding Box der Kontrollpunkte
-            if update_rect:
-                min_x = min(cp.point.x for cp in spline.control_points)
-                max_x = max(cp.point.x for cp in spline.control_points)
-                min_y = min(cp.point.y for cp in spline.control_points)
-                max_y = max(cp.point.y for cp in spline.control_points)
-                p_tl = self.world_to_screen(QPointF(min_x, max_y)) # Y flip
-                p_br = self.world_to_screen(QPointF(max_x, min_y))
-                spline_rect = QRectF(p_tl, p_br).normalized().adjusted(-20,-20,20,20)
-                if not update_rect.intersects(spline_rect): continue
+        # --- 4. ZEICHNEN (Batch Rendering) ---
+
+        # A. Glow (ganz unten)
+        if not path_glow.isEmpty():
+            glow_color = QColor(DesignTokens.COLOR_GEO_SELECTED)
+            glow_color.setAlpha(60)
+            glow_pen = QPen(glow_color, 6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            p.setPen(glow_pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_glow)
+
+        # B. Construction (Gestrichelt)
+        if not path_construction.isEmpty():
+            p.setPen(DesignTokens.pen_geo_construction())
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_construction)
             
-            # ... (Rest der Spline Logik unverändert) ...
+        # C. Fixed (Magenta) - <--- FIX: Jetzt existiert die Variable und hat Inhalt
+        if not path_fixed.isEmpty():
+            pen = QPen(DesignTokens.COLOR_GEO_FIXED, 1.5)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_fixed)
+
+        # D. Normal (Standard Geometrie)
+        if not path_normal.isEmpty():
+            p.setPen(DesignTokens.pen_geo_normal())
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_normal)
+
+        # E. Hover (Gehightlightet)
+        if not path_hover.isEmpty():
+            pen = QPen(DesignTokens.COLOR_GEO_HOVER, 2.5)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_hover)
+
+        # F. Selected (Blau)
+        if not path_selected.isEmpty():
+            p.setPen(DesignTokens.pen_geo_selected())
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_selected)
+
+        # G. Punkte (Obendrauf)
+        if not path_endpoints.isEmpty():
+            # FIX: DesignTokens statt self.GEO_COLOR nutzen (falls self.GEO_COLOR nicht existiert)
+            p.setPen(QPen(DesignTokens.COLOR_GEO_BODY, 1)) 
+            p.setBrush(DesignTokens.COLOR_BG_CANVAS)
+            p.drawPath(path_endpoints)
+            
+        if not path_fixed_points.isEmpty():
+            p.setPen(QPen(DesignTokens.COLOR_GEO_FIXED, 2))
+            p.setBrush(DesignTokens.COLOR_GEO_FIXED)
+            p.drawPath(path_fixed_points)
+
+        # --- 5. Splines (Separat, da komplexer) ---
+        for spline in self.sketch.splines:
+            # Culling für Spline
+            if update_rect:
+                cps = spline.control_points
+                if not cps: continue
+                min_x = min(cp.point.x for cp in cps)
+                max_x = max(cp.point.x for cp in cps)
+                min_y = min(cp.point.y for cp in cps)
+                max_y = max(cp.point.y for cp in cps)
+                
+                pt_tl = self.world_to_screen(QPointF(min_x, max_y)) 
+                pt_br = self.world_to_screen(QPointF(max_x, min_y))
+                spline_bound = QRectF(pt_tl, pt_br).normalized().adjusted(-50, -50, 50, 50)
+                
+                if not update_rect.intersects(spline_bound): continue
+
+            # Drawing logic
             is_selected = spline == self.selected_spline
             is_dragging = (spline == self.spline_drag_spline)
-            col = self.GEO_CONSTRUCTION if spline.construction else self.GEO_COLOR
-            if is_selected: col = QColor(50, 200, 255)
             
+            # Style wählen
+            col = DesignTokens.COLOR_GEO_CONSTRUCTION if spline.construction else DesignTokens.COLOR_GEO_BODY
+            width = 2
+            if is_selected: 
+                col = DesignTokens.COLOR_GEO_SELECTED
+                width = 3
+            
+            # Linien holen
             lines_to_draw = []
             if is_dragging and hasattr(spline, '_preview_lines'):
                 lines_to_draw = spline._preview_lines
             elif hasattr(spline, 'to_lines'):
                 lines_to_draw = spline.to_lines(segments_per_span=10)
             
-            path = QPainterPath()
-            if lines_to_draw:
-                path.moveTo(self.world_to_screen(QPointF(lines_to_draw[0].start.x, lines_to_draw[0].start.y)))
-                for l in lines_to_draw:
-                    path.lineTo(self.world_to_screen(QPointF(l.end.x, l.end.y)))
+            if not lines_to_draw: continue
+
+            # Pfad bauen
+            spline_path = QPainterPath()
+            first = lines_to_draw[0]
+            spline_path.moveTo(self.world_to_screen(first.start))
             
-            p.setPen(QPen(col, 2))
+            for l in lines_to_draw:
+                spline_path.lineTo(self.world_to_screen(l.end))
+            
+            # Zeichnen
+            if is_selected: # Glow für Spline
+                glow_pen = QPen(QColor(DesignTokens.COLOR_GEO_SELECTED), 8)
+                glow_pen.getColor().setAlpha(100)
+                p.setPen(glow_pen)
+                p.drawPath(spline_path)
+                
+            p.setPen(QPen(col, width))
             p.setBrush(Qt.NoBrush)
-            p.drawPath(path)
+            p.drawPath(spline_path)
             
             if is_selected or is_dragging:
                 self._draw_spline_handles(p, spline)
@@ -443,7 +537,7 @@ class SketchRendererMixin:
     
     def _draw_constraints(self, p):
         """Zeichnet Constraint-Icons an den betroffenen Elementen (Fusion360-Style)"""
-        p.setFont(QFont("Arial", 9, QFont.Bold))
+        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
 
         # Speichere Bounding-Boxes für Constraint-Klick-Erkennung
         if not hasattr(self, 'constraint_icon_rects'):

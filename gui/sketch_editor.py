@@ -26,6 +26,12 @@ import numpy as np
 from loguru import logger
 
 try:
+    from gui.design_tokens import DesignTokens
+except ImportError:
+    from design_tokens import DesignTokens
+
+
+try:
     from gui.quadtree import QuadTree
     logger.success("QuadTree Module loaded.")
 except ImportError:
@@ -422,8 +428,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Mark index dirty whenever sketch changes
         self.sketched_changed.connect(self._mark_index_dirty)
         self.hovered_ref_edge = None
+        self.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_CANVAS.name()};")
 
         QTimer.singleShot(100, self._center_view)
+    
+    def _safe_float(self, value):
+        """
+        Konvertiert JEDEN Wert sicher zu Python native float.
+        Entfernt numpy.float64, numpy.bool_, etc.
+        """
+        if hasattr(value, 'item'):
+            # numpy scalar - .item() gibt Python native zurück
+            return float(value.item())
+        elif isinstance(value, (bool, np.bool_)):
+            # FEHLERFALL: Boolean wurde als Zahl behandelt
+            logger.warning(f"Boolean erkannt statt float: {value}. Konvertiere zu 0.0 oder 1.0")
+            return float(value)
+        else:
+            return float(value)
+
+    def _safe_bool(self, value):
+        """
+        Konvertiert JEDEN Wert sicher zu Python native bool.
+        """
+        if isinstance(value, np.bool_):
+            return bool(value)  # numpy bool → Python bool
+        return bool(value)
     
     def _solve_async(self):
         """
@@ -449,7 +479,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     dof = getattr(result, 'dof', 0)
                     
                     # Emit result to Main Thread
-                    self.solver_finished_signal.emit(success, msg, float(dof))
+                    self.solver_finished_signal.emit(success, msg, self._safe_float(dof))
                 except Exception as e:
                     logger.error(f"Solver Crash: {e}")
                     self.solver_finished_signal.emit(False, str(e), 0.0)
@@ -486,95 +516,184 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _mark_index_dirty(self):
         self.index_dirty = True
 
+    def _debug_inspect_geometry(self):
+        """
+        Forensische Suche: Findet Geometrie, die versehentlich Booleans statt Zahlen enthält.
+        """
+        import numpy as np
+        
+        logger.info("🕵️ Starte Geometrie-Inspektion...")
+        
+        found_error = False
+
+        def is_bad(val, name):
+            # Prüft auf bool (Python) oder numpy.bool_ (NumPy)
+            if isinstance(val, (bool, np.bool_)):
+                logger.critical(f"🚨 FEHLER GEFUNDEN in {name}!")
+                logger.critical(f"   Wert ist BOOLEAN: {val} (Typ: {type(val)})")
+                logger.critical(f"   Erwartet wurde float/int.")
+                return True
+            return False
+
+        # 1. Linien prüfen
+        for i, line in enumerate(self.sketch.lines):
+            if is_bad(line.start.x, f"Line[{i}].start.x"): found_error = True
+            if is_bad(line.start.y, f"Line[{i}].start.y"): found_error = True
+            if is_bad(line.end.x,   f"Line[{i}].end.x"):   found_error = True
+            if is_bad(line.end.y,   f"Line[{i}].end.y"):   found_error = True
+
+        # 2. Kreise prüfen
+        for i, circle in enumerate(self.sketch.circles):
+            if is_bad(circle.center.x, f"Circle[{i}].center.x"): found_error = True
+            if is_bad(circle.center.y, f"Circle[{i}].center.y"): found_error = True
+            if is_bad(circle.radius,   f"Circle[{i}].radius"):   found_error = True
+
+        # 3. Arcs prüfen
+        for i, arc in enumerate(self.sketch.arcs):
+            if is_bad(arc.center.x, f"Arc[{i}].center.x"): found_error = True
+            if is_bad(arc.center.y, f"Arc[{i}].center.y"): found_error = True
+            if is_bad(arc.radius,   f"Arc[{i}].radius"):   found_error = True
+            if is_bad(arc.start_angle, f"Arc[{i}].start_angle"): found_error = True
+            if is_bad(arc.end_angle,   f"Arc[{i}].end_angle"):   found_error = True
+
+        if found_error:
+            logger.critical("❌ Inspektion beendet: KORRUPTE GEOMETRIE GEFUNDEN.")
+        else:
+            logger.success("✅ Inspektion beendet: Keine Booleans in der Geometrie gefunden.")
+            
+        return found_error
+ 
+
+    
+
     def _rebuild_spatial_index(self):
-        """Rebuilds the QuadTree from current sketch entities."""
-        if not self.sketch.lines and not self.sketch.circles and not self.sketch.arcs and not self.sketch.splines:
+        """
+        Final Defensive Version: Audits geometry first, then rebuilds with strict casting.
+        """
+        import numpy as np
+        
+
+        # --- INTERNAL AUDIT FUNCTION ---
+        def audit_geometry(sketch):
+            """Checks for numpy types in geometry."""
+            problems = []
+            
+            def check(val, name):
+                if isinstance(val, (np.bool_, np.int64, np.float64, np.float32)):
+                    return f"{name}={val} ({type(val)})"
+                return None
+
+            for i, l in enumerate(sketch.lines):
+                if err := check(l.start.x, f"L{i}.start.x"): problems.append(err)
+                if err := check(l.start.y, f"L{i}.start.y"): problems.append(err)
+                if err := check(l.end.x, f"L{i}.end.x"): problems.append(err)
+                if err := check(l.end.y, f"L{i}.end.y"): problems.append(err)
+
+            return problems
+
+        # 1. RUN AUDIT
+        # If this logs errors, we know the source data is 'infected' with numpy types
+        #if problems := audit_geometry(self.sketch):
+            #logger.warning(f"⚠️ Geometry contains NumPy types! First 3 issues: {problems[:3]}")
+            # We don't abort, because the casting below should handle it, but it's good to know.
+
+        # 2. STANDARD CHECKS
+        has_geo = (len(self.sketch.lines) > 0 or len(self.sketch.circles) > 0 or 
+                   len(self.sketch.arcs) > 0 or len(self.sketch.splines) > 0)
+        
+        if not has_geo:
             self.spatial_index = None
             self.index_dirty = False
             return
 
-        # 1. Calculate World Bounds for the Root Node
-        min_x, min_y = float('inf'), float('inf')
-        max_x, max_y = float('-inf'), float('-inf')
+        # 3. HELPER FOR CASTING
+        def to_float(v):
+            try:
+                if hasattr(v, 'item'): return self._safe_float(v.item())
+                return self._safe_float(v)
+            except: return 0.0
 
-        # Sample bounds from lines (fast approximation)
+        # 4. CALCULATE BOUNDS
+        min_x, min_y = self._safe_float('inf'), self._safe_float('inf')
+        max_x, max_y = self._safe_float('-inf'), self._safe_float('-inf')
+
         for l in self.sketch.lines:
-            min_x = min(min_x, l.start.x, l.end.x)
-            max_x = max(max_x, l.start.x, l.end.x)
-            min_y = min(min_y, l.start.y, l.end.y)
-            max_y = max(max_y, l.start.y, l.end.y)
-        
-        # Determine circles/arcs bounds
-        for c in self.sketch.circles + self.sketch.arcs:
-            min_x = min(min_x, c.center.x - c.radius)
-            max_x = max(max_x, c.center.x + c.radius)
-            min_y = min(min_y, c.center.y - c.radius)
-            max_y = max(max_y, c.center.y + c.radius)
-
-        # Splines
-        for s in self.sketch.splines:
-             for cp in s.control_points:
-                 min_x = min(min_x, cp.point.x)
-                 max_x = max(max_x, cp.point.x)
-                 min_y = min(min_y, cp.point.y)
-                 max_y = max(max_y, cp.point.y)
-
-        # Default bounds if empty or single point
-        if min_x == float('inf'): 
-            min_x, max_x, min_y, max_y = -100, 100, -100, 100
-        
-        # Add padding to root bounds
-        padding = 100
-        root_rect = QRectF(min_x - padding, min_y - padding, 
-                           (max_x - min_x) + 2*padding, (max_y - min_y) + 2*padding)
-
-        # 2. Create Tree
-        self.spatial_index = QuadTree(root_rect)
-
-        # 3. Insert Entities
-        # Lines
-        for line in self.sketch.lines:
-            # Normalized rect ensures width/height are positive
-            rect = QRectF(QPointF(line.start.x, line.start.y), 
-                          QPointF(line.end.x, line.end.y)).normalized()
-            # Padding for thin lines (makes hit testing reliable)
-            self.spatial_index.insert(line, rect.adjusted(-1, -1, 1, 1))
-
-        # Circles
-        for circle in self.sketch.circles:
-            r = circle.radius
-            rect = QRectF(circle.center.x - r, circle.center.y - r, 2*r, 2*r)
-            self.spatial_index.insert(circle, rect)
-
-        # Arcs (Using full circle bounds for simplicity/speed)
-        for arc in self.sketch.arcs:
-            r = arc.radius
-            rect = QRectF(arc.center.x - r, arc.center.y - r, 2*r, 2*r)
-            self.spatial_index.insert(arc, rect)
+            x1, y1 = to_float(l.start.x), to_float(l.start.y)
+            x2, y2 = to_float(l.end.x), to_float(l.end.y)
+            min_x = min(min_x, x1, x2); max_x = max(max_x, x1, x2)
+            min_y = min(min_y, y1, y2); max_y = max(max_y, y1, y2)
             
-        # Splines
-        for spline in self.sketch.splines:
-            # Calculate rough bbox from control points
-            s_min_x = min((cp.point.x for cp in spline.control_points), default=0)
-            s_max_x = max((cp.point.x for cp in spline.control_points), default=0)
-            s_min_y = min((cp.point.y for cp in spline.control_points), default=0)
-            s_max_y = max((cp.point.y for cp in spline.control_points), default=0)
-            rect = QRectF(QPointF(s_min_x, s_min_y), QPointF(s_max_x, s_max_y)).normalized()
-            self.spatial_index.insert(spline, rect)
+        for c in self.sketch.circles + self.sketch.arcs:
+            r = to_float(c.radius)
+            cx, cy = to_float(c.center.x), to_float(c.center.y)
+            min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+            min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
+
+        for s in self.sketch.splines:
+             for cp in getattr(s, 'control_points', []):
+                 px, py = to_float(cp.point.x), to_float(cp.point.y)
+                 min_x = min(min_x, px); max_x = max(max_x, px)
+                 min_y = min(min_y, py); max_y = max(max_y, py)
+
+        if min_x == self._safe_float('inf'): min_x, max_x, min_y, max_y = -100.0, 100.0, -100.0, 100.0
+        
+        pad = 100.0
+        try:
+            # FORCE NATIVE FLOATS FOR QRECT
+            x1 = self._safe_float(min_x - pad)
+            y1 = self._safe_float(min_y - pad)
+            w = self._safe_float(max_x - min_x + 2*pad)
+            h = self._safe_float(max_y - min_y + 2*pad)
+            assert isinstance(x1, float) and not isinstance(x1, np.floating), \
+    f"x1 ist {type(x1)}, nicht Python float!"
+            root_rect = QRectF(x1, y1, w, h)
+            self.spatial_index = QuadTree(root_rect)
+        except Exception as e:
+            logger.critical(f"❌ QuadTree init crashed: {e}")
+            return
+
+        # 5. INSERT GEOMETRY
+        for l in self.sketch.lines:
+            x1, y1 = to_float(l.start.x), to_float(l.start.y)
+            x2, y2 = to_float(l.end.x), to_float(l.end.y)
+            
+            # Manual Rect construction (safest)
+            lx = min(x1, x2) - 2.0
+            ly = min(y1, y2) - 2.0
+            lw = abs(x2 - x1) + 4.0
+            lh = abs(y2 - y1) + 4.0
+            
+            self.spatial_index.insert(l, QRectF(self._safe_float(lx), self._safe_float(ly), self._safe_float(lw), self._safe_float(lh)))
+
+        for c in self.sketch.circles + self.sketch.arcs:
+            cx, cy = to_float(c.center.x), to_float(c.center.y)
+            r = to_float(c.radius)
+            self.spatial_index.insert(c, QRectF(self._safe_float(cx-r), self._safe_float(cy-r), self._safe_float(2*r), self._safe_float(2*r)))
+
+        for s in self.sketch.splines:
+             cps = getattr(s, 'control_points', [])
+             if not cps: continue
+             sx_min = min((to_float(cp.point.x) for cp in cps), default=0.0)
+             sx_max = max((to_float(cp.point.x) for cp in cps), default=0.0)
+             sy_min = min((to_float(cp.point.y) for cp in cps), default=0.0)
+             sy_max = max((to_float(cp.point.y) for cp in cps), default=0.0)
+             w = max(sx_max - sx_min, 0.1)
+             h = max(sy_max - sy_min, 0.1)
+             self.spatial_index.insert(s, QRectF(self._safe_float(sx_min), self._safe_float(sy_min), self._safe_float(w), self._safe_float(h)))
 
         self.index_dirty = False
-        logger.debug(f"Spatial Index Rebuilt. Bounds: {root_rect}")
-        #     
+       
+          
     def handle_option_changed(self, option: str, value):
         """Reagiert auf Änderungen aus dem ToolPanel (Checkboxen)"""
         if option == "construction":
-            self.construction_mode = bool(value)
+            self.construction_mode = self._safe_bool(value)
             # Optional: Feedback in Statuszeile, wenn per Klick geändert
             state = tr("ON") if self.construction_mode else tr("OFF")
             self.status_message.emit(tr("Construction: {state}").format(state=state))
             
         elif option == "grid_snap":
-            self.grid_snap = bool(value)
+            self.grid_snap = self._safe_bool(value)
             
         elif option == "grid_size":
             self.grid_size = float(value)
@@ -582,55 +701,64 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
 
     def _get_entity_bbox(self, entity):
-        """Liefert das Screen-Bounding-Rect für eine Entity (für Dirty Tracking)"""
+        """Liefert das Screen-Bounding-Rect für eine Entity (Hardened against NumPy)"""
         from sketcher import Line2D, Circle2D, Arc2D
         
         rect = QRectF()
         if entity is None: 
             return rect
+        
+        # Helper für sicheren Cast
+        def safe_pt(x, y):
+            return QPointF(self._safe_float(x), self._safe_float(y))
             
-        if isinstance(entity, Line2D):
-            p1 = self.world_to_screen(QPointF(entity.start.x, entity.start.y))
-            p2 = self.world_to_screen(QPointF(entity.end.x, entity.end.y))
-            rect = QRectF(p1, p2).normalized()
-            
-        elif isinstance(entity, (Circle2D, Arc2D)):
-            c = self.world_to_screen(QPointF(entity.center.x, entity.center.y))
-            r = entity.radius * self.view_scale
-            rect = QRectF(c.x()-r, c.y()-r, 2*r, 2*r)
+        try:
+            if isinstance(entity, Line2D):
+                # Explizite Floats vor QPointF Erstellung
+                p1 = self.world_to_screen(safe_pt(entity.start.x, entity.start.y))
+                p2 = self.world_to_screen(safe_pt(entity.end.x, entity.end.y))
+                rect = QRectF(p1, p2).normalized()
+                
+            elif isinstance(entity, (Circle2D, Arc2D)):
+                c = self.world_to_screen(safe_pt(entity.center.x, entity.center.y))
+                r = self._safe_float(entity.radius) * self.view_scale
+                rect = QRectF(c.x()-r, c.y()-r, 2*r, 2*r)
+        except Exception:
+            return QRectF() # Im Zweifel leeres Rect zurückgeben
             
         # Padding für Strichstärke (5px) + Glow (10px) = sicherheitshalber 15
         return rect.adjusted(-15, -15, 15, 15)
     
     def _calculate_plane_axes(self, normal_vec):
         """
-        Berechnet stabile X- und Y-Achsen für eine Ebene basierend auf der Normalen.
-        Muss IDENTISCH zu viewport_pyvista.py sein!
+        Berechnet stabile X- und Y-Achsen.
+        Returns native tuples of floats to avoid NumPy types leaking into logic.
         """
-        n = np.array(normal_vec)
+        import numpy as np # Import lokal, falls global fehlt
+        
+        n = np.array(normal_vec, dtype=np.float64)
         norm = np.linalg.norm(n)
-        if norm == 0: return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+        if norm == 0: 
+            return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+        
         n = n / norm
         
-        # Globale Up-Vektor Strategie (Z-Up)
-        # FIX: float() cast um numpy.bool Fehler im if-Statement zu vermeiden
-        if abs(self.to_native_float(n[2])) > 0.999:
-            # Normale ist (0,0,1) oder (0,0,-1)
-            x_dir = np.array([1.0, 0.0, 0.0])
+        # Safe comparison avoiding numpy.bool output
+        # abs(n[2]) liefert numpy scalar, float() macht es sicher
+        if self._safe_float(abs(n[2])) > 0.999:
+            x_dir = np.array([1.0, 0.0, 0.0], dtype=np.float64)
             y_dir = np.cross(n, x_dir)
             y_dir = y_dir / np.linalg.norm(y_dir)
-            # X re-orthogonalisieren
             x_dir = np.cross(y_dir, n)
         else:
-            # Standardfall
-            global_up = np.array([0.0, 0.0, 1.0])
+            global_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
             x_dir = np.cross(global_up, n)
             x_dir = x_dir / np.linalg.norm(x_dir)
             y_dir = np.cross(n, x_dir)
             y_dir = y_dir / np.linalg.norm(y_dir)
             
-        # FIX: Rückgabe als Tuple von nativen Floats, nicht numpy.float64
-        return tuple(float(v) for v in x_dir), tuple(float(v) for v in y_dir)
+        # CRITICAL: Convert back to native python tuple immediately
+        return tuple(map(float, x_dir)), tuple(map(float, y_dir))
 
     def to_native_float(self, value):
         """Sicheres Casting von NumPy → Python native"""
@@ -638,16 +766,40 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return value.item()
         elif isinstance(value, (np.integer, np.floating)):
             return value.item()
-        return float(value)
+        return self._safe_float(value)
 
 
     def world_to_screen(self, w):
-        return QPointF(w.x() * self.view_scale + self.view_offset.x(),
-                      -w.y() * self.view_scale + self.view_offset.y())
+        # Punkt auslesen
+        if hasattr(w, 'x') and not callable(w.x):
+            wx = self._safe_float(w.x)
+            wy = self._safe_float(w.y)
+        else:
+            wx = self._safe_float(w.x())  # ← Explizit zu Python float
+            wy = self._safe_float(w.y())
+        
+        # View-Offset auslesen (auch explizit)
+        ox = self._safe_float(self.view_offset.x())
+        oy = self._safe_float(self.view_offset.y())
+        
+        # DANN berechnen
+        screen_x = self._safe_float(wx * self.view_scale) + ox
+        screen_y = self._safe_float(-wy * self.view_scale) + oy
+        
+        # DANN in QPointF
+        return QPointF(screen_x, screen_y)
     
     def screen_to_world(self, s):
-        return QPointF((s.x() - self.view_offset.x()) / self.view_scale,
-                      -(s.y() - self.view_offset.y()) / self.view_scale)
+        """
+        Konvertiert Screen-Koordinaten zu Welt-Koordinaten.
+        Gibt QPointF zurück.
+        """
+        # s ist hier immer ein QPointF vom MouseEvent
+        ox = self.view_offset.x()
+        oy = self.view_offset.y()
+        
+        return QPointF((s.x() - ox) / self.view_scale,
+                      -(s.y() - oy) / self.view_scale)
     
     def _center_view(self):
         self.view_offset = QPointF(self.width() / 2, self.height() / 2)
@@ -674,10 +826,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         QTimer.singleShot(duration, self.update)
 
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
-        """
-        Setzt die Body-Referenzen für transparente Anzeige.
-        FIX: Casting von NumPy-Typen zu nativem int(), um 'numpy.bool'/'numpy.int' Fehler zu vermeiden.
-        """
         self.reference_bodies = []
         self.sketch_plane_normal = plane_normal
         self.sketch_plane_origin = plane_origin
@@ -688,75 +836,78 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         import numpy as np
         
-        # Berechne lokales Koordinatensystem für die Ebene
-        n = np.array(plane_normal)
+        # Alles in float64 casten für Präzision
+        n = np.array(plane_normal, dtype=np.float64)
         norm = np.linalg.norm(n)
-        n = n / norm if norm > 0 else np.array([0,0,1])
+        n = n / norm if norm > 0 else np.array([0,0,1], dtype=np.float64)
         
-        # FIX: Nutze übergebene X-Achse, falls vorhanden
         if plane_x:
-            u = np.array(plane_x)
+            u = np.array(plane_x, dtype=np.float64)
             u = u / np.linalg.norm(u)
         else:
-            # Fallback: Raten
-            # float() Cast verhindert, dass der Vergleich ein numpy.bool zurückgibt
-            if abs(self.to_native_float(n[2])) < 0.9:
+            if self._safe_float(abs(n[2])) < 0.9:
                 u = np.cross(n, [0, 0, 1])
             else:
                 u = np.cross(n, [1, 0, 0])
             u = u / np.linalg.norm(u)
             
-        v = np.cross(n, u) # Y-Achse
-        
-        origin = np.array(plane_origin)
+        v = np.cross(n, u)
+        origin = np.array(plane_origin, dtype=np.float64)
         
         for body_info in bodies_data:
             mesh = body_info.get('mesh')
-            color = body_info.get('color', (0.6, 0.6, 0.8))
-            
+            # Farbe parsen
+            raw_color = body_info.get('color', (0.6, 0.6, 0.8))
+            if isinstance(raw_color, (tuple, list)):
+                color = tuple(self._safe_float(x) for x in raw_color[:3]) # Sicherstellen float
+            else:
+                # Fallback für String-Farben
+                try: 
+                    c = QColor(raw_color)
+                    color = (c.redF(), c.greenF(), c.blueF())
+                except: 
+                    color = (0.5, 0.5, 0.5)
+
             if mesh is None: continue
             
             try:
-                # Extrahiere Kanten für Drahtgitter-Darstellung
                 edges = mesh.extract_feature_edges(
-                    boundary_edges=True,
-                    feature_edges=True,
-                    manifold_edges=False,
-                    feature_angle=30
+                    boundary_edges=True, feature_edges=True, 
+                    manifold_edges=False, feature_angle=30
                 )
-                
-                if edges.n_points == 0:
-                    edges = mesh.extract_all_edges()
+                if edges.n_points == 0: edges = mesh.extract_all_edges()
                 
                 edges_2d = []
-                
                 if edges.n_lines > 0:
-                    lines = edges.lines
-                    points = edges.points
+                    lines = edges.lines # Das ist ein NumPy Array!
+                    points = edges.points # Das auch!
+                    
                     i = 0
                     while i < len(lines):
-                        # FIX: Expliziter Cast zu int(), da lines[i] ein numpy.int ist
+                        # Expliziter Cast zu int für Loop-Index
                         n_pts = int(lines[i])
-                        
                         if n_pts >= 2:
-                            for j in range(n_pts - 1):
-                                # Indizes extrahieren (auch hier sicherheitshalber casten)
-                                idx1 = int(lines[i + 1 + j])
-                                idx2 = int(lines[i + 2 + j])
-                                
-                                p1_3d = points[idx1]
-                                p2_3d = points[idx2]
-                                
-                                # Projiziere auf Ebene (lokale 2D-Koordinaten)
-                                rel1 = p1_3d - origin
-                                rel2 = p2_3d - origin
-                                
-                                x1 = float(np.dot(rel1, u))
-                                y1 = float(np.dot(rel1, v))
-                                x2 = float(np.dot(rel2, u))
-                                y2 = float(np.dot(rel2, v))
-                                
-                                edges_2d.append((x1, y1, x2, y2))
+                            # Vektorisierte Berechnung wäre schneller, aber hier loop for safety
+                            # Wir holen den Segment-Block
+                            segment_indices = lines[i+1 : i+1+n_pts]
+                            
+                            # Punkte holen
+                            segment_points = points[segment_indices]
+                            
+                            # Projektion (Vector math)
+                            rels = segment_points - origin
+                            
+                            # Dot Product für Projektion auf 2D Ebene
+                            xs = np.dot(rels, u)
+                            ys = np.dot(rels, v)
+                            
+                            # Liniensegmente speichern (Native Floats!)
+                            for k in range(n_pts - 1):
+                                edges_2d.append((
+                                    self._safe_float(xs[k]), self._safe_float(ys[k]), 
+                                    self._safe_float(xs[k+1]), self._safe_float(ys[k+1])
+                                ))
+                        
                         i += n_pts + 1
                 
                 if edges_2d:
@@ -764,7 +915,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         'edges_2d': edges_2d,
                         'color': color
                     })
-                    
             except Exception as e:
                 logger.error(f"Body reference error: {e}")
         
@@ -1087,7 +1237,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             # Finde den kleinsten Container (mit kleinster Fläche der enthält)
             best_parent = -1
-            best_parent_area = float('inf')
+            best_parent_area = self._safe_float('inf')
             
             for j in range(n):
                 if i == j:
@@ -1335,9 +1485,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         variance = np.std(distances) / radius
         
         # FIX: float() cast in comparison
-        if float(variance) < tolerance:
+        if self._safe_float(variance) < tolerance:
             # FIX: Native Floats zurückgeben
-            return (float(cx), float(cy), float(radius))
+            return (self._safe_float(cx), self._safe_float(cy), self._safe_float(radius))
         
         return None
     
@@ -1463,7 +1613,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         if p_type == 'polygon':
                             coords = list(p_data.exterior.coords)
                             # Duplikate entfernen und zu Floats konvertieren
-                            pts = [(float(c[0]), float(c[1])) for c in coords]
+                            pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in coords]
                             if len(pts) > 0 and pts[0] == pts[-1]:
                                 pts.pop() # Letzten Punkt weg, wenn doppelt
                             
@@ -1476,7 +1626,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                 if hasattr(p_data, 'interiors'):
                                     for idx, interior in enumerate(p_data.interiors):
                                         hole_coords = list(interior.coords)
-                                        h_pts = [(float(c[0]), float(c[1])) for c in hole_coords]
+                                        h_pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in hole_coords]
                                         if len(h_pts)>0 and h_pts[0]==h_pts[-1]: h_pts.pop()
                                         
                                         logger.debug(f"  Loch {idx}: {len(h_pts)} Punkte")
@@ -1603,7 +1753,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         if p_type == 'polygon' and hasattr(p_data, 'exterior'):
                             coords = list(p_data.exterior.coords)
                             # Punkte in Float wandeln
-                            pts = [(float(c[0]), float(c[1])) for c in coords]
+                            pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in coords]
                             
                             if len(pts) > 1 and pts[0] == pts[-1]: pts.pop()
                             
@@ -1617,8 +1767,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         elif p_type == 'circle':
                             c = p_data.center
                             # Auch hier: Locations sind lokal auf der Plane
-                            with Locations([(float(c.x), float(c.y))]):
-                                B3DCircle(radius=float(p_data.radius))
+                            with Locations([(self._safe_float(c.x), self._safe_float(c.y))]):
+                                B3DCircle(radius=self._safe_float(p_data.radius))
                             created = True
                             
                     if not created: return None, None, None
@@ -1830,9 +1980,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # POLYGON: Nach Zentrum
         elif self.current_tool == SketchTool.POLYGON:
             if self.tool_step >= 1:
-                fields = [("R", "radius", self.live_radius, "mm"), ("N", "sides", float(self.polygon_sides), "")]
+                fields = [("R", "radius", self.live_radius, "mm"), ("N", "sides", self._safe_float(self.polygon_sides), "")]
             elif self.tool_step == 0:
-                fields = [("R", "radius", 25.0, "mm"), ("N", "sides", float(self.polygon_sides), "")]
+                fields = [("R", "radius", 25.0, "mm"), ("N", "sides", self._safe_float(self.polygon_sides), "")]
                 
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             fields = [("X", "dx", 0.0, "mm"), ("Y", "dy", 0.0, "mm")]
@@ -1864,12 +2014,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.PATTERN_LINEAR and self.tool_step >= 1:
             count = self.tool_data.get('pattern_count', 3)
             spacing = self.tool_data.get('pattern_spacing', 20.0)
-            fields = [("Anzahl", "count", float(count), "x"), ("Abstand", "spacing", spacing, "mm")]
+            fields = [("Anzahl", "count", self._safe_float(count), "x"), ("Abstand", "spacing", spacing, "mm")]
             
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR and self.tool_step >= 1:
             count = self.tool_data.get('pattern_count', 6)
             angle = self.tool_data.get('pattern_angle', 360.0)
-            fields = [("Anzahl", "count", float(count), "x"), ("Winkel", "angle", angle, "°")]
+            fields = [("Anzahl", "count", self._safe_float(count), "x"), ("Winkel", "angle", angle, "°")]
             
         if not fields:
             self.status_message.emit(tr("Tab: Set a point first or choose another tool"))
@@ -2880,7 +3030,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # ... existing spline check logic from your code ...
             # Reuse logic from original _find_spline_at
             pts = spline.get_curve_points(segments_per_span=10)
-            local_min = float('inf')
+            local_min = self._safe_float('inf')
             px, py = pos.x(), pos.y()
             for i in range(len(pts) - 1):
                 x1, y1 = pts[i]
@@ -2893,7 +3043,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return local_min
 
         for entity in candidates:
-            dist = float('inf')
+            dist = self._safe_float('inf')
             
             # Type-based distance check
             # We assume your entity classes have .distance_to_point or similar logic
@@ -2915,7 +3065,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         e = entity.end_angle % 360
                         # Check if angle is within sweep
                         in_arc = (s <= e and s <= angle <= e) or (s > e and (angle >= s or angle <= e))
-                        if not in_arc: dist = float('inf')
+                        if not in_arc: dist = self._safe_float('inf')
 
             elif hasattr(entity, 'control_points'): # Spline
                 dist = check_spline(entity)
@@ -3203,8 +3353,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _fit_view(self):
         if not self.sketch.lines and not self.sketch.circles:
             self._center_view(); return
-        minx = miny = float('inf')
-        maxx = maxy = float('-inf')
+        minx = miny = self._safe_float('inf')
+        maxx = maxy = self._safe_float('-inf')
         for l in self.sketch.lines:
             for p in [l.start, l.end]:
                 minx, maxx = min(minx, p.x), max(maxx, p.x)
@@ -3214,7 +3364,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             maxx = max(maxx, c.center.x + c.radius)
             miny = min(miny, c.center.y - c.radius)
             maxy = max(maxy, c.center.y + c.radius)
-        if minx == float('inf'): return
+        if minx == self._safe_float('inf'): return
         pad = 60
         w, h = max(maxx-minx, 1), max(maxy-miny, 1)
         self.view_scale = min((self.width()-2*pad)/w, (self.height()-2*pad)/h)
@@ -3233,7 +3383,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         p.setRenderHint(QPainter.Antialiasing)
         
         # Hintergrund
-        p.fillRect(event.rect(), self.BG_COLOR)
+        p.fillRect(event.rect(), DesignTokens.COLOR_BG_CANVAS)
         
         # Renderer aufrufen - jetzt wird ein QRectF übergeben, 
         # und .intersects(path.boundingRect()) funktioniert!

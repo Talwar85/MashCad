@@ -161,20 +161,22 @@ class ConstraintSolver:
 
             # Finale Werte übernehmen
             for i, (obj, attr) in enumerate(refs):
-                setattr(obj, attr, result.x[i])
+                # .item() konvertiert numpy.float64 -> float
+                val = result.x[i].item()
+                setattr(obj, attr, val)
 
             # Erfolg prüfen (nur Constraint-Fehler, nicht Regularisierung)
             constraint_error = sum(calculate_constraint_error(c) for c in constraints)
             success = result.success and constraint_error < 1e-3
-
             status = ConstraintStatus.FULLY_CONSTRAINED if success else ConstraintStatus.INCONSISTENT
 
+
             return SolverResult(
-                success=success,
-                iterations=result.nfev,
-                final_error=constraint_error,
+                success=bool(success),           # numpy.bool_ -> bool
+                iterations=int(result.nfev),     # numpy.int32 -> int
+                final_error=float(constraint_error), # numpy.float64 -> float
                 status=status,
-                message=result.message if hasattr(result, 'message') else ""
+                message=str(result.message) if hasattr(result, 'message') else ""
             )
 
         except Exception as e:

@@ -21,20 +21,34 @@ class GeometryType(Enum):
 
 @dataclass
 class Point2D:
-    """2D-Punkt - Grundbaustein aller Geometrie"""
+    """2D-Punkt - Grundbaustein aller Geometrie (Gehärtet)"""
     x: float = 0.0
     y: float = 0.0
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    fixed: bool = False  # Fixiert = nicht vom Solver bewegbar
-    construction: bool = False  # Konstruktionsgeometrie
-    standalone: bool = False  # Explizit erstellter Punkt (nicht Teil einer Linie)
+    fixed: bool = False
+    construction: bool = False
+    standalone: bool = False
     
+    def __post_init__(self):
+        """
+        FIREWALL: Wandelt alles sofort in native Python-Floats um.
+        Schützt vor Abstürzen durch Solver-Rückgabewerte (NumPy).
+        """
+        try:
+            # .item() wandelt numpy-skalare extrem schnell in python-types
+            if hasattr(self.x, 'item'): self.x = self.x.item()
+            else: self.x = float(self.x)
+            
+            if hasattr(self.y, 'item'): self.y = self.y.item()
+            else: self.y = float(self.y)
+        except (TypeError, ValueError):
+            self.x = 0.0
+            self.y = 0.0
+
     def distance_to(self, other: 'Point2D') -> float:
-        """Abstand zu anderem Punkt"""
-        return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
+        return math.hypot(self.x - other.x, self.y - other.y)
     
     def midpoint(self, other: 'Point2D') -> 'Point2D':
-        """Mittelpunkt zwischen zwei Punkten"""
         return Point2D((self.x + other.x) / 2, (self.y + other.y) / 2)
     
     def as_tuple(self) -> Tuple[float, float]:
