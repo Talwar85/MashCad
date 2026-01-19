@@ -546,8 +546,22 @@ class SketchRendererMixin:
 
         # Sammle Constraints pro Linie für Offset
         line_constraint_count = {}
-        
+        view_rect = QRectF(0, 0, self.width(), self.height()).adjusted(-50, -50, 50, 50)
         for c in self.sketch.constraints:
+            if not c.entities: continue
+            entity = c.entities[0]
+            if hasattr(entity, 'start'): # Line
+                # Schneller Check: Ist Start oder Ende im Viewport?
+                p_test = self.world_to_screen(entity.midpoint) # Nur Mittelpunkt testen
+                if not view_rect.contains(p_test):
+                    continue
+            elif hasattr(entity, 'center'): # Circle/Arc
+                p_test = self.world_to_screen(entity.center)
+                if not view_rect.contains(p_test):
+                     # Grober Radius Check falls Zentrum draußen aber Kreis drin
+                     r_screen = entity.radius * self.view_scale
+                     if not view_rect.intersects(QRectF(p_test.x()-r_screen, p_test.y()-r_screen, 2*r_screen, 2*r_screen)):
+                         continue
             try:
                 if c.type == ConstraintType.HORIZONTAL and c.entities:
                     line = c.entities[0]

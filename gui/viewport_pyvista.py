@@ -9,6 +9,7 @@ from typing import Optional, List, Tuple, Dict, Any
 import uuid
 from loguru import logger
 from gui.geometry_detector import GeometryDetector
+import time
 
 # Mixins importieren
 from gui.viewport.extrude_mixin import ExtrudeMixin
@@ -149,7 +150,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.transform_actor = None # Der Actor der gerade transformiert wird
         self.transform_widget = None # Das Gizmo
         self.original_matrix = None # Zum Zurücksetzen
-        
+        self._last_pick_time = 0
+        self._pick_interval = 0.05 # 2ß Checks pro Sekunde
+
     def set_selection_mode(self, mode: str):
         """Übersetzt den String-Modus aus dem MainWindow in Detector-Filter."""
         from gui.geometry_detector import GeometryDetector
@@ -179,6 +182,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             
     def on_mouse_move(self, event):
         """CAD-typisches Hover / Preselect"""
+        current_time = time.time()
+        if (current_time - self._last_pick_time < self._pick_interval):
+            return 
+            
+        self._last_pick_time = current_time
+
         pos = event.position() if hasattr(event, 'position') else event.pos()
         x, y = int(pos.x()), int(pos.y())
 
@@ -224,46 +233,69 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     
     def _setup_plotter(self):
         self._drag_screen_vector = np.array([1.0, 0.0])
-        # QtInteractor direkt zum Widget-Layout hinzufügen (ohne extra Frame)
+        
+        # QtInteractor erstellen
         self.plotter = QtInteractor(self)
         self.plotter.interactor.setStyleSheet("background-color: #262626;")
         self.main_layout.addWidget(self.plotter.interactor)
         
+        # --- PERFORMANCE & FIX START ---
+        # Hier lag der Absturz. Wir machen das jetzt robust für alle Versionen.
+        if hasattr(self.plotter, 'iren'):
+            try:
+                # Versuch 1: PyVista Style (snake_case) - Wahrscheinlich deine Version
+                self.plotter.iren.set_desired_update_rate(60.0)
+            except AttributeError:
+                try:
+                    # Versuch 2: VTK Style (CamelCase) - Fallback
+                    self.plotter.iren.SetDesiredUpdateRate(60.0)
+                except AttributeError:
+                    # Wenn beides fehlt, ist es nicht kritisch, nur weniger optimiert.
+                    pass
+        
+        # Events
         self.plotter.interactor.setMouseTracking(True)
         self.plotter.interactor.installEventFilter(self)
         
-        # Gradient Background - dunkler
-        self.plotter.set_background('#1e1e1e', top='#2d2d30')
+        # Kamera-Stil
         self.plotter.enable_trackball_style()
+
+        # --- VISUAL QUALITÄT ---
+        # Hintergrund
+        self.plotter.set_background('#1e1e1e', top='#2d2d30')
         
-        try: self.plotter.enable_anti_aliasing('fxaa')
-        except: pass
-        
-        # WICHTIG: Entferne alle Standard-Widgets die PyVista automatisch erstellt
+        # WICHTIG: FXAA macht Linien unscharf. Für CAD nutzen wir lieber MSAA (Multi-Sampling).
+        # Das kostet minimal mehr GPU, sieht aber bei Drahtgittermodellen viel besser aus.
+        if hasattr(self.plotter, 'ren_win') and hasattr(self.plotter.ren_win, 'SetMultiSamples'):
+            self.plotter.ren_win.SetMultiSamples(4) # 4x oder 8x Glättung
+        else:
+            # Fallback falls MSAA nicht geht
+            try: self.plotter.enable_anti_aliasing('fxaa')
+            except: pass
+        # --- PERFORMANCE & FIX END ---
+
+        # UI Cleanup: Entferne Standard-Achsen
         try: self.plotter.hide_axes()
         except: pass
         
-        # NUR das große Camera Orientation Widget (ViewCube mit klickbaren Kugeln)
+        # ViewCube Widget
         try:
             widget = self.plotter.add_camera_orientation_widget()
             if widget:
-                # Versuch Labels zu setzen, aber stürzt nicht ab wenn es fehlschlägt
                 try:
                     rep = widget.GetRepresentation()
                     if hasattr(rep, 'SetLabelText'):
-                        rep.SetLabelText(0, "RECHTS")
-                        rep.SetLabelText(1, "LINKS")
-                        rep.SetLabelText(2, "HINTEN")
-                        rep.SetLabelText(3, "VORNE")
-                        rep.SetLabelText(4, "OBEN")
-                        rep.SetLabelText(5, "UNTEN")
+                        # Beschriftungen setzen
+                        labels = ["RECHTS", "LINKS", "HINTEN", "VORNE", "OBEN", "UNTEN"]
+                        for i, text in enumerate(labels):
+                            rep.SetLabelText(i, text)
                 except:
-                    pass # Labels werden ignoriert, wenn nicht unterstützt
+                    pass 
                 self._cam_widget = widget
         except Exception as e:
             logger.warning(f"ViewCube creation warning: {e}")
         
-        # Home-Button als Overlay
+        # Home Button Overlay
         self.btn_home = OverlayHomeButton(self)
         self.btn_home.clicked.connect(self._reset_camera_animated)
         self.btn_home.move(20, 20)
@@ -272,6 +304,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
         self._viewcube_created = True
         
+        # Observer für View-Changes
         try:
             if hasattr(self.plotter, 'iren') and self.plotter.iren:
                 self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
@@ -1414,6 +1447,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         Zeichnet NICHT mehr alle 60+ Kandidaten als transparente Overlays,
         da dies bei komplexen Modellen extrem laggt.
         """
+        if not self.selected_face_ids and getattr(self, 'hover_face_id', -1) == -1 and not self._face_actors:
+            return
+
         self._clear_face_actors()
         
         # 1. Sammle relevante IDs (Selected + Hovered)
@@ -1478,7 +1514,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self._update_detector_for_picking()
             else:
                 self._clear_edge_highlights()
-    
+
+   
+
     def _highlight_all_edges(self):
         """Zeigt alle Kanten der Bodies als selektierbar an"""
         try:
@@ -1656,23 +1694,141 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         logger.debug(f" Detection fertig. {added} Body-Faces gefunden.")
 
     def set_sketches(self, sketches):
-        """Zeichnet 2D-Sketches im 3D-Raum"""
+        """
+        Zeichnet 2D-Sketches im 3D-Raum (Batch-Rendering V2.1 - Fix).
+        """
         self.sketches = list(sketches)
         if not HAS_PYVISTA: return
         
-        # Cleanup
+        # 1. Alte Sketch-Actors entfernen
         for n in self._sketch_actors:
             try: self.plotter.remove_actor(n)
             except: pass
         self._sketch_actors.clear()
         
+        # 2. Sketches rendern
         for s, visible in self.sketches:
-            if visible: self._render_sketch(s)
-        self.plotter.update()
+            if visible: 
+                self._render_sketch_batched(s)
+        
+        self.plotter.render()
 
-    # In viewport_pyvista.py, Methode add_body anpassen:
+    def _render_sketch_batched(self, s):
+        """
+        Kombiniert Geometrie zu einem Mesh (High-Performance).
+        FIX: Nutzt explizit 'lines=' für PolyData.
+        """
+        sid = getattr(s, 'id', id(s))
+        norm = tuple(getattr(s, 'plane_normal', (0,0,1)))
+        orig = getattr(s, 'plane_origin', (0,0,0))
+        
+        # Caching der Achsen
+        cached_x = getattr(s, 'plane_x_dir', None)
+        cached_y = getattr(s, 'plane_y_dir', None)
+        
+        if cached_x and cached_y:
+            ux, uy, uz = cached_x
+            vx, vy, vz = cached_y
+            ox, oy, oz = orig
+        else:
+            (ux, uy, uz), (vx, vy, vz) = self._calculate_plane_axes(norm)
+            ox, oy, oz = orig
 
-    # In Klasse PyVistaViewport:
+        # Listen für Punkte: Immer [Start, End, Start, End, ...]
+        reg_points = []
+        const_points = []
+        
+        def to_3d(lx, ly):
+            return (
+                ox + lx * ux + ly * vx,
+                oy + lx * uy + ly * vy,
+                oz + lx * uz + ly * vz
+            )
+
+        # --- 1. Linien ---
+        for l in getattr(s, 'lines', []):
+            p1 = to_3d(l.start.x, l.start.y)
+            p2 = to_3d(l.end.x, l.end.y)
+            target = const_points if getattr(l, 'construction', False) else reg_points
+            target.extend([p1, p2])
+
+        # --- Helper für Kurven ---
+        def add_poly_segments(points_2d_list, is_const):
+            target = const_points if is_const else reg_points
+            # Wandle 2D Punkte in 3D Linien-Segmente um
+            pts_3d = [to_3d(p[0], p[1]) for p in points_2d_list]
+            for i in range(len(pts_3d) - 1):
+                target.append(pts_3d[i])
+                target.append(pts_3d[i+1])
+
+        # --- 2. Kreise ---
+        for c in getattr(s, 'circles', []):
+            pts = []
+            steps = 64
+            for j in range(steps + 1):
+                angle = j * 2 * math.pi / steps
+                lx = c.center.x + c.radius * math.cos(angle)
+                ly = c.center.y + c.radius * math.sin(angle)
+                pts.append((lx, ly))
+            add_poly_segments(pts, getattr(c, 'construction', False))
+
+        # --- 3. Bögen (Arcs) ---
+        for arc in getattr(s, 'arcs', []):
+            pts = []
+            start, end = arc.start_angle, arc.end_angle
+            sweep = end - start
+            if sweep < 0.1: sweep += 360
+            steps = max(12, int(sweep / 5))
+            
+            for j in range(steps + 1):
+                t = math.radians(start + sweep * (j / steps))
+                lx = arc.center.x + arc.radius * math.cos(t)
+                ly = arc.center.y + arc.radius * math.sin(t)
+                pts.append((lx, ly))
+            add_poly_segments(pts, getattr(arc, 'construction', False))
+            
+        # --- 4. Splines ---
+        for spline in getattr(s, 'splines', []):
+            pts_2d = []
+            # Versuche Punkte zu holen
+            if hasattr(spline, 'get_curve_points'):
+                 pts_2d = spline.get_curve_points(segments_per_span=10)
+            elif hasattr(spline, 'to_lines'):
+                 lines = spline.to_lines(segments_per_span=10)
+                 if lines:
+                     pts_2d.append((lines[0].start.x, lines[0].start.y))
+                     for l in lines: pts_2d.append((l.end.x, l.end.y))
+            
+            if len(pts_2d) > 1:
+                add_poly_segments(pts_2d, getattr(spline, 'construction', False))
+
+        # --- BATCH MESH ERSTELLEN (FIXED) ---
+        def create_lines_mesh(point_list):
+            if not point_list: return None
+            points = np.array(point_list)
+            n_segments = len(point_list) // 2
+            
+            # Zellen-Array für VTK Lines: [AnzahlPunkte, Index1, Index2, AnzahlPunkte, ...]
+            # Da es Liniensegmente sind, ist AnzahlPunkte immer 2.
+            cells = np.full((n_segments, 3), 2, dtype=int)
+            cells[:, 1] = np.arange(0, len(point_list), 2)
+            cells[:, 2] = np.arange(1, len(point_list), 2)
+            
+            # WICHTIG: 'lines=' Parameter verwenden, nicht positionales Argument!
+            return pv.PolyData(points, lines=cells.flatten())
+
+        # Actors hinzufügen
+        if reg_points:
+            mesh = create_lines_mesh(reg_points)
+            name = f"sketch_{sid}_reg"
+            self.plotter.add_mesh(mesh, color='#4d94ff', line_width=3, name=name, pickable=False)
+            self._sketch_actors.append(name)
+            
+        if const_points:
+            mesh = create_lines_mesh(const_points)
+            name = f"sketch_{sid}_const"
+            self.plotter.add_mesh(mesh, color='gray', line_width=1, name=name, pickable=False, opacity=0.6)
+            self._sketch_actors.append(name)
 
     def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None, 
                  verts=None, faces=None, normals=None, edges=None, edge_lines=None):

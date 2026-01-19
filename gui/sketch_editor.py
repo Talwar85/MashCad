@@ -970,24 +970,28 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         self.closed_profiles.clear()
         
-        # --- PHASE 1: Welding & Geometrie-Vorbereitung ---
-        
-        # Snap-Map zum Schließen von Lücken < 0.05mm
-        snap_map = {}
-        SNAP_TOL = 0.05
-        
+        # --- PHASE 1: Fast Welding (Coordinate Hashing) ---
+        WELD_GRID = 0.1 
+        welded_points = {} # Map: (ix, iy) -> (float_x, float_y)
+
         def get_welded_pt(x, y):
-            key = (round(x, 1), round(y, 1)) # Grobes Grid für schnelle Suche
-            search_keys = [
-                key, (key[0]+0.1, key[1]), (key[0]-0.1, key[1]),
-                (key[0], key[1]+0.1), (key[0], key[1]-0.1)
-            ]
-            for k in search_keys:
-                if k in snap_map:
-                    sx, sy = snap_map[k]
-                    if math.hypot(x - sx, y - sy) < SNAP_TOL:
-                        return (sx, sy)
-            snap_map[key] = (x, y)
+            ix = int(round(x / WELD_GRID))
+            iy = int(round(y / WELD_GRID))
+            key = (ix, iy)
+            
+            if key in welded_points:
+                return welded_points[key]
+            
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0: continue
+                    neighbor_key = (ix + dx, iy + dy)
+                    if neighbor_key in welded_points:
+                        nx, ny = welded_points[neighbor_key]
+                        if (x - nx)**2 + (y - ny)**2 < (WELD_GRID/2)**2:
+                            return (nx, ny)
+            
+            welded_points[key] = (x, y)
             return (x, y)
 
         shapely_lines = []
@@ -1000,40 +1004,40 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if p1 != p2:
                 shapely_lines.append(LineString([p1, p2]))
 
-        # 2. Bögen (Arcs)
+        # 2. Bögen
         arcs = [a for a in self.sketch.arcs if not a.construction]
         for arc in arcs:
-            points = []
-            # Start/Ende explizit welden (WICHTIG für Slots!)
             start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
             end_p = get_welded_pt(arc.end_point.x, arc.end_point.y)
             
-            points.append(start_p)
-            
             sweep = abs(arc.end_angle - arc.start_angle)
             if sweep < 0.1: sweep += 360
-            steps = max(16, int(sweep / 5)) # Genug Segmente für Smoothness
             
+            # Optimierung: Weniger Segmente für kleine Bögen
+            steps = max(4, int(sweep / 10))
+            
+            points = [start_p]
             diff = arc.end_angle - arc.start_angle
             for i in range(1, steps):
                 t = i / steps
                 angle = math.radians(arc.start_angle + diff * t)
                 px = arc.center.x + arc.radius * math.cos(angle)
                 py = arc.center.y + arc.radius * math.sin(angle)
-                points.append((px, py)) # Zwischenpunkte nicht welden
-            
+                points.append((px, py))
             points.append(end_p)
+            
             if len(points) >= 2:
                 shapely_lines.append(LineString(points))
 
-        # 3. Kreise (als Polygone approximieren für Boolesche Operationen)
-        circles = [c for c in self.sketch.circles if not c.construction]
+        # --- 3. KREISE (FEHLENDER BLOCK HINZUGEFÜGT) ---
+        # Kreise müssen in Polygone umgewandelt werden, da Shapely keine echten Kreise kennt
         standalone_polys = []
+        circles = [c for c in self.sketch.circles if not c.construction]
         
         for circle in circles:
             cx, cy, r = circle.center.x, circle.center.y, circle.radius
             pts = []
-            segments = 128 # Hohe Auflösung wie im 3D Mode
+            segments = 64 # Auflösung für Collision Detection
             for i in range(segments):
                 a = 2 * math.pi * i / segments
                 pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
@@ -1272,47 +1276,80 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def snap_point(self, w):
         if not self.snap_enabled: return w, SnapType.NONE
-        r = self.snap_radius / self.view_scale
-        best_pt, best_d, best_t = None, r, SnapType.NONE
         
-        # ORIGIN SNAPPING - Höchste Priorität!
-        # Origin (0,0) ist wichtiger als andere Punkte
-        origin_d = math.hypot(0 - w.x(), 0 - w.y())
-        origin_snap_r = r * 2.0  # Doppelter Snap-Radius für Origin
-        if origin_d < origin_snap_r:
-            # Origin hat Priorität - direkt zurückgeben wenn sehr nah
-            if origin_d < r * 0.5:
-                return QPointF(0, 0), SnapType.CENTER
-            # Sonst als besten Kandidaten merken
-            best_d, best_pt, best_t = origin_d, QPointF(0, 0), SnapType.CENTER
+        # Performance: Umwandlung nur einmal
+        r_world = self.snap_radius / self.view_scale
         
-        # Endpunkte von Linien
-        for line in self.sketch.lines:
-            for pt in [line.start, line.end]:
-                d = math.hypot(pt.x - w.x(), pt.y - w.y())
-                if d < best_d: best_d, best_pt, best_t = d, QPointF(pt.x, pt.y), SnapType.ENDPOINT
-            mid = line.midpoint
-            d = math.hypot(mid.x - w.x(), mid.y - w.y())
-            if d < best_d: best_d, best_pt, best_t = d, QPointF(mid.x, mid.y), SnapType.MIDPOINT
+        # 1. ORIGIN CHECK (Immer Priorität, sehr schnell)
+        dist_sq_origin = w.x()**2 + w.y()**2
+        if dist_sq_origin < (r_world * 2)**2: # Doppelter Radius für Origin
+             return QPointF(0, 0), SnapType.CENTER
+
+        best_pt, best_dist_sq, best_t = None, r_world**2, SnapType.NONE
         
-        # Kreiszentren und Quadranten
-        for c in self.sketch.circles:
-            d = math.hypot(c.center.x - w.x(), c.center.y - w.y())
-            if d < best_d: best_d, best_pt, best_t = d, QPointF(c.center.x, c.center.y), SnapType.CENTER
-            for ang in [0, 90, 180, 270]:
-                qx = c.center.x + c.radius * math.cos(math.radians(ang))
-                qy = c.center.y + c.radius * math.sin(math.radians(ang))
-                d = math.hypot(qx - w.x(), qy - w.y())
-                if d < best_d: best_d, best_pt, best_t = d, QPointF(qx, qy), SnapType.QUADRANT
+        # 2. QUADTREE QUERY: Nur relevante Geometrie holen!
+        query_rect = QRectF(w.x() - r_world, w.y() - r_world, r_world * 2, r_world * 2)
         
-        # Schnittpunkte
-        for i, l1 in enumerate(self.sketch.lines):
-            for l2 in self.sketch.lines[i+1:]:
-                inter = self._line_intersection(l1, l2)
-                if inter:
-                    d = math.hypot(inter.x() - w.x(), inter.y() - w.y())
-                    if d < best_d: best_d, best_pt, best_t = d, inter, SnapType.INTERSECTION
-        
+        # Falls Index dirty, neu bauen (sollte aber durch MouseMove schon aktuell sein)
+        if self.index_dirty: self._rebuild_spatial_index()
+            
+        # Kandidaten holen (Viel weniger als self.sketch.lines!)
+        candidates = self.spatial_index.query(query_rect) if self.spatial_index else (self.sketch.lines + self.sketch.circles + self.sketch.arcs)
+
+        # 3. Optimierte Suche auf Kandidaten
+        for entity in candidates:
+            # --- LINIE ---
+            if hasattr(entity, 'start') and hasattr(entity, 'end'):
+                # Startpunkt
+                d2 = (entity.start.x - w.x())**2 + (entity.start.y - w.y())**2
+                if d2 < best_dist_sq:
+                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.start.x, entity.start.y), SnapType.ENDPOINT
+                # Endpunkt
+                d2 = (entity.end.x - w.x())**2 + (entity.end.y - w.y())**2
+                if d2 < best_dist_sq:
+                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.end.x, entity.end.y), SnapType.ENDPOINT
+                # Midpoint
+                mid = entity.midpoint
+                d2 = (mid.x - w.x())**2 + (mid.y - w.y())**2
+                if d2 < best_dist_sq:
+                    best_dist_sq, best_pt, best_t = d2, QPointF(mid.x, mid.y), SnapType.MIDPOINT
+
+            # --- KREIS / BOGEN ---
+            elif hasattr(entity, 'center') and hasattr(entity, 'radius'):
+                # Zentrum
+                d2 = (entity.center.x - w.x())**2 + (entity.center.y - w.y())**2
+                if d2 < best_dist_sq:
+                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.center.x, entity.center.y), SnapType.CENTER
+                
+                # Quadranten (nur prüfen wenn Maus nah am Kreisring ist?)
+                # Optimierung: Quadranten sind teuer (sin/cos). Nur prüfen wenn wir noch keinen sehr guten Snap haben
+                if best_dist_sq > (r_world * 0.1)**2: 
+                    for ang in [0, 90, 180, 270]:
+                        qx = entity.center.x + entity.radius * math.cos(math.radians(ang))
+                        qy = entity.center.y + entity.radius * math.sin(math.radians(ang))
+                        d2_q = (qx - w.x())**2 + (qy - w.y())**2
+                        if d2_q < best_dist_sq:
+                            best_dist_sq, best_pt, best_t = d2_q, QPointF(qx, qy), SnapType.QUADRANT
+
+        # 4. Schnittpunkte (Teuer! Nur berechnen für Kandidaten im Sichtbereich)
+        # Wenn wir schon einen sehr guten Endpoint-Snap haben, überspringen wir Intersection oft
+        if best_dist_sq > 0.0001: 
+            # Wir prüfen nur Intersections zwischen den Kandidaten, nicht allen Linien!
+            lines = [e for e in candidates if hasattr(e, 'start')]
+            for i, l1 in enumerate(lines):
+                for l2 in lines[i+1:]:
+                    # Bounding Box Vorprüfung
+                    if not (min(l1.start.x, l1.end.x) > max(l2.start.x, l2.end.x) or 
+                            max(l1.start.x, l1.end.x) < min(l2.start.x, l2.end.x) or
+                            min(l1.start.y, l1.end.y) > max(l2.start.y, l2.end.y) or 
+                            max(l1.start.y, l1.end.y) < min(l2.start.y, l2.end.y)):
+                        
+                        inter = self._line_intersection(l1, l2)
+                        if inter:
+                            d2 = (inter.x() - w.x())**2 + (inter.y() - w.y())**2
+                            if d2 < best_dist_sq:
+                                best_dist_sq, best_pt, best_t = d2, inter, SnapType.INTERSECTION
+
         # Grid als Fallback
         if best_pt is None and self.grid_snap:
             gx = round(w.x() / self.grid_size) * self.grid_size
@@ -3373,25 +3410,39 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.update()
     
     def paintEvent(self, event):
-        # FIX: Konvertiere das Integer-Rect (QRect) sofort in ein Float-Rect (QRectF)
-        # Der Renderer arbeitet mit QRectF (wegen Zoom/Pan), daher muss das hier passen.
-        update_rect = QRectF(event.rect())
-        
+        # 1. QPainter initialisieren
         p = QPainter(self)
-        # Clipping kann weiterhin das pixelgenaue Integer-Rect nutzen
+        
+        # WICHTIG: Clipping setzen, damit Qt nicht außerhalb des "Dirty Rects" malt.
+        # Das spart GPU-Arbeit.
         p.setClipRect(event.rect())
+        
+        # Antialiasing für schöne Linien
         p.setRenderHint(QPainter.Antialiasing)
         
-        # Hintergrund
+        # 2. Hintergrund füllen (Schneller als drawRect)
         p.fillRect(event.rect(), DesignTokens.COLOR_BG_CANVAS)
         
-        # Renderer aufrufen - jetzt wird ein QRectF übergeben, 
-        # und .intersects(path.boundingRect()) funktioniert!
+        # 3. Update-Rect für Culling vorbereiten
+        # Wir nehmen das Event-Rect (den Bereich, der neu gezeichnet werden muss)
+        # und machen es etwas größer (Padding).
+        # Warum? Damit dicke Linien oder Kreise am Rand nicht "abgehackt" wirken,
+        # wenn der Renderer entscheidet, sie seien knapp draußen.
+        update_rect = QRectF(event.rect()).adjusted(-20, -20, 20, 20)
+        
+        # 4. Zeichen-Methoden aufrufen
+        # Da wir update_rect übergeben, berechnet der Renderer intern:
+        # "Liegt diese Linie innerhalb von update_rect?" -> Wenn nein, Skip.
+        
         self._draw_grid(p, update_rect)
-        self._draw_body_references(p)
+        self._draw_body_references(p)   # Falls vorhanden (projizierte 3D-Kanten)
         self._draw_profiles(p, update_rect)
         self._draw_axes(p)
+        
+        # Hier passiert die Magie der Performance-Optimierung:
         self._draw_geometry(p, update_rect)
+        
+        # UI-Elemente (Constraints, Snaps etc.) zeichnen
         self._draw_constraints(p) 
         self._draw_open_ends(p)
         self._draw_preview(p)
@@ -3399,6 +3450,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_snap(p)
         self._draw_live_dimensions(p)
         self._draw_hud(p)
+        
+        p.end()
     
     def _on_dim_choice_changed(self, key, value):
         """Reagiert auf Dropdown-Auswahl im Dialog"""
