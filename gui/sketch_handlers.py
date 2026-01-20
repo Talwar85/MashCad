@@ -5,6 +5,8 @@ Extracted from sketch_editor.py for better maintainability
 """
 
 import math
+import sys
+import os
 from loguru import logger
 from PySide6.QtCore import QPointF, Qt, QRectF
 from PySide6.QtGui import QColor, QTransform, QPainterPath, QFont, QFontMetrics
@@ -24,6 +26,15 @@ except ImportError:
     except ImportError:
         from .sketch_tools import SketchTool, SnapType
 
+
+
+try:
+    import sketcher.geometry as geometry
+except ImportError:
+    import geometry
+
+
+from sketcher.sketch import Sketch
 
 class SketchHandlersMixin:
     """Mixin containing all tool handler methods for SketchEditor"""
@@ -45,11 +56,17 @@ class SketchHandlersMixin:
                 if hit in self.selected_points: self.selected_points.remove(hit)
                 else: self.selected_points.append(hit)
     
-    def _handle_line(self, pos, snap_type):
+    def _handle_line(self, pos, snap_type, snap_entity=None):
+        """
+        Erstellt Linien und nutzt die existierenden Constraint-Methoden des Sketch-Objekts.
+        """
+        # Schritt 1: Startpunkt setzen
         if self.tool_step == 0:
             self.tool_points = [pos]
             self.tool_step = 1
-            self.status_message.emit(tr("Endpoint | Tab=Length/Angle | Right=Finish"))
+            self.status_message.emit("Endpunkt wählen | Tab=Länge/Winkel | Rechts=Fertig")
+        
+        # Schritt 2: Endpunkt setzen und Linie erstellen
         else:
             start = self.tool_points[-1]
             dx = pos.x() - start.x()
@@ -58,30 +75,62 @@ class SketchHandlersMixin:
 
             if length > 0.01:
                 self._save_undo()
+                
+                # Linie erstellen (wie in deinem Original)
                 line = self.sketch.add_line(start.x(), start.y(), pos.x(), pos.y(), construction=self.construction_mode)
 
-                # Auto-Constraints: Horizontal/Vertikal wenn fast gerade
-                h_tolerance = 3.0  # Pixel-Toleranz
-                if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
-                    # Fast horizontal -> Horizontal Constraint
-                    self.sketch.add_horizontal(line)
-                elif abs(dx) < h_tolerance and abs(dy) > h_tolerance:
-                    # Fast vertikal -> Vertical Constraint
-                    self.sketch.add_vertical(line)
+                # --- A. Auto-Constraints: Horizontal / Vertikal ---
+                # Wir nutzen hier deine existierenden Methoden add_horizontal/vertical
+                h_tolerance = 3.0
+                
+                # Nur prüfen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
+                if snap_type not in [SnapType.EDGE, SnapType.INTERSECTION]:
+                    if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
+                        if hasattr(self.sketch, 'add_horizontal'):
+                            self.sketch.add_horizontal(line)
+                            self.status_message.emit("Auto: Horizontal")
+                            
+                    elif abs(dx) < h_tolerance and abs(dy) > h_tolerance:
+                        if hasattr(self.sketch, 'add_vertical'):
+                            self.sketch.add_vertical(line)
+                            self.status_message.emit("Auto: Vertical")
 
-                # Auto-Constraint: Point-on-Line wenn Endpunkt auf anderer Linie liegt
-                if snap_type and 'LINE' in str(snap_type):
-                    for other_line in self.sketch.lines:
-                        if other_line == line:
-                            continue
-                        dist = other_line.distance_to_point(line.end)
-                        if dist < 1.0:
-                            self.sketch.add_point_on_line(line.end, other_line)
-                            break
+                # --- B. Auto-Constraints: Verbindungen (Das neue Snapping) ---
+                # Statt über alle Linien zu loopen, nutzen wir das snap_entity direkt!
+                
+                if snap_entity and snap_type == SnapType.EDGE:
+                    
+                    # 1. Verbindung mit LINIE
+                    if hasattr(snap_entity, 'start'): 
+                        # Verhindern, dass wir die Linie an sich selbst kleben
+                        if snap_entity != line:
+                            # Nutze deine existierende Methode!
+                            if hasattr(self.sketch, 'add_point_on_line'):
+                                self.sketch.add_point_on_line(line.end, snap_entity)
+                                self.status_message.emit("Auto: Punkt auf Linie")
+                    
+                    # 2. Verbindung mit KREIS (Das fehlte vorher!)
+                    elif hasattr(snap_entity, 'radius'):
+                        # Prüfen ob du add_point_on_circle hast, sonst manuell
+                        if hasattr(self.sketch, 'add_point_on_circle'):
+                            self.sketch.add_point_on_circle(line.end, snap_entity)
+                            self.status_message.emit("Auto: Punkt auf Kreis")
+                        else:
+                            # Fallback: Direktes Einfügen, falls die Methode fehlt
+                            try:
+                                from constraints import Constraint, ConstraintType
+                                c = Constraint(ConstraintType.POINT_ON_CIRCLE, [line.end, snap_entity])
+                                self.sketch.constraints.append(c)
+                                self.status_message.emit("Auto: Punkt auf Kreis (Manuell)")
+                            except Exception as e:
+                                print(f"Konnte Kreis-Constraint nicht erstellen: {e}")
 
-                self._solve_async() # Thread start
-                self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                # --- C. Abschluss ---
+                self._solve_async() 
+                self._find_closed_profiles()
                 self.sketched_changed.emit()
+                
+                # Poly-Line Modus
                 self.tool_points.append(pos)
     
     def _handle_rectangle(self, pos, snap_type):
@@ -302,6 +351,7 @@ class SketchHandlersMixin:
                 self._save_undo()
                 self.sketch.add_arc(*arc, construction=self.construction_mode)
                 self.sketched_changed.emit()
+                self._find_closed_profiles()
             self._cancel_tool()
     
     def _calc_arc_3point(self, p1, p2, p3):
@@ -971,44 +1021,175 @@ class SketchHandlersMixin:
         self._solve_async()
         self._find_closed_profiles()
     
-    def _handle_trim(self, pos, snap_type):
-        line = self._find_line_at(pos)
-        if not line: self.status_message.emit(tr("No line found")); return
-        intersections = []
-        for other in self.sketch.lines:
-            if other == line: continue
-            inter = self._line_intersection(line, other)
-            if inter:
-                t = self._point_on_line_t(line, inter)
-                if 0.01 < t < 0.99: intersections.append((t, inter))
-        if not intersections:
-            self._save_undo()
-            self.sketch.delete_line(line)
-            self.sketched_changed.emit()
-            self._find_closed_profiles()
+    
+    def _handle_trim(self, pos, snap_type, snap_entity=None):
+        """
+        Intelligentes Trimmen:
+        1. Findet Entity unter Maus
+        2. Berechnet ALLE Schnittpunkte gegen ALLE anderen Geometrien
+        3. Löscht Segment
+        """
+        # --- Imports Setup ---
+        try:
+            import sketcher.geometry as geometry
+        except ImportError:
+            import geometry 
+        from sketcher import Point2D, Line2D, Circle2D, Arc2D
+        # ---------------------
+
+        # 1. Target bestimmen
+        target = snap_entity
+        if not target:
+            target = self._find_entity_at(pos) # Kein Radius-Parameter mehr!
+            
+        if not target:
+            self.preview_geometry = []
+            self.update()
             return
-        intersections.sort()
-        click_t = self._point_on_line_t(line, pos)
-        self._save_undo()
-        prev_t = 0.0
-        for i, (t, _) in enumerate(intersections):
-            if click_t < t:
-                if prev_t > 0.01:
-                    pt1 = self._point_at_t(line, prev_t)
-                    self.sketch.add_line(line.start.x, line.start.y, pt1.x(), pt1.y())
-                if t < 0.99:
-                    pt2 = self._point_at_t(line, t)
-                    self.sketch.add_line(pt2.x(), pt2.y(), line.end.x, line.end.y)
-                self.sketch.delete_line(line)
+
+        # 2. Liste aller anderen Entities erstellen (FIX FÜR AttributeError)
+        # Wir müssen die Listen manuell zusammenfügen, da self.sketch.entities nicht existiert
+        other_entities = []
+        other_entities.extend(self.sketch.lines)
+        other_entities.extend(self.sketch.circles)
+        if hasattr(self.sketch, 'arcs'):
+            other_entities.extend(self.sketch.arcs)
+        # Punkte ignorieren wir beim Trimmen (man kann Linie nicht an Punkt schneiden ohne Constraint)
+
+        # 3. Alle Schnittpunkte berechnen
+        cut_points = []
+        
+        # Start/Ende des Targets selbst
+        if isinstance(target, Line2D):
+            cut_points.append((0.0, target.start))
+            cut_points.append((1.0, target.end))
+
+        # Loop über die manuell erstellte Liste
+        for other in other_entities:
+            if other == target: continue 
+            
+            intersects = []
+            try:
+                # Dispatching an Geometry-Backend
+                if isinstance(target, Line2D) and isinstance(other, Line2D):
+                    pt = geometry.line_line_intersection(target, other)
+                    if pt: intersects = [pt]
+                elif isinstance(target, Circle2D) and isinstance(other, Circle2D):
+                    intersects = geometry.circle_circle_intersection(target, other)
+                elif isinstance(target, Line2D) and isinstance(other, Circle2D):
+                    intersects = geometry.circle_line_intersection(other, target)
+                elif isinstance(target, Circle2D) and isinstance(other, Line2D):
+                    intersects = geometry.circle_line_intersection(target, other)
+                elif isinstance(target, Arc2D) and isinstance(other, Line2D):
+                    intersects = geometry.arc_line_intersection(target, other)
+                elif isinstance(target, Line2D) and isinstance(other, Arc2D):
+                    intersects = geometry.arc_line_intersection(other, target)
+                elif isinstance(target, Arc2D) and isinstance(other, Circle2D):
+                    intersects = geometry.arc_circle_intersection(target, other)
+                elif isinstance(target, Circle2D) and isinstance(other, Arc2D):
+                    intersects = geometry.arc_circle_intersection(other, target)
+            except Exception:
+                continue
+
+            # Validierung der Punkte
+            for p in intersects:
+                t = geometry.get_param_on_entity(p, target)
+                
+                if isinstance(target, Line2D):
+                    # Toleranz: Nicht exakt auf Start/Ende
+                    if 0.001 < t < 0.999:
+                        cut_points.append((t, p))
+                elif isinstance(target, Circle2D):
+                    cut_points.append((t, p))
+                elif isinstance(target, Arc2D):
+                    cut_points.append((t, p))
+
+        # 4. Sortieren
+        cut_points.sort(key=lambda x: x[0])
+
+        # 5. Segment finden
+        t_mouse = geometry.get_param_on_entity(Point2D(pos.x(), pos.y()), target)
+        segment_to_remove = None
+        
+        if isinstance(target, Line2D):
+            for i in range(len(cut_points) - 1):
+                t_start, p_start = cut_points[i]
+                t_end, p_end = cut_points[i+1]
+                if t_start <= t_mouse <= t_end:
+                    segment_to_remove = (p_start, p_end, i, cut_points)
+                    break
+                    
+        elif isinstance(target, Circle2D):
+            if not cut_points:
+                segment_to_remove = "ALL"
+            else:
+                first_t, first_p = cut_points[0]
+                cut_points_loop = cut_points + [(first_t + 2*math.pi, first_p)]
+                
+                found = False
+                for i in range(len(cut_points_loop) - 1):
+                    t_s, p_s = cut_points_loop[i]
+                    t_e, p_e = cut_points_loop[i+1]
+                    
+                    if t_s <= t_mouse <= t_e:
+                        segment_to_remove = (p_s, p_e, i, cut_points)
+                        found = True
+                        break
+                    # Wrap-Around Check
+                    if t_mouse + 2*math.pi <= t_e:
+                         if t_s <= t_mouse + 2*math.pi:
+                            segment_to_remove = (p_s, p_e, i, cut_points)
+                            found = True
+                            break
+                            
+                if not found and cut_points:
+                     segment_to_remove = (cut_points[-1][1], cut_points[0][1], -1, cut_points)
+
+        # 6. Aktion ausführen
+        if segment_to_remove:
+            self.status_message.emit("Klicken zum Trimmen")
+            
+            # Vorschau (optional)
+            if isinstance(target, Line2D) and segment_to_remove != "ALL":
+                self.preview_geometry = [Line2D(segment_to_remove[0], segment_to_remove[1])]
+
+            if QApplication.mouseButtons() & Qt.LeftButton:
+                self._save_undo()
+                
+                # Entfernen (Sicher, ohne .entities Property)
+                if target in self.sketch.points: self.sketch.points.remove(target)
+                elif target in self.sketch.lines: self.sketch.lines.remove(target)
+                elif target in self.sketch.circles: self.sketch.circles.remove(target)
+                elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs: self.sketch.arcs.remove(target)
+                
+                # Neu erstellen (Was übrig bleibt)
+                if isinstance(target, Line2D):
+                    for i in range(len(cut_points) - 1):
+                        p_start = cut_points[i][1]
+                        p_end = cut_points[i+1][1]
+                        
+                        # Check ob das das gelöschte Segment ist
+                        is_removed = (abs(p_start.x - segment_to_remove[0].x) < 1e-5 and 
+                                      abs(p_start.y - segment_to_remove[0].y) < 1e-5)
+                        
+                        if not is_removed and p_start.distance_to(p_end) > 1e-3:
+                            self.sketch.add_line(p_start.x, p_start.y, p_end.x, p_end.y)
+
+                elif isinstance(target, Circle2D) and segment_to_remove != "ALL":
+                    p_start_remove, p_end_remove, idx, _ = segment_to_remove
+                    
+                    ang_start = geometry.get_param_on_entity(p_end_remove, target)
+                    ang_end = geometry.get_param_on_entity(p_start_remove, target)
+                    
+                    if ang_end < ang_start: 
+                        ang_end += 2*math.pi
+                        
+                    if abs(ang_end - ang_start) > 1e-4:
+                        self.sketch.add_arc(target.center.x, target.center.y, target.radius, ang_start, ang_end)
+
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
-                return
-            prev_t = t
-        pt = self._point_at_t(line, prev_t)
-        self.sketch.add_line(line.start.x, line.start.y, pt.x(), pt.y())
-        self.sketch.delete_line(line)
-        self.sketched_changed.emit()
-        self._find_closed_profiles()
+                self.mouse_buttons = Qt.NoButton
     
     def _handle_extend(self, pos, snap_type):
         line = self._find_line_at(pos)

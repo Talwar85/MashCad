@@ -237,7 +237,7 @@ class SketchRendererMixin:
                 
         # Koordinaten zählen
         for pt in endpoints:
-            key = (round(pt.x, 3), round(pt.y, 3))
+            key = (round(pt.x, 2), round(pt.y, 2))
             coord_counts[key] = coord_counts.get(key, 0) + 1
             
         # Zeichne rote Punkte für "einsame" Enden (Count == 1)
@@ -246,7 +246,7 @@ class SketchRendererMixin:
         p.setBrush(QBrush(QColor(255, 0, 50, 180))) # Leuchtendes Rot
         
         for pt in endpoints:
-            key = (round(pt.x, 3), round(pt.y, 3))
+            key = (round(pt.x, 2), round(pt.y, 2))
             if coord_counts[key] == 1:
                 # Das ist ein offenes Ende!
                 screen_pos = self.world_to_screen(QPointF(pt.x, pt.y))
@@ -260,48 +260,45 @@ class SketchRendererMixin:
         """
         Ultimate Performance Render:
         1. Culling: Ignoriert alles außerhalb von update_rect.
-        2. Batching: Sammelt Geometrie in QPainterPaths, um Draw-Calls zu minimieren.
+        2. Batching: Sammelt Geometrie in QPainterPaths.
         """
         
-        # --- 0. Vorbereitung der Pfade (Batching Container) ---
-        path_normal = QPainterPath()       # Standard Geometrie
-        path_construction = QPainterPath() # Gestrichelt
-        path_fixed = QPainterPath()        # <--- FIX: Initialisierung hinzugefügt (Magenta/Fixed)
-        path_selected = QPainterPath()     # Blau
-        path_hover = QPainterPath()        # Hellblau
-        
-        # Pfad für Glow (alles was selektiert ist)
+        # --- 0. Vorbereitung ---
+        path_normal = QPainterPath()       
+        path_construction = QPainterPath() 
+        path_fixed = QPainterPath()        
+        path_selected = QPainterPath()     
+        path_hover = QPainterPath()        
         path_glow = QPainterPath()
-        
-        # Pfad für Punkte (Endpunkte, Fixed Points)
         path_endpoints = QPainterPath()
         path_fixed_points = QPainterPath()
 
-        # Hilfsfunktion für Sichtbarkeitsprüfung
         def is_visible(bounds):
             if update_rect is None: return True
             return update_rect.intersects(bounds)
 
+        # Spline-Linien sammeln, um sie NICHT doppelt zu zeichnen (verhindert "schwarze Fläche")
+        spline_lines_ids = set()
+        for s in self.sketch.splines:
+            if hasattr(s, '_lines'):
+                for l in s._lines: spline_lines_ids.add(id(l))
+
         # --- 1. Linien sammeln ---
         for line in self.sketch.lines:
-            # Spline-Linien überspringen wenn Dragging
-            if self.spline_drag_spline and line in getattr(self.spline_drag_spline, '_lines', []): 
+            # Überspringe Linien, die Teil eines Splines sind (wir zeichnen den Spline selbst)
+            if id(line) in spline_lines_ids: 
                 continue
 
-            # Culling Check
             bounds = self._get_line_bounds(line)
             if not is_visible(bounds): continue
 
-            # Koordinaten berechnen
             p1 = self.world_to_screen(line.start)
             p2 = self.world_to_screen(line.end)
             
-            # Status bestimmen
             is_sel = line in self.selected_lines
             is_hov = self.hovered_entity == line
-            is_fixed = getattr(line, 'fixed', False) # Check auf Fixed Attribut
+            is_fixed = getattr(line, 'fixed', False)
             
-            # Zu passendem Pfad hinzufügen
             if is_sel:
                 path_selected.moveTo(p1)
                 path_selected.lineTo(p2)
@@ -313,14 +310,13 @@ class SketchRendererMixin:
             elif line.construction:
                 path_construction.moveTo(p1)
                 path_construction.lineTo(p2)
-            elif is_fixed: # <--- FIX: Logik für Fixed Lines
+            elif is_fixed:
                 path_fixed.moveTo(p1)
                 path_fixed.lineTo(p2)
             else:
                 path_normal.moveTo(p1)
                 path_normal.lineTo(p2)
 
-            # Endpunkte sammeln (Batching für Punkte!)
             for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
                 if hasattr(pt, 'fixed') and pt.fixed:
                     path_fixed_points.addEllipse(screen_pt, 4, 4)
@@ -346,7 +342,7 @@ class SketchRendererMixin:
                 path_hover.addEllipse(ctr, r, r)
             elif c.construction:
                 path_construction.addEllipse(ctr, r, r)
-            elif is_fixed: # <--- FIX
+            elif is_fixed:
                 path_fixed.addEllipse(ctr, r, r)
             else:
                 path_normal.addEllipse(ctr, r, r)
@@ -361,6 +357,7 @@ class SketchRendererMixin:
             rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
             
             start_angle = arc.start_angle
+            # Fix: Variable 'end_angle' war hier undefiniert -> arc.end_angle nutzen
             sweep = arc.end_angle - arc.start_angle
             if sweep <= 0: sweep += 360
             
@@ -379,23 +376,22 @@ class SketchRendererMixin:
                 path_hover.addPath(temp_path)
             elif arc.construction:
                 path_construction.addPath(temp_path)
-            elif is_fixed: # <--- FIX
+            elif is_fixed:
                 path_fixed.addPath(temp_path)
             else:
                 path_normal.addPath(temp_path)
 
-            # Endpunkte für Arcs zeichnen
+            # Endpunkte für Arcs zeichnen (FIX: arc.end_angle statt end_angle)
             sx = arc.center.x + arc.radius * math.cos(math.radians(start_angle))
             sy = arc.center.y + arc.radius * math.sin(math.radians(start_angle))
-            ex = arc.center.x + arc.radius * math.cos(math.radians(end_angle))
-            ey = arc.center.y + arc.radius * math.sin(math.radians(end_angle))
+            ex = arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle))
+            ey = arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
             
             path_endpoints.addEllipse(self.world_to_screen(QPointF(sx, sy)), 3, 3)
             path_endpoints.addEllipse(self.world_to_screen(QPointF(ex, ey)), 3, 3)
 
-        # --- 4. ZEICHNEN (Batch Rendering) ---
+        # --- 4. ZEICHNEN ---
 
-        # A. Glow (ganz unten)
         if not path_glow.isEmpty():
             glow_color = QColor(DesignTokens.COLOR_GEO_SELECTED)
             glow_color.setAlpha(60)
@@ -404,41 +400,34 @@ class SketchRendererMixin:
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_glow)
 
-        # B. Construction (Gestrichelt)
         if not path_construction.isEmpty():
             p.setPen(DesignTokens.pen_geo_construction())
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_construction)
             
-        # C. Fixed (Magenta) - <--- FIX: Jetzt existiert die Variable und hat Inhalt
         if not path_fixed.isEmpty():
             pen = QPen(DesignTokens.COLOR_GEO_FIXED, 1.5)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_fixed)
 
-        # D. Normal (Standard Geometrie)
         if not path_normal.isEmpty():
             p.setPen(DesignTokens.pen_geo_normal())
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_normal)
 
-        # E. Hover (Gehightlightet)
         if not path_hover.isEmpty():
             pen = QPen(DesignTokens.COLOR_GEO_HOVER, 2.5)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_hover)
 
-        # F. Selected (Blau)
         if not path_selected.isEmpty():
             p.setPen(DesignTokens.pen_geo_selected())
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_selected)
 
-        # G. Punkte (Obendrauf)
         if not path_endpoints.isEmpty():
-            # FIX: DesignTokens statt self.GEO_COLOR nutzen (falls self.GEO_COLOR nicht existiert)
             p.setPen(QPen(DesignTokens.COLOR_GEO_BODY, 1)) 
             p.setBrush(DesignTokens.COLOR_BG_CANVAS)
             p.drawPath(path_endpoints)
@@ -448,35 +437,23 @@ class SketchRendererMixin:
             p.setBrush(DesignTokens.COLOR_GEO_FIXED)
             p.drawPath(path_fixed_points)
 
-        # --- 5. Splines (Separat, da komplexer) ---
+        # --- 5. Splines (Separat & Korrigiert) ---
         for spline in self.sketch.splines:
-            # Culling für Spline
             if update_rect:
+                # Grober Bounding Box Check für Spline
                 cps = spline.control_points
                 if not cps: continue
-                min_x = min(cp.point.x for cp in cps)
-                max_x = max(cp.point.x for cp in cps)
-                min_y = min(cp.point.y for cp in cps)
-                max_y = max(cp.point.y for cp in cps)
-                
-                pt_tl = self.world_to_screen(QPointF(min_x, max_y)) 
-                pt_br = self.world_to_screen(QPointF(max_x, min_y))
-                spline_bound = QRectF(pt_tl, pt_br).normalized().adjusted(-50, -50, 50, 50)
-                
-                if not update_rect.intersects(spline_bound): continue
+                # ... (hier vereinfacht, im Zweifel zeichnen) ...
 
-            # Drawing logic
             is_selected = spline == self.selected_spline
             is_dragging = (spline == self.spline_drag_spline)
             
-            # Style wählen
             col = DesignTokens.COLOR_GEO_CONSTRUCTION if spline.construction else DesignTokens.COLOR_GEO_BODY
             width = 2
             if is_selected: 
                 col = DesignTokens.COLOR_GEO_SELECTED
                 width = 3
             
-            # Linien holen
             lines_to_draw = []
             if is_dragging and hasattr(spline, '_preview_lines'):
                 lines_to_draw = spline._preview_lines
@@ -485,19 +462,21 @@ class SketchRendererMixin:
             
             if not lines_to_draw: continue
 
-            # Pfad bauen
             spline_path = QPainterPath()
             first = lines_to_draw[0]
             spline_path.moveTo(self.world_to_screen(first.start))
-            
             for l in lines_to_draw:
                 spline_path.lineTo(self.world_to_screen(l.end))
             
-            # Zeichnen
-            if is_selected: # Glow für Spline
+            if is_selected:
                 glow_pen = QPen(QColor(DesignTokens.COLOR_GEO_SELECTED), 8)
-                glow_pen.getColor().setAlpha(100)
+                # FIX: .getColor() existiert nicht. Korrekte PySide6 Syntax:
+                c = glow_pen.color()
+                c.setAlpha(100)
+                glow_pen.setColor(c)
+                
                 p.setPen(glow_pen)
+                p.setBrush(Qt.NoBrush)
                 p.drawPath(spline_path)
                 
             p.setPen(QPen(col, width))
@@ -1316,6 +1295,85 @@ class SketchRendererMixin:
             p.drawLine(int(pos.x())-5, int(pos.y())-5, int(pos.x())+5, int(pos.y())+5)
             p.drawLine(int(pos.x())+5, int(pos.y())-5, int(pos.x())-5, int(pos.y())+5)
     
+    def _draw_snap_guides(self, p: QPainter):
+        """
+        Zeichnet das Feedback. 
+        Wichtig: Nutze QPainterPath für gestrichelte Linien (Performance).
+        """
+        if not self.last_snap_result or self.last_snap_result.type == SnapType.NONE:
+            return
+
+        res = self.last_snap_result
+        screen_pt = self.world_to_screen(res.point)
+        
+        # 1. Guides (Hintergrund)
+        if res.guides:
+            p.setPen(QPen(QColor(0, 150, 255, 120), 1, Qt.DashLine))
+            for gtype, val in res.guides:
+                if gtype == "vline":
+                    sx = self.world_to_screen(QPointF(val, 0)).x()
+                    p.drawLine(sx, 0, sx, self.height())
+                elif gtype == "hline":
+                    sy = self.world_to_screen(QPointF(0, val)).y()
+                    p.drawLine(0, sy, self.width(), sy)
+
+        # 2. Der Marker (Vordergrund)
+        # Fusion Style: Verschiedene Symbole für verschiedene Snaps
+        p.setPen(QPen(QColor(255, 255, 255), 2))
+        p.setBrush(QColor(0, 120, 255, 100)) # Blau halbtransparent
+        
+        s = 10 # Größe
+        r = QRectF(screen_pt.x() - s/2, screen_pt.y() - s/2, s, s)
+        
+        if res.type == SnapType.ENDPOINT:
+            p.drawRect(r) # Quadrat für Endpunkt
+        elif res.type == SnapType.MIDPOINT:
+            # Dreieck zeichnen
+            tri = QPolygonF([
+                QPointF(screen_pt.x(), screen_pt.y() - s/2),
+                QPointF(screen_pt.x() - s/2, screen_pt.y() + s/2),
+                QPointF(screen_pt.x() + s/2, screen_pt.y() + s/2)
+            ])
+            p.drawPolygon(tri)
+        elif res.type == SnapType.CENTER:
+            p.drawEllipse(r) # Kreis für Zentrum
+        else:
+            # Standard X oder kleiner Kreis
+            p.drawEllipse(screen_pt, 3, 3)
+    
+    def _draw_fusion_input_box(self, p: QPainter, center: QPointF, label: str, value_text: str, active: bool = True):
+        """
+        Zeichnet eine Input-Box im Fusion-Style (Blau hinterlegt).
+        """
+        text = f"{label} {value_text}"
+        fm = p.fontMetrics()
+        rect = fm.boundingRect(text)
+        
+        # Padding
+        pad_x = 8
+        pad_y = 4
+        w = rect.width() + (pad_x * 2)
+        h = rect.height() + (pad_y * 2)
+        
+        # Box zentriert um 'center' positionieren
+        x = center.x() - (w / 2)
+        y = center.y() - (h / 2)
+        box_rect = QRectF(x, y, w, h)
+        
+        # Style: Fusion Blue (#0064C8) oder Grau, wenn inaktiv
+        bg_color = QColor(0, 100, 200, 220) if active else QColor(80, 80, 80, 200)
+        border_color = QColor(255, 255, 255, 150)
+        
+        p.setPen(QPen(border_color, 1))
+        p.setBrush(QBrush(bg_color))
+        p.drawRoundedRect(box_rect, 4, 4)
+        
+        # Text
+        p.setPen(QColor(255, 255, 255))
+        # Text exakt zentrieren
+        p.drawText(box_rect, Qt.AlignCenter, text)
+
+        
     def _draw_live_dimensions(self, p):
         if self.tool_step == 0: return
         p.setFont(QFont("Consolas", 11, QFont.Bold))

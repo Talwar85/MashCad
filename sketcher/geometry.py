@@ -301,6 +301,88 @@ def circle_line_intersection(circle: Circle2D, line: Line2D) -> List[Point2D]:
     return points
 
 
+def circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Point2D']:
+    """
+    Berechnet die Schnittpunkte zweier Kreise.
+    Mathematik: Radical Axis Methode.
+    """
+    # Abstand zwischen Mittelpunkten
+    dx = c2.center.x - c1.center.x
+    dy = c2.center.y - c1.center.y
+    d = (dx**2 + dy**2)**0.5
+    
+    r1 = c1.radius
+    r2 = c2.radius
+    
+    # Filter: Keine Lösung möglich
+    if d > r1 + r2: return [] # Disjunkt außen
+    if d < abs(r1 - r2): return [] # Einer im Anderen
+    if d == 0: return [] # Konzentrisch/Identisch (Ignorieren für Snapping)
+    
+    # Abstand a vom c1-Zentrum zum Schnittpunkt der Verbindungslinie
+    a = (r1**2 - r2**2 + d**2) / (2 * d)
+    
+    # Punkt P2 auf der Verbindungslinie
+    px = c1.center.x + a * dx / d
+    py = c1.center.y + a * dy / d
+    
+    # Höhe h (Abstand von P2 zu den Schnittpunkten)
+    h_sq = r1**2 - a**2
+    if h_sq < 0: return []
+    h = h_sq**0.5
+    
+    # Schnittpunkte berechnen
+    x1 = px + h * dy / d
+    y1 = py - h * dx / d
+    x2 = px - h * dy / d
+    y2 = py + h * dx / d
+    
+    points = [Point2D(x1, y1)]
+    
+    # Wenn Kreise sich nicht nur berühren, zweiten Punkt hinzufügen
+    if d < r1 + r2 and h > 1e-10:
+        points.append(Point2D(x2, y2))
+        
+    return points
+
+def is_point_on_arc(point: 'Point2D', arc: 'Arc2D', tolerance: float = 1e-4) -> bool:
+    """Prüft, ob ein Punkt winkeltechnisch auf dem Bogen liegt."""
+    import math
+    
+    # 1. Radius-Check (Grobfilter)
+    if abs(point.distance_to(arc.center) - arc.radius) > tolerance:
+        return False
+        
+    # 2. Winkel berechnen
+    angle = math.atan2(point.y - arc.center.y, point.x - arc.center.x)
+    if angle < 0: angle += 2 * math.pi
+    
+    start = arc.start_angle
+    end = arc.end_angle
+    
+    # Normalisierung [0, 2pi]
+    if start < 0: start += 2 * math.pi
+    if end < 0: end += 2 * math.pi
+    
+    # 3. Bereichsprüfung (Handling für 0-Übergang)
+    if start <= end:
+        return start - tolerance <= angle <= end + tolerance
+    else:
+        return angle >= start - tolerance or angle <= end + tolerance
+
+def arc_line_intersection(arc: 'Arc2D', line: 'Line2D') -> List['Point2D']:
+    """Schnitt Arc-Linie: Berechnet Kreis-Schnitt und filtert via Winkel."""
+    full_circle = Circle2D(arc.center, arc.radius)
+    candidates = circle_line_intersection(full_circle, line)
+    return [p for p in candidates if is_point_on_arc(p, arc)]
+
+def arc_circle_intersection(arc: 'Arc2D', circle: 'Circle2D') -> List['Point2D']:
+    """Schnitt Arc-Kreis."""
+    full_circle_arc = Circle2D(arc.center, arc.radius)
+    candidates = circle_circle_intersection(full_circle_arc, circle)
+    return [p for p in candidates if is_point_on_arc(p, arc)]
+
+
 def points_are_coincident(p1: Point2D, p2: Point2D, tolerance: float = 1e-6) -> bool:
     """Prüft ob zwei Punkte zusammenfallen"""
     return p1.distance_to(p2) < tolerance
@@ -435,3 +517,34 @@ class BezierSpline:
             line.construction = self.construction
             lines.append(line)
         return lines
+
+
+def get_param_on_entity(point: 'Point2D', entity) -> float:
+    """
+    Gibt einen Sortier-Parameter zurück:
+    - Linie: 0.0 (Start) bis 1.0 (Ende)
+    - Kreis: 0.0 bis 2*PI (Winkel)
+    """
+    import math
+    
+    if isinstance(entity, Line2D):
+        # Projeziere Punkt auf Linie und berechne t (0..1)
+        dx = entity.end.x - entity.start.x
+        dy = entity.end.y - entity.start.y
+        if dx == 0 and dy == 0: return 0.0
+        
+        # Vektor Start->Punkt
+        vkx = point.x - entity.start.x
+        vky = point.y - entity.start.y
+        
+        # Skalarprodukt für Projektion
+        t = (vkx * dx + vky * dy) / (dx*dx + dy*dy)
+        return t
+
+    elif isinstance(entity, Circle2D):
+        # Winkel berechnen
+        angle = math.atan2(point.y - entity.center.y, point.x - entity.center.x)
+        if angle < 0: angle += 2 * math.pi
+        return angle
+        
+    return 0.0

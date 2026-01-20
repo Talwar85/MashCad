@@ -30,6 +30,16 @@ try:
 except ImportError:
     from design_tokens import DesignTokens
 
+try:
+    from gui.sketch_snapper import SmartSnapper
+except ImportError:
+    try:
+        from sketch_snapper import SmartSnapper
+        logger.success("SmartSnapper Module loaded.")
+    except ImportError:
+        logger.error("SmartSnapper not found. Snapping will be degraded.")
+        SmartSnapper = None
+
 
 try:
     from gui.quadtree import QuadTree
@@ -301,7 +311,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(600, 400)
-        self.setMouseTracking(True)
+        
         self.setFocusPolicy(Qt.StrongFocus)
         
         self._solver_lock = threading.Lock()
@@ -316,6 +326,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.snap_enabled = True
         self.snap_radius = 15
         
+        # ... Snapper initialisieren ...
+        if SmartSnapper:
+            self.snapper = SmartSnapper(self)
+        else:
+            self.snapper = None
+
         self.current_tool = SketchTool.SELECT
         self.tool_step = 0
         self.tool_points = []
@@ -429,7 +445,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.connect(self._mark_index_dirty)
         self.hovered_ref_edge = None
         self.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_CANVAS.name()};")
-
+        self.setMouseTracking(True)
         QTimer.singleShot(100, self._center_view)
     
     def _safe_float(self, value):
@@ -964,6 +980,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         1. Welding (Punkte verschweißen) gegen Mikro-Lücken (für Slots/Langlöcher).
         2. Hierarchie-Analyse (wie im 3D Modus) für korrekte Löcher/Inseln.
         """
+       
         from shapely.geometry import LineString, Polygon as ShapelyPolygon, Point
         from shapely.ops import polygonize, unary_union
         import numpy as np
@@ -1274,89 +1291,27 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._find_closed_profiles()
         return len(self.closed_profiles) > 0
     
+
+    # In sketch_editor.py
+
     def snap_point(self, w):
-        if not self.snap_enabled: return w, SnapType.NONE
-        
-        # Performance: Umwandlung nur einmal
-        r_world = self.snap_radius / self.view_scale
-        
-        # 1. ORIGIN CHECK (Immer Priorität, sehr schnell)
-        dist_sq_origin = w.x()**2 + w.y()**2
-        if dist_sq_origin < (r_world * 2)**2: # Doppelter Radius für Origin
-             return QPointF(0, 0), SnapType.CENTER
-
-        best_pt, best_dist_sq, best_t = None, r_world**2, SnapType.NONE
-        
-        # 2. QUADTREE QUERY: Nur relevante Geometrie holen!
-        query_rect = QRectF(w.x() - r_world, w.y() - r_world, r_world * 2, r_world * 2)
-        
-        # Falls Index dirty, neu bauen (sollte aber durch MouseMove schon aktuell sein)
-        if self.index_dirty: self._rebuild_spatial_index()
+        if not self.snap_enabled: 
+            return w, SnapType.NONE, None  # <--- Drittes Element: Entity
             
-        # Kandidaten holen (Viel weniger als self.sketch.lines!)
-        candidates = self.spatial_index.query(query_rect) if self.spatial_index else (self.sketch.lines + self.sketch.circles + self.sketch.arcs)
-
-        # 3. Optimierte Suche auf Kandidaten
-        for entity in candidates:
-            # --- LINIE ---
-            if hasattr(entity, 'start') and hasattr(entity, 'end'):
-                # Startpunkt
-                d2 = (entity.start.x - w.x())**2 + (entity.start.y - w.y())**2
-                if d2 < best_dist_sq:
-                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.start.x, entity.start.y), SnapType.ENDPOINT
-                # Endpunkt
-                d2 = (entity.end.x - w.x())**2 + (entity.end.y - w.y())**2
-                if d2 < best_dist_sq:
-                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.end.x, entity.end.y), SnapType.ENDPOINT
-                # Midpoint
-                mid = entity.midpoint
-                d2 = (mid.x - w.x())**2 + (mid.y - w.y())**2
-                if d2 < best_dist_sq:
-                    best_dist_sq, best_pt, best_t = d2, QPointF(mid.x, mid.y), SnapType.MIDPOINT
-
-            # --- KREIS / BOGEN ---
-            elif hasattr(entity, 'center') and hasattr(entity, 'radius'):
-                # Zentrum
-                d2 = (entity.center.x - w.x())**2 + (entity.center.y - w.y())**2
-                if d2 < best_dist_sq:
-                    best_dist_sq, best_pt, best_t = d2, QPointF(entity.center.x, entity.center.y), SnapType.CENTER
-                
-                # Quadranten (nur prüfen wenn Maus nah am Kreisring ist?)
-                # Optimierung: Quadranten sind teuer (sin/cos). Nur prüfen wenn wir noch keinen sehr guten Snap haben
-                if best_dist_sq > (r_world * 0.1)**2: 
-                    for ang in [0, 90, 180, 270]:
-                        qx = entity.center.x + entity.radius * math.cos(math.radians(ang))
-                        qy = entity.center.y + entity.radius * math.sin(math.radians(ang))
-                        d2_q = (qx - w.x())**2 + (qy - w.y())**2
-                        if d2_q < best_dist_sq:
-                            best_dist_sq, best_pt, best_t = d2_q, QPointF(qx, qy), SnapType.QUADRANT
-
-        # 4. Schnittpunkte (Teuer! Nur berechnen für Kandidaten im Sichtbereich)
-        # Wenn wir schon einen sehr guten Endpoint-Snap haben, überspringen wir Intersection oft
-        if best_dist_sq > 0.0001: 
-            # Wir prüfen nur Intersections zwischen den Kandidaten, nicht allen Linien!
-            lines = [e for e in candidates if hasattr(e, 'start')]
-            for i, l1 in enumerate(lines):
-                for l2 in lines[i+1:]:
-                    # Bounding Box Vorprüfung
-                    if not (min(l1.start.x, l1.end.x) > max(l2.start.x, l2.end.x) or 
-                            max(l1.start.x, l1.end.x) < min(l2.start.x, l2.end.x) or
-                            min(l1.start.y, l1.end.y) > max(l2.start.y, l2.end.y) or 
-                            max(l1.start.y, l1.end.y) < min(l2.start.y, l2.end.y)):
-                        
-                        inter = self._line_intersection(l1, l2)
-                        if inter:
-                            d2 = (inter.x() - w.x())**2 + (inter.y() - w.y())**2
-                            if d2 < best_dist_sq:
-                                best_dist_sq, best_pt, best_t = d2, inter, SnapType.INTERSECTION
-
-        # Grid als Fallback
-        if best_pt is None and self.grid_snap:
-            gx = round(w.x() / self.grid_size) * self.grid_size
-            gy = round(w.y() / self.grid_size) * self.grid_size
-            best_pt, best_t = QPointF(gx, gy), SnapType.GRID
-        
-        return (best_pt, best_t) if best_pt else (w, SnapType.NONE)
+        if self.snapper:
+            if self.index_dirty: self._rebuild_spatial_index()
+            screen_pos = self.world_to_screen(w)
+            res = self.snapper.snap(screen_pos)
+            # Rückgabe: Punkt, Typ, Getroffenes Entity (für Auto-Constraints)
+            return res.point, res.type, res.target_entity
+            
+        else:
+            if self.grid_snap:
+                 gx = round(w.x() / self.grid_size) * self.grid_size
+                 gy = round(w.y() / self.grid_size) * self.grid_size
+                 return QPointF(gx, gy), SnapType.GRID, None
+            return w, SnapType.NONE, None
+    
     
     def _line_intersection(self, l1, l2):
         x1, y1, x2, y2 = l1.start.x, l1.start.y, l1.end.x, l1.end.y
@@ -2343,35 +2298,40 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
         
-        # Wenn DimensionInput aktiv: Klick außerhalb = BESTÄTIGEN
+        # 1. Dimension Input Bestätigung (Klick ins Leere bestätigt Eingabe)
         if self.dim_input_active and self.dim_input.isVisible():
             if not self.dim_input.geometry().contains(pos.toPoint()):
-                self._on_dim_confirmed()  # Bestätigt statt nur schließen!
+                self._on_dim_confirmed()
                 return
         
+        # 2. Panning (Mittelklick)
         if event.button() == Qt.MiddleButton:
             self.is_panning = True
             self.pan_start = pos
             self.setCursor(Qt.ClosedHandCursor)
             return
         
+        # 3. Linksklick Interaktionen
         if event.button() == Qt.LeftButton:
-            # Constraint-Icon-Klick prüfen (höchste Priorität im SELECT-Modus)
+            
+            # A. Constraint-Icon-Klick prüfen (höchste Priorität im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 clicked_constraint = self._find_constraint_at(pos)
                 if clicked_constraint:
                     ctrl = event.modifiers() & Qt.ControlModifier
                     if not ctrl:
                         self.selected_constraints.clear()
+                    
                     if clicked_constraint not in self.selected_constraints:
                         self.selected_constraints.append(clicked_constraint)
                     else:
                         self.selected_constraints.remove(clicked_constraint)
+                    
                     self.status_message.emit(f"Constraint ausgewählt: {clicked_constraint.type.name}")
                     self.update()
                     return
 
-            # Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
+            # B. Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
                 if spline_elem:
@@ -2386,9 +2346,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.status_message.emit(tr("Drag spline {type} | Shift=Corner").format(type=elem_type))
                     return
             
-            snapped, snap_type = self.snap_point(self.mouse_world)
+            # C. SNAPPING (Hier ist der entscheidende Fix für die Kreis-Verbindung!)
+            # Wir holen uns jetzt 3 Werte: Punkt, Typ UND das Entity (Kreis/Linie)
+            snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
+            
+            # D. Selektion (wenn kein Tool aktiv)
             if self.current_tool == SketchTool.SELECT and not self._find_entity_at(snapped):
-                # Auch Spline-Kurve selbst prüfen
+                # Auch Spline-Kurve selbst prüfen (Body-Klick)
                 spline = self._find_spline_at(self.mouse_world)
                 if spline:
                     self.selected_spline = spline
@@ -2396,14 +2360,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.status_message.emit(tr("Spline selected - drag points/handles"))
                     self.update()
                     return
+                
+                # Selection Box starten
                 self.selection_box_start = pos
                 self.selection_box_end = pos
                 return
-            handler = getattr(self, f'_handle_{self.current_tool.name.lower()}', None)
-            if handler: handler(snapped, snap_type)
+            
+            # E. TOOL HANDLER AUFRUFEN
+            # Wir rufen die _handle_... Methode auf und übergeben das snap_entity
+            handler_name = f'_handle_{self.current_tool.name.lower()}'
+            handler = getattr(self, handler_name, None)
+            
+            if handler:
+                try:
+                    # Versuche, das Entity mit zu übergeben (für _handle_line notwendig)
+                    handler(snapped, snap_type, snap_entity)
+                except TypeError:
+                    # Fallback: Falls andere Tools (z.B. Rect) noch nicht aktualisiert wurden
+                    # und keine 3 Argumente akzeptieren, rufen wir sie klassisch auf.
+                    handler(snapped, snap_type)
+
+        # 4. Rechtsklick (Abbrechen / Kontextmenü)
         elif event.button() == Qt.RightButton:
-            if self.tool_step > 0: self._finish_current_operation()
-            else: self._show_context_menu(pos)
+            if self.tool_step > 0: 
+                self._finish_current_operation()
+            else: 
+                self._show_context_menu(pos)
+        
         self.update()
     
     def mouseReleaseEvent(self, event):
@@ -2540,8 +2523,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.mouse_world = self.screen_to_world(pos)
         if self.tool_step > 0:
             # Snap und Live-Werte müssen trotzdem berechnet werden
-            snapped, snap_type = self.snap_point(self.mouse_world)
-            self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
+            snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
+            self.current_snap = (snapped, snap_type, snap_entity) if snap_type != SnapType.NONE else None
             self._update_live_values(snapped)
             
             self.update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
@@ -2575,11 +2558,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         else:
             # 2. Snapping und Hover-Logik
-            snapped, snap_type = self.snap_point(self.mouse_world)
+            snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
             
             # Snap-Update Check
             old_snap = self.current_snap
-            self.current_snap = (snapped, snap_type) if snap_type != SnapType.NONE else None
+            self.current_snap = (snapped, snap_type, snap_entity)
             
             if self.current_snap != old_snap:
                 # Snap hat sich geändert -> Bereich um alten und neuen Snap invalidieren
@@ -2805,6 +2788,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def keyPressEvent(self, event):
         key, mod = event.key(), event.modifiers()
+        if key == Qt.Key_Escape:
+            print("Keypress")
+            self._handle_escape_logic()
+            return
+    
         if self.dim_input_active and self.dim_input.isVisible():
             if key == Qt.Key_Escape:
                 self.dim_input.hide()
@@ -2844,7 +2832,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
         
         shortcuts = {
-            Qt.Key_Escape: lambda: self._cancel_tool() if self.tool_step > 0 else self.set_tool(SketchTool.SELECT),
+            #Qt.Key_Escape: lambda: self._cancel_tool() if self.tool_step > 0 else self.set_tool(SketchTool.SELECT),
             Qt.Key_Space: lambda: self.set_tool(SketchTool.SELECT),
             Qt.Key_L: lambda: self.set_tool(SketchTool.LINE),
             Qt.Key_R: lambda: self.set_tool(SketchTool.RECTANGLE),
@@ -2875,7 +2863,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if key in shortcuts: shortcuts[key](); self.update()
     
 
-  
+    def _handle_escape_logic(self):
+        """
+        Hierarchisches Beenden von Aktionen (Fusion Style).
+        Reihenfolge:
+        1. Laufende Geometrie-Erstellung abbrechen (z.B. ersten Punkt einer Linie vergessen)
+        2. Aktives Tool beenden -> Wechsel zu SELECT
+        3. Auswahl aufheben (Deselect All)
+        4. Sketch Modus verlassen
+        """
+        # Level 1: Laufende Operation abbrechen (z.B. Linie hat schon Startpunkt)
+        if hasattr(self, 'temp_points') and self.temp_points:
+            self.temp_points = []
+            self.update() # Neu zeichnen um Geisterlinien zu entfernen
+            self.status_message.emit("Action cancelled")
+            return
+
+        # Level 2: Aktives Tool beenden (zurück zu Select)
+        if self.active_tool != SketchTool.SELECT:
+            self.set_tool(SketchTool.SELECT)
+            self.status_message.emit("Tool deactivated")
+            return
+
+        # Level 3: Selektion aufheben
+        if self.selected_lines or self.selected_points or self.selected_circles:
+            self._clear_selection()
+            self.update()
+            return
+
+        # Level 4: Sketch Modus wirklich verlassen (nur wenn nichts anderes aktiv war)
+        # Optional: Dialog "Wirklich beenden?" oder direkt raus
+        self.exit_sketch_mode()
             
     def _finish_current_operation(self):
         if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:

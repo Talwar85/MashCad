@@ -698,53 +698,55 @@ class Sketch:
     
     # === Profil-Erkennung ===
     
-    def find_closed_profiles(self) -> List[List[Line2D]]:
+    def _find_closed_profiles(self, tolerance: float = 0.5):
         """Findet geschlossene Profile (für Extrude)"""
-        # Vereinfachte Implementierung - findet verbundene Schleifen
+       
         profiles = []
         used_line_ids = set()
         
-        for start_line in self.lines:
+        non_construction_lines = [l for l in self.lines if not l.construction]
+        
+        for start_line in non_construction_lines:
             if start_line.id in used_line_ids:
                 continue
             
-            profile = self._trace_profile(start_line, used_line_ids)
+            profile = self._trace_profile(start_line, used_line_ids, tolerance)  # ← Bleibt gleich
+            
             if profile and len(profile) >= 3:
                 profiles.append(profile)
         
         return profiles
     
-    def _trace_profile(self, start_line: Line2D, used_ids: set) -> Optional[List[Line2D]]:
-        """Verfolgt ein Profil von einer Startlinie aus"""
+    def _trace_profile(self, start_line: Line2D, used_ids: set, tolerance: float = 0.5) -> Optional[List[Line2D]]:
         profile = [start_line]
         used_ids.add(start_line.id)
         current_point = start_line.end
         
         max_iterations = len(self.lines)
+        
         for _ in range(max_iterations):
-            # Finde nächste Linie die an current_point beginnt
             next_line = None
             for line in self.lines:
-                if line.id in used_ids:
+                if line.id in used_ids or line.construction:
                     continue
-                if points_are_coincident(line.start, current_point, 0.01):
+                
+                # Nutze Toleranz Parameter
+                if points_are_coincident(line.start, current_point, tolerance):
                     next_line = line
                     current_point = line.end
                     break
-                elif points_are_coincident(line.end, current_point, 0.01):
-                    # Linie umkehren
+                elif points_are_coincident(line.end, current_point, tolerance):
                     next_line = line
                     current_point = line.start
                     break
             
             if next_line is None:
-                return None  # Offenes Profil
+                return None
             
             profile.append(next_line)
             used_ids.add(next_line.id)
             
-            # Geschlossen?
-            if points_are_coincident(current_point, start_line.start, 0.01):
+            if points_are_coincident(current_point, start_line.start, tolerance):
                 return profile
         
         return None
