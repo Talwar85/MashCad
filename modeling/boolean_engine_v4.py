@@ -313,6 +313,11 @@ class BooleanEngineV4:
         """
         Execute OpenCASCADE Boolean operation with robust settings.
 
+        Phase 3: Robuste Boolean-Defaults (Fusion 360-ähnlich)
+        - SetFuzzyValue: Toleranz für numerische Ungenauigkeiten
+        - SetRunParallel: Multi-Threading für Performance
+        - SetGlue: Robustes Gluing für überlappende Geometrien
+
         Args:
             shape1: OCP TopoDS_Shape (target)
             shape2: OCP TopoDS_Shape (tool)
@@ -327,20 +332,37 @@ class BooleanEngineV4:
             logger.debug(f"OCP Boolean {operation}: shape1 type={type(shape1).__name__}, shape2 type={type(shape2).__name__}")
             logger.debug(f"  Fuzzy tolerance: {fuzzy_tolerance}")
 
-            # Use the SIMPLE constructor-based API (more reliable)
-            # This directly passes shapes instead of using SetArguments/SetTools
+            # Phase 3: Use explicit API with robust settings
+            # Parameter-less constructor allows setting options before Build()
             if operation.lower() in ["join", "fuse"]:
-                op = BRepAlgoAPI_Fuse(shape1, shape2)
+                op = BRepAlgoAPI_Fuse()
             elif operation.lower() == "cut":
-                op = BRepAlgoAPI_Cut(shape1, shape2)
+                op = BRepAlgoAPI_Cut()
             elif operation.lower() in ["intersect", "common"]:
-                op = BRepAlgoAPI_Common(shape1, shape2)
+                op = BRepAlgoAPI_Common()
             else:
                 logger.debug(f"Unknown operation: {operation}")
                 return None, None
 
-            # The constructor already calls Build() internally
-            logger.debug("  Boolean operation executed via constructor")
+            # Create TopTools_ListOfShape (required by OCP API)
+            args_list = TopTools_ListOfShape()
+            args_list.Append(shape1)
+
+            tools_list = TopTools_ListOfShape()
+            tools_list.Append(shape2)
+
+            op.SetArguments(args_list)
+            op.SetTools(tools_list)
+
+            # Phase 3: Robuste Boolean-Defaults (wie Fusion 360)
+            op.SetFuzzyValue(fuzzy_tolerance)  # Toleranz für numerische Ungenauigkeiten
+            op.SetRunParallel(True)            # Multi-Threading für Performance
+            # HINWEIS: SetGlue(GlueShift) entfernt - verursachte kaputte Körper bei ~20% der Joins
+            # GlueOff (default) ist sicherer für allgemeine Operationen
+
+            # Manual Build (nicht automatisch via Konstruktor)
+            op.Build()
+            logger.debug("  Boolean operation built with Phase 3 settings")
 
             is_done = op.IsDone()
             logger.debug(f"  op.IsDone() = {is_done}")

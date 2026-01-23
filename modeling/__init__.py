@@ -187,18 +187,56 @@ class Body:
         self.features: List[Feature] = []
         
         # CAD Kernel Objekte
-        self._build123d_solid = None  
-        self.shape = None             
-        
-        # PyVista/VTK Objekte (Cache)
-        self.vtk_mesh = None       # pv.PolyData (Faces)
-        self.vtk_edges = None      # pv.PolyData (Edges)
-        
+        self._build123d_solid = None
+        self.shape = None
+
+        # === PHASE 2: Single Source of Truth ===
+        # PyVista/VTK Objekte - LAZY LOADED aus _build123d_solid
+        self._mesh_cache = None       # pv.PolyData (Faces) - privat!
+        self._edges_cache = None      # pv.PolyData (Edges) - privat!
+        self._mesh_cache_valid = False  # Invalidiert wenn Solid sich ändert
+
         # Legacy Visualisierungs-Daten (Nur als Fallback)
         self._mesh_vertices: List[Tuple[float, float, float]] = []
         self._mesh_triangles: List[Tuple[int, int, int]] = []
-        self._mesh_normals = [] 
+        self._mesh_normals = []
         self._mesh_edges = []
+
+    # === PHASE 2: Lazy-Loaded Properties ===
+    @property
+    def vtk_mesh(self):
+        """Lazy-loaded mesh from solid (Single Source of Truth)"""
+        if not self._mesh_cache_valid or self._mesh_cache is None:
+            self._regenerate_mesh()
+        return self._mesh_cache
+
+    @property
+    def vtk_edges(self):
+        """Lazy-loaded edges from solid (Single Source of Truth)"""
+        if not self._mesh_cache_valid or self._edges_cache is None:
+            self._regenerate_mesh()
+        return self._edges_cache
+
+    def _regenerate_mesh(self):
+        """Single point of mesh generation - called automatically when needed"""
+        if self._build123d_solid is None:
+            self._mesh_cache = None
+            self._edges_cache = None
+            self._mesh_cache_valid = True
+            return
+
+        # Generate from solid via CADTessellator
+        self._mesh_cache, self._edges_cache = CADTessellator.tessellate(
+            self._build123d_solid
+        )
+        self._mesh_cache_valid = True
+        n_pts = self._mesh_cache.n_points if self._mesh_cache else 0
+        n_edges = self._edges_cache.n_lines if self._edges_cache else 0
+        logger.debug(f"Mesh regenerated for '{self.name}': {n_pts} pts, {n_edges} edges")
+
+    def invalidate_mesh(self):
+        """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
+        self._mesh_cache_valid = False
         
     def add_feature(self, feature: Feature):
         """Feature hinzufügen und Geometrie neu berechnen"""
@@ -390,7 +428,7 @@ class Body:
                 warnings.append("solid2 wurde repariert")
 
             # 3. Boolean Operation
-            FUZZY_VALUE = 1e-5
+            FUZZY_VALUE = 1e-4  # 0.1mm - Fusion360-ähnliche Toleranz (Phase 2)
             result_shape = None
 
             if operation == "Join":
@@ -534,7 +572,7 @@ class Body:
             result_shape = None
 
             # Toleranzen für robuste Operationen
-            FUZZY_VALUE = 1e-5  # 0.01mm - größer = toleranter
+            FUZZY_VALUE = 1e-4  # 0.1mm - Fusion360-ähnliche Toleranz (Phase 2)
 
             if operation == "Join":
                 result_shape = self._ocp_fuse(shape1, shape2, FUZZY_VALUE)
@@ -1034,9 +1072,8 @@ class Body:
         """
         logger.info(f"Rebuilding Body '{self.name}' ({len(self.features)} Features)...")
         
-        # Reset Cache
-        self.vtk_mesh = None
-        self.vtk_edges = None
+        # Reset Cache (Phase 2: Lazy-Loading)
+        self.invalidate_mesh()
         self._mesh_vertices.clear()
         self._mesh_triangles.clear()
         
@@ -1664,23 +1701,16 @@ class Body:
 
     def _update_mesh_from_solid(self, solid):
         """
-        Generiert Mesh-Daten via Tessellator.
-        Ersetzt den alten komplexen Code durch einen einfachen Helper-Aufruf.
+        Phase 2: Invalidiert Mesh-Cache - Mesh wird lazy regeneriert bei Zugriff.
+        (Single Source of Truth Pattern)
         """
-        if not solid: return
+        if not solid:
+            return
 
-        # Cache leeren bei erstem Aufruf (falls nicht beim Start geschehen)
-        if not CADTessellator._cache_cleared:
-            CADTessellator.clear_cache()
+        # Invalidiere Cache - nächster Zugriff auf vtk_mesh/vtk_edges regeneriert
+        self.invalidate_mesh()
 
-        # 1. High-Performance Tessellierung mit Cache
-        self.vtk_mesh, self.vtk_edges = CADTessellator.tessellate(solid)
-        
-        # Debug: Edge-Info loggen
-        if self.vtk_edges is not None:
-            logger.debug(f"Body '{self.name}': {self.vtk_edges.n_lines} Edge-Linien")
-        
-        # 2. Legacy Support leeren
+        # Legacy Support leeren
         self._mesh_vertices = []
         self._mesh_triangles = []
 
