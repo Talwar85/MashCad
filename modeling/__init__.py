@@ -106,11 +106,16 @@ class Feature:
 class ExtrudeFeature(Feature):
     sketch: Sketch = None
     distance: float = 10.0
-    direction: int = 1 
+    direction: int = 1
     operation: str = "New Body"
-    selector: list = None 
-    precalculated_polys: list = field(default_factory=list) # NEU: Für Detector-Sync
-    
+    selector: list = None
+    precalculated_polys: list = field(default_factory=list)
+    # Plane-Info für Rebuild (wenn sketch=None)
+    plane_origin: tuple = field(default_factory=lambda: (0, 0, 0))
+    plane_normal: tuple = field(default_factory=lambda: (0, 0, 1))
+    plane_x_dir: tuple = None
+    plane_y_dir: tuple = None
+
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
         if not self.name or self.name == "Feature": self.name = "Extrude"

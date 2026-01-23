@@ -49,40 +49,61 @@ class TransformCommand(QUndoCommand):
         """
         from modeling.cad_tessellator import CADTessellator
 
+        logger.info(f"🔧 TransformCommand.redo() CALLED")
+        logger.info(f"   Body: {self.body.name}")
+        logger.info(f"   Feature: {self.feature.name}")
+        logger.info(f"   Mode: {self.feature.mode}")
+        logger.info(f"   Data: {self.feature.data}")
+
         # Only add if not already added
         if len(self.body.features) == self.old_feature_count:
             # Feature zur History hinzufügen (OHNE _rebuild!)
             self.body.features.append(self.feature)
-            logger.debug(f"Redo: Added {self.feature.name} to {self.body.name}")
+            logger.info(f"   ✅ Feature added to body.features")
 
             # Transform direkt auf aktuelles Solid anwenden
-            with CADTessellator.invalidate_cache():
-                try:
-                    new_solid = self.body._apply_transform_feature(
-                        self.body._build123d_solid,
-                        self.feature
-                    )
-                    if new_solid:
-                        self.body._build123d_solid = new_solid
-                        if hasattr(new_solid, 'wrapped'):
-                            self.body.shape = new_solid.wrapped
-                        # Mesh aktualisieren
-                        self.body._update_mesh_from_solid(new_solid)
-                        self.feature.status = "OK"
-                        logger.success(f"Transform direkt angewendet: {self.feature.mode}")
-                    else:
-                        self.feature.status = "ERROR"
-                        logger.error("Transform returned None")
-                except Exception as e:
-                    self.feature.status = "ERROR"
-                    logger.error(f"Transform Error: {e}")
-
-                # UI Update
-                self.main_window._update_body_from_build123d(
-                    self.body,
-                    self.body._build123d_solid
+            try:
+                logger.info(f"   🔨 Calling _apply_transform_feature...")
+                new_solid = self.body._apply_transform_feature(
+                    self.body._build123d_solid,
+                    self.feature
                 )
-                self.main_window.browser.refresh()
+                logger.info(f"   Transform result: {new_solid is not None}")
+
+                if new_solid:
+                    logger.info(f"   ✅ Transform successful - updating body")
+                    self.body._build123d_solid = new_solid
+                    if hasattr(new_solid, 'wrapped'):
+                        self.body.shape = new_solid.wrapped
+
+                    # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
+                    # Transform creates NEW solid which may reuse Python IDs
+                    CADTessellator.clear_cache()
+                    logger.debug(f"🔄 Cache komplett gelöscht nach Transform")
+                    # Mesh aktualisieren
+                    logger.info(f"   🔄 Updating mesh from solid...")
+                    self.body._update_mesh_from_solid(new_solid)
+                    self.feature.status = "OK"
+                    logger.success(f"✅ Transform direkt angewendet: {self.feature.mode}")
+                else:
+                    self.feature.status = "ERROR"
+                    logger.error("❌ Transform returned None")
+            except Exception as e:
+                self.feature.status = "ERROR"
+                logger.error(f"Transform Error: {e}")
+
+            # UI Update (IMMER ausführen, auch bei Erfolg!)
+            logger.info(f"   🖼️  Updating UI (viewport + browser)...")
+            self.main_window._update_body_from_build123d(
+                self.body,
+                self.body._build123d_solid
+            )
+            self.main_window.browser.refresh()
+            logger.info(f"   ✅ UI updated")
+
+            # Gizmo an neue Position verschieben falls aktiv
+            self._update_gizmo_position()
+            logger.info(f"✅ TransformCommand.redo() FINISHED")
 
     def undo(self):
         """
@@ -100,37 +121,42 @@ class TransformCommand(QUndoCommand):
             logger.debug(f"Undo: Removed {removed_feature.name} from {self.body.name}")
 
             # Inverse Transform anwenden statt _rebuild()
-            with CADTessellator.invalidate_cache():
-                try:
-                    # Erstelle inverse TransformFeature
-                    inverse_feature = self._create_inverse_transform(removed_feature)
-                    if inverse_feature:
-                        new_solid = self.body._apply_transform_feature(
-                            self.body._build123d_solid,
-                            inverse_feature
-                        )
-                        if new_solid:
-                            self.body._build123d_solid = new_solid
-                            if hasattr(new_solid, 'wrapped'):
-                                self.body.shape = new_solid.wrapped
-                            self.body._update_mesh_from_solid(new_solid)
-                            logger.success(f"Undo: Inverse Transform angewendet")
-                        else:
-                            # Fallback zu _rebuild() wenn inverse Transform fehlschlägt
-                            logger.warning("Inverse Transform failed, using _rebuild()")
-                            self.body._rebuild()
-                    else:
-                        # Fallback für unbekannte Transform-Typen
-                        self.body._rebuild()
-                except Exception as e:
-                    logger.error(f"Undo Error: {e}, using _rebuild()")
-                    self.body._rebuild()
+            try:
+                # Erstelle inverse TransformFeature
+                inverse_feature = self._create_inverse_transform(removed_feature)
+                if inverse_feature:
+                    new_solid = self.body._apply_transform_feature(
+                        self.body._build123d_solid,
+                        inverse_feature
+                    )
+                    if new_solid:
+                        self.body._build123d_solid = new_solid
+                        if hasattr(new_solid, 'wrapped'):
+                            self.body.shape = new_solid.wrapped
 
-                self.main_window._update_body_from_build123d(
-                    self.body,
-                    self.body._build123d_solid
-                )
-                self.main_window.browser.refresh()
+                        # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
+                        CADTessellator.clear_cache()
+                        logger.debug(f"🔄 Cache komplett gelöscht nach Inverse Transform")
+
+                        self.body._update_mesh_from_solid(new_solid)
+                        logger.success(f"Undo: Inverse Transform angewendet")
+                    else:
+                        # Fallback zu _rebuild() wenn inverse Transform fehlschlägt
+                        logger.warning("Inverse Transform failed, using _rebuild()")
+                        self.body._rebuild()
+                else:
+                    # Fallback für unbekannte Transform-Typen
+                    self.body._rebuild()
+            except Exception as e:
+                logger.error(f"Undo Error: {e}, using _rebuild()")
+                self.body._rebuild()
+
+            # UI Update (IMMER ausführen!)
+            self.main_window._update_body_from_build123d(
+                self.body,
+                self.body._build123d_solid
+            )
+            self.main_window.browser.refresh()
 
             # Gizmo an neue Position verschieben falls aktiv
             self._update_gizmo_position()
@@ -215,13 +241,13 @@ class DeleteFeatureCommand(QUndoCommand):
             self.body.features.remove(self.feature)
             logger.debug(f"Redo: Deleted {self.feature.name}")
 
-            with CADTessellator.invalidate_cache():
-                self.body._rebuild()
-                self.main_window._update_body_from_build123d(
-                    self.body,
-                    self.body._build123d_solid
-                )
-                self.main_window.browser.refresh()
+            # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
+            self.body._rebuild()
+            self.main_window._update_body_from_build123d(
+                self.body,
+                self.body._build123d_solid
+            )
+            self.main_window.browser.refresh()
 
     def undo(self):
         """Restore feature at original position"""
@@ -232,13 +258,13 @@ class DeleteFeatureCommand(QUndoCommand):
             self.body.features.insert(self.feature_index, self.feature)
             logger.debug(f"Undo: Restored {self.feature.name}")
 
-            with CADTessellator.invalidate_cache():
-                self.body._rebuild()
-                self.main_window._update_body_from_build123d(
-                    self.body,
-                    self.body._build123d_solid
-                )
-                self.main_window.browser.refresh()
+            # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
+            self.body._rebuild()
+            self.main_window._update_body_from_build123d(
+                self.body,
+                self.body._build123d_solid
+            )
+            self.main_window.browser.refresh()
 
             # Gizmo an neue Position verschieben falls aktiv
             self._update_gizmo_position()
@@ -273,13 +299,13 @@ class EditFeatureCommand(QUndoCommand):
         self.feature.data = self.new_data.copy()
         logger.debug(f"Redo: Applied new data to {self.feature.name}")
 
-        with CADTessellator.invalidate_cache():
-            self.body._rebuild()
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
+        # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
+        self.body._rebuild()
+        self.main_window._update_body_from_build123d(
+            self.body,
+            self.body._build123d_solid
+        )
+        self.main_window.browser.refresh()
 
     def undo(self):
         """Restore old data"""
@@ -288,13 +314,13 @@ class EditFeatureCommand(QUndoCommand):
         self.feature.data = self.old_data.copy()
         logger.debug(f"Undo: Restored old data to {self.feature.name}")
 
-        with CADTessellator.invalidate_cache():
-            self.body._rebuild()
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
+        # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
+        self.body._rebuild()
+        self.main_window._update_body_from_build123d(
+            self.body,
+            self.body._build123d_solid
+        )
+        self.main_window.browser.refresh()
 
         # Gizmo an neue Position verschieben falls aktiv
         self._update_gizmo_position()

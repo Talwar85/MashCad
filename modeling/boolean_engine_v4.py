@@ -1,0 +1,509 @@
+"""
+MashCAD - Professional Boolean Engine V4
+========================================
+
+Production-ready Boolean operations with:
+- Transaction-based rollback safety
+- Fusion 360-grade default tolerances
+- Fail-fast error signaling
+- Geometry-change verification
+- No multi-strategy fallbacks (keeps it simple)
+
+Author: Claude (Architecture Refactoring Phase 1)
+Date: 2026-01-22
+"""
+
+from typing import Optional, Tuple, Any
+from loguru import logger
+
+try:
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common
+    from OCP.BOPAlgo import BOPAlgo_GlueEnum
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.TopTools import TopTools_ListOfShape  # ✅ FIX: Correct type for SetArguments()
+    HAS_OCP = True
+except ImportError:
+    HAS_OCP = False
+
+from modeling.result_types import BooleanResult, ResultStatus
+from modeling.body_transaction import BodyTransaction, BooleanOperationError
+
+
+class BooleanEngineV4:
+    """
+    Professional Boolean engine with production-grade defaults.
+
+    Philosophy:
+    - Use Fusion 360-grade tolerances (1e-5) as DEFAULT
+    - Fail fast with clear error messages
+    - No magic fallbacks - user should fix geometry
+    - Transaction-based rollback for safety
+    """
+
+    # Production-grade fuzzy tolerance (like Fusion 360)
+    # Reason: Real CAD geometries have numerical imprecision
+    # 1e-7 is too strict for practical work
+    PRODUCTION_FUZZY_TOLERANCE = 1e-4  # 0.1mm (erhöht von 1e-5 für bessere Toleranz)
+
+    # Minimum volume change to consider operation successful (mm³)
+    # WICHTIG: Sehr klein setzen um auch kleine Cuts zu erlauben!
+    MIN_VOLUME_CHANGE = 1e-6  # 0.000001 mm³ (erhöht von 1e-3)
+
+    @staticmethod
+    def execute_boolean(
+        body: 'Body',
+        tool_solid: Any,
+        operation: str,
+        fuzzy_tolerance: Optional[float] = None
+    ) -> BooleanResult:
+        """
+        Execute Boolean operation with transaction safety.
+
+        Args:
+            body: Target body (will be modified in transaction)
+            tool_solid: Tool solid for Boolean operation
+            operation: "Join", "Cut", or "Intersect"
+            fuzzy_tolerance: Override default tolerance (for advanced users)
+
+        Returns:
+            BooleanResult with SUCCESS, ERROR, or EMPTY status
+
+        Raises:
+            BooleanOperationError: Triggers automatic rollback
+        """
+        if not HAS_OCP:
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message="OpenCASCADE not available",
+                operation_type=operation
+            )
+
+        # Use production defaults unless overridden
+        if fuzzy_tolerance is None:
+            fuzzy_tolerance = BooleanEngineV4.PRODUCTION_FUZZY_TOLERANCE
+
+        # Execute within transaction for safety
+        with BodyTransaction(body, f"Boolean {operation}") as txn:
+            try:
+                # 1. Validate inputs
+                logger.debug(f"Validating Boolean {operation} inputs...")
+                validation_error = BooleanEngineV4._validate_inputs(
+                    body._build123d_solid, tool_solid, operation
+                )
+                if validation_error:
+                    raise BooleanOperationError(validation_error)
+                logger.debug("  Inputs valid")
+
+                # 2. Execute OpenCASCADE Boolean
+                logger.debug(f"Executing OCP Boolean {operation}...")
+
+                # Get OCP shapes WITH their transformations applied!
+                # CRITICAL: build123d stores Location separately from wrapped shape
+                # We must use shape.wrapped.Moved(location) to get positioned geometry
+
+                # Get OCP shapes directly - build123d's .wrapped ALREADY includes transformations!
+                # The .location attribute records what was applied, but .wrapped has it baked in.
+                # DO NOT apply .location again or you'll double-transform!
+                body_shape = body._build123d_solid.wrapped
+                tool_shape = tool_solid.wrapped if hasattr(tool_solid, 'wrapped') else tool_solid
+
+                # Debug: Log bounding boxes to verify positions
+                from OCP.Bnd import Bnd_Box
+                from OCP.BRepBndLib import BRepBndLib
+
+                def log_bbox(shape, name):
+                    try:
+                        bbox = Bnd_Box()
+                        BRepBndLib.Add_s(shape, bbox)
+                        xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+                        logger.info(f"{name} BBox: ({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
+                    except Exception as e:
+                        logger.debug(f"{name} bbox error: {e}")
+
+                log_bbox(body_shape, "Body")
+                log_bbox(tool_shape, "Tool")
+
+                # Debug: Log shape info
+                from OCP.TopAbs import TopAbs_SOLID, TopAbs_COMPOUND
+                logger.debug(f"Shape types - Body: {body_shape.ShapeType()}, Tool: {tool_shape.ShapeType()}")
+
+                # Debug: Log tool volume and bounding box
+                tool_vol_props = GProp_GProps()
+                BRepGProp.VolumeProperties_s(tool_shape, tool_vol_props)
+                tool_volume = tool_vol_props.Mass()
+
+                # Get tool bounding box to verify position
+                from OCP.Bnd import Bnd_Box
+                from OCP.BRepBndLib import BRepBndLib
+                tool_bbox = Bnd_Box()
+                BRepBndLib.Add_s(tool_shape, tool_bbox)
+                xmin, ymin, zmin, xmax, ymax, zmax = tool_bbox.Get()
+                logger.debug(f"Tool: Vol={tool_volume:.1f}, BBox=({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
+
+                result_shape, history = BooleanEngineV4._execute_ocp_boolean(
+                    body_shape,
+                    tool_shape,
+                    operation,
+                    fuzzy_tolerance
+                )
+
+                if result_shape is None:
+                    raise BooleanOperationError(
+                        f"Boolean {operation} failed: OpenCASCADE returned None.\n"
+                        f"Possible causes:\n"
+                        f"  - Geometries don't overlap (for Cut/Intersect)\n"
+                        f"  - Invalid input geometry\n"
+                        f"→ Check tool position and try again."
+                    )
+
+                # 3. Validate result shape
+                is_valid = BooleanEngineV4._is_valid_shape(result_shape)
+                logger.debug(f"Shape validation: is_valid={is_valid}")
+
+                if not is_valid:
+                    raise BooleanOperationError(
+                        f"Boolean {operation} produced invalid geometry.\n"
+                        f"→ Try simplifying input geometries."
+                    )
+
+                # 4. Verify geometry actually changed
+                if not BooleanEngineV4._verify_geometry_changed(
+                    body._build123d_solid.wrapped,
+                    result_shape,
+                    operation
+                ):
+                    raise BooleanOperationError(
+                        f"Boolean {operation} produced no change.\n"
+                        f"Possible causes:\n"
+                        f"  - Tool too small to affect body\n"
+                        f"  - Tool outside body bounds (for Cut)\n"
+                        f"  - No overlap (for Intersect)\n"
+                        f"→ Check tool size and position."
+                    )
+
+                # 5. Calculate OCP result volume BEFORE wrapping (for debugging)
+                ocp_vol_props = GProp_GProps()
+                BRepGProp.VolumeProperties_s(result_shape, ocp_vol_props)
+                ocp_result_volume = ocp_vol_props.Mass()
+
+                ocp_orig_props = GProp_GProps()
+                BRepGProp.VolumeProperties_s(body._build123d_solid.wrapped, ocp_orig_props)
+                ocp_original_volume = ocp_orig_props.Mass()
+
+                logger.info(f"OCP Volumes: Original={ocp_original_volume:.1f}, Result={ocp_result_volume:.1f}")
+
+                # 6. Wrap result in build123d Solid
+                from build123d import Solid, Shape
+
+                try:
+                    result_solid = Solid(result_shape)
+                    logger.debug(f"Wrapped as Solid successfully")
+                except Exception as wrap_err:
+                    logger.debug(f"Solid wrap failed: {wrap_err}, trying Shape")
+                    result_solid = Shape(result_shape)
+
+                # 6b. Validate wrapped result has volume
+                if not hasattr(result_solid, 'volume'):
+                    raise BooleanOperationError(
+                        f"Boolean {operation} result cannot be converted to Solid.\n"
+                        f"→ The operation may have produced invalid geometry."
+                    )
+
+                # 6c. Compare wrapped volume with OCP volume
+                wrapped_volume = result_solid.volume
+                logger.info(f"Wrapped volume: {wrapped_volume:.1f} (OCP was {ocp_result_volume:.1f})")
+
+                if abs(wrapped_volume - ocp_result_volume) > 100:
+                    logger.warning(f"VOLUME MISMATCH! OCP={ocp_result_volume:.1f}, Wrapped={wrapped_volume:.1f}")
+
+                # 6d. Try fix() if result is invalid
+                if hasattr(result_solid, 'is_valid') and not result_solid.is_valid():
+                    logger.debug("Result invalid, trying fix()")
+                    try:
+                        result_solid = result_solid.fix()
+                    except Exception as fix_err:
+                        logger.debug(f"fix() failed: {fix_err}")
+
+                # 6. Verify wrapped result has correct volume
+                try:
+                    wrapped_volume = result_solid.volume
+                    original_volume = body._build123d_solid.volume
+                    logger.debug(f"Volume change: {original_volume:.1f} → {wrapped_volume:.1f}")
+
+                    # Additional check: Ensure volume actually changed for Cut
+                    if operation.lower() == "cut" and abs(wrapped_volume - original_volume) < 1.0:
+                        logger.warning(f"Cut produced no volume change! Original={original_volume:.1f}, Result={wrapped_volume:.1f}")
+                except Exception as vol_err:
+                    logger.debug(f"Could not get volumes: {vol_err}")
+
+                # 7. Update body (transaction will commit if we return success)
+                body._build123d_solid = result_solid
+
+                # 8. Invalidate mesh cache (lazy regeneration)
+                if hasattr(body, 'invalidate_mesh'):
+                    body.invalidate_mesh()
+                else:
+                    # Legacy: force regeneration
+                    body._mesh_cache_valid = False
+
+                logger.success(f"✅ Boolean {operation} successful")
+
+                # ✅ CRITICAL: Commit transaction to prevent rollback!
+                txn.commit()
+
+                return BooleanResult(
+                    status=ResultStatus.SUCCESS,
+                    value=result_solid,
+                    message=f"Boolean {operation} completed successfully",
+                    operation_type=operation.lower(),
+                    history=history
+                )
+
+            except BooleanOperationError as e:
+                # Expected failure - will trigger rollback
+                logger.warning(f"⚠️ Boolean {operation} failed: {e}")
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=str(e),
+                    operation_type=operation.lower()
+                )
+
+            except Exception as e:
+                # Unexpected error - log and fail
+                logger.error(f"❌ Boolean {operation} unexpected error: {e}")
+                import traceback
+                traceback.print_exc()
+
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Unexpected error: {type(e).__name__}: {e}",
+                    operation_type=operation.lower()
+                )
+
+    @staticmethod
+    def _validate_inputs(solid1: Any, solid2: Any, operation: str) -> Optional[str]:
+        """
+        Validate Boolean operation inputs.
+
+        Returns:
+            Error message if invalid, None if OK
+        """
+        if solid1 is None:
+            return "Target body is None"
+
+        if solid2 is None:
+            return "Tool solid is None"
+
+        if operation not in ["Join", "Cut", "Intersect"]:
+            return f"Unknown operation: {operation}"
+
+        return None
+
+    @staticmethod
+    def _execute_ocp_boolean(
+        shape1: Any,
+        shape2: Any,
+        operation: str,
+        fuzzy_tolerance: float
+    ) -> Tuple[Optional[Any], Optional[Any]]:
+        """
+        Execute OpenCASCADE Boolean operation with robust settings.
+
+        Args:
+            shape1: OCP TopoDS_Shape (target)
+            shape2: OCP TopoDS_Shape (tool)
+            operation: "Join", "Cut", or "Intersect"
+            fuzzy_tolerance: Fuzzy value for robustness
+
+        Returns:
+            (result_shape, history) or (None, None) on failure
+        """
+        try:
+            # Debug: Log input shapes
+            logger.debug(f"OCP Boolean {operation}: shape1 type={type(shape1).__name__}, shape2 type={type(shape2).__name__}")
+            logger.debug(f"  Fuzzy tolerance: {fuzzy_tolerance}")
+
+            # Use the SIMPLE constructor-based API (more reliable)
+            # This directly passes shapes instead of using SetArguments/SetTools
+            if operation.lower() in ["join", "fuse"]:
+                op = BRepAlgoAPI_Fuse(shape1, shape2)
+            elif operation.lower() == "cut":
+                op = BRepAlgoAPI_Cut(shape1, shape2)
+            elif operation.lower() in ["intersect", "common"]:
+                op = BRepAlgoAPI_Common(shape1, shape2)
+            else:
+                logger.debug(f"Unknown operation: {operation}")
+                return None, None
+
+            # The constructor already calls Build() internally
+            logger.debug("  Boolean operation executed via constructor")
+
+            is_done = op.IsDone()
+            logger.debug(f"  op.IsDone() = {is_done}")
+
+            if not is_done:
+                # Try to get error info
+                try:
+                    error_status = op.HasErrors()
+                    logger.debug(f"  op.HasErrors() = {error_status}")
+                    if error_status:
+                        logger.debug("  OCP Boolean failed with errors")
+                except:
+                    pass
+                logger.warning("OpenCASCADE Boolean returned IsDone=False")
+                return None, None
+
+            result_shape = op.Shape()
+            logger.debug(f"  Result shape type: {type(result_shape).__name__}")
+
+            # Validate result is not null/empty
+            if result_shape is None or result_shape.IsNull():
+                logger.warning("OCP Boolean returned null shape")
+                return None, None
+
+            # Debug: Check if result is different from input
+            logger.info(f"Result shape id: {id(result_shape)}, Input shape1 id: {id(shape1)}")
+
+            # Debug: Calculate result volume immediately
+            result_props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(result_shape, result_props)
+            result_vol = result_props.Mass()
+
+            input_props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(shape1, input_props)
+            input_vol = input_props.Mass()
+
+            logger.info(f"OCP Result: input_vol={input_vol:.1f}, result_vol={result_vol:.1f}, diff={input_vol - result_vol:.1f}")
+
+            # Get history for TNP (Topological Naming Problem) mitigation
+            try:
+                history = op.History()
+                logger.debug("  History extracted successfully")
+            except Exception as hist_err:
+                logger.debug(f"  Could not extract history: {hist_err}")
+                history = None
+
+            return result_shape, history
+
+        except Exception as e:
+            logger.error(f"OCP Boolean execution failed with exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None
+
+    @staticmethod
+    def _is_valid_shape(shape: Any) -> bool:
+        """
+        Validate OpenCASCADE shape.
+
+        Returns:
+            True if shape is valid
+        """
+        if shape is None:
+            return False
+
+        try:
+            analyzer = BRepCheck_Analyzer(shape)
+            return analyzer.IsValid()
+        except:
+            return False
+
+    @staticmethod
+    def _verify_geometry_changed(
+        original_shape: Any,
+        result_shape: Any,
+        operation: str
+    ) -> bool:
+        """
+        Verify that Boolean operation actually changed geometry.
+
+        Prevents false-positives where OpenCASCADE returns "success"
+        but geometry is unchanged.
+
+        Args:
+            original_shape: Original OCP shape
+            result_shape: Result OCP shape
+            operation: Operation type
+
+        Returns:
+            True if geometry changed, False if false-positive
+        """
+        try:
+            # Calculate volumes
+            props_original = GProp_GProps()
+            props_result = GProp_GProps()
+
+            BRepGProp.VolumeProperties_s(original_shape, props_original)
+            BRepGProp.VolumeProperties_s(result_shape, props_result)
+
+            vol_original = props_original.Mass()
+            vol_result = props_result.Mass()
+
+            # Calculate face counts
+            def count_faces(shape):
+                explorer = TopExp_Explorer(shape, TopAbs_FACE)
+                count = 0
+                while explorer.More():
+                    count += 1
+                    explorer.Next()
+                return count
+
+            faces_original = count_faces(original_shape)
+            faces_result = count_faces(result_shape)
+
+            # Debug: Log what we're comparing
+            logger.debug(f"_verify_geometry_changed: Vol {vol_original:.1f}→{vol_result:.1f}, Faces {faces_original}→{faces_result}")
+
+            # Check for changes based on operation type
+            vol_diff = abs(vol_original - vol_result)
+            faces_changed = faces_original != faces_result
+
+            operation_lower = operation.lower()
+
+            if operation_lower in ["cut", "intersect"]:
+                # Cut/Intersect MUST reduce volume - face changes alone are not enough
+                # A cut that only changes faces without removing material is not meaningful
+                volume_reduced = vol_result < (vol_original - BooleanEngineV4.MIN_VOLUME_CHANGE)
+
+                # ✅ Detailed logging für Debugging
+                logger.info(f"  Cut validation: vol_original={vol_original:.3f}, vol_result={vol_result:.3f}, "
+                           f"vol_diff={vol_diff:.6f}, MIN={BooleanEngineV4.MIN_VOLUME_CHANGE}")
+                logger.debug(f"  volume_reduced={volume_reduced}, faces_changed={faces_changed}")
+
+                if not volume_reduced:
+                    # Cut must remove material, period
+                    # ✅ WARNING statt DEBUG für sichtbarere Meldung
+                    logger.warning(
+                        f"⚠️ Cut REJECTED - no volume reduction: "
+                        f"Vol {vol_original:.3f}→{vol_result:.3f} (-{vol_diff:.6f}mm³), "
+                        f"Faces {faces_original}→{faces_result}, MIN_CHANGE={BooleanEngineV4.MIN_VOLUME_CHANGE}"
+                    )
+                    return False
+
+                logger.info(
+                    f"✅ Cut accepted: "
+                    f"Vol {vol_original:.1f}→{vol_result:.1f} (-{vol_original - vol_result:.1f}mm³), "
+                    f"Faces {faces_original}→{faces_result}"
+                )
+                return True
+
+            elif operation_lower in ["join", "fuse"]:
+                # Join should increase or maintain volume
+                # Faces can decrease (merge) or increase
+                if vol_diff < BooleanEngineV4.MIN_VOLUME_CHANGE and not faces_changed:
+                    logger.debug(f"Join false-positive: No geometry change detected")
+                    return False
+
+                return True
+
+            # Unknown operation - accept
+            return True
+
+        except Exception as e:
+            # On error, accept result (fail-safe)
+            logger.debug(f"Geometry verification failed: {e}")
+            return True

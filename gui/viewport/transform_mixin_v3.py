@@ -167,18 +167,29 @@ class TransformMixinV3:
         
     def _apply_transform_from_gizmo(self, body_id: str, mode: str, data):
         """Callback: Wendet Transform an"""
+        logger.info(f"🎯 _apply_transform_from_gizmo CALLED")
+        logger.info(f"   body_id: {body_id}")
+        logger.info(f"   mode: {mode}")
+        logger.info(f"   data: {data}")
+
         if hasattr(self, 'body_transform_requested'):
             self.body_transform_requested.emit(body_id, mode, data)
-            logger.debug(f"Transform Signal: {mode} auf {body_id}")
+            logger.info(f"✅ Transform Signal EMITTED: {mode} auf {body_id}")
+        else:
+            logger.error(f"❌ body_transform_requested Signal NICHT VERFÜGBAR!")
             
     def _copy_body_from_gizmo(self, body_id: str, mode: str, data):
         """Callback: Kopiert Body und wendet Transform an"""
         # FIX Bug 1.5: Signal direkt emittieren (hasattr kann bei Qt Signals fehlschlagen)
         try:
+            logger.info(f"🚀 _copy_body_from_gizmo CALLED - Emitting signal")
+            logger.info(f"   body_id: {body_id}")
+            logger.info(f"   mode: {mode}")
+            logger.info(f"   data: {data}")
             self.body_copy_requested.emit(body_id, mode, data)
-            logger.debug(f"Copy+Transform Signal: {mode} auf {body_id}")
-        except AttributeError:
-            logger.warning("body_copy_requested Signal nicht verfügbar")
+            logger.info(f"✅ Copy+Transform Signal EMITTED: {mode} auf {body_id}")
+        except AttributeError as e:
+            logger.error(f"❌ body_copy_requested Signal nicht verfügbar: {e}")
             
     def _mirror_body_from_gizmo(self, body_id: str, plane: str):
         """Callback: Spiegelt Body"""

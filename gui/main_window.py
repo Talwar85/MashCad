@@ -43,6 +43,7 @@ from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPan
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler
+from gui.widgets.section_view_panel import SectionViewPanel
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.transform_state import TransformState
 
@@ -138,13 +139,32 @@ class MainWindow(QMainWindow):
         elif level == "warning": style = "warning"
         elif level == "success": style = "success"
         else: style = "info"
-        
+
         # Widget erstellen
         notif = NotificationWidget(message, style, self)
         self.notifications.append(notif)
         self._reposition_notifications()
-        
-    
+
+    def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000):
+        """
+        Zeigt eine Toast-Notification an (für Result-Pattern Integration)
+
+        Args:
+            title: Titel der Notification (wird in message integriert)
+            message: Haupt-Nachricht
+            level: "info", "success", "warning", "error"
+            duration: Dauer in ms (wird aktuell nicht verwendet, da NotificationWidget Auto-Close hat)
+        """
+        # Kombiniere Title und Message
+        if title:
+            full_message = f"{title}: {message}"
+        else:
+            full_message = message
+
+        # Nutze bestehende Toast-Overlay Methode
+        self._show_toast_overlay(level, full_message)
+
+
 
     def _cleanup_notification(self, notif):
         if notif in self.notifications:
@@ -388,6 +408,15 @@ class MainWindow(QMainWindow):
 
         self._fillet_mode = None  # 'fillet' or 'chamfer'
         self._fillet_target_body = None
+
+        # Section View Panel (Schnittansicht wie Fusion 360)
+        self.section_panel = SectionViewPanel(self)
+        self.section_panel.section_enabled.connect(self._on_section_enabled)
+        self.section_panel.section_disabled.connect(self._on_section_disabled)
+        self.section_panel.section_position_changed.connect(self._on_section_position_changed)
+        self.section_panel.section_plane_changed.connect(self._on_section_plane_changed)
+        self.section_panel.section_invert_toggled.connect(self._on_section_invert_toggled)
+        self.section_panel.hide()  # Initially hidden
 
         # Edge Selection Signal verbinden
         self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
@@ -806,17 +835,19 @@ class MainWindow(QMainWindow):
             
             'fillet': self._start_fillet,
             'chamfer': self._start_chamfer,
-            
+
+            # Inspection Tools
+            'section_view': self._toggle_section_view,
+
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),
             'primitive_box': lambda: self._show_not_implemented("Box Primitiv"),
-            
+
             'shell': lambda: self._show_not_implemented("Shell"),
             'hole': lambda: self._show_not_implemented("Bohrung"),
-            
+
             'measure': lambda: self._show_not_implemented("Messen"),
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
             'check': lambda: self._show_not_implemented("Geometrie prüfen"),
-            'section': lambda: self._show_not_implemented("Schnittansicht"),
             'thread': lambda: self._show_not_implemented("Gewinde"),
             'pattern': lambda: self._show_not_implemented("Muster"),
             'convert_to_brep': self._convert_selected_body_to_brep,
@@ -1158,7 +1189,12 @@ class MainWindow(QMainWindow):
         logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
 
     def _on_point_to_point_move(self, body_id: str, start_point: tuple, end_point: tuple):
-        """Handler für Point-to-Point Move (Fusion 360-Style)"""
+        """
+        Handler für Point-to-Point Move (Fusion 360-Style)
+
+        WICHTIG: Nutzt das normale Transform-Command-System für Undo/Redo Support
+        und korrekte Mesh-Updates!
+        """
         # Body finden
         body = None
         for b in self.document.bodies:
@@ -1166,15 +1202,9 @@ class MainWindow(QMainWindow):
                 body = b
                 break
 
-        if not body or not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+        if not body:
             logger.error("Body nicht gefunden für Point-to-Point Move")
             return
-
-        from build123d import Location
-        from modeling.cad_tessellator import CADTessellator
-
-        # Cache leeren
-        CADTessellator.clear_cache()
 
         try:
             # Berechne Verschiebungs-Vektor
@@ -1182,19 +1212,22 @@ class MainWindow(QMainWindow):
             dy = end_point[1] - start_point[1]
             dz = end_point[2] - start_point[2]
 
-            logger.info(f"Point-to-Point Move: {start_point} → {end_point}")
-            logger.info(f"Verschiebung: dx={dx:.2f}, dy={dy:.2f}, dz={dz:.2f}")
+            logger.info(f"🎯 Point-to-Point Move: {start_point} → {end_point}")
+            logger.info(f"   Verschiebung: dx={dx:.2f}, dy={dy:.2f}, dz={dz:.2f}")
 
-            # Verschiebe Body
-            body._build123d_solid = body._build123d_solid.move(Location((dx, dy, dz)))
+            # WICHTIG: Nutze das normale Transform-Command-System!
+            # Das stellt sicher, dass die Transform korrekt angewendet wird (inkl. Undo/Redo)
+            translation_data = [dx, dy, dz]
 
-            # Mesh aktualisieren
-            self._update_body_from_build123d(body, body._build123d_solid)
+            # Rufe den normalen Transform-Handler auf (der TransformCommand nutzt)
+            self._on_body_transform_requested(body_id, "move", translation_data)
 
-            logger.success(f"Point-to-Point Move auf {body.name} durchgeführt")
+            logger.success(f"✅ Point-to-Point Move auf {body.name} durchgeführt")
 
         except Exception as e:
-            logger.error(f"Point-to-Point Move fehlgeschlagen: {e}")
+            logger.error(f"❌ Point-to-Point Move fehlgeschlagen: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -1283,74 +1316,80 @@ class MainWindow(QMainWindow):
             mode: "move", "rotate", "scale", "mirror"
             data: Transform-Daten (Liste oder Dict)
         """
+        logger.info(f"📥 _on_body_transform_requested HANDLER CALLED")
+        logger.info(f"   body_ids: {body_ids}")
+        logger.info(f"   mode: {mode}")
+        logger.info(f"   data: {data}")
+
         # Normalisiere zu Liste
         if isinstance(body_ids, str):
             body_ids = [body_ids]
 
-        logger.debug(f"Transform requested: {mode} auf {len(body_ids)} Bodies mit data={data}")
+        logger.info(f"   Normalized to {len(body_ids)} bodies")
 
         from modeling import TransformFeature
         from modeling.cad_tessellator import CADTessellator
 
-        # WICHTIG: Cache leeren damit neues Mesh generiert wird!
-        with CADTessellator.invalidate_cache():
-            try:
-                # Normalisiere data-Format
-                transform_data = self._normalize_transform_data(mode, data)
+        # Performance Optimization 1.2: Cache-Clearing verschoben zu TransformCommand.redo()
+        # (per-shape invalidation statt global)
+        try:
+            # Normalisiere data-Format
+            transform_data = self._normalize_transform_data(mode, data)
 
-                # Wende Transform auf alle selektierten Bodies an
-                success_count = 0
-                for body_id in body_ids:
-                    body = next((b for b in self.document.bodies if b.id == body_id), None)
-                    if not body:
-                        logger.warning(f"Body {body_id} nicht gefunden für Transform")
-                        continue
+            # Wende Transform auf alle selektierten Bodies an
+            success_count = 0
+            for body_id in body_ids:
+                body = next((b for b in self.document.bodies if b.id == body_id), None)
+                if not body:
+                    logger.warning(f"Body {body_id} nicht gefunden für Transform")
+                    continue
 
-                    if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
-                        logger.warning(f"Build123d nicht verfügbar für Body {body_id}")
-                        continue
+                if not HAS_BUILD123D or not getattr(body, '_build123d_solid', None):
+                    logger.warning(f"Build123d nicht verfügbar für Body {body_id}")
+                    continue
 
-                    # Berechne Body-Zentrum für Rotate/Scale
-                    body_transform_data = transform_data.copy()
-                    if mode in ["rotate", "scale"]:
-                        bounds = body._build123d_solid.bounding_box()
-                        center = [
-                            (bounds.min.X + bounds.max.X) / 2,
-                            (bounds.min.Y + bounds.max.Y) / 2,
-                            (bounds.min.Z + bounds.max.Z) / 2
-                        ]
-                        body_transform_data["center"] = center
+                # Berechne Body-Zentrum für Rotate/Scale
+                body_transform_data = transform_data.copy()
+                if mode in ["rotate", "scale"]:
+                    bounds = body._build123d_solid.bounding_box()
+                    center = [
+                        (bounds.min.X + bounds.max.X) / 2,
+                        (bounds.min.Y + bounds.max.Y) / 2,
+                        (bounds.min.Z + bounds.max.Z) / 2
+                    ]
+                    body_transform_data["center"] = center
 
-                    # Erstelle TransformFeature
-                    feature = TransformFeature(
-                        mode=mode,
-                        data=body_transform_data,
-                        name=f"Transform: {mode.capitalize()}"
-                    )
+                # Erstelle TransformFeature
+                feature = TransformFeature(
+                    mode=mode,
+                    data=body_transform_data,
+                    name=f"Transform: {mode.capitalize()}"
+                )
 
-                    # NEU: Push to Undo Stack (calls redo() automatically)
-                    from gui.commands.transform_command import TransformCommand
-                    cmd = TransformCommand(body, feature, self)
-                    self.undo_stack.push(cmd)
-                    success_count += 1
+                # NEU: Push to Undo Stack (calls redo() automatically)
+                # Cache wird in TransformCommand.redo() invalidiert (per-shape)
+                from gui.commands.transform_command import TransformCommand
+                cmd = TransformCommand(body, feature, self)
+                self.undo_stack.push(cmd)
+                success_count += 1
 
-                # Gizmo an neuer Position anzeigen (nur bei Single-Select)
-                if len(body_ids) == 1:
-                    gizmo_was_active = hasattr(self.viewport_3d, 'is_transform_active') and self.viewport_3d.is_transform_active()
-                    if gizmo_was_active and hasattr(self.viewport_3d, 'show_transform_gizmo'):
-                        self.viewport_3d.show_transform_gizmo(body_ids[0], force_refresh=False)
+            # Gizmo an neuer Position anzeigen (nur bei Single-Select)
+            if len(body_ids) == 1:
+                gizmo_was_active = hasattr(self.viewport_3d, 'is_transform_active') and self.viewport_3d.is_transform_active()
+                if gizmo_was_active and hasattr(self.viewport_3d, 'show_transform_gizmo'):
+                    self.viewport_3d.show_transform_gizmo(body_ids[0], force_refresh=False)
 
-                # UI aufräumen
-                if hasattr(self, 'transform_panel'):
-                    self.transform_panel.hide()
+            # UI aufräumen
+            if hasattr(self, 'transform_panel'):
+                self.transform_panel.hide()
 
-                if success_count > 0:
-                    logger.success(f"Transform-Feature auf {success_count} Bodies angewendet (Undo: Ctrl+Z)")
-                else:
-                    logger.warning("Keine Bodies transformiert")
+            if success_count > 0:
+                logger.success(f"Transform-Feature auf {success_count} Bodies angewendet (Undo: Ctrl+Z)")
+            else:
+                logger.warning("Keine Bodies transformiert")
 
-            except Exception as e:
-                logger.exception(f"Transform Error: {e}")
+        except Exception as e:
+            logger.exception(f"Transform Error: {e}")
 
     def _normalize_transform_data(self, mode: str, data) -> dict:
         """
@@ -1413,7 +1452,10 @@ class MainWindow(QMainWindow):
         Handler für Copy+Transform (Shift+Drag).
         Kopiert den Body und wendet dann den Transform an.
         """
-        logger.debug(f"Copy+Transform requested: {mode} auf {body_id}")
+        logger.info(f"📥 _on_body_copy_requested HANDLER CALLED")
+        logger.info(f"   body_id: {body_id}")
+        logger.info(f"   mode: {mode}")
+        logger.info(f"   data: {data}")
         
         # Original Body finden
         body = next((b for b in self.document.bodies if b.id == body_id), None)
@@ -1433,8 +1475,10 @@ class MainWindow(QMainWindow):
             # 1. Neuen Body erstellen
             new_body = Body(name=f"{body.name}_copy")
             
-            # 2. Solid kopieren
-            new_body._build123d_solid = body._build123d_solid.copy()
+            # 2. Solid kopieren (Build123d hat keine .copy() - wir müssen neu konstruieren)
+            # Workaround: Kopiere durch Location-Identity-Transform
+            from build123d import Location
+            new_body._build123d_solid = body._build123d_solid.moved(Location((0, 0, 0)))
             
             # 3. Cache leeren
             CADTessellator.clear_cache()
@@ -1622,7 +1666,7 @@ class MainWindow(QMainWindow):
 
     def _create_sketch_at(self, origin, normal, x_dir_override=None):
         s = self.document.new_sketch(f"Sketch{len(self.document.sketches)+1}")
-        
+
         # Berechne Achsen
         if x_dir_override:
             # PERFEKT: Wir haben eine stabile Achse vom Detector
@@ -1636,12 +1680,19 @@ class MainWindow(QMainWindow):
         else:
             # Fallback: Raten (das was bisher Probleme machte)
             x_dir, y_dir = self._calculate_plane_axes(normal)
-        
+
         # Speichere ALLES im Sketch
         s.plane_origin = origin
         s.plane_normal = normal
         s.plane_x_dir = x_dir  # <--- Das ist der Schlüssel zum Erfolg
         s.plane_y_dir = y_dir
+
+        # ✅ FIX: Speichere Parent-Body für korrektes Targeting
+        if hasattr(self.viewport_3d, '_last_picked_body_id') and self.viewport_3d._last_picked_body_id:
+            s.parent_body_id = self.viewport_3d._last_picked_body_id
+            logger.info(f"✅ Sketch erstellt auf Body: {s.parent_body_id}")
+            # Reset after use
+            self.viewport_3d._last_picked_body_id = None
         
         self.active_sketch = s
         self.sketch_editor.sketch = s
@@ -1927,11 +1978,13 @@ class MainWindow(QMainWindow):
                 )
         
         # B) Body-Flächen verarbeiten (NUR sichtbare!)
+        # Performance Optimization Phase 2.2: Übergebe extrude_mode für Dynamic Priority
+        extrude_mode = getattr(self.viewport_3d, 'extrude_mode', False)
         for body in self.document.bodies:
             if self.viewport_3d.is_body_visible(body.id):
                 mesh = self.viewport_3d.get_body_mesh(body.id)
                 if mesh:
-                    self.viewport_3d.detector.process_body_mesh(body.id, mesh)
+                    self.viewport_3d.detector.process_body_mesh(body.id, mesh, extrude_mode=extrude_mode)
 
         count = len(self.viewport_3d.detector.selection_faces)
         if count == 0:
@@ -1996,18 +2049,31 @@ class MainWindow(QMainWindow):
                         
                     else:
                         # AUTO-DETECTION
-                        # Suche den Körper, der der Skizze am nächsten ist.
-                        # Wir erzwingen hier fast immer einen Treffer, um "Cut All" zu vermeiden.
-                        priority_body = self._find_body_closest_to_sketch(target_sketch, selection_data)
-                        
-                        if priority_body:
-                            target_bodies = [priority_body]
-                        elif self.document.bodies and operation != "New Body":
-                            # Fallback: Wenn wir wirklich nichts finden (z.B. Skizze weit im Raum),
-                            # nehmen wir bei Join/Cut lieber den letzten Körper als gar keinen oder alle.
-                            # Das ist sicherer als "Alle schneiden".
-                            target_bodies = [self.document.bodies[-1]]
-                            logger.info(f"Targeting Fallback: Nutze '{target_bodies[0].name}'")
+                        # ✅ FIX: Operation-aware targeting
+                        # - Join: Use parent body (adding to same body)
+                        # - Cut: Use intersecting body (cutting whatever the volume hits)
+
+                        if operation == "Join":
+                            # Join sollte den Parent-Body nutzen (Material hinzufügen)
+                            if hasattr(target_sketch, 'parent_body_id') and target_sketch.parent_body_id:
+                                parent_body = next((b for b in self.document.bodies if b.id == target_sketch.parent_body_id), None)
+                                if parent_body:
+                                    target_bodies = [parent_body]
+                                    logger.info(f"🎯 Join: Nutze Parent-Body '{parent_body.name}'")
+
+                        # Für Cut/Intersect: Finde Body der mit Extrusion-Volumen überlappt
+                        if not target_bodies:
+                            priority_body = self._find_body_closest_to_sketch(target_sketch, selection_data)
+
+                            if priority_body:
+                                target_bodies = [priority_body]
+                                logger.info(f"🎯 Auto-Target: Nutze nächsten Body '{priority_body.name}' (Proximity)")
+                            elif self.document.bodies and operation != "New Body":
+                                # Fallback: Wenn wir wirklich nichts finden (z.B. Skizze weit im Raum),
+                                # nehmen wir bei Join/Cut lieber den letzten Körper als gar keinen oder alle.
+                                # Das ist sicherer als "Alle schneiden".
+                                target_bodies = [self.document.bodies[-1]]
+                                logger.info(f"⚠️ Targeting Fallback: Nutze '{target_bodies[0].name}'")
 
                     if not target_bodies and operation == "Cut":
                          logger.warning("Kein Ziel-Körper gefunden. Bitte Körper im Browser auswählen.")
@@ -2141,17 +2207,160 @@ class MainWindow(QMainWindow):
             if msg: logger.success(msg)
         
         
+    def _extract_face_as_polygon(self, face):
+        """
+        Extrahiert die Flächen-Kontur als Shapely Polygon.
+
+        Dies ermöglicht es, Push/Pull als PARAMETRISCHES Feature zu speichern,
+        das beim Rebuild rekonstruiert werden kann.
+
+        Returns:
+            (polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir) oder (None, None, None, None, None)
+        """
+        try:
+            from shapely.geometry import Polygon as ShapelyPolygon
+            from OCP.BRep import BRep_Tool
+            from OCP.BRepTools import BRepTools_WireExplorer
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_WIRE, TopAbs_EDGE
+            from OCP.gp import gp_Pnt, gp_Vec
+            import numpy as np
+
+            # 1. Hole Face-Surface für Koordinatentransformation
+            surface = BRep_Tool.Surface_s(face.wrapped)
+
+            # 2. Hole Face-Normale und Origin
+            # Berechne Normale am Zentrum der Fläche
+            from OCP.BRepGProp import BRepGProp_Face
+            prop = BRepGProp_Face(face.wrapped)
+
+            # Finde UV-Zentrum
+            umin, umax, vmin, vmax = BRep_Tool.Surface_s(face.wrapped).Bounds()
+            u_mid = (umin + umax) / 2
+            v_mid = (vmin + vmax) / 2
+
+            # Berechne Punkt und Normale am Zentrum
+            pnt = gp_Pnt()
+            normal_vec = gp_Vec()
+            prop.Normal(u_mid, v_mid, pnt, normal_vec)
+
+            plane_origin = (pnt.X(), pnt.Y(), pnt.Z())
+            plane_normal = (normal_vec.X(), normal_vec.Y(), normal_vec.Z())
+
+            # X-Richtung: Eine Tangente zur Fläche
+            d1u = gp_Vec()
+            d1v = gp_Vec()
+            surface.D1(u_mid, v_mid, pnt, d1u, d1v)
+            d1u.Normalize()
+            plane_x_dir = (d1u.X(), d1u.Y(), d1u.Z())
+
+            # 3. Extrahiere Outer Wire Punkte
+            from OCP.TopoDS import TopoDS
+
+            wire_exp = TopExp_Explorer(face.wrapped, TopAbs_WIRE)
+            if not wire_exp.More():
+                logger.warning("Face hat keinen Wire")
+                return None, None, None, None, None
+
+            # ✅ FIX: Cast TopoDS_Shape -> TopoDS_Wire
+            outer_wire_shape = wire_exp.Current()
+            outer_wire = TopoDS.Wire_s(outer_wire_shape)
+
+            # 4. Sammle alle Punkte entlang des Wire
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GCPnts import GCPnts_UniformAbscissa
+
+            points_3d = []
+            edge_exp = BRepTools_WireExplorer(outer_wire)
+
+            while edge_exp.More():
+                edge = edge_exp.Current()
+
+                try:
+                    # BRepAdaptor_Curve ist einfacher zu verwenden als BRep_Tool.Curve_s
+                    adaptor = BRepAdaptor_Curve(edge)
+                    first = adaptor.FirstParameter()
+                    last = adaptor.LastParameter()
+
+                    # Sample Punkte entlang der Kante
+                    n_samples = 10
+                    for i in range(n_samples):
+                        t = first + (last - first) * i / n_samples
+                        pt = adaptor.Value(t)
+                        points_3d.append((pt.X(), pt.Y(), pt.Z()))
+
+                except Exception as edge_err:
+                    logger.debug(f"Edge-Sampling fehlgeschlagen: {edge_err}")
+
+                edge_exp.Next()
+
+            if len(points_3d) < 3:
+                logger.warning(f"Zu wenige Punkte extrahiert: {len(points_3d)}")
+                return None, None, None, None, None
+
+            # 5. Transformiere 3D-Punkte in 2D-Koordinaten (lokale Face-Ebene)
+            origin = np.array(plane_origin)
+            normal = np.array(plane_normal)
+            x_dir = np.array(plane_x_dir)
+
+            # Normalisieren
+            normal = normal / np.linalg.norm(normal)
+            x_dir = x_dir / np.linalg.norm(x_dir)
+
+            # Y-Richtung als Kreuzprodukt
+            y_dir = np.cross(normal, x_dir)
+            y_dir = y_dir / np.linalg.norm(y_dir)
+
+            # Projiziere Punkte auf 2D
+            points_2d = []
+            for p3d in points_3d:
+                p = np.array(p3d) - origin
+                x = np.dot(p, x_dir)
+                y = np.dot(p, y_dir)
+                points_2d.append((x, y))
+
+            # 6. Erstelle Shapely Polygon
+            try:
+                polygon = ShapelyPolygon(points_2d)
+                if not polygon.is_valid:
+                    polygon = polygon.buffer(0)  # Reparatur
+
+                # ✅ FIX: y_dir als Tuple speichern für korrekte 2D→3D Transformation beim Rebuild
+                plane_y_dir = tuple(y_dir.tolist())
+
+                # DEBUG: Zeige Koordinatensystem bei Extraktion
+                logger.debug(f"  Koordinatensystem bei Extraktion:")
+                logger.debug(f"    x_dir={plane_x_dir}")
+                logger.debug(f"    y_dir={plane_y_dir}")
+                logger.debug(f"    normal={plane_normal}")
+
+                logger.info(f"✅ Face-Polygon extrahiert: {len(points_2d)} Punkte, Area={polygon.area:.1f}")
+                return polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir
+
+            except Exception as poly_err:
+                logger.warning(f"Polygon-Erstellung fehlgeschlagen: {poly_err}")
+                return None, None, None, None, None
+
+        except Exception as e:
+            logger.warning(f"Face-Extraktion fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None, None, None, None
+
     def _extrude_body_face_build123d(self, face_data, height, operation):
         """
-        Version 4.0: Multi-Body Support!
-        - "Entpackt" verschachtelte Compounds (0-Faces Fix)
-        - Unterstützt "Cut" durch mehrere Körper (nicht nur den eigenen)
+        Version 5.0: PARAMETRISCHES Push/Pull!
+
+        Statt nur das Solid direkt zu modifizieren, erstellen wir jetzt ein
+        echtes ExtrudeFeature mit der Flächen-Kontur als precalculated_polys.
+
+        Das Feature kann dann beim Rebuild rekonstruiert werden!
         """
         try:
             # 1. Source Body finden (der, dem die Fläche gehört)
             source_body_id = face_data.get('body_id')
             source_body = next((b for b in self.document.bodies if b.id == source_body_id), None)
-            
+
             if not source_body or not hasattr(source_body, '_build123d_solid') or source_body._build123d_solid is None:
                 logger.error(f"Fehler: Body oder BREP-Daten fehlen.")
                 return False
@@ -2167,7 +2376,7 @@ class MainWindow(QMainWindow):
             # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
             b3d_obj = source_body._build123d_solid
             candidate_faces = b3d_obj.faces()
-            
+
             if not candidate_faces:
                 explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
                 candidate_faces = []
@@ -2178,10 +2387,12 @@ class MainWindow(QMainWindow):
 
             mesh_center = Vector(face_data['center_3d'])
             ocp_pt_vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(mesh_center.X, mesh_center.Y, mesh_center.Z)).Vertex()
-            
+
             best_face = None
             best_dist = float('inf')
-            
+
+            logger.debug(f"Face-Suche: mesh_center=({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f}), {len(candidate_faces)} Kandidaten")
+
             for f in candidate_faces:
                 try:
                     extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, f.wrapped)
@@ -2190,68 +2401,109 @@ class MainWindow(QMainWindow):
                         if dist < best_dist:
                             best_dist = dist
                             best_face = f
-                except: pass
-            
-            if best_face is None or best_dist > 2.0:
-                logger.error(f"FEHLER: Keine Fläche in Reichweite gefunden.")
+                except Exception as ex:
+                    logger.debug(f"Face-Distanz-Fehler: {ex}")
+
+            # ✅ Erhöhter Schwellenwert: 10.0 statt 2.0
+            # Bei größeren Körpern kann die Distanz zwischen Mesh-Zentrum und BREP-Face größer sein
+            FACE_DISTANCE_THRESHOLD = 10.0
+
+            if best_face is None:
+                logger.error(f"FEHLER: Keine Fläche gefunden! ({len(candidate_faces)} Kandidaten geprüft)")
                 return False
 
-            # --- SCHRITT B: Extrusions-Werkzeug erstellen ---
-            # Das ist der "Stempel", mit dem wir schneiden oder joinen
+            if best_dist > FACE_DISTANCE_THRESHOLD:
+                logger.error(f"FEHLER: Nächste Fläche zu weit entfernt (dist={best_dist:.2f} > {FACE_DISTANCE_THRESHOLD})")
+                logger.debug(f"  mesh_center: ({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f})")
+                return False
+
+            logger.info(f"Face gefunden: dist={best_dist:.3f}")
+
+            # --- SCHRITT B: Face-Kontur als Polygon extrahieren ---
+            # KEIN FALLBACK! Push/Pull MUSS parametrisch sein.
+            polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir = self._extract_face_as_polygon(best_face)
+
+            if polygon is None:
+                logger.error("FEHLER: Konnte Face-Polygon nicht extrahieren. Push/Pull abgebrochen.")
+                return False
+
+            # Extrusions-Werkzeug erstellen
             new_geo = extrude(best_face, amount=height)
-            
-            # --- SCHRITT C: Multi-Body Operationen (DER FIX!) ---
-            
+
+            # --- SCHRITT C: Multi-Body Operationen ---
+
             # 1. Ziele definieren
             targets = []
-            
+
             if operation == "New Body":
-                # Neuer Body -> Keine Modifikation existierender Bodies
-                new_body = self.document.new_body() 
+                # Neuer Body mit parametrischem Feature
+                new_body = self.document.new_body()
+
                 from modeling import ExtrudeFeature
-                feat = ExtrudeFeature(sketch=None, distance=height, operation="New Body", name="Extrude (Face)")
+                feat = ExtrudeFeature(
+                    sketch=None,
+                    distance=height,
+                    operation="New Body",
+                    name="Push/Pull (New Body)",
+                    precalculated_polys=[polygon],
+                    plane_origin=plane_origin,
+                    plane_normal=plane_normal,
+                    plane_x_dir=plane_x_dir,
+                    plane_y_dir=plane_y_dir  # ✅ FIX: Y-Richtung speichern
+                )
                 new_body.features.append(feat)
                 new_body._build123d_solid = new_geo
                 self._update_body_from_build123d(new_body, new_geo)
+                logger.info(f"✅ Push/Pull New Body '{new_body.name}' erstellt")
                 return True
-                
+
             elif operation == "Cut":
                 # CUT: Wir schneiden ALLES was sichtbar ist!
-                # (Auch den Source Body, falls wir 'in ihn hinein' extrudieren)
                 targets = [b for b in self.document.bodies if self.viewport_3d.is_body_visible(b.id)]
-                
-            else: # Join / Intersect
+
+            else:  # Join / Intersect
                 # Normalerweise joinen wir nur mit dem Körper, von dem wir gestartet sind
                 targets = [source_body]
 
             # 2. Operation auf alle Ziele anwenden
             success_count = 0
-            
+
             for target in targets:
                 try:
                     if not hasattr(target, '_build123d_solid') or target._build123d_solid is None:
                         continue
-                        
+
                     old_solid = target._build123d_solid
                     new_solid = None
-                    
+
                     if operation == "Cut":
                         new_solid = old_solid - new_geo
                     elif operation == "Join":
                         new_solid = old_solid + new_geo
                     elif operation == "Intersect":
                         new_solid = old_solid & new_geo
-                        
+
                     # Nur speichern, wenn das Ergebnis valide ist und nicht leer
                     if new_solid is not None and not new_solid.is_null():
-                        # Dummy Feature für History (da Face-Op keine Parameter hat)
+                        # Parametrisches Feature erstellen
                         from modeling import ExtrudeFeature
-                        feat = ExtrudeFeature(sketch=None, distance=height, operation=operation, name=f"{operation} (Face)")
+                        feat = ExtrudeFeature(
+                            sketch=None,
+                            distance=height,
+                            operation=operation,
+                            name=f"Push/Pull ({operation})",
+                            precalculated_polys=[polygon],
+                            plane_origin=plane_origin,
+                            plane_normal=plane_normal,
+                            plane_x_dir=plane_x_dir,
+                            plane_y_dir=plane_y_dir  # ✅ FIX: Y-Richtung speichern
+                        )
                         target.features.append(feat)
-                        
+
                         target._build123d_solid = new_solid
                         self._update_body_from_build123d(target, new_solid)
                         success_count += 1
+                        logger.info(f"✅ Push/Pull {operation} auf '{target.name}' (parametrisch)")
                         
                 except Exception as e:
                     logger.exeption(f"Body-Face Op '{operation}' an {target.name} gescheitert: {e}")
@@ -2302,17 +2554,19 @@ class MainWindow(QMainWindow):
     
     def _update_body_from_build123d(self, body, solid):
         """
-        Delegiert die Berechnung an die Body-Klasse (modeling.py),
-        welche den CADTessellator nutzt.
+        Regeneriert das Mesh aus dem Solid und aktualisiert den Viewport.
+
+        WICHTIG: Diese Methode wird für direkte Solid-Updates verwendet (Push/Pull),
+        wo KEIN _rebuild() aufgerufen wird. Daher MUSS das Mesh hier regeneriert werden!
         """
-        # 1. Solid im Body speichern
-        body._build123d_solid = solid
-        
-        # 2. Mesh zentral generieren lassen (nutzt Cache & OCP)
-        # Dies füllt body.vtk_mesh und body.vtk_edges
-        if hasattr(body, '_update_mesh_from_solid'):
-            body._update_mesh_from_solid(solid)
-        
+        from modeling.cad_tessellator import CADTessellator
+
+        # 1. Cache leeren - das Solid hat sich geändert!
+        CADTessellator.clear_cache()
+
+        # 2. Mesh aus dem neuen Solid regenerieren
+        body._update_mesh_from_solid(solid)
+
         # 3. Viewport aktualisieren
         self._update_body_mesh(body)
 
@@ -2913,80 +3167,84 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Erstelle {pattern_type} Pattern mit {count} Kopien für {body.name}")
 
-        with CADTessellator.invalidate_cache():
-            try:
-                new_bodies = []
+        # Performance Optimization 1.2: Per-Shape Cache-Invalidierung für Pattern-Bodies
+        try:
+            new_bodies = []
 
-                for i in range(1, count):  # Start bei 1 (Original bleibt)
-                    # Kopiere Body
-                    import copy
-                    new_body = copy.deepcopy(body)
-                    new_body.id = f"{body.id}_pattern_{i}"
-                    new_body.name = f"{body.name} (Pattern {i})"
+            for i in range(1, count):  # Start bei 1 (Original bleibt)
+                # Kopiere Body
+                import copy
+                new_body = copy.deepcopy(body)
+                new_body.id = f"{body.id}_pattern_{i}"
+                new_body.name = f"{body.name} (Pattern {i})"
 
-                    # Erstelle Transform-Feature basierend auf Pattern-Typ
-                    if pattern_type == "linear":
-                        spacing = pattern_data["spacing"]
-                        axis = pattern_data["axis"]
+                # ✅ FIX: Clear entire cache for consistency
+                # Deepcopy shouldn't reuse IDs, but full clear is safer
+                CADTessellator.clear_cache()
 
-                        # Offset für dieses Element
-                        offset = spacing * i
+                # Erstelle Transform-Feature basierend auf Pattern-Typ
+                if pattern_type == "linear":
+                    spacing = pattern_data["spacing"]
+                    axis = pattern_data["axis"]
 
-                        translation = [0, 0, 0]
-                        if axis == "X":
-                            translation[0] = offset
-                        elif axis == "Y":
-                            translation[1] = offset
-                        elif axis == "Z":
-                            translation[2] = offset
+                    # Offset für dieses Element
+                    offset = spacing * i
 
-                        transform_feature = TransformFeature(
-                            mode="move",
-                            data={"translation": translation},
-                            name=f"Pattern Move {i}"
-                        )
+                    translation = [0, 0, 0]
+                    if axis == "X":
+                        translation[0] = offset
+                    elif axis == "Y":
+                        translation[1] = offset
+                    elif axis == "Z":
+                        translation[2] = offset
 
-                    elif pattern_type == "circular":
-                        axis = pattern_data["axis"]
-                        angle_per_copy = pattern_data["angle"]
+                    transform_feature = TransformFeature(
+                        mode="move",
+                        data={"translation": translation},
+                        name=f"Pattern Move {i}"
+                    )
 
-                        # Rotation für dieses Element
-                        total_angle = angle_per_copy * i
+                elif pattern_type == "circular":
+                    axis = pattern_data["axis"]
+                    angle_per_copy = pattern_data["angle"]
 
-                        # Berechne Body-Center als Rotation-Center
-                        if hasattr(new_body, '_build123d_solid') and new_body._build123d_solid:
-                            bounds = new_body._build123d_solid.bounding_box()
-                            center = [
-                                (bounds.min.X + bounds.max.X) / 2,
-                                (bounds.min.Y + bounds.max.Y) / 2,
-                                (bounds.min.Z + bounds.max.Z) / 2
-                            ]
-                        else:
-                            center = [0, 0, 0]
+                    # Rotation für dieses Element
+                    total_angle = angle_per_copy * i
 
-                        transform_feature = TransformFeature(
-                            mode="rotate",
-                            data={"axis": axis, "angle": total_angle, "center": center},
-                            name=f"Pattern Rotate {i}"
-                        )
+                    # Berechne Body-Center als Rotation-Center
+                    if hasattr(new_body, '_build123d_solid') and new_body._build123d_solid:
+                        bounds = new_body._build123d_solid.bounding_box()
+                        center = [
+                            (bounds.min.X + bounds.max.X) / 2,
+                            (bounds.min.Y + bounds.max.Y) / 2,
+                            (bounds.min.Z + bounds.max.Z) / 2
+                        ]
+                    else:
+                        center = [0, 0, 0]
 
-                    # Feature zum Body hinzufügen
-                    new_body.add_feature(transform_feature)
+                    transform_feature = TransformFeature(
+                        mode="rotate",
+                        data={"axis": axis, "angle": total_angle, "center": center},
+                        name=f"Pattern Rotate {i}"
+                    )
 
-                    # Body zum Dokument hinzufügen
-                    self.document.bodies.append(new_body)
-                    new_bodies.append(new_body)
+                # Feature zum Body hinzufügen
+                new_body.add_feature(transform_feature)
 
-                # UI aktualisieren
-                for new_body in new_bodies:
-                    self._update_body_from_build123d(new_body, new_body._build123d_solid)
+                # Body zum Dokument hinzufügen
+                self.document.bodies.append(new_body)
+                new_bodies.append(new_body)
 
-                self.browser.refresh()
+            # UI aktualisieren
+            for new_body in new_bodies:
+                self._update_body_from_build123d(new_body, new_body._build123d_solid)
 
-                logger.success(f"Pattern erstellt: {count} Kopien von {body.name}")
+            self.browser.refresh()
 
-            except Exception as e:
-                logger.exception(f"Pattern-Error: {e}")
+            logger.success(f"Pattern erstellt: {count} Kopien von {body.name}")
+
+        except Exception as e:
+            logger.exception(f"Pattern-Error: {e}")
 
     def _show_not_implemented(self, feature: str):
         logger.info(f"{feature} - Coming soon!")
@@ -3168,11 +3426,50 @@ class MainWindow(QMainWindow):
                     self.viewport_3d.mark_edge_as_failed(edge_idx)
 
                 # Feature zur History hinzufügen
+                # Legacy Point-Selectors (backward-compat)
                 selectors = self.viewport_3d.get_edge_selectors()
+
+                # TNP Phase 1: GeometricSelectors erstellen
+                from modeling.geometric_selector import create_geometric_selectors_from_edges
+                selected_edges = self.viewport_3d.get_selected_edges()
+                geometric_selectors = create_geometric_selectors_from_edges(selected_edges)
+                logger.debug(f"🎯 TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
+
+                # ✅ TNP Phase 2: OCP Edge Shapes speichern
+                ocp_edge_shapes = []
+                for edge in selected_edges:
+                    if hasattr(edge, 'wrapped'):
+                        ocp_edge_shapes.append(edge.wrapped)
+                    else:
+                        logger.warning("Edge hat kein 'wrapped' Attribut - Phase 2 TNP nicht möglich")
+
+                # ✅ TNP Phase 2: Finde vorheriges Boolean-Feature (für History-Lookup)
+                depends_on_feature_id = None
+                from modeling import ExtrudeFeature
+                for feat in reversed(body.features):
+                    if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
+                        depends_on_feature_id = feat.id
+                        logger.debug(f"🎯 TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
+                        break
+
                 if mode == "chamfer":
-                    feat = ChamferFeature(distance=radius, edge_selectors=selectors)
+                    feat = ChamferFeature(
+                        distance=radius,
+                        edge_selectors=selectors,
+                        geometric_selectors=geometric_selectors,
+                        ocp_edge_shapes=ocp_edge_shapes,  # ✅ Phase 2 TNP
+                        depends_on_feature_id=depends_on_feature_id  # ✅ Phase 2 TNP
+                    )
                 else:
-                    feat = FilletFeature(radius=radius, edge_selectors=selectors)
+                    feat = FilletFeature(
+                        radius=radius,
+                        edge_selectors=selectors,
+                        geometric_selectors=geometric_selectors,
+                        ocp_edge_shapes=ocp_edge_shapes,  # ✅ Phase 2 TNP
+                        depends_on_feature_id=depends_on_feature_id  # ✅ Phase 2 TNP
+                    )
+
+                logger.debug(f"✅ TNP Phase 2: Feature mit {len(ocp_edge_shapes)} OCP Edges erstellt")
                 body.features.append(feat)
 
                 # Visualisierung aktualisieren
@@ -3211,11 +3508,77 @@ class MainWindow(QMainWindow):
         self.viewport_3d.stop_edge_selection_mode()
         self.fillet_panel.hide()
         logger.info("Fillet/Chamfer abgebrochen")
-        
-    
-    
-    
-            
+
+    # ==================== SECTION VIEW ====================
+
+    def _on_section_enabled(self, plane: str, position: float):
+        """Section View wurde aktiviert."""
+        logger.info(f"🔪 Section View aktiviert: {plane} @ {position:.1f}mm")
+
+        # Berechne Bounds für Slider
+        min_pos, max_pos, default_pos = self.viewport_3d.get_section_bounds()
+        self.section_panel.set_slider_bounds(min_pos, max_pos, default_pos)
+
+        # Aktiviere in Viewport
+        self.viewport_3d.enable_section_view(plane, position)
+
+    def _on_section_disabled(self):
+        """Section View wurde deaktiviert."""
+        logger.info("🔪 Section View deaktiviert")
+        self.viewport_3d.disable_section_view()
+
+    def _on_section_position_changed(self, position: float):
+        """Section Position wurde geändert."""
+        self.viewport_3d.update_section_position(position)
+
+    def _on_section_plane_changed(self, plane: str):
+        """Section Plane wurde geändert."""
+        logger.debug(f"🔪 Section Plane: {plane}")
+        # Re-enable mit neuer Plane wird im Panel selbst gemacht
+
+    def _on_section_invert_toggled(self):
+        """Section Seite wurde invertiert."""
+        self.viewport_3d.toggle_section_invert()
+
+    def _toggle_section_view(self):
+        """
+        Öffnet/Schließt Section View Panel.
+
+        User-Story: "ich brauchte für körper noch schnittansicht um besser zu prüfen ob cuts gingen"
+        Implementierung: Fusion 360-ähnliche Section Analysis mit Clipping Planes
+        """
+        if self.section_panel.isVisible():
+            # Deaktiviere Section View
+            self.section_panel.hide()
+            if self.viewport_3d._section_view_enabled:
+                self.viewport_3d.disable_section_view()
+            logger.info("🔪 Section View Panel geschlossen")
+        else:
+            # Zeige Section View Panel
+            # ✅ FIX: Berechne Position relativ zum Viewport
+            viewport_geom = self.viewport_3d.geometry()
+
+            # Position: Rechts oben im Viewport-Bereich
+            panel_width = 320  # Feste Breite (aus SectionViewPanel)
+            panel_x = viewport_geom.right() - panel_width - 30
+            panel_y = viewport_geom.top() + 30
+
+            # ✅ DEBUG: Zeige Positions-Info
+            logger.debug(f"Section Panel Position: x={panel_x}, y={panel_y}, width={panel_width}")
+
+            self.section_panel.move(panel_x, panel_y)
+            self.section_panel.show()
+            self.section_panel.raise_()
+
+            # ✅ AUTO-AKTIVIEREN: Aktiviere Section View automatisch beim Öffnen
+            if not self.section_panel._is_active:
+                self.section_panel.toggle_button.click()  # Simuliere Button-Klick
+
+            logger.info("🔪 Section View Panel geöffnet & aktiviert")
+            logger.info("Tipp: Bewege Position-Slider um durch den Körper zu schneiden!")
+
+
+
     # ==================== 3D OPERATIONEN ====================
 
     def _get_active_body(self):

@@ -62,7 +62,9 @@ class Sketch:
     # Ebene (später: 3D-Ebene)
     plane_origin: Tuple[float, float, float] = (0, 0, 0)
     plane_normal: Tuple[float, float, float] = (0, 0, 1)  # XY-Ebene
-    
+    plane_x_dir: Tuple[float, float, float] = (1, 0, 0)
+    plane_y_dir: Tuple[float, float, float] = (0, 1, 0)
+
     # Solver
     _solver: ConstraintSolver = field(default_factory=ConstraintSolver)
     

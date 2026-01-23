@@ -494,11 +494,21 @@ class GeometryDetector:
     
     
 
-    def process_body_mesh(self, body_id, vtk_mesh):
+    def process_body_mesh(self, body_id, vtk_mesh, extrude_mode=False):
         """
         Zerlegt das Body-Mesh in planare Flächen.
         FIX: Bessere Normalen-Gruppierung für zylindrische Flächen
+
+        Performance Optimization Phase 2.2: Dynamic Face-Pick-Priority
+        Im Extrude-Mode bekommen Faces höhere Priorität für besseres Picking.
+
+        Args:
+            body_id: ID des Bodies
+            vtk_mesh: PyVista Mesh
+            extrude_mode: True wenn Viewport im Extrude-Mode ist (Default: False)
         """
+        # Speichere extrude_mode für _add_body_face
+        self._current_extrude_mode = extrude_mode
         if not HAS_VTK or vtk_mesh is None:
             return
 
@@ -565,14 +575,20 @@ class GeometryDetector:
         self._add_body_face(body_id, center, normal, mesh)
     
     def _add_body_face(self, body_id, center, normal, mesh):
+        # Performance Optimization Phase 2.2: Dynamic Priority
+        # Im Extrude-Mode: Faces bekommen HÖCHSTE Priorität (50) für besseres Picking
+        # Normal-Mode: Niedrige Priorität (5) damit Body-Mesh nicht stört
+        extrude_mode = getattr(self, '_current_extrude_mode', False)
+        face_priority = 50 if extrude_mode else 5
+
         face = SelectionFace(
             id=self._counter,
             owner_id=body_id,
             domain_type="body_face",
             plane_origin=tuple(center),
             plane_normal=tuple(normal),
-            pick_priority=5,
-            display_mesh=mesh 
+            pick_priority=face_priority,  # DYNAMIC!
+            display_mesh=mesh
         )
         self.selection_faces.append(face)
         self._counter += 1

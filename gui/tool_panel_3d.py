@@ -86,10 +86,15 @@ class ToolPanel3D(QWidget):
             (tr("Cut") if tr("Cut") != "Cut" else "Cut", "boolean_cut"),
             (tr("Intersect") if tr("Intersect") != "Intersect" else "Intersect", "boolean_intersect"),
         ])
-        
+
+        # --- Inspect ---
+        self._add_group("Inspect", [
+            ("🔪 Section View", "Schnittansicht (wie Fusion 360)", "section_view"),
+        ])
+
         # --- Tools ---
         self._add_group(tr("TOOLS"), [
-            (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"), 
+            (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"),
             (tr("Measure") if tr("Measure") != "Measure" else "Measure", "measure"),
         ])
         

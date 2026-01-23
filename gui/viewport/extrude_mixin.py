@@ -11,18 +11,72 @@ class ExtrudeMixin:
     """Mixin mit allen Extrude-bezogenen Methoden"""
     
     def set_extrude_mode(self, enabled):
-        """Aktiviert den Extrude-Modus und initialisiert den Detector."""
+        """
+        Aktiviert den Extrude-Modus und initialisiert den Detector.
+
+        UX-IMPROVEMENT: X-Ray Vision (Bodies werden halbtransparent)
+        User-Problem: "muss oft erst den körper unsichtbar machen um fläche zu selektieren"
+        Lösung: Bodies automatisch 70% transparent → kein manuelles Unsichtbar-Machen!
+
+        FIX: _body_actors ist Dict[str, tuple[str]] (actor names), NICHT Dict mit mesh_actor key
+        """
         self.extrude_mode = enabled
-        
+
         if enabled:
             self.selected_face_ids.clear()
-            self._drag_screen_vector = np.array([0.0, -1.0]) 
+            self._drag_screen_vector = np.array([0.0, -1.0])
+
+            # X-RAY VISION: Bodies halbtransparent machen
+            logger.debug(f"🔍 X-Ray Vision: Aktiviere für {len(self._body_actors)} Bodies")
+            for body_id, actor_names in self._body_actors.items():
+                # actor_names ist ein Tuple wie ("body_xyz_m", "body_xyz_e")
+                # Erstes Element ist immer der Mesh-Actor
+                if not actor_names:
+                    logger.debug(f"⚠️ Body {body_id}: Keine Actors gefunden")
+                    continue
+
+                mesh_actor_name = actor_names[0]  # "body_{id}_m"
+
+                # Actor aus Renderer holen
+                if mesh_actor_name in self.plotter.renderer.actors:
+                    mesh_actor = self.plotter.renderer.actors[mesh_actor_name]
+                    try:
+                        # 30% opacity = gut sichtbar aber Face-Picking möglich
+                        mesh_actor.GetProperty().SetOpacity(0.3)
+                        logger.debug(f"✅ Body {body_id}: X-Ray Mode aktiviert (30% opacity)")
+                    except Exception as e:
+                        logger.warning(f"❌ Konnte Opacity nicht setzen für {body_id}: {e}")
+                else:
+                    logger.debug(f"⚠️ Actor {mesh_actor_name} nicht in Renderer gefunden")
+
+            # Performance Optimization Phase 2.3: Display-Mesh Force-Refresh
+            # Lade Detector neu mit extrude_mode=True, um Bodies mit höherer Pick-Priority zu laden
+            logger.debug("🔄 Force-Refresh: Lade Detector neu mit Extrude-Mode Priority")
+            self._load_detector_mesh_data()
+
             self._draw_selectable_faces_from_detector()
             self.plotter.render()
         else:
             self.selected_face_ids.clear()
             self._clear_face_actors()
             self._clear_preview()
+
+            # X-RAY VISION: Bodies zurück zu normal (90% opacity)
+            logger.debug(f"🔍 X-Ray Vision: Deaktiviere für {len(self._body_actors)} Bodies")
+            for body_id, actor_names in self._body_actors.items():
+                if not actor_names:
+                    continue
+
+                mesh_actor_name = actor_names[0]  # "body_{id}_m"
+
+                if mesh_actor_name in self.plotter.renderer.actors:
+                    mesh_actor = self.plotter.renderer.actors[mesh_actor_name]
+                    try:
+                        mesh_actor.GetProperty().SetOpacity(0.9)
+                        logger.debug(f"✅ Body {body_id}: X-Ray Mode deaktiviert (90% opacity)")
+                    except Exception as e:
+                        logger.warning(f"❌ Konnte Opacity nicht zurücksetzen für {body_id}: {e}")
+
             self.plotter.render()
             
     def get_extrusion_data_for_kernel(self):

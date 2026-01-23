@@ -1328,6 +1328,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.undo_stack.append(self.sketch.to_dict())
         self.redo_stack.clear()
         if len(self.undo_stack) > self.max_undo: self.undo_stack.pop(0)
+
+        # Performance Optimization 1.6: Invalidiere Intersection Cache bei Geometrie-Änderungen
+        if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
+            self.snapper.invalidate_intersection_cache()
     
     def undo(self):
         if not self.undo_stack:
@@ -1340,6 +1344,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         self.show_message(tr("Undone"), 1500)
         logger.debug("Undo performed")
+
+        # Performance Optimization 1.6: Invalidiere Intersection Cache
+        if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
+            self.snapper.invalidate_intersection_cache()
+
         self.update()
 
     def redo(self):
@@ -1353,6 +1362,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         self.show_message(tr("Redone"), 1500)
         logger.debug("Redo performed")
+
+        # Performance Optimization 1.6: Invalidiere Intersection Cache
+        if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
+            self.snapper.invalidate_intersection_cache()
+
         self.update()
     
     def import_dxf(self, filepath=None):
@@ -2496,7 +2510,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.sketch.points.remove(old_line.start)
                 if old_line.end in self.sketch.points:
                     self.sketch.points.remove(old_line.end)
-        
+
+        # Performance Optimization 2.1: Invalidiere Cache vor finaler Linien-Generierung
+        if hasattr(spline, 'invalidate_cache'):
+            spline.invalidate_cache()
+
         # Neue Linien generieren
         new_lines = spline.to_lines(segments_per_span=10)
         spline._lines = new_lines  # Referenz aktualisieren
@@ -2722,6 +2740,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # FIX: Vorschau erzwingen
         try:
+            # Performance Optimization 2.1: Invalidiere Cache vor Neuberechnung
+            if hasattr(spline, 'invalidate_cache'):
+                spline.invalidate_cache()
+
             # Wir speichern die temporären Linien direkt im Spline-Objekt
             spline._preview_lines = spline.to_lines(segments_per_span=10)
             self.update() # Wichtig: PaintEvent neu triggern

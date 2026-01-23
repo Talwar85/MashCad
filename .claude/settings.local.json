@@ -3,7 +3,8 @@
     "allow": [
       "Bash(dir /b /s python.exe)",
       "Bash(findstr:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }

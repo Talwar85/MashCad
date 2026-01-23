@@ -62,18 +62,70 @@ class BodyRenderingMixin:
                     smooth_shading=has_normals, pbr=not has_normals,
                     metallic=0.1, roughness=0.6, pickable=True
                 )
-                
+
                 if n_mesh in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[n_mesh].SetVisibility(True)
-                    
+                    actor = self.plotter.renderer.actors[n_mesh]
+                    actor.SetVisibility(True)
+
+                    # ✅ CRITICAL FIX: Explizit Mapper mit neuem Mesh aktualisieren
+                    # Problem: PyVista's add_mesh() könnte altes Mesh im Mapper cachen
+                    # Lösung: Force-Update des VTK Mappers nach Boolean Operations
+                    mapper = actor.GetMapper()
+                    mapper.SetInputData(mesh_obj)
+                    mapper.Modified()  # VTK Update-Signal
+                    logger.debug(f"✅ Mapper explizit aktualisiert für Body {bid}: {mesh_obj.n_points} Punkte")
+
                 actors_list.append(n_mesh)
                 
                 if edge_mesh_obj is not None:
                     n_edge = f"body_{bid}_e"
                     self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
+
+                    # ✅ Force-Update Edge Mapper too
+                    if n_edge in self.plotter.renderer.actors:
+                        edge_actor = self.plotter.renderer.actors[n_edge]
+                        edge_mapper = edge_actor.GetMapper()
+                        edge_mapper.SetInputData(edge_mesh_obj)
+                        edge_mapper.Modified()
+
                     actors_list.append(n_edge)
                 
                 self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
+
+                # ✅ FIX: Re-apply Section View if active
+                if hasattr(self, '_section_view_enabled') and self._section_view_enabled:
+                    logger.debug(f"🔪 Re-applying section clipping to updated body {bid}")
+                    # Re-clip this specific body
+                    if bid in self._body_actors and self._body_actors[bid]:
+                        mesh_actor_name = self._body_actors[bid][0]
+                        if mesh_actor_name in self.plotter.renderer.actors:
+                            actor = self.plotter.renderer.actors[mesh_actor_name]
+                            mapper = actor.GetMapper()
+
+                            # Get plane info
+                            plane_origins = {
+                                "XY": [0, 0, self._section_position],
+                                "YZ": [self._section_position, 0, 0],
+                                "XZ": [0, self._section_position, 0]
+                            }
+                            plane_normals = {
+                                "XY": [0, 0, 1],
+                                "YZ": [1, 0, 0],
+                                "XZ": [0, 1, 0]
+                            }
+                            origin = plane_origins.get(self._section_plane, [0, 0, self._section_position])
+                            normal = plane_normals.get(self._section_plane, [0, 0, 1])
+                            if self._section_invert:
+                                normal = [-n for n in normal]
+
+                            # Clip the new mesh
+                            clipped_mesh = mesh_obj.clip(
+                                normal=normal,
+                                origin=origin,
+                                invert=False
+                            )
+                            mapper.SetInputData(clipped_mesh)
+                            logger.debug(f"✅ Section clipping re-applied to body {bid}")
 
             # Pfad B: Legacy Listen (Verts/Faces)
             elif verts and faces:
@@ -101,7 +153,11 @@ class BodyRenderingMixin:
                 self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
                 
             self._body_actors[bid] = tuple(actors_list)
-            
+
+            # ✅ CRITICAL: Force render after Mapper update
+            # Ensures VTK displays the new mesh immediately
+            self.plotter.render()
+
         except Exception as e:
             logger.error(f"Add body error: {e}")
 

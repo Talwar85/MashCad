@@ -374,7 +374,18 @@ class EdgeSelectionMixin:
         return self._selected_edge_ids.copy()
 
     def get_edge_selectors(self):
+        """Gibt Legacy Point-Selectors zurück (backward-compat)"""
         return [e.center for e in self._selectable_edges if e.id in self._selected_edge_ids]
+
+    def get_selected_edges(self):
+        """
+        Gibt die echten build123d Edges zurück (für TNP-robuste GeometricSelectors).
+
+        Returns:
+            List[build123d.Edge]: Selektierte Edges
+        """
+        return [e.build123d_edge for e in self._selectable_edges
+                if e.id in self._selected_edge_ids and e.build123d_edge is not None]
 
     def select_all_edges(self):
         self._selected_edge_ids = {e.id for e in self._selectable_edges}

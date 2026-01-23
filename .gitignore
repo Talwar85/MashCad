@@ -23,6 +23,8 @@ clean_pycache.sh
 nul
 *.sh
 .claude
+tests/
+docs/
 
 # Virtual environments
 venv/

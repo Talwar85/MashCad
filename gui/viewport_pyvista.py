@@ -17,6 +17,7 @@ from gui.viewport.picking_mixin import PickingMixin
 from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
+from gui.viewport.section_view_mixin import SectionViewMixin
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -72,7 +73,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin):
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -123,6 +124,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # Edge Selection Mixin initialisieren
         self._init_edge_selection()
+
+        # Section View Mixin initialisieren
+        self._init_section_view()
+
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
         self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
         self.point_to_point_start = None  # Erster ausgewählter Punkt (x, y, z)
@@ -132,6 +137,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.is_dragging = False
         self.drag_start_pos = QPoint()
         self.drag_start_height = 0.0
+
+        # ✅ FIX: Track last picked body for sketch targeting
+        self._last_picked_body_id = None
         
         # Tracking
         self._sketch_actors = []
@@ -408,7 +416,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.hover_body_id = None
         logger.debug(f"Pending transform mode: {active}")
 
-    def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True):
+    def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True, log_pick: bool = True):
         """
         Picked einen 3D-Punkt auf der Geometrie (Fusion 360-Style).
         Gibt (body_id, point) zurück oder (None, None) wenn nichts getroffen.
@@ -416,6 +424,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         Args:
             screen_x, screen_y: Screen-Koordinaten
             snap_to_vertex: Wenn True, snapped auf nächstgelegenen Vertex (Fusion-Style)
+            log_pick: Wenn False, kein Debug-Logging (für hover performance)
 
         Returns:
             (body_id, point) oder (None, None)
@@ -475,10 +484,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                     if nearest_vertex is not None:
                         point = nearest_vertex
-                        logger.debug(f"Snapped to vertex (dist={min_dist:.2f})")
+                        if log_pick:  # Nur loggen wenn explizit gewünscht
+                            logger.debug(f"Snapped to vertex (dist={min_dist:.2f})")
 
         point_tuple = (float(point[0]), float(point[1]), float(point[2]))
-        logger.debug(f"Picked point: {point_tuple} on body {body_id}")
+        if log_pick:  # Nur loggen wenn explizit gewünscht
+            logger.debug(f"Picked point: {point_tuple} on body {body_id}")
         return body_id, point_tuple
 
     def start_point_to_point_mode(self, body_id: str):
@@ -840,12 +851,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # --- POINT-TO-POINT MOVE MODE (Fusion 360-Style) ---
         if self.point_to_point_mode:
-            # Mouse Move: Zeige Hover-Vertex
+            # Mouse Move: Zeige Hover-Vertex (KEIN LOGGING für Performance)
             if event.type() == QEvent.MouseMove:
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 x, y = int(pos.x()), int(pos.y())
 
-                body_id, point = self.pick_point_on_geometry(x, y, snap_to_vertex=True)
+                # WICHTIG: log_pick=False für hover (kein Debug-Output bei jedem Frame)
+                body_id, point = self.pick_point_on_geometry(x, y, snap_to_vertex=True, log_pick=False)
                 if point:
                     # Zeige Hover-Marker (Orange)
                     import pyvista as pv
@@ -862,19 +874,24 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 x, y = int(pos.x()), int(pos.y())
 
+                # WICHTIG: Entferne Hover-Marker BEVOR wir picken (sonst blockt er den Pick!)
+                self.plotter.remove_actor('p2p_hover_marker', render=False)
+
                 body_id, point = self.pick_point_on_geometry(x, y)
                 if point:
                     if not self.point_to_point_start:
                         # Erster Punkt ausgewählt
                         self.point_to_point_start = point
+                        self.point_to_point_body_id = body_id
                         # Visualisiere Start-Punkt (Gelb)
                         import pyvista as pv
                         sphere = pv.Sphere(center=point, radius=2.0)
                         self.plotter.add_mesh(sphere, color='yellow', name='p2p_start_marker')
-                        logger.success(f"Start-Punkt gewählt: {point}. Wähle Ziel-Punkt.")
+                        logger.success(f"✅ Start-Punkt gewählt. Jetzt Ziel-Punkt klicken.")
                     else:
                         # Zweiter Punkt ausgewählt - führe Move durch
                         end_point = point
+                        logger.info(f"🎯 Point-to-Point Move: Start {self.point_to_point_start} → Ziel {end_point}")
                         # Emittiere Signal für MainWindow
                         self.point_to_point_move.emit(self.point_to_point_body_id, self.point_to_point_start, end_point)
                         # Reset
@@ -1206,15 +1223,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
             if face:
                 logger.info(f"Sketch Plane gewählt: Face {face.id} auf Body {face.owner_id}")
-                
+
                 # Sende Origin und Normal
                 self.custom_plane_clicked.emit(
-                    face.plane_origin, 
+                    face.plane_origin,
                     face.plane_normal
                 )
-                
+
                 # Speichere die stabile X-Achse für Schritt 2 (siehe vorherige Antwort)
                 self._last_picked_x_dir = face.plane_x
+
+                # ✅ FIX: Speichere auch die Body-ID für korrektes Targeting
+                self._last_picked_body_id = face.owner_id
                 return
 
     def _update_detector_for_picking(self):
@@ -1225,9 +1245,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.detector.clear()
         
         # Nur Bodies laden (Sketches brauchen wir nicht um darauf zu sketchen)
+        # Performance Optimization Phase 2.2: Übergebe extrude_mode für Dynamic Priority
+        extrude_mode = getattr(self, 'extrude_mode', False)
         for bid, body in self.bodies.items():
             if self.is_body_visible(bid) and 'mesh' in body:
-                self.detector.process_body_mesh(bid, body['mesh'])
+                self.detector.process_body_mesh(bid, body['mesh'], extrude_mode=extrude_mode)
             
    
         
@@ -1482,20 +1504,65 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             
             if face.display_mesh:
                 name = f"det_face_{face.id}"
-                
-                # Kleiner Offset gegen Z-Fighting
-                offset = np.array(face.plane_normal) * 0.05
+
+                # Erhöhter Offset gegen Z-Fighting (UX-Improvement: 0.05 → 0.5)
+                # User-Problem: "selektierte fläche nicht immer sichtbar"
+                offset = np.array(face.plane_normal) * 0.5
                 shifted = face.display_mesh.translate(offset, inplace=False)
-                
+
                 self.plotter.add_mesh(
-                    shifted, 
-                    color=color, 
-                    opacity=opacity, 
-                    name=name, 
+                    shifted,
+                    color=color,
+                    opacity=opacity,
+                    name=name,
                     pickable=False
                 )
                 self._face_actors.append(name)
-                
+
+            else:
+                # Performance Optimization Phase 2.4: Fallback-Highlighting (Wireframe)
+                # Wenn display_mesh fehlt, zeichne zumindest den Umriss als Feedback
+                logger.debug(f"⚠️ Face {face.id} hat kein display_mesh - nutze Wireframe-Fallback")
+
+                try:
+                    # Erstelle einen simplen Marker an der plane_origin
+                    center = np.array(face.plane_origin)
+                    normal = np.array(face.plane_normal)
+
+                    # Erstelle ein kleines Quad als Highlight
+                    if abs(normal[2]) < 0.9:
+                        u = np.cross(normal, [0, 0, 1])
+                    else:
+                        u = np.cross(normal, [1, 0, 0])
+                    u = u / np.linalg.norm(u)
+                    v = np.cross(normal, u)
+
+                    size = 10.0  # 10mm großes Quad
+                    pts = [
+                        center + size * (-u - v),
+                        center + size * (u - v),
+                        center + size * (u + v),
+                        center + size * (-u + v),
+                    ]
+
+                    import pyvista as pv
+                    quad = pv.PolyData(np.array(pts), faces=[4, 0, 1, 2, 3])
+
+                    name = f"det_face_fallback_{face.id}"
+                    self.plotter.add_mesh(
+                        quad,
+                        color=color,
+                        opacity=opacity,
+                        style='wireframe',  # Wireframe statt Solid
+                        line_width=3,
+                        name=name,
+                        pickable=False
+                    )
+                    self._face_actors.append(name)
+
+                except Exception as e:
+                    logger.warning(f"Konnte Fallback-Highlight nicht zeichnen: {e}")
+
         self.plotter.render()
         
         
