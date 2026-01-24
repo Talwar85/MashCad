@@ -13,6 +13,7 @@ except ImportError:
     HAS_PYVISTA = False
 
 from PySide6.QtGui import QColor
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
 
 
 class BodyRenderingMixin:
@@ -156,7 +157,7 @@ class BodyRenderingMixin:
 
             # ✅ CRITICAL: Force render after Mapper update
             # Ensures VTK displays the new mesh immediately
-            self.plotter.render()
+            request_render(self.plotter)
 
         except Exception as e:
             logger.error(f"Add body error: {e}")
@@ -170,7 +171,7 @@ class BodyRenderingMixin:
             for name in actors:
                 if name in self.plotter.renderer.actors:
                     self.plotter.renderer.actors[name].SetVisibility(visible)
-            self.plotter.render()
+            request_render(self.plotter)
         except Exception as e:
             logger.error(f"Set visibility error: {e}")
 
@@ -253,7 +254,7 @@ class BodyRenderingMixin:
                 quad, color='#00aaff', opacity=0.4,
                 name='body_face_hover', pickable=False
             )
-            self.plotter.render()
+            request_render(self.plotter)
             
         except Exception as e:
             logger.debug(f"Draw highlight error: {e}")
@@ -297,7 +298,7 @@ class BodyRenderingMixin:
                 quad, color='#ffaa00', opacity=0.5,
                 name='body_face_select', pickable=False
             )
-            self.plotter.render()
+            request_render(self.plotter)
             
         except Exception:
             pass

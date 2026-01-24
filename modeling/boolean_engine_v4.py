@@ -31,6 +31,7 @@ except ImportError:
 
 from modeling.result_types import BooleanResult, ResultStatus
 from modeling.body_transaction import BodyTransaction, BooleanOperationError
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 
 class BooleanEngineV4:
@@ -38,20 +39,15 @@ class BooleanEngineV4:
     Professional Boolean engine with production-grade defaults.
 
     Philosophy:
-    - Use Fusion 360-grade tolerances (1e-5) as DEFAULT
+    - Use Fusion 360-grade tolerances as DEFAULT
     - Fail fast with clear error messages
     - No magic fallbacks - user should fix geometry
     - Transaction-based rollback for safety
     """
 
-    # Production-grade fuzzy tolerance (like Fusion 360)
-    # Reason: Real CAD geometries have numerical imprecision
-    # 1e-7 is too strict for practical work
-    PRODUCTION_FUZZY_TOLERANCE = 1e-4  # 0.1mm (erhöht von 1e-5 für bessere Toleranz)
-
-    # Minimum volume change to consider operation successful (mm³)
-    # WICHTIG: Sehr klein setzen um auch kleine Cuts zu erlauben!
-    MIN_VOLUME_CHANGE = 1e-6  # 0.000001 mm³ (erhöht von 1e-3)
+    # Phase 5: Verwende zentralisierte Toleranzen
+    PRODUCTION_FUZZY_TOLERANCE = Tolerances.KERNEL_FUZZY
+    MIN_VOLUME_CHANGE = Tolerances.KERNEL_MIN_VOLUME_CHANGE
 
     @staticmethod
     def execute_boolean(

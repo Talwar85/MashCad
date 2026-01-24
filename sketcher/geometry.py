@@ -274,19 +274,28 @@ def circle_line_intersection(circle: Circle2D, line: Line2D) -> List[Point2D]:
     # Linie in parametrischer Form: P = start + t * (end - start)
     dx = line.end.x - line.start.x
     dy = line.end.y - line.start.y
-    
+
     fx = line.start.x - circle.center.x
     fy = line.start.y - circle.center.y
-    
+
     a = dx*dx + dy*dy
+
+    # Schutz vor Division durch Null (Linie hat keine Länge)
+    if a < 1e-12:
+        # Prüfen ob der Punkt auf dem Kreis liegt
+        dist = math.hypot(fx, fy)
+        if abs(dist - circle.radius) < 1e-6:
+            return [Point2D(line.start.x, line.start.y)]
+        return []
+
     b = 2 * (fx*dx + fy*dy)
     c = fx*fx + fy*fy - circle.radius**2
-    
+
     discriminant = b*b - 4*a*c
-    
+
     if discriminant < 0:
         return []
-    
+
     points = []
     if discriminant == 0:
         t = -b / (2*a)
@@ -556,6 +565,254 @@ class BezierSpline:
         self._cache_hash = current_hash
 
         return lines
+
+
+@dataclass
+class Spline2D:
+    """
+    Native B-Spline/NURBS Kurve für DXF-Import und saubere Extrusion.
+
+    Im Gegensatz zu BezierSpline (interaktiv mit Handles) speichert diese Klasse
+    die mathematisch exakte B-Spline Definition aus DXF-Dateien:
+    - Kontrollpunkte
+    - Knotenvektor
+    - Grad
+    - Gewichte (optional, für NURBS)
+
+    Beim Extrudieren wird diese direkt zu Build123d Edge.make_spline() konvertiert,
+    was eine einzelne glatte Fläche erzeugt (statt vieler kleiner Polygone).
+    """
+    control_points: List[Tuple[float, float]] = field(default_factory=list)
+    knots: List[float] = field(default_factory=list)
+    degree: int = 3
+    weights: List[float] = field(default_factory=list)  # Leer = nicht-rational (B-Spline)
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    construction: bool = False
+
+    # Gecachte Endpunkte für schnelles Profil-Matching
+    _start_point: Optional[Point2D] = field(default=None, init=False, repr=False)
+    _end_point: Optional[Point2D] = field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        """Validiert und berechnet Endpunkte."""
+        if len(self.control_points) < 2:
+            return
+
+        # Default Gewichte (alle 1.0 = B-Spline)
+        if not self.weights:
+            self.weights = [1.0] * len(self.control_points)
+
+        # Grad auf max. n-1 begrenzen
+        n = len(self.control_points)
+        if self.degree >= n:
+            self.degree = n - 1
+
+        # Default Knotenvektor (clamped uniform)
+        if not self.knots:
+            self.knots = self._create_clamped_uniform_knots()
+
+        # Endpunkte berechnen
+        self._compute_endpoints()
+
+    def _create_clamped_uniform_knots(self) -> List[float]:
+        """Erstellt clamped uniform Knotenvektor."""
+        n = len(self.control_points)
+        p = self.degree
+        m = n + p + 1
+        knots = []
+
+        for i in range(m):
+            if i <= p:
+                knots.append(0.0)
+            elif i >= m - p - 1:
+                knots.append(1.0)
+            else:
+                knots.append((i - p) / (n - p))
+
+        return knots
+
+    def _compute_endpoints(self):
+        """Berechnet Start- und Endpunkt durch Spline-Evaluation."""
+        if len(self.control_points) < 2:
+            return
+
+        try:
+            start = self.evaluate(0.0)
+            end = self.evaluate(1.0)
+            self._start_point = Point2D(start[0], start[1])
+            self._end_point = Point2D(end[0], end[1])
+        except Exception:
+            # Fallback: Erster/letzter Kontrollpunkt
+            self._start_point = Point2D(self.control_points[0][0], self.control_points[0][1])
+            self._end_point = Point2D(self.control_points[-1][0], self.control_points[-1][1])
+
+    @property
+    def start_point(self) -> Point2D:
+        """Startpunkt der Kurve."""
+        if self._start_point is None:
+            self._compute_endpoints()
+        return self._start_point or Point2D(0, 0)
+
+    @property
+    def end_point(self) -> Point2D:
+        """Endpunkt der Kurve."""
+        if self._end_point is None:
+            self._compute_endpoints()
+        return self._end_point or Point2D(0, 0)
+
+    def _basis_function(self, i: int, p: int, u: float) -> float:
+        """Cox-de Boor Rekursion für B-Spline Basisfunktion."""
+        if p == 0:
+            if self.knots[i] <= u < self.knots[i + 1]:
+                return 1.0
+            elif u == self.knots[i + 1] == 1.0 and self.knots[i] < 1.0:
+                return 1.0
+            return 0.0
+
+        result = 0.0
+        denom1 = self.knots[i + p] - self.knots[i]
+        if denom1 != 0:
+            result += (u - self.knots[i]) / denom1 * self._basis_function(i, p - 1, u)
+
+        denom2 = self.knots[i + p + 1] - self.knots[i + 1]
+        if denom2 != 0:
+            result += (self.knots[i + p + 1] - u) / denom2 * self._basis_function(i + 1, p - 1, u)
+
+        return result
+
+    def evaluate(self, u: float) -> Tuple[float, float]:
+        """
+        Evaluiert Kurve an Parameter u ∈ [0, 1].
+
+        Args:
+            u: Parameter (0.0 = Start, 1.0 = Ende)
+
+        Returns:
+            Punkt (x, y) auf der Kurve
+        """
+        u = max(0.0, min(1.0, u))
+        n = len(self.control_points)
+
+        if n < 2:
+            return self.control_points[0] if self.control_points else (0.0, 0.0)
+
+        # Basisfunktionen berechnen
+        N = [self._basis_function(i, self.degree, u) for i in range(n)]
+
+        # Gewichtete Summe (NURBS Formel)
+        num_x, num_y = 0.0, 0.0
+        denom = 0.0
+
+        for i in range(n):
+            w = self.weights[i] if i < len(self.weights) else 1.0
+            num_x += N[i] * w * self.control_points[i][0]
+            num_y += N[i] * w * self.control_points[i][1]
+            denom += N[i] * w
+
+        if abs(denom) < 1e-10:
+            return self.control_points[n // 2]
+
+        return (num_x / denom, num_y / denom)
+
+    def evaluate_points(self, num_points: int = 50) -> List[Tuple[float, float]]:
+        """Evaluiert Kurve an gleichmäßig verteilten Parametern."""
+        points = []
+        for i in range(num_points):
+            u = i / (num_points - 1) if num_points > 1 else 0.0
+            points.append(self.evaluate(u))
+        return points
+
+    def to_polyline_points(self, tolerance: float = 0.01) -> List[Tuple[float, float]]:
+        """
+        Konvertiert zu Polyline mit adaptiver Auflösung.
+        Mehr Punkte in stark gekrümmten Bereichen.
+        """
+        # Einfache Version: Gleichmäßige Verteilung basierend auf Grad und Kontrollpunkten
+        num_points = max(50, len(self.control_points) * 10)
+        return self.evaluate_points(num_points)
+
+    def to_build123d_edge(self, plane=None):
+        """
+        Konvertiert zu Build123d Edge für saubere Extrusion.
+
+        Args:
+            plane: Build123d Plane für 3D-Konvertierung (optional)
+
+        Returns:
+            Build123d Edge Objekt
+        """
+        try:
+            from OCP.Geom import Geom_BSplineCurve
+            from OCP.TColgp import TColgp_Array1OfPnt
+            from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+            from OCP.gp import gp_Pnt
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            from build123d import Edge
+
+            n = len(self.control_points)
+
+            # Poles (Kontrollpunkte) - Z=0 für 2D
+            poles = TColgp_Array1OfPnt(1, n)
+            for i, (x, y) in enumerate(self.control_points):
+                if plane:
+                    pt_3d = plane.from_local_coords((x, y))
+                    poles.SetValue(i + 1, gp_Pnt(pt_3d.X, pt_3d.Y, pt_3d.Z))
+                else:
+                    poles.SetValue(i + 1, gp_Pnt(x, y, 0))
+
+            # Weights
+            weights = TColStd_Array1OfReal(1, n)
+            for i, w in enumerate(self.weights):
+                weights.SetValue(i + 1, w)
+
+            # Knots + Multiplicities
+            unique_knots = sorted(set(self.knots))
+            multiplicities = [self.knots.count(k) for k in unique_knots]
+
+            knots_arr = TColStd_Array1OfReal(1, len(unique_knots))
+            mults_arr = TColStd_Array1OfInteger(1, len(unique_knots))
+
+            for i, (k, m) in enumerate(zip(unique_knots, multiplicities)):
+                knots_arr.SetValue(i + 1, k)
+                mults_arr.SetValue(i + 1, m)
+
+            # BSpline Kurve erstellen
+            ocp_curve = Geom_BSplineCurve(poles, weights, knots_arr, mults_arr, self.degree)
+
+            # Edge erstellen
+            edge_builder = BRepBuilderAPI_MakeEdge(ocp_curve)
+            if not edge_builder.IsDone():
+                raise ValueError("Edge-Erstellung fehlgeschlagen")
+
+            return Edge(edge_builder.Edge())
+
+        except ImportError as e:
+            from loguru import logger
+            logger.warning(f"Build123d/OCP nicht verfügbar für native Spline: {e}")
+            return None
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"Spline zu Edge Konvertierung fehlgeschlagen: {e}")
+            return None
+
+    def to_lines(self, segments: int = 50) -> List[Line2D]:
+        """
+        Fallback: Konvertiert zu Linien-Approximation.
+        Nur verwenden wenn native Spline-Extrusion nicht möglich.
+        """
+        pts = self.evaluate_points(segments)
+        lines = []
+        for i in range(len(pts) - 1):
+            p1 = Point2D(pts[i][0], pts[i][1])
+            p2 = Point2D(pts[i + 1][0], pts[i + 1][1])
+            if p1.distance_to(p2) > 1e-6:
+                line = Line2D(p1, p2)
+                line.construction = self.construction
+                lines.append(line)
+        return lines
+
+    def __repr__(self):
+        return f"Spline2D({len(self.control_points)} pts, deg={self.degree})"
 
 
 def get_param_on_entity(point: 'Point2D', entity) -> float:

@@ -5,6 +5,7 @@ FIX: Auto-Fallback für korrupte Edge-Daten
 FIX: Echte B-Rep Kanten statt Tessellations-Kanten
 FIX: Transform invalidiert jetzt auch ocp_tessellate Cache
 VERSION: 4 - Cache wird bei Version-Änderung geleert
+Phase 5: Zentralisierte Toleranzen
 """
 import numpy as np
 import pyvista as pv
@@ -12,6 +13,8 @@ from loguru import logger
 from typing import Tuple, Optional
 from contextlib import contextmanager
 import time
+
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
 _TESSELLATOR_VERSION = 4
@@ -173,23 +176,28 @@ class CADTessellator:
             logger.debug(f"B-Rep Edge extraction failed: {e}")
             return None
 
-    @staticmethod
-    def tessellate(solid, quality=0.01, angular_tolerance=0.2) -> Tuple[Optional[pv.PolyData], Optional[pv.PolyData]]:
-        """
-        Konvertiert build123d Solid zu (FaceMesh, EdgeMesh).
-        EdgeMesh enthält jetzt echte B-Rep Kanten!
-        """
-        if not solid:
-            return None, None
+    # Phase 4.3: Topology-Cache für schnellere Hash-Berechnung
+    _topology_cache = {}  # {python_id: (shape_hash, n_faces, n_edges, n_vertices)}
 
-        # ✅ ROBUST FIX: Custom geometry-based hash instead of Python id()
-        # This prevents cache collisions from Python ID recycling
-        # Uses shape topology + mass properties for deterministic hashing
+    @staticmethod
+    def _get_geometry_hash(solid) -> int:
+        """
+        Phase 4.3: Cached Geometry-Hash Berechnung.
+
+        Problem: Topology-Counting ist teuer (~5ms pro Aufruf)
+        Lösung: Cache basierend auf Python-ID + Invalidierung bei Body.invalidate_mesh()
+        """
+        python_id = id(solid.wrapped)
+
+        # Check Topology-Cache first (O(1) statt O(n) für Counting)
+        if python_id in CADTessellator._topology_cache:
+            cached = CADTessellator._topology_cache[python_id]
+            return cached[0]  # Return cached shape_hash
+
+        # Cache-Miss: Berechne Topology (nur einmal pro Solid)
         try:
             ocp_shape = solid.wrapped
 
-            # Count topological elements (faces, edges, vertices)
-            # These counts change after Boolean operations → new cache key automatically
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
 
@@ -215,7 +223,7 @@ class CADTessellator:
                 n_vertices += 1
                 explorer.Next()
 
-            # Get mass properties (volume, center of mass)
+            # Get mass properties
             from OCP.GProp import GProp_GProps
             from OCP.BRepGProp import BRepGProp
 
@@ -226,19 +234,58 @@ class CADTessellator:
             cog = props.CentreOfMass()
             cog_tuple = (round(cog.X(), 6), round(cog.Y(), 6), round(cog.Z(), 6))
 
-            # Create geometry-based hash: topology counts + volume + center of mass
-            # This is deterministic and changes with any Boolean operation
+            # Create geometry-based hash
             shape_hash = hash((n_faces, n_edges, n_vertices, round(volume, 6), cog_tuple))
 
-            logger.debug(f"🔢 Geometry hash: F={n_faces}, E={n_edges}, V={n_vertices}, Vol={volume:.3f}")
+            # Cache für nächsten Aufruf
+            CADTessellator._topology_cache[python_id] = (shape_hash, n_faces, n_edges, n_vertices)
+
+            logger.debug(f"🔢 Topology cached: F={n_faces}, E={n_edges}, V={n_vertices}, Vol={volume:.3f}")
+            return shape_hash
 
         except Exception as e:
-            # Fallback to Python ID only if geometry hash fails
-            logger.warning(f"⚠️ Geometry-based hash fehlgeschlagen, nutze Python ID: {e}")
-            shape_hash = id(solid.wrapped)
+            logger.warning(f"⚠️ Geometry-hash failed, using Python ID: {e}")
+            return python_id
+
+    @staticmethod
+    def invalidate_topology_cache(python_id: int = None):
+        """
+        Phase 4.3: Invalidiert Topology-Cache.
+
+        Aufruf: Nach Body.invalidate_mesh() oder Boolean-Operationen.
+        """
+        if python_id is not None:
+            CADTessellator._topology_cache.pop(python_id, None)
+        else:
+            CADTessellator._topology_cache.clear()
+
+    @staticmethod
+    def tessellate(solid, quality=None, angular_tolerance=None) -> Tuple[Optional[pv.PolyData], Optional[pv.PolyData]]:
+        """
+        Konvertiert build123d Solid zu (FaceMesh, EdgeMesh).
+        EdgeMesh enthält jetzt echte B-Rep Kanten!
+
+        Phase 4.3: Optimiert mit Topology-Caching.
+        Phase 5: Verwendet zentralisierte Toleranzen.
+
+        Args:
+            solid: Build123d Solid
+            quality: Lineare Abweichung (default: Tolerances.TESSELLATION_QUALITY)
+            angular_tolerance: Winkel-Abweichung (default: Tolerances.TESSELLATION_ANGULAR)
+        """
+        if not solid:
+            return None, None
+
+        # Phase 5: Defaults aus zentraler Konfiguration
+        if quality is None:
+            quality = Tolerances.TESSELLATION_QUALITY
+        if angular_tolerance is None:
+            angular_tolerance = Tolerances.TESSELLATION_ANGULAR
+
+        # Phase 4.3: Cached Geometry-Hash (O(1) bei Cache-Hit statt O(n))
+        shape_hash = CADTessellator._get_geometry_hash(solid)
 
         # Cache-Key basiert auf Geometrie-Hash + Qualität + Version
-        # KEIN globaler Counter mehr nötig - Geometrie-Änderung → neuer Hash automatisch!
         cache_key = f"{shape_hash}_{quality}_{angular_tolerance}_v{_TESSELLATOR_VERSION}"
 
         if cache_key in CADTessellator._mesh_cache:

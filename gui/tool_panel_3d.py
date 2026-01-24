@@ -70,6 +70,14 @@ class ToolPanel3D(QWidget):
             (tr("Chamfer"), "chamfer"),
         ])
 
+        # --- Advanced (Phase 6) ---
+        self._add_group(tr("Advanced"), [
+            (tr("Shell"), tr("Hollow out solid"), "shell"),
+            (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
+            (tr("Loft"), tr("Loft between profiles"), "loft"),
+            (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
+        ])
+
         # --- Transform ---
         self._add_group("Transform", [
             (tr("Move"), tr("Move"), "move_body"),

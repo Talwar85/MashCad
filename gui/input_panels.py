@@ -416,8 +416,682 @@ class FilletChamferPanel(QFrame):
             elif hasattr(self, 'radius_input'):
                 self.radius_input.setFocus()
                 self.radius_input.selectAll()
-            
-            
+
+
+# ==================== PHASE 6: SHELL INPUT PANEL ====================
+
+class ShellInputPanel(QFrame):
+    """
+    Input panel for Shell operation.
+
+    Shows:
+    - Thickness spinner (wall thickness)
+    - Face count label
+    - OK/Cancel buttons
+    """
+
+    thickness_changed = Signal(float)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._thickness = 2.0
+        self._target_body = None
+        self._opening_faces = []
+
+        self.setMinimumWidth(380)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px; font-weight: bold;
+            }
+            QPushButton:hover { background: #555; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        # Label
+        self.label = QLabel("Shell:")
+        layout.addWidget(self.label)
+
+        # Thickness input
+        self.thickness_input = ActionSpinBox()
+        self.thickness_input.setRange(0.1, 100.0)
+        self.thickness_input.setDecimals(2)
+        self.thickness_input.setSuffix(" mm")
+        self.thickness_input.setValue(2.0)
+
+        self.thickness_input.valueChanged.connect(self._on_value_changed)
+        self.thickness_input.enterPressed.connect(self._confirm)
+        self.thickness_input.escapePressed.connect(self._cancel)
+
+        layout.addWidget(self.thickness_input)
+
+        # Face count label
+        self.face_count_label = QLabel("0 Öffnungen")
+        self.face_count_label.setStyleSheet("""
+            color: #888;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+            padding-left: 5px;
+        """)
+        self.face_count_label.setMinimumWidth(90)
+        layout.addWidget(self.face_count_label)
+
+        # OK button
+        self.ok_btn = QPushButton("OK")
+        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.clicked.connect(self._confirm)
+        layout.addWidget(self.ok_btn)
+
+        # Cancel button
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setFixedWidth(30)
+        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.clicked.connect(self._cancel)
+        layout.addWidget(self.cancel_btn)
+
+        self.hide()
+
+    def set_target_body(self, body):
+        """Setzt den Ziel-Body für die Shell-Operation."""
+        self._target_body = body
+
+    def get_target_body(self):
+        """Gibt den Ziel-Body zurück."""
+        return self._target_body
+
+    def add_opening_face(self, face_selector: tuple):
+        """Fügt eine Öffnungs-Fläche hinzu."""
+        if face_selector not in self._opening_faces:
+            self._opening_faces.append(face_selector)
+            self.update_face_count(len(self._opening_faces))
+
+    def remove_opening_face(self, face_selector: tuple):
+        """Entfernt eine Öffnungs-Fläche."""
+        if face_selector in self._opening_faces:
+            self._opening_faces.remove(face_selector)
+            self.update_face_count(len(self._opening_faces))
+
+    def clear_opening_faces(self):
+        """Löscht alle Öffnungs-Flächen."""
+        self._opening_faces.clear()
+        self.update_face_count(0)
+
+    def get_opening_faces(self) -> list:
+        """Gibt alle Öffnungs-Flächen zurück."""
+        return self._opening_faces.copy()
+
+    def get_thickness(self) -> float:
+        """Gibt die eingestellte Wandstärke zurück."""
+        return self.thickness_input.value()
+
+    def update_face_count(self, count: int):
+        """Aktualisiert die Anzeige der ausgewählten Öffnungen."""
+        if count == 0:
+            self.face_count_label.setText("Keine Öffnung")
+            self.face_count_label.setStyleSheet("""
+                color: #ffaa00;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
+        elif count == 1:
+            self.face_count_label.setText("1 Öffnung")
+            self.face_count_label.setStyleSheet("""
+                color: #66ff66;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
+        else:
+            self.face_count_label.setText(f"{count} Öffnungen")
+            self.face_count_label.setStyleSheet("""
+                color: #66ff66;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+                padding-left: 5px;
+            """)
+
+    def reset(self):
+        """Setzt das Panel zurück."""
+        self._target_body = None
+        self._opening_faces.clear()
+        self.thickness_input.setValue(2.0)
+        self.update_face_count(0)
+
+    def _on_value_changed(self, val):
+        """Callback bei Änderung der Wandstärke."""
+        self._thickness = val
+        self.thickness_changed.emit(val)
+
+    def _confirm(self):
+        """Bestätigt die Operation."""
+        self.confirmed.emit()
+
+    def _cancel(self):
+        """Bricht die Operation ab."""
+        self.cancelled.emit()
+
+    def show_at(self, pos_widget=None):
+        """Zeigt das Panel zentriert unten im Parent-Widget."""
+        self.show()
+        self.raise_()
+
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+
+            # X mittig zentrieren
+            x = (parent.width() - self.width()) // 2
+
+            # Y unten positionieren (mit 50px Abstand vom Rand)
+            y = parent.height() - self.height() - 50
+
+            if y < 0:
+                y = 50
+
+            self.move(x, y)
+
+            self.thickness_input.setFocus()
+            self.thickness_input.selectAll()
+
+
+class SweepInputPanel(QFrame):
+    """
+    Input panel for Sweep operation.
+
+    Shows:
+    - Profile status (selected/not selected)
+    - Path status (selected/not selected)
+    - Frenet checkbox (twist along path)
+    - Operation dropdown (New Body, Join, Cut, Intersect)
+    - OK/Cancel buttons
+    """
+
+    confirmed = Signal()
+    cancelled = Signal()
+    operation_changed = Signal(str)
+    sketch_path_requested = Signal()  # Fordert Pfad aus Sketch an
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._profile_data = None
+        self._path_data = None
+        self._operation = "New Body"
+        self._is_frenet = False
+
+        self.setMinimumWidth(450)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QComboBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 11px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView { background: #1e1e1e; color: #fff; selection-background-color: #0078d4; }
+            QCheckBox { color: #fff; font-size: 11px; }
+            QCheckBox::indicator { width: 16px; height: 16px; }
+            QCheckBox::indicator:unchecked { background: #1e1e1e; border: 1px solid #555; border-radius: 3px; }
+            QCheckBox::indicator:checked { background: #0078d4; border: 1px solid #0078d4; border-radius: 3px; }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px; font-weight: bold;
+            }
+            QPushButton:hover { background: #555; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        # Label
+        self.label = QLabel("Sweep:")
+        layout.addWidget(self.label)
+
+        # Profile status
+        self.profile_status = QLabel("⬜ Profil")
+        self.profile_status.setStyleSheet("""
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self.profile_status.setMinimumWidth(70)
+        layout.addWidget(self.profile_status)
+
+        # Path status
+        self.path_status = QLabel("⬜ Pfad")
+        self.path_status.setStyleSheet("""
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self.path_status.setMinimumWidth(70)
+        layout.addWidget(self.path_status)
+
+        # Sketch Path button
+        self.sketch_path_btn = QPushButton("Sketch")
+        self.sketch_path_btn.setToolTip("Pfad aus Sketch wählen (Bogen/Linie/Spline)")
+        self.sketch_path_btn.setFixedWidth(55)
+        self.sketch_path_btn.clicked.connect(lambda: self.sketch_path_requested.emit())
+        layout.addWidget(self.sketch_path_btn)
+
+        # Frenet checkbox
+        self.frenet_check = QCheckBox("Frenet")
+        self.frenet_check.setToolTip("Verdrehung entlang des Pfads")
+        self.frenet_check.stateChanged.connect(self._on_frenet_changed)
+        layout.addWidget(self.frenet_check)
+
+        # Operation combo
+        self.operation_combo = QComboBox()
+        self.operation_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        self.operation_combo.setFixedWidth(90)
+        self.operation_combo.currentTextChanged.connect(self._on_operation_changed)
+        layout.addWidget(self.operation_combo)
+
+        # OK button
+        self.ok_btn = QPushButton("OK")
+        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.clicked.connect(self._confirm)
+        self.ok_btn.setEnabled(False)  # Disabled until profile and path selected
+        layout.addWidget(self.ok_btn)
+
+        # Cancel button
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setFixedWidth(30)
+        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.clicked.connect(self._cancel)
+        layout.addWidget(self.cancel_btn)
+
+        self.hide()
+
+    def set_profile(self, profile_data: dict):
+        """Setzt das Profil für den Sweep."""
+        self._profile_data = profile_data
+        self.profile_status.setText("✅ Profil")
+        self.profile_status.setStyleSheet("""
+            color: #66ff66;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self._update_ok_button()
+
+    def clear_profile(self):
+        """Löscht das Profil."""
+        self._profile_data = None
+        self.profile_status.setText("⬜ Profil")
+        self.profile_status.setStyleSheet("""
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self._update_ok_button()
+
+    def set_path(self, path_data: dict):
+        """Setzt den Pfad für den Sweep."""
+        self._path_data = path_data
+        self.path_status.setText("✅ Pfad")
+        self.path_status.setStyleSheet("""
+            color: #66ff66;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self._update_ok_button()
+
+    def clear_path(self):
+        """Löscht den Pfad."""
+        self._path_data = None
+        self.path_status.setText("⬜ Pfad")
+        self.path_status.setStyleSheet("""
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self._update_ok_button()
+
+    def get_profile_data(self) -> dict:
+        """Gibt die Profil-Daten zurück."""
+        return self._profile_data
+
+    def get_path_data(self) -> dict:
+        """Gibt die Pfad-Daten zurück."""
+        return self._path_data
+
+    def get_operation(self) -> str:
+        """Gibt die gewählte Operation zurück."""
+        return self.operation_combo.currentText()
+
+    def is_frenet(self) -> bool:
+        """Gibt zurück ob Frenet aktiv ist."""
+        return self.frenet_check.isChecked()
+
+    def reset(self):
+        """Setzt das Panel zurück."""
+        self._profile_data = None
+        self._path_data = None
+        self.clear_profile()
+        self.clear_path()
+        self.frenet_check.setChecked(False)
+        self.operation_combo.setCurrentIndex(0)
+
+    def _update_ok_button(self):
+        """Aktiviert OK nur wenn Profil und Pfad gesetzt sind."""
+        enabled = self._profile_data is not None and self._path_data is not None
+        self.ok_btn.setEnabled(enabled)
+
+    def _on_frenet_changed(self, state):
+        """Callback bei Änderung der Frenet-Option."""
+        self._is_frenet = state == Qt.Checked
+
+    def _on_operation_changed(self, operation: str):
+        """Callback bei Änderung der Operation."""
+        self._operation = operation
+        self.operation_changed.emit(operation)
+
+    def _confirm(self):
+        """Bestätigt die Operation."""
+        self.confirmed.emit()
+
+    def _cancel(self):
+        """Bricht die Operation ab."""
+        self.cancelled.emit()
+
+    def show_at(self, pos_widget=None):
+        """Zeigt das Panel zentriert unten im Parent-Widget."""
+        self.show()
+        self.raise_()
+
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+
+            if y < 0:
+                y = 50
+
+            self.move(x, y)
+
+
+class LoftInputPanel(QFrame):
+    """
+    Input panel for Loft operation.
+
+    Shows:
+    - Profile list with Z-info
+    - Add profile button
+    - Ruled/Smooth toggle
+    - Operation dropdown
+    - OK/Cancel buttons
+    """
+
+    confirmed = Signal()
+    cancelled = Signal()
+    add_profile_requested = Signal()
+    operation_changed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._profiles = []  # List of profile data dicts
+        self._operation = "New Body"
+        self._ruled = False
+
+        self.setMinimumWidth(480)
+        self.setFixedHeight(80)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QComboBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 11px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView { background: #1e1e1e; color: #fff; selection-background-color: #0078d4; }
+            QCheckBox { color: #fff; font-size: 11px; }
+            QCheckBox::indicator { width: 16px; height: 16px; }
+            QCheckBox::indicator:unchecked { background: #1e1e1e; border: 1px solid #555; border-radius: 3px; }
+            QCheckBox::indicator:checked { background: #0078d4; border: 1px solid #0078d4; border-radius: 3px; }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px; font-weight: bold;
+            }
+            QPushButton:hover { background: #555; }
+            QListWidget {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; font-size: 10px;
+            }
+        """)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 5, 10, 5)
+        main_layout.setSpacing(5)
+
+        # Top row: Label, Profile count, Add button
+        top_row = QHBoxLayout()
+
+        self.label = QLabel("Loft:")
+        top_row.addWidget(self.label)
+
+        self.profile_count_label = QLabel("0 Profile")
+        self.profile_count_label.setStyleSheet("""
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: normal;
+            border: none;
+        """)
+        self.profile_count_label.setMinimumWidth(80)
+        top_row.addWidget(self.profile_count_label)
+
+        self.add_profile_btn = QPushButton("+ Profil")
+        self.add_profile_btn.setStyleSheet("background: #3a3a3a; font-size: 10px;")
+        self.add_profile_btn.clicked.connect(self._on_add_profile)
+        top_row.addWidget(self.add_profile_btn)
+
+        # Ruled checkbox
+        self.ruled_check = QCheckBox("Ruled")
+        self.ruled_check.setToolTip("Gerade Linien statt glatter Übergänge")
+        self.ruled_check.stateChanged.connect(self._on_ruled_changed)
+        top_row.addWidget(self.ruled_check)
+
+        # Operation combo
+        self.operation_combo = QComboBox()
+        self.operation_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        self.operation_combo.setFixedWidth(90)
+        self.operation_combo.currentTextChanged.connect(self._on_operation_changed)
+        top_row.addWidget(self.operation_combo)
+
+        # OK button
+        self.ok_btn = QPushButton("OK")
+        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.clicked.connect(self._confirm)
+        self.ok_btn.setEnabled(False)  # Disabled until 2+ profiles
+        top_row.addWidget(self.ok_btn)
+
+        # Cancel button
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setFixedWidth(30)
+        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.clicked.connect(self._cancel)
+        top_row.addWidget(self.cancel_btn)
+
+        main_layout.addLayout(top_row)
+
+        # Bottom row: Profile info
+        self.profile_info = QLabel("Wähle Flächen auf verschiedenen Z-Ebenen")
+        self.profile_info.setStyleSheet("""
+            color: #888;
+            font-size: 10px;
+            font-weight: normal;
+            border: none;
+        """)
+        main_layout.addWidget(self.profile_info)
+
+        self.hide()
+
+    def add_profile(self, profile_data: dict):
+        """Fügt ein Profil zur Liste hinzu."""
+        self._profiles.append(profile_data)
+        self._update_ui()
+
+    def remove_profile(self, index: int):
+        """Entfernt ein Profil aus der Liste."""
+        if 0 <= index < len(self._profiles):
+            self._profiles.pop(index)
+            self._update_ui()
+
+    def clear_profiles(self):
+        """Löscht alle Profile."""
+        self._profiles.clear()
+        self._update_ui()
+
+    def get_profiles(self) -> list:
+        """Gibt alle Profile zurück."""
+        return self._profiles.copy()
+
+    def get_operation(self) -> str:
+        """Gibt die gewählte Operation zurück."""
+        return self.operation_combo.currentText()
+
+    def is_ruled(self) -> bool:
+        """Gibt zurück ob Ruled aktiv ist."""
+        return self.ruled_check.isChecked()
+
+    def reset(self):
+        """Setzt das Panel zurück."""
+        self._profiles.clear()
+        self.ruled_check.setChecked(False)
+        self.operation_combo.setCurrentIndex(0)
+        self._update_ui()
+
+    def _update_ui(self):
+        """Aktualisiert die UI basierend auf dem aktuellen Zustand."""
+        count = len(self._profiles)
+
+        # Profile count label
+        if count == 0:
+            self.profile_count_label.setText("0 Profile")
+            self.profile_count_label.setStyleSheet("""
+                color: #ffaa00;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+            """)
+        elif count == 1:
+            z_info = self._get_z_info(self._profiles[0])
+            self.profile_count_label.setText(f"1 Profil ({z_info})")
+            self.profile_count_label.setStyleSheet("""
+                color: #ffaa00;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+            """)
+        else:
+            z_min = min(self._get_z(p) for p in self._profiles)
+            z_max = max(self._get_z(p) for p in self._profiles)
+            self.profile_count_label.setText(f"{count} Profile (Z: {z_min:.0f}-{z_max:.0f})")
+            self.profile_count_label.setStyleSheet("""
+                color: #66ff66;
+                font-size: 11px;
+                font-weight: normal;
+                border: none;
+            """)
+
+        # OK button enabled only with 2+ profiles
+        self.ok_btn.setEnabled(count >= 2)
+
+        # Info label
+        if count < 2:
+            self.profile_info.setText(f"Wähle mindestens {2 - count} weitere Fläche(n)")
+        else:
+            self.profile_info.setText(f"Bereit zum Loft ({count} Profile)")
+
+    def _get_z(self, profile_data: dict) -> float:
+        """Extrahiert Z-Koordinate aus Profil-Daten."""
+        if 'plane_origin' in profile_data:
+            origin = profile_data['plane_origin']
+            if isinstance(origin, (list, tuple)) and len(origin) >= 3:
+                return origin[2]
+        return 0.0
+
+    def _get_z_info(self, profile_data: dict) -> str:
+        """Gibt Z-Info String zurück."""
+        z = self._get_z(profile_data)
+        return f"Z={z:.0f}"
+
+    def _on_add_profile(self):
+        """Callback für Add-Profile-Button."""
+        self.add_profile_requested.emit()
+
+    def _on_ruled_changed(self, state):
+        """Callback bei Änderung der Ruled-Option."""
+        self._ruled = state == Qt.Checked
+
+    def _on_operation_changed(self, operation: str):
+        """Callback bei Änderung der Operation."""
+        self._operation = operation
+        self.operation_changed.emit(operation)
+
+    def _confirm(self):
+        """Bestätigt die Operation."""
+        self.confirmed.emit()
+
+    def _cancel(self):
+        """Bricht die Operation ab."""
+        self.cancelled.emit()
+
+    def show_at(self, pos_widget=None):
+        """Zeigt das Panel zentriert unten im Parent-Widget."""
+        self.show()
+        self.raise_()
+
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+
+            if y < 0:
+                y = 50
+
+            self.move(x, y)
+
+
 class TransformPanel(QFrame):
     """
     Einzeiliges Transform-Panel für Move, Rotate, Scale.

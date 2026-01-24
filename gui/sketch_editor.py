@@ -24,6 +24,7 @@ import sys
 import os
 import numpy as np
 from loguru import logger
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 try:
     from gui.design_tokens import DesignTokens
@@ -164,7 +165,7 @@ def ramer_douglas_peucker(points, epsilon):
         return [p1, p2]
 
 class DXFImportWorker(QThread):
-    finished_signal = Signal(list, list, list)  # lines, circles, arcs
+    finished_signal = Signal(list, list, list, list)  # lines, circles, arcs, native_splines
     error_signal = Signal(str)
     progress_signal = Signal(str)
 
@@ -175,38 +176,218 @@ class DXFImportWorker(QThread):
     def run(self):
         try:
             import ezdxf
-            import ezdxf.path
-            
+
+            # ezdxf.path nur in neueren Versionen verfügbar
+            try:
+                import ezdxf.path
+                HAS_EZDXF_PATH = True
+            except ImportError:
+                HAS_EZDXF_PATH = False
+                logger.info("ezdxf.path nicht verfügbar - nutze Fallback für Splines")
+
             doc = ezdxf.readfile(self.filepath)
             msp = doc.modelspace()
-            
+
             new_lines = []
             new_circles = []
             new_arcs = []  # (cx, cy, radius, start_angle, end_angle)
-            
-            # Helper: Konvertiert komplexe Formen in mikroskopisch feine Linien
-            def add_path_as_lines(entity, matrix=None):
+            new_native_splines = []  # Native B-Spline Daten: (control_points, knots, degree, weights)
+
+            def flatten_spline_fallback(entity, matrix=None):
+                """Fallback für Spline-Konvertierung ohne ezdxf.path"""
                 try:
-                    p = ezdxf.path.make_path(entity)
-                    if matrix: p = p.transform(matrix)
-                    
-                    # 1. SAMPLING: Alle 0.01 mm ein Punkt (Fusion-Qualität)
-                    raw_points = list(p.flattening(distance=0.01))
-                    if len(raw_points) < 2: return
-                    
-                    # 2. OPTIMIERUNG: RDP entfernt überflüssige Punkte
-                    # epsilon=0.005: Erlaubt max 5 Mikrometer Abweichung -> Unsichtbar für Auge
-                    points_2d = [(v.x, v.y) for v in raw_points]
-                    simplified = ramer_douglas_peucker(points_2d, 0.005)
-                    
-                    for k in range(len(simplified) - 1):
-                        p1 = simplified[k]
-                        p2 = simplified[k+1]
-                        # Min-Länge Filter (0.001mm) gegen Grafik-Glitches
-                        if math.hypot(p2[0]-p1[0], p2[1]-p1[1]) > 0.001:
-                            new_lines.append((p1[0], p1[1], p2[0], p2[1]))
+                    # Kontrollpunkte und Knoten holen
+                    ctrl_pts = list(entity.control_points)
+                    if len(ctrl_pts) < 2:
+                        return []
+
+                    degree = entity.dxf.degree
+                    knots = list(entity.knots) if hasattr(entity, 'knots') else []
+
+                    # B-Spline korrekt evaluieren mit scipy
+                    try:
+                        from scipy import interpolate
+                        import numpy as np
+
+                        # Kontrollpunkte als Arrays
+                        ctrl_x = np.array([p[0] for p in ctrl_pts])
+                        ctrl_y = np.array([p[1] for p in ctrl_pts])
+
+                        if knots and len(knots) == len(ctrl_pts) + degree + 1:
+                            # Echte B-Spline Evaluation mit Knotenvektor
+                            knots_arr = np.array(knots)
+
+                            # Parameter-Bereich aus Knoten
+                            t_min = knots_arr[degree]
+                            t_max = knots_arr[-(degree + 1)]
+
+                            # Evaluierungspunkte
+                            n_points = max(100, len(ctrl_pts) * 3)
+                            t_eval = np.linspace(t_min, t_max, n_points)
+
+                            # BSpline für X und Y
+                            try:
+                                bspline_x = interpolate.BSpline(knots_arr, ctrl_x, degree)
+                                bspline_y = interpolate.BSpline(knots_arr, ctrl_y, degree)
+                                x_new = bspline_x(t_eval)
+                                y_new = bspline_y(t_eval)
+                                points = list(zip(x_new, y_new))
+                            except Exception:
+                                # BSpline fehlgeschlagen - Fallback auf Interpolation
+                                points = None
+                        else:
+                            points = None
+
+                        # Fallback: Interpolation durch Kontrollpunkte (weniger genau)
+                        if points is None:
+                            pts = np.array([(p[0], p[1]) for p in ctrl_pts])
+                            t = np.linspace(0, 1, len(pts))
+                            t_new = np.linspace(0, 1, max(100, len(pts) * 3))
+
+                            k = min(3, degree, len(pts) - 1)
+                            if k >= 1:
+                                tck_x = interpolate.splrep(t, pts[:, 0], k=k, s=0)
+                                tck_y = interpolate.splrep(t, pts[:, 1], k=k, s=0)
+                                x_new = interpolate.splev(t_new, tck_x)
+                                y_new = interpolate.splev(t_new, tck_y)
+                                points = list(zip(x_new, y_new))
+                            else:
+                                points = [(p[0], p[1]) for p in ctrl_pts]
+
+                    except ImportError:
+                        # Ohne scipy: Kontrollpunkte als Polyline (ungenau aber besser als nichts)
+                        points = [(p[0], p[1]) for p in ctrl_pts]
+
+                    # Matrix anwenden
+                    if matrix and points:
+                        transformed = []
+                        for px, py in points:
+                            pt = matrix.transform(ezdxf.math.Vec3(px, py, 0))
+                            transformed.append((pt.x, pt.y))
+                        points = transformed
+
+                    return points
                 except Exception as e:
-                    logger.error(f"Path Error: {e}")
+                    logger.debug(f"Spline fallback error: {e}")
+                    return []
+
+            def flatten_lwpolyline(entity, matrix=None):
+                """LWPOLYLINE zu Punkten konvertieren"""
+                try:
+                    points = []
+                    for pt in entity.get_points():
+                        x, y = pt[0], pt[1]
+                        if matrix:
+                            transformed = matrix.transform(ezdxf.math.Vec3(x, y, 0))
+                            x, y = transformed.x, transformed.y
+                        points.append((x, y))
+
+                    # Geschlossene Polyline?
+                    if entity.closed and points:
+                        points.append(points[0])
+
+                    return points
+                except Exception as e:
+                    logger.debug(f"LWPOLYLINE error: {e}")
+                    return []
+
+            # === NATIVE SPLINE EXTRAKTION (NEU) ===
+            def extract_native_spline(entity, matrix=None):
+                """
+                Extrahiert native B-Spline Daten für saubere Extrusion.
+
+                Returns:
+                    (control_points, knots, degree, weights) oder None bei Fehler
+                """
+                try:
+                    ctrl_pts = list(entity.control_points)
+                    if len(ctrl_pts) < 2:
+                        return None
+
+                    degree = entity.dxf.degree
+                    knots = list(entity.knots) if hasattr(entity, 'knots') else []
+                    weights = list(entity.weights) if hasattr(entity, 'weights') else []
+
+                    # Matrix anwenden auf Kontrollpunkte
+                    control_points = []
+                    for p in ctrl_pts:
+                        if matrix:
+                            pt = matrix.transform(ezdxf.math.Vec3(p[0], p[1], 0))
+                            control_points.append((pt.x, pt.y))
+                        else:
+                            control_points.append((p[0], p[1]))
+
+                    logger.debug(f"Native Spline: {len(control_points)} ctrl pts, deg={degree}, {len(knots)} knots")
+                    return (control_points, knots, degree, weights)
+
+                except Exception as e:
+                    logger.warning(f"Native Spline extraction failed: {e}")
+                    return None
+
+            # Helper: Konvertiert komplexe Formen in Linien (Fallback für Nicht-Splines)
+            def add_path_as_lines(entity, matrix=None):
+                points_2d = []
+
+                # Methode 1: ezdxf.path (moderne Version)
+                if HAS_EZDXF_PATH:
+                    try:
+                        p = ezdxf.path.make_path(entity)
+                        if matrix:
+                            p = p.transform(matrix)
+                        raw_points = list(p.flattening(distance=0.01))
+                        if raw_points:
+                            points_2d = [(v.x, v.y) for v in raw_points]
+                    except Exception as e:
+                        logger.debug(f"ezdxf.path failed: {e}")
+
+                # Methode 2: Fallback für ältere Versionen
+                if not points_2d:
+                    dxftype = entity.dxftype()
+                    if dxftype == 'SPLINE':
+                        points_2d = flatten_spline_fallback(entity, matrix)
+                    elif dxftype in ['LWPOLYLINE', 'POLYLINE']:
+                        points_2d = flatten_lwpolyline(entity, matrix)
+                    elif dxftype == 'ELLIPSE':
+                        # Ellipse als Polygon approximieren
+                        try:
+                            cx, cy = entity.dxf.center.x, entity.dxf.center.y
+                            # Vereinfachte Ellipsen-Approximation
+                            points_2d = []
+                            for i in range(64):
+                                angle = 2 * math.pi * i / 64
+                                # Vereinfacht: Nur für Kreise exakt
+                                ratio = getattr(entity.dxf, 'ratio', 1.0)
+                                major = entity.dxf.major_axis
+                                px = cx + major.x * math.cos(angle) * ratio
+                                py = cy + major.y * math.cos(angle) + major.x * math.sin(angle)
+                                if matrix:
+                                    pt = matrix.transform(ezdxf.math.Vec3(px, py, 0))
+                                    px, py = pt.x, pt.y
+                                points_2d.append((px, py))
+                        except Exception:
+                            pass
+
+                if len(points_2d) < 2:
+                    return
+
+                # RDP-Vereinfachung - Balance zwischen Performance und Qualität
+                if len(points_2d) > 500:
+                    rdp_tolerance = 0.15  # 0.15mm für sehr komplexe Kurven
+                elif len(points_2d) > 200:
+                    rdp_tolerance = 0.05  # 0.05mm für komplexe Kurven
+                elif len(points_2d) > 50:
+                    rdp_tolerance = 0.02  # 0.02mm für mittlere Kurven
+                else:
+                    rdp_tolerance = 0.005  # 0.005mm für einfache Kurven
+
+                simplified = ramer_douglas_peucker(points_2d, rdp_tolerance)
+                logger.debug(f"RDP: {len(points_2d)} -> {len(simplified)} Punkte (tol={rdp_tolerance})")
+
+                for k in range(len(simplified) - 1):
+                    p1 = simplified[k]
+                    p2 = simplified[k+1]
+                    if math.hypot(p2[0]-p1[0], p2[1]-p1[1]) > 0.001:
+                        new_lines.append((p1[0], p1[1], p2[0], p2[1]))
 
             def process_entity(entity, matrix=None):
                 dxftype = entity.dxftype()
@@ -242,39 +423,194 @@ class DXFImportWorker(QThread):
                     c = entity.dxf.center
                     r = entity.dxf.radius
                     # DXF: Winkel in Grad, CCW von positiver X-Achse
-                    start_angle = entity.dxf.start_angle
-                    end_angle = entity.dxf.end_angle
-                    
+                    start_angle_raw = entity.dxf.start_angle
+                    end_angle_raw = entity.dxf.end_angle
+
                     if matrix:
                         c = matrix.transform(c)
                         # Skalierung für Radius
                         vec = matrix.transform_direction(ezdxf.math.Vec3(1, 0, 0))
                         r *= vec.magnitude
-                        # Rotation für Winkel (vereinfacht - funktioniert für 90°-Rotationen)
-                        # Für komplexere Transformationen müsste man die Winkel neu berechnen
+                        # Rotation für Winkel
                         rot_angle = math.degrees(math.atan2(vec.y, vec.x))
-                        start_angle += rot_angle
-                        end_angle += rot_angle
-                    
-                    # Normalisiere Winkel auf 0-360
-                    start_angle = start_angle % 360
-                    end_angle = end_angle % 360
-                    
-                    new_arcs.append((c.x, c.y, r, start_angle, end_angle))
+                        start_angle_raw += rot_angle
+                        end_angle_raw += rot_angle
 
-                # Splines, Polylines, Ellipsen -> High-Res Fitting
-                elif dxftype in ['SPLINE', 'LWPOLYLINE', 'POLYLINE', 'ELLIPSE']:
+                    # Berechne Sweep BEVOR Normalisierung (wichtig für Vollkreise!)
+                    sweep_raw = end_angle_raw - start_angle_raw
+                    while sweep_raw < 0:
+                        sweep_raw += 360
+                    while sweep_raw > 360:
+                        sweep_raw -= 360
+
+                    # Vollkreis-Erkennung: Wenn Sweep ~360° ist, als CIRCLE importieren
+                    if sweep_raw > 359.5 or sweep_raw < 0.5:
+                        # Das ist ein Vollkreis als ARC definiert -> als Circle importieren
+                        logger.debug(f"Vollkreis-Arc erkannt: center=({c.x:.2f}, {c.y:.2f}), r={r:.2f}")
+                        new_circles.append((c.x, c.y, r))
+                    else:
+                        # Echter Arc (Teilkreis)
+                        start_angle = start_angle_raw % 360
+                        end_angle = end_angle_raw % 360
+                        new_arcs.append((c.x, c.y, r, start_angle, end_angle))
+                        logger.debug(f"Arc: center=({c.x:.2f}, {c.y:.2f}), r={r:.2f}, {start_angle:.1f}° -> {end_angle:.1f}° (sweep={sweep_raw:.1f}°)")
+
+                # SPLINES -> Hybrid-Ansatz: Native für einfache, Polyline für komplexe
+                elif dxftype == 'SPLINE':
+                    # Schwellenwert: Komplexe Splines (viele Kontrollpunkte) als Polyline
+                    NATIVE_SPLINE_THRESHOLD = 20  # Erhöht auf 20 für bessere Erkennung kleiner Splines
+
+                    try:
+                        ctrl_pts = list(entity.control_points)
+                        n_ctrl = len(ctrl_pts)
+                    except:
+                        n_ctrl = 999  # Force polyline fallback on error
+
+                    # Prüfe ob Spline geschlossen ist (für Schraubenlöcher etc.)
+                    is_closed_spline = False
+                    try:
+                        # Evaluiere Start/End des Splines
+                        from scipy import interpolate as sp_interp
+                        import numpy as np
+                        knots = list(entity.knots) if hasattr(entity, 'knots') else []
+                        degree = entity.dxf.degree
+                        if knots and len(knots) == n_ctrl + degree + 1:
+                            ctrl_x = np.array([p[0] for p in ctrl_pts])
+                            ctrl_y = np.array([p[1] for p in ctrl_pts])
+                            knots_arr = np.array(knots)
+                            t_min = knots_arr[degree]
+                            t_max = knots_arr[-(degree + 1)]
+                            bspline_x = sp_interp.BSpline(knots_arr, ctrl_x, degree)
+                            bspline_y = sp_interp.BSpline(knots_arr, ctrl_y, degree)
+                            start_pt = (float(bspline_x(t_min)), float(bspline_y(t_min)))
+                            end_pt = (float(bspline_x(t_max)), float(bspline_y(t_max)))
+                            gap = math.hypot(end_pt[0] - start_pt[0], end_pt[1] - start_pt[1])
+                            is_closed_spline = gap < 0.5  # < 0.5mm = geschlossen
+                    except:
+                        pass
+
+                    logger.debug(f"SPLINE: {n_ctrl} ctrl pts, closed={is_closed_spline}")
+
+                    # Kleine geschlossene Splines (Schraubenlöcher) -> Als Kreis/Polygon
+                    if is_closed_spline and n_ctrl <= 30:
+                        # Evaluiere und erstelle Polygon direkt
+                        try:
+                            pts_2d = flatten_spline_fallback(entity, matrix)
+                            if pts_2d and len(pts_2d) >= 3:
+                                # Als geschlossene Form zu circles hinzufügen
+                                # Berechne Bounding Box für Radius-Schätzung
+                                xs = [p[0] for p in pts_2d]
+                                ys = [p[1] for p in pts_2d]
+                                cx = sum(xs) / len(xs)
+                                cy = sum(ys) / len(ys)
+                                r_approx = max(max(xs) - min(xs), max(ys) - min(ys)) / 2
+                                new_circles.append((cx, cy, r_approx))
+                                logger.info(f"Geschlossener Spline als Kreis: center=({cx:.2f}, {cy:.2f}), r≈{r_approx:.2f}")
+                        except Exception as e:
+                            logger.debug(f"Closed spline as circle failed: {e}")
+                            add_path_as_lines(entity, matrix)
+
+                    elif n_ctrl > NATIVE_SPLINE_THRESHOLD:
+                        # Komplexer Spline -> Polyline-Methode
+                        logger.info(f"Komplexer Spline ({n_ctrl} Kontrollpunkte) -> Polyline-Import")
+                        lines_before = len(new_lines)
+                        add_path_as_lines(entity, matrix)
+                        lines_added = len(new_lines) - lines_before
+                        logger.debug(f"  -> {lines_added} Liniensegmente erzeugt")
+                    else:
+                        # Einfacher offener Spline -> Native versuchen
+                        spline_data = extract_native_spline(entity, matrix)
+                        if spline_data:
+                            new_native_splines.append(spline_data)
+                            logger.info(f"Native Spline importiert: {len(spline_data[0])} Kontrollpunkte")
+                        else:
+                            logger.warning("Spline Fallback: Konvertiere zu Linien")
+                            add_path_as_lines(entity, matrix)
+
+                # Polylines, Ellipsen -> High-Res Fitting (weiterhin als Linien)
+                elif dxftype in ['LWPOLYLINE', 'POLYLINE', 'ELLIPSE']:
                     add_path_as_lines(entity, matrix)
+
+                # HATCH (Schraffuren) - Boundary-Pfade extrahieren
+                elif dxftype == 'HATCH':
+                    try:
+                        for boundary in entity.paths:
+                            # Boundary-Pfad in Linien konvertieren
+                            if hasattr(boundary, 'vertices'):
+                                verts = list(boundary.vertices)
+                                for k in range(len(verts)):
+                                    p1 = verts[k]
+                                    p2 = verts[(k + 1) % len(verts)]
+                                    x1, y1 = p1[:2]
+                                    x2, y2 = p2[:2]
+                                    if matrix:
+                                        pt1 = matrix.transform(ezdxf.math.Vec3(x1, y1, 0))
+                                        pt2 = matrix.transform(ezdxf.math.Vec3(x2, y2, 0))
+                                        x1, y1 = pt1.x, pt1.y
+                                        x2, y2 = pt2.x, pt2.y
+                                    if math.hypot(x2-x1, y2-y1) > 0.001:
+                                        new_lines.append((x1, y1, x2, y2))
+                    except Exception as he:
+                        logger.debug(f"HATCH boundary extraction: {he}")
+
+                # POINT - als sehr kleiner Kreis (Marker)
+                elif dxftype == 'POINT':
+                    try:
+                        loc = entity.dxf.location
+                        if matrix:
+                            loc = matrix.transform(loc)
+                        # Punkt als kleinen Kreis darstellen (0.5mm Radius)
+                        new_circles.append((loc.x, loc.y, 0.5))
+                    except Exception:
+                        pass
+
+                # SOLID/3DFACE - als Linien um die Ecken
+                elif dxftype in ['SOLID', '3DFACE']:
+                    try:
+                        pts = []
+                        for attr in ['vtx0', 'vtx1', 'vtx2', 'vtx3']:
+                            if hasattr(entity.dxf, attr):
+                                pt = getattr(entity.dxf, attr)
+                                if matrix:
+                                    pt = matrix.transform(pt)
+                                pts.append((pt.x, pt.y))
+                        # Linien zwischen Punkten
+                        for k in range(len(pts)):
+                            p1 = pts[k]
+                            p2 = pts[(k + 1) % len(pts)]
+                            if math.hypot(p2[0]-p1[0], p2[1]-p1[1]) > 0.001:
+                                new_lines.append((p1[0], p1[1], p2[0], p2[1]))
+                    except Exception:
+                        pass
+
+                # TEXT/MTEXT - ignorieren (keine Geometrie)
+                elif dxftype in ['TEXT', 'MTEXT', 'ATTRIB', 'ATTDEF']:
+                    pass  # Text wird übersprungen
+
+                # DIMENSION - ignorieren (Bemaßungen)
+                elif dxftype in ['DIMENSION', 'LEADER', 'TOLERANCE']:
+                    pass  # Bemaßungen überspringen
+
+                # Fallback: Versuche path.make_path für unbekannte Typen
+                else:
+                    try:
+                        add_path_as_lines(entity, matrix)
+                    except Exception:
+                        logger.debug(f"DXF Entity '{dxftype}' übersprungen")
 
             # Start
             all_ents = list(msp)
             total = len(all_ents)
+            skipped_types = set()
             for i, e in enumerate(all_ents):
                 process_entity(e)
-                if i % 20 == 0: 
+                if i % 20 == 0:
                     self.progress_signal.emit(f"Importiere... {int(i/total*100)}%")
 
-            self.finished_signal.emit(new_lines, new_circles, new_arcs)
+            if skipped_types:
+                logger.info(f"DXF: Übersprungene Entity-Typen: {skipped_types}")
+
+            self.finished_signal.emit(new_lines, new_circles, new_arcs, new_native_splines)
 
         except Exception as e:
             self.error_signal.emit(str(e))
@@ -324,7 +660,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.grid_size = 1.0
         self.grid_snap = True
         self.snap_enabled = True
-        self.snap_radius = 15
+        self.snap_radius = Tolerances.SKETCH_SNAP_RADIUS_PX  # Konfigurierbarer Fangradius
         
         # ... Snapper initialisieren ...
         if SmartSnapper:
@@ -447,7 +783,30 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_CANVAS.name()};")
         self.setMouseTracking(True)
         QTimer.singleShot(100, self._center_view)
-    
+
+        # Phase 4.4: Update-Debouncing für Performance
+        self._update_pending = False
+        self._update_timer = QTimer()
+        self._update_timer.setSingleShot(True)
+        self._update_timer.setInterval(16)  # ~60 FPS max
+        self._update_timer.timeout.connect(self._do_debounced_update)
+
+    def request_update(self):
+        """
+        Phase 4.4: Debounced Update-Request.
+
+        Problem: 30+ self.request_update() Aufrufe → Lag bei 100+ Constraints
+        Lösung: Sammle alle Requests, führe max 1 Update pro 16ms aus.
+        """
+        if not self._update_pending:
+            self._update_pending = True
+            self._update_timer.start()
+
+    def _do_debounced_update(self):
+        """Führt das tatsächliche Qt-Update aus."""
+        self._update_pending = False
+        super().update()  # Direkter Qt-Update (nicht request_update!)
+
     def _safe_float(self, value):
         """
         Konvertiert JEDEN Wert sicher zu Python native float.
@@ -522,7 +881,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         
         # Trigger repaint of the new geometry state
-        self.update()
+        self.request_update()
         
         # Optional: Update status only if it was a discrete operation (not while dragging)
         if self.current_tool == SketchTool.SELECT and not self.is_panning:
@@ -710,11 +1069,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
         elif option == "grid_snap":
             self.grid_snap = self._safe_bool(value)
-            
+
         elif option == "grid_size":
             self.grid_size = float(value)
-            
-        self.update()
+
+        elif option == "snap_radius":
+            self.snap_radius = int(value)
+            state = f"{self.snap_radius} px"
+            self.status_message.emit(tr("Snap Radius: {state}").format(state=state))
+
+        self.request_update()
 
     def _get_entity_bbox(self, entity):
         """Liefert das Screen-Bounding-Rect für eine Entity (Hardened against NumPy)"""
@@ -819,7 +1183,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _center_view(self):
         self.view_offset = QPointF(self.width() / 2, self.height() / 2)
-        self.update()
+        self.request_update()
 
     def show_message(self, text: str, duration: int = 3000, color: QColor = None):
         """
@@ -835,7 +1199,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._hud_message_time = time.time() * 1000
         self._hud_duration = duration
         self._hud_color = color if color else QColor(255, 255, 255)
-        self.update()
+        self.request_update()
 
         # Timer für Refresh während Fade-out
         QTimer.singleShot(duration - 500, self.update)
@@ -847,7 +1211,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketch_plane_origin = plane_origin
         
         if not bodies_data:
-            self.update()
+            self.request_update()
             return
         
         import numpy as np
@@ -934,7 +1298,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             except Exception as e:
                 logger.error(f"Body reference error: {e}")
         
-        self.update()
+        self.request_update()
     
     def _draw_body_references(self, painter):
         """Zeichnet Bodies als transparente Referenz im Hintergrund"""
@@ -986,33 +1350,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         import numpy as np
 
         self.closed_profiles.clear()
-        
+
         # --- PHASE 1: Fast Welding (Coordinate Hashing) ---
-        WELD_GRID = 0.1 
+        # Erhöht auf 0.5mm für bessere DXF-Kompatibilität (Fusion nutzt ähnliche Werte)
+        WELD_GRID = 0.5
         welded_points = {} # Map: (ix, iy) -> (float_x, float_y)
 
         def get_welded_pt(x, y):
             ix = int(round(x / WELD_GRID))
             iy = int(round(y / WELD_GRID))
             key = (ix, iy)
-            
+
             if key in welded_points:
                 return welded_points[key]
-            
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
+
+            # Suche in Nachbarzellen nach nahen Punkten (erweitert auf 2 Zellen Radius)
+            for dx in [-2, -1, 0, 1, 2]:
+                for dy in [-2, -1, 0, 1, 2]:
                     if dx == 0 and dy == 0: continue
                     neighbor_key = (ix + dx, iy + dy)
                     if neighbor_key in welded_points:
                         nx, ny = welded_points[neighbor_key]
-                        if (x - nx)**2 + (y - ny)**2 < (WELD_GRID/2)**2:
+                        # Toleranz erhöht auf WELD_GRID (statt WELD_GRID/2)
+                        if (x - nx)**2 + (y - ny)**2 < WELD_GRID**2:
                             return (nx, ny)
-            
+
             welded_points[key] = (x, y)
             return (x, y)
 
         shapely_lines = []
-        
+        geometry_sources = []  # Parallel list: Original geometry for each LineString
+
         # 1. Linien
         lines = [l for l in self.sketch.lines if not l.construction]
         for line in lines:
@@ -1020,54 +1388,166 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             p2 = get_welded_pt(line.end.x, line.end.y)
             if p1 != p2:
                 shapely_lines.append(LineString([p1, p2]))
+                geometry_sources.append(('line', line, p1, p2))
 
         # 2. Bögen
         arcs = [a for a in self.sketch.arcs if not a.construction]
         for arc in arcs:
             start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
             end_p = get_welded_pt(arc.end_point.x, arc.end_point.y)
-            
-            sweep = abs(arc.end_angle - arc.start_angle)
-            if sweep < 0.1: sweep += 360
-            
-            # Optimierung: Weniger Segmente für kleine Bögen
-            steps = max(4, int(sweep / 10))
-            
+
+            # Korrekte Sweep-Berechnung
+            sweep = arc.end_angle - arc.start_angle
+            # Normalisiere auf positive Werte
+            while sweep < 0:
+                sweep += 360
+            while sweep > 360:
+                sweep -= 360
+            # Sehr kleine Sweeps als Vollkreis behandeln (z.B. 359.99° -> 360°)
+            if sweep < 0.1:
+                sweep = 360
+
+            # Segmente basierend auf Sweep (mindestens 8 für gute Kurven)
+            steps = max(8, int(sweep / 5))
+
             points = [start_p]
-            diff = arc.end_angle - arc.start_angle
             for i in range(1, steps):
                 t = i / steps
-                angle = math.radians(arc.start_angle + diff * t)
+                angle = math.radians(arc.start_angle + sweep * t)
                 px = arc.center.x + arc.radius * math.cos(angle)
                 py = arc.center.y + arc.radius * math.sin(angle)
-                points.append((px, py))
+                # Zwischenpunkte auch durch Welding
+                points.append(get_welded_pt(px, py))
             points.append(end_p)
-            
+
             if len(points) >= 2:
                 shapely_lines.append(LineString(points))
+                # WICHTIG: Speichere ALLE Segment-Paare des Arcs für korrektes Matching
+                for seg_idx in range(len(points) - 1):
+                    seg_start = points[seg_idx]
+                    seg_end = points[seg_idx + 1]
+                    geometry_sources.append(('arc', arc, seg_start, seg_end))
+
+        # --- 2b. NATIVE SPLINES (NEU für saubere Extrusion) ---
+        # Splines als LineStrings für Shapely-Polygonisierung,
+        # aber Original-Daten bleiben in sketch.native_splines für Build123d
+        # NEU: Geschlossene Splines werden als standalone_polys behandelt (wie Kreise)
+        native_splines = getattr(self.sketch, 'native_splines', [])
+        closed_spline_polys = []  # Für geschlossene Splines
+
+        for spline in native_splines:
+            if spline.construction:
+                continue
+            try:
+                # Evaluiere Spline zu Punkten für Shapely
+                pts = spline.evaluate_points(50)  # Hohe Auflösung für gute Profil-Erkennung
+                if len(pts) >= 2:
+                    # Start/End durch Welding
+                    welded_pts = []
+                    for px, py in pts:
+                        welded_pts.append(get_welded_pt(px, py))
+
+                    # Prüfe ob Spline geschlossen ist (Start ≈ End)
+                    start_pt = welded_pts[0]
+                    end_pt = welded_pts[-1]
+                    gap = math.hypot(end_pt[0] - start_pt[0], end_pt[1] - start_pt[1])
+
+                    if gap < WELD_GRID:  # Geschlossen!
+                        # Erstelle Polygon direkt (wie bei Kreisen)
+                        # Letzen Punkt entfernen wenn er mit erstem identisch ist
+                        if welded_pts[-1] == welded_pts[0]:
+                            poly_pts = welded_pts[:-1]
+                        else:
+                            poly_pts = welded_pts
+                        if len(poly_pts) >= 3:
+                            closed_poly = ShapelyPolygon(poly_pts)
+                            if closed_poly.is_valid and closed_poly.area > 0.01:
+                                closed_spline_polys.append(closed_poly)
+                                logger.info(f"Geschlossener Spline als Polygon: {len(poly_pts)} Punkte, area={closed_poly.area:.2f}")
+                            else:
+                                # Fallback: Als LineString
+                                shapely_lines.append(LineString(welded_pts))
+                    else:
+                        # Offener Spline -> als LineString für Polygonisierung
+                        shapely_lines.append(LineString(welded_pts))
+
+                    # Speichere Segment-Paare für Geometrie-Matching
+                    for seg_idx in range(len(welded_pts) - 1):
+                        seg_start = welded_pts[seg_idx]
+                        seg_end = welded_pts[seg_idx + 1]
+                        geometry_sources.append(('spline', spline, seg_start, seg_end))
+
+                    logger.debug(f"Native Spline: {len(welded_pts)} Punkte, gap={gap:.4f}mm, closed={gap < WELD_GRID}")
+            except Exception as e:
+                logger.warning(f"Spline-Konvertierung für Profil fehlgeschlagen: {e}")
 
         # --- 3. KREISE (FEHLENDER BLOCK HINZUGEFÜGT) ---
         # Kreise müssen in Polygone umgewandelt werden, da Shapely keine echten Kreise kennt
         standalone_polys = []
         circles = [c for c in self.sketch.circles if not c.construction]
-        
+
+        if circles:
+            logger.debug(f"Verarbeite {len(circles)} Kreise für Profil-Erkennung")
+
         for circle in circles:
             cx, cy, r = circle.center.x, circle.center.y, circle.radius
             pts = []
-            segments = 64 # Auflösung für Collision Detection
+            segments = 64  # Auflösung für Collision Detection
             for i in range(segments):
                 a = 2 * math.pi * i / segments
                 pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-            standalone_polys.append(ShapelyPolygon(pts))
+            circle_poly = ShapelyPolygon(pts)
+            standalone_polys.append(circle_poly)
+            logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
 
-        # --- PHASE 2: Polygonize & Raw Polygons ---
-        
+        # Geschlossene Splines hinzufügen (wie Kreise behandeln)
+        if closed_spline_polys:
+            logger.info(f"Füge {len(closed_spline_polys)} geschlossene Splines als Polygone hinzu")
+            standalone_polys.extend(closed_spline_polys)
+
+        # --- PHASE 2: Gap Closing & Polygonize ---
+
         raw_polys = []
-        
+
         # Aus Linien/Bögen Flächen finden
         if shapely_lines:
             try:
                 merged = unary_union(shapely_lines)
+
+                # PHASE 2a: Lücken schließen (für DXF-Kompatibilität)
+                # Finde offene Endpunkte und verbinde nahe Punkte
+                if hasattr(merged, 'geoms'):
+                    # Es ist eine MultiLineString - suche offene Enden
+                    endpoints = []
+                    for geom in merged.geoms:
+                        if hasattr(geom, 'coords'):
+                            coords = list(geom.coords)
+                            if len(coords) >= 2:
+                                endpoints.append(coords[0])
+                                endpoints.append(coords[-1])
+
+                    # Verbinde nahe Endpunkte (Gap < 1mm)
+                    GAP_TOLERANCE = 1.0
+                    additional_lines = []
+                    used = set()
+                    for i, p1 in enumerate(endpoints):
+                        if i in used:
+                            continue
+                        for j, p2 in enumerate(endpoints):
+                            if j <= i or j in used:
+                                continue
+                            dist = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+                            if 0 < dist < GAP_TOLERANCE:
+                                # Kleine Lücke gefunden - verbinden
+                                additional_lines.append(LineString([p1, p2]))
+                                used.add(i)
+                                used.add(j)
+                                break
+
+                    if additional_lines:
+                        logger.debug(f"Gap closing: {len(additional_lines)} kleine Lücken geschlossen")
+                        merged = unary_union([merged] + additional_lines)
+
                 for poly in polygonize(merged):
                     if poly.area > 0.01:
                         raw_polys.append(poly)
@@ -1075,81 +1555,247 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 logger.warning(f"Polygonize error: {e}")
 
         # Eigenständige Kreise hinzufügen (wenn sie nicht schon durch Linien abgedeckt sind)
+        # WICHTIG: Nur ECHTE Duplikate filtern (gleiche Position + gleiche Größe)
+        # Kreise innerhalb anderer Polygone sind KEINE Duplikate - sie werden später als Löcher erkannt
         for c_poly in standalone_polys:
-            # Check auf Duplikate (falls Kreise auch als Arcs gezeichnet wurden)
             is_duplicate = False
+            c_centroid = c_poly.centroid
+            c_area = c_poly.area
+
             for existing in raw_polys:
-                if abs(existing.area - c_poly.area) < 0.1 and existing.intersection(c_poly).area > c_poly.area * 0.9:
+                # 1. Größen-Check: Nur ähnliche Größen vergleichen (±10%)
+                area_ratio = existing.area / c_area if c_area > 0 else 999
+                if area_ratio < 0.9 or area_ratio > 1.1:
+                    continue
+
+                # 2. Centroid-Check: Müssen fast identisch sein (innerhalb 5% des Radius)
+                e_centroid = existing.centroid
+                centroid_dist = math.hypot(c_centroid.x - e_centroid.x, c_centroid.y - e_centroid.y)
+                radius_approx = math.sqrt(c_area / math.pi)
+
+                # Nur Duplikat wenn Centroids SEHR nah (< 5% des Radius)
+                if centroid_dist < radius_approx * 0.05:
                     is_duplicate = True
+                    logger.debug(f"Kreis-Duplikat erkannt: area={c_area:.2f}, centroid_dist={centroid_dist:.4f}")
                     break
+
             if not is_duplicate:
                 raw_polys.append(c_poly)
+                logger.debug(f"Eigenständiger Kreis hinzugefügt: area={c_area:.2f} @ ({c_centroid.x:.2f}, {c_centroid.y:.2f})")
 
         if not raw_polys:
             return
 
         # --- PHASE 3: Hierarchie & Holes (Die Logic aus GeometryDetector) ---
-        
+
         # Sortieren nach Größe (Groß zuerst -> Parents)
         raw_polys.sort(key=lambda p: p.area, reverse=True)
-        
+
+        n_polys = len(raw_polys)
+
+        # OPTIMIERUNG: Bei vielen Polygonen Bounding-Box Pre-Filter verwenden
+        # und Fortschritt loggen
+        if n_polys > 20:
+            logger.info(f"Hierarchie-Analyse: {n_polys} Polygone (kann dauern...)")
+
+        # Pre-compute bounding boxes für schnellen Vorfilter
+        bounds = [p.bounds for p in raw_polys]  # (minx, miny, maxx, maxy)
+
+        def bbox_contains(parent_bounds, child_bounds):
+            """Schneller Check ob Parent-BBox die Child-BBox enthalten KÖNNTE"""
+            return (parent_bounds[0] <= child_bounds[0] and
+                    parent_bounds[1] <= child_bounds[1] and
+                    parent_bounds[2] >= child_bounds[2] and
+                    parent_bounds[3] >= child_bounds[3])
+
         # Wer enthält wen?
         # hierarchy[i] = Liste von Indizes, die in Polygon i liegen
-        hierarchy = {i: [] for i in range(len(raw_polys))}
+        hierarchy = {i: [] for i in range(n_polys)}
+        contains_checks = 0
+
         for i, parent in enumerate(raw_polys):
+            parent_bounds = bounds[i]
             for j, child in enumerate(raw_polys):
-                if i == j: continue
-                # contains ist teuer, aber bei 2D Sketches ist N klein (<100)
-                if parent.contains(child):
-                    hierarchy[i].append(j)
-        
+                if i == j:
+                    continue
+                # OPTIMIERUNG: Größenfilter - Kind kann nicht größer als Parent sein
+                if raw_polys[j].area >= raw_polys[i].area:
+                    continue
+                # OPTIMIERUNG: Bounding Box Vorfilter
+                if not bbox_contains(parent_bounds, bounds[j]):
+                    continue
+                # Jetzt erst teurer contains() Check
+                try:
+                    contains_checks += 1
+                    if parent.contains(child):
+                        hierarchy[i].append(j)
+                except Exception as e:
+                    logger.debug(f"Contains check skipped for poly {i}/{j}: {e}")
+                    continue
+
+        if n_polys > 20:
+            logger.debug(f"  → {contains_checks} contains() Checks durchgeführt (statt max {n_polys*n_polys})")
+
         # Direkte Kinder finden (Direct Children)
-        # Ein Polygon K ist direktes Kind von P, wenn es keinen Zwischen-Parent Z gibt.
-        direct_children = {i: [] for i in range(len(raw_polys))}
-        
+        direct_children = {i: [] for i in range(n_polys)}
+
         for parent_idx, children_indices in hierarchy.items():
             for child_idx in children_indices:
                 is_direct = True
                 for other_child in children_indices:
-                    if child_idx == other_child: continue
-                    # Wenn ein anderes Kind mein Kind enthält, bin ich nicht der direkte Parent
-                    if raw_polys[other_child].contains(raw_polys[child_idx]):
-                        is_direct = False
-                        break
+                    if child_idx == other_child:
+                        continue
+                    # OPTIMIERUNG: Größenfilter
+                    if raw_polys[child_idx].area >= raw_polys[other_child].area:
+                        continue
+                    # OPTIMIERUNG: BBox Vorfilter
+                    if not bbox_contains(bounds[other_child], bounds[child_idx]):
+                        continue
+                    try:
+                        if raw_polys[other_child].contains(raw_polys[child_idx]):
+                            is_direct = False
+                            break
+                    except Exception:
+                        continue
                 if is_direct:
                     direct_children[parent_idx].append(child_idx)
 
         # Profile erstellen (Parent minus direkte Kinder)
         # Wir müssen vermeiden, dass Kinder doppelt gezeichnet werden.
-        # Im Sketch-Modus wollen wir ALLES zeichnen, aber Löcher sollen "leer" sein.
-        
-        processed = set()
-        
+        #
+        # Hierarchie-Logik:
+        # - Level 0: Top-Level Polygone (keine Eltern) → hinzufügen mit Löchern
+        # - Level 1: Kinder von Level 0 → werden als Löcher abgezogen, NICHT separat hinzufügen
+        # - Level 2: Kinder von Level 1 (Inseln in Löchern) → hinzufügen mit Löchern
+        # - Level 3: usw.
+        #
+        # Regel: Nur Polygone auf geraden Levels (0, 2, 4, ...) hinzufügen
+
+        # Finde alle Polygone die Kinder von anderen sind (und selbst keine Kinder haben)
+        is_pure_child = set()  # Polygone die Kinder sind und selbst keine Kinder haben
+        for parent_idx, children_indices in direct_children.items():
+            for child_idx in children_indices:
+                # Wenn das Kind selbst keine Kinder hat, ist es ein "reines Loch"
+                if not direct_children[child_idx]:
+                    is_pure_child.add(child_idx)
+
+        # Berechne Level für jedes Polygon (Level = Anzahl Ancestors)
+        def get_level(idx, cache={}):
+            if idx in cache:
+                return cache[idx]
+            # Finde Parent
+            for parent_idx, children_indices in direct_children.items():
+                if idx in children_indices:
+                    level = get_level(parent_idx, cache) + 1
+                    cache[idx] = level
+                    return level
+            cache[idx] = 0  # Kein Parent = Top-Level
+            return 0
+
+        # --- Baue Endpoint-zu-Geometry Mapping für späteres Matching ---
+        # Key: (welded_start, welded_end) -> (geom_type, geom_obj)
+        # Auch reversed key für bidirektionale Suche
+        endpoint_to_geom = {}
+        for geom_type, geom_obj, start_p, end_p in geometry_sources:
+            key_fwd = (start_p, end_p)
+            key_rev = (end_p, start_p)
+            endpoint_to_geom[key_fwd] = (geom_type, geom_obj)
+            endpoint_to_geom[key_rev] = (geom_type, geom_obj)  # Reversed lookup
+
+        def match_polygon_to_geometry(poly, endpoint_map, tolerance=0.5):
+            """
+            Matches polygon exterior segments to original geometry objects.
+            Returns list of (geom_type, geom_obj) in polygon order.
+            """
+            coords = list(poly.exterior.coords)
+            matched_geometry = []
+
+            for i in range(len(coords) - 1):
+                p1 = coords[i]
+                p2 = coords[i + 1]
+
+                # Direct key lookup
+                key = (p1, p2)
+                if key in endpoint_map:
+                    matched_geometry.append(endpoint_map[key])
+                    continue
+
+                # Fuzzy matching for near-coincident points
+                best_match = None
+                best_dist = tolerance ** 2
+
+                for (ep1, ep2), geom_info in endpoint_map.items():
+                    # Check if this segment's endpoints match within tolerance
+                    dist1 = (p1[0] - ep1[0])**2 + (p1[1] - ep1[1])**2
+                    dist2 = (p2[0] - ep2[0])**2 + (p2[1] - ep2[1])**2
+                    total_dist = dist1 + dist2
+
+                    if total_dist < best_dist:
+                        best_dist = total_dist
+                        best_match = geom_info
+
+                if best_match:
+                    matched_geometry.append(best_match)
+                else:
+                    # No match found - might be a gap-closing line
+                    matched_geometry.append(('gap', None))
+
+            return matched_geometry
+
         for i in range(len(raw_polys)):
-            # Wenn dieses Polygon ein direktes Kind von irgendwem ist, 
-            # wird es dort ausgeschnitten. Aber: Wenn es selbst Kinder hat (Insel),
-            # muss es später wieder als positiver Shape gezeichnet werden.
-            # Die einfache Regel für QPainterPath (OddEvenFill) ist:
-            # Wir brauchen das "End-Polygon" mit Löchern drin.
-            
-            # Wir verarbeiten hier nur die "Top Level" Parents und die "Inseln" (Level 2, 4...)
-            # Aber noch einfacher: Wir berechnen einfach für JEDES Polygon die Differenz zu seinen direkten Kindern.
-            # Das Ergebnis ist ein Ring (oder eine Vollfläche).
-            
+            level = get_level(i)
+
+            # Nur gerade Levels hinzufügen (0, 2, 4, ...)
+            # Ungerade Levels (1, 3, 5, ...) sind Löcher und werden per difference() abgezogen
+            if level % 2 != 0:
+                continue
+
             poly = raw_polys[i]
             children = direct_children[i]
-            
+
             final_shape = poly
             for child_idx in children:
                 try:
                     final_shape = final_shape.difference(raw_polys[child_idx])
                 except Exception as e:
                     logger.warning(f"Difference error: {e}")
-            
-            # Speichern als Polygon
+
+            # Speichern als Polygon MIT Geometry-Mapping
             if not final_shape.is_empty and final_shape.area > 0.01:
-                self.closed_profiles.append(('polygon', final_shape))
-        
+                # Match polygon segments to source geometry
+                matched_geom = match_polygon_to_geometry(final_shape, endpoint_to_geom)
+
+                # Dedupliziere: Entferne aufeinanderfolgende Duplikate
+                # (z.B. wenn ein Spline aus vielen Segmenten besteht)
+                unique_geom = []
+                for geom_info in matched_geom:
+                    if not unique_geom or unique_geom[-1] != geom_info:
+                        unique_geom.append(geom_info)
+
+                # Log für Debugging
+                geom_types = [g[0] for g in unique_geom if g[0] != 'gap']
+                if geom_types:
+                    logger.debug(f"Profile {i}: {len(unique_geom)} geometry segments: {set(geom_types)}")
+
+                # Store as (type, polygon, geometry_list)
+                self.closed_profiles.append(('polygon', final_shape, unique_geom))
+
+        # Store geometry mapping on sketch for extrusion to access
+        # Key: polygon area (rounded) for fast lookup
+        if not hasattr(self.sketch, '_profile_geometry_map'):
+            self.sketch._profile_geometry_map = {}
+
+        for profile_tuple in self.closed_profiles:
+            if len(profile_tuple) == 3:
+                _, poly, geom_list = profile_tuple
+                # Create stable key from polygon bounds + area
+                bounds = poly.bounds
+                key = (round(bounds[0], 2), round(bounds[1], 2),
+                       round(bounds[2], 2), round(bounds[3], 2),
+                       round(poly.area, 2))
+                self.sketch._profile_geometry_map[key] = geom_list
+                logger.debug(f"Stored geometry map for profile: {key}")
+
         # Hinweis: Diese Methode erzeugt jetzt Shapely-Polygone, die Löcher enthalten können!
         # Der Renderer muss das verstehen.
         self._build_profile_hierarchy()
@@ -1157,10 +1803,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _build_profile_hierarchy(self):
         """Baut Containment-Hierarchie auf: Welche Faces sind Löcher in anderen?"""
         from shapely.geometry import Polygon as ShapelyPolygon, Point as ShapelyPoint
-        
+
         def get_profile_vertices(profile):
             """Extrahiert Vertices aus einem Profil für Point-in-Polygon Test"""
-            profile_type, data = profile
+            # Handle both 2-tuple and 3-tuple formats
+            profile_type = profile[0]
+            data = profile[1]
             if profile_type == 'lines':
                 vertices = []
                 for line in data:
@@ -1180,10 +1828,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     vertices.append((x, y))
                 return vertices
             return []
-        
+
         def get_profile_area(profile):
             """Berechnet Fläche eines Profils"""
-            profile_type, data = profile
+            # Handle both 2-tuple and 3-tuple formats
+            profile_type = profile[0]
+            data = profile[1]
             if profile_type == 'lines':
                 vertices = get_profile_vertices(profile)
                 if len(vertices) < 3:
@@ -1204,7 +1854,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         def get_profile_point(profile):
             """Gibt einen Testpunkt für Point-in-Polygon zurück"""
-            profile_type, data = profile
+            # Handle both 2-tuple and 3-tuple formats
+            profile_type = profile[0]
+            data = profile[1]
             if profile_type == 'lines':
                 # Zentroid der Vertices
                 vertices = get_profile_vertices(profile)
@@ -1349,7 +2001,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
             self.snapper.invalidate_intersection_cache()
 
-        self.update()
+        self.request_update()
 
     def redo(self):
         if not self.redo_stack:
@@ -1367,7 +2019,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
             self.snapper.invalidate_intersection_cache()
 
-        self.update()
+        self.request_update()
     
     def import_dxf(self, filepath=None):
         """Startet den Import im Hintergrund"""
@@ -1396,29 +2048,51 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._dxf_worker.progress_signal.connect(self.status_message.emit)
         self._dxf_worker.start()
 
-    def _on_dxf_finished(self, lines, circles, arcs):
+    def _on_dxf_finished(self, lines, circles, arcs, native_splines=None):
         from PySide6.QtWidgets import QApplication
-        
+        from sketcher.geometry import Spline2D
+
+        if native_splines is None:
+            native_splines = []
+
         self._save_undo()
-        
+
         # Linien hinzufügen
         for l in lines:
             self.sketch.add_line(l[0], l[1], l[2], l[3])
-            
+
         # Kreise hinzufügen
         for c in circles:
             self.sketch.add_circle(c[0], c[1], c[2])
-        
+
         # Arcs hinzufügen
         for a in arcs:
             # a = (cx, cy, radius, start_angle, end_angle)
             self.sketch.add_arc(a[0], a[1], a[2], a[3], a[4])
-            
+
+        # Native Splines hinzufügen (NEU)
+        for spline_data in native_splines:
+            control_points, knots, degree, weights = spline_data
+            spline = Spline2D(
+                control_points=control_points,
+                knots=knots,
+                degree=degree,
+                weights=weights
+            )
+            self.sketch.native_splines.append(spline)
+            logger.info(f"Native Spline hinzugefügt: {len(control_points)} ctrl pts, deg={degree}")
+
         QApplication.restoreOverrideCursor()
         self._find_closed_profiles()
         self.sketched_changed.emit()
-        self.status_message.emit(f"Fertig: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Bögen.")
-        self.update()
+
+        # Status-Meldung mit Spline-Count
+        msg = f"Fertig: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Bögen"
+        if native_splines:
+            msg += f", {len(native_splines)} Splines (nativ)"
+        self.status_message.emit(msg)
+
+        self.request_update()
         self._dxf_worker = None
 
     def _on_dxf_error(self, err):
@@ -1462,17 +2136,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     # ==================== BUILD123D INTEGRATION ====================
     
-    def _detect_circle_from_points(self, points, tolerance=0.02):
+    def _detect_circle_from_points(self, points, tolerance=None):
         """
         Erkennt ob ein Polygon eigentlich ein Kreis ist.
-        
+
         Args:
             points: Liste von (x, y) Tupeln
-            tolerance: Relative Toleranz für Radius-Varianz
-            
+            tolerance: Relative Toleranz für Radius-Varianz (default: SKETCH_CIRCLE_FIT)
+
         Returns:
             (cx, cy, radius) als native Floats wenn es ein Kreis ist, sonst None
         """
+        if tolerance is None:
+            tolerance = Tolerances.SKETCH_CIRCLE_FIT
         if len(points) < 8:
             return None
         
@@ -1599,7 +2275,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # DEBUG: Zeige alle gefundenen Profile
         logger.debug(f"=== {len(self.closed_profiles)} Profile gefunden ===")
-        for i, (p_type, p_data) in enumerate(self.closed_profiles):
+        for i, profile_tuple in enumerate(self.closed_profiles):
+            p_type = profile_tuple[0]
+            p_data = profile_tuple[1]
             if p_type == 'polygon':
                 n_holes = len(list(p_data.interiors)) if hasattr(p_data, 'interiors') else 0
                 logger.debug(f"  [{i}] Polygon: area={p_data.area:.1f}, holes={n_holes}")
@@ -1614,7 +2292,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             with BuildPart() as part:
                 with BuildSketch(plane):
                     created_any = False
-                    for p_type, p_data in self.closed_profiles:
+                    for profile_tuple in self.closed_profiles:
+                        # Handle both 2-tuple and 3-tuple formats
+                        p_type = profile_tuple[0]
+                        p_data = profile_tuple[1]
                         # Fall 1: Polygon
                         if p_type == 'polygon':
                             coords = list(p_data.exterior.coords)
@@ -1668,7 +2349,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return None, None, None
 
             # Mesh generieren
-            mesh_data = solid.tessellate(tolerance=0.05)
+            mesh_data = solid.tessellate(tolerance=Tolerances.TESSELLATION_PREVIEW)
             verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
             faces = [tuple(t) for t in mesh_data[1]]
             
@@ -1732,8 +2413,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return None, None, None
             
             logger.success(f"Build123d Direct: Solid erstellt!")
-            
-            mesh_data = solid.tessellate(tolerance=0.1)
+
+            mesh_data = solid.tessellate(tolerance=Tolerances.TESSELLATION_COARSE)
             verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
             faces = [tuple(t) for t in mesh_data[1]]
             
@@ -1754,8 +2435,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 # Plane wird jetzt korrekt ausgerichtet sein (dank z_dir oben)
                 with BuildSketch(plane):
                     created = False
-                    
-                    for p_type, p_data in self.closed_profiles:
+
+                    for profile_tuple in self.closed_profiles:
+                        # Handle both 2-tuple and 3-tuple formats
+                        p_type = profile_tuple[0]
+                        p_data = profile_tuple[1]
                         if p_type == 'polygon' and hasattr(p_data, 'exterior'):
                             coords = list(p_data.exterior.coords)
                             # Punkte in Float wandeln
@@ -1786,7 +2470,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if solid is None: return None, None, None
             
             # Mesh für Anzeige generieren
-            mesh = solid.tessellate(tolerance=0.01)
+            mesh = solid.tessellate(tolerance=Tolerances.TESSELLATION_QUALITY)
             verts = [(v.X, v.Y, v.Z) for v in mesh[0]]
             faces = [tuple(t) for t in mesh[1]]
             
@@ -1807,7 +2491,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._update_cursor()
         self._show_tool_hint()
         self._show_tool_options()  # Optionen-Popup
-        self.update()
+        self.request_update()
     
     def _show_tool_options(self):
         """Zeigt Optionen-Popup für Tools die Optionen haben"""
@@ -1887,7 +2571,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         self._show_tool_hint()  # Hint aktualisieren
         self._show_tool_options()  # Optionen-Titel aktualisieren (für Toleranz-Anzeige)
-        self.update()
+        self.request_update()
     
     def _cancel_tool(self):
         self.tool_step = 0
@@ -1906,7 +2590,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.offset_start_pos = None
         self.offset_preview_lines = []
         
-        self.update()
+        self.request_update()
     
     def _update_cursor(self):
         if self.current_tool == SketchTool.SELECT: self.setCursor(Qt.ArrowCursor)
@@ -2063,15 +2747,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif key == "spacing": 
                 self.tool_data['pattern_spacing'] = value
             # Bei Linear Pattern müssen wir die Vorschau erzwingen
-            self.update()
+            self.request_update()
                 
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR:
             if key == "count": 
                 self.tool_data['pattern_count'] = max(2, int(value))
             elif key == "angle": 
                 self.tool_data['pattern_angle'] = value
-            self.update()
-        self.update()
+            self.request_update()
+        self.request_update()
     
     def _on_dim_confirmed(self):
         from sketcher.constraints import ConstraintType
@@ -2123,7 +2807,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.dim_input.hide()
             self.dim_input.unlock_all()
             self.dim_input_active = False
-            self.update()
+            self.request_update()
             return
 
         # === EXTRUDE MODE ===
@@ -2305,7 +2989,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input.unlock_all()
         self.dim_input_active = False
         self.setFocus()
-        self.update()
+        self.request_update()
     
     def mousePressEvent(self, event):
         pos = event.position()
@@ -2342,7 +3026,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         self.selected_constraints.remove(clicked_constraint)
                     
                     self.status_message.emit(f"Constraint ausgewählt: {clicked_constraint.type.name}")
-                    self.update()
+                    self.request_update()
                     return
 
             # B. Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
@@ -2372,7 +3056,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.selected_spline = spline
                     self._clear_selection()
                     self.status_message.emit(tr("Spline selected - drag points/handles"))
-                    self.update()
+                    self.request_update()
                     return
                 
                 # Selection Box starten
@@ -2401,7 +3085,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             else: 
                 self._show_context_menu(pos)
         
-        self.update()
+        self.request_update()
     
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -2414,7 +3098,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self._update_cursor()
             if self.selection_box_start:
                 self._finish_selection_box()
-        self.update()
+        self.request_update()
 
     def mouseDoubleClickEvent(self, event):
         """Doppelklick auf Constraint-Icon oder Geometrie öffnet DimensionInput-Editor"""
@@ -2545,7 +3229,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.current_snap = (snapped, snap_type, snap_entity) if snap_type != SnapType.NONE else None
             self._update_live_values(snapped)
             
-            self.update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
+            self.request_update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
             return
         needs_full_update = False
         dirty_region = QRectF()
@@ -2554,7 +3238,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.is_panning:
             self.view_offset += pos - self.pan_start
             self.pan_start = pos
-            self.update() # Pan braucht Full Redraw
+            self.request_update() # Pan braucht Full Redraw
             return
             
         elif self.spline_dragging:
@@ -2648,7 +3332,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # FINAL UPDATE CALL
         if needs_full_update:
-            self.update()
+            self.request_update()
         elif not dirty_region.isEmpty():
             # Konvertiere float QRectF zu integer QRect für update()
             # .toAlignedRect() rundet sicher auf, damit nichts abgeschnitten wird
@@ -2746,7 +3430,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             # Wir speichern die temporären Linien direkt im Spline-Objekt
             spline._preview_lines = spline.to_lines(segments_per_span=10)
-            self.update() # Wichtig: PaintEvent neu triggern
+            self.request_update() # Wichtig: PaintEvent neu triggern
         except Exception as e:
             logger.error(f"Spline preview error: {e}")
     
@@ -2805,7 +3489,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         world_after = self.screen_to_world(pos)
         self.view_offset += QPointF((world_after.x() - world_before.x()) * self.view_scale,
                                    -(world_after.y() - world_before.y()) * self.view_scale)
-        self.update()
+        self.request_update()
     
     
     def keyPressEvent(self, event):
@@ -2882,7 +3566,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Qt.Key_Minus: self._decrease_tolerance,  # - für Toleranz verringern
             Qt.Key_P: lambda: self.set_tool(SketchTool.PROJECT), # <--- NEU
         }
-        if key in shortcuts: shortcuts[key](); self.update()
+        if key in shortcuts: shortcuts[key](); self.request_update()
     
 
     def _handle_escape_logic(self):
@@ -2897,7 +3581,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Level 1: Laufende Operation abbrechen (z.B. Linie hat schon Startpunkt)
         if hasattr(self, 'temp_points') and self.temp_points:
             self.temp_points = []
-            self.update() # Neu zeichnen um Geisterlinien zu entfernen
+            self.request_update() # Neu zeichnen um Geisterlinien zu entfernen
             self.status_message.emit("Action cancelled")
             return
 
@@ -2910,7 +3594,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Level 3: Selektion aufheben
         if self.selected_lines or self.selected_points or self.selected_circles:
             self._clear_selection()
-            self.update()
+            self.request_update()
             return
 
         # Level 4: Sketch Modus wirklich verlassen (nur wenn nichts anderes aktiv war)
@@ -2930,7 +3614,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # WICHTIG: Signal senden, damit die Checkbox im ToolPanel aktualisiert wird
         self.grid_snap_mode_changed.emit(self.grid_snap)
-        self.update()
+        self.request_update()
     
     def _toggle_construction(self):
         self.construction_mode = not self.construction_mode
@@ -2939,7 +3623,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # WICHTIG: Signal senden, damit die Checkbox im ToolPanel aktualisiert wird
         self.construction_mode_changed.emit(self.construction_mode)
-        self.update()
+        self.request_update()
     
     def _increase_tolerance(self):
         """Toleranz für Muttern erhöhen"""
@@ -2978,7 +3662,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         for arc in self.sketch.arcs:
             used_point_ids.add(arc.center.id)
         self.selected_points = [p for p in self.sketch.points if p.id not in used_point_ids]
-        self.update()
+        self.request_update()
     
     def _finish_selection_box(self):
         if not self.selection_box_start or not self.selection_box_end: return
@@ -3036,7 +3720,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketched_changed.emit()
             self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
             logger.debug(f"Deleted {count} constraints")
-            self.update()
+            self.request_update()
             return
 
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points:
@@ -3057,7 +3741,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         self.show_message(f"{deleted_count} Element(e) gelöscht", 2000, QColor(100, 255, 100))
         logger.debug(f"Deleted {deleted_count} elements")
-        self.update()
+        self.request_update()
 
     def _find_constraint_at(self, screen_pos):
         """Findet einen Constraint dessen Icon an der Screen-Position liegt"""
@@ -3267,12 +3951,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _find_face_at(self, pos):
         """Findet die Fläche unter dem Cursor (Point-in-Polygon Test)"""
         px, py = pos.x(), pos.y()
-        
+
         for profile_data in self.closed_profiles:
-            if not isinstance(profile_data, tuple) or len(profile_data) != 2:
+            if not isinstance(profile_data, tuple) or len(profile_data) < 2:
                 continue
-            
-            profile_type, data = profile_data
+
+            # Handle both 2-tuple and 3-tuple formats
+            profile_type = profile_data[0]
+            data = profile_data[1]
             
             if profile_type == 'circle':
                 # Kreis: Prüfe ob Punkt innerhalb
@@ -3411,7 +4097,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
         logger.info(f"Deleted {count} constraints from selection")
-        self.update()
+        self.request_update()
 
     def _delete_all_constraints(self):
         """Löscht alle Constraints im Sketch"""
@@ -3425,7 +4111,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
         self.show_message(f"Alle {count} Constraints gelöscht", 2000, QColor(100, 255, 100))
         logger.info(f"Deleted all {count} constraints")
-        self.update()
+        self.request_update()
     
     def _fit_view(self):
         if not self.sketch.lines and not self.sketch.circles:
@@ -3447,7 +4133,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.view_scale = min((self.width()-2*pad)/w, (self.height()-2*pad)/h)
         cx, cy = (minx+maxx)/2, (miny+maxy)/2
         self.view_offset = QPointF(self.width()/2 - cx*self.view_scale, self.height()/2 + cy*self.view_scale)
-        self.update()
+        self.request_update()
     
     def paintEvent(self, event):
         # 1. QPainter initialisieren
@@ -3481,7 +4167,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # Hier passiert die Magie der Performance-Optimierung:
         self._draw_geometry(p, update_rect)
-        
+        self._draw_native_splines(p)  # Native B-Splines aus DXF Import
+
         # UI-Elemente (Constraints, Snaps etc.) zeichnen
         self._draw_constraints(p) 
         self._draw_open_ends(p)

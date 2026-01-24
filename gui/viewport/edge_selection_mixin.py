@@ -15,6 +15,8 @@ try:
 except ImportError:
     HAS_PYVISTA = False
 
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
+
 
 # ==================== Datenstrukturen ====================
 
@@ -95,7 +97,7 @@ class EdgeSelectionMixin:
         
         from PySide6.QtCore import Qt
         self.setCursor(Qt.PointingHandCursor)
-        self.plotter.render()
+        request_render(self.plotter)
         
         logger.info(f"Fillet Mode: {len(self._selectable_edges)} Kanten bereit.")
 
@@ -112,7 +114,7 @@ class EdgeSelectionMixin:
         from PySide6.QtCore import Qt
         self.setCursor(Qt.ArrowCursor)
         
-        if hasattr(self, 'plotter'): self.plotter.render()
+        if hasattr(self, 'plotter'): request_render(self.plotter)
 
     # ==================== Extraction ====================
 
@@ -301,7 +303,7 @@ class EdgeSelectionMixin:
             if eid != self._hovered_edge_id:
                 self._hovered_edge_id = eid
                 self._draw_edges_modern()
-                self.plotter.render()
+                request_render(self.plotter)
             return True
             
         # 3. Keine Kante: Prüfe Fläche (Loop Preview)
@@ -324,7 +326,7 @@ class EdgeSelectionMixin:
                 
                 # Nur hier neu zeichnen!
                 self._draw_edges_modern()
-                self.plotter.render()
+                request_render(self.plotter)
                 
         return True
 
@@ -343,7 +345,7 @@ class EdgeSelectionMixin:
             self._draw_edges_modern()
             if hasattr(self, 'edge_selection_changed'):
                 self.edge_selection_changed.emit(len(self._selected_edge_ids))
-            self.plotter.render()
+            request_render(self.plotter)
             return True
             
         # B. Klick auf Fläche (Loop)
@@ -358,7 +360,7 @@ class EdgeSelectionMixin:
             self._draw_edges_modern()
             if hasattr(self, 'edge_selection_changed'):
                 self.edge_selection_changed.emit(len(self._selected_edge_ids))
-            self.plotter.render()
+            request_render(self.plotter)
             return True
             
         return False
@@ -392,4 +394,4 @@ class EdgeSelectionMixin:
         self._draw_edges_modern()
         if hasattr(self, 'edge_selection_changed'):
             self.edge_selection_changed.emit(len(self._selected_edge_ids))
-        self.plotter.render()
+        request_render(self.plotter)

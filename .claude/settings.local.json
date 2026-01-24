@@ -4,7 +4,10 @@
       "Bash(dir /b /s python.exe)",
       "Bash(findstr:*)",
       "Bash(python:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(conda run -n cad_env python:*)",
+      "Bash(\"C:/Users/User/miniforge3/envs/cad_env/python.exe\" tests/analyze_dxf.py)",
+      "Bash(/c/Users/User/miniforge3/envs/cad_env/python.exe:*)"
     ]
   }
 }

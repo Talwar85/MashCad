@@ -6,6 +6,7 @@ MashCad - Viewport Module
 from .extrude_mixin import ExtrudeMixin
 from .picking_mixin import PickingMixin
 from .body_mixin import BodyRenderingMixin
+from .render_queue import RenderQueue, request_render
 
 # V3: Full Feature (Move/Rotate/Scale/Copy/Mirror) - AKTIV
 from .transform_mixin_v3 import TransformMixinV3

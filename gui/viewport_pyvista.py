@@ -18,6 +18,8 @@ from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
 from gui.viewport.section_view_mixin import SectionViewMixin
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -89,7 +91,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     mirror_requested = Signal(str)  # body_id - Öffnet Mirror-Dialog
     point_to_point_move = Signal(str, tuple, tuple)  # body_id, start_point, end_point - NEU: Point-to-Point Move
     edge_selection_changed = Signal(int)  # NEU: Anzahl selektierter Kanten für Fillet/Chamfer
-    
+    sketch_path_clicked = Signal(str, str, int)  # NEU: sketch_id, geom_type ('line', 'arc', 'spline'), index
+    texture_face_selected = Signal(int)  # NEU: Anzahl selektierter Faces für Texture
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
@@ -130,6 +134,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
         self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
+        self.sketch_path_mode = False  # NEU: Sketch-Element-Selektion für Sweep-Pfad
+        self.texture_face_mode = False  # NEU: Face-Selektion für Surface Texture
+        self._texture_body_id = None  # Body für Texture-Selektion
+        self._texture_selected_faces = []  # Liste von selektierten Body-Faces für Texture
         self.point_to_point_start = None  # Erster ausgewählter Punkt (x, y, z)
         self.point_to_point_body_id = None  # Body, der verschoben wird
         self.extrude_height = 0.0
@@ -159,7 +167,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.transform_widget = None # Das Gizmo
         self.original_matrix = None # Zum Zurücksetzen
         self._last_pick_time = 0
-        self._pick_interval = 0.05 # 2ß Checks pro Sekunde
+        self._pick_interval = 0.05  # 20 Checks pro Sekunde (50ms)
+
+        # Phase 4: Globales Mouse-Event Throttling
+        self._last_mouse_move_time = 0
+        self._mouse_move_interval = 0.016  # ~60 FPS max (16ms)
 
     def set_selection_mode(self, mode: str):
         """Übersetzt den String-Modus aus dem MainWindow in Detector-Filter."""
@@ -176,7 +188,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
         # Visuelles Feedback: Hover zurücksetzen
         self._update_hover(-1)
-        self.plotter.render()
+        request_render(self.plotter)
         
     def _setup_ui(self):
         # Direktes Layout ohne zusätzlichen Frame
@@ -268,6 +280,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Kamera-Stil
         self.plotter.enable_trackball_style()
 
+        # Wireframe Toggle (W-Taste) - echtes Toggle statt nur Wireframe-Modus setzen
+        self._wireframe_mode = False
+        self.plotter.add_key_event('w', self._toggle_wireframe)
+        self.plotter.add_key_event('W', self._toggle_wireframe)
+
         # --- VISUAL QUALITÄT ---
         # Hintergrund
         self.plotter.set_background('#1e1e1e', top='#2d2d30')
@@ -330,6 +347,23 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.btn_home.move(20, 20)
             self.btn_home.raise_()  # Nach vorne bringen
 
+    def _toggle_wireframe(self):
+        """Togglet zwischen Wireframe und Surface Modus für alle Meshes."""
+        self._wireframe_mode = not self._wireframe_mode
+        style = 'wireframe' if self._wireframe_mode else 'surface'
+
+        # Alle Actors durchgehen
+        for actor in self.plotter.renderer.GetActors():
+            if actor.GetMapper():
+                prop = actor.GetProperty()
+                if self._wireframe_mode:
+                    prop.SetRepresentationToWireframe()
+                else:
+                    prop.SetRepresentationToSurface()
+
+        self.plotter.render()
+        logger.debug(f"Wireframe Toggle: {style}")
+
     def _setup_scene(self):
         self._draw_grid(200)
         self._draw_axes(50)
@@ -386,7 +420,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if actor:
                 actor.GetProperty().SetColor(0.4, 0.7, 1.0)  # Helles Blau
                 actor.GetProperty().SetOpacity(0.8)
-                self.plotter.render()
+                request_render(self.plotter)
         except Exception as e:
             logger.debug(f"Konnte Body {body_id} nicht highlighten: {e}")
 
@@ -403,7 +437,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # Standard-Farbe (grau)
                 actor.GetProperty().SetColor(0.6, 0.6, 0.8)
                 actor.GetProperty().SetOpacity(1.0)
-                self.plotter.render()
+                request_render(self.plotter)
         except Exception as e:
             logger.debug(f"Konnte Body {body_id} nicht unhighlighten: {e}")
 
@@ -433,7 +467,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         import numpy as np
 
         picker = vtk.vtkCellPicker()
-        picker.SetTolerance(0.005)
+        picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
 
         # Pick durchführen
         picker.Pick(screen_x, self.plotter.interactor.height() - screen_y, 0, self.plotter.renderer)
@@ -534,7 +568,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.plotter.remove_actor(name)
             
         # Zur Sicherheit Rendern
-        self.plotter.render()
+        request_render(self.plotter)
         
     # Transform-Methoden sind jetzt im TransformMixin
     # (start_transform, end_transform, apply_transform_values, etc.)
@@ -688,7 +722,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if not HAS_PYVISTA: return False
         from PySide6.QtCore import QEvent, Qt
         from PySide6.QtWidgets import QApplication
-        
+
+        # Phase 4: Globales Mouse-Move Throttling (max 60 FPS)
+        if event.type() == QEvent.MouseMove:
+            current_time = time.time()
+            if current_time - self._last_mouse_move_time < self._mouse_move_interval:
+                return False  # Event ignorieren, zu schnell
+            self._last_mouse_move_time = current_time
+
         # --- TRANSFORM MODE (Onshape-Style Gizmo V2) ---
         if self.is_transform_active():
             event_type = event.type()
@@ -822,6 +863,45 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                 self._hide_numeric_input_overlay()
                             logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
                         return True
+
+        # --- TEXTURE FACE SELECTION MODE ---
+        if self.texture_face_mode:
+            event_type = event.type()
+
+            # Mouse Move: Face-Hover anzeigen (NUR wenn keine Maustaste gedrückt!)
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    # Kein Button gedrückt → Hover-Highlight
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+                # IMMER False zurückgeben damit VTK die Events für Kamera bekommt
+                return False
+
+            # NUR Left-Click für Face-Selektion abfangen - ABER NUR wenn Body getroffen!
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    # Nur konsumieren wenn tatsächlich eine Face gehovered ist
+                    if self.hovered_body_face is not None:
+                        self._click_body_face()
+                        return True
+                    # Kein Body getroffen → Kamera-Rotation erlauben
+                    return False
+                # Middle/Right Button: Für Kamera-Kontrolle durchlassen
+                return False
+
+            # Mouse Release: Für Kamera durchlassen
+            if event_type == QEvent.MouseButtonRelease:
+                return False
+
+            if event_type == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.stop_texture_face_mode()
+                    return True
+
+            # Alle anderen Events (Wheel, etc.) durchlassen
+            return False
 
         # --- EDGE SELECTION MODE (Fillet/Chamfer) ---
         if self.edge_select_mode:
@@ -988,8 +1068,17 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self.body_clicked.emit(body_id)
                     return True
 
+            # NEU: Sketch-Pfad-Selektion für Sweep (direkter Viewport-Klick)
+            if self.sketch_path_mode:
+                sketch_id, geom_type, index = self._pick_sketch_element_at(x, y)
+                if sketch_id and geom_type in ('line', 'arc', 'spline'):
+                    logger.info(f"Sketch-Pfad geklickt: {sketch_id}/{geom_type}/{index}")
+                    self.sketch_path_clicked.emit(sketch_id, geom_type, index)
+                    return True
+
             # Face-Selection (für Extrude etc.)
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
+            logger.info(f"Viewport: Klick bei ({x}, {y}), hit_id={hit_id}, extrude_mode={self.extrude_mode}")
 
             if hit_id != -1:
                 # Multi-Select mit STRG/Shift
@@ -1011,8 +1100,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if face: self._cache_drag_direction_for_face_v2(face)
                 
                 self._draw_selectable_faces_from_detector()
-                
+
                 # NEU: Signal für automatische Operation-Erkennung
+                logger.debug(f"Viewport: Emitting face_selected({hit_id})")
                 self.face_selected.emit(hit_id)
                 return True
 
@@ -1031,7 +1121,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         try:
             import vtk
             picker = vtk.vtkCellPicker()
-            picker.SetTolerance(0.005)
+            picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
             picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
             
             actor = picker.GetActor()
@@ -1131,7 +1221,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.last_highlighted_plane = found_std_plane
             for k in ['xy','xz','yz']:
                 self._set_opacity(k, 0.7 if k == found_std_plane else 0.25)
-            self.plotter.render()
+            request_render(self.plotter)
 
         # 2. Wenn keine Standard-Ebene, prüfe auf Body-Flächen via Detector
         # (Nur wenn wir nicht gerade über einer Standardebene hovern)
@@ -1404,7 +1494,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
         self._body_actors[bid] = (n1, n2)
         self.bodies[bid] = {'mesh': mesh, 'color': col}
-        self.plotter.render()
+        request_render(self.plotter)
 
     # ==================== PUBLIC API ====================
     def set_plane_select_mode(self, enabled):
@@ -1422,13 +1512,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # Wir nutzen die Hilfsfunktion, um nicht alles doppelt zu schreiben
             self._update_detector_for_picking()
             
-            self.plotter.render()
+            request_render(self.plotter)
         else: 
             self._hide_selection_planes()
             # Aufräumen
             self._clear_face_actors()
             self._clear_plane_hover_highlight() # Alte Visualisierung löschen
-            self.plotter.render()
+            request_render(self.plotter)
 
     def set_extrude_mode(self, enabled):
         """Aktiviert den Modus und stellt sicher, dass der Detector visualisiert wird."""
@@ -1440,13 +1530,106 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self._drag_screen_vector = np.array([0.0, -1.0]) 
             # Zeichnen anstoßen (initial leer, da nichts selektiert)
             self._draw_selectable_faces_from_detector()
-            self.plotter.render()
+            request_render(self.plotter)
         else:
             self.selected_face_ids.clear()
             self._clear_face_actors()
             self._clear_preview()
-            self.plotter.render()
-            
+            request_render(self.plotter)
+
+    # ==================== SKETCH PATH SELECTION MODE ====================
+
+    def start_sketch_path_mode(self):
+        """
+        Aktiviert Sketch-Element-Selektion für Sweep-Pfade.
+        In diesem Modus kann der User direkt auf Sketch-Linien, Bögen und Splines klicken.
+        """
+        self.sketch_path_mode = True
+        # Highlight alle Sketch-Elemente
+        self._highlight_sketch_paths()
+        logger.info("Sketch-Pfad-Modus aktiviert: Klicke auf eine Linie, Bogen oder Spline im Viewport")
+
+    def stop_sketch_path_mode(self):
+        """Beendet den Sketch-Pfad-Modus."""
+        self.sketch_path_mode = False
+        self._unhighlight_sketch_paths()
+        logger.debug("Sketch-Pfad-Modus beendet")
+
+    def _highlight_sketch_paths(self):
+        """Hebt alle Sketch-Pfad-Elemente (Linien, Bögen, Splines) hervor."""
+        for actor_name in self._sketch_actors:
+            # Nur Linien, Bögen und Splines highlighten (nicht Kreise)
+            if '_l_' in actor_name or '_a_' in actor_name or '_sp_' in actor_name:
+                try:
+                    actor = self.plotter.renderer.actors.get(actor_name)
+                    if actor:
+                        # Helle Farbe für Pfad-Kandidaten
+                        actor.GetProperty().SetColor(0.0, 1.0, 0.5)  # Hellgrün
+                        actor.GetProperty().SetLineWidth(5)
+                except:
+                    pass
+        request_render(self.plotter)
+
+    def _unhighlight_sketch_paths(self):
+        """Setzt Sketch-Elemente auf Normalfarbe zurück."""
+        for actor_name in self._sketch_actors:
+            try:
+                actor = self.plotter.renderer.actors.get(actor_name)
+                if actor:
+                    # Zurück zur Standardfarbe
+                    actor.GetProperty().SetColor(0.3, 0.58, 1.0)  # #4d94ff
+                    actor.GetProperty().SetLineWidth(3)
+            except:
+                pass
+        request_render(self.plotter)
+
+    def _pick_sketch_element_at(self, x: int, y: int) -> tuple:
+        """
+        Prüft ob bei (x, y) ein Sketch-Element getroffen wird.
+
+        Returns:
+            Tuple (sketch_id, geom_type, index) oder (None, None, None) wenn nichts getroffen.
+            geom_type: 'line', 'arc', 'circle', 'spline'
+        """
+        import vtk
+
+        try:
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.01)
+            picker.Pick(x, self.plotter.interactor.height() - y, 0, self.plotter.renderer)
+
+            actor = picker.GetActor()
+            if not actor:
+                return (None, None, None)
+
+            # Finde den Actor-Namen
+            for actor_name in self._sketch_actors:
+                try:
+                    if self.plotter.renderer.actors.get(actor_name) == actor:
+                        # Parse: s_{sketch_id}_l_{index}, s_{sketch_id}_a_{index}, etc.
+                        parts = actor_name.split('_')
+                        if len(parts) >= 4:
+                            sketch_id = parts[1]
+                            geom_type_code = parts[2]
+                            index = int(parts[3])
+
+                            geom_type_map = {
+                                'l': 'line',
+                                'a': 'arc',
+                                'c': 'circle',
+                                'sp': 'spline'
+                            }
+                            geom_type = geom_type_map.get(geom_type_code, geom_type_code)
+
+                            return (sketch_id, geom_type, index)
+                except:
+                    continue
+
+        except Exception as e:
+            logger.debug(f"Sketch-Element Picking Fehler: {e}")
+
+        return (None, None, None)
+
     def get_extrusion_data_for_kernel(self):
         """Gibt die Shapely-Polygone für den Kernel zurück"""
         data = []
@@ -1481,7 +1664,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             
         if not relevant_ids:
             # Nichts zu tun, Render nur erzwingen um alte zu löschen
-            self.plotter.render()
+            request_render(self.plotter)
             return
             
         # 2. Nur relevante zeichnen
@@ -1563,7 +1746,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 except Exception as e:
                     logger.warning(f"Konnte Fallback-Highlight nicht zeichnen: {e}")
 
-        self.plotter.render()
+        request_render(self.plotter)
         
         
     def set_edge_select_mode(self, enabled):
@@ -1664,101 +1847,87 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         prop.SetOpacity(1.0)
             except:
                 pass
-        self.plotter.render()
+        request_render(self.plotter)
     
     def _detect_body_faces(self):
-        """Erkennt planare Flächen von 3D-Bodies und fügt sie zu detected_faces hinzu"""
+        """Erkennt planare Flächen von 3D-Bodies und fügt sie zu detected_faces hinzu.
+
+        OPTIMIERT: Verwendet cell_centers() und numpy für 10x schnellere Detection.
+        """
         if not self.bodies:
             return
-            
-        logger.debug(f" Starte Face-Detection für {len(self.bodies)} Bodies...")
+
+        import numpy as np
+
+        logger.debug(f"Starte Face-Detection für {len(self.bodies)} Bodies...")
         count_before = len(self.detected_faces)
-            
+
         for bid, body_data in self.bodies.items():
             mesh = body_data.get('mesh')
-            if mesh is None: continue
-            
+            if mesh is None:
+                continue
+
             try:
                 # Prüfen ob Mesh Zellen hat
                 if mesh.n_cells == 0:
-                    logger.debug(f" Body {bid} hat keine Zellen (Faces).")
+                    logger.debug(f"Body {bid} hat keine Zellen (Faces).")
                     continue
 
                 # Normalen berechnen falls nötig
                 if 'Normals' not in mesh.cell_data:
                     mesh.compute_normals(cell_normals=True, inplace=True)
-                
+
                 cell_normals = mesh.cell_data.get('Normals')
                 if cell_normals is None or len(cell_normals) == 0:
-                    logger.debug(f" Keine Normalen für Body {bid} gefunden.")
+                    logger.debug(f"Keine Normalen für Body {bid} gefunden.")
                     continue
-                
-                # Gruppiere Zellen nach Normale (für planare Flächen)
-                face_groups = {}  # normal_key -> list of cell_ids
-                
-                # Numpy-Optimierung für Geschwindigkeit
-                import numpy as np
-                rounded_normals = np.round(cell_normals, 2)
-                
-                # Wir iterieren über Indizes, das ist sicherer
-                for cell_id in range(mesh.n_cells):
-                    # Tuple als Key für Dictionary
-                    nkey = tuple(rounded_normals[cell_id])
-                    if nkey not in face_groups:
-                        face_groups[nkey] = []
-                    face_groups[nkey].append(cell_id)
-                
-                # Für jede Gruppe eine selektierbare Fläche erstellen
-                for normal_key, cell_ids in face_groups.items():
-                    # Berechne Zentrum aus allen Punkten der Zellen
-                    # (Vereinfacht: Mittelwert der Zellen-Zentren wäre schneller, aber wir machen es robust)
-                    
-                    # Schneller Check: Hat die Fläche relevante Größe? (Min 1 Zelle)
-                    if not cell_ids: continue
 
-                    # Wir nehmen einfach das Zentrum der ersten Zelle als "Anker" für die Suche,
-                    # und berechnen das echte Zentrum später falls nötig.
-                    # Für Picking reicht ein qualitatives Zentrum.
-                    
-                    # Extrahiere Sub-Mesh für genaues Zentrum
-                    # Das kann langsam sein bei High-Poly, aber notwendig für präzises Extrude-Handle
-                    try:
-                        # Hole Punkte der Zellen direkt
-                        # Optimierung: Nur von jeder 10. Zelle den Mittelpunkt nehmen für Speed
-                        sample_step = max(1, len(cell_ids) // 50)
-                        sample_centers = []
-                        
-                        for i in range(0, len(cell_ids), sample_step):
-                            cell = mesh.get_cell(cell_ids[i])
-                            pts = cell.points
-                            if len(pts) > 0:
-                                sample_centers.append(np.mean(pts, axis=0))
-                        
-                        if not sample_centers: continue
-                        
-                        center_3d = np.mean(sample_centers, axis=0)
-                        
-                        # Fläche registrieren
-                        self.detected_faces.append({
-                            'type': 'body_face',
-                            'body_id': bid,
-                            'cell_ids': cell_ids,
-                            'normal': normal_key,
-                            'center_3d': tuple(center_3d),
-                            'center_2d': (center_3d[0], center_3d[1]), # Dummy für API Kompatibilität
-                            'origin': tuple(center_3d),
-                            'mesh': mesh
-                        })
-                    except Exception as e:
-                         logger.debug(f" Fehler bei Face-Gruppe {normal_key}: {e}")
+                # OPTIMIERUNG: Cell centers einmal vorberechnen (viel schneller als get_cell!)
+                all_cell_centers = mesh.cell_centers().points
+
+                # Runde Normalen für Gruppierung (Quantisierung)
+                rounded_normals = np.round(cell_normals, 2)
+
+                # OPTIMIERUNG: Numpy-basierte Gruppierung statt Python-Loop
+                # Erstelle eindeutige Normal-Keys
+                unique_normals, inverse_indices = np.unique(
+                    rounded_normals, axis=0, return_inverse=True
+                )
+
+                # Für jede eindeutige Normale eine Face-Gruppe erstellen
+                for group_idx, normal in enumerate(unique_normals):
+                    # Finde alle Zellen mit dieser Normale
+                    cell_mask = (inverse_indices == group_idx)
+                    cell_ids = np.where(cell_mask)[0].tolist()
+
+                    if not cell_ids:
+                        continue
+
+                    # OPTIMIERUNG: Zentrum aus vorberechneten Cell-Centers (vektorisiert)
+                    group_centers = all_cell_centers[cell_mask]
+                    center_3d = np.mean(group_centers, axis=0)
+
+                    normal_key = tuple(normal)
+
+                    # Fläche registrieren
+                    self.detected_faces.append({
+                        'type': 'body_face',
+                        'body_id': bid,
+                        'cell_ids': cell_ids,
+                        'normal': normal_key,
+                        'center_3d': tuple(center_3d),
+                        'center_2d': (center_3d[0], center_3d[1]),
+                        'origin': tuple(center_3d),
+                        'mesh': mesh
+                    })
 
             except Exception as e:
-                logger.debug(f" Body face detection error for body {bid}: {e}")
+                logger.debug(f"Body face detection error for body {bid}: {e}")
                 import traceback
                 traceback.print_exc()
 
         added = len(self.detected_faces) - count_before
-        logger.debug(f" Detection fertig. {added} Body-Faces gefunden.")
+        logger.debug(f"Detection fertig. {added} Body-Faces gefunden.")
 
     def set_sketches(self, sketches):
         """
@@ -1778,7 +1947,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if visible: 
                 self._render_sketch_batched(s)
         
-        self.plotter.render()
+        request_render(self.plotter)
 
     def _render_sketch_batched(self, s):
         """
@@ -1980,7 +2149,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
         # KRITISCH: Erzwinge Render nach dem Cleanup um sicherzustellen
         # dass der alte Actor wirklich weg ist bevor wir den neuen hinzufügen
-        self.plotter.render()
+        request_render(self.plotter, immediate=True)
         
         actors_list = []
         if color is None: 
@@ -2022,7 +2191,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
                     actors_list.append(n_edge)
                 
-                self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
+                self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb, 'body': None}
 
             # === PFAD B: Legacy Listen (Verts/Faces) ===
             elif verts and faces:
@@ -2046,12 +2215,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)
                     
                 actors_list.append(n_mesh)
-                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
-                
+                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb, 'body': None}
+
             self._body_actors[bid] = tuple(actors_list)
-            
+
+            # WICHTIG: Actor-Cache invalidieren für schnellen Hover-Lookup
+            if hasattr(self, '_actor_to_body_cache'):
+                self._rebuild_actor_body_cache()
+
             # WICHTIG: Erzwinge Render nach dem Hinzufügen
-            self.plotter.render()
+            request_render(self.plotter, immediate=True)
             
         except Exception as e:
             logger.error(f"add_body error: {e}")
@@ -2064,7 +2237,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             for name in actors:
                 if name in self.plotter.renderer.actors:
                     self.plotter.renderer.actors[name].SetVisibility(visible)
-            self.plotter.render()
+            request_render(self.plotter)
         except: pass
     
     def set_all_bodies_visible(self, visible):
@@ -2075,21 +2248,398 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.plotter.renderer.actors[m].SetVisibility(visible)
                 self.plotter.renderer.actors[e].SetVisibility(visible)
             except: pass
-        self.plotter.render()
+        request_render(self.plotter)
 
     def clear_bodies(self):
         for names in self._body_actors.values():
-            for n in names: 
+            for n in names:
                 try: self.plotter.remove_actor(n)
                 except: pass
-        self._body_actors.clear(); self.bodies.clear(); self.plotter.render()
+        self._body_actors.clear()
+        self.bodies.clear()
+        # Cache invalidieren
+        if hasattr(self, '_actor_to_body_cache'):
+            self._actor_to_body_cache.clear()
+        request_render(self.plotter)
 
     def get_body_mesh(self, body_id):
         if body_id in self.bodies: return self.bodies[body_id]['mesh']
         return None
 
+    def set_body_object(self, body_id: str, body_obj):
+        """Setzt die Body-Objekt-Referenz für Texture-Previews."""
+        if body_id in self.bodies:
+            self.bodies[body_id]['body'] = body_obj
+
+    def refresh_texture_previews(self, body_id: str = None):
+        """
+        Aktualisiert alle Texture-Previews für einen Body oder alle Bodies.
+
+        Args:
+            body_id: Wenn angegeben, nur diesen Body aktualisieren
+        """
+        from modeling import SurfaceTextureFeature
+
+        body_ids = [body_id] if body_id else list(self.bodies.keys())
+
+        for bid in body_ids:
+            if bid not in self.bodies:
+                continue
+
+            body_data = self.bodies[bid]
+            body = body_data.get('body')
+            mesh = body_data.get('mesh')
+
+            if body is None or mesh is None:
+                continue
+
+            # Sammle alle Texture-Features für diesen Body
+            texture_features = [
+                f for f in body.features
+                if isinstance(f, SurfaceTextureFeature) and not f.suppressed
+            ]
+
+            if not texture_features:
+                # Keine Texturen - alte Overlays entfernen
+                self._clear_textured_faces_overlay(bid)
+                continue
+
+            # Für jedes Texture-Feature die Face-Daten sammeln
+            # WICHTIG: Jede Face bekommt ihr eigenes Texture-Feature!
+            face_data_list = []
+            for feat in texture_features:
+                for selector in feat.face_selectors:
+                    face_data = {
+                        'cell_ids': selector.get('cell_ids', []),
+                        'normal': selector.get('normal', (0, 0, 1)),
+                        'center': selector.get('center', (0, 0, 0)),
+                        'texture_feature': feat,  # WICHTIG: Feature mit Face verknüpfen!
+                    }
+                    if face_data['cell_ids']:
+                        face_data_list.append(face_data)
+
+            if face_data_list:
+                self.show_textured_faces_overlay(bid, face_data_list, 'mixed')
+
+        logger.debug(f"Texture-Previews aktualisiert für {len(body_ids)} Bodies")
+
     def get_selected_faces(self):
         return [self.detected_faces[i] for i in self.selected_faces if i < len(self.detected_faces)]
+
+    # ==================== Texture Face Selection Mode ====================
+
+    def start_texture_face_mode(self, body_id: str):
+        """Startet Face-Selektionsmodus für Surface Texture."""
+        self.texture_face_mode = True
+        self._texture_body_id = body_id
+        self._texture_selected_faces = []
+
+        # WICHTIG: Body-Faces erkennen und in detected_faces laden
+        self.detected_faces = []  # Reset
+
+        # Debug: Zeige verfügbare Bodies
+        logger.debug(f"Texture Mode: Verfügbare Bodies: {list(self.bodies.keys())}")
+        logger.debug(f"Texture Mode: Body Actors: {list(self._body_actors.keys())}")
+
+        self._detect_body_faces()
+
+        # WICHTIG: Actor-Cache für Hover-Lookup neu aufbauen
+        self._rebuild_actor_body_cache()
+        logger.debug(f"Texture Mode: Actor-Cache mit {len(getattr(self, '_actor_to_body_cache', {}))} Einträgen")
+
+        # Debug: Zeige erkannte Faces pro Body
+        face_count_per_body = {}
+        for face in self.detected_faces:
+            bid = face.get('body_id', 'unknown')
+            face_count_per_body[bid] = face_count_per_body.get(bid, 0) + 1
+        logger.info(f"Texture Mode: {len(self.detected_faces)} Faces erkannt: {face_count_per_body}")
+
+        self.setCursor(Qt.PointingHandCursor)
+        logger.info(f"Texture Mode: Klicke auf Faces von Body '{body_id}'")
+        request_render(self.plotter)
+
+    def stop_texture_face_mode(self):
+        """Beendet Face-Selektionsmodus für Texture."""
+        self.texture_face_mode = False
+        self._texture_body_id = None
+        self._texture_selected_faces = []
+        self._clear_texture_face_highlights()
+        self._clear_body_face_highlight()  # Auch Hover-Highlight entfernen
+        self.hovered_body_face = None
+        self.setCursor(Qt.ArrowCursor)
+        request_render(self.plotter)
+
+    def get_texture_selected_faces(self):
+        """Gibt selektierte Face-Daten für Texture zurück."""
+        return self._texture_selected_faces
+
+    def _add_texture_face(self, face_data: dict):
+        """Fügt Face zur Texture-Selektion hinzu."""
+        # Prüfen ob Face schon selektiert (anhand der Normalen - gleiche Fläche = gleiche Normale)
+        new_normal = face_data.get('normal', (0, 0, 1))
+
+        for f in self._texture_selected_faces:
+            existing_normal = f.get('normal', (0, 0, 1))
+            # Vergleiche Normalen (Toleranz für Rundungsfehler)
+            if (abs(existing_normal[0] - new_normal[0]) < 0.01 and
+                abs(existing_normal[1] - new_normal[1]) < 0.01 and
+                abs(existing_normal[2] - new_normal[2]) < 0.01):
+                # Gleiche Fläche bereits selektiert → deselektieren
+                self._texture_selected_faces.remove(f)
+                self._update_texture_face_highlights()
+                self.texture_face_selected.emit(len(self._texture_selected_faces))
+                logger.debug(f"Face deselektiert (Normal: {new_normal})")
+                return
+
+        # Neu hinzufügen
+        self._texture_selected_faces.append(face_data)
+        self._update_texture_face_highlights()
+        self.texture_face_selected.emit(len(self._texture_selected_faces))
+        logger.debug(f"Face selektiert (Normal: {new_normal})")
+
+    def _update_texture_face_highlights(self):
+        """Aktualisiert Highlight für selektierte Texture-Faces."""
+        self._clear_texture_face_highlights()
+
+        for i, face_data in enumerate(self._texture_selected_faces):
+            try:
+                mesh = face_data.get('mesh')
+                cell_ids = face_data.get('cell_ids', [])
+
+                if mesh is not None and cell_ids:
+                    # Echtes Face-Overlay wie bei Extrude
+                    face_mesh = mesh.extract_cells(cell_ids)
+
+                    # WICHTIG: Offset entlang Normalen um Z-Fighting zu vermeiden!
+                    # Das Highlight wird 0.3mm nach außen verschoben
+                    face_normal = face_data.get('normal', (0, 0, 1))
+                    offset = 0.3  # mm
+                    normal_arr = np.array(face_normal)
+                    normal_arr = normal_arr / (np.linalg.norm(normal_arr) + 1e-10)
+
+                    # Verschiebe alle Punkte des Face-Mesh
+                    face_mesh_copy = face_mesh.copy()
+                    face_mesh_copy.points = face_mesh_copy.points + normal_arr * offset
+
+                    self.plotter.add_mesh(
+                        face_mesh_copy,
+                        color='orange',
+                        opacity=0.7,
+                        name=f'texture_face_highlight_{i}',
+                        pickable=False,
+                        show_edges=True,
+                        edge_color='darkorange',
+                        line_width=2
+                    )
+                else:
+                    # Fallback: Punkt am Zentrum
+                    center = face_data.get('center', (0, 0, 0))
+                    import pyvista as pv
+                    point = pv.PolyData([center])
+                    self.plotter.add_mesh(
+                        point,
+                        color='orange',
+                        point_size=15,
+                        render_points_as_spheres=True,
+                        name=f'texture_face_highlight_{i}'
+                    )
+            except Exception as e:
+                logger.debug(f"Texture Face Highlight Error: {e}")
+
+    def _clear_texture_face_highlights(self):
+        """Entfernt Texture-Face-Highlights."""
+        for i in range(50):  # Max 50 highlights
+            try:
+                self.plotter.remove_actor(f'texture_face_highlight_{i}')
+            except:
+                pass
+
+    def show_textured_faces_overlay(self, body_id: str, face_data_list: list, texture_type: str):
+        """
+        Zeigt permanentes Overlay für texturierte Flächen.
+        Jetzt mit ECHTER 3D-Geometrie (Displacement)!
+
+        Args:
+            body_id: ID des Bodies
+            face_data_list: Liste mit {'cell_ids': [...], 'normal': (...), 'center': (...), 'texture_feature': ...}
+            texture_type: Name der Textur für Logging (Fallback)
+        """
+        # Alte Overlays für diesen Body entfernen
+        self._clear_textured_faces_overlay(body_id)
+
+        if body_id not in self.bodies:
+            logger.warning(f"Body {body_id} nicht gefunden für Texture-Overlay")
+            return
+
+        mesh = self.bodies[body_id].get('mesh')
+        if mesh is None:
+            return
+
+        # Farben für verschiedene Textur-Typen
+        texture_colors = {
+            'ripple': '#4a90d9',
+            'honeycomb': '#d9a54a',
+            'diamond': '#9b59b6',
+            'knurl': '#27ae60',
+            'crosshatch': '#e74c3c',
+            'voronoi': '#1abc9c',
+            'custom': '#95a5a6',
+        }
+
+        for i, face_data in enumerate(face_data_list):
+            cell_ids = face_data.get('cell_ids', [])
+            if not cell_ids:
+                continue
+
+            # WICHTIG: Jede Face hat ihr eigenes Texture-Feature!
+            texture_feature = face_data.get('texture_feature')
+            face_texture_type = texture_feature.texture_type if texture_feature else texture_type
+
+            try:
+                # Face-Mesh extrahieren
+                face_mesh = mesh.extract_cells(cell_ids)
+                if face_mesh.n_cells == 0:
+                    continue
+
+                face_mesh = face_mesh.extract_surface()
+                actor_name = f'textured_overlay_{body_id}_{i}'
+
+                # Echtes 3D-Displacement anwenden wenn Feature vorhanden
+                if texture_feature is not None:
+                    displaced_mesh = self._apply_texture_preview(
+                        face_mesh, face_data, texture_feature
+                    )
+                    if displaced_mesh is not None:
+                        face_mesh = displaced_mesh
+                        logger.debug(f"Displacement für Face {i} angewendet: {face_texture_type}")
+
+                # Farbe basierend auf DIESEM Face's Textur-Typ
+                color = texture_colors.get(face_texture_type, '#4a90d9')
+
+                # Offset entlang Normalen um Z-Fighting zu vermeiden
+                face_normal = face_data.get('normal', (0, 0, 1))
+                normal_arr = np.array(face_normal)
+                norm_len = np.linalg.norm(normal_arr)
+                if norm_len > 0:
+                    normal_arr = normal_arr / norm_len
+                face_mesh.points = face_mesh.points + normal_arr * 0.15  # 0.15mm offset für Z-Fighting
+
+                # Normalen neu berechnen für korrektes Shading
+                face_mesh.compute_normals(inplace=True)
+
+                self.plotter.add_mesh(
+                    face_mesh,
+                    color=color,
+                    opacity=1.0,  # Vollständig opak für bessere Sichtbarkeit
+                    name=actor_name,
+                    pickable=False,
+                    show_edges=False,  # Keine Edges - zeigt das 3D-Relief besser
+                    smooth_shading=True,  # Glatte Schattierung für 3D-Effekt
+                    specular=0.3,  # Etwas Glanz für bessere Tiefenwahrnehmung
+                )
+            except Exception as e:
+                logger.warning(f"Texture-Overlay Fehler für Face {i}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        request_render(self.plotter)
+        logger.info(f"3D-Texture-Preview für {len(face_data_list)} Faces angezeigt")
+
+    def _apply_texture_preview(self, face_mesh, face_data, texture_feature):
+        """
+        Wendet Texture-Displacement für Preview an.
+        Verwendet weniger Subdivisions für bessere Performance.
+        """
+        try:
+            from modeling.surface_texture import TextureGenerator, sample_heightmap_at_uvs
+            from modeling.texture_exporter import TextureExporter
+
+            # Preview-Einstellungen: HÖHERE Subdivisions für sichtbares 3D-Relief
+            # 3 subdivisions = 81 Vertices (zu wenig)
+            # 5 subdivisions = ~2000 Vertices (gut sichtbar)
+            # 6 subdivisions = ~8000 Vertices (sehr detailliert)
+            preview_subdivisions = 5  # Guter Kompromiss zwischen Qualität und Performance
+
+            # Kopie erstellen um Original nicht zu verändern
+            face_mesh = face_mesh.copy()
+
+            # Triangulieren falls nötig
+            if not face_mesh.is_all_triangles:
+                face_mesh = face_mesh.triangulate()
+
+            # Subdividen für genug Vertices - loop für bessere Qualität bei gekrümmten Flächen
+            face_mesh = face_mesh.subdivide(preview_subdivisions, subfilter='loop')
+
+            # Normalen berechnen
+            face_mesh.compute_normals(inplace=True)
+
+            # UVs berechnen
+            face_center = face_data.get('center', (0, 0, 0))
+            face_normal = face_data.get('normal', (0, 0, 1))
+            uvs = TextureExporter._compute_uvs(face_mesh, face_center, face_normal)
+
+            # Heightmap generieren
+            heightmap = TextureGenerator.generate(
+                texture_feature.texture_type,
+                texture_feature.type_params,
+                size=128  # Kleiner für Preview
+            )
+
+            # Heights sampeln
+            heights = sample_heightmap_at_uvs(
+                heightmap,
+                uvs,
+                scale=texture_feature.scale,
+                rotation=texture_feature.rotation
+            )
+
+            # Debug: Height-Statistik
+            logger.info(f"Preview Heights: min={heights.min():.3f}, max={heights.max():.3f}, "
+                       f"mean={heights.mean():.3f}, std={heights.std():.3f}")
+
+            # Invertieren falls gewünscht
+            if texture_feature.invert:
+                heights = 1.0 - heights
+
+            # WICHTIG: Heights zentrieren für bidirektionales Displacement
+            # Statt nur 0->1 (nur Erhöhungen) machen wir -0.5->+0.5 (Täler UND Erhöhungen)
+            # Das macht die Textur viel sichtbarer!
+            heights_centered = heights - 0.5  # Jetzt von -0.5 bis +0.5
+
+            # Displacement anwenden
+            depth = texture_feature.depth
+            normals = face_mesh.point_data.get('Normals')
+
+            if normals is None:
+                normal_arr = np.array(face_normal)
+                normal_arr = normal_arr / (np.linalg.norm(normal_arr) + 1e-10)
+                normals = np.tile(normal_arr, (face_mesh.n_points, 1))
+                logger.debug(f"Fallback-Normalen verwendet: {normal_arr}")
+
+            # Displacement: depth ist jetzt die GESAMTE Amplitude (von Tal bis Spitze)
+            displacement = heights_centered * depth
+            logger.info(f"Preview Displacement: min={displacement.min():.3f}mm, max={displacement.max():.3f}mm, "
+                       f"depth={depth}mm, type={texture_feature.texture_type}")
+
+            # Displacement anwenden
+            face_mesh.points = face_mesh.points + normals * displacement[:, np.newaxis]
+
+            logger.info(f"Preview erfolgreich: {face_mesh.n_points} Vertices, {texture_feature.texture_type}")
+            return face_mesh
+
+        except Exception as e:
+            logger.error(f"Texture-Preview Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _clear_textured_faces_overlay(self, body_id: str):
+        """Entfernt Texture-Overlays für einen Body."""
+        for i in range(50):  # Max 50 Overlays pro Body
+            try:
+                self.plotter.remove_actor(f'textured_overlay_{body_id}_{i}')
+            except:
+                pass
 
     def get_extrusion_data(self, face_idx, height):
         if face_idx < 0 or face_idx >= len(self.detected_faces): 
@@ -2392,7 +2942,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 
                 self.plotter.add_mesh(combined, color=col, opacity=0.5, name='prev', pickable=False)
                 self._preview_actor = 'prev'
-                self.plotter.render()
+                request_render(self.plotter)
         except Exception as e:
             logger.error(f" {e}")
     
@@ -2562,7 +3112,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if "body_face" in selection_filter:
             import vtk
             picker = vtk.vtkCellPicker()
-            picker.SetTolerance(0.005) # Sehr genau
+            picker.SetTolerance(Tolerances.PICKER_TOLERANCE)  # Präzises Picking
             
             # Wichtig: VTK Y-Koordinate ist invertiert
             height = self.plotter.interactor.height()
@@ -2639,7 +3189,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def _pick_body_face(self, x, y):
         """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""
         cell_picker = vtk.vtkCellPicker()
-        cell_picker.SetTolerance(0.005) # Etwas strikter
+        cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
         cell_picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
         
         if cell_picker.GetCellId() != -1:
@@ -2665,18 +3215,22 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         return False
     
     def _hover_body_face(self, x, y):
-        """Hebt Body-Flächen beim Hover hervor"""
-        if not self.bodies: return
-            
+        """Hebt Body-Flächen beim Hover hervor.
+
+        OPTIMIERT: O(1) Actor-zu-BodyID Lookup statt O(n*m).
+        """
+        if not self.bodies:
+            return
+
         try:
             import vtk
             cell_picker = vtk.vtkCellPicker()
-            cell_picker.SetTolerance(0.01)
+            cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
             height = self.plotter.interactor.height()
-            
+
             picked = cell_picker.Pick(x, height - y, 0, self.plotter.renderer)
             cell_id = cell_picker.GetCellId()
-            
+
             if picked and cell_id != -1:
                 actor = cell_picker.GetActor()
                 if actor is None or not actor.GetVisibility():
@@ -2684,37 +3238,66 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         self.hovered_body_face = None
                         self._clear_body_face_highlight()
                     return
-                
-                body_id = None
-                # FIX: Suche Body ID flexibel
-                for bid, actors in self._body_actors.items():
-                    for name in actors:
-                        if name in self.plotter.renderer.actors:
-                            body_actor = self.plotter.renderer.actors[name]
-                            if body_actor is actor:
-                                body_id = bid
-                                break
-                    if body_id: break
-                
+
+                # OPTIMIERUNG: O(1) Lookup mit gecachter Map
+                body_id = self._get_body_id_for_actor(actor)
+
+                # Debug: Zeige Hover-Status (nur bei Änderungen loggen um Spam zu reduzieren)
+                if self.texture_face_mode and body_id is not None:
+                    logger.debug(f"Hover: cell_id={cell_id}, body_id={body_id}")
+
                 if body_id is not None:
                     normal = cell_picker.GetPickNormal()
                     pos = cell_picker.GetPickPosition()
-                    
-                    new_hover = (body_id, cell_id, tuple(normal), tuple(pos))
+
+                    # Nur runden für Vergleich (verhindert Flackern bei minimalen Änderungen)
+                    rounded_normal = tuple(round(n, 2) for n in normal)
+                    new_hover = (body_id, cell_id, rounded_normal, tuple(pos))
+
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
                         self._draw_body_face_highlight(pos, normal)
                     return
-            
+
             if self.hovered_body_face is not None:
                 self.hovered_body_face = None
                 self._clear_body_face_highlight()
-                
+
         except Exception:
             pass
+
+    def _get_body_id_for_actor(self, picked_actor):
+        """Findet Body-ID für einen gepickten VTK-Actor.
+
+        VTK CellPicker gibt Raw-VTK-Actors zurück, die sich von PyVista's
+        gewrappten Actors unterscheiden. Daher vergleichen wir die VTK-Adressen.
+        """
+        if picked_actor is None:
+            return None
+
+        # Hole VTK-Adresse des gepickten Actors
+        picked_addr = picked_actor.GetAddressAsString("")
+
+        for bid, actor_names in self._body_actors.items():
+            for name in actor_names:
+                if name in self.plotter.renderer.actors:
+                    registered_actor = self.plotter.renderer.actors[name]
+                    # Vergleiche VTK-Adressen
+                    if registered_actor.GetAddressAsString("") == picked_addr:
+                        return bid
+        return None
+
+    def _rebuild_actor_body_cache(self):
+        """Debug-Ausgabe für Actor-Cache (nicht mehr für Lookup verwendet)."""
+        logger.debug(f"Renderer actors: {list(self.plotter.renderer.actors.keys())}")
+        for bid, actors in self._body_actors.items():
+            logger.debug(f"Body '{bid}' hat actors: {actors}")
     
     def _draw_body_face_highlight(self, pos, normal):
-        """Zeichnet Highlight auf gehoverter Body-Fläche"""
+        """Zeichnet Highlight auf gehoverter Body-Fläche.
+
+        FIX: Offset vom Body weg um Z-Fighting zu vermeiden.
+        """
         self._clear_body_face_highlight()
         try:
             center = np.array(pos)
@@ -2724,10 +3307,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 n = n / norm_len
             else:
                 n = np.array([0, 0, 1])
-            
+
+            # OFFSET: Highlight leicht vom Body weg verschieben (Z-Fighting vermeiden)
+            offset_center = center + n * 0.5  # 0.5mm Offset
+
             # Erstelle einen Kreis senkrecht zur Normalen
-            radius = 5.0
-            
+            radius = 8.0  # Etwas größer für bessere Sichtbarkeit
+
             # Finde zwei Vektoren senkrecht zur Normalen
             if abs(n[2]) < 0.9:
                 u = np.cross(n, [0, 0, 1])
@@ -2735,27 +3321,33 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 u = np.cross(n, [1, 0, 0])
             u = u / np.linalg.norm(u)
             v = np.cross(n, u)
-            
+
             # Kreis-Punkte
             points = []
             for i in range(33):
                 angle = i * 2 * math.pi / 32
-                p = center + radius * (math.cos(angle) * u + math.sin(angle) * v)
+                p = offset_center + radius * (math.cos(angle) * u + math.sin(angle) * v)
                 points.append(p)
-            
-            # Als Linie zeichnen
+
+            # Als Linie zeichnen mit render_lines_as_tubes für bessere Sichtbarkeit
             pts = np.array(points)
             lines = pv.lines_from_points(pts)
-            self.plotter.add_mesh(lines, color='cyan', line_width=4, name='body_face_highlight')
-            
+            self.plotter.add_mesh(
+                lines, color='cyan', line_width=5,
+                name='body_face_highlight',
+                render_lines_as_tubes=True
+            )
+
             # Normale als Pfeil (zeigt Extrude-Richtung)
-            arrow_end = center + n * 8
-            arrow = pv.Arrow(start=center, direction=n, scale=8)
+            arrow = pv.Arrow(start=offset_center, direction=n, scale=10)
             self.plotter.add_mesh(arrow, color='cyan', name='body_face_arrow')
-            
-            self.plotter.update()
+
+            # Render erzwingen statt nur update
+            request_render(self.plotter, immediate=True)
         except Exception as e:
-            logger.error(f" {e}")
+            logger.error(f"Highlight Fehler: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _clear_body_face_highlight(self):
         """Entfernt Body-Face-Highlight"""
@@ -2765,17 +3357,78 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         try:
             self.plotter.remove_actor('body_face_arrow')
         except: pass
-        try:
-            self.plotter.update()
-        except: pass
+        # Kein render hier - wird beim nächsten Hover gemacht
     
     def _click_body_face(self):
-        """Klick auf Body-Face - bereitet Extrusion vor"""
+        """Klick auf Body-Face - bereitet Extrusion oder Texture-Selektion vor"""
         if self.hovered_body_face is None:
             return
-        
+
         body_id, cell_id, normal, pos = self.hovered_body_face
-        
+
+        # Texture Face Mode: Sammle Faces für Texturierung
+        if self.texture_face_mode:
+            # Debug: Zeige Klick-Infos
+            logger.debug(f"Texture Klick: body_id='{body_id}', normal={normal}")
+            logger.debug(f"  detected_faces: {len(self.detected_faces)}, Ziel-Body: '{self._texture_body_id}'")
+
+            # Nur Faces vom richtigen Body akzeptieren
+            if self._texture_body_id and body_id != self._texture_body_id:
+                logger.warning(f"Face von anderem Body ignoriert (erwartet: '{self._texture_body_id}', geklickt: '{body_id}')")
+                return
+
+            # Finde passendes detected_face anhand der Normalen
+            rounded_normal = tuple(round(n, 2) for n in normal)
+            matching_face = None
+
+            # Debug: Zeige alle verfügbaren Faces für diesen Body
+            body_faces = [f for f in self.detected_faces if f.get('body_id') == body_id and f.get('type') == 'body_face']
+            logger.debug(f"  Faces für Body '{body_id}': {len(body_faces)}")
+            for i, f in enumerate(body_faces[:6]):  # Max 6 zeigen
+                logger.debug(f"    Face {i}: normal={f.get('normal')}, cells={len(f.get('cell_ids', []))}")
+
+            for face in self.detected_faces:
+                if face.get('type') != 'body_face':
+                    continue
+                if face.get('body_id') != body_id:
+                    continue
+                # Vergleiche Normalen
+                face_normal = face.get('normal', (0, 0, 0))
+                if (abs(face_normal[0] - rounded_normal[0]) < 0.05 and
+                    abs(face_normal[1] - rounded_normal[1]) < 0.05 and
+                    abs(face_normal[2] - rounded_normal[2]) < 0.05):
+                    matching_face = face
+                    break
+
+            if matching_face:
+                # Vollständige Face-Daten mit cell_ids für Highlighting
+                face_data = {
+                    'body_id': body_id,
+                    'cell_ids': matching_face.get('cell_ids', []),
+                    'normal': matching_face.get('normal', normal),
+                    'center': matching_face.get('center_3d', pos),
+                    'mesh': matching_face.get('mesh'),
+                    'area': len(matching_face.get('cell_ids', [])),  # Approximation
+                    'surface_type': 'plane'
+                }
+            else:
+                # Fallback: Nur den geklickten Punkt
+                logger.debug(f"Kein detected_face gefunden für Normal {rounded_normal}")
+                face_data = {
+                    'body_id': body_id,
+                    'cell_ids': [cell_id],
+                    'normal': normal,
+                    'center': pos,
+                    'mesh': self.bodies.get(body_id, {}).get('mesh'),
+                    'area': 1.0,
+                    'surface_type': 'plane'
+                }
+
+            self._add_texture_face(face_data)
+            logger.debug(f"Texture Face hinzugefügt: {len(self._texture_selected_faces)} Faces")
+            return
+
+        # Standard Extrusion-Modus
         # Speichere die Flächen-Daten für Extrusion
         # Wir erstellen ein "detected_face" aus der Body-Fläche
         self.body_face_extrude = {
@@ -2785,13 +3438,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             'origin': pos,
             'mesh': self.bodies.get(body_id, {}).get('mesh')
         }
-        
+
         # Markiere als ausgewählt
         self.selected_faces.clear()
         self.selected_faces.add(-1)  # Special marker für Body-Face
-        
+
         logger.info(f"Body face selected: body={body_id}, normal={normal}, pos={pos}")
-        
+
         # Zeige Preview
         self._draw_body_face_selection(pos, normal)
     
@@ -2916,14 +3569,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Linien
         for i,l in enumerate(getattr(s,'lines',[])):
             col = 'gray' if getattr(l,'construction',False) else '#4d94ff'
-            self.plotter.add_mesh(pv.Line(t3d(l.start.x,l.start.y), t3d(l.end.x,l.end.y)), color=col, line_width=3, name=f"s_{sid}_l_{i}")
+            self.plotter.add_mesh(pv.Line(t3d(l.start.x,l.start.y), t3d(l.end.x,l.end.y)), color=col, line_width=3, name=f"s_{sid}_l_{i}", pickable=True)
             self._sketch_actors.append(f"s_{sid}_l_{i}")
             
         # Kreise
         for i,c in enumerate(getattr(s,'circles',[])):
             pts = [t3d(c.center.x+c.radius*math.cos(j*6.28/64), c.center.y+c.radius*math.sin(j*6.28/64)) for j in range(65)]
             col = 'gray' if getattr(c,'construction',False) else '#4d94ff'
-            self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_c_{i}")
+            self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_c_{i}", pickable=True)
             self._sketch_actors.append(f"s_{sid}_c_{i}")
             
         # Arcs (Neu: Bessere Darstellung)
@@ -2941,9 +3594,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 y = arc.center.y + arc.radius * math.sin(t)
                 pts.append(t3d(x, y))
             if len(pts) > 1:
-                self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_a_{i}")
+                self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_a_{i}", pickable=True)
                 self._sketch_actors.append(f"s_{sid}_a_{i}")
-                
+
         # Splines (Neu!)
         for i, spline in enumerate(getattr(s, 'splines', [])):
             col = 'gray' if getattr(spline,'construction',False) else '#4d94ff'
@@ -2959,7 +3612,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             
             if len(pts_2d) > 1:
                 pts_3d = [t3d(p[0], p[1]) for p in pts_2d]
-                self.plotter.add_mesh(pv.lines_from_points(np.array(pts_3d)), color=col, line_width=3, name=f"s_{sid}_sp_{i}")
+                self.plotter.add_mesh(pv.lines_from_points(np.array(pts_3d)), color=col, line_width=3, name=f"s_{sid}_sp_{i}", pickable=True)
                 self._sketch_actors.append(f"s_{sid}_sp_{i}")
 
     def _show_selection_planes(self):

@@ -16,6 +16,7 @@ Datum: 2026-01-22
 
 import numpy as np
 from loguru import logger
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
 
 
 class SectionViewMixin:
@@ -79,7 +80,7 @@ class SectionViewMixin:
         if self._section_show_cut_face:
             self._highlight_section_faces(origin, normal)
 
-        self.plotter.render()
+        request_render(self.plotter)
 
     def disable_section_view(self):
         """Deaktiviert Schnittansicht und stellt Bodies wieder her."""
@@ -98,7 +99,7 @@ class SectionViewMixin:
 
         # ✅ WICHTIG: Force Render nach Wiederherstellung
         self.plotter.render_window.Render()
-        self.plotter.render()
+        request_render(self.plotter)
 
     def update_section_position(self, position: float):
         """

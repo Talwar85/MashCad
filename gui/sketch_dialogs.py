@@ -4,7 +4,7 @@ DimensionInput and ToolOptionsPopup for the 2D sketch editor
 """
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, 
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QGraphicsDropShadowEffect, QWidget,
     QSizePolicy, QLayout, QGridLayout
 )
@@ -15,6 +15,15 @@ try:
     from gui.design_tokens import DesignTokens
 except ImportError:
     from design_tokens import DesignTokens
+
+# Parameter-System für Variablen in Dimensionen
+try:
+    from core.parameters import get_parameters
+    HAS_PARAMETERS = True
+except ImportError:
+    HAS_PARAMETERS = False
+    def get_parameters():
+        return None
 
 class DimensionInput(QFrame):
     """
@@ -184,11 +193,51 @@ class DimensionInput(QFrame):
             self.fields[key].setStyleSheet(self._get_lineedit_style(locked=True))
 
     def _on_text_changed(self, key, text):
-        try:
-            val = float(text.replace(',', '.'))
+        val = self._evaluate_expression(text)
+        if val is not None:
             self.value_changed.emit(key, val)
+
+    def _evaluate_expression(self, text: str):
+        """
+        Evaluiert einen Ausdruck: Zahl, Parameter-Name oder Formel.
+
+        Beispiele:
+            "100" -> 100.0
+            "width" -> Wert von Parameter 'width'
+            "width * 2" -> Berechneter Wert
+        """
+        if not text:
+            return None
+
+        text = text.strip().replace(',', '.')
+
+        # Versuch 1: Direkte Zahl
+        try:
+            return float(text)
         except ValueError:
             pass
+
+        # Versuch 2: Parameter-System nutzen
+        if HAS_PARAMETERS:
+            params = get_parameters()
+            if params:
+                # Ist es ein Parameter-Name?
+                param_names = [p[0] for p in params.list_all()]
+                if text in param_names:
+                    return params.get(text)
+
+                # Versuche als Formel zu evaluieren
+                try:
+                    # Temporär evaluieren
+                    temp_name = "__dim_eval__"
+                    params.set(temp_name, text)
+                    result = params.get(temp_name)
+                    params.delete(temp_name)
+                    return result
+                except:
+                    pass
+
+        return None
 
     def _on_confirm(self):
         self.confirmed.emit()
@@ -197,10 +246,9 @@ class DimensionInput(QFrame):
         result = {}
         for key, widget in self.fields.items():
             if self.field_types[key] == 'float':
-                try: 
-                    result[key] = float(widget.text().replace(',', '.'))
-                except: 
-                    result[key] = 0.0
+                text = widget.text()
+                val = self._evaluate_expression(text)
+                result[key] = val if val is not None else 0.0
             elif self.field_types[key] == 'choice':
                 result[key] = widget.currentText()
         return result

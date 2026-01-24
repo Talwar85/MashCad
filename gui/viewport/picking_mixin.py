@@ -5,6 +5,7 @@ Selection und Picking Methoden für den 3D Viewport
 
 import numpy as np
 from loguru import logger
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 try:
     import vtk
@@ -37,7 +38,7 @@ class PickingMixin:
         # --- 1. BODY FACES (Hardware Picking) ---
         if "body_face" in selection_filter and HAS_VTK:
             picker = vtk.vtkCellPicker()
-            picker.SetTolerance(0.005)
+            picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
             
             height = self.plotter.interactor.height()
             picker.Pick(x, height - y, 0, self.plotter.renderer)
@@ -125,7 +126,7 @@ class PickingMixin:
             
         try:
             cell_picker = vtk.vtkCellPicker()
-            cell_picker.SetTolerance(0.01)
+            cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
             height = self.plotter.interactor.height()
             
             picked = cell_picker.Pick(x, height - y, 0, self.plotter.renderer)
@@ -173,7 +174,7 @@ class PickingMixin:
             return False
             
         cell_picker = vtk.vtkCellPicker()
-        cell_picker.SetTolerance(0.005)
+        cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
         cell_picker.Pick(x, self.plotter.interactor.height() - y, 0, self.plotter.renderer)
         
         if cell_picker.GetCellId() != -1:

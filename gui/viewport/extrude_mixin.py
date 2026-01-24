@@ -5,6 +5,7 @@ Extrusion-bezogene Methoden für den 3D Viewport
 
 import numpy as np
 from loguru import logger
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
 
 
 class ExtrudeMixin:
@@ -55,7 +56,7 @@ class ExtrudeMixin:
             self._load_detector_mesh_data()
 
             self._draw_selectable_faces_from_detector()
-            self.plotter.render()
+            request_render(self.plotter)
         else:
             self.selected_face_ids.clear()
             self._clear_face_actors()
@@ -77,7 +78,7 @@ class ExtrudeMixin:
                     except Exception as e:
                         logger.warning(f"❌ Konnte Opacity nicht zurücksetzen für {body_id}: {e}")
 
-            self.plotter.render()
+            request_render(self.plotter)
             
     def get_extrusion_data_for_kernel(self):
         """Gibt die Shapely-Polygone für den Kernel zurück"""
@@ -125,7 +126,7 @@ class ExtrudeMixin:
                 
                 self.plotter.add_mesh(combined, color=col, opacity=0.5, name='prev', pickable=False)
                 self._preview_actor = 'prev'
-                self.plotter.render()
+                request_render(self.plotter)
         except Exception as e:
             logger.error(f"Preview error: {e}")
     

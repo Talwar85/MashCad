@@ -142,7 +142,9 @@ class SketchRendererMixin:
             from PySide6.QtGui import QPainterPath
             def profile_to_path(profile_data, scale, offset_func):
                 path = QPainterPath()
-                profile_type, data = profile_data
+                # Handle both 2-tuple and 3-tuple formats
+                profile_type = profile_data[0]
+                data = profile_data[1]
                 if profile_type == 'circle':
                     circle = data
                     center = offset_func(QPointF(circle.center.x, circle.center.y))
@@ -513,7 +515,40 @@ class SketchRendererMixin:
                 hp = self.world_to_screen(QPointF(h[0], h[1]))
                 p.drawLine(pt_screen, hp)
                 p.drawEllipse(hp, 3, 3)
-    
+
+    def _draw_native_splines(self, p):
+        """Zeichnet native B-Splines (aus DXF Import) - diese erzeugen saubere Extrusions-Flächen."""
+        native_splines = getattr(self.sketch, 'native_splines', [])
+        if not native_splines:
+            return
+
+        for spline in native_splines:
+            if spline.construction:
+                continue
+
+            # Spline als Linien-Approximation für Anzeige
+            try:
+                lines = spline.to_lines(segments=50)
+                if not lines:
+                    continue
+
+                col = DesignTokens.COLOR_GEO_CONSTRUCTION if spline.construction else DesignTokens.COLOR_GEO_BODY
+                width = 2
+
+                spline_path = QPainterPath()
+                first = lines[0]
+                spline_path.moveTo(self.world_to_screen(first.start))
+                for l in lines:
+                    spline_path.lineTo(self.world_to_screen(l.end))
+
+                p.setPen(QPen(col, width))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(spline_path)
+
+            except Exception as e:
+                from loguru import logger
+                logger.debug(f"Native Spline Rendering fehlgeschlagen: {e}")
+
     def _draw_constraints(self, p):
         """Zeichnet Constraint-Icons an den betroffenen Elementen (Fusion360-Style)"""
         p.setFont(QFont("Segoe UI", 8, QFont.Bold))

@@ -31,7 +31,7 @@ if _project_root not in sys.path:
 
 from i18n import tr
 from sketcher import Sketch
-from modeling import Document, Body, ExtrudeFeature, FilletFeature, ChamferFeature, FeatureType
+from modeling import Document, Body, ExtrudeFeature, FilletFeature, ChamferFeature, FeatureType, SurfaceTextureFeature
 from modeling.brep_utils import pick_face_by_ray, find_closest_face
 
 # GUI Module
@@ -39,12 +39,16 @@ from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
-from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget
+from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel
+from gui.widgets.texture_panel import SurfaceTexturePanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from gui.log_panel import LogPanel
-from gui.widgets import NotificationWidget, QtLogHandler
+from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
 from gui.widgets.section_view_panel import SectionViewPanel
 from gui.dialogs import VectorInputDialog, BooleanDialog
+from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
 
 try:
@@ -53,6 +57,15 @@ try:
 except ImportError:
     HAS_OCP_TESSELLATE = False
     logger.warning("ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
+
+# Surface Texture Export
+try:
+    from modeling.textured_tessellator import TexturedTessellator
+    from modeling.texture_exporter import apply_textures_to_body, ResultStatus
+    HAS_TEXTURE_EXPORT = True
+except ImportError:
+    HAS_TEXTURE_EXPORT = False
+    logger.debug("Texture Export Module nicht verfügbar.")
 
 
 if not HAS_PYVISTA:
@@ -75,6 +88,7 @@ class MainWindow(QMainWindow):
         
         self._setup_logging()
         self.document = Document("Projekt1")
+        self._current_project_path = None  # Phase 8.2: Aktueller Projekt-Pfad
 
         # NEU: Undo/Redo System
         from PySide6.QtGui import QUndoStack
@@ -296,20 +310,26 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0,0,0,0)
         left_layout.setSpacing(0)
 
-        # 1. Spalte: Browser (oben) + Log (unten)
+        # 1. Spalte: Browser (oben) + TNP Stats + Log (unten)
         browser_log_splitter = QSplitter(Qt.Vertical)
         browser_log_splitter.setHandleWidth(1)
-        
+
         self.browser = ProjectBrowser()
         self.browser.set_document(self.document)
         browser_log_splitter.addWidget(self.browser)
-        
+
+        # TNP Statistiken Panel (Phase 8.2)
+        self.tnp_stats_panel = TNPStatsPanel()
+        self.tnp_stats_panel.setMaximumHeight(200)
+        browser_log_splitter.addWidget(self.tnp_stats_panel)
+
         self.log_panel = LogPanel() # Log Panel Instanz
         browser_log_splitter.addWidget(self.log_panel)
-        
-        # Verhältnisse setzen (Browser groß, Log klein)
-        browser_log_splitter.setStretchFactor(0, 3)
+
+        # Verhältnisse setzen (Browser groß, TNP Stats mittel, Log klein)
+        browser_log_splitter.setStretchFactor(0, 4)
         browser_log_splitter.setStretchFactor(1, 1)
+        browser_log_splitter.setStretchFactor(2, 1)
 
         left_layout.addWidget(browser_log_splitter)
         
@@ -409,6 +429,46 @@ class MainWindow(QMainWindow):
         self._fillet_mode = None  # 'fillet' or 'chamfer'
         self._fillet_target_body = None
 
+        # Shell Panel (Phase 6)
+        self.shell_panel = ShellInputPanel(self)
+        self.shell_panel.thickness_changed.connect(self._on_shell_thickness_changed)
+        self.shell_panel.confirmed.connect(self._on_shell_confirmed)
+        self.shell_panel.cancelled.connect(self._on_shell_cancelled)
+
+        self._shell_mode = False
+        self._shell_target_body = None
+        self._shell_opening_faces = []  # Liste der ausgewählten Öffnungs-Flächen
+
+        # Surface Texture Panel (Phase 7)
+        self.texture_panel = SurfaceTexturePanel(self)
+        self.texture_panel.texture_applied.connect(self._on_texture_applied)
+        self.texture_panel.preview_requested.connect(self._on_texture_preview_requested)
+        self.texture_panel.cancelled.connect(self._on_texture_cancelled)
+
+        self._texture_mode = False
+        self._texture_target_body = None
+        self._pending_texture_mode = False  # Für Body-Selektion im Viewport
+
+        # Sweep Panel (Phase 6)
+        self.sweep_panel = SweepInputPanel(self)
+        self.sweep_panel.confirmed.connect(self._on_sweep_confirmed)
+        self.sweep_panel.cancelled.connect(self._on_sweep_cancelled)
+        self.sweep_panel.sketch_path_requested.connect(self._on_sweep_sketch_path_requested)
+
+        self._sweep_mode = False
+        self._sweep_phase = None  # 'profile' or 'path'
+        self._sweep_profile_data = None
+        self._sweep_path_data = None
+
+        # Loft Panel (Phase 6)
+        self.loft_panel = LoftInputPanel(self)
+        self.loft_panel.confirmed.connect(self._on_loft_confirmed)
+        self.loft_panel.cancelled.connect(self._on_loft_cancelled)
+        self.loft_panel.add_profile_requested.connect(self._on_loft_add_profile)
+
+        self._loft_mode = False
+        self._loft_profiles = []
+
         # Section View Panel (Schnittansicht wie Fusion 360)
         self.section_panel = SectionViewPanel(self)
         self.section_panel.section_enabled.connect(self._on_section_enabled)
@@ -420,7 +480,13 @@ class MainWindow(QMainWindow):
 
         # Edge Selection Signal verbinden
         self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
-        
+
+        # Texture Face Selection Signal verbinden
+        self.viewport_3d.texture_face_selected.connect(self._on_texture_face_selected)
+
+        # Sketch-Pfad-Selektion für Sweep (direkter Viewport-Klick)
+        self.viewport_3d.sketch_path_clicked.connect(self._on_sketch_path_clicked)
+
         self.tool_panel.option_changed.connect(self.sketch_editor.handle_option_changed)
         # 2. Vom Editor zum Panel (Wenn man 'X' oder 'G' drückt -> Checkbox Update)
         self.sketch_editor.construction_mode_changed.connect(self.tool_panel.set_construction)
@@ -564,11 +630,13 @@ class MainWindow(QMainWindow):
         # Datei-Menü
         file_menu = mb.addMenu(tr("File"))
         file_menu.addAction(tr("New Project"), self._new_project, QKeySequence.New)
-        file_menu.addAction(tr("Open..."), lambda: None, QKeySequence.Open)
-        file_menu.addAction(tr("Save..."), lambda: None, QKeySequence.Save)
+        file_menu.addAction(tr("Open..."), self._open_project, QKeySequence.Open)
+        file_menu.addAction(tr("Save..."), self._save_project, QKeySequence.Save)
+        file_menu.addAction(tr("Save As..."), self._save_project_as)
         file_menu.addSeparator()
         file_menu.addAction(tr("Export STL..."), self._export_stl)
         file_menu.addAction("Export STEP...", self._export_step)
+        file_menu.addAction("Import STEP...", self._import_step)
         file_menu.addSeparator()
         file_menu.addAction(tr("Quit"), self.close, QKeySequence.Quit)
         
@@ -582,6 +650,9 @@ class MainWindow(QMainWindow):
         redo_action = self.undo_stack.createRedoAction(self, tr("Redo"))
         redo_action.setShortcut(QKeySequence.Redo)
         edit_menu.addAction(redo_action)
+
+        edit_menu.addSeparator()
+        edit_menu.addAction(tr("Parameters..."), self._show_parameters_dialog, "Ctrl+Shift+P")
 
         # Transform-Menü
         transform_menu = mb.addMenu("Transform")
@@ -781,7 +852,7 @@ class MainWindow(QMainWindow):
 
         # Finales Rendering erzwingen
         if hasattr(self.viewport_3d, 'plotter'):
-            self.viewport_3d.plotter.render()
+            request_render(self.viewport_3d.plotter, immediate=True)
         self.viewport_3d.update()
 
     def _update_viewport_all(self):
@@ -817,8 +888,8 @@ class MainWindow(QMainWindow):
             'primitive_cylinder': lambda: self._show_not_implemented("Zylinder Primitiv"),
             'primitive_sphere': lambda: self._show_not_implemented("Kugel Primitiv"),
             'revolve': lambda: self._show_not_implemented("Revolve"),
-            'sweep': lambda: self._show_not_implemented("Sweep"),
-            'loft': lambda: self._show_not_implemented("Loft"),
+            'sweep': self._start_sweep,
+            'loft': self._start_loft,
             
             # --- Implementierte Transformationen ---
             'move_body': lambda: self._start_transform_mode("move"),
@@ -842,7 +913,8 @@ class MainWindow(QMainWindow):
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),
             'primitive_box': lambda: self._show_not_implemented("Box Primitiv"),
 
-            'shell': lambda: self._show_not_implemented("Shell"),
+            'shell': self._start_shell,
+            'surface_texture': self._start_texture_mode,
             'hole': lambda: self._show_not_implemented("Bohrung"),
 
             'measure': lambda: self._show_not_implemented("Messen"),
@@ -923,7 +995,7 @@ class MainWindow(QMainWindow):
                 
                 # 6. Rendern erzwingen
                 if hasattr(self.viewport_3d, 'plotter'):
-                    self.viewport_3d.plotter.render()
+                    request_render(self.viewport_3d.plotter, immediate=True)
                     self.viewport_3d.update()
                 
             else:
@@ -998,9 +1070,12 @@ class MainWindow(QMainWindow):
                 # Body merken für späteren Transform (G/R/S Taste)
                 if hasattr(body, 'id'):
                     self._selected_body_for_transform = body.id
+                # TNP Stats aktualisieren
+                self._update_tnp_stats(body)
             else:
                 self.body_properties.clear()
                 self._hide_transform_ui()
+                self._update_tnp_stats(None)
     
     def _start_transform_mode(self, mode):
         """
@@ -1147,6 +1222,16 @@ class MainWindow(QMainWindow):
         # Prüfe auf Fillet/Chamfer Pending Mode (NEU)
         if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
             self._on_body_clicked_for_fillet(body_id)
+            return
+
+        # Prüfe auf Shell Pending Mode (Phase 6)
+        if getattr(self, '_pending_shell_mode', False):
+            self._on_body_clicked_for_shell(body_id)
+            return
+
+        # Prüfe auf Texture Pending Mode (Phase 7)
+        if getattr(self, '_pending_texture_mode', False):
+            self._on_body_clicked_for_texture(body_id)
             return
 
         # Nur reagieren wenn wir auf Body-Selektion warten (Transform)
@@ -1842,7 +1927,23 @@ class MainWindow(QMainWindow):
     def _on_face_selected_for_extrude(self, face_id):
         """
         Automatische Operation-Erkennung wenn eine Fläche ausgewählt wird.
+        Auch für Shell-Mode verwendet.
         """
+        # Shell-Mode hat Priorität (Phase 6)
+        if getattr(self, '_shell_mode', False):
+            self._on_face_selected_for_shell(face_id)
+            return
+
+        # Sweep-Profil-Phase (Phase 6)
+        if getattr(self, '_sweep_mode', False) and getattr(self, '_sweep_phase', None) == 'profile':
+            self._on_face_selected_for_sweep(face_id)
+            return
+
+        # Loft-Mode (Phase 6)
+        if getattr(self, '_loft_mode', False):
+            self._on_face_selected_for_loft(face_id)
+            return
+
         if not self.viewport_3d.extrude_mode:
             return
             
@@ -2204,9 +2305,11 @@ class MainWindow(QMainWindow):
             
         if success:
             self.browser.refresh()
+            # TNP Statistiken aktualisieren
+            self._update_tnp_stats()
             if msg: logger.success(msg)
-        
-        
+
+
     def _extract_face_as_polygon(self, face):
         """
         Extrahiert die Flächen-Kontur als Shapely Polygon.
@@ -2506,7 +2609,7 @@ class MainWindow(QMainWindow):
                         logger.info(f"✅ Push/Pull {operation} auf '{target.name}' (parametrisch)")
                         
                 except Exception as e:
-                    logger.exeption(f"Body-Face Op '{operation}' an {target.name} gescheitert: {e}")
+                    logger.exception(f"Body-Face Op '{operation}' an {target.name} gescheitert: {e}")
 
             return success_count > 0
             
@@ -2723,7 +2826,7 @@ class MainWindow(QMainWindow):
             mesh = mesh.triangulate()
             
             # 2. Clean (entfernt doppelte Punkte, degenerierte Faces)
-            mesh = mesh.clean(tolerance=1e-6)
+            mesh = mesh.clean(tolerance=Tolerances.MESH_CLEAN)
             
             # 3. Normals berechnen und konsistent machen
             mesh.compute_normals(cell_normals=True, point_normals=True, 
@@ -2758,7 +2861,7 @@ class MainWindow(QMainWindow):
             
             if result and result.n_points > 0:
                 # Ergebnis aufräumen
-                result = result.clean(tolerance=1e-6)
+                result = result.clean(tolerance=Tolerances.MESH_CLEAN)
                 result.compute_normals(inplace=True)
                 return result
                 
@@ -2794,7 +2897,7 @@ class MainWindow(QMainWindow):
         elif operation == "Intersect":
             boolean.SetOperationToIntersection()
         
-        boolean.SetTolerance(1e-6)
+        boolean.SetTolerance(Tolerances.KERNEL_PRECISION)
         boolean.Update()
         
         result = pv.wrap(boolean.GetOutput())
@@ -2822,6 +2925,9 @@ class MainWindow(QMainWindow):
                      mesh_obj=mesh_override,
                      color=getattr(body, 'color', None)
                  )
+                 # Body-Referenz setzen und Texture-Preview aktualisieren
+                 self.viewport_3d.set_body_object(body.id, body)
+                 self.viewport_3d.refresh_texture_previews(body.id)
              return
 
         # 2. NEUER PFAD: Prüfen auf VTK/PyVista Cache (aus cad_tessellator)
@@ -2834,12 +2940,15 @@ class MainWindow(QMainWindow):
              default_col = (0.7, 0.7, 0.7)
              
              self.viewport_3d.add_body(
-                 bid=body.id, 
-                 name=body.name, 
-                 mesh_obj=body.vtk_mesh, 
+                 bid=body.id,
+                 name=body.name,
+                 mesh_obj=body.vtk_mesh,
                  edge_mesh_obj=body.vtk_edges,
                  color=default_col
              )
+             # Body-Referenz setzen und Texture-Preview aktualisieren
+             self.viewport_3d.set_body_object(body.id, body)
+             self.viewport_3d.refresh_texture_previews(body.id)
              return
 
         # 3. LEGACY PFAD: Alte Listen (nur Fallback)
@@ -2851,12 +2960,15 @@ class MainWindow(QMainWindow):
              colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
              
              self.viewport_3d.add_body(
-                 bid=body.id, 
-                 name=body.name, 
-                 verts=body._mesh_vertices, 
+                 bid=body.id,
+                 name=body.name,
+                 verts=body._mesh_vertices,
                  faces=body._mesh_triangles,
                  color=colors[col_idx]
              )
+             # Body-Referenz setzen und Texture-Preview aktualisieren
+             self.viewport_3d.set_body_object(body.id, body)
+             self.viewport_3d.refresh_texture_previews(body.id)
         else:
             logger.warning(f"Body '{body.name}' hat keine Mesh-Daten!")
 
@@ -3049,48 +3161,169 @@ class MainWindow(QMainWindow):
         else:
             self.active_selection_filter = SelectionFilter.ALL
         
-    def _export_stl(self): 
-        """STL Export mit Loguru statt QMessageBox"""
+    # =========================================================================
+    # Phase 8.2: Projekt Save/Load
+    # =========================================================================
+
+    def _save_project(self):
+        """Speichert das aktuelle Projekt."""
+        # Wenn schon ein Pfad bekannt ist, direkt speichern
+        if hasattr(self, '_current_project_path') and self._current_project_path:
+            self._do_save_project(self._current_project_path)
+        else:
+            self._save_project_as()
+
+    def _save_project_as(self):
+        """Speichert das Projekt unter neuem Namen."""
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Projekt speichern"),
+            "",
+            "MashCAD Project (*.mshcad);;All Files (*)"
+        )
+        if path:
+            self._do_save_project(path)
+
+    def _do_save_project(self, path: str):
+        """Führt die eigentliche Speicherung durch."""
+        try:
+            if self.document.save_project(path):
+                self._current_project_path = path
+                self.setWindowTitle(f"MashCAD - {os.path.basename(path)}")
+                logger.success(f"Projekt gespeichert: {path}")
+            else:
+                QMessageBox.critical(self, "Fehler", "Projekt konnte nicht gespeichert werden.")
+        except Exception as e:
+            logger.error(f"Fehler beim Speichern: {e}")
+            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{e}")
+
+    def _open_project(self):
+        """Öffnet ein bestehendes Projekt."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Projekt öffnen"),
+            "",
+            "MashCAD Project (*.mshcad);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            doc = Document.load_project(path)
+            if doc:
+                # Altes Dokument ersetzen
+                self.document = doc
+                self._current_project_path = path
+
+                # UI aktualisieren
+                self.browser.set_document(doc)
+                self.browser.refresh()
+
+                # Viewport aktualisieren
+                self.viewport_3d.clear()
+                for body in doc.bodies:
+                    if body._build123d_solid or body.vtk_mesh:
+                        self.viewport_3d.add_body(body.id, body)
+
+                self.setWindowTitle(f"MashCAD - {os.path.basename(path)}")
+
+                # TNP Stats aktualisieren
+                self._update_tnp_stats()
+
+                logger.success(f"Projekt geladen: {path}")
+            else:
+                QMessageBox.critical(self, "Fehler", "Projekt konnte nicht geladen werden.")
+        except Exception as e:
+            logger.error(f"Fehler beim Laden: {e}")
+            QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
+
+    def _export_stl(self):
+        """STL Export mit Surface Texture Support."""
         bodies = self._get_export_candidates()
         if not bodies:
             logger.warning("Keine sichtbaren Körper zum Exportieren.")
             return
-        
+
         path, _ = QFileDialog.getSaveFileName(self, tr("STL exportieren"), "", "STL Files (*.stl)")
         if not path: return
 
         try:
             import pyvista as pv
             merged_polydata = None
-            
+            texture_applied_count = 0
+
             for body in bodies:
                 mesh_to_add = None
-                if HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+
+                # Check for SurfaceTextureFeatures
+                has_textures = HAS_TEXTURE_EXPORT and any(
+                    isinstance(f, SurfaceTextureFeature) and not f.suppressed
+                    for f in getattr(body, 'features', [])
+                )
+
+                if has_textures and HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+                    # Use TexturedTessellator for bodies with textures
                     try:
-                        b3d_mesh = body._build123d_solid.tessellate(tolerance=0.01)
+                        logger.info(f"Tesselliere '{body.name}' mit Textur-Mapping...")
+                        mesh, face_mappings = TexturedTessellator.tessellate_with_face_map(
+                            body._build123d_solid,
+                            quality=Tolerances.TESSELLATION_QUALITY
+                        )
+
+                        if mesh is not None:
+                            # Apply textures
+                            mesh, results = apply_textures_to_body(mesh, body, face_mappings)
+
+                            # Log results
+                            for result in results:
+                                if result.status == ResultStatus.ERROR:
+                                    logger.error(f"Textur-Fehler: {result.message}")
+                                elif result.status == ResultStatus.WARNING:
+                                    logger.warning(f"Textur-Warnung: {result.message}")
+                                elif result.status == ResultStatus.SUCCESS:
+                                    texture_applied_count += 1
+                                    logger.debug(f"Textur angewendet: {result.message}")
+
+                            mesh_to_add = mesh
+
+                    except Exception as e:
+                        logger.warning(f"Texture-Export für '{body.name}' fehlgeschlagen: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        # Fallback to standard tessellation
+                        has_textures = False
+
+                # Standard tessellation (no textures or texture failed)
+                if mesh_to_add is None and HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
+                    try:
+                        b3d_mesh = body._build123d_solid.tessellate(tolerance=Tolerances.TESSELLATION_QUALITY)
                         verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
                         faces = []
                         for t in b3d_mesh[1]: faces.extend([3] + list(t))
-                        import numpy as np
                         mesh_to_add = pv.PolyData(np.array(verts), np.array(faces))
                     except Exception as e:
-                        logger.warning(f"Build123d Tessellierung fehlgeschlagen, nutze Fallback: {e}")
-                
+                        logger.warning(f"Build123d Tessellierung fehlgeschlagen: {e}")
+
                 if mesh_to_add is None:
                     mesh_to_add = self.viewport_3d.get_body_mesh(body.id)
-                
+
                 if mesh_to_add:
                     if merged_polydata is None: merged_polydata = mesh_to_add
                     else: merged_polydata = merged_polydata.merge(mesh_to_add)
 
             if merged_polydata:
                 merged_polydata.save(path)
-                logger.success(f"STL gespeichert: {path}")
+                if texture_applied_count > 0:
+                    logger.success(f"STL gespeichert: {path} ({texture_applied_count} Texturen angewendet)")
+                else:
+                    logger.success(f"STL gespeichert: {path}")
             else:
                 logger.error("Konnte keine Mesh-Daten generieren.")
 
         except Exception as e:
             logger.error(f"STL Export Fehler: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _export_step(self):
         """STEP Export mit FIX für 'Part object has no attribute export_step'"""
@@ -3133,6 +3366,60 @@ class MainWindow(QMainWindow):
             logger.error(f"STEP Export Fehler: {e}")
             import traceback
             traceback.print_exc()
+
+    def _import_step(self):
+        """
+        Phase 8.3: STEP Import mit Auto-Healing.
+
+        Importiert STEP-Datei und erstellt neue Bodies.
+        Unterstützt AP214 und AP242 Dateien.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("STEP importieren"),
+            "",
+            "STEP Files (*.step *.stp);;All Files (*)"
+        )
+
+        if not path:
+            return
+
+        try:
+            # Document.import_step nutzen (Phase 8.3)
+            new_bodies = self.document.import_step(path, auto_heal=True)
+
+            if new_bodies:
+                # Browser aktualisieren (macht Bodies sichtbar)
+                self.browser.refresh()
+
+                # WICHTIG: Gleiche Refresh-Logik wie _finish_sketch verwenden!
+                # Dies triggert _update_viewport_all_impl() was:
+                # 1. clear_bodies() aufruft
+                # 2. Alle sichtbaren Bodies neu hinzufügt
+                self._trigger_viewport_update()
+
+                # Zusätzlich: Kamera auf neue Objekte ausrichten
+                # (nach kurzer Verzögerung, da _trigger_viewport_update async ist)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(100, lambda: self._focus_camera_on_bodies(new_bodies))
+
+                logger.success(f"STEP Import: {len(new_bodies)} Body(s) importiert von {path}")
+            else:
+                logger.warning("STEP Import: Keine Bodies erstellt")
+
+        except Exception as e:
+            logger.error(f"STEP Import Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _focus_camera_on_bodies(self, bodies):
+        """Fokussiert die Kamera auf die angegebenen Bodies."""
+        try:
+            if HAS_PYVISTA and self.viewport_3d and self.viewport_3d.plotter:
+                self.viewport_3d.plotter.reset_camera()
+                self.viewport_3d.plotter.render()
+        except Exception as e:
+            logger.debug(f"Camera focus Fehler (ignoriert): {e}")
 
     def _create_pattern(self):
         """
@@ -3248,7 +3535,23 @@ class MainWindow(QMainWindow):
 
     def _show_not_implemented(self, feature: str):
         logger.info(f"{feature} - Coming soon!")
-        
+
+    def _show_parameters_dialog(self):
+        """Öffnet den Parameter-Dialog (Fusion 360-Style)."""
+        from core.parameters import get_parameters
+
+        params = get_parameters()
+        dialog = ParameterDialog(params, self)
+        dialog.parameters_changed.connect(self._on_parameters_changed)
+        dialog.exec_()
+
+    def _on_parameters_changed(self):
+        """Reagiert auf Änderungen der Parameter."""
+        # Aktualisiere alle Sketches die Parameter verwenden
+        if hasattr(self, 'sketch_editor') and self.sketch_editor:
+            self.sketch_editor.request_update()
+        logger.info("Parameter aktualisiert")
+
     def _show_about(self):
         """Über-Dialog"""
         QMessageBox.about(self, tr("Über MashCad"),
@@ -3371,8 +3674,15 @@ class MainWindow(QMainWindow):
         Callback wenn sich die Kantenauswahl ändert.
         Aktualisiert das Panel mit der Anzahl selektierter Kanten.
         """
+        # Fillet/Chamfer Panel
         if hasattr(self, 'fillet_panel') and self.fillet_panel.isVisible():
             self.fillet_panel.update_edge_count(count)
+
+        # Sweep Path Phase (Phase 6)
+        if getattr(self, '_sweep_mode', False) and getattr(self, '_sweep_phase', None) == 'path':
+            if count > 0:
+                edges = self.viewport_3d.get_selected_edges()
+                self._on_edge_selected_for_sweep(edges)
 
     def _on_fillet_confirmed(self):
         """
@@ -3480,6 +3790,9 @@ class MainWindow(QMainWindow):
                 self.fillet_panel.hide()
                 self.browser.refresh()
 
+                # TNP Statistiken aktualisieren
+                self._update_tnp_stats(body)
+
                 logger.success(f"{mode.capitalize()}: {result.message}")
 
             else:
@@ -3508,6 +3821,922 @@ class MainWindow(QMainWindow):
         self.viewport_3d.stop_edge_selection_mode()
         self.fillet_panel.hide()
         logger.info("Fillet/Chamfer abgebrochen")
+
+    # ==================== SHELL (Phase 6) ====================
+
+    def _start_shell(self):
+        """
+        Startet den Shell-Workflow.
+
+        UX-Pattern wie Fillet/Chamfer:
+        - Falls Body ausgewählt → sofort starten
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        # Prüfe ob Body im Browser ausgewählt
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt → Pending-Mode
+        if not selected_bodies:
+            self._pending_shell_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Shell: Klicke auf einen Körper in der 3D-Ansicht oder wähle im Browser")
+            return
+
+        # Fall 2: Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_shell_for_body(body)
+
+    def _on_body_clicked_for_shell(self, body_id: str):
+        """
+        Callback wenn im Pending-Mode ein Body angeklickt wird.
+        """
+        self._pending_shell_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_shell_for_body(body)
+
+    def _activate_shell_for_body(self, body):
+        """
+        Aktiviert Shell-Modus für einen spezifischen Body.
+        """
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
+            return
+
+        # WICHTIG: Transform-Gizmo ausblenden, damit Klicks nicht abgefangen werden
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
+        self._shell_mode = True
+        self._shell_target_body = body
+        self._shell_opening_faces = []
+        self._pending_shell_mode = False
+
+        # WICHTIG: Face-Detection aktivieren damit Flächen wählbar sind
+        # (Analog zu Extrude-Mode, aber für Body-Flächen)
+        self.viewport_3d.set_extrude_mode(True)  # Aktiviert Face-Picking
+        self._update_detector()  # Detector mit Body-Faces füllen
+
+        # Panel anzeigen
+        self.shell_panel.clear_opening_faces()
+        self.shell_panel.show_at(self.viewport_3d)
+
+        logger.info(f"Shell: Wähle Öffnungs-Flächen von '{body.name}' (Klick = hinzufügen, ESC = abbrechen)")
+
+    def _on_face_selected_for_shell(self, face_id):
+        """
+        Callback wenn eine Fläche für Shell ausgewählt wird.
+        """
+        logger.debug(f"Shell: _on_face_selected_for_shell aufgerufen mit face_id={face_id}")
+
+        if not self._shell_mode or not self._shell_target_body:
+            logger.debug(f"Shell: Abgebrochen - _shell_mode={getattr(self, '_shell_mode', False)}, target_body={self._shell_target_body}")
+            return
+
+        # Finde die Face-Daten
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            logger.warning(f"Shell: Face mit ID {face_id} nicht im Detector gefunden")
+            return
+
+        logger.debug(f"Shell: Face gefunden - domain_type={face.domain_type}, has_shapely={face.shapely_poly is not None}")
+
+        # Nur Body-Faces akzeptieren
+        if not face.domain_type.startswith('body'):
+            logger.warning(f"Shell: Nur Body-Flächen erlaubt, aber domain_type={face.domain_type}")
+            return
+
+        # Face-Center als Selektor speichern (für TNP)
+        # Für Body-Faces nutzen wir plane_origin als Fallback wenn kein Shapely-Polygon
+        face_center = None
+
+        if face.shapely_poly:
+            centroid = face.shapely_poly.centroid
+            # Transformiere 2D zu 3D
+            plane_x = np.array(face.plane_x)
+            plane_y = np.array(face.plane_y)
+            origin = np.array(face.plane_origin)
+            face_center = origin + centroid.x * plane_x + centroid.y * plane_y
+        elif hasattr(face, 'plane_origin') and face.plane_origin is not None:
+            # Fallback: Nutze plane_origin direkt (für Body-Faces)
+            face_center = np.array(face.plane_origin)
+            logger.debug(f"Shell: Nutze plane_origin als Face-Center: {face_center}")
+        else:
+            logger.warning(f"Shell: Face hat weder shapely_poly noch plane_origin - kann nicht verwendet werden")
+            return
+
+        face_selector = (tuple(face_center), tuple(face.plane_normal))
+
+        # Prüfen ob schon ausgewählt (Toggle-Verhalten)
+        already_selected = False
+        for i, (fc, fn) in enumerate(self._shell_opening_faces):
+            if np.linalg.norm(np.array(fc) - face_center) < 0.1:
+                # Bereits ausgewählt → entfernen
+                self._shell_opening_faces.pop(i)
+                already_selected = True
+                logger.info(f"Shell: Fläche entfernt ({len(self._shell_opening_faces)} Öffnungen)")
+                break
+
+        if not already_selected:
+            self._shell_opening_faces.append(face_selector)
+            self.shell_panel.add_opening_face(face_selector)
+            logger.info(f"Shell: Fläche hinzugefügt ({len(self._shell_opening_faces)} Öffnungen)")
+
+        # Panel aktualisieren
+        self.shell_panel.update_face_count(len(self._shell_opening_faces))
+
+    def _on_shell_confirmed(self):
+        """
+        Wendet Shell auf den Body an.
+        """
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import ShellFeature
+
+        thickness = self.shell_panel.get_thickness()
+        body = self._shell_target_body
+
+        if not body:
+            logger.error("Shell: Kein Body ausgewählt")
+            return
+
+        logger.info(f"Wende Shell auf '{body.name}' an (Wandstärke={thickness}mm, {len(self._shell_opening_faces)} Öffnungen)...")
+
+        try:
+            # Shell Feature erstellen
+            shell_feature = ShellFeature(
+                thickness=thickness,
+                opening_face_selectors=self._shell_opening_faces.copy()
+            )
+
+            # Feature zur History hinzufügen
+            body.features.append(shell_feature)
+
+            # Body neu berechnen
+            CADTessellator.clear_cache()
+            body._rebuild()
+
+            # Visualisierung aktualisieren
+            self._update_body_from_build123d(body, body._build123d_solid)
+
+            # Aufräumen
+            self._stop_shell_mode()
+            self.browser.refresh()
+
+            logger.success(f"Shell erfolgreich: Wandstärke {thickness}mm mit {len(self._shell_opening_faces)} Öffnungen")
+
+        except Exception as e:
+            logger.error(f"Shell fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Shell fehlgeschlagen:\n{str(e)}")
+
+    def _on_shell_thickness_changed(self, thickness: float):
+        """
+        Callback wenn die Wandstärke geändert wird.
+        Aktuell nur für spätere Preview-Funktionalität reserviert.
+        """
+        # TODO: Live-Preview wenn Performance es erlaubt
+        pass
+
+    def _on_shell_cancelled(self):
+        """Bricht die Shell-Operation ab."""
+        self._stop_shell_mode()
+        logger.info("Shell abgebrochen")
+
+    def _stop_shell_mode(self):
+        """Beendet den Shell-Modus und räumt auf."""
+        self._shell_mode = False
+        self._shell_target_body = None
+        self._shell_opening_faces = []
+        self.shell_panel.hide()
+
+        # Face-Detection deaktivieren
+        self.viewport_3d.set_extrude_mode(False)
+
+    # ==================== SURFACE TEXTURE (Phase 7) ====================
+
+    def _start_texture_mode(self):
+        """
+        Startet den Surface Texture Modus.
+        Workflow wie Fillet/Shell: Body auswählen → Faces selektieren → Textur anwenden
+
+        Unterstützt:
+        - Body bereits im Browser ausgewählt → direkt starten
+        - Kein Body ausgewählt → Pending-Mode für Viewport-Selektion
+        """
+        # Prüfe ob Body im Browser ausgewählt
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt → Pending-Mode (wie bei Fillet/Shell)
+        if not selected_bodies:
+            self._pending_texture_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            # Aktiviere Body-Highlighting im Viewport
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Surface Texture: Klicke auf einen Körper in der 3D-Ansicht oder wähle im Browser")
+            return
+
+        # Fall 2: Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_texture_for_body(body)
+
+    def _on_body_clicked_for_texture(self, body_id: str):
+        """
+        Callback wenn im Pending-Mode ein Body angeklickt wird.
+        Wird vom _on_viewport_body_clicked Handler aufgerufen.
+        """
+        self._pending_texture_mode = False
+
+        # Pending-Mode deaktivieren
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Body finden
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_texture_for_body(body)
+
+    def _activate_texture_for_body(self, body):
+        """
+        Aktiviert Texture-Mode für einen spezifischen Body.
+
+        Args:
+            body: Body-Objekt
+        """
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh). Texturen nur auf BREP-Bodies.")
+            return
+
+        self._texture_mode = True
+        self._texture_target_body = body
+        self._pending_texture_mode = False
+
+        # WICHTIG: Face-Detection aktivieren (wie bei Shell/Extrude)
+        self.viewport_3d.set_extrude_mode(True)
+        self._update_detector()
+
+        # Face-Selektionsmodus im Viewport starten
+        self.viewport_3d.start_texture_face_mode(body.id)
+
+        # Panel anzeigen
+        self.texture_panel.reset()
+        self.texture_panel.show_at(self.viewport_3d)
+
+        logger.info(f"Surface Texture: Klicke auf Faces von '{body.name}' (ESC = abbrechen)")
+
+    def _on_texture_face_selected(self, count: int):
+        """Callback wenn Texture-Faces im Viewport selektiert werden."""
+        if self._texture_mode and hasattr(self, 'texture_panel'):
+            self.texture_panel.set_face_count(count)
+
+    def _on_texture_applied(self, config: dict):
+        """
+        Wendet die Textur auf den Body an.
+
+        Args:
+            config: Textur-Konfiguration aus SurfaceTexturePanel
+        """
+        from modeling.cad_tessellator import CADTessellator
+
+        if not self._texture_target_body:
+            logger.error("Kein Target-Body für Textur")
+            return
+
+        body = self._texture_target_body
+
+        # Selektierte Faces vom Viewport holen
+        selected_faces = self.viewport_3d.get_texture_selected_faces()
+
+        if not selected_faces:
+            logger.warning("Keine Faces selektiert für Textur")
+            return
+
+        # Face-Selectors erstellen (mit cell_ids für Viewport-Overlay)
+        face_selectors = []
+        viewport_face_data = []  # Für visuelles Feedback im Viewport
+        for face_data in selected_faces:
+            selector = {
+                'center': face_data.get('center', (0, 0, 0)),
+                'normal': face_data.get('normal', (0, 0, 1)),
+                'area': face_data.get('area', 1.0),
+                'surface_type': face_data.get('surface_type', 'plane'),
+                'cell_ids': face_data.get('cell_ids', [])  # NEU: Für Preview!
+            }
+            face_selectors.append(selector)
+            # Speichere cell_ids für Viewport-Overlay
+            viewport_face_data.append({
+                'cell_ids': face_data.get('cell_ids', []),
+                'normal': face_data.get('normal', (0, 0, 1)),
+                'center': face_data.get('center', (0, 0, 0)),
+                # texture_feature wird unten gesetzt!
+            })
+
+        # SurfaceTextureFeature erstellen
+        feature = SurfaceTextureFeature(
+            name=f"Texture: {config['texture_type'].capitalize()}",
+            texture_type=config['texture_type'],
+            face_selectors=face_selectors,
+            scale=config.get('scale', 1.0),
+            depth=config.get('depth', 0.5),
+            rotation=config.get('rotation', 0.0),
+            invert=config.get('invert', False),
+            type_params=config.get('type_params', {}),
+            export_subdivisions=config.get('export_subdivisions', 4)
+        )
+
+        # Feature zum Body hinzufügen
+        body.features.append(feature)
+
+        # Cache invalidieren für nächsten Render
+        CADTessellator.clear_cache()
+
+        # Browser aktualisieren
+        self.browser.refresh()
+
+        # Body-Referenz setzen für Texture-Previews
+        self.viewport_3d.set_body_object(body.id, body)
+
+        # ALLE Texturen des Bodies im Viewport anzeigen (nicht nur die neue!)
+        self.viewport_3d.refresh_texture_previews(body.id)
+
+        # Texture-Mode beenden
+        self._stop_texture_mode()
+
+        # Benutzer informieren (Textur ist nur beim Export sichtbar)
+        self.show_notification(
+            "Textur angewendet",
+            f"'{config['texture_type']}' auf {len(face_selectors)} Face(s). Sichtbar beim STL-Export.",
+            "success"
+        )
+
+        logger.success(f"Textur '{feature.name}' auf {len(face_selectors)} Face(s) angewendet")
+
+    def _on_texture_preview_requested(self, config: dict):
+        """
+        Preview für Textur (optional - aktuell nicht implementiert).
+
+        Note: Live-Preview würde Normal-Map-Rendering im Shader erfordern.
+        Für MVP: Kein Preview, nur Export-Zeit Anwendung.
+        """
+        # TODO: Optional - Normal-Map Preview im Viewport
+        pass
+
+    def _on_texture_cancelled(self):
+        """Bricht die Textur-Operation ab."""
+        self._stop_texture_mode()
+        logger.info("Surface Texture abgebrochen")
+
+    def _stop_texture_mode(self):
+        """Beendet den Texture-Modus und räumt auf."""
+        self._texture_mode = False
+        self._texture_target_body = None
+        self._pending_texture_mode = False
+        self.texture_panel.hide()
+
+        # Face-Detection deaktivieren
+        self.viewport_3d.set_extrude_mode(False)
+
+        # Viewport aufräumen
+        self.viewport_3d.stop_texture_face_mode()
+
+    # ==================== SWEEP (Phase 6) ====================
+
+    def _start_sweep(self):
+        """
+        Startet den Sweep-Workflow.
+
+        Zwei-Phasen Selektion:
+        1. Profil auswählen (Face)
+        2. Pfad auswählen (Edge)
+        """
+        # WICHTIG: Transform-Gizmo ausblenden, damit Klicks nicht abgefangen werden
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
+        self._sweep_mode = True
+        self._sweep_phase = 'profile'
+        self._sweep_profile_data = None
+        self._sweep_path_data = None
+
+        # Face-Detection aktivieren
+        self.viewport_3d.set_extrude_mode(True)
+        self._update_detector()
+
+        # Panel anzeigen und zurücksetzen
+        self.sweep_panel.reset()
+        self.sweep_panel.show_at(self.viewport_3d)
+
+        logger.info("Sweep: Wähle ein Profil (Face) aus")
+
+    def _on_face_selected_for_sweep(self, face_id):
+        """
+        Callback wenn eine Fläche für Sweep-Profil ausgewählt wird.
+        """
+        if not self._sweep_mode or self._sweep_phase != 'profile':
+            return
+
+        # Finde die Face-Daten
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return
+
+        # Profil-Daten speichern
+        profile_data = {
+            'type': face.domain_type,
+            'face_id': face_id,
+            'plane_origin': face.plane_origin,
+            'plane_normal': face.plane_normal,
+            'plane_x': face.plane_x,
+            'plane_y': face.plane_y,
+            'shapely_poly': face.shapely_poly
+        }
+
+        self._sweep_profile_data = profile_data
+        self.sweep_panel.set_profile(profile_data)
+
+        # Zur Pfad-Phase wechseln
+        self._sweep_phase = 'path'
+        logger.info("Sweep: Profil ausgewählt. Klicke auf einen Pfad im Viewport (Sketch-Linie/Bogen/Spline oder Body-Edge)")
+
+        # NEU: Direkte Viewport-Selektion für Sketch-Pfade aktivieren
+        self.viewport_3d.start_sketch_path_mode()
+
+        # Aktiviere sowohl Sketch-Element-Selektion als auch Edge-Selection
+        # 1. Für Sketch-Elemente: Nutze Face-Selection im Detector
+        self.viewport_3d.set_extrude_mode(True)  # Aktiviert allgemeine Selektion
+        self._update_detector()
+
+        # 2. Für Body-Edges: Edge-Selection-Mode aktivieren
+        if self.document.bodies:
+            body = self.document.bodies[0]
+            if hasattr(body, '_build123d_solid') and body._build123d_solid:
+                self.viewport_3d.set_edge_selection_callbacks(
+                    get_body_by_id=lambda bid: next((b for b in self.document.bodies if b.id == bid), None)
+                )
+                self.viewport_3d.start_edge_selection_mode(body.id)
+
+    def _on_edge_selected_for_sweep(self, edges: list):
+        """
+        Callback wenn eine Kante für Sweep-Pfad ausgewählt wird.
+        """
+        if not self._sweep_mode or self._sweep_phase != 'path':
+            return
+
+        if not edges:
+            return
+
+        # Erste Kante als Pfad verwenden
+        edge = edges[0]
+
+        # Hole echte Build123d Edges für robuste Pfad-Auflösung
+        build123d_edges = self.viewport_3d.get_selected_edges()
+
+        # Pfad-Daten speichern
+        path_data = {
+            'type': 'body_edge',
+            'edge': edge,
+            'edge_selector': self.viewport_3d.get_edge_selectors(),
+            'build123d_edges': build123d_edges  # Direkte Edge-Referenzen
+        }
+
+        self._sweep_path_data = path_data
+        self.sweep_panel.set_path(path_data)
+
+        logger.info(f"Sweep: Pfad ausgewählt ({len(build123d_edges)} Edges). Drücke OK zum Ausführen")
+
+    def _on_sweep_confirmed(self):
+        """
+        Wendet Sweep auf das Profil an.
+        """
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import SweepFeature
+
+        if not self._sweep_profile_data or not self._sweep_path_data:
+            logger.error("Sweep: Profil oder Pfad fehlt")
+            return
+
+        operation = self.sweep_panel.get_operation()
+        is_frenet = self.sweep_panel.is_frenet()
+
+        logger.info(f"Wende Sweep an (Operation={operation}, Frenet={is_frenet})...")
+
+        try:
+            # Sweep Feature erstellen
+            sweep_feature = SweepFeature(
+                profile_data=self._sweep_profile_data,
+                path_data=self._sweep_path_data,
+                is_frenet=is_frenet,
+                operation=operation
+            )
+
+            # Body finden oder erstellen
+            if operation == "New Body" or not self.document.bodies:
+                # Neuen Body erstellen
+                from modeling import Body
+                new_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}")
+                new_body.features.append(sweep_feature)
+                self.document.bodies.append(new_body)
+                target_body = new_body
+            else:
+                # Existierenden Body verwenden
+                target_body = self.document.bodies[0]
+                target_body.features.append(sweep_feature)
+
+            # Body neu berechnen
+            CADTessellator.clear_cache()
+            target_body._rebuild()
+
+            # Visualisierung aktualisieren
+            self._update_body_from_build123d(target_body, target_body._build123d_solid)
+
+            # Aufräumen
+            self._stop_sweep_mode()
+            self.browser.refresh()
+
+            logger.success(f"Sweep erfolgreich: {operation}")
+
+        except Exception as e:
+            logger.error(f"Sweep fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Sweep fehlgeschlagen:\n{str(e)}")
+
+    def _on_sweep_cancelled(self):
+        """Bricht die Sweep-Operation ab."""
+        self._stop_sweep_mode()
+        logger.info("Sweep abgebrochen")
+
+    def _on_sketch_path_clicked(self, sketch_id: str, geom_type: str, index: int):
+        """
+        Handler für direkten Viewport-Klick auf Sketch-Element.
+        Wird aufgerufen wenn User im Sweep-Pfad-Modus auf eine Linie/Arc/Spline klickt.
+        """
+        if not self._sweep_mode or self._sweep_phase != 'path':
+            return
+
+        # Finde den Sketch
+        sketch = next((s for s in self.document.sketches if s.id == sketch_id), None)
+        if not sketch:
+            logger.warning(f"Sketch {sketch_id} nicht gefunden")
+            return
+
+        # Finde das Geometrie-Element
+        geom = None
+        if geom_type == 'line':
+            lines = getattr(sketch, 'lines', [])
+            if 0 <= index < len(lines):
+                geom = lines[index]
+        elif geom_type == 'arc':
+            arcs = getattr(sketch, 'arcs', [])
+            if 0 <= index < len(arcs):
+                geom = arcs[index]
+        elif geom_type == 'spline':
+            splines = getattr(sketch, 'splines', []) + getattr(sketch, 'native_splines', [])
+            if 0 <= index < len(splines):
+                geom = splines[index]
+
+        if not geom:
+            logger.warning(f"Geometrie {geom_type}[{index}] im Sketch {sketch_id} nicht gefunden")
+            return
+
+        # Path-Daten erstellen (identisch zu _on_sweep_sketch_path_requested)
+        path_data = {
+            'type': 'sketch_edge',
+            'geometry_type': geom_type,
+            'plane_origin': sketch.plane_origin,
+            'plane_normal': sketch.plane_normal,
+            'plane_x': getattr(sketch, 'plane_x_dir', (1, 0, 0)),
+            'plane_y': getattr(sketch, 'plane_y_dir', (0, 1, 0)),
+        }
+
+        # Geometrie-spezifische Daten
+        if geom_type == 'arc':
+            center = geom.center
+            path_data['center'] = (center.x, center.y)
+            path_data['radius'] = geom.radius
+            path_data['start_angle'] = geom.start_angle
+            path_data['end_angle'] = geom.end_angle
+        elif geom_type == 'line':
+            path_data['start'] = (geom.start.x, geom.start.y)
+            path_data['end'] = (geom.end.x, geom.end.y)
+        elif geom_type == 'spline':
+            ctrl_pts = getattr(geom, 'control_points', None)
+            if ctrl_pts is None:
+                ctrl_pts = getattr(geom, 'points', [])
+            if ctrl_pts and hasattr(ctrl_pts[0], 'x'):
+                path_data['control_points'] = [(p.x, p.y) for p in ctrl_pts]
+            else:
+                path_data['control_points'] = ctrl_pts
+
+        # Pfad setzen
+        self._sweep_path_data = path_data
+        self.sweep_panel.set_path(path_data)
+
+        # Sketch-Pfad-Modus beenden (Pfad wurde ausgewählt)
+        self.viewport_3d.stop_sketch_path_mode()
+
+        # Visuelles Feedback
+        logger.success(f"Sweep: Pfad ausgewählt - {sketch.name}: {geom_type.capitalize()}")
+        logger.info("Drücke OK um Sweep auszuführen")
+
+    def _on_sweep_sketch_path_requested(self):
+        """
+        Öffnet Dialog zur Auswahl eines Sketch-Elements als Pfad.
+        Sucht Bögen, Linien und Splines in sichtbaren Sketches.
+        """
+        from PySide6.QtWidgets import QInputDialog
+
+        # Sammle verfügbare Pfad-Geometrien aus Sketches
+        path_options = []
+
+        for sketch in self.document.sketches:
+            # Bögen - perfekt für Sweep
+            for arc in getattr(sketch, 'arcs', []):
+                path_options.append({
+                    'name': f"{sketch.name}: Bogen (R={arc.radius:.1f}mm)",
+                    'sketch': sketch,
+                    'geometry': arc,
+                    'type': 'arc'
+                })
+
+            # Linien - für gerade Sweeps
+            for line in getattr(sketch, 'lines', []):
+                # Line2D hat length property oder berechne manuell
+                length = getattr(line, 'length', None)
+                if length is None:
+                    length = ((line.end.x - line.start.x)**2 + (line.end.y - line.start.y)**2)**0.5
+                path_options.append({
+                    'name': f"{sketch.name}: Linie (L={length:.1f}mm)",
+                    'sketch': sketch,
+                    'geometry': line,
+                    'type': 'line'
+                })
+
+            # Splines - für komplexe Pfade
+            for spline in getattr(sketch, 'splines', []):
+                n_pts = len(getattr(spline, 'control_points', getattr(spline, 'points', [])))
+                path_options.append({
+                    'name': f"{sketch.name}: Spline ({n_pts} Punkte)",
+                    'sketch': sketch,
+                    'geometry': spline,
+                    'type': 'spline'
+                })
+
+            # Native Splines (aus DXF)
+            for spline in getattr(sketch, 'native_splines', []):
+                n_pts = len(getattr(spline, 'control_points', []))
+                path_options.append({
+                    'name': f"{sketch.name}: B-Spline ({n_pts} Punkte)",
+                    'sketch': sketch,
+                    'geometry': spline,
+                    'type': 'spline'
+                })
+
+        if not path_options:
+            QMessageBox.warning(
+                self, "Kein Pfad gefunden",
+                "Keine Bögen, Linien oder Splines in Sketches gefunden.\n\n"
+                "Zeichne zuerst einen Bogen oder eine Linie im Sketch."
+            )
+            return
+
+        # Auto-Select wenn nur ein Pfad verfügbar
+        if len(path_options) == 1:
+            selected = path_options[0]
+            logger.info(f"Sweep: Auto-Auswahl (einziger Pfad): {selected['name']}")
+        else:
+            # Dialog zur Auswahl bei mehreren Pfaden
+            names = [opt['name'] for opt in path_options]
+            name, ok = QInputDialog.getItem(
+                self, "Sweep-Pfad wählen",
+                "Wähle einen Pfad aus den Sketches:",
+                names, 0, False
+            )
+
+            if not ok:
+                return
+
+            # Gewählte Option finden
+            selected = next((opt for opt in path_options if opt['name'] == name), None)
+        if not selected:
+            return
+
+        sketch = selected['sketch']
+        geom = selected['geometry']
+        geom_type = selected['type']
+
+        # Path-Daten erstellen
+        path_data = {
+            'type': 'sketch_edge',
+            'geometry_type': geom_type,
+            'plane_origin': sketch.plane_origin,
+            'plane_normal': sketch.plane_normal,
+            'plane_x': getattr(sketch, 'plane_x_dir', (1, 0, 0)),
+            'plane_y': getattr(sketch, 'plane_y_dir', (0, 1, 0)),
+        }
+
+        # Geometrie-spezifische Daten
+        if geom_type == 'arc':
+            # Arc2D hat center als Point2D
+            center = geom.center
+            path_data['center'] = (center.x, center.y)
+            path_data['radius'] = geom.radius
+            path_data['start_angle'] = geom.start_angle
+            path_data['end_angle'] = geom.end_angle
+        elif geom_type == 'line':
+            # Line2D hat start/end als Point2D
+            path_data['start'] = (geom.start.x, geom.start.y)
+            path_data['end'] = (geom.end.x, geom.end.y)
+        elif geom_type == 'spline':
+            # Spline kann control_points oder points haben
+            ctrl_pts = getattr(geom, 'control_points', None)
+            if ctrl_pts is None:
+                ctrl_pts = getattr(geom, 'points', [])
+            # Konvertiere zu Tupel-Liste falls Point2D
+            if ctrl_pts and hasattr(ctrl_pts[0], 'x'):
+                path_data['control_points'] = [(p.x, p.y) for p in ctrl_pts]
+            else:
+                path_data['control_points'] = ctrl_pts
+
+        self._sweep_path_data = path_data
+        self.sweep_panel.set_path(path_data)
+
+        logger.info(f"Sweep: Pfad aus Sketch gewählt - {name}")
+
+    def _stop_sweep_mode(self):
+        """Beendet den Sweep-Modus und räumt auf."""
+        self._sweep_mode = False
+        self._sweep_phase = None
+        self._sweep_profile_data = None
+        self._sweep_path_data = None
+        self.sweep_panel.hide()
+
+        # Sketch-Pfad-Modus stoppen
+        if hasattr(self.viewport_3d, 'stop_sketch_path_mode'):
+            self.viewport_3d.stop_sketch_path_mode()
+
+        # Edge-Selection stoppen falls aktiv
+        if hasattr(self.viewport_3d, 'stop_edge_selection_mode'):
+            self.viewport_3d.stop_edge_selection_mode()
+
+    # ==================== LOFT (Phase 6) ====================
+
+    def _start_loft(self):
+        """
+        Startet den Loft-Workflow.
+
+        Loft verbindet mehrere Profile auf verschiedenen Z-Ebenen.
+        """
+        # WICHTIG: Transform-Gizmo ausblenden, damit Klicks nicht abgefangen werden
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
+        self._loft_mode = True
+        self._loft_profiles = []
+
+        # Face-Detection aktivieren
+        self.viewport_3d.set_extrude_mode(True)
+        self._update_detector()
+
+        # Panel anzeigen und zurücksetzen
+        self.loft_panel.reset()
+        self.loft_panel.show_at(self.viewport_3d)
+
+        logger.info("Loft: Wähle Profile (Flächen) auf verschiedenen Z-Ebenen aus")
+
+    def _on_loft_add_profile(self):
+        """
+        Callback wenn "Profil hinzufügen" geklickt wird.
+        Aktiviert Face-Selection-Mode.
+        """
+        logger.info("Loft: Klicke auf eine Fläche um sie als Profil hinzuzufügen")
+
+    def _on_face_selected_for_loft(self, face_id):
+        """
+        Callback wenn eine Fläche für Loft-Profil ausgewählt wird.
+        """
+        if not self._loft_mode:
+            return
+
+        # Finde die Face-Daten
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return
+
+        # Profil-Daten erstellen
+        profile_data = {
+            'type': face.domain_type,
+            'face_id': face_id,
+            'plane_origin': face.plane_origin,
+            'plane_normal': face.plane_normal,
+            'plane_x': face.plane_x,
+            'plane_y': face.plane_y,
+            'shapely_poly': face.shapely_poly
+        }
+
+        # Prüfen ob schon ausgewählt (gleiche Z-Ebene)
+        z_new = profile_data['plane_origin'][2] if isinstance(profile_data['plane_origin'], (list, tuple)) else 0
+
+        for existing in self._loft_profiles:
+            z_existing = existing['plane_origin'][2] if isinstance(existing['plane_origin'], (list, tuple)) else 0
+            if abs(z_new - z_existing) < 0.1:
+                logger.warning(f"Loft: Profil auf Z={z_new:.0f} bereits vorhanden - übersprungen")
+                return
+
+        # Profil hinzufügen
+        self._loft_profiles.append(profile_data)
+        self.loft_panel.add_profile(profile_data)
+
+        logger.info(f"Loft: Profil auf Z={z_new:.0f} hinzugefügt ({len(self._loft_profiles)} Profile)")
+
+    def _on_loft_confirmed(self):
+        """
+        Wendet Loft auf die Profile an.
+        """
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import LoftFeature
+
+        profiles = self.loft_panel.get_profiles()
+
+        if len(profiles) < 2:
+            logger.error("Loft: Mindestens 2 Profile benötigt")
+            return
+
+        operation = self.loft_panel.get_operation()
+        ruled = self.loft_panel.is_ruled()
+
+        logger.info(f"Wende Loft an ({len(profiles)} Profile, Operation={operation}, Ruled={ruled})...")
+
+        try:
+            # Profile nach Z sortieren
+            profiles_sorted = sorted(profiles, key=lambda p: p['plane_origin'][2] if isinstance(p['plane_origin'], (list, tuple)) else 0)
+
+            # Loft Feature erstellen
+            loft_feature = LoftFeature(
+                profile_data=profiles_sorted,
+                ruled=ruled,
+                operation=operation
+            )
+
+            # Body finden oder erstellen
+            if operation == "New Body" or not self.document.bodies:
+                from modeling import Body
+                new_body = Body(name=f"Loft_{len(self.document.bodies) + 1}")
+                new_body.features.append(loft_feature)
+                self.document.bodies.append(new_body)
+                target_body = new_body
+            else:
+                target_body = self.document.bodies[0]
+                target_body.features.append(loft_feature)
+
+            # Body neu berechnen
+            CADTessellator.clear_cache()
+            target_body._rebuild()
+
+            # Visualisierung aktualisieren
+            self._update_body_from_build123d(target_body, target_body._build123d_solid)
+
+            # Aufräumen
+            self._stop_loft_mode()
+            self.browser.refresh()
+
+            logger.success(f"Loft erfolgreich: {len(profiles)} Profile verbunden")
+
+        except Exception as e:
+            logger.error(f"Loft fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Loft fehlgeschlagen:\n{str(e)}")
+
+    def _on_loft_cancelled(self):
+        """Bricht die Loft-Operation ab."""
+        self._stop_loft_mode()
+        logger.info("Loft abgebrochen")
+
+    def _stop_loft_mode(self):
+        """Beendet den Loft-Modus und räumt auf."""
+        self._loft_mode = False
+        self._loft_profiles = []
+        self.loft_panel.hide()
 
     # ==================== SECTION VIEW ====================
 
@@ -3595,6 +4824,24 @@ class MainWindow(QMainWindow):
         if self.document.bodies:
             return self.document.bodies[-1]
         return None
+
+    def _update_tnp_stats(self, body=None):
+        """
+        Aktualisiert das TNP-Statistiken-Panel.
+
+        Args:
+            body: Body-Objekt oder None (verwendet dann aktiven Body)
+        """
+        if not hasattr(self, 'tnp_stats_panel'):
+            return
+
+        if body is None:
+            body = self._get_active_body()
+
+        try:
+            self.tnp_stats_panel.update_stats(body)
+        except Exception as e:
+            logger.debug(f"TNP Stats Update fehlgeschlagen: {e}")
 
     def _move_body(self):
         body = self._get_active_body()

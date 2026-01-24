@@ -4,7 +4,7 @@ Vollständiges Transform-System mit Move, Rotate, Scale, Copy, Mirror
 
 Basiert auf V2, erweitert um:
 - Rotate: Ringe um jede Achse
-- Scale: Würfel an Achsenenden  
+- Scale: Würfel an Achsenenden
 - Copy: Dupliziert Body bei Transform
 - Mirror: Spiegelt an XY/XZ/YZ Ebene
 """
@@ -14,6 +14,7 @@ from typing import Optional, Tuple, List, Callable
 from enum import Enum, auto
 from dataclasses import dataclass
 from loguru import logger
+from gui.viewport.render_queue import request_render  # Phase 4: Performance
 
 try:
     import pyvista as pv
@@ -183,7 +184,7 @@ class FullTransformGizmo:
         self._create_all_elements()
         self._update_pick_bounds()  # Performance Optimization 2.4: BVH aufbauen
         self._update_visibility()
-        self.plotter.render()
+        request_render(self.plotter)
         
     def hide(self):
         """Versteckt das Gizmo"""
@@ -647,7 +648,7 @@ class FullTransformGizmo:
             except:
                 pass
                 
-        self.plotter.render()
+        request_render(self.plotter)
         
     def _update_colors(self):
         """Aktualisiert Farben basierend auf Hover/Active"""
@@ -682,7 +683,7 @@ class FullTransformGizmo:
                 except:
                     pass
                     
-        self.plotter.render()
+        request_render(self.plotter)
 
 
 @dataclass
@@ -875,7 +876,7 @@ class FullTransformController:
             now = time.time() * 1000
             if now - self._last_render_time >= self._render_interval_ms:
                 if self._dirty:
-                    self.plotter.render()
+                    request_render(self.plotter)
                     self._last_render_time = now
                     self._dirty = False
 
@@ -988,7 +989,7 @@ class FullTransformController:
         self.gizmo._reset_transforms()
         self.gizmo._create_all_elements()  # Neu erstellen mit korrekten Pick-Meshes
         self.gizmo._update_visibility()
-        self.gizmo.plotter.render()
+        request_render(self.gizmo.plotter)
 
         return True
         

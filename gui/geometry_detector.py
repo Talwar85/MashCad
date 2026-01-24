@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 from loguru import logger
+from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
 # Optional Imports
 try:
@@ -91,15 +92,45 @@ class GeometryDetector:
              y = np.cross(n, x)
              plane_y_dir = tuple(y)
 
-        # 1. Linien in Shapely konvertieren
+        # 1. Linien in Shapely konvertieren mit Welding
         lines = []
         standalone_circles = []  # Kreise die eigenständig sind
-        def rnd(val): return round(val, 5)
 
-        # Lines
+        # Welding-System (wie in sketch_editor.py) für DXF-Kompatibilität
+        WELD_GRID = 0.5  # 0.5mm Toleranz
+        welded_points = {}
+
+        def get_welded_pt(x, y):
+            """Verschweißt nahe Punkte zu einem gemeinsamen Punkt"""
+            ix = int(round(x / WELD_GRID))
+            iy = int(round(y / WELD_GRID))
+            key = (ix, iy)
+
+            if key in welded_points:
+                return welded_points[key]
+
+            # Suche in Nachbarzellen
+            for dx in [-2, -1, 0, 1, 2]:
+                for dy in [-2, -1, 0, 1, 2]:
+                    if dx == 0 and dy == 0: continue
+                    neighbor_key = (ix + dx, iy + dy)
+                    if neighbor_key in welded_points:
+                        nx, ny = welded_points[neighbor_key]
+                        if (x - nx)**2 + (y - ny)**2 < WELD_GRID**2:
+                            return (nx, ny)
+
+            welded_points[key] = (x, y)
+            return (x, y)
+
+        def rnd(val): return round(val, 5)  # Für Kreise weiterhin nutzen
+
+        # Lines - mit Welding für bessere DXF-Kompatibilität
         for l in getattr(sketch, 'lines', []):
             if not l.construction:
-                lines.append(LineString([(rnd(l.start.x), rnd(l.start.y)), (rnd(l.end.x), rnd(l.end.y))]))
+                p1 = get_welded_pt(l.start.x, l.start.y)
+                p2 = get_welded_pt(l.end.x, l.end.y)
+                if p1 != p2:  # Keine Zero-Length Linien
+                    lines.append(LineString([p1, p2]))
         
         # Circles - Mit mehr Segmenten für bessere Präzision
         for c in getattr(sketch, 'circles', []):
@@ -119,42 +150,61 @@ class GeometryDetector:
                 # Speichere als eigenständiges Polygon für den Fall dass polygonize fehlschlägt
                 standalone_circles.append(Polygon(pts[:-1]))
         
-        # Arcs
+        # Arcs - mit Welding für Start/End-Punkte
         for a in getattr(sketch, 'arcs', []):
             if not a.construction:
                 # Arc-Winkel berechnen
                 start_angle = getattr(a, 'start_angle', 0)
                 end_angle = getattr(a, 'end_angle', 360)
-                
+
                 # Falls arc_size statt end_angle
                 if hasattr(a, 'arc_size'):
                     end_angle = start_angle + a.arc_size
-                
+
                 # Normalisiere Winkel
                 if end_angle < start_angle:
                     end_angle += 360
-                    
+
                 num_segments = max(32, int(abs(end_angle - start_angle) / 3))
-                pts = []
-                for i in range(num_segments + 1):
+
+                # Start-Punkt mit Welding
+                start_rad = math.radians(start_angle)
+                start_p = get_welded_pt(
+                    a.center.x + a.radius * math.cos(start_rad),
+                    a.center.y + a.radius * math.sin(start_rad)
+                )
+
+                pts = [start_p]
+                for i in range(1, num_segments):
                     angle = math.radians(start_angle + (end_angle - start_angle) * i / num_segments)
-                    pts.append((
-                        rnd(a.center.x + a.radius * math.cos(angle)),
-                        rnd(a.center.y + a.radius * math.sin(angle))
+                    # Zwischenpunkte auch welded für bessere Konsistenz
+                    pts.append(get_welded_pt(
+                        a.center.x + a.radius * math.cos(angle),
+                        a.center.y + a.radius * math.sin(angle)
                     ))
+
+                # End-Punkt mit Welding
+                end_rad = math.radians(end_angle)
+                end_p = get_welded_pt(
+                    a.center.x + a.radius * math.cos(end_rad),
+                    a.center.y + a.radius * math.sin(end_rad)
+                )
+                pts.append(end_p)
+
                 if len(pts) >= 2:
                     lines.append(LineString(pts))
         
-        # Splines
+        # Splines - mit Welding für Endpunkte
         for s in getattr(sketch, 'splines', []):
             if not s.construction and hasattr(s, 'points') and len(s.points) >= 2:
-                pts = [(rnd(p.x), rnd(p.y)) for p in s.points]
-                lines.append(LineString(pts))
+                pts = [get_welded_pt(p.x, p.y) for p in s.points]
+                if len(pts) >= 2:
+                    lines.append(LineString(pts))
         
-        # Polygons (falls vorhanden)
+        # Polygons (falls vorhanden) - mit Welding
         for p in getattr(sketch, 'polygons', []):
             if not p.construction and hasattr(p, 'points') and len(p.points) >= 3:
-                pts = [(rnd(pt.x), rnd(pt.y)) for pt in p.points]
+                pts = [get_welded_pt(pt.x, pt.y) for pt in p.points]
                 pts.append(pts[0])  # Schließen
                 lines.append(LineString(pts))
 
@@ -166,6 +216,37 @@ class GeometryDetector:
         try:
             if lines:
                 merged = unary_union(lines)
+
+                # Gap Closing (wie in sketch_editor.py) - verbindet nahe Endpunkte
+                if hasattr(merged, 'geoms'):
+                    endpoints = []
+                    for geom in merged.geoms:
+                        if hasattr(geom, 'coords'):
+                            coords = list(geom.coords)
+                            if len(coords) >= 2:
+                                endpoints.append(coords[0])
+                                endpoints.append(coords[-1])
+
+                    GAP_TOLERANCE = 1.0  # 1mm
+                    additional_lines = []
+                    used = set()
+                    for i, p1 in enumerate(endpoints):
+                        if i in used:
+                            continue
+                        for j, p2 in enumerate(endpoints):
+                            if j <= i or j in used:
+                                continue
+                            dist = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+                            if 0 < dist < GAP_TOLERANCE:
+                                additional_lines.append(LineString([p1, p2]))
+                                used.add(i)
+                                used.add(j)
+                                break
+
+                    if additional_lines:
+                        logger.debug(f"Gap closing: {len(additional_lines)} kleine Lücken geschlossen")
+                        merged = unary_union([merged] + additional_lines)
+
                 raw_polys = list(polygonize(merged))
         except Exception as e:
             logger.debug(f"Polygonize failed: {e}")
@@ -661,16 +742,16 @@ class GeometryDetector:
             tris = shapely.ops.triangulate(poly)
             
             # FIX 2: Robustere Prüfung für Kreise/Rundungen
-            # Wir nutzen einen minimalen Puffer (1e-5), um Rundungsfehler
+            # Wir nutzen einen minimalen Puffer, um Rundungsfehler
             # an den Rändern abzufangen.
-            buffered_poly = poly.buffer(1e-5)
+            buffered_poly = poly.buffer(Tolerances.SKETCH_SNAP)
 
             # FIX 3: Holes (Interior-Ringe) als Exclusion-Zonen
             # Dreiecke die im Hole liegen, müssen ausgeschlossen werden
             from shapely.geometry import Polygon as ShapelyPolygon
             hole_polys = []
             for interior in poly.interiors:
-                hole_poly = ShapelyPolygon(interior).buffer(-1e-5)  # Leicht nach innen puffern
+                hole_poly = ShapelyPolygon(interior).buffer(-Tolerances.SKETCH_SNAP)  # Leicht nach innen puffern
                 if hole_poly.is_valid and not hole_poly.is_empty:
                     hole_polys.append(hole_poly)
 

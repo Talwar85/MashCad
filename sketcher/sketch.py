@@ -12,7 +12,7 @@ import math
 from .geometry import (
     Point2D, Line2D, Circle2D, Arc2D, Rectangle2D,
     line_line_intersection, points_are_coincident,
-    BezierSpline, SplineControlPoint
+    BezierSpline, SplineControlPoint, Spline2D
 )
 from .constraints import (
     Constraint, ConstraintType, ConstraintStatus,
@@ -51,7 +51,8 @@ class Sketch:
     lines: List[Line2D] = field(default_factory=list)
     circles: List[Circle2D] = field(default_factory=list)
     arcs: List[Arc2D] = field(default_factory=list)
-    splines: List['BezierSpline'] = field(default_factory=list)  # Bézier-Splines
+    splines: List['BezierSpline'] = field(default_factory=list)  # Bézier-Splines (interaktiv)
+    native_splines: List['Spline2D'] = field(default_factory=list)  # B-Splines aus DXF (exakt)
     
     # Constraints
     constraints: List[Constraint] = field(default_factory=list)
@@ -757,16 +758,35 @@ class Sketch:
     
     def to_dict(self) -> Dict[str, Any]:
         """Konvertiert zu Dictionary (für Speichern/Undo)"""
+        # Splines serialisieren
+        splines_data = []
+        for spline in self.splines:
+            cp_data = []
+            for cp in spline.control_points:
+                cp_data.append({
+                    'point': (cp.point.x, cp.point.y),
+                    'handle_in': cp.handle_in,
+                    'handle_out': cp.handle_out,
+                    'smooth': cp.smooth
+                })
+            splines_data.append({
+                'id': spline.id,
+                'control_points': cp_data,
+                'closed': spline.closed,
+                'construction': spline.construction
+            })
+
         return {
             'name': self.name,
             'id': self.id,
             'points': [(p.x, p.y, p.id, p.fixed) for p in self.points],
-            'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction) 
+            'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction)
                       for l in self.lines],
-            'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction) 
+            'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction)
                         for c in self.circles],
-            'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle, 
+            'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle,
                       a.id, a.construction) for a in self.arcs],
+            'splines': splines_data,
         }
     
     @classmethod
@@ -774,7 +794,7 @@ class Sketch:
         """Erstellt Sketch aus Dictionary (für Undo)"""
         sketch = cls(name=data.get('name', 'Sketch'))
         sketch.id = data.get('id', sketch.id)
-        
+
         # Linien wiederherstellen
         for ldata in data.get('lines', []):
             x1, y1, x2, y2 = ldata[0], ldata[1], ldata[2], ldata[3]
@@ -783,7 +803,7 @@ class Sketch:
             line = sketch.add_line(x1, y1, x2, y2, construction=construction)
             if lid:
                 line.id = lid
-        
+
         # Kreise wiederherstellen
         for cdata in data.get('circles', []):
             cx, cy, r = cdata[0], cdata[1], cdata[2]
@@ -792,7 +812,7 @@ class Sketch:
             circle = sketch.add_circle(cx, cy, r, construction=construction)
             if cid:
                 circle.id = cid
-        
+
         # Bögen wiederherstellen
         for adata in data.get('arcs', []):
             cx, cy, r, start, sweep = adata[0], adata[1], adata[2], adata[3], adata[4]
@@ -801,7 +821,33 @@ class Sketch:
             arc = sketch.add_arc(cx, cy, r, start, start + sweep, construction=construction)
             if aid:
                 arc.id = aid
-        
+
+        # Splines wiederherstellen
+        for sdata in data.get('splines', []):
+            spline = BezierSpline()
+            spline.id = sdata.get('id', spline.id)
+            spline.closed = sdata.get('closed', False)
+            spline.construction = sdata.get('construction', False)
+
+            for cp_data in sdata.get('control_points', []):
+                px, py = cp_data['point']
+                cp = SplineControlPoint(
+                    point=Point2D(px, py),
+                    handle_in=tuple(cp_data.get('handle_in', (0, 0))),
+                    handle_out=tuple(cp_data.get('handle_out', (0, 0))),
+                    smooth=cp_data.get('smooth', True)
+                )
+                spline.control_points.append(cp)
+
+            sketch.splines.append(spline)
+
+            # Linien für Kompatibilität regenerieren
+            if spline.control_points:
+                lines = spline.to_lines(segments_per_span=10)
+                spline._lines = lines
+                for line in lines:
+                    sketch.lines.append(line)
+
         return sketch
     
     def __repr__(self):

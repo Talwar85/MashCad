@@ -1,499 +1,433 @@
-# MashCad – Projektdokumentation
+# MashCad - Architektur-Referenz
 
-> **Zweck:** Zentrale Referenz für alle Claude-Arbeitsessions. Diese Doku ist **lebend** – wird bei jeder größeren Änderung aktualisiert. Stand: Januar 2026, V12+
-
----
-
-## 🎯 Claude AI – Verhaltensrichtlinien & Standards
-
-### Philosophie: Senior Product Designer + Senior Engineer
-
-Du agierst nicht nur als Coder, sondern als **Senior Product Designer & UX Architect**. Oberste Direktive: **Exzellenz in der Benutzerführung (UX)**.
-
-#### 1. Das "Fusion-Plus"-Prinzip
-
-- **Benchmark:** Mindeststandard = Fusion 360 Feature-Implementierung
-- **Ziel:** Wir machen es **besser** → flüssiger UX, weniger Klicks
-- **Abbruchkriterium:** Eine Implementierung ist NICHT "fertig", wenn sie nur funktioniert. Sie ist fertig, wenn sie sich **gut anfühlt**
-
-#### 2. Konsistenz & Integration (Anti-Insel-Policy)
-
-- **Bevor** du ein neues Feature baust (z.B. Chamfer), analysiere **zwingend** die UX der Best-Practice-Features (aktuell: **Transform V3**)
-- **Workflow-Konsistenz:** Wenn Feature A interaktive Selektion im Viewport erlaubt → Feature B muss das auch können
-- **UI-Integration:** Neue Features passen nahtlos in bestehende Panel-Strukturen
-- **Fehlerbehandlung:** Keine Insel-Lösungen – konsistente Error-Signaling über alle Features
-
-#### 3. Rigorosität & Observability (Anti-Schwammig-Policy)
-
-- **Fehlerkultur:** Fehler müssen **glasklar** unterscheidbar sein
-- **Result-Pattern:** Nutze strukturierte Rückgabetypen:
-  - `CRITICAL`: Code gecrasht / Recovery notwendig
-  - `FALLBACK`: Alternative Berechnung genutzt (Warnung)
-  - `EMPTY_SUCCESS`: Technisch okay, aber logisch kein Ergebnis (z.B. keine Kante)
-  - `SUCCESS`: Alles okay
-
-- **Test-Mentalität:** Kein Code ohne Verifikationsplan. "Sollte gehen" ist nicht akzeptabel
+> **Version:** 13 | **Stand:** Januar 2026 | **Autor:** Claude (Lead Developer)
 
 ---
 
-## 📋 Projektübersicht
+## Philosophie: CAD-Kernel ist Master
 
-**MashCad** (ehemals LiteCad) ist eine professionelle CAD-Anwendung in Python, die Fusion360-Level-Funktionalität anstrebt.
-
-### Tech-Stack
-
-| Komponente | Stack |
-|-----------|-------|
-| **GUI** | PySide6 (Qt6) |
-| **3D-Rendering** | PyVista (VTK-basiert) |
-| **CAD-Kernel** | Build123d (OpenCASCADE-basiert) |
-| **2D-Geometrie** | Shapely |
-| **Logging** | Loguru |
-| **Constraints (Sketcher)** | Custom Solver (Lagrange Multiplier) |
-
----
-
-## 🏗️ Architektur
-
-### Directory-Struktur
+**Kernprinzip:** Das gesamte System baut auf dem CAD-Kernel (Build123d/OpenCASCADE) auf. Es gibt **keine Fallback-Lösungen**. Wenn der Kernel fehlschlägt, schlägt die Operation fehl - klar und deutlich.
 
 ```
-LiteCad/
-├── main.py                          # Entry Point
-│
-├── gui/
-│   ├── main_window.py               # Zentrale App-Logik, Signal-Routing
-│   ├── viewport_pyvista.py          # 3D-Viewport Backbone
-│   ├── browser.py                   # Projektbaum (Bodies, Sketches, Planes, Features)
-│   ├── sketch_editor.py             # 2D-Sketching-Editor
-│   │
-│   ├── tool_panel.py                # Sketch-Tools (Toolbar)
-│   ├── tool_panel_3d.py             # 3D-Tools (Extrude, Fillet, Chamfer, etc.)
-│   ├── input_panels.py              # Modal/Dock-Panels (Extrude-Parameter, Fillet-Radius, etc.)
-│   ├── geometry_detector.py         # Face/Edge-Picking & Raytracing
-│   │
-│   ├── viewport/
-│   │   ├── transform_gizmo_v3.py    # 🟢 Transform-Gizmo (Move/Rotate/Scale) – REFERENZ-UX
-│   │   ├── transform_mixin_v3.py    # Viewport-Integration für Transform
-│   │   ├── picking_mixin.py         # Picking-Logik (Raycasting)
-│   │   ├── body_mixin.py            # Body-Rendering & Mesh-Updates
-│   │   ├── extrude_mixin.py         # Extrude-Preview-System
-│   │   └── chamfer_mixin.py         # Chamfer-Preview (neuer Standard)
-│   │
-│   └── widgets/
-│       ├── transform_panel.py       # Transform-Eingabe-Panel
-│       ├── notification.py          # Toast/Benachrichtigungen
-│       └── property_panel.py        # Feature-Eigenschaften & History
-│
-├── modeling/
-│   ├── __init__.py                  # Document, Body, Feature Basis-Klassen
-│   ├── cad_tessellator.py           # Build123d → PyVista Konvertierung (mit Cache)
-│   ├── mesh_converter.py            # BREP ↔ Mesh Konvertierung
-│   └── feature_registry.py          # Feature-Typ-Registry & Factory
-│
-├── sketcher/
-│   ├── __init__.py                  # Sketch-Klasse, Sketch-State
-│   ├── geometry.py                  # 2D-Primitive (Line, Arc, Circle, Point, etc.)
-│   ├── constraints.py               # Geometrische Constraints (Coincident, Tangent, etc.)
-│   ├── solver.py                    # Constraint-Solver (Lagrange)
-│   └── evaluator.py                 # Sketch-Evaluierung & Validation
-│
-├── i18n/
-│   ├── de.json                      # Deutsche Strings
-│   ├── en.json                      # Englische Strings
-│   └── __init__.py                  # i18n-System
-│
-└── config/
-    └── defaults.py                  # Globale Settings (Grid, Colors, Shortcuts)
+┌─────────────────────────────────────────────────────┐
+│              SINGLE SOURCE OF TRUTH                 │
+│                                                     │
+│    _build123d_solid (OCP/OpenCASCADE)              │
+│              ↓ (lazy)                               │
+│    vtk_mesh / vtk_edges (PyVista)                  │
+│              ↓                                      │
+│    Viewport Rendering                               │
+└─────────────────────────────────────────────────────┘
 ```
+
+**Anti-Patterns (VERBOTEN):**
+- Mesh-basierte Fallbacks für Boolean-Operationen
+- Manuelle Mesh-Manipulation ohne Kernel-Update
+- Cache-Invalidierung vergessen nach Kernel-Änderungen
+- Multi-Strategy-Fallbacks ("wenn A nicht klappt, probiere B")
 
 ---
 
-## 🧠 Kernkonzepte
+## UX-Philosophie: Fusion-Plus
 
-### 1. Document-Body-Feature-Hierarchie
+### Benchmark: Fusion 360
+- Mindeststandard = Fusion 360 Feature-Implementierung
+- Ziel: **Besser** → flüssiger UX, weniger Klicks
+- Abbruchkriterium: Nicht "fertig" wenn es funktioniert, sondern wenn es sich **gut anfühlt**
+
+### Konsistenz (Anti-Insel-Policy)
+- Neue Features analysieren zuerst die UX von **Transform V3** (Referenz)
+- Workflow-Konsistenz: Feature A erlaubt Viewport-Selektion → Feature B auch
+- UI-Integration: Neue Features passen in bestehende Panel-Strukturen
+
+### Fehlerkultur (Anti-Schwammig-Policy)
+- Fehler müssen **glasklar** unterscheidbar sein
+- Strukturierte Result-Types: `SUCCESS`, `WARNING`, `EMPTY`, `ERROR`
+- "Sollte gehen" ist nicht akzeptabel
+
+---
+
+## Tech-Stack
+
+| Komponente | Technologie | Rolle |
+|------------|-------------|-------|
+| **CAD-Kernel** | Build123d + OCP (OpenCASCADE) | Master - alle Geometrie |
+| **Visualization** | PyVista (VTK) | Slave - nur Darstellung |
+| **GUI** | PySide6 (Qt6) | User Interface |
+| **2D-Sketcher** | Custom + Shapely | Constraint-basierte Skizzen |
+| **Logging** | Loguru | Strukturiertes Logging |
+
+---
+
+## Architektur-Säulen
+
+### 1. Single Source of Truth (Phase 2)
+
+Der CAD-Kernel (`_build123d_solid`) ist die einzige Wahrheit. Meshes werden **lazy** generiert.
 
 ```python
-Document
-├── bodies: List[Body]              # 3D-Körper
-├── sketches: List[Sketch]          # 2D-Skizzen (können an Bodies gebunden sein)
-├── planes: List[Plane]             # Referenz-Planes
-├── active_body: Optional[Body]     # Aktiver Body für neue Features
-└── active_sketch: Optional[Sketch] # Aktive Skizze für Editing
+class Body:
+    def __init__(self):
+        self._build123d_solid = None      # ← MASTER
+        self._mesh_cache = None           # ← Privat, lazy
+        self._mesh_cache_valid = False
 
-Body
-├── _build123d_solid: Solid         # Build123d Solid-Objekt (CAD-Geometrie)
-├── vtk_mesh: PolyData              # PyVista PolyData (Visualization)
-├── vtk_edges: PolyData             # Kanten-Rendering
-├── vtk_normals: ndarray            # Für Normale Picking
-├── features: List[Feature]         # Feature-Geschichte (Extrude, Fillet, etc.)
-└── metadata: Dict                  # Name, Color, Visibility, etc.
+    @property
+    def vtk_mesh(self):
+        """Lazy-loaded - regeneriert automatisch bei Zugriff"""
+        if not self._mesh_cache_valid:
+            self._regenerate_mesh()
+        return self._mesh_cache
 
-Feature (abstrakt)
-├── id: str                         # Eindeutige ID
-├── name: str                       # "Extrude1", "Fillet2", etc.
-├── type: str                       # "extrude", "fillet", "chamfer"
-├── params: Dict                    # Feature-Parameter (Höhe, Radius, etc.)
-├── depends_on: List[str]           # Feature-Dependencies (für Recompute)
-└── suppressed: bool                # Kann deaktiviert werden
+    def invalidate_mesh(self):
+        """Nach JEDER Kernel-Änderung aufrufen!"""
+        self._mesh_cache_valid = False
 ```
 
-### 2. Transform-System V3 – UX Referenzstandard
+**Regel:** Nach jeder Änderung an `_build123d_solid` → `invalidate_mesh()` aufrufen.
 
-**Dies ist der Gold-Standard für Interaktion.** Alle neuen Features sollten diesen UX-Standard als Vorlage nutzen.
+### 2. Fail-Fast Boolean Engine (Phase 3)
 
-#### Komponenten
+Keine Multi-Strategy-Fallbacks. Eine Operation funktioniert oder sie schlägt fehl.
 
-| Komponente | Verantwortung |
-|-----------|---------------|
-| `transform_gizmo_v3.py` | Rendering der 3D-Gizmo (Pfeile, Ringe, Würfel) |
-| `transform_mixin_v3.py` | Event-Handling & Viewport-Integration |
-| `transform_panel.py` | Numerische Eingabe & Live-Werte |
+```python
+# modeling/boolean_engine_v4.py
 
-#### Workflow
+class BooleanEngineV4:
+    PRODUCTION_FUZZY_TOLERANCE = 1e-4  # 0.1mm (Fusion 360-Level)
 
-```
-1. User klickt Body im Viewport
-   ↓
-2. Viewport.body_selected Signal emittiert
-   ↓
-3. MainWindow._show_transform_gizmo() aktiviert
-   ↓
-4. Gizmo wird gerendert (Pfeile/Ringe/Würfel)
-   ↓
-5. User dragged Pfeil (z.B. X-Achse Move)
-   ↓
-6. Live-Preview: VTK UserTransform anwenden (KEIN Build123d!)
-   ↓
-7. Transform-Panel zeigt Live-Werte
-   ↓
-8. User release Maus
-   ↓
-9. Apply Transform:
-   - CADTessellator.clear_cache()  🔴 WICHTIG!
-   - body._build123d_solid = body._build123d_solid.move(Location(...))
-   - Body._update_mesh_from_solid()
+    def execute_boolean(body, tool_solid, operation):
+        # Eine Strategie, klares Ergebnis
+        with BodyTransaction(body) as txn:
+            result = _execute_ocp_boolean(...)
+
+            if result is None:
+                raise BooleanOperationError("Boolean fehlgeschlagen")
+
+            body._build123d_solid = result
+            body.invalidate_mesh()
+            txn.commit()
 ```
 
-#### Cache-Invalidierung (KRITISCH)
+**OCP Boolean Settings (Phase 3):**
+```python
+op.SetFuzzyValue(1e-4)      # Toleranz für numerische Ungenauigkeiten
+op.SetRunParallel(True)     # Multi-Threading
+# SetGlue NICHT verwenden - verursacht kaputte Bodies
+```
+
+### 3. Transaction-basierte Sicherheit (Phase 1)
+
+Jede destruktive Operation ist transaktionsgesichert. Fehler → automatischer Rollback.
+
+```python
+# modeling/body_transaction.py
+
+with BodyTransaction(body, "Boolean Cut") as txn:
+    # Snapshot wird automatisch erstellt
+
+    result = execute_boolean(...)
+
+    if result.is_error:
+        raise BooleanOperationError(result.message)
+        # → Automatischer Rollback, Body bleibt intakt
+
+    txn.commit()  # Erst hier wird Änderung permanent
+```
+
+### 4. Strukturierte Result-Types (Phase 4)
+
+Klare Unterscheidung zwischen Erfolg, Warnung, Leer und Fehler.
+
+```python
+# modeling/result_types.py
+
+class ResultStatus(Enum):
+    SUCCESS = auto()   # Alles OK
+    WARNING = auto()   # OK aber mit Einschränkungen
+    EMPTY = auto()     # Kein Ergebnis (kein Fehler!)
+    ERROR = auto()     # Fehlgeschlagen
+
+# Verwendung:
+result = BooleanEngineV4.execute_boolean(body, cutter, "Cut")
+
+if result.status == ResultStatus.SUCCESS:
+    logger.success(result.message)
+elif result.status == ResultStatus.ERROR:
+    show_error_dialog(result.message)
+```
+
+---
+
+## Directory-Struktur
+
+```
+MashCad/
+├── main.py                           # Entry Point
+│
+├── modeling/
+│   ├── __init__.py                   # Body, Feature, Document
+│   ├── boolean_engine_v4.py          # Fail-Fast Boolean Operations
+│   ├── body_transaction.py           # Transaction/Rollback System
+│   ├── result_types.py               # OperationResult, BooleanResult
+│   ├── cad_tessellator.py            # Kernel → Mesh Konvertierung
+│   └── geometric_selector.py         # Face/Edge Selection
+│
+├── gui/
+│   ├── main_window.py                # Zentrale App-Logik
+│   ├── viewport_pyvista.py           # 3D-Viewport (Mixin-basiert)
+│   ├── browser.py                    # Feature-Tree
+│   ├── sketch_editor.py              # 2D-Sketcher
+│   ├── tool_panel_3d.py              # 3D-Tools (Extrude, Fillet, etc.)
+│   │
+│   └── viewport/
+│       ├── body_mixin.py             # Body-Rendering
+│       ├── picking_mixin.py          # Raycasting & Selection
+│       ├── transform_mixin_v3.py     # Transform-Gizmo (REFERENZ-UX)
+│       ├── extrude_mixin.py          # Extrude-Preview
+│       └── edge_selection_mixin.py   # Kanten-Selektion
+│
+├── sketcher/
+│   ├── __init__.py                   # Sketch-Klasse
+│   ├── geometry.py                   # 2D-Primitive
+│   ├── constraints.py                # Constraint-Definitionen
+│   └── solver.py                     # Lagrange-Multiplier Solver
+│
+└── i18n/                             # Internationalisierung (DE/EN)
+```
+
+---
+
+## Performance-Architektur
+
+### Tessellator-Caching
 
 ```python
 # cad_tessellator.py
-_CACHE_INVALIDATION_COUNTER = 0
 
-def clear_cache():
-    """Invalidiert ALLE Caches (lokal + ocp_tessellate)"""
-    global _CACHE_INVALIDATION_COUNTER
-    _CACHE_INVALIDATION_COUNTER += 1  # Notwendig für ocp_tessellate!
-    CAD_TESSELLATOR._cache.clear()
-```
-
-**Wichtig:** Nach **jedem** Transform, Extrude, Fillet etc. muss `clear_cache()` aufgerufen werden!
-
-### 3. CAD Tessellator-Cache
-
-Build123d/OpenCASCADE ist rechenintensiv. Der Tessellator cached Mesh-Daten aggressiv.
-
-```python
 class CADTessellator:
-    _cache: Dict[str, Tuple[PolyData, PolyData]] = {}
-    
-    @staticmethod
-    def tessellate(solid, quality=0.5):
-        # Cache-Key basiert auf Shape + Quality + globaler Version-Counter
-        cache_key = f"{id(solid)}_{quality}_v{VERSION}_c{_CACHE_INVALIDATION_COUNTER}"
-        
-        if cache_key in _cache:
-            return _cache[cache_key]  # Hit
-        
-        # Miss: Konvertiere mit ocp_tessellate
-        mesh_data = ocp_tessellate(solid, quality)
-        _cache[cache_key] = mesh_data
-        return mesh_data
+    _mesh_cache = {}  # Geometry-Hash → (mesh, edges)
+
+    def tessellate(solid):
+        # Cache-Key basiert auf GEOMETRIE, nicht Python-ID
+        # → Änderungen am Solid = neuer Hash = Cache-Miss
+        shape_hash = hash((n_faces, n_edges, n_vertices, volume, center_of_mass))
+        cache_key = f"{shape_hash}_{quality}"
+
+        if cache_key in _mesh_cache:
+            return _mesh_cache[cache_key]  # HIT
+
+        # MISS: Tesselliere und cache
+        mesh = ocp_tessellate(solid.wrapped, ...)
+        _mesh_cache[cache_key] = mesh
+        return mesh
 ```
 
-**Merksätze:**
-- Jeder Build123d Transform → `clear_cache()`
-- Cache-Key enthält `_CACHE_INVALIDATION_COUNTER`
-- Ohne Counter = alte Meshes werden wiederverwendet = visuelle Bugs
+**Wichtig:** Geometry-basierter Hash statt Python `id()` verhindert Cache-Kollisionen.
 
-### 4. Signal-Flow (Qt Signals)
+### Lazy Mesh-Regeneration
+
+Meshes werden **nur** generiert wenn sie gebraucht werden (beim Rendern).
+
+```python
+# RICHTIG: Lazy
+body._build123d_solid = new_solid
+body.invalidate_mesh()
+# → Mesh wird erst bei nächstem Viewport-Render generiert
+
+# FALSCH: Eager (verschwendet Performance)
+body._build123d_solid = new_solid
+body._regenerate_mesh()  # ← Nicht direkt aufrufen!
+```
+
+### Performance-Kritische Pfade
+
+| Pfad | Regel |
+|------|-------|
+| Mouse-Move Events | Kein Tessellieren, kein Logging |
+| Viewport Render | Nur bei Änderungen, cached meshes |
+| Boolean Operations | Parallel via `SetRunParallel(True)` |
+| Cache-Invalidierung | Per-Shape statt global wenn möglich |
+
+---
+
+## UX-Standards
+
+### Referenz: Transform-System V3
+
+Alle interaktiven Features sollten diesem Standard folgen:
+
+1. **Direkte Manipulation** - Gizmo im Viewport
+2. **Live-Preview** - VTK UserTransform (kein Kernel-Update während Drag)
+3. **Numerische Eingabe** - Panel für präzise Werte
+4. **Commit on Release** - Kernel-Update erst bei Maus-Release
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Qt Signal-Topologie                       │
-└─────────────────────────────────────────────────────────────┘
-
-Browser.feature_selected(body_id, feature_id)
+User Drag Gizmo
     ↓
-MainWindow._on_feature_selected()
-    ├─ Highlight Feature in Viewport
-    └─ MainWindow._show_feature_properties()
-
-Viewport.body_clicked(body_id)
+Live VTK Transform (SCHNELL, kein Kernel)
     ↓
-MainWindow._on_body_clicked()
-    ├─ CADTessellator.clear_cache()
-    └─ Viewport.show_transform_gizmo(body_id)
-
-Viewport.body_transform_requested(body_id, mode, data)
-    ├─ (mode = "move" | "rotate" | "scale" | "mirror")
+User Release
     ↓
-MainWindow._on_body_transform_requested()
-    ├─ CADTessellator.clear_cache()
-    ├─ body._build123d_solid = body._build123d_solid.<transform>()
-    ├─ Body._update_mesh_from_solid()
-    └─ Viewport.refresh()
-
-Tool_3D.extrude_requested(face_ids, height, mode)
+Kernel Update + invalidate_mesh()
     ↓
-MainWindow._on_extrude_requested()
-    ├─ CADTessellator.clear_cache()
-    ├─ new_solid = current_body.extrude(faces, height)
-    ├─ Body._update_mesh_from_solid()
-    └─ Viewport.refresh()
+Viewport Refresh
+```
+
+### Error-Feedback
+
+Fehler müssen **sofort** und **klar** kommuniziert werden:
+
+```python
+# RICHTIG: Klare Fehlermeldung
+if result.is_error:
+    show_notification(
+        "Boolean Cut fehlgeschlagen",
+        detail="Geometrien überschneiden sich nicht",
+        type="error"
+    )
+
+# FALSCH: Stille Fehler
+if result.is_error:
+    logger.warning("Something went wrong")  # User sieht das nicht!
 ```
 
 ---
 
-## 🔴 Bekannte Probleme & TODOs
+## Code-Patterns
 
-### Priorität 1 (Critical UX)
-
-- [ ] **Body-Klick im Viewport funktioniert nicht** → Nur Browser-Klick funktioniert
-  - Impact: User kann Body nicht direkt auswählen zum Transformieren
-  - Fix: `geometry_detector.py` – Raycasting verbessern
-  
-- [ ] **Gizmo-Pfeile teilweise vom Body verdeckt** → Z-Buffer-Konflikte
-  - Impact: Schwierig, Gizmo zu greifen
-  - Fix: Gizmo mit `depth_peeling` rendern oder separaten Layer nutzen
-
-- [ ] **Undo/Redo für Transforms**
-  - Impact: User muss manuell rückgängig machen
-  - Architecture: `main_window.py` – Command-Pattern implementieren
-
-### Priorität 2 (Feature-Vollständigkeit)
-
-- [ ] Multi-Select für Transforms (mehrere Bodies gleichzeitig)
-- [ ] Mirror-Feature (aktuell nur Dialog, nicht implementiert)
-- [ ] Fillet-Kanten-Picking im Viewport (aktuell nur über Browser)
-- [ ] Chamfer-Feature (UX-Standard wie Transform V3)
-
-### Priorität 3 (Polish)
-
-- [ ] Transform-Panel Layout optimieren (zu viel Whitespace)
-- [ ] Keyboard-Shortcuts vollständig dokumentieren
-- [ ] Tooltips auf allen UI-Elementen
-- [ ] Constraint-Solver Stabilität (seltene Edge-Cases)
-
----
-
-## 💻 Wichtige Code-Patterns
-
-### Pattern 1: Body zu Viewport hinzufügen
+### Pattern 1: Kernel-Operation mit Transaction
 
 ```python
-# In viewport_pyvista.py, BodyRenderingMixin
+def apply_fillet(body, edge_indices, radius):
+    with BodyTransaction(body, "Fillet") as txn:
+        # 1. Kernel-Operation
+        new_solid = body._build123d_solid.fillet(edges, radius)
 
-def add_body(self, body_id: str, body: Body):
-    """Fügt Body zur Viewport hinzu oder updated existierenden."""
-    
-    # Schritt 1: Alte Actors ZUERST entfernen!
-    self._remove_body_actors(body_id)
-    
-    # Schritt 2: Neue Meshes generieren
-    mesh_data, edges_data = CADTessellator.tessellate(body._build123d_solid)
-    
-    # Schritt 3: Actors hinzufügen
-    body_mesh_actor = self.plotter.add_mesh(
-        mesh_data,
-        name=f"body_{body_id}_mesh",
-        color=body.metadata.get("color", [0.7, 0.7, 0.7]),
-        opacity=0.9
-    )
-    
-    body_edges_actor = self.plotter.add_mesh(
-        edges_data,
-        name=f"body_{body_id}_edges",
-        color=[0, 0, 0],
-        line_width=1.5
-    )
-    
-    # Schritt 4: Metadata speichern
-    self._body_actors[body_id] = {
-        "mesh_actor": body_mesh_actor,
-        "edges_actor": body_edges_actor,
-        "body": body
-    }
-    
-    # Schritt 5: Viewport Refresh
-    self.plotter.reset_camera()
+        # 2. Validierung
+        if new_solid is None or new_solid.is_null():
+            raise BooleanOperationError("Fillet fehlgeschlagen")
+
+        # 3. Update
+        body._build123d_solid = new_solid
+        body.invalidate_mesh()
+
+        # 4. Commit
+        txn.commit()
+
+    return OperationResult.success(new_solid)
 ```
 
-### Pattern 2: Transform anwenden
+### Pattern 2: Viewport Body-Update
 
 ```python
-# In main_window.py
+def update_body_in_viewport(viewport, body):
+    # Mesh wird lazy generiert beim ersten Zugriff
+    mesh = body.vtk_mesh  # ← Lazy, cached
+    edges = body.vtk_edges
 
-def _on_body_transform_requested(self, body_id: str, mode: str, data: Dict):
-    """
-    Args:
-        body_id: ID des zu transformierenden Bodies
-        mode: "move", "rotate", "scale", "copy", "mirror"
-        data: Transformations-Parameter
-            - move: {"dx": float, "dy": float, "dz": float}
-            - rotate: {"axis": (x,y,z), "angle": float}
-            - scale: {"factor": float}
-    """
-    
-    # Schritt 1: Alte Cache invalidieren
-    CADTessellator.clear_cache()
-    
-    # Schritt 2: Body abrufen
-    body = self.document.get_body(body_id)
-    if not body:
-        logger.error(f"Body {body_id} nicht gefunden")
+    if mesh is None:
         return
-    
-    # Schritt 3: Transform auf Build123d Solid anwenden
+
+    viewport.plotter.add_mesh(mesh, name=f"body_{body.id}")
+    viewport.plotter.add_mesh(edges, name=f"edges_{body.id}")
+```
+
+### Pattern 3: Result-Handling
+
+```python
+result = BooleanEngineV4.execute_boolean(body, tool, "Cut")
+
+match result.status:
+    case ResultStatus.SUCCESS:
+        update_viewport(body)
+        show_success("Cut erfolgreich")
+
+    case ResultStatus.EMPTY:
+        show_info("Keine Überschneidung gefunden")
+
+    case ResultStatus.ERROR:
+        show_error(result.message)
+        # Body ist automatisch zurückgerollt!
+```
+
+---
+
+## Verbotene Patterns
+
+### 1. Mesh-Fallbacks
+
+```python
+# VERBOTEN
+def boolean_cut(body, tool):
     try:
-        if mode == "move":
-            location = Location(translation=(data["dx"], data["dy"], data["dz"]))
-            body._build123d_solid = body._build123d_solid.move(location)
-        
-        elif mode == "rotate":
-            axis = Axis(data["axis"])
-            angle = data["angle"]
-            body._build123d_solid = body._build123d_solid.rotate(axis, angle)
-        
-        elif mode == "scale":
-            # Skalierung ist komplexer – Center beachten!
-            factor = data["factor"]
-            body._build123d_solid = body._build123d_solid.scale(factor)
-        
-        logger.success(f"Transform {mode} angewendet: {body.name}")
-    
-    except Exception as e:
-        logger.error(f"Transform fehlgeschlagen: {e}")
-        self.show_notification("Transform fehlgeschlagen", "error")
-        return
-    
-    # Schritt 4: Mesh updaten
-    body._update_mesh_from_solid()
-    
-    # Schritt 5: Viewport refresh
-    self.viewport.add_body(body_id, body)
-    self.viewport.plotter.render()
+        return kernel_boolean(body, tool)
+    except:
+        return mesh_boolean(body, tool)  # ← NEIN!
 ```
 
-### Pattern 3: Neues Feature mit UX-Konsistenz (Chamfer-Beispiel)
+### 2. Direkte Mesh-Zuweisung
 
 ```python
-# In tool_panel_3d.py
+# VERBOTEN
+body.vtk_mesh = some_mesh  # ← vtk_mesh ist @property!
 
-def request_chamfer(self):
-    """Startet Chamfer-Feature mit Transform-V3-UX-Standard"""
-    
-    # Schritt 1: Selektion validieren
-    selected_edges = self.viewport.geometry_detector.get_selected_edges()
-    
-    if not selected_edges:
-        self.show_notification("Bitte Kanten selektieren", "warning")
-        return
-    
-    # Schritt 2: Feature erstellen
-    chamfer_feature = Feature(
-        name="Chamfer1",
-        type="chamfer",
-        depends_on=self.document.active_body.features[-1].id,
-        params={
-            "edge_ids": selected_edges,
-            "size": 2.0,  # Standard 2mm
-            "mode": "size"  # oder "angle"
-        }
-    )
-    
-    # Schritt 3: Mit Transform-V3 Pattern arbeiten!
-    # → Interaktives Gizmo im Viewport für Radius-Adjustment
-    # → Live-Preview während Drag
-    # → Numerische Eingabe im Panel
-    # → Consistency-Check: Ist UX gleich wie Transform V3?
-    
-    self.viewport.show_chamfer_gizmo(
-        chamfer_feature,
-        on_changed=self._on_chamfer_changed,  # Live-Preview Callback
-        on_applied=self._on_chamfer_applied   # Final Apply
-    )
-    
-    # Schritt 4: Viewport aktualisieren (Kanten-Highlight)
-    self.viewport.highlight_edges(selected_edges)
-
-def _on_chamfer_changed(self, size: float):
-    """Live-Preview während Gizmo-Drag"""
-    # KEIN Build123d Update hier! Nur Visual Preview
-    self.viewport.preview_chamfer_radius(size)
-
-def _on_chamfer_applied(self, size: float):
-    """Final Apply nach Release"""
-    CADTessellator.clear_cache()  # 🔴 WICHTIG!
-    
-    # Feature-Compute
-    new_solid = self.document.active_body.compute_chamfer(size)
-    
-    # Build123d Update
-    self.document.active_body._build123d_solid = new_solid
-    
-    # Viewport Update
-    self.viewport.add_body(self.document.active_body.id, self.document.active_body)
-    logger.success("Chamfer angewendet")
+# RICHTIG
+body._build123d_solid = new_solid
+body.invalidate_mesh()
 ```
 
-### Pattern 4: Mixin-Architektur für Viewport
+### 3. Cache-Invalidierung vergessen
 
 ```python
-# In viewport_pyvista.py
+# VERBOTEN
+body._build123d_solid = new_solid
+# mesh ist jetzt out-of-sync!
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, ChamferMixin):
-    """
-    Viewport kombiniert mehrere Mixins für saubere Separation of Concerns.
-    
-    Mixin-Aufteilung:
-    - ExtrudeMixin: Extrude-Preview-System
-    - PickingMixin: Raycasting & Face/Edge-Selection
-    - BodyRenderingMixin: Body-Rendering & Mesh-Lifecycle
-    - TransformMixinV3: Transform-Gizmo & Interaktion
-    - ChamferMixin: Chamfer-Gizmo & Preview
-    """
-    
-    def __init__(self):
-        super().__init__()
-        self.plotter = PyVistaPlotter()
-        self._body_actors = {}
-        self._gizmo_system = GizmoManager()  # Zentrale Gizmo-Verwaltung
-        
-        # Mixin-Initialisierung
-        self._init_picking()
-        self._init_transform_gizmo()
-        self._init_chamfer_gizmo()
-        self._init_extrude_preview()
+# RICHTIG
+body._build123d_solid = new_solid
+body.invalidate_mesh()
+```
+
+### 4. Silent Failures
+
+```python
+# VERBOTEN
+try:
+    do_operation()
+except:
+    pass  # ← User erfährt nichts!
+
+# RICHTIG
+try:
+    do_operation()
+except Exception as e:
+    return OperationResult.error(f"Operation fehlgeschlagen: {e}")
 ```
 
 ---
 
-## 🚀 Entwicklungshinweise
+## Keyboard-Shortcuts
+
+| Taste | Funktion |
+|-------|----------|
+| `G` | Move-Gizmo |
+| `R` | Rotate-Gizmo |
+| `S` | Scale-Gizmo |
+| `M` | Mirror-Dialog |
+| `Esc` | Abbrechen / Deselektieren |
+| `Delete` | Löschen |
+| `H` | Verstecken/Zeigen |
+
+---
+
+## Entwicklung
 
 ### Starten
 
 ```bash
-cd LiteCad
 conda activate cad_env
 python main.py
-```
-
-### Abhängigkeiten
-
-```bash
-pip install pyside6 pyvista build123d loguru shapely numpy scipy
 ```
 
 ### Debug-Logging
@@ -501,175 +435,41 @@ pip install pyside6 pyvista build123d loguru shapely numpy scipy
 ```python
 from loguru import logger
 
-logger.debug("...")       # Detailliert (nur in Dev-Mode)
-logger.info("...")        # Normal
-logger.success("...")     # Erfolg (grün) – NUR bei User-Facing Success
-logger.warning("...")     # Warnung – Fallbacks
-logger.error("...")       # Fehler – Exceptions mit Kontext
-logger.critical("...")    # Kritisch – App-Stop
+logger.debug("...")      # Entwickler-Details
+logger.info("...")       # Normale Info
+logger.success("...")    # Erfolg (grün)
+logger.warning("...")    # Warnung
+logger.error("...")      # Fehler
 ```
 
-### Keyboard-Shortcuts
+### Pre-Commit Checklist
 
-| Taste | Funktion |
-|-------|----------|
-| `G` | Move-Gizmo aktivieren |
-| `R` | Rotate-Gizmo aktivieren |
-| `S` | Scale-Gizmo aktivieren |
-| `M` | Mirror-Dialog öffnen |
-| `Shift+Drag` | Copy + Transform |
-| `Esc` | Abbrechen / Deselektieren / Gizmo ausblenden |
-| `Tab` | Numerische Eingabe fokussieren |
-| `Enter` | Transform/Feature anwenden |
-| `Delete` | Body/Feature löschen |
-| `H` | Body verstecken/zeigen |
+- [ ] Kernel-Operationen in Transaction gewrapped
+- [ ] `invalidate_mesh()` nach Kernel-Änderungen
+- [ ] Result-Types für alle Operationen
+- [ ] Keine Silent Failures
+- [ ] Keine Mesh-Fallbacks
+- [ ] Performance: Kein Tessellieren in Event-Loops
 
 ---
 
-## 📊 Architektur-Versionshistorie
+## Versions-Historie
 
-Dokumentiert größere Architektur-Änderungen für Kontextualität.
-
-### V12 (aktuell – Januar 2026)
-
-**Neue Features:**
-- Transform-System V3 aktiviert (Move/Rotate/Scale/Copy/Mirror mit Gizmo)
-- Cache-Counter für Tessellator-Invalidierung
-- Zentrales Hinweis-Widget für Benutzerführung
-- Live-Werte-Anzeige im Transform-Panel
-
-**Breaking Changes:**
-- Cache-API geändert (jetzt mit Counter)
-- Transform-Mixin-Signale neu strukturiert
-
-**Bekannte Issues:**
-- Body-Klick im Viewport funktioniert nicht (nur Browser)
-- Gizmo-Z-Buffer-Konflikte
-
-### V11 (Dezember 2025)
-
-- Sketch-Solver verbessert (Lagrange Multiplier)
-- Constraint-Types erweitert
-
-### V10 (November 2025)
-
-- Initiale PyVista-Integration
-- Body-Rendering-System
+| Version | Datum | Änderungen |
+|---------|-------|------------|
+| V13 | Jan 2026 | Phase 2+3 implementiert, neue CLAUDE.md |
+| V12 | Jan 2026 | Transform V3, Cache-Counter |
+| V11 | Dez 2025 | Sketch-Solver verbessert |
+| V10 | Nov 2025 | PyVista-Integration |
 
 ---
 
-## 🎓 Lern-Ressourcen
+## Performance-Optimierung (TODO)
 
-### Build123d Dokumentation
+Bekannte Bottlenecks für zukünftige Optimierung:
 
-- Offizielle Docs: [build123d GitHub](https://github.com/CadQuery/build123d)
-- Wichtig: `Solid` API, `Location` für Transforms, `BuildPart` für Features
-
-### PyVista / VTK
-
-- [PyVista Docs](https://docs.pyvista.org/)
-- Kritisch: `Plotter`, `PolyData`, `UserTransform`, Picking mit Raycasting
-
-### Qt/PySide6
-
-- [PySide6 Dokumentation](https://doc.qt.io/qtforpython-6/)
-- Patterns: Signal/Slot, Mixin-Architektur, MDI-Widgets
-
-### CAD-Theorie
-
-- **BREP vs Mesh:** BREP = Boundary Representation (exakt), Mesh = Tessellation (visual)
-- **Constraints:** Lagrange Multiplier Method für Sketch-Solver
-- **Transforms:** OpenCASCADE `Location` API
-
----
-
-## 📝 Schnelle Referenz für häufige Aufgaben
-
-### Neue Features hinzufügen
-
-1. Feature-Klasse in `modeling/__init__.py` registrieren
-2. Feature-Compute-Logik schreiben (mit Build123d)
-3. **UX-Konsistenz-Check:** Transform V3 als Referenz nutzen
-4. Viewport-Mixin hinzufügen (z.B. `ChamferMixin`)
-5. Tool-Button in `tool_panel_3d.py`
-6. Internationalisierung (DE + EN) in `i18n/`
-
-### Viewport-Updates nach Änderungen
-
-```python
-# IMMER diese Reihenfolge:
-1. CADTessellator.clear_cache()
-2. body._build123d_solid = <new solid>
-3. body._update_mesh_from_solid()
-4. self.viewport.add_body(body_id, body)
-5. self.viewport.plotter.render()
-```
-
-### Performance-Bottlenecks debuggen
-
-```python
-# In viewport_pyvista.py
-import time
-
-def add_body_debug(self, body_id, body):
-    t0 = time.time()
-    
-    mesh_data, edges_data = CADTessellator.tessellate(body._build123d_solid)
-    logger.debug(f"Tessellate: {time.time()-t0:.2f}s")
-    
-    t0 = time.time()
-    self.plotter.add_mesh(mesh_data, ...)
-    logger.debug(f"Add Mesh: {time.time()-t0:.2f}s")
-```
-
----
-
-## 🔗 Abhängigkeiten zwischen Komponenten
-
-```
-main_window.py
-├─ Browser (Feature-Auswahl)
-├─ Viewport (Rendering)
-│  ├─ TransformMixinV3 (Transform-Gizmo)
-│  ├─ PickingMixin (Raycasting)
-│  ├─ BodyRenderingMixin (Mesh-Lifecycle)
-│  └─ ExtrudeMixin (Extrude-Preview)
-├─ ToolPanel3D (3D-Tool-Buttons)
-├─ InputPanels (Feature-Parameter)
-└─ CADTessellator (Mesh-Generation)
-
-Document
-├─ bodies: [Body]
-├─ sketches: [Sketch]
-└─ planes: [Plane]
-
-Body
-├─ _build123d_solid (CAD-Geometrie)
-├─ vtk_mesh (Visualization)
-└─ features: [Feature]
-
-Sketch
-├─ geometry: [Line, Arc, Circle, ...]
-└─ constraints: [Constraint]
-```
-
----
-
-## ✅ Pre-Commit Checklist (für neue Features)
-
-- [ ] Alle Tests grün
-- [ ] Logging-Level auf `INFO` (nicht `DEBUG`)
-- [ ] Keine `print()` Statements (nur `logger`)
-- [ ] Internationalisierung (DE + EN)
-- [ ] Cache-Invalidierung nach Build123d Updates
-- [ ] UX-Konsistenz mit Transform V3 geprüft
-- [ ] Keine unerwarteten Fehlerseiten möglich
-- [ ] Dokumentation aktualisiert (diese Doku)
-- [ ] Keyboard-Shortcuts dokumentiert
-- [ ] Viewport-Performance akzeptabel (<100ms bei Standard-Model)
-
----
-
-**Letzte Aktualisierung:** Januar 2026, V12+  
-**Nächste Review:** Nach Major-Feature-Implementierung  
-**Verantwortung:** Claude (kontinuierliche Architektur-Überblicke)
+1. **Tessellation bei jedem Render** - LOD-System einführen
+2. **Globale Cache-Invalidierung** - Per-Body Invalidierung
+3. **Sketch-Renderer** - Batch-Rendering statt einzelne Elemente
+4. **Event-Handling** - Debouncing für Mouse-Move
+5. **VTK Actor-Management** - Pooling statt neu erstellen

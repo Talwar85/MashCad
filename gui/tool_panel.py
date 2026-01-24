@@ -261,7 +261,27 @@ class ToolPanel(QFrame):
         
         const_group.setLayout(const_layout)
         layout.addWidget(const_group)
-        
+
+        # === IMPORT/EXPORT ===
+        import_group = self._create_group(tr("Import/Export"))
+        import_layout = QGridLayout()
+        import_layout.setSpacing(4)
+
+        tools_import = [
+            (f"📥 {tr('DXF Import')}", "import_dxf", "", "Import DXF file", 0, 0),
+            (f"📤 {tr('DXF Export')}", "export_dxf", "", "Export to DXF", 0, 1),
+        ]
+
+        for text, name, shortcut, tooltip, row, col in tools_import:
+            btn = ToolButton(text, shortcut, tr(tooltip))
+            btn.setCheckable(False)  # Import/Export sind keine Toggle-Buttons
+            btn.clicked.connect(lambda checked, n=name: self._on_tool_clicked(n))
+            self.buttons[name] = btn
+            import_layout.addWidget(btn, row, col)
+
+        import_group.setLayout(import_layout)
+        layout.addWidget(import_group)
+
         # === OPTIONEN ===
         options_group = self._create_group(tr("Settings"))
         options_layout = QVBoxLayout()
@@ -288,7 +308,19 @@ class ToolPanel(QFrame):
         self.grid_size_spin.valueChanged.connect(lambda v: self.option_changed.emit("grid_size", v))
         grid_row.addWidget(self.grid_size_spin)
         options_layout.addLayout(grid_row)
-        
+
+        # Snap-Radius Einstellung
+        snap_row = QHBoxLayout()
+        snap_row.addWidget(QLabel(tr("Snap Radius") + ":"))
+        self.snap_radius_spin = QSpinBox()
+        self.snap_radius_spin.setRange(5, 50)
+        self.snap_radius_spin.setValue(15)
+        self.snap_radius_spin.setSuffix(" px")
+        self.snap_radius_spin.setFocusPolicy(Qt.ClickFocus)
+        self.snap_radius_spin.valueChanged.connect(lambda v: self.option_changed.emit("snap_radius", v))
+        snap_row.addWidget(self.snap_radius_spin)
+        options_layout.addLayout(snap_row)
+
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
         
@@ -316,9 +348,12 @@ class ToolPanel(QFrame):
     
     def set_grid_snap(self, enabled: bool):
         self.grid_snap_cb.setChecked(enabled)
-    
+
     def set_construction(self, enabled: bool):
         self.construction_cb.setChecked(enabled)
+
+    def set_snap_radius(self, radius: int):
+        self.snap_radius_spin.setValue(radius)
 
 
 class PropertiesPanel(QFrame):

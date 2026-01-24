@@ -191,6 +191,27 @@ class GeometricFaceSelector:
             pass
         return "bspline"
 
+    def to_dict(self) -> dict:
+        """Serialisiert Selector zu Dict für persistente Speicherung."""
+        return {
+            "center": list(self.center),
+            "normal": list(self.normal),
+            "area": self.area,
+            "surface_type": self.surface_type,
+            "tolerance": self.tolerance,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'GeometricFaceSelector':
+        """Deserialisiert Selector von Dict."""
+        return cls(
+            center=tuple(data.get("center", (0, 0, 0))),
+            normal=tuple(data.get("normal", (0, 0, 1))),
+            area=data.get("area", 0),
+            surface_type=data.get("surface_type", "planar"),
+            tolerance=data.get("tolerance", 10.0),
+        )
+
 
 @dataclass
 class GeometricEdgeSelector:
@@ -354,6 +375,27 @@ class GeometricEdgeSelector:
         except:
             pass
         return "bspline"
+
+    def to_dict(self) -> dict:
+        """Serialisiert Selector zu Dict für persistente Speicherung."""
+        return {
+            "center": list(self.center),
+            "direction": list(self.direction),
+            "length": self.length,
+            "curve_type": self.curve_type,
+            "tolerance": self.tolerance,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'GeometricEdgeSelector':
+        """Deserialisiert Selector von Dict."""
+        return cls(
+            center=tuple(data.get("center", (0, 0, 0))),
+            direction=tuple(data.get("direction", (1, 0, 0))),
+            length=data.get("length", 0),
+            curve_type=data.get("curve_type", "line"),
+            tolerance=data.get("tolerance", 10.0),
+        )
 
 
 # ==================== HELPER FUNCTIONS ====================
