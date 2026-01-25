@@ -16,7 +16,15 @@
       "Bash(\"C:\\\\Python39\\\\python.exe\" -c \"import pyvista; import build123d; print\\(''Dependencies OK''\\)\")",
       "Bash(del c:LiteCadcheck_api.py)",
       "Bash(C:UsersUserminiconda3envscad_envpython.exe test_v2_direct.py)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(C:/Users/User/anaconda3/envs/cad_env/python.exe:*)",
+      "Bash(\"C:/Users/User/miniforge3/envs/cad_env/python.exe\" c:/LiteCad/phase2/export_step_safe.py)",
+      "Bash(git restore:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nMeshconverter aufgeräumt, Fillet-Konvertierung deaktiviert\n\n- 15 ungenutzte Converter-Dateien entfernt \\(alte Experimente\\)\n- Fillet \\(zylindrische\\) Konvertierung temporär deaktiviert\n- Chamfer-Konvertierung funktioniert weiterhin\n- FilletAwareConverter in Package exportiert\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
