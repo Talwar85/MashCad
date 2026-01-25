@@ -931,96 +931,68 @@ class MainWindow(QMainWindow):
             logger.warning(f"Unbekannte 3D-Aktion: {action}")
             
     def _convert_selected_body_to_brep(self):
-        from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
+        """Konvertiert ausgewählten Mesh-Body zu BREP-Solid."""
+        from PySide6.QtWidgets import QApplication, QMessageBox
         from PySide6.QtCore import Qt
 
         body = self._get_active_body()
-        if not body: 
+        if not body:
             logger.warning("Kein Körper ausgewählt.")
             return
 
-        # --- Parameter-Abfrage ---
-        options = [
-            "Auto (Hybrid - Automatische Wahl der besten Methode)",
-            "Primitives (RANSAC - Erkennt Zylinder, Kugeln, Ebenen)",
-            "Smart (Planare Flächen - Für prismatische Teile)"
-        ]
+        if body._build123d_solid is not None:
+            logger.info(f"'{body.name}' ist bereits ein CAD-Solid.")
+            return
 
-        # Dialog anzeigen
-        item, ok = QInputDialog.getItem(
-            self,
-            "Konvertierungsmethode wählen",
-            "Strategie:",
-            options,
-            0, # Standard-Auswahl (Index 0 = Auto/Hybrid)
-            False # Nicht editierbar
-        )
+        if body.vtk_mesh is None:
+            logger.warning("Kein Mesh vorhanden zum Konvertieren.")
+            return
 
-        if not ok or not item:
-            return # Nutzer hat Abbrechen geklickt
+        logger.info(f"Konvertiere '{body.name}' zu BREP (bitte warten)...")
 
-        # Auswahl in technischen Parameter übersetzen
-        mode_param = "hybrid"  # Default zu Hybrid
-        if "Primitives" in item:
-            mode_param = "v7"
-        elif "Smart" in item:
-            mode_param = "v6"
-        # ------------------------------
-
-        logger.info(f"Konvertiere '{body.name}' mit [{mode_param.upper()}] (bitte warten)...")
-        
-        # UI updaten und Cursor auf "Warten" setzen (da V5 dauern kann)
+        # UI updaten und Cursor auf "Warten" setzen
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents() 
+        QApplication.processEvents()
 
         try:
-            # 2. Konvertierung starten (mit Parameter!)
-            success = body.convert_to_brep(mode=mode_param)
-            
+            success = body.convert_to_brep()
+
             if success:
                 logger.success(f"Erfolg! '{body.name}' ist jetzt ein CAD-Solid.")
-                
-                # 3. Browser aktualisieren
+
+                # Browser aktualisieren
                 self.browser.refresh()
-                
-                # 4. VIEWPORT FIX: Alte Darstellung entfernen
+
+                # VIEWPORT FIX: Alte Darstellung entfernen
                 if body.id in self.viewport_3d._body_actors:
                     for actor_name in self.viewport_3d._body_actors[body.id]:
                         try:
                             self.viewport_3d.plotter.remove_actor(actor_name)
                         except: pass
-                
-                # 5. Neu laden
+
+                # Neu laden
                 self._update_viewport_all_impl()
-                
-                # 6. Rendern erzwingen
+
+                # Rendern erzwingen
                 if hasattr(self.viewport_3d, 'plotter'):
                     request_render(self.viewport_3d.plotter, immediate=True)
                     self.viewport_3d.update()
-                
+
             else:
-                QApplication.restoreOverrideCursor() # Cursor zurücksetzen vor der Box
-
-                # Spezifische Fehlermeldung basierend auf Modus
-                if mode_param == "hybrid":
-                    error_msg = "Hybrid-Konvertierung fehlgeschlagen.\nAlle Fallback-Methoden haben versagt."
-                elif mode_param == "v7":
-                    error_msg = "RANSAC-Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und hat klare geometrische Primitive?"
-                elif mode_param == "v6":
-                    error_msg = "Smart-Konvertierung fehlgeschlagen.\nEnthält das Mesh planare Flächen?"
-                else:
-                    error_msg = "Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und valide?"
-
-                QMessageBox.warning(self, "Fehler", error_msg)
-                logger.error(f"Konvertierung fehlgeschlagen: {mode_param}")
+                QApplication.restoreOverrideCursor()
+                QMessageBox.warning(
+                    self,
+                    "Fehler",
+                    "Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und valide?"
+                )
+                logger.error("Mesh-zu-BREP Konvertierung fehlgeschlagen")
 
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Absturz", f"Kritischer Fehler bei Konvertierung: {e}")
+            QMessageBox.critical(self, "Fehler", f"Kritischer Fehler: {e}")
             traceback.print_exc()
 
         finally:
-            # WICHTIG: Cursor immer zurücksetzen, auch bei Fehlern
             QApplication.restoreOverrideCursor()
             
     def _show_not_implemented(self, feature: str):

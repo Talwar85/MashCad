@@ -507,6 +507,12 @@ class Body:
             self._regenerate_mesh()
         return self._mesh_cache
 
+    @vtk_mesh.setter
+    def vtk_mesh(self, value):
+        """Setter für importierte Meshes (vor BREP-Konvertierung)"""
+        self._mesh_cache = value
+        self._mesh_cache_valid = True
+
     @property
     def vtk_edges(self):
         """Lazy-loaded edges from solid (Single Source of Truth)"""
@@ -552,10 +558,12 @@ class Body:
             self.features.remove(feature)
             self._rebuild()
             
-    def convert_to_brep(self, mode: str = "hybrid"):
+    def convert_to_brep(self, mode: str = "auto"):
         """
         Wandelt Mesh in CAD-Solid um.
-        :param mode: 'hybrid' (Auto - EMPFOHLEN), 'v7' (RANSAC Primitives), 'v6' (Smart/Planar)
+
+        Verwendet DirectMeshConverter + BRepOptimizer für zuverlässige Konvertierung.
+        Faces werden zu BREP konvertiert und dann mit UnifySameDomain optimiert.
         """
         if self._build123d_solid is not None:
             logger.info(f"Body '{self.name}' ist bereits BREP.")
@@ -565,80 +573,56 @@ class Body:
             logger.warning("Keine Mesh-Daten vorhanden.")
             return False
 
-        solid = None
+        logger.info(f"Starte Mesh-zu-BREP Konvertierung für '{self.name}'...")
+        logger.info(f"  Mesh: {self.vtk_mesh.n_points} Punkte, {self.vtk_mesh.n_cells} Faces")
 
-        # --- MODUS HYBRID: AUTOMATISCHE WAHL (EMPFOHLEN) ---
-        if mode == "hybrid":
-            logger.info("Starte Konvertierung mit Hybrid (Automatische Wahl)...")
-            try:
-                from modeling.mesh_converter_hybrid import HybridMeshConverter
-                converter = HybridMeshConverter(
-                    ransac_min_coverage=0.80,   # 80% Coverage für RANSAC-Erfolg
-                    use_v7=True,                # V7 (RANSAC) aktiviert
-                    use_v6_fallback=True,       # V6 als Fallback
-                    use_v1_fallback=True        # V1 als letzter Fallback
-                )
-                solid = converter.convert(self.vtk_mesh)
+        try:
+            # 1. DirectMeshConverter: Mesh -> BREP (1:1 Faces)
+            from meshconverter.direct_mesh_converter import DirectMeshConverter
+            from meshconverter.brep_optimizer import optimize_brep
 
-            except Exception as e:
-                logger.error(f"Hybrid Konvertierung fehlgeschlagen: {e}")
-                traceback.print_exc()
+            converter = DirectMeshConverter(unify_faces=False)
+            result = converter.convert(self.vtk_mesh)
+
+            if result.solid is None:
+                logger.error(f"DirectMeshConverter fehlgeschlagen: {result.message}")
                 return False
 
-        # --- MODUS V7: RANSAC PRIMITIVES ---
-        elif mode == "v7":
-            logger.info("Starte Konvertierung mit V7 (RANSAC Primitives)...")
-            try:
-                from modeling.mesh_converter_primitives import RANSACPrimitiveConverter
-                converter = RANSACPrimitiveConverter(
-                    angle_tolerance=5.0,        # 5° für Region-Clustering
-                    ransac_threshold=0.5,       # 0.5mm Inlier-Toleranz
-                    min_inlier_ratio=0.70,      # 70% Inliers minimum
-                    min_region_faces=10,
-                    sewing_tolerance=0.1
-                )
-                solid = converter.convert(self.vtk_mesh)
+            logger.info(f"  BREP erstellt: {result.stats.get('faces_created', '?')} Faces")
 
-            except Exception as e:
-                logger.error(f"V7 Konvertierung fehlgeschlagen: {e}")
-                traceback.print_exc()
+            # 2. BRepOptimizer: Face-Reduktion + Primitiv-Erkennung
+            optimized, opt_stats = optimize_brep(result.solid)
+
+            faces_before = opt_stats.get('faces_before', 0)
+            faces_after = opt_stats.get('faces_after', 0)
+            reduction = faces_before - faces_after
+
+            logger.info(f"  Optimiert: {faces_before} -> {faces_after} Faces ({reduction} reduziert)")
+            if opt_stats.get('cylinders_detected', 0) > 0:
+                logger.info(f"  Zylinder erkannt: {opt_stats['cylinders_detected']}")
+            if opt_stats.get('spheres_detected', 0) > 0:
+                logger.info(f"  Kugeln erkannt: {opt_stats['spheres_detected']}")
+
+            # 3. In Build123d Solid wrappen
+            from build123d import Solid
+            solid = Solid(optimized)
+
+            if solid and hasattr(solid, 'wrapped') and not solid.wrapped.IsNull():
+                self._build123d_solid = solid
+                self.shape = solid.wrapped
+
+                logger.success(f"Body '{self.name}' erfolgreich konvertiert!")
+
+                # Mesh neu berechnen (vom BREP abgeleitet für Konsistenz)
+                self._update_mesh_from_solid(solid)
+                return True
+            else:
+                logger.warning("Konvertierung lieferte kein gültiges Solid.")
                 return False
 
-        # --- MODUS V6: SMART / FEATURE DETECTION ---
-        elif mode == "v6":
-            logger.info("Starte Konvertierung mit V6 (Smart Feature Detection)...")
-            try:
-                converter = SmartMeshConverter(
-                    angle_tolerance=5.0,      # 5° für planare Erkennung
-                    min_region_faces=3,
-                    decimate_target=5000,
-                    sewing_tolerance=0.1
-                )
-                solid = converter.convert(self.vtk_mesh, method="smart")
-
-            except Exception as e:
-                logger.error(f"V6 Konvertierung fehlgeschlagen: {e}")
-                traceback.print_exc()
-                return False
-
-        # --- UNGÜLTIGER MODUS ---
-        else:
-            logger.error(f"Ungültiger Modus: {mode}")
-            logger.info("Verfügbare Modi: 'hybrid', 'v7', 'v6'")
-            return False
-
-        # --- ERGEBNIS VERARBEITEN ---
-        if solid and hasattr(solid, 'wrapped') and not solid.wrapped.IsNull():
-            self._build123d_solid = solid
-            self.shape = solid.wrapped
-            
-            logger.success(f"Body '{self.name}' erfolgreich mit [{mode.upper()}] konvertiert.")
-            
-            # Mesh neu berechnen (diesmal vom BREP abgeleitet für Konsistenz)
-            self._update_mesh_from_solid(solid)
-            return True
-        else:
-            logger.warning(f"Konvertierung mit [{mode.upper()}] lieferte kein gültiges Solid.")
+        except Exception as e:
+            logger.error(f"Konvertierung fehlgeschlagen: {e}")
+            traceback.print_exc()
             return False
             
     def _safe_operation(self, op_name, op_func, fallback_func=None):

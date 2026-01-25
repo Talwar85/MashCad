@@ -1,91 +1,170 @@
-"""Konvertiert alle STL-Dateien zu optimierten STEP-Dateien."""
+"""
+Konvertiere alle Test-STL-Dateien zu STEP und analysiere die Ergebnisse.
+"""
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 from loguru import logger
 import sys
-import os
+import glob
 
 logger.remove()
 logger.add(sys.stderr, format="<level>{level: <8}</level> | {message}", level="INFO")
 
-from meshconverter.direct_mesh_converter import DirectMeshConverter
 from meshconverter.mesh_converter_v10 import MeshLoader
-from meshconverter.brep_optimizer import optimize_brep
+from meshconverter.trimmed_cylinder_converter import TrimmedCylinderConverter
+from meshconverter.final_mesh_converter import FinalMeshConverter
+
 from OCP.STEPControl import STEPControl_Writer, STEPControl_AsIs
-from OCP.IFSelect import IFSelect_RetDone
+from OCP.Interface import Interface_Static
 
-# STL-Dateien zum Konvertieren
-stl_files = [
-    ('stl/MGN12H_X_Carriage_Lite (1).stl', 'step_output/MGN12H_optimized.step'),
-    ('stl/V1.stl', 'step_output/V1_optimized.step'),
-    ('stl/V2.stl', 'step_output/V2_optimized.step'),
-]
+os.makedirs('step', exist_ok=True)
 
-os.makedirs('step_output', exist_ok=True)
+# Finde alle STL-Dateien
+stl_files = glob.glob('stl/*.stl') + glob.glob('stl/*.STL')
+print(f"Gefundene STL-Dateien: {len(stl_files)}")
+for f in stl_files:
+    print(f"  - {f}")
 
-for stl_path, step_path in stl_files:
-    if not os.path.exists(stl_path):
-        print(f"\n[SKIP] {stl_path} nicht gefunden")
-        continue
+results = []
 
+# Konverter
+trimmed_converter = TrimmedCylinderConverter()
+final_converter = FinalMeshConverter(preserve_cylinders=True)
+solid_converter = FinalMeshConverter(preserve_cylinders=False)
+
+def count_step_entities(filepath):
+    """Zählt Entities im STEP-File."""
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+        return {
+            'CYLINDRICAL_SURFACE': content.count('CYLINDRICAL_SURFACE'),
+            'PLANE': content.count('PLANE('),
+            'B_SPLINE_SURFACE': content.count('B_SPLINE_SURFACE'),
+            'SPHERICAL_SURFACE': content.count('SPHERICAL_SURFACE'),
+            'total_lines': len(content.split('\n'))
+        }
+    except:
+        return {}
+
+print("\n" + "=" * 80)
+print("KONVERTIERUNG")
+print("=" * 80)
+
+for stl_path in stl_files:
+    basename = os.path.splitext(os.path.basename(stl_path))[0]
     print(f"\n{'='*60}")
-    print(f"Konvertiere: {stl_path}")
+    print(f"STL: {basename}")
     print('='*60)
 
-    # 1. Lade STL
-    print("\n1. Lade STL...")
-    try:
-        load_result = MeshLoader.load(stl_path, repair=True)
-        print(f"   {load_result.mesh.n_points} Punkte, {load_result.mesh.n_cells} Faces")
-    except Exception as e:
-        print(f"   [FEHLER] Laden fehlgeschlagen: {e}")
+    # Lade Mesh
+    load_result = MeshLoader.load(stl_path, repair=True)
+    if load_result.mesh is None:
+        print("  FEHLER: Konnte nicht laden")
         continue
 
-    # 2. Konvertiere zu BREP
-    print("\n2. Konvertiere zu BREP...")
-    try:
-        converter = DirectMeshConverter(unify_faces=False)
-        result = converter.convert(load_result.mesh)
-        print(f"   Status: {result.status.name}")
-        print(f"   BREP Faces: {result.stats.get('faces_created', '?')}")
-    except Exception as e:
-        print(f"   [FEHLER] Konvertierung fehlgeschlagen: {e}")
-        continue
+    mesh = load_result.mesh
+    print(f"  Mesh: {mesh.n_points} Vertices, {mesh.n_cells} Faces")
 
-    if not result.solid:
-        print("   [FEHLER] Kein Solid erstellt")
-        continue
+    result_info = {
+        'name': basename,
+        'mesh_faces': mesh.n_cells,
+        'conversions': {}
+    }
 
-    # 3. Optimiere BREP
-    print("\n3. Optimiere BREP...")
-    try:
-        optimized, opt_stats = optimize_brep(result.solid)
-
-        faces_before = opt_stats.get('faces_before', 0)
-        faces_after = opt_stats.get('faces_after', 0)
-        reduction = faces_before - faces_after
-        reduction_pct = 100 * reduction / faces_before if faces_before > 0 else 0
-
-        print(f"   Faces: {faces_before} → {faces_after} ({reduction_pct:.1f}% Reduktion)")
-        print(f"   Zylinder erkannt: {opt_stats.get('cylinders_detected', 0)}")
-        print(f"   Kugeln erkannt: {opt_stats.get('spheres_detected', 0)}")
-    except Exception as e:
-        print(f"   [FEHLER] Optimierung fehlgeschlagen: {e}")
-        optimized = result.solid
-
-    # 4. Exportiere STEP
-    print("\n4. Exportiere STEP...")
-    try:
+    # 1. Trimmed Converter
+    print("\n  [1] Trimmed Converter...")
+    result = trimmed_converter.convert(mesh)
+    if result.shape is not None:
+        step_path = f"step/{basename}_trimmed.step"
         writer = STEPControl_Writer()
-        writer.Transfer(optimized, STEPControl_AsIs)
-        status = writer.Write(step_path)
+        Interface_Static.SetCVal_s("write.step.schema", "AP214")
+        writer.Transfer(result.shape, STEPControl_AsIs)
+        writer.Write(step_path)
 
-        if status == IFSelect_RetDone:
-            size = os.path.getsize(step_path) / 1024
-            print(f"   ✓ {step_path} ({size:.0f} KB)")
-        else:
-            print(f"   [FEHLER] STEP-Export fehlgeschlagen")
-    except Exception as e:
-        print(f"   [FEHLER] Export fehlgeschlagen: {e}")
+        entities = count_step_entities(step_path)
+        result_info['conversions']['trimmed'] = {
+            'status': result.status,
+            'is_solid': result.is_solid,
+            'cylindrical': result.cylindrical_surfaces,
+            'step_entities': entities
+        }
+        print(f"      Status: {result.status}, Solid: {result.is_solid}")
+        print(f"      CYLINDRICAL_SURFACE: {result.cylindrical_surfaces}")
+        print(f"      -> {step_path}")
 
-print(f"\n{'='*60}")
-print("FERTIG")
-print('='*60)
+    # 2. Final Converter (Cylinder Mode)
+    print("\n  [2] Final Converter (Cylinder Mode)...")
+    result = final_converter.convert(mesh)
+    if result.shape is not None:
+        step_path = f"step/{basename}_cylinders.step"
+        writer = STEPControl_Writer()
+        writer.Transfer(result.shape, STEPControl_AsIs)
+        writer.Write(step_path)
+
+        entities = count_step_entities(step_path)
+        result_info['conversions']['cylinders'] = {
+            'status': result.status,
+            'is_solid': result.is_solid,
+            'cylindrical': result.cylindrical_surfaces,
+            'step_entities': entities
+        }
+        print(f"      Status: {result.status}, Solid: {result.is_solid}")
+        print(f"      CYLINDRICAL_SURFACE: {result.cylindrical_surfaces}")
+        print(f"      -> {step_path}")
+
+    # 3. Final Converter (Solid Mode)
+    print("\n  [3] Final Converter (Solid Mode)...")
+    result = solid_converter.convert(mesh)
+    if result.shape is not None:
+        step_path = f"step/{basename}_solid.step"
+        writer = STEPControl_Writer()
+        writer.Transfer(result.shape, STEPControl_AsIs)
+        writer.Write(step_path)
+
+        entities = count_step_entities(step_path)
+        result_info['conversions']['solid'] = {
+            'status': result.status,
+            'is_solid': result.is_solid,
+            'cylindrical': result.cylindrical_surfaces,
+            'step_entities': entities
+        }
+        print(f"      Status: {result.status}, Solid: {result.is_solid}")
+        print(f"      CYLINDRICAL_SURFACE: {result.cylindrical_surfaces}")
+        print(f"      -> {step_path}")
+
+    results.append(result_info)
+
+# Zusammenfassung
+print("\n" + "=" * 80)
+print("ZUSAMMENFASSUNG")
+print("=" * 80)
+
+print(f"\n{'Datei':<40} {'Trimmed':<15} {'Cylinders':<15} {'Solid':<15}")
+print("-" * 85)
+
+for r in results:
+    name = r['name'][:38]
+
+    def fmt(conv_name):
+        if conv_name in r['conversions']:
+            c = r['conversions'][conv_name]
+            cyl = c.get('cylindrical', 0)
+            solid = 'S' if c.get('is_solid', False) else '-'
+            return f"{cyl} CYL {solid}"
+        return "N/A"
+
+    print(f"{name:<40} {fmt('trimmed'):<15} {fmt('cylinders'):<15} {fmt('solid'):<15}")
+
+print("\nLegende: X CYL = Anzahl CYLINDRICAL_SURFACE, S = ist Solid, - = kein Solid")
+
+print("\n" + "=" * 80)
+print("STEP-DATEIEN")
+print("=" * 80)
+step_files = glob.glob('step/*.step')
+for f in sorted(step_files):
+    entities = count_step_entities(f)
+    cyl = entities.get('CYLINDRICAL_SURFACE', 0)
+    plane = entities.get('PLANE', 0)
+    print(f"  {os.path.basename(f):<45} CYL:{cyl:<3} PLANE:{plane}")

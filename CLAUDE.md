@@ -425,10 +425,7 @@ except Exception as e:
 
 ### Starten
 
-```bash
-conda activate cad_env
-python main.py
-```
+conda run -n cad_env python -c "
 
 ### Debug-Logging
 
