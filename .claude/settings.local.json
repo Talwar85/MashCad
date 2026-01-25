@@ -7,7 +7,15 @@
       "Bash(powershell -Command:*)",
       "Bash(conda run -n cad_env python:*)",
       "Bash(\"C:/Users/User/miniforge3/envs/cad_env/python.exe\" tests/analyze_dxf.py)",
-      "Bash(/c/Users/User/miniforge3/envs/cad_env/python.exe:*)"
+      "Bash(/c/Users/User/miniforge3/envs/cad_env/python.exe:*)",
+      "Bash(C:Python39python.exe -c \"from meshconverter import MeshToBREPConverterV10, convert_stl_to_brep, ConversionStatus; print\\(''Import OK''\\)\")",
+      "Bash(\"C:\\\\Users\\\\User\\\\miniforge3\\\\python.exe\" -c \"import pyvista; print\\(''pyvista OK''\\)\")",
+      "Bash(dir /s /b \"C:\\\\Users\\\\User\\\\miniforge3\\\\envs\\\\*python.exe\")",
+      "Bash(\"C:/Users/User/miniforge3/envs/cad_env/python.exe\" -c \"import pyvista; print\\(''pyvista OK''\\)\")",
+      "Bash(C:UsersUserminiforge3python.exe -c \"import pyvista; import build123d; print\\(''Dependencies OK''\\)\")",
+      "Bash(\"C:\\\\Python39\\\\python.exe\" -c \"import pyvista; import build123d; print\\(''Dependencies OK''\\)\")",
+      "Bash(del c:LiteCadcheck_api.py)",
+      "Bash(C:UsersUserminiconda3envscad_envpython.exe test_v2_direct.py)"
     ]
   }
 }
