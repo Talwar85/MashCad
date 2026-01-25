@@ -357,18 +357,73 @@ class DirectMeshConverter:
             if shape_type.name == 'TopAbs_SHELL':
                 shell = TopoDS.Shell_s(sewed_shape)
             elif shape_type.name == 'TopAbs_COMPOUND':
-                # Versuche Shell aus Compound zu extrahieren
+                # Sammle ALLE Shells aus dem Compound
                 from OCP.TopExp import TopExp_Explorer
-                from OCP.TopAbs import TopAbs_SHELL
+                from OCP.TopAbs import TopAbs_SHELL, TopAbs_SOLID
+                from OCP.BRep import BRep_Builder
+                from OCP.TopoDS import TopoDS_Compound
+
+                shells = []
                 exp = TopExp_Explorer(sewed_shape, TopAbs_SHELL)
-                if exp.More():
-                    shell = TopoDS.Shell_s(exp.Current())
-                else:
+                while exp.More():
+                    shells.append(TopoDS.Shell_s(exp.Current()))
+                    exp.Next()
+
+                logger.debug(f"  Compound enthält {len(shells)} Shells")
+
+                if not shells:
                     logger.warning("Kein Shell in Compound gefunden")
                     stats['is_valid'] = False
                     return ConversionResult(
                         status=ConversionStatus.PARTIAL,
                         message=f"Compound ohne Shell, {free_edges} free edges",
+                        stats=stats
+                    )
+
+                # Wenn nur eine Shell, normal weiter
+                if len(shells) == 1:
+                    shell = shells[0]
+                else:
+                    # Mehrere Shells: Kombiniere zu einem Compound von Solids
+                    logger.info(f"  Kombiniere {len(shells)} Shells zu Compound...")
+                    builder = BRep_Builder()
+                    compound = TopoDS_Compound()
+                    builder.MakeCompound(compound)
+
+                    for i, sh in enumerate(shells):
+                        # Jede Shell zu Solid
+                        shell_fixer = ShapeFix_Shell(sh)
+                        shell_fixer.Perform()
+                        fixed_sh = shell_fixer.Shell()
+
+                        solid_builder = BRepBuilderAPI_MakeSolid(fixed_sh)
+                        if solid_builder.IsDone():
+                            builder.Add(compound, solid_builder.Solid())
+
+                    stats['solid_created'] = True
+                    stats['is_valid'] = True
+                    stats['multiple_shells'] = len(shells)
+
+                    # Face-Merging auf Compound
+                    if self.unify_faces:
+                        try:
+                            upgrader = ShapeUpgrade_UnifySameDomain(compound, True, True, True)
+                            upgrader.SetLinearTolerance(self.unify_linear_tol)
+                            upgrader.SetAngularTolerance(self.unify_angular_tol)
+                            upgrader.Build()
+                            unified = upgrader.Shape()
+                            if not unified.IsNull():
+                                compound = TopoDS.Compound_s(unified) if unified.ShapeType().name == 'TopAbs_COMPOUND' else compound
+                                n_faces = self._count_faces(compound)
+                                stats['faces_after_unify'] = n_faces
+                                logger.info(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
+                        except Exception as e:
+                            logger.warning(f"UnifySameDomain auf Compound fehlgeschlagen: {e}")
+
+                    logger.success(f"Compound mit {len(shells)} Solids erstellt")
+                    return ConversionResult(
+                        status=ConversionStatus.SUCCESS,
+                        solid=compound,
                         stats=stats
                     )
             else:
