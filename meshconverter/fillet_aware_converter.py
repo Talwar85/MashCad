@@ -237,20 +237,21 @@ class FilletAwareConverter:
                 ))
                 logger.debug(f"  Chamfer: w={width:.2f}mm")
 
-        logger.info(f"  → {len(fillets)} fillets, {len(chamfers)} chamfers")
-        stats['fillets'] = len(fillets)
+        logger.info(f"  → {len(fillets)} fillets (disabled), {len(chamfers)} chamfers")
+        stats['fillets_detected'] = len(fillets)
+        stats['fillets_converted'] = 0  # Disabled
         stats['chamfers'] = len(chamfers)
 
         # === PHASE 5: Create BREP faces ===
         logger.info("Phase 5: Creating BREP faces...")
         faces = []
 
-        # Create cylindrical faces for fillets
-        for fillet in fillets:
-            face = self._create_cylindrical_face(mesh, fillet)
-            if face:
-                faces.append(face)
-                logger.debug(f"  Created CYLINDRICAL_SURFACE for fillet r={fillet.radius:.2f}mm")
+        # NOTE: Fillet (cylindrical) face creation is disabled for now
+        # The arc edges implementation needs further work
+        # Fillets are skipped - only chamfers and main faces are converted
+        if fillets:
+            logger.warning(f"  ⚠ {len(fillets)} fillets detected but SKIPPED (disabled)")
+            logger.warning(f"    Fillet conversion is disabled until arc edges are fixed")
 
         # Create planar faces for chamfers
         for chamfer in chamfers:

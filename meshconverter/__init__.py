@@ -41,6 +41,13 @@ from meshconverter.mesh_converter_v10 import (
     MeshLoader,
 )
 
+# Fillet-Aware Converter (V9-style detection)
+# Note: Fillet conversion is currently disabled, only chamfers work
+from meshconverter.fillet_aware_converter import (
+    FilletAwareConverter,
+    convert_with_fillets,
+)
+
 __all__ = [
     # Main
     'MeshToBREPConverterV10',
@@ -63,6 +70,10 @@ __all__ = [
 
     # Loader
     'MeshLoader',
+
+    # Fillet-Aware Converter (chamfer-only for now)
+    'FilletAwareConverter',
+    'convert_with_fillets',
 ]
 
 __version__ = '10.0.0'
