@@ -15,7 +15,8 @@
       "Bash(C:UsersUserminiforge3python.exe -c \"import pyvista; import build123d; print\\(''Dependencies OK''\\)\")",
       "Bash(\"C:\\\\Python39\\\\python.exe\" -c \"import pyvista; import build123d; print\\(''Dependencies OK''\\)\")",
       "Bash(del c:LiteCadcheck_api.py)",
-      "Bash(C:UsersUserminiconda3envscad_envpython.exe test_v2_direct.py)"
+      "Bash(C:UsersUserminiconda3envscad_envpython.exe test_v2_direct.py)",
+      "Bash(dir:*)"
     ]
   }
 }

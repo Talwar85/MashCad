@@ -38,6 +38,8 @@ if result.solid:
     print(f"   - Cluster gefunden: {opt_stats.get('clusters_found', '?')}")
     print(f"   - Planes gemerged: {opt_stats.get('planes_merged', '?')}")
     print(f"   - Zylinder gemerged: {opt_stats.get('cylinders_merged', '?')}")
+    print(f"   - Zylinder erkannt: {opt_stats.get('cylinders_detected', '?')}")
+    print(f"   - Kugeln erkannt: {opt_stats.get('spheres_detected', '?')}")
 
     reduction = opt_stats.get('faces_before', 0) - opt_stats.get('faces_after', 0)
     if opt_stats.get('faces_before', 0) > 0:
