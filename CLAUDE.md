@@ -20,6 +20,8 @@
 └─────────────────────────────────────────────────────┘
 ```
 
+conda run -n cad_env python -c "
+
 **Anti-Patterns (VERBOTEN):**
 - Mesh-basierte Fallbacks für Boolean-Operationen
 - Manuelle Mesh-Manipulation ohne Kernel-Update

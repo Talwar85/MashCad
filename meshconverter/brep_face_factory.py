@@ -128,12 +128,17 @@ class BRepFaceFactory:
 
     def _create_cylindrical_face(self, prim: DetectedPrimitive) -> Optional['TopoDS_Face']:
         """
-        Erstellt zylindrische Face.
+        Erstellt zylindrische Face (voll oder partiell).
+
+        Unterstützt arc_angle für Fillet-Flächen (partielle Zylinder).
         """
         center = np.array(prim.params['center'])
         axis = np.array(prim.params['axis'])
         radius = float(prim.params['radius'])
         height = float(prim.params['height'])
+
+        # Optional: Bogenwinkel für partielle Zylinder (Fillets)
+        arc_angle = float(prim.params.get('arc_angle', 2 * np.pi))
 
         if radius <= 0 or height <= 0:
             return None
@@ -159,9 +164,18 @@ class BRepFaceFactory:
         cylinder_surface = Geom_CylindricalSurface(ax3, radius)
 
         # Face mit U/V Bounds
-        # U: 0 bis 2*pi (voller Umfang)
+        # U: Bogenwinkel (0 bis arc_angle für partielle Zylinder)
         # V: -height/2 bis +height/2
-        u_min, u_max = 0.0, 2 * np.pi
+        # Für vollständigen Zylinder: U = 0 bis 2*pi
+        # Für Fillet: U = -arc_angle/2 bis +arc_angle/2 (zentriert)
+        if arc_angle < 2 * np.pi - 0.1:
+            # Partieller Zylinder (Fillet)
+            u_min = -arc_angle / 2
+            u_max = arc_angle / 2
+        else:
+            # Voller Zylinder
+            u_min, u_max = 0.0, 2 * np.pi
+
         v_min, v_max = -height / 2, height / 2
 
         try:
@@ -172,6 +186,7 @@ class BRepFaceFactory:
                 self.tolerance
             )
             if face_builder.IsDone():
+                logger.debug(f"Cylindrical face created: r={radius:.2f}mm, arc={np.degrees(arc_angle):.1f}°")
                 return face_builder.Face()
             else:
                 logger.warning("BRepBuilderAPI_MakeFace (cylinder) fehlgeschlagen")

@@ -209,7 +209,7 @@ class PrimitiveFitter:
             return None
 
     # =========================================================================
-    # Cylinder Fitting (PCA + Median)
+    # Cylinder Fitting (2D Circle Fit - V9 Algorithm)
     # =========================================================================
 
     def _fit_cylinder(
@@ -219,77 +219,114 @@ class PrimitiveFitter:
         region: Region
     ) -> Optional[DetectedPrimitive]:
         """
-        Fittet Zylinder via PCA auf Normalen + Median-Radius.
+        Fittet Zylinder via 2D Circle Fit - korrigierter V9 Algorithmus.
+
+        Für Fillets (partielle Zylinderoberflächen) liegt die Zylinderachse
+        NICHT im Centroid der Punkte, sondern ist um den Radius versetzt.
 
         Methode:
-        1. PCA auf Normalen → Achse ist Richtung mit größter Varianz
-        2. Punkte auf Achse projizieren
-        3. Radius = Median der Abstände zur Achse
+        1. PCA auf Punkte → Achse ist Richtung mit größter Varianz (entlang Streifen)
+        2. Lokales Koordinatensystem senkrecht zur Achse
+        3. Punkte auf 2D-Ebene projizieren
+        4. 2D Kreis-Fit (algebraisch) → findet wahres Zentrum und Radius
+        5. Zentrum zurück in 3D transformieren
         """
-        if len(points) < 10 or not HAS_SKLEARN:
+        if len(points) < 6:
             return None
 
         try:
-            # Normalen normalisieren
-            norm_lengths = np.linalg.norm(normals, axis=1, keepdims=True)
-            norm_lengths[norm_lengths < 1e-10] = 1
-            normals_normalized = normals / norm_lengths
-
-            # PCA auf Normalen → Achse ist orthogonal zu allen Normalen
-            # Bei Zylinder zeigen alle Normalen von der Achse weg
-            # Die Achse ist die Richtung mit minimaler Varianz in den Normalen
-            pca = PCA(n_components=3)
-            pca.fit(normals_normalized)
-
-            # Die letzte Komponente (kleinste Varianz) ist die Achsen-Richtung
-            axis = pca.components_[-1]
-
-            # Alternativ: Die Achse ist senkrecht zu den meisten Normalen
-            # → Nimm die Richtung mit minimaler durchschnittlicher |dot| mit Normalen
-            dots = np.abs(np.dot(normals_normalized, axis))
-            if np.mean(dots) > 0.3:
-                # Probiere andere Komponenten
-                for i in range(3):
-                    test_axis = pca.components_[i]
-                    test_dots = np.abs(np.dot(normals_normalized, test_axis))
-                    if np.mean(test_dots) < np.mean(dots):
-                        axis = test_axis
-                        dots = test_dots
-
-            # Centroid als Punkt auf Achse
+            # 1. Achsen-Richtung via PCA auf Punkte (nicht Normalen!)
+            # Bei einem Zylinder-Streifen ist die größte Varianz entlang der Achse
             centroid = np.mean(points, axis=0)
+            centered = points - centroid
 
-            # Abstände zur Achse
-            # Projektion auf Achse
-            proj_lengths = np.dot(points - centroid, axis)
-            proj_points = centroid + proj_lengths[:, np.newaxis] * axis
-            perpendicular = points - proj_points
-            distances_to_axis = np.linalg.norm(perpendicular, axis=1)
+            U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+            axis = Vt[0]  # Richtung mit größter Varianz
 
-            # Radius = Median (robust gegen Outliers)
-            radius = np.median(distances_to_axis)
+            # 2. Lokales Koordinatensystem senkrecht zur Achse
+            if abs(axis[2]) < 0.9:
+                x_local = np.cross(axis, [0, 0, 1])
+            else:
+                x_local = np.cross(axis, [1, 0, 0])
+            x_local = x_local / (np.linalg.norm(x_local) + 1e-10)
+            y_local = np.cross(axis, x_local)
 
-            if radius < 0.1:  # Zu klein
+            # 3. Projiziere Punkte auf die 2D-Ebene (x_local, y_local)
+            points_2d = np.column_stack([
+                np.dot(centered, x_local),
+                np.dot(centered, y_local)
+            ])
+
+            # 4. 2D Kreis-Fit (algebraischer Least Squares Fit)
+            # Gleichung: (x-cx)² + (y-cy)² = r²
+            # Umgeformt: x² + y² = 2*cx*x + 2*cy*y + (r² - cx² - cy²)
+            x = points_2d[:, 0]
+            y = points_2d[:, 1]
+
+            A = np.column_stack([2*x, 2*y, np.ones(len(x))])
+            b = x**2 + y**2
+
+            result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+            cx, cy, d = result
+
+            radius_sq = d + cx**2 + cy**2
+            if radius_sq <= 0:
                 return None
 
-            # Fehler = Abweichung vom Radius
-            radial_errors = np.abs(distances_to_axis - radius)
+            radius = np.sqrt(radius_sq)
+            center_2d = np.array([cx, cy])
+
+            # Validiere Radius
+            if radius < 0.5 or radius > 1000:
+                return None
+
+            # 5. Transformiere Zentrum zurück in 3D
+            center_offset = center_2d[0] * x_local + center_2d[1] * y_local
+            axis_point = centroid + center_offset
+
+            # 6. Berechne 3D Fehler (Abstand zur Zylinderfläche)
+            axis_to_points = points - axis_point
+            proj_along_axis = np.dot(axis_to_points, axis)[:, np.newaxis] * axis
+            perp = axis_to_points - proj_along_axis
+            distances = np.linalg.norm(perp, axis=1)
+            radial_errors = np.abs(distances - radius)
             error = np.mean(radial_errors)
             inlier_ratio = np.mean(radial_errors < self.tolerance)
 
-            # Height aus Projektion
+            # 7. Berechne Height und Center
+            proj_lengths = np.dot(points - axis_point, axis)
             height = np.max(proj_lengths) - np.min(proj_lengths)
 
-            if height < 0.1:  # Zu flach
+            if height < 0.1:
                 return None
 
             # Center auf Achsen-Mitte verschieben
-            center = centroid + (np.min(proj_lengths) + np.max(proj_lengths)) / 2 * axis
+            center = axis_point + ((np.min(proj_lengths) + np.max(proj_lengths)) / 2) * axis
 
+            # 8. Berechne Bogenwinkel (arc_angle) für partielle Zylinder
+            angles = []
+            for p in points:
+                rel = p - axis_point
+                h = np.dot(rel, axis)
+                perp_vec = rel - h * axis
+                if np.linalg.norm(perp_vec) > 1e-6:
+                    pn = perp_vec / np.linalg.norm(perp_vec)
+                    angle = np.arctan2(np.dot(pn, y_local), np.dot(pn, x_local))
+                    angles.append(angle)
+
+            arc_angle = 2 * np.pi  # Default: voller Zylinder
+            if len(angles) >= 3:
+                angles = np.array(angles)
+                angles_sorted = np.sort(angles)
+                gaps = np.diff(angles_sorted)
+                gaps = np.append(gaps, angles_sorted[0] + 2*np.pi - angles_sorted[-1])
+                arc_angle = 2*np.pi - np.max(gaps)
+
+            # Confidence basierend auf Fehler und Inlier-Ratio
             confidence = inlier_ratio * (1.0 - min(error / self.tolerance, 1.0))
 
-            # Nur akzeptieren wenn deutlich besser als Plane wäre
-            if confidence < 0.5:
+            # Nur akzeptieren wenn Confidence gut genug
+            if confidence < 0.3:
                 return None
 
             return DetectedPrimitive(
@@ -299,7 +336,8 @@ class PrimitiveFitter:
                     'center': center.tolist(),
                     'axis': axis.tolist(),
                     'radius': float(radius),
-                    'height': float(height)
+                    'height': float(height),
+                    'arc_angle': float(arc_angle)
                 },
                 boundary_points=region.boundary_points if region.boundary_points is not None else points,
                 area=region.area,
