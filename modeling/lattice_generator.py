@@ -71,7 +71,8 @@ class LatticeGenerator:
 
     @staticmethod
     def generate(solid, cell_type: str = "BCC", cell_size: float = 5.0,
-                 beam_radius: float = 0.5, max_cells: int = 500):
+                 beam_radius: float = 0.5, max_cells: int = 500,
+                 progress_callback=None):
         """
         Generate a lattice structure within the bounding box of the solid,
         then intersect with the original solid.
@@ -82,6 +83,7 @@ class LatticeGenerator:
             cell_size: Size of each unit cell in mm
             beam_radius: Radius of each beam strut in mm
             max_cells: Maximum number of cells (safety limit)
+            progress_callback: Optional callable(percent: int, message: str)
 
         Returns:
             Build123d Solid of the lattice, or None on failure
@@ -147,7 +149,10 @@ class LatticeGenerator:
             if not beam_shapes:
                 raise RuntimeError("No beams generated")
 
-            logger.info(f"Fusing {len(beam_shapes)} beams...")
+            total_beams = len(beam_shapes)
+            logger.info(f"Fusing {total_beams} beams...")
+            if progress_callback:
+                progress_callback(5, f"Fusing {total_beams} beams...")
 
             # Fuse all beams
             result = beam_shapes[0]
@@ -157,11 +162,16 @@ class LatticeGenerator:
                 fuse.Build()
                 if fuse.IsDone():
                     result = fuse.Shape()
-                if i % 100 == 0:
-                    logger.debug(f"Fused {i}/{len(beam_shapes)} beams")
+                if i % 50 == 0:
+                    pct = int(5 + 85 * i / total_beams)
+                    logger.debug(f"Fused {i}/{total_beams} beams")
+                    if progress_callback:
+                        progress_callback(pct, f"Fusing beams {i}/{total_beams}...")
 
             # Intersect with original body
             logger.info("Intersecting lattice with body...")
+            if progress_callback:
+                progress_callback(92, "Intersecting with body...")
             common = BRepAlgoAPI_Common(result, shape)
             common.SetFuzzyValue(1e-3)
             common.Build()

@@ -98,6 +98,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     offset_plane_drag_changed = Signal(float)  # Offset-Wert während Drag
     hole_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     draft_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
+    pushpull_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     split_body_clicked = Signal(str)  # body_id
     split_drag_changed = Signal(float)  # position during drag
 
@@ -164,6 +165,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._split_dragging = False
         self._split_drag_start = None
         self._split_drag_start_pos = 0.0
+
+        self.pushpull_mode = False
+        self._pushpull_body_id = None
+        self._pushpull_selected_face = None  # single face data dict
+        self._pushpull_preview_actor = None
 
         self.offset_plane_mode = False
         self._offset_plane_base_origin = None
@@ -1144,12 +1150,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             logger.warning("Draft: Nur Faces vom gleichen Body erlaubt")
             return
 
-        # Toggle: deselect if same normal already selected
+        # Toggle: deselect if same face already selected (by cell_ids overlap)
+        new_cells = set(face_data.get('cell_ids', []))
         for i, f in enumerate(self._draft_selected_faces):
-            fn = f.get('normal', (0, 0, 0))
-            if (abs(fn[0] - new_normal[0]) < 0.05 and
-                abs(fn[1] - new_normal[1]) < 0.05 and
-                abs(fn[2] - new_normal[2]) < 0.05):
+            existing_cells = set(f.get('cell_ids', []))
+            if new_cells and existing_cells and new_cells & existing_cells:
                 self._draft_selected_faces.pop(i)
                 self._update_draft_face_highlights()
                 return
@@ -1228,6 +1233,80 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         except Exception:
             pass
         self._draft_preview_actor = None
+
+    # ==================== PUSHPULL MODE ====================
+    def set_pushpull_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven PushPull-Modus."""
+        self.pushpull_mode = enabled
+        if enabled:
+            self._pushpull_body_id = None
+            self._pushpull_selected_face = None
+        else:
+            self._pushpull_body_id = None
+            self._pushpull_selected_face = None
+            self.clear_pushpull_preview()
+            self._clear_body_face_highlight()
+
+    def set_pushpull_face(self, face_data):
+        """Setzt die selektierte Face für PushPull und zeigt grünes Highlight."""
+        self._pushpull_selected_face = face_data
+        self._pushpull_body_id = face_data.get('body_id')
+        # Show green highlight on selected face
+        self._clear_pushpull_face_highlight()
+        try:
+            mesh = face_data.get('mesh')
+            cell_ids = face_data.get('cell_ids', [])
+            if mesh is not None and cell_ids:
+                import numpy as np
+                face_mesh = mesh.extract_cells(cell_ids)
+                normal_arr = np.array(face_data.get('normal', (0, 0, 1)), dtype=float)
+                norm_len = np.linalg.norm(normal_arr)
+                if norm_len > 1e-10:
+                    normal_arr = normal_arr / norm_len
+                face_copy = face_mesh.copy()
+                face_copy.points = face_copy.points + normal_arr * 0.3
+                self.plotter.add_mesh(
+                    face_copy, color='#50bb50', opacity=0.7,
+                    name='pushpull_face_highlight',
+                    pickable=False, show_edges=True,
+                    edge_color='#309030', line_width=2
+                )
+                request_render(self.plotter)
+        except Exception as e:
+            logger.debug(f"PushPull face highlight error: {e}")
+
+    def _clear_pushpull_face_highlight(self):
+        try:
+            self.plotter.remove_actor('pushpull_face_highlight')
+        except Exception:
+            pass
+
+    def show_pushpull_preview(self, mesh):
+        """Zeigt halbtransparentes PushPull-Ergebnis als Live-Preview."""
+        try:
+            self.plotter.remove_actor('pushpull_preview')
+        except Exception:
+            pass
+        if mesh is None:
+            return
+        try:
+            self._pushpull_preview_actor = self.plotter.add_mesh(
+                mesh, color='#50bb50', opacity=0.4,
+                name='pushpull_preview', pickable=False,
+                show_edges=True, edge_color='#309030', line_width=1
+            )
+            request_render(self.plotter)
+        except Exception as e:
+            logger.debug(f"PushPull preview mesh error: {e}")
+
+    def clear_pushpull_preview(self):
+        """Entfernt alle PushPull-Visualisierungen."""
+        self._clear_pushpull_face_highlight()
+        try:
+            self.plotter.remove_actor('pushpull_preview')
+        except Exception:
+            pass
+        self._pushpull_preview_actor = None
 
     # ==================== SPLIT MODE ====================
     def set_split_mode(self, enabled):
@@ -1846,6 +1925,31 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             return False
 
         if self.draft_mode:
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+                return False
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    if self.hovered_body_face is not None:
+                        self._click_body_face()
+                        return True
+                    return False
+                return False
+
+            if event_type == QEvent.MouseButtonRelease:
+                return False
+
+            return False
+
+        # --- PUSHPULL MODE (Body-Face picking) ---
+        if self.pushpull_mode:
             event_type = event.type()
 
             if event_type == QEvent.MouseMove:
@@ -4349,9 +4453,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
-                        # Draft mode: full-face blue highlight
-                        if self.draft_mode:
-                            self._draw_full_face_hover(body_id, rounded_normal, normal)
+                        # Draft/PushPull mode: full-face blue highlight
+                        if self.draft_mode or self.pushpull_mode:
+                            self._draw_full_face_hover(body_id, rounded_normal, normal, cell_id)
                         else:
                             self._draw_body_face_highlight(pos, normal)
                     return
@@ -4456,21 +4560,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         except: pass
         # Kein render hier - wird beim nächsten Hover gemacht
 
-    def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal):
+    def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal, cell_id=None):
         """Zeichnet full-face blaues Highlight auf gehoverter Body-Fläche (Draft/Texture Mode)."""
         self._clear_body_face_highlight()
         try:
-            # Finde detected_face mit passender Normale
+            # Finde detected_face anhand cell_id (robust nach Draft/Hole)
             face_data = None
             for face in self.detected_faces:
                 if face.get('type') != 'body_face':
                     continue
                 if face.get('body_id') != body_id:
                     continue
-                fn = face.get('normal', (0, 0, 0))
-                if (abs(fn[0] - rounded_normal[0]) < 0.05 and
-                    abs(fn[1] - rounded_normal[1]) < 0.05 and
-                    abs(fn[2] - rounded_normal[2]) < 0.05):
+                if cell_id is not None and cell_id in face.get('cell_ids', []):
                     face_data = face
                     break
 
@@ -4517,18 +4618,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # Draft Mode: Full-face selection with orange highlight
         if self.draft_mode:
-            # Find matching detected_face for full-face mesh extraction
-            rounded_normal = tuple(round(n, 2) for n in normal)
+            # Find matching detected_face by cell_id membership (robust after Draft/Hole)
             face_data = None
             for face in self.detected_faces:
                 if face.get('type') != 'body_face':
                     continue
                 if face.get('body_id') != body_id:
                     continue
-                face_normal = face.get('normal', (0, 0, 0))
-                if (abs(face_normal[0] - rounded_normal[0]) < 0.05 and
-                    abs(face_normal[1] - rounded_normal[1]) < 0.05 and
-                    abs(face_normal[2] - rounded_normal[2]) < 0.05):
+                if cell_id in face.get('cell_ids', []):
                     face_data = face
                     break
 
@@ -4543,6 +4640,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.draft_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
             return
 
+        # PushPull Mode: Single face selection
+        if self.pushpull_mode:
+            self.pushpull_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
+            return
+
         # Texture Face Mode: Sammle Faces für Texturierung
         if self.texture_face_mode:
             # Debug: Zeige Klick-Infos
@@ -4554,26 +4656,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 logger.warning(f"Face von anderem Body ignoriert (erwartet: '{self._texture_body_id}', geklickt: '{body_id}')")
                 return
 
-            # Finde passendes detected_face anhand der Normalen
-            rounded_normal = tuple(round(n, 2) for n in normal)
+            # Finde passendes detected_face anhand cell_id Zugehörigkeit (robust)
             matching_face = None
-
-            # Debug: Zeige alle verfügbaren Faces für diesen Body
-            body_faces = [f for f in self.detected_faces if f.get('body_id') == body_id and f.get('type') == 'body_face']
-            logger.debug(f"  Faces für Body '{body_id}': {len(body_faces)}")
-            for i, f in enumerate(body_faces[:6]):  # Max 6 zeigen
-                logger.debug(f"    Face {i}: normal={f.get('normal')}, cells={len(f.get('cell_ids', []))}")
-
             for face in self.detected_faces:
                 if face.get('type') != 'body_face':
                     continue
                 if face.get('body_id') != body_id:
                     continue
-                # Vergleiche Normalen
-                face_normal = face.get('normal', (0, 0, 0))
-                if (abs(face_normal[0] - rounded_normal[0]) < 0.05 and
-                    abs(face_normal[1] - rounded_normal[1]) < 0.05 and
-                    abs(face_normal[2] - rounded_normal[2]) < 0.05):
+                if cell_id in face.get('cell_ids', []):
                     matching_face = face
                     break
 

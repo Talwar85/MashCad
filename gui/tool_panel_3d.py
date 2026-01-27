@@ -1,9 +1,10 @@
 import os
 from i18n import tr # Import hinzufügen
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QToolButton, QGroupBox, 
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QToolButton, QGroupBox,
                                QGridLayout, QLabel, QScrollArea, QFrame, QSizePolicy)
 from PySide6.QtCore import QSize, Qt, Signal
+from gui.widgets.collapsible_section import CollapsibleSection
 
 class ToolPanel3D(QWidget):
     action_triggered = Signal(str)
@@ -64,7 +65,7 @@ class ToolPanel3D(QWidget):
             (tr("Cylinder"), tr("Create cylinder primitive"), "primitive_cylinder"),
             (tr("Sphere"), tr("Create sphere primitive"), "primitive_sphere"),
             (tr("Cone"), tr("Create cone primitive"), "primitive_cone"),
-        ], grid=True)
+        ], grid=True, expanded=True)
 
         # --- Sketch & Base ---
         self._add_group("Sketch & Base", [
@@ -72,26 +73,21 @@ class ToolPanel3D(QWidget):
             (tr("Offset Plane..."), tr("Create offset construction plane"), "offset_plane"),
             (tr("Extrude..."), tr("Extrude (E)"), "extrude"),
             (tr("Revolve..."), tr("Revolve sketch around axis"), "revolve"),
-        ])
-        
+        ], expanded=True)
+
         # --- Modify ---
         self._add_group(tr("Modify"), [
             (tr("Fillet"), "fillet"),
             (tr("Chamfer"), "chamfer"),
             (tr("Hole..."), tr("Create hole (simple/counterbore/countersink)"), "hole"),
             (tr("Draft..."), tr("Add draft/taper angle to faces"), "draft"),
-            (tr("Split Body..."), tr("Split body along a plane"), "split_body"),
-            (tr("Thread..."), tr("Create thread (metric/UNC)"), "thread"),
-            (tr("PushPull"), tr("Extrude face along its normal"), "pushpull"),
-        ])
-
-        # --- Advanced (Phase 6) ---
-        self._add_group(tr("Advanced"), [
+            (tr("Split Body..."), tr("Split body along a plane"), "split_body"),         
             (tr("Shell"), tr("Hollow out solid"), "shell"),
             (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
             (tr("Loft"), tr("Loft between profiles"), "loft"),
             (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
             (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
+            
         ])
 
         # --- Transform ---
@@ -101,9 +97,9 @@ class ToolPanel3D(QWidget):
             (tr("Scale"), tr("Scale"), "scale_body"),
             (tr("Mirror"), tr("Mirror"), "mirror_body"),
             (tr("Copy"), tr("Copy"), "copy_body"),
-            ("📍 Point Move", "Point-to-Point Move (wie Fusion 360)", "point_to_point_move"),
+            ("Point Move", "Point-to-Point Move (wie Fusion 360)", "point_to_point_move"),
         ], grid=True)
-        
+
         # --- Boolean ---
         self._add_group("Boolean", [
             (tr("Union") if tr("Union") != "Union" else "Union", "boolean_union"),
@@ -111,49 +107,53 @@ class ToolPanel3D(QWidget):
             (tr("Intersect") if tr("Intersect") != "Intersect" else "Intersect", "boolean_intersect"),
         ])
 
-        # --- 3D Print ---
-        self._add_group(tr("3D PRINT"), [
-            (tr("Hollow"), tr("Hollow body with optional drain hole"), "hollow"),
-            (tr("Wall Thickness"), tr("Analyze wall thickness for 3D printing"), "wall_thickness"),
-            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
-        ])
-
+      
         # --- Inspect ---
         self._add_group("Inspect", [
-            ("🔪 Section View", "Schnittansicht (wie Fusion 360)", "section_view"),
+            ("Section View", "Schnittansicht", "section_view"),
             ("Check Geometry", "Validate and heal geometry", "geometry_check"),
             (tr("Surface Analysis"), tr("Curvature, draft angle, zebra stripes"), "surface_analysis"),
             (tr("Mesh Repair"), tr("Diagnose and repair geometry"), "mesh_repair"),
+            (tr("Wall Thickness"), tr("Analyze wall thickness for 3D printing"), "wall_thickness"),
+            (tr("Measure") if tr("Measure") != "Measure" else "Measure", "measure"),
         ])
 
         # --- Tools ---
         self._add_group(tr("TOOLS"), [
+            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
             (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"),
-            (tr("Measure") if tr("Measure") != "Measure" else "Measure", "measure"),
+            
         ])
-        
+
         # --- Import/Export ---
         self._add_group(tr("File"), [
             (tr("Import Mesh") if tr("Import Mesh") != "Import Mesh" else "Import Mesh", "Lade STL/OBJ Datei", "import_mesh"),
             (tr("Export STL..."), "export_stl"),
             ("Export STEP...", "export_step"),
         ])
+
+        # --- Advanced (Phase 6) ---
+        self._add_group(tr("Geht nicht"), [
+            (tr("PushPull"), tr("Extrude face along its normal"), "pushpull"),
+            (tr("Thread..."), tr("Create thread (metric/UNC)"), "thread"),
+        ])
         
         self.layout.addStretch()
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
 
-    def _add_group(self, title, buttons, grid=False):
-        group = QGroupBox(title)
+    def _add_group(self, title, buttons, grid=False, expanded=False):
+        section = CollapsibleSection(title, expanded=expanded)
+
         if grid:
-            lay = QGridLayout(group)
+            from PySide6.QtWidgets import QWidget as _QW
+            grid_widget = _QW()
+            lay = QGridLayout(grid_widget)
             lay.setSpacing(4)
-            lay.setContentsMargins(5, 10, 5, 5)
+            lay.setContentsMargins(0, 0, 0, 0)
         else:
-            lay = QVBoxLayout(group)
-            lay.setSpacing(4)
-            lay.setContentsMargins(5, 10, 5, 5)
-            
+            lay = None
+
         for i, btn_data in enumerate(buttons):
             if len(btn_data) == 3:
                 label, tip, action = btn_data
@@ -162,7 +162,7 @@ class ToolPanel3D(QWidget):
                 tip = None
 
             btn = self._create_btn(label, action)
-            if tip: 
+            if tip:
                 btn.setToolTip(tip)
 
             if grid:
@@ -170,9 +170,12 @@ class ToolPanel3D(QWidget):
                 btn.setStyleSheet("text-align: center; font-weight: bold;")
                 lay.addWidget(btn, i // 2, i % 2)
             else:
-                lay.addWidget(btn)
-                
-        self.layout.addWidget(group)
+                section.content_layout.addWidget(btn)
+
+        if grid:
+            section.content_layout.addWidget(grid_widget)
+
+        self.layout.addWidget(section)
 
     def _create_btn(self, text, action_name):
         btn = QToolButton()

@@ -3005,7 +3005,7 @@ class SketchHandlersMixin:
 
             logger.info(f"Canvas geladen: {path} ({pixmap.width()}x{pixmap.height()}px, {default_width:.0f}x{default_height:.0f}mm)")
             self.status_message.emit(tr("Canvas platziert") + f" ({default_width:.0f}x{default_height:.0f}mm)")
-            self._show_hud(tr("Canvas platziert — Rechtsklick für Optionen"))
+            self._draw_hud(tr("Canvas platziert — Rechtsklick für Optionen"))
             self.set_tool(SketchTool.SELECT)
             self.request_update()
 
@@ -3082,7 +3082,7 @@ class SketchHandlersMixin:
         self._canvas_calibrating = True
         self._canvas_calib_points = []
         self.status_message.emit(tr("Kalibrierung: Ersten Punkt auf dem Bild anklicken"))
-        self._show_hud(tr("Kalibrierung — Punkt 1 von 2 setzen"))
+        self._draw_hud(tr("Kalibrierung — Punkt 1 von 2 setzen"))
         self.request_update()
 
     def _canvas_calibration_click(self, world_pos):
@@ -3094,7 +3094,7 @@ class SketchHandlersMixin:
 
         if len(self._canvas_calib_points) == 1:
             self.status_message.emit(tr("Kalibrierung: Zweiten Punkt auf dem Bild anklicken"))
-            self._show_hud(tr("Kalibrierung — Punkt 2 von 2 setzen"))
+            self._draw_hud(tr("Kalibrierung — Punkt 2 von 2 setzen"))
             self.request_update()
             return True
 
@@ -3104,7 +3104,7 @@ class SketchHandlersMixin:
             pixel_dist = math.sqrt((p2.x() - p1.x())**2 + (p2.y() - p1.y())**2)
 
             if pixel_dist < 0.01:
-                self._show_hud(tr("Punkte zu nah beieinander"))
+                self._draw_hud(tr("Punkte zu nah beieinander"))
                 self._canvas_calibrating = False
                 self._canvas_calib_points = []
                 return True
@@ -3115,7 +3115,7 @@ class SketchHandlersMixin:
                 tr("Canvas kalibrieren"),
                 tr("Reale Distanz zwischen den Punkten (mm):"),
                 value=round(pixel_dist, 2),
-                min=0.1, max=100000.0, decimals=2
+                minValue=0.1, maxValue=100000.0, decimals=2
             )
 
             if ok and real_dist > 0:
@@ -3132,9 +3132,9 @@ class SketchHandlersMixin:
                     new_w, new_h
                 )
                 logger.info(f"Canvas kalibriert: Faktor {scale_factor:.3f}, {new_w:.1f}x{new_h:.1f}mm")
-                self._show_hud(tr("Canvas kalibriert") + f" ({new_w:.0f}x{new_h:.0f}mm)")
+                self._draw_hud(tr("Canvas kalibriert") + f" ({new_w:.0f}x{new_h:.0f}mm)")
             else:
-                self._show_hud(tr("Kalibrierung abgebrochen"))
+                self._draw_hud(tr("Kalibrierung abgebrochen"))
 
             self._canvas_calibrating = False
             self._canvas_calib_points = []

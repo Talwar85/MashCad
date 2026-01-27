@@ -12,13 +12,13 @@ from PySide6.QtGui import QFont, QIcon, QKeySequence
 
 from i18n import tr  # <--- NEU: Import
 
-# ... (Imports bleiben gleich, QScrollArea sicherstellen) ...
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QGridLayout, QSpinBox, QDoubleSpinBox,
     QGroupBox, QCheckBox, QSlider, QToolButton, QButtonGroup,
     QSizePolicy
 )
+from gui.widgets.collapsible_section import CollapsibleSection
 
 class ToolButton(QToolButton):
     """Einzelner Werkzeug-Button"""
@@ -132,9 +132,11 @@ class ToolPanel(QFrame):
         layout.addWidget(title)
         
         # === ZEICHNEN ===
-        draw_group = self._create_group(tr("Draw"))
-        draw_layout = QGridLayout()
-        draw_layout.setSpacing(4) # Button Abstand reduziert
+        draw_group = self._create_group(tr("Draw"), expanded=True)
+        draw_container = QWidget()
+        draw_layout = QGridLayout(draw_container)
+        draw_layout.setContentsMargins(0, 0, 0, 0)
+        draw_layout.setSpacing(4)
         
         tools_draw = [
             (f"✎ {tr('Line')}", "line", "L", "Line", 0, 0),
@@ -155,13 +157,15 @@ class ToolPanel(QFrame):
             self.button_group.addButton(btn)
             draw_layout.addWidget(btn, row, col)
         
-        draw_group.setLayout(draw_layout)
+        draw_group.content_layout.addWidget(draw_container)
         layout.addWidget(draw_group)
         
         
         # === SHAPES (Sonderformen) ===
         shapes_group = self._create_group(tr("Shapes"))
-        shapes_layout = QGridLayout()
+        shapes_container = QWidget()
+        shapes_layout = QGridLayout(shapes_container)
+        shapes_layout.setContentsMargins(0, 0, 0, 0)
         shapes_layout.setSpacing(4)
         
         tools_shapes = [
@@ -178,13 +182,15 @@ class ToolPanel(QFrame):
             self.button_group.addButton(btn)
             shapes_layout.addWidget(btn, row, col)
             
-        shapes_group.setLayout(shapes_layout)
+        shapes_group.content_layout.addWidget(shapes_container)
         layout.addWidget(shapes_group)
         
         
         # === BEARBEITEN ===
-        edit_group = self._create_group(tr("Modify"))
-        edit_layout = QGridLayout()
+        edit_group = self._create_group(tr("Modify"), expanded=True)
+        edit_container = QWidget()
+        edit_layout = QGridLayout(edit_container)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
         edit_layout.setSpacing(4)
         
         tools_edit = [
@@ -207,11 +213,13 @@ class ToolPanel(QFrame):
             self.button_group.addButton(btn)
             edit_layout.addWidget(btn, row, col)
         
-        edit_group.setLayout(edit_layout)
+        edit_group.content_layout.addWidget(edit_container)
         layout.addWidget(edit_group)
         
         pattern_group = self._create_group(tr("Patterns"))
-        pattern_layout = QGridLayout()
+        pattern_container = QWidget()
+        pattern_layout = QGridLayout(pattern_container)
+        pattern_layout.setContentsMargins(0, 0, 0, 0)
         pattern_layout.setSpacing(4)
         
         tools_pattern = [
@@ -231,13 +239,15 @@ class ToolPanel(QFrame):
             self.button_group.addButton(btn)
             pattern_layout.addWidget(btn, row, col)
             
-        pattern_group.setLayout(pattern_layout)
+        pattern_group.content_layout.addWidget(pattern_container)
         layout.addWidget(pattern_group)
 
 
         # === CONSTRAINTS ===
         const_group = self._create_group(tr("Constraints"))
-        const_layout = QGridLayout()
+        const_container = QWidget()
+        const_layout = QGridLayout(const_container)
+        const_layout.setContentsMargins(0, 0, 0, 0)
         const_layout.setSpacing(4)
         
         tools_const = [
@@ -259,12 +269,14 @@ class ToolPanel(QFrame):
             self.button_group.addButton(btn)
             const_layout.addWidget(btn, row, col)
         
-        const_group.setLayout(const_layout)
+        const_group.content_layout.addWidget(const_container)
         layout.addWidget(const_group)
 
         # === IMPORT/EXPORT ===
         import_group = self._create_group(tr("Import/Export"))
-        import_layout = QGridLayout()
+        import_container = QWidget()
+        import_layout = QGridLayout(import_container)
+        import_layout.setContentsMargins(0, 0, 0, 0)
         import_layout.setSpacing(4)
 
         tools_import = [
@@ -280,12 +292,12 @@ class ToolPanel(QFrame):
             self.buttons[name] = btn
             import_layout.addWidget(btn, row, col)
 
-        import_group.setLayout(import_layout)
+        import_group.content_layout.addWidget(import_container)
         layout.addWidget(import_group)
 
         # === OPTIONEN ===
         options_group = self._create_group(tr("Settings"))
-        options_layout = QVBoxLayout()
+        options_layout = options_group.content_layout
         options_layout.setSpacing(6)
         
         self.grid_snap_cb = QCheckBox(tr("Grid Snap") + " (G)")
@@ -322,7 +334,6 @@ class ToolPanel(QFrame):
         snap_row.addWidget(self.snap_radius_spin)
         options_layout.addLayout(snap_row)
 
-        options_group.setLayout(options_layout)
         layout.addWidget(options_group)
         
         layout.addStretch()
@@ -333,9 +344,9 @@ class ToolPanel(QFrame):
         if "select" in self.buttons:
             self.buttons["select"].setChecked(True)
 
-    def _create_group(self, title: str) -> QGroupBox:
-        group = QGroupBox(title)
-        return group
+    def _create_group(self, title: str, expanded: bool = False) -> CollapsibleSection:
+        section = CollapsibleSection(title, expanded=expanded)
+        return section
     
     def _on_tool_clicked(self, tool_name: str):
         self.tool_selected.emit(tool_name)

@@ -1569,6 +1569,13 @@ class Body:
         plane_normal = getattr(sketch, 'plane_normal', (0, 0, 1))
         x_dir = getattr(sketch, 'plane_x_dir', None)
 
+        # Validate plane_normal is not zero
+        import math
+        norm_len = math.sqrt(sum(c*c for c in plane_normal))
+        if norm_len < 1e-9:
+            logger.warning("Revolve: plane_normal ist Null-Vektor, Fallback auf (0,0,1)")
+            plane_normal = (0, 0, 1)
+
         plane = Plane(
             origin=Vector(*plane_origin),
             z_dir=Vector(*plane_normal),
@@ -4104,14 +4111,28 @@ class Body:
         Kombiniert "What you see is what you get" (Detector) mit 
         robuster Fallback-Berechnung (Alter Code).
         """
-        if not HAS_BUILD123D or not feature.sketch: return None
-        
+        if not HAS_BUILD123D: return None
+        # Allow rebuild without sketch if precalculated_polys exist (loaded from file)
+        has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
+        if not feature.sketch and not has_polys: return None
+
         try:
             from build123d import make_face, Wire, Compound
             from shapely.geometry import Polygon as ShapelyPoly
-            
+
             sketch = feature.sketch
-            plane = self._get_plane_from_sketch(sketch)
+            if sketch:
+                plane = self._get_plane_from_sketch(sketch)
+            else:
+                # Reconstruct plane from saved feature data
+                from build123d import Plane as B3DPlane, Vector
+                origin = Vector(*feature.plane_origin)
+                normal = Vector(*feature.plane_normal)
+                if feature.plane_x_dir:
+                    x_dir = Vector(*feature.plane_x_dir)
+                    plane = B3DPlane(origin=origin, z_dir=normal, x_dir=x_dir)
+                else:
+                    plane = B3DPlane(origin=origin, z_dir=normal)
             solids = []
             
             # === PFAD A: Exakte Polygone vom Detector (Neu & Stabil) ===
@@ -4990,6 +5011,36 @@ class Body:
                     "beam_radius": feat.beam_radius,
                 })
 
+            elif isinstance(feat, ThreadFeature):
+                feat_dict.update({
+                    "feature_class": "ThreadFeature",
+                    "thread_type": feat.thread_type,
+                    "standard": feat.standard,
+                    "diameter": feat.diameter,
+                    "pitch": feat.pitch,
+                    "depth": feat.depth,
+                    "position": list(feat.position),
+                    "direction": list(feat.direction),
+                    "tolerance_class": feat.tolerance_class,
+                    "tolerance_offset": feat.tolerance_offset,
+                })
+
+            elif isinstance(feat, DraftFeature):
+                feat_dict.update({
+                    "feature_class": "DraftFeature",
+                    "draft_angle": feat.draft_angle,
+                    "pull_direction": list(feat.pull_direction),
+                    "face_selectors": feat.face_selectors,
+                })
+
+            elif isinstance(feat, SplitFeature):
+                feat_dict.update({
+                    "feature_class": "SplitFeature",
+                    "plane_origin": list(feat.plane_origin),
+                    "plane_normal": list(feat.plane_normal),
+                    "keep_side": feat.keep_side,
+                })
+
             elif isinstance(feat, PushPullFeature):
                 feat_dict.update({
                     "feature_class": "PushPullFeature",
@@ -5022,11 +5073,8 @@ class Body:
             elif isinstance(feat, TransformFeature):
                 feat_dict.update({
                     "feature_class": "TransformFeature",
-                    "transform_type": feat.transform_type,
-                    "translation": list(feat.translation) if feat.translation else None,
-                    "rotation_axis": list(feat.rotation_axis) if feat.rotation_axis else None,
-                    "rotation_angle": feat.rotation_angle,
-                    "scale_factor": feat.scale_factor,
+                    "mode": feat.mode,
+                    "data": feat.data,
                 })
 
             features_data.append(feat_dict)
@@ -5039,12 +5087,34 @@ class Body:
                 "statistics": self._tnp_tracker.get_statistics(),
             }
 
+        # B-Rep Snapshot: exakte Geometrie speichern
+        brep_string = None
+        if self._build123d_solid is not None:
+            try:
+                from OCP.BRepTools import BRepTools
+                from io import StringIO
+                import OCP.TopoDS
+                shape = self._build123d_solid.wrapped if hasattr(self._build123d_solid, 'wrapped') else self._build123d_solid
+                stream = StringIO()
+                # BRepTools.Write_s schreibt in Datei — nutze temp file
+                import tempfile, os
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as tmp:
+                    tmp_path = tmp.name
+                BRepTools.Write_s(shape, tmp_path)
+                with open(tmp_path, 'r') as f:
+                    brep_string = f.read()
+                os.unlink(tmp_path)
+                logger.debug(f"BREP serialisiert für '{self.name}': {len(brep_string)} Zeichen")
+            except Exception as e:
+                logger.warning(f"BREP-Serialisierung fehlgeschlagen für '{self.name}': {e}")
+
         return {
             "name": self.name,
             "id": self.id,
             "features": features_data,
             "tnp_data": tnp_data,
-            "version": "8.2",  # Schema-Version für Kompatibilität
+            "brep": brep_string,
+            "version": "8.3",
         }
 
     @classmethod
@@ -5228,13 +5298,40 @@ class Body:
                     **base_kwargs
                 )
 
+            elif feat_class == "ThreadFeature":
+                feat = ThreadFeature(
+                    thread_type=feat_dict.get("thread_type", "external"),
+                    standard=feat_dict.get("standard", "M"),
+                    diameter=feat_dict.get("diameter", 10.0),
+                    pitch=feat_dict.get("pitch", 1.5),
+                    depth=feat_dict.get("depth", 20.0),
+                    position=tuple(feat_dict.get("position", (0, 0, 0))),
+                    direction=tuple(feat_dict.get("direction", (0, 0, 1))),
+                    tolerance_class=feat_dict.get("tolerance_class", "6g"),
+                    tolerance_offset=feat_dict.get("tolerance_offset", 0.0),
+                    **base_kwargs
+                )
+
+            elif feat_class == "DraftFeature":
+                feat = DraftFeature(
+                    draft_angle=feat_dict.get("draft_angle", 5.0),
+                    pull_direction=tuple(feat_dict.get("pull_direction", (0, 0, 1))),
+                    face_selectors=feat_dict.get("face_selectors", []),
+                    **base_kwargs
+                )
+
+            elif feat_class == "SplitFeature":
+                feat = SplitFeature(
+                    plane_origin=tuple(feat_dict.get("plane_origin", (0, 0, 0))),
+                    plane_normal=tuple(feat_dict.get("plane_normal", (0, 0, 1))),
+                    keep_side=feat_dict.get("keep_side", "above"),
+                    **base_kwargs
+                )
+
             elif feat_class == "TransformFeature":
                 feat = TransformFeature(
-                    transform_type=feat_dict.get("transform_type", "move"),
-                    translation=tuple(feat_dict["translation"]) if feat_dict.get("translation") else None,
-                    rotation_axis=tuple(feat_dict["rotation_axis"]) if feat_dict.get("rotation_axis") else None,
-                    rotation_angle=feat_dict.get("rotation_angle", 0.0),
-                    scale_factor=feat_dict.get("scale_factor", 1.0),
+                    mode=feat_dict.get("mode", "move"),
+                    data=feat_dict.get("data", {}),
                     **base_kwargs
                 )
 
@@ -5249,6 +5346,71 @@ class Body:
             if feat:
                 feat.id = feat_dict.get("id", str(uuid.uuid4())[:8])
                 body.features.append(feat)
+
+        # B-Rep Snapshot laden
+        brep_string = data.get("brep")
+        if brep_string and HAS_OCP:
+            try:
+                from OCP.BRepTools import BRepTools
+                from OCP.TopoDS import TopoDS_Shape
+                from OCP.BRep import BRep_Builder
+                import tempfile, os
+
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False, encoding='utf-8') as tmp:
+                    tmp.write(brep_string)
+                    tmp_path = tmp.name
+
+                shape = TopoDS_Shape()
+                builder = BRep_Builder()
+                BRepTools.Read_s(shape, tmp_path, builder)
+                os.unlink(tmp_path)
+
+                if not shape.IsNull():
+                    from build123d import Solid, Compound
+                    from OCP.TopAbs import TopAbs_SOLID, TopAbs_COMPOUND, TopAbs_SHELL
+                    from OCP.TopExp import TopExp_Explorer
+                    from OCP.BRep import BRep_Builder as _BB
+                    from OCP.TopoDS import TopoDS_Compound as _TC
+
+                    shape_type = shape.ShapeType()
+                    if shape_type == TopAbs_SOLID:
+                        body._build123d_solid = Solid.cast(shape)
+                    elif shape_type == TopAbs_COMPOUND:
+                        # Sammle alle Solids aus dem Compound
+                        solids = []
+                        explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+                        while explorer.More():
+                            solids.append(explorer.Current())
+                            explorer.Next()
+
+                        if len(solids) == 1:
+                            body._build123d_solid = Solid.cast(solids[0])
+                        elif len(solids) > 1:
+                            # Mehrere Solids → als Compound behalten
+                            body._build123d_solid = Compound.cast(shape)
+                            logger.debug(f"BREP Compound mit {len(solids)} Solids für '{body.name}'")
+                        else:
+                            # Kein Solid — vielleicht Shells (z.B. STL-Import)?
+                            shells = []
+                            exp2 = TopExp_Explorer(shape, TopAbs_SHELL)
+                            while exp2.More():
+                                shells.append(exp2.Current())
+                                exp2.Next()
+                            if shells:
+                                body._build123d_solid = Compound.cast(shape)
+                                logger.debug(f"BREP Compound mit {len(shells)} Shells für '{body.name}'")
+                            else:
+                                logger.warning(f"BREP Compound enthält keinen Solid/Shell für '{body.name}'")
+                    else:
+                        body._build123d_solid = Solid.cast(shape)
+
+                    if body._build123d_solid is not None:
+                        body.invalidate_mesh()
+                        logger.debug(f"BREP geladen für '{body.name}': exakte Geometrie wiederhergestellt")
+                else:
+                    logger.warning(f"BREP leer für '{body.name}' — Rebuild wird versucht")
+            except Exception as e:
+                logger.warning(f"BREP-Laden fehlgeschlagen für '{body.name}': {e}")
 
         # TNP-Daten importieren
         tnp_data = data.get("tnp_data", {})
@@ -5427,16 +5589,11 @@ class Document:
             "bodies": [body.to_dict() for body in self.bodies],
             "sketches": [
                 {
-                    "name": sketch.name,
-                    "id": sketch.id,
+                    **sketch.to_dict(),
                     "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
                     "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
                     "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
                     "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
-                    "geometry_wkt": [
-                        g.wkt if hasattr(g, 'wkt') else str(g)
-                        for g in getattr(sketch, 'geometry', [])
-                    ],
                 }
                 for sketch in self.sketches
             ],
@@ -5487,11 +5644,11 @@ class Document:
             except Exception as e:
                 logger.warning(f"Body konnte nicht geladen werden: {e}")
 
-        # Sketches laden (vereinfacht - vollständige Sketch-Serialisierung wäre aufwändiger)
+        # Sketches laden (vollständig via Sketch.from_dict)
         for sketch_data in data.get("sketches", []):
             try:
-                sketch = Sketch(name=sketch_data.get("name", "Sketch"))
-                sketch.id = sketch_data.get("id", str(uuid.uuid4())[:8])
+                sketch = Sketch.from_dict(sketch_data)
+                # Plane-Daten wiederherstellen (nicht in Sketch.from_dict enthalten)
                 if "plane_origin" in sketch_data:
                     sketch.plane_origin = tuple(sketch_data["plane_origin"])
                 if "plane_normal" in sketch_data:
@@ -5500,13 +5657,6 @@ class Document:
                     sketch.plane_x_dir = tuple(sketch_data["plane_x_dir"])
                 if sketch_data.get("plane_y_dir"):
                     sketch.plane_y_dir = tuple(sketch_data["plane_y_dir"])
-                # WKT zu Shapely (falls vorhanden)
-                if "geometry_wkt" in sketch_data:
-                    try:
-                        from shapely import wkt
-                        sketch.geometry = [wkt.loads(w) for w in sketch_data["geometry_wkt"]]
-                    except:
-                        pass
                 doc.sketches.append(sketch)
             except Exception as e:
                 logger.warning(f"Sketch konnte nicht geladen werden: {e}")
@@ -5557,10 +5707,21 @@ class Document:
 
             data = self.to_dict()
 
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            import numpy as np
 
-            logger.success(f"Projekt gespeichert: {path}")
+            class _NumpyEncoder(json.JSONEncoder):
+                def default(self, obj):
+                    if isinstance(obj, (np.integer,)):
+                        return int(obj)
+                    if isinstance(obj, (np.floating,)):
+                        return float(obj)
+                    if isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    return super().default(obj)
+
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False, cls=_NumpyEncoder)
+
             return True
 
         except Exception as e:
@@ -5592,16 +5753,17 @@ class Document:
 
             doc = cls.from_dict(data)
 
-            # Bodies rebuilden um Geometrie zu erzeugen
+            # Bodies: BREP direkt laden oder Rebuild als Fallback
             for body in doc.bodies:
-                if body.features:
+                if body._build123d_solid is not None:
+                    logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nötig)")
+                elif body.features:
                     try:
                         body._rebuild()
-                        logger.debug(f"Body '{body.name}' rebuilt nach Laden")
+                        logger.debug(f"Body '{body.name}': Rebuild aus Feature-Tree")
                     except Exception as e:
                         logger.warning(f"Body '{body.name}' rebuild fehlgeschlagen: {e}")
 
-            logger.success(f"Projekt geladen: {path}")
             return doc
 
         except json.JSONDecodeError as e:

@@ -39,32 +39,43 @@ class PickingMixin:
         if "body_face" in selection_filter and HAS_VTK:
             picker = vtk.vtkCellPicker()
             picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
-            
+
             height = self.plotter.interactor.height()
             picker.Pick(x, height - y, 0, self.plotter.renderer)
-            
+
             cell_id = picker.GetCellId()
-            
+
             if cell_id != -1:
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
-                
+
+                # Sichtbare Body-IDs vorfiltern
+                visible_bodies = None
+                if hasattr(self, 'bodies') and hasattr(self, 'is_body_visible'):
+                    visible_bodies = {bid for bid in self.bodies if self.is_body_visible(bid)}
+
                 best_face = None
                 best_dist = float('inf')
-                
+
                 for face in self.detector.selection_faces:
                     if face.domain_type != "body_face":
                         continue
-                    
-                    dist_plane = abs(np.dot(pos - np.array(face.plane_origin), np.array(face.plane_normal)))
-                    dot_normal = np.dot(normal, np.array(face.plane_normal))
-                    
+                    if visible_bodies is not None and face.owner_id not in visible_bodies:
+                        continue
+
+                    # Pre-computed numpy arrays (keine Tuple→Array Konvertierung)
+                    f_origin = face._np_origin
+                    f_normal = face._np_normal
+
+                    dist_plane = abs(np.dot(pos - f_origin, f_normal))
+                    dot_normal = np.dot(normal, f_normal)
+
                     if dist_plane < 1.0 and dot_normal > 0.8:
-                        dist_center = np.linalg.norm(pos - np.array(face.plane_origin))
+                        dist_center = np.linalg.norm(pos - f_origin)
                         if dist_center < best_dist:
                             best_dist = dist_center
                             best_face = face
-                
+
                 if best_face:
                     return best_face.id
 

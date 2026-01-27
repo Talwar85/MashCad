@@ -49,6 +49,14 @@ class SelectionFace:
     pick_priority: int = 0
     display_mesh: Any = None
 
+    # Pre-computed numpy arrays for fast picking (avoid per-pick conversion)
+    _np_origin: Any = field(default=None, repr=False)
+    _np_normal: Any = field(default=None, repr=False)
+
+    def __post_init__(self):
+        self._np_origin = np.asarray(self.plane_origin, dtype=np.float64)
+        self._np_normal = np.asarray(self.plane_normal, dtype=np.float64)
+
 
 class GeometryDetector:
     class SelectionFilter:
@@ -67,11 +75,17 @@ class GeometryDetector:
     def __init__(self):
         self.selection_faces: List[SelectionFace] = []
         self._counter = 0
-        
+        # Per-body face cache: body_id → (mesh_id, [SelectionFace, ...])
+        self._body_face_cache: Dict[str, Tuple[int, List[SelectionFace]]] = {}
 
     def clear(self):
         self.selection_faces.clear()
         self._counter = 0
+
+    def clear_full(self):
+        """Vollständiger Reset inkl. Cache."""
+        self.clear()
+        self._body_face_cache.clear()
         
         
     
@@ -578,20 +592,33 @@ class GeometryDetector:
     def process_body_mesh(self, body_id, vtk_mesh, extrude_mode=False):
         """
         Zerlegt das Body-Mesh in planare Flächen.
-        FIX: Bessere Normalen-Gruppierung für zylindrische Flächen
-
-        Performance Optimization Phase 2.2: Dynamic Face-Pick-Priority
-        Im Extrude-Mode bekommen Faces höhere Priorität für besseres Picking.
+        Nutzt per-Body Cache um wiederholte Verarbeitung zu vermeiden.
 
         Args:
             body_id: ID des Bodies
             vtk_mesh: PyVista Mesh
             extrude_mode: True wenn Viewport im Extrude-Mode ist (Default: False)
         """
-        # Speichere extrude_mode für _add_body_face
         self._current_extrude_mode = extrude_mode
         if not HAS_VTK or vtk_mesh is None:
             return
+
+        # Cache-Check: Mesh unverändert? → Faces aus Cache nehmen
+        mesh_key = id(vtk_mesh)
+        if body_id in self._body_face_cache:
+            cached_key, cached_faces = self._body_face_cache[body_id]
+            if cached_key == mesh_key:
+                # Priority ggf. aktualisieren und IDs neu vergeben
+                face_priority = 50 if extrude_mode else 5
+                for face in cached_faces:
+                    face.id = self._counter
+                    face.pick_priority = face_priority
+                    self.selection_faces.append(face)
+                    self._counter += 1
+                return
+
+        # Merke Start-Index für Cache
+        _cache_start = len(self.selection_faces)
 
         if not vtk_mesh.is_all_triangles:
             vtk_mesh = vtk_mesh.triangulate()
@@ -644,6 +671,11 @@ class GeometryDetector:
                 # Fallback bei Fehler
                 logger.warning(f"Connectivity Fallback: {e}")
                 self._add_single_face(body_id, group_mesh, normal)
+
+        # Cache speichern
+        new_faces = self.selection_faces[_cache_start:]
+        self._body_face_cache[body_id] = (mesh_key, list(new_faces))
+        logger.debug(f"Body {body_id}: {len(new_faces)} Faces gecacht")
 
     def _add_single_face(self, body_id, mesh, normal):
         if mesh.n_points < 3: return

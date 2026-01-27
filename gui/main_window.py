@@ -490,6 +490,14 @@ class MainWindow(QMainWindow):
         self.split_panel.cancelled.connect(self._on_split_cancelled)
         self._split_mode = False
 
+        # PushPull Input Panel
+        from gui.input_panels import PushPullInputPanel
+        self.pushpull_panel = PushPullInputPanel(self)
+        self.pushpull_panel.distance_changed.connect(self._on_pushpull_distance_changed)
+        self.pushpull_panel.confirmed.connect(self._on_pushpull_confirmed)
+        self.pushpull_panel.cancelled.connect(self._on_pushpull_cancelled)
+        self._pushpull_mode = False
+
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
         self.center_hint.hide()
@@ -671,11 +679,14 @@ class MainWindow(QMainWindow):
         logger.info(f"Transform: {body_name} | G=Move R=Rotate S=Scale | Tab=Eingabe | Esc=Abbrechen")
 
     def _hide_transform_ui(self):
-        """Versteckt Transform-UI"""
+        """Versteckt Transform-UI und alle interaktiven Panels."""
         self._selected_body_for_transform = None
         self.transform_panel.hide()
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
+        # Clean up pushpull mode if active
+        if getattr(self, '_pushpull_mode', False):
+            self._finish_pushpull_ui()
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
@@ -828,6 +839,8 @@ class MainWindow(QMainWindow):
             self.viewport_3d.hole_face_clicked.connect(self._on_body_face_clicked_for_hole)
         if hasattr(self.viewport_3d, 'draft_face_clicked'):
             self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
+        if hasattr(self.viewport_3d, 'pushpull_face_clicked'):
+            self.viewport_3d.pushpull_face_clicked.connect(self._on_body_face_clicked_for_pushpull)
         if hasattr(self.viewport_3d, 'split_body_clicked'):
             self.viewport_3d.split_body_clicked.connect(self._on_split_body_clicked)
         if hasattr(self.viewport_3d, 'split_drag_changed'):
@@ -2251,7 +2264,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.repaired_solid is not None:
             body._build123d_solid = dlg.repaired_solid
             body.invalidate_mesh()
-            self.viewport.update_body(body)
+            self.viewport_3d.update_body(body)
             self._refresh_browser()
             logger.success("Geometry repair angewendet")
 
@@ -2264,11 +2277,11 @@ class MainWindow(QMainWindow):
             logger.warning("Kein Body mit Geometrie ausgewaehlt.")
             return
 
-        dlg = NSidedPatchDialog(body, self.viewport, parent=self)
+        dlg = NSidedPatchDialog(body, self.viewport_3d, parent=self)
         # Übergebe bereits selektierte Kanten aus dem Viewport
         selected_edges = []
-        if hasattr(self.viewport, 'get_selected_edges'):
-            selected_edges = self.viewport.get_selected_edges() or []
+        if hasattr(self.viewport_3d, 'get_selected_edges'):
+            selected_edges = self.viewport_3d.get_selected_edges() or []
             if selected_edges:
                 dlg.set_selected_edges(selected_edges)
         if not dlg.exec():
@@ -2298,65 +2311,140 @@ class MainWindow(QMainWindow):
         )
         body.features.append(feat)
         body._rebuild()
-        self.viewport.update_body(body)
+        self.viewport_3d.update_body(body)
         self._refresh_browser()
         logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
 
     def _pushpull_dialog(self):
-        """Open PushPull: Erst Face-Pick-Modus, dann Dialog mit Distanz."""
-        body = self._get_active_body()
+        """Startet interaktiven PushPull-Workflow (Draft-style Face-Select + Live-Preview)."""
+        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        if not has_bodies:
+            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
+            return
+
+        self._hide_transform_ui()
+        self._pushpull_mode = True
+        self._pushpull_target_body = None
+        self._pushpull_face_center = None
+        self._pushpull_face_normal = None
+        # Detect body faces for full-face hover/click
+        self.viewport_3d.detected_faces = []
+        self.viewport_3d._detect_body_faces()
+        logger.info(f"PushPull: {len(self.viewport_3d.detected_faces)} Body-Faces erkannt")
+        self.viewport_3d.set_pushpull_mode(True)
+        self.pushpull_panel.reset()
+        self.pushpull_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage("PushPull: Klicke auf eine Fläche des Bodys")
+        logger.info("PushPull-Modus gestartet — Fläche auf Body klicken")
+
+    def _on_body_face_clicked_for_pushpull(self, body_id, cell_id, normal, position):
+        """Body-Face wurde im PushPull-Modus geklickt."""
+        if not self._pushpull_mode:
+            return
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
         if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
             return
 
-        # Prüfe ob bereits eine Face gepickt wurde
-        face_center = getattr(self.viewport, '_last_picked_face_center', None)
-        face_normal = getattr(self.viewport, '_last_picked_face_normal', None)
+        self._pushpull_target_body = body
+        self._pushpull_face_normal = normal
+        self._pushpull_face_center = position
 
-        if face_center is not None and face_normal is not None:
-            self._pushpull_with_face(body, face_center, face_normal)
-        else:
-            # Aktiviere Face-Pick-Modus mit PushPull-Callback
-            logger.info("PushPull: Klicke eine Face im Viewport...")
-            self._pushpull_body = body
-            self.viewport.set_plane_select_mode(True)
-            # Temporär umleiten
-            try:
-                self.viewport.custom_plane_clicked.disconnect(self._on_custom_plane_selected)
-            except Exception:
-                pass
-            self.viewport.custom_plane_clicked.connect(self._on_pushpull_face_picked)
+        # Find matching detected face for full-face highlight
+        import numpy as np
+        rounded = tuple(np.round(normal, 2))
+        for df in self.viewport_3d.detected_faces:
+            if df.get('body_id') != body_id:
+                continue
+            df_normal = tuple(np.round(df.get('normal', (0, 0, 0)), 2))
+            if df_normal == rounded:
+                self.viewport_3d.set_pushpull_face(df)
+                break
 
-    def _on_pushpull_face_picked(self, origin, normal):
-        """Callback wenn Face für PushPull gepickt wurde."""
-        self.viewport.set_plane_select_mode(False)
-        self.viewport.custom_plane_clicked.disconnect(self._on_pushpull_face_picked)
-        self.viewport.custom_plane_clicked.connect(self._on_custom_plane_selected)
+        self.pushpull_panel.set_face_count(1)
+        self.statusBar().showMessage("PushPull: Distanz einstellen, Enter bestätigen")
+        self._update_pushpull_preview()
 
-        body = getattr(self, '_pushpull_body', None)
-        if body is None:
+    def _on_pushpull_distance_changed(self, value):
+        """Distanz per Panel geändert."""
+        if not self._pushpull_mode or not self._pushpull_target_body:
+            return
+        self._update_pushpull_preview()
+
+    def _update_pushpull_preview(self):
+        """Live-Preview des PushPull-Ergebnisses."""
+        body = getattr(self, '_pushpull_target_body', None)
+        center = getattr(self, '_pushpull_face_center', None)
+        normal = getattr(self, '_pushpull_face_normal', None)
+        if not body or not body._build123d_solid or center is None or normal is None:
+            self.viewport_3d.clear_pushpull_preview()
             return
 
-        self._pushpull_with_face(body, origin, normal)
+        try:
+            from modeling import PushPullFeature
+            from modeling.cad_tessellator import CADTessellator
 
-    def _pushpull_with_face(self, body, face_center, face_normal):
-        """PushPull Dialog öffnen mit bekannter Face."""
-        from gui.dialogs.pushpull_dialog import PushPullDialog
+            distance = self.pushpull_panel.get_distance()
+            if abs(distance) < 0.01:
+                self.viewport_3d.show_pushpull_preview(None)
+                return
+
+            feature = PushPullFeature(
+                face_selector=(tuple(center), tuple(normal)),
+                distance=distance,
+            )
+            result_solid = body._compute_pushpull(feature, body._build123d_solid)
+            if result_solid is not None:
+                mesh, _ = CADTessellator.tessellate(result_solid)
+                self.viewport_3d.show_pushpull_preview(mesh)
+            else:
+                self.viewport_3d.show_pushpull_preview(None)
+        except Exception as e:
+            logger.debug(f"PushPull preview error: {e}")
+            self.viewport_3d.show_pushpull_preview(None)
+
+    def _on_pushpull_confirmed(self):
+        """PushPull bestätigt — Feature erstellen."""
         from modeling import PushPullFeature
+        from gui.commands.feature_commands import AddFeatureCommand
 
-        dlg = PushPullDialog(face_center=face_center, face_normal=face_normal, parent=self)
-        if not dlg.exec():
+        body = getattr(self, '_pushpull_target_body', None)
+        center = getattr(self, '_pushpull_face_center', None)
+        normal = getattr(self, '_pushpull_face_normal', None)
+        if not body or center is None or normal is None:
+            self.statusBar().showMessage("Keine Face ausgewählt!")
+            self._finish_pushpull_ui()
             return
 
-        feat = PushPullFeature(
-            face_selector=(tuple(face_center), tuple(face_normal)),
-            distance=dlg.distance,
+        distance = self.pushpull_panel.get_distance()
+        if abs(distance) < 0.01:
+            self.statusBar().showMessage("Distanz zu klein!")
+            return
+
+        feature = PushPullFeature(
+            face_selector=(tuple(center), tuple(normal)),
+            distance=distance,
         )
-        body.features.append(feat)
-        body._rebuild()
-        self.viewport.update_body(body)
-        self._refresh_browser()
-        logger.success(f"PushPull {dlg.distance:+.1f}mm angewendet")
+        cmd = AddFeatureCommand(body, feature, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"PushPull {distance:+.1f}mm erstellt")
+        logger.success(f"PushPull {distance:+.1f}mm erstellt")
+        self._finish_pushpull_ui()
+
+    def _on_pushpull_cancelled(self):
+        """PushPull abgebrochen."""
+        self._finish_pushpull_ui()
+        self.statusBar().showMessage("PushPull abgebrochen")
+
+    def _finish_pushpull_ui(self):
+        """PushPull-UI aufräumen."""
+        self._pushpull_mode = False
+        self._pushpull_target_body = None
+        self._pushpull_face_center = None
+        self._pushpull_face_normal = None
+        self.viewport_3d.set_pushpull_mode(False)
+        self.pushpull_panel.hide()
+        self._trigger_viewport_update()
 
     def _surface_analysis_dialog(self):
         """Open surface analysis dialog (curvature, draft angle, zebra)."""
@@ -2367,7 +2455,7 @@ class MainWindow(QMainWindow):
             logger.warning("Kein Body mit Geometrie ausgewaehlt.")
             return
 
-        SurfaceAnalysisDialog(body, self.viewport, parent=self).exec()
+        SurfaceAnalysisDialog(body, self.viewport_3d, parent=self).exec()
 
     def _wall_thickness_dialog(self):
         """Open wall thickness analysis dialog."""
@@ -2384,6 +2472,9 @@ class MainWindow(QMainWindow):
         """Open lattice structure dialog for selected body."""
         from gui.dialogs.lattice_dialog import LatticeDialog
         from modeling import LatticeFeature
+        from modeling.lattice_generator import LatticeGenerator
+        from PySide6.QtCore import QThread, Signal as QSignal, QObject
+        from PySide6.QtWidgets import QProgressDialog
 
         body = self._get_active_body()
         if not body or not body._build123d_solid:
@@ -2394,17 +2485,75 @@ class MainWindow(QMainWindow):
         if not dlg.exec():
             return
 
-        feat = LatticeFeature(
-            cell_type=dlg.cell_type,
-            cell_size=dlg.cell_size,
-            beam_radius=dlg.beam_radius,
-        )
-        body.features.append(feat)
-        body._rebuild()
-        body.invalidate_mesh()
-        self._update_body_from_build123d(body, body._build123d_solid)
-        self._browser.refresh()
-        logger.success(f"Lattice ({dlg.cell_type}) angewendet auf {body.name}")
+        cell_type = dlg.cell_type
+        cell_size = dlg.cell_size
+        beam_radius = dlg.beam_radius
+        solid = body._build123d_solid
+
+        # Worker thread
+        class LatticeWorker(QThread):
+            progress = QSignal(int, str)
+            finished_ok = QSignal(object)
+            finished_err = QSignal(str)
+
+            def run(self):
+                try:
+                    result = LatticeGenerator.generate(
+                        solid, cell_type=cell_type, cell_size=cell_size,
+                        beam_radius=beam_radius,
+                        progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+                    )
+                    self.finished_ok.emit(result)
+                except Exception as e:
+                    self.finished_err.emit(str(e))
+
+        from PySide6.QtCore import Qt as QtConst
+        from gui.design_tokens import DesignTokens
+
+        progress_dlg = QProgressDialog("Lattice generieren...", "Abbrechen", 0, 100, self)
+        progress_dlg.setWindowTitle("Lattice")
+        progress_dlg.setWindowModality(QtConst.WindowModal)
+        progress_dlg.setMinimumWidth(350)
+        progress_dlg.setMinimumDuration(0)
+        progress_dlg.setValue(0)
+        progress_dlg.setAutoClose(False)
+        progress_dlg.setAutoReset(False)
+        progress_dlg.setStyleSheet(DesignTokens.stylesheet_dialog())
+
+        worker = LatticeWorker()
+
+        def on_progress(pct, msg):
+            if not progress_dlg.wasCanceled():
+                progress_dlg.setValue(pct)
+                progress_dlg.setLabelText(msg)
+
+        def on_success(lattice_solid):
+            progress_dlg.setValue(100)
+            progress_dlg.close()
+            if lattice_solid is not None:
+                body._build123d_solid = lattice_solid
+                feat = LatticeFeature(
+                    cell_type=cell_type, cell_size=cell_size, beam_radius=beam_radius,
+                )
+                body.features.append(feat)
+                body.invalidate_mesh()
+                self._update_body_from_build123d(body, body._build123d_solid)
+                self.browser.refresh()
+                logger.success(f"Lattice ({cell_type}) angewendet auf {body.name}")
+            worker.deleteLater()
+
+        def on_error(msg):
+            progress_dlg.close()
+            logger.error(f"Lattice fehlgeschlagen: {msg}")
+            worker.deleteLater()
+
+        worker.progress.connect(on_progress, QtConst.QueuedConnection)
+        worker.finished_ok.connect(on_success, QtConst.QueuedConnection)
+        worker.finished_err.connect(on_error, QtConst.QueuedConnection)
+
+        # Keep reference to prevent GC
+        self._lattice_worker = worker
+        worker.start()
 
     def _hollow_dialog(self):
         """Open hollow dialog for selected body."""
@@ -2945,6 +3094,13 @@ class MainWindow(QMainWindow):
             return
 
         first_face = selection_data[0]
+
+        # Revolve benötigt ein Sketch-Profil
+        if not first_face.domain_type.startswith('sketch'):
+            logger.warning("Revolve benötigt ein Sketch-Profil. Body-Flächen werden nicht unterstützt.")
+            self._on_revolve_cancelled()
+            return
+
         source_id = first_face.owner_id
         target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
         polys = [f.shapely_poly for f in selection_data]
@@ -3401,7 +3557,11 @@ class MainWindow(QMainWindow):
                             sketch=target_sketch,
                             distance=height,
                             operation=operation,
-                            precalculated_polys=polys
+                            precalculated_polys=polys,
+                            plane_origin=getattr(target_sketch, 'plane_origin', (0, 0, 0)),
+                            plane_normal=getattr(target_sketch, 'plane_normal', (0, 0, 1)),
+                            plane_x_dir=getattr(target_sketch, 'plane_x_dir', None),
+                            plane_y_dir=getattr(target_sketch, 'plane_y_dir', None),
                         )
 
                         try:
@@ -3591,17 +3751,22 @@ class MainWindow(QMainWindow):
                 edge = edge_exp.Current()
 
                 try:
-                    # BRepAdaptor_Curve ist einfacher zu verwenden als BRep_Tool.Curve_s
+                    from OCP.GeomAbs import GeomAbs_Line
                     adaptor = BRepAdaptor_Curve(edge)
                     first = adaptor.FirstParameter()
                     last = adaptor.LastParameter()
 
-                    # Sample Punkte entlang der Kante
-                    n_samples = 10
-                    for i in range(n_samples):
-                        t = first + (last - first) * i / n_samples
-                        pt = adaptor.Value(t)
+                    if adaptor.GetType() == GeomAbs_Line:
+                        # Lineare Kante: nur Startpunkt (Endpunkt kommt von nächster Kante)
+                        pt = adaptor.Value(first)
                         points_3d.append((pt.X(), pt.Y(), pt.Z()))
+                    else:
+                        # Gekrümmte Kante: Sample-Punkte
+                        n_samples = 10
+                        for i in range(n_samples):
+                            t = first + (last - first) * i / n_samples
+                            pt = adaptor.Value(t)
+                            points_3d.append((pt.X(), pt.Y(), pt.Z()))
 
                 except Exception as edge_err:
                     logger.debug(f"Edge-Sampling fehlgeschlagen: {edge_err}")
@@ -3718,16 +3883,21 @@ class MainWindow(QMainWindow):
                 except Exception as ex:
                     logger.debug(f"Face-Distanz-Fehler: {ex}")
 
-            # ✅ Erhöhter Schwellenwert: 10.0 statt 2.0
-            # Bei größeren Körpern kann die Distanz zwischen Mesh-Zentrum und BREP-Face größer sein
-            FACE_DISTANCE_THRESHOLD = 10.0
+            # Dynamischer Schwellenwert basierend auf Body-Bounding-Box-Diagonale
+            try:
+                bb = b3d_obj.bounding_box()
+                import numpy as np
+                diag = np.sqrt((bb.max.X - bb.min.X)**2 + (bb.max.Y - bb.min.Y)**2 + (bb.max.Z - bb.min.Z)**2)
+                FACE_DISTANCE_THRESHOLD = max(10.0, diag * 0.25)
+            except Exception:
+                FACE_DISTANCE_THRESHOLD = 25.0
 
             if best_face is None:
                 logger.error(f"FEHLER: Keine Fläche gefunden! ({len(candidate_faces)} Kandidaten geprüft)")
                 return False
 
             if best_dist > FACE_DISTANCE_THRESHOLD:
-                logger.error(f"FEHLER: Nächste Fläche zu weit entfernt (dist={best_dist:.2f} > {FACE_DISTANCE_THRESHOLD})")
+                logger.error(f"FEHLER: Nächste Fläche zu weit entfernt (dist={best_dist:.2f} > {FACE_DISTANCE_THRESHOLD:.1f})")
                 logger.debug(f"  mesh_center: ({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f})")
                 return False
 
@@ -4648,12 +4818,20 @@ class MainWindow(QMainWindow):
                 self.browser.refresh()
 
                 # Viewport aktualisieren
-                self.viewport_3d.clear()
+                self.viewport_3d.clear_bodies()
                 for body in doc.bodies:
                     if body._build123d_solid or body.vtk_mesh:
-                        self.viewport_3d.add_body(body.id, body)
+                        self._update_body_mesh(body)
+
+                # Aktiven Sketch setzen
+                if doc.active_sketch:
+                    self.active_sketch = doc.active_sketch
+                    self.sketch_editor.sketch = doc.active_sketch
 
                 self.setWindowTitle(f"MashCAD - {os.path.basename(path)}")
+
+                # Konstruktionsebenen rendern
+                self._render_construction_planes()
 
                 # TNP Stats aktualisieren
                 self._update_tnp_stats()
