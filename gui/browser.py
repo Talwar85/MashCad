@@ -6,7 +6,7 @@ Collapsible tree with Origin planes, Components, Sketches, Bodies
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTreeWidget, QTreeWidgetItem, QMenu, QSizePolicy,
-    QToolButton, QScrollArea
+    QToolButton, QScrollArea, QSlider
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QIcon, QColor
@@ -23,8 +23,11 @@ class ProjectBrowser(QFrame):
     visibility_changed = Signal()
     body_vis_changed = Signal(str, bool)
     plane_selected = Signal(str)
+    construction_plane_selected = Signal(object)  # ConstructionPlane
+    construction_plane_vis_changed = Signal(str, bool)  # (plane_id, visible)
     collapsed_changed = Signal(bool)
-    
+    rollback_changed = Signal(object, int)  # (body, rollback_index)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._collapsed = False
@@ -40,6 +43,7 @@ class ProjectBrowser(QFrame):
         self.document = None
         self.sketch_visibility = {}
         self.body_visibility = {}
+        self.plane_visibility = {}
         
         self._setup_ui()
     
@@ -101,7 +105,36 @@ class ProjectBrowser(QFrame):
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         
         content_layout.addWidget(self.tree)
-        
+
+        # === ROLLBACK BAR ===
+        self.rollback_frame = QFrame()
+        self.rollback_frame.setStyleSheet("background: #2d2d30; border-top: 1px solid #3f3f46;")
+        self.rollback_frame.setFixedHeight(40)
+        self.rollback_frame.setVisible(False)
+        rb_layout = QHBoxLayout(self.rollback_frame)
+        rb_layout.setContentsMargins(6, 2, 6, 2)
+
+        rb_label = QLabel("⏪")
+        rb_label.setStyleSheet("color: #0078d4; font-size: 12px;")
+        rb_layout.addWidget(rb_label)
+
+        self.rollback_slider = QSlider(Qt.Horizontal)
+        self.rollback_slider.setStyleSheet("""
+            QSlider::groove:horizontal { background: #3f3f46; height: 4px; border-radius: 2px; }
+            QSlider::handle:horizontal { background: #0078d4; width: 12px; margin: -4px 0; border-radius: 6px; }
+            QSlider::sub-page:horizontal { background: #0078d4; border-radius: 2px; }
+        """)
+        self.rollback_slider.valueChanged.connect(self._on_rollback_changed)
+        rb_layout.addWidget(self.rollback_slider)
+
+        self.rollback_label = QLabel("")
+        self.rollback_label.setStyleSheet("color: #999; font-size: 10px; min-width: 30px;")
+        rb_layout.addWidget(self.rollback_label)
+
+        content_layout.addWidget(self.rollback_frame)
+
+        self._rollback_body = None
+
         self.main_layout.addWidget(self.content)
         
         # === COLLAPSE BAR (rechts vom Content) ===
@@ -184,7 +217,16 @@ class ProjectBrowser(QFrame):
             item = QTreeWidgetItem(origin, [f"→ {name}"])
             item.setData(0, Qt.UserRole, ('axis', axis_id))
             item.setForeground(0, QColor(color))
-        
+
+        # Construction Planes (Offset Planes)
+        if hasattr(self.document, 'planes') and self.document.planes:
+            for cp in self.document.planes:
+                vis = self.plane_visibility.get(cp.id, True)
+                icon = "●" if vis else "○"
+                item = QTreeWidgetItem(origin, [f"{icon} ▬ {cp.name}"])
+                item.setData(0, Qt.UserRole, ('construction_plane', cp))
+                item.setForeground(0, QColor("#bb88dd" if vis else "#555"))
+
         # Components Container
         if self.document.bodies or self.document.sketches:
             comp = QTreeWidgetItem(root, ["⊞ Component1"])
@@ -210,10 +252,16 @@ class ProjectBrowser(QFrame):
                 bi.setForeground(0, QColor("#a8d4a8" if vis else "#555"))
                 
                 if hasattr(b, 'features'):
-                    for f in b.features:
-                        fi = QTreeWidgetItem(bi, [f"↳ {f.name}"])
+                    rb_idx = b.rollback_index if b.rollback_index is not None else len(b.features)
+                    for fi_idx, f in enumerate(b.features):
+                        rolled_back = fi_idx >= rb_idx
+                        prefix = "↳" if not rolled_back else "⊘"
+                        color = "#777" if not rolled_back else "#444"
+                        if hasattr(f, 'status') and f.status == "ERROR":
+                            color = "#cc5555"
+                        fi = QTreeWidgetItem(bi, [f"{prefix} {f.name}"])
                         fi.setData(0, Qt.UserRole, ('feature', f, b))
-                        fi.setForeground(0, QColor("#777"))
+                        fi.setForeground(0, QColor(color))
     
     def get_visible_sketches(self):
         if not self.document:
@@ -231,6 +279,8 @@ class ProjectBrowser(QFrame):
         if data:
             if data[0] == 'plane':
                 self.plane_selected.emit(data[1])
+            elif data[0] == 'construction_plane':
+                self.construction_plane_selected.emit(data[1])
             else:
                 self.feature_selected.emit(data)
     
@@ -269,6 +319,14 @@ class ProjectBrowser(QFrame):
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_body(data[1]))
             
+        elif data[0] == 'construction_plane':
+            cp = data[1]
+            vis = self.plane_visibility.get(cp.id, True)
+            menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(cp, 'construction_plane'))
+            menu.addAction(tr("New Sketch"), lambda: self.construction_plane_selected.emit(cp))
+            menu.addSeparator()
+            menu.addAction(tr("Delete"), lambda: self._del_construction_plane(cp))
+
         elif data[0] == 'plane':
             menu.addAction(tr("New Sketch"), lambda: self.plane_selected.emit(data[1]))
             
@@ -294,9 +352,21 @@ class ProjectBrowser(QFrame):
             new_vis = not self.body_visibility.get(obj.id, True)
             self.body_visibility[obj.id] = new_vis
             self.body_vis_changed.emit(obj.id, new_vis)
+        elif type_ == 'construction_plane':
+            new_vis = not self.plane_visibility.get(obj.id, True)
+            self.plane_visibility[obj.id] = new_vis
+            obj.visible = new_vis
+            self.construction_plane_vis_changed.emit(obj.id, new_vis)
         self.refresh()
         self.visibility_changed.emit()
     
+    def _del_construction_plane(self, cp):
+        if hasattr(self.document, 'planes') and cp in self.document.planes:
+            self.document.planes.remove(cp)
+            self.plane_visibility.pop(cp.id, None)
+            self.refresh()
+            self.visibility_changed.emit()
+
     def _del_sketch(self, s):
         if s in self.document.sketches:
             self.document.sketches.remove(s)
@@ -310,12 +380,11 @@ class ProjectBrowser(QFrame):
             self.visibility_changed.emit()
 
     def _del_feature(self, feature, body):
-        """Löscht ein Feature aus einem Body und triggert Rebuild"""
+        """Löscht ein Feature aus einem Body via UndoCommand"""
         if feature in body.features:
-            body.features.remove(feature)
-            # Signal emittieren für MainWindow-Rebuild
+            # Feature NICHT hier entfernen - das macht DeleteFeatureCommand.redo()
+            # Signal emittieren für MainWindow, das den UndoCommand erstellt
             self.feature_deleted.emit(feature, body)
-            self.refresh()
 
     def get_selected_body_ids(self):
         """
@@ -352,3 +421,30 @@ class ProjectBrowser(QFrame):
                 bodies.append(body)
 
         return bodies
+
+    def show_rollback_bar(self, body):
+        """Show rollback slider for a body with features."""
+        if not body or not hasattr(body, 'features') or not body.features:
+            self.rollback_frame.setVisible(False)
+            self._rollback_body = None
+            return
+        self._rollback_body = body
+        n = len(body.features)
+        rb = body.rollback_index if body.rollback_index is not None else n
+        self.rollback_slider.blockSignals(True)
+        self.rollback_slider.setRange(0, n)
+        self.rollback_slider.setValue(rb)
+        self.rollback_slider.blockSignals(False)
+        self.rollback_label.setText(f"{rb}/{n}")
+        self.rollback_frame.setVisible(True)
+
+    def _on_rollback_changed(self, value):
+        """Slider value changed - emit rollback signal."""
+        if not self._rollback_body:
+            return
+        n = len(self._rollback_body.features)
+        self.rollback_label.setText(f"{value}/{n}")
+        idx = value if value < n else None  # None = all features
+        self._rollback_body.rollback_index = idx
+        self.rollback_changed.emit(self._rollback_body, value)
+

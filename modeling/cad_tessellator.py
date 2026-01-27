@@ -47,25 +47,50 @@ class CADTessellator:
     Singleton-ähnlicher Manager für Tessellierung.
     Nutzt LRU-Caching Strategie mit Version-Tag.
     """
-    _mesh_cache = {}  # { "id_quality_version": (poly_mesh, poly_edges) }
+    _mesh_cache = {}  # { "hash_quality_version": (poly_mesh, poly_edges) }
     _cache_version = _TESSELLATOR_VERSION
-    _cache_cleared = False  # Flag um mehrfaches Clearen zu vermeiden
+    _cache_cleared = False
 
     # Performance Optimization 1.2: Per-Shape Versioning statt globaler Counter
     _shape_versions = {}  # { shape_id: version }
 
+    # Performance: LRU-Tracking + Größenlimit
+    _cache_access_order = []  # [cache_key, ...] — älteste zuerst
+    MAX_CACHE_ENTRIES = 200
+
     @staticmethod
     def clear_cache():
         """
-        DEPRECATED: Leert GESAMTEN Cache (für Kompatibilität).
-        Besser: clear_cache_for_shape(shape_id) nutzen!
+        Leert gesamten Cache. Nur bei echtem Bedarf nutzen (z.B. Tessellator-Version-Änderung).
+        Für einzelne Body-Updates NICHT nötig — der Geometry-Hash stellt Cache-Korrektheit sicher.
         """
         global _CACHE_INVALIDATION_COUNTER
         _CACHE_INVALIDATION_COUNTER += 1
         CADTessellator._mesh_cache.clear()
-        CADTessellator._shape_versions.clear()  # Auch Shape-Versionen leeren
+        CADTessellator._shape_versions.clear()
+        CADTessellator._cache_access_order.clear()
         CADTessellator._cache_cleared = True
-        logger.info(f"CADTessellator Cache geleert (Version {_TESSELLATOR_VERSION}, Counter {_CACHE_INVALIDATION_COUNTER})")
+        logger.info(f"CADTessellator Cache komplett geleert (Version {_TESSELLATOR_VERSION})")
+
+    @staticmethod
+    def notify_body_changed():
+        """
+        Leichtgewichtige Benachrichtigung: Ein Body hat sich geändert.
+        Der Geometry-Hash-basierte Cache ist self-invalidating — alte Einträge
+        werden automatisch nicht mehr getroffen. Diese Methode triggert nur
+        LRU-Eviction wenn der Cache zu groß wird.
+        """
+        if len(CADTessellator._mesh_cache) > CADTessellator.MAX_CACHE_ENTRIES:
+            CADTessellator._evict_lru()
+
+    @staticmethod
+    def _evict_lru():
+        """Entfernt älteste Cache-Einträge bis unter MAX_CACHE_ENTRIES."""
+        target = CADTessellator.MAX_CACHE_ENTRIES * 3 // 4  # 75% behalten
+        while len(CADTessellator._mesh_cache) > target and CADTessellator._cache_access_order:
+            old_key = CADTessellator._cache_access_order.pop(0)
+            CADTessellator._mesh_cache.pop(old_key, None)
+        logger.debug(f"LRU-Eviction: Cache auf {len(CADTessellator._mesh_cache)} Einträge reduziert")
 
     @staticmethod
     def clear_cache_for_shape(shape_id: int):
@@ -93,18 +118,18 @@ class CADTessellator:
     def invalidate_cache():
         """
         Context Manager für automatische Cache-Invalidierung.
+        Nutzt notify_body_changed() statt clear_cache() — Geometry-Hash
+        stellt Cache-Korrektheit sicher, LRU hält Größe im Rahmen.
 
         Usage:
             with CADTessellator.invalidate_cache():
                 # Transform operations
                 body._build123d_solid = body._build123d_solid.move(...)
         """
-        CADTessellator.clear_cache()
         try:
             yield
         finally:
-            # Optional: Post-processing hier möglich
-            pass
+            CADTessellator.notify_body_changed()
 
     @staticmethod
     def extract_brep_edges(solid, deflection=0.1) -> Optional[pv.PolyData]:
@@ -290,6 +315,12 @@ class CADTessellator:
 
         if cache_key in CADTessellator._mesh_cache:
             logger.debug(f"Tessellator: Cache HIT für {cache_key[:30]}...")
+            # LRU: Move to end
+            try:
+                CADTessellator._cache_access_order.remove(cache_key)
+            except ValueError:
+                pass
+            CADTessellator._cache_access_order.append(cache_key)
             return CADTessellator._mesh_cache[cache_key]
 
         logger.debug(f"Tessellator: Cache MISS - generiere neu für {cache_key[:40]}...")
@@ -328,7 +359,8 @@ class CADTessellator:
                             normals = np.array(normals, dtype=np.float32).reshape(-1, 3)
                             if len(normals) == len(verts):
                                 mesh.point_data["Normals"] = normals
-                        except: pass
+                        except Exception as e:
+                            logger.debug(f"Normal-Zuweisung fehlgeschlagen: {e}")
 
             # --- FALLBACK für Mesh --- 
             if mesh is None:
@@ -354,6 +386,10 @@ class CADTessellator:
                     logger.debug(f"B-Rep Edges extrahiert: {edge_mesh.n_lines} Linien")
 
             CADTessellator._mesh_cache[cache_key] = (mesh, edge_mesh)
+            CADTessellator._cache_access_order.append(cache_key)
+            # LRU-Eviction prüfen
+            if len(CADTessellator._mesh_cache) > CADTessellator.MAX_CACHE_ENTRIES:
+                CADTessellator._evict_lru()
             return mesh, edge_mesh
 
         except Exception as e:
@@ -373,5 +409,6 @@ class CADTessellator:
                 count += 1
                 explorer.Next()
             return count
-        except:
+        except Exception as e:
+            logger.debug(f"Face-Count fehlgeschlagen: {e}")
             return 0

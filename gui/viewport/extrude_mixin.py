@@ -249,6 +249,26 @@ class ExtrudeMixin:
         
         return projection_pixels * scale_factor
 
+    def calculate_to_face_height(self, target_face_id) -> float:
+        """Berechnet Extrusions-Höhe von ausgewählter Quell-Face zur Ziel-Face."""
+        if not self.selected_face_ids:
+            return 0.0
+
+        source_id = next(iter(self.selected_face_ids))
+        source = next((f for f in self.detector.selection_faces if f.id == source_id), None)
+        target = next((f for f in self.detector.selection_faces if f.id == target_face_id), None)
+
+        if not source or not target:
+            return 0.0
+
+        src_origin = np.array(source.plane_origin)
+        src_normal = np.array(source.plane_normal)
+        tgt_origin = np.array(target.plane_origin)
+
+        # Projektion des Abstands auf die Extrusions-Richtung (Quell-Normal)
+        height = float(np.dot(tgt_origin - src_origin, src_normal))
+        return height
+
     def _clear_preview(self):
         """Entfernt die Extrude-Vorschau"""
         if self._preview_actor:

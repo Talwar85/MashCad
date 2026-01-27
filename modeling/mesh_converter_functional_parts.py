@@ -69,7 +69,7 @@ class MeshToBREPV5:
         shape = self._run_gmsh_ocp(clean_stl)
         
         try: os.remove(clean_stl)
-        except: pass
+        except Exception as e: logger.debug(f"Temp-Datei Cleanup: {e}")
         
         return shape
 
@@ -81,7 +81,7 @@ class MeshToBREPV5:
             
             mesh.merge_vertices()
             try: mesh.update_faces(mesh.unique_faces())
-            except: pass
+            except Exception as e: logger.debug(f"unique_faces fehlgeschlagen: {e}")
             
             fd, temp_path = tempfile.mkstemp(suffix=".stl")
             os.close(fd)
@@ -174,8 +174,8 @@ class MeshToBREPV5:
                     solid = Solid.make_solid(b123d_shell)
                     logger.success("✅ Solid erfolgreich erstellt!")
                     return solid
-                except:
-                    logger.warning("⚠️ Nicht wasserdicht, gebe Shell zurück.")
+                except Exception as e:
+                    logger.warning(f"Nicht wasserdicht, gebe Shell zurück: {e}")
                     return b123d_shell
                     
             else:

@@ -204,6 +204,8 @@ class PickingMixin:
                     if abs(normal[i] + 1.0) < 0.001:
                         normal[i] = -1.0
                 
+                self._last_picked_face_center = tuple(pos)
+                self._last_picked_face_normal = tuple(normal)
                 self.custom_plane_clicked.emit(tuple(pos), tuple(normal))
                 self._draw_plane_hover_highlight(pos, normal)
                 return True
@@ -226,12 +228,15 @@ class PickingMixin:
                 self.selected_face_ids.clear()
                 self.selected_face_ids.add(face_id)
             
-            # Cache drag direction für die erste selektierte Fläche
+            # Cache drag direction und Face-Daten für die erste selektierte Fläche
             if self.selected_face_ids:
                 first_id = next(iter(self.selected_face_ids))
                 face = next((f for f in self.detector.selection_faces if f.id == first_id), None)
                 if face:
                     self._cache_drag_direction_for_face_v2(face)
+                    # Face-Daten für Offset Plane und andere Face-basierte Features
+                    self._last_picked_face_center = face.plane_origin
+                    self._last_picked_face_normal = face.plane_normal
             
             self._draw_selectable_faces_from_detector()
             self.face_selected.emit(face_id)

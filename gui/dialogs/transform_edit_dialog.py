@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
 from loguru import logger
+from gui.design_tokens import DesignTokens
+from i18n import tr
 
 
 class TransformEditDialog(QDialog):
@@ -55,25 +57,13 @@ class TransformEditDialog(QDialog):
         # Buttons
         button_layout = QHBoxLayout()
 
-        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn = QPushButton(tr("Cancel"))
         self.cancel_btn.clicked.connect(self.reject)
 
-        self.apply_btn = QPushButton("Apply")
+        self.apply_btn = QPushButton(tr("Apply"))
         self.apply_btn.setDefault(True)
         self.apply_btn.clicked.connect(self._on_apply)
-        self.apply_btn.setStyleSheet("""
-            QPushButton {
-                background: #0078d4;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #1084d8;
-            }
-        """)
+        self.apply_btn.setObjectName("primary")
 
         button_layout.addStretch()
         button_layout.addWidget(self.cancel_btn)
@@ -83,59 +73,11 @@ class TransformEditDialog(QDialog):
         layout.addLayout(button_layout)
 
         # Dark Theme
-        self.setStyleSheet("""
-            QDialog {
-                background: #2d2d30;
-            }
-            QLabel {
-                color: #ddd;
-                font-size: 13px;
-            }
-            QLineEdit {
-                background: #1e1e1e;
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #0078d4;
-            }
-            QComboBox {
-                background: #1e1e1e;
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QPushButton {
-                background: #3f3f46;
-                color: #ddd;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #505050;
-            }
-            QGroupBox {
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_dialog())
 
     def _create_move_inputs(self, layout):
         """Input-Felder für Move (Translation)"""
-        group = QGroupBox("Translation")
+        group = QGroupBox(tr("Translation"))
         group_layout = QVBoxLayout()
 
         self.move_x = self._create_number_input("X:", group_layout)
@@ -147,12 +89,12 @@ class TransformEditDialog(QDialog):
 
     def _create_rotate_inputs(self, layout):
         """Input-Felder für Rotate"""
-        group = QGroupBox("Rotation")
+        group = QGroupBox(tr("Rotation"))
         group_layout = QVBoxLayout()
 
         # Axis Selector
         axis_layout = QHBoxLayout()
-        axis_layout.addWidget(QLabel("Axis:"))
+        axis_layout.addWidget(QLabel(tr("Axis:")))
         self.rotate_axis = QComboBox()
         self.rotate_axis.addItems(["X", "Y", "Z"])
         axis_layout.addWidget(self.rotate_axis)
@@ -166,7 +108,7 @@ class TransformEditDialog(QDialog):
         layout.addWidget(group)
 
         # Center (optional, read-only info)
-        center_group = QGroupBox("Rotation Center (Body Center)")
+        center_group = QGroupBox(tr("Rotation Center (Body Center)"))
         center_layout = QVBoxLayout()
         self.center_info = QLabel("")
         self.center_info.setStyleSheet("color: #999; font-size: 11px;")
@@ -176,12 +118,12 @@ class TransformEditDialog(QDialog):
 
     def _create_scale_inputs(self, layout):
         """Input-Felder für Scale"""
-        group = QGroupBox("Scale Factor")
+        group = QGroupBox(tr("Scale Factor"))
         group_layout = QVBoxLayout()
 
         self.scale_factor = self._create_number_input("Factor:", group_layout)
 
-        info = QLabel("Note: Uniform scaling only (Build123d limitation)")
+        info = QLabel(tr("Note: Uniform scaling only (Build123d limitation)"))
         info.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
         group_layout.addWidget(info)
 
@@ -190,11 +132,11 @@ class TransformEditDialog(QDialog):
 
     def _create_mirror_inputs(self, layout):
         """Input-Felder für Mirror"""
-        group = QGroupBox("Mirror Plane")
+        group = QGroupBox(tr("Mirror Plane"))
         group_layout = QVBoxLayout()
 
         plane_layout = QHBoxLayout()
-        plane_layout.addWidget(QLabel("Plane:"))
+        plane_layout.addWidget(QLabel(tr("Plane:")))
         self.mirror_plane = QComboBox()
         self.mirror_plane.addItems(["XY", "XZ", "YZ"])
         plane_layout.addWidget(self.mirror_plane)

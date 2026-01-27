@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from enum import Enum, auto
 import uuid
 import math
+from loguru import logger
 
 from .geometry import (
     Point2D, Line2D, Circle2D, Arc2D, Rectangle2D,
@@ -68,6 +69,11 @@ class Sketch:
 
     # Solver
     _solver: ConstraintSolver = field(default_factory=ConstraintSolver)
+
+    # Performance: Profil-Cache + Adjacency-Map
+    _profiles_valid: bool = field(default=False, repr=False)
+    _cached_profiles: list = field(default_factory=list, repr=False)
+    _adjacency: dict = field(default_factory=dict, repr=False)  # {(rx,ry): [line, ...]}
     
     # === Geometrie-Erstellung ===
     
@@ -86,6 +92,7 @@ class Sketch:
         
         line = Line2D(start, end, construction=construction)
         self.lines.append(line)
+        self.invalidate_profiles()
         return line
     
     def _find_or_create_point(self, x: float, y: float, tolerance: float = 1.0) -> Point2D:
@@ -116,6 +123,7 @@ class Sketch:
         """Fügt eine Linie zwischen existierenden Punkten hinzu"""
         line = Line2D(p1, p2, construction=construction)
         self.lines.append(line)
+        self.invalidate_profiles()
         return line
     
     def add_circle(self, cx: float, cy: float, radius: float,
@@ -528,7 +536,7 @@ class Sketch:
                     self._update_arc_angles() # (Methode aus vorherigem Schritt)
                     return res
         except ImportError:
-            pass
+            logger.info("py-slvs nicht verfügbar, nutze SciPy-Fallback")
 
         # 2. Fallback auf Scipy Solver (NEU)
         res = self._solver.solve(
@@ -538,7 +546,8 @@ class Sketch:
         # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
         if res.success:
             self._update_arc_angles()
-            
+            self.invalidate_profiles()
+
         return res
     
     def is_fully_constrained(self) -> bool:
@@ -595,7 +604,8 @@ class Sketch:
         
         # Bereinige verwaiste Punkte
         self._cleanup_orphan_points()
-    
+        self.invalidate_profiles()
+
     def delete_circle(self, circle: Circle2D):
         """Löscht einen Kreis und bereinigt verwaiste Punkte"""
         if circle in self.circles:
@@ -699,41 +709,66 @@ class Sketch:
                 return line
         return None
     
-    # === Profil-Erkennung ===
-    
+    # === Profil-Erkennung (Optimiert: Adjacency-Map + Caching) ===
+
+    def invalidate_profiles(self):
+        """Nach Geometrie-Änderung aufrufen — Profil-Cache wird lazy neu berechnet."""
+        self._profiles_valid = False
+        self._adjacency.clear()
+
+    def _build_adjacency(self, tolerance: float = 0.5):
+        """Baut Punkt→Linien Adjacency-Map für O(1) Nachbar-Lookup."""
+        self._adjacency.clear()
+        prec = max(1, int(-1 * round(math.log10(tolerance)))) if tolerance > 0 else 1
+        for line in self.lines:
+            if line.construction:
+                continue
+            for pt in [line.start, line.end]:
+                key = (round(pt.x, prec), round(pt.y, prec))
+                self._adjacency.setdefault(key, []).append(line)
+
     def _find_closed_profiles(self, tolerance: float = 0.5):
-        """Findet geschlossene Profile (für Extrude)"""
-       
+        """Findet geschlossene Profile (für Extrude). Cached bis invalidate_profiles()."""
+        if self._profiles_valid:
+            return self._cached_profiles
+
+        self._build_adjacency(tolerance)
+
         profiles = []
         used_line_ids = set()
-        
         non_construction_lines = [l for l in self.lines if not l.construction]
-        
+
         for start_line in non_construction_lines:
             if start_line.id in used_line_ids:
                 continue
-            
-            profile = self._trace_profile(start_line, used_line_ids, tolerance)  # ← Bleibt gleich
-            
+            profile = self._trace_profile(start_line, used_line_ids, tolerance)
             if profile and len(profile) >= 3:
                 profiles.append(profile)
-        
+
+        self._cached_profiles = profiles
+        self._profiles_valid = True
         return profiles
-    
+
+    def _adj_key(self, pt, tolerance: float = 0.5):
+        """Rundet Punkt auf Adjacency-Key."""
+        prec = max(1, int(-1 * round(math.log10(tolerance)))) if tolerance > 0 else 1
+        return (round(pt.x, prec), round(pt.y, prec))
+
     def _trace_profile(self, start_line: Line2D, used_ids: set, tolerance: float = 0.5) -> Optional[List[Line2D]]:
         profile = [start_line]
         used_ids.add(start_line.id)
         current_point = start_line.end
-        
+
         max_iterations = len(self.lines)
-        
+
         for _ in range(max_iterations):
             next_line = None
-            for line in self.lines:
-                if line.id in used_ids or line.construction:
+            key = self._adj_key(current_point, tolerance)
+            candidates = self._adjacency.get(key, [])
+
+            for line in candidates:
+                if line.id in used_ids:
                     continue
-                
-                # Nutze Toleranz Parameter
                 if points_are_coincident(line.start, current_point, tolerance):
                     next_line = line
                     current_point = line.end
@@ -742,16 +777,18 @@ class Sketch:
                     next_line = line
                     current_point = line.start
                     break
-            
+
             if next_line is None:
+                logger.debug(f"Profil-Trace abgebrochen: kein Nachbar für Punkt ({current_point.x:.2f}, {current_point.y:.2f}), {len(profile)} Linien gesammelt")
                 return None
-            
+
             profile.append(next_line)
             used_ids.add(next_line.id)
-            
+
             if points_are_coincident(current_point, start_line.start, tolerance):
                 return profile
-        
+
+        logger.debug(f"Profil-Trace abgebrochen: max_iterations erreicht, {len(profile)} Linien gesammelt")
         return None
     
     # === Serialisierung ===
@@ -776,6 +813,25 @@ class Sketch:
                 'construction': spline.construction
             })
 
+        # Constraints serialisieren
+        constraints_data = []
+        for c in self.constraints:
+            entity_ids = []
+            for e in c.entities:
+                eid = getattr(e, 'id', None)
+                if eid is not None:
+                    entity_ids.append(eid)
+            cd = {
+                'type': c.type.name,
+                'id': c.id,
+                'entity_ids': entity_ids,
+                'value': c.value,
+                'driving': c.driving,
+            }
+            if c.formula:
+                cd['formula'] = c.formula
+            constraints_data.append(cd)
+
         return {
             'name': self.name,
             'id': self.id,
@@ -787,6 +843,7 @@ class Sketch:
             'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle,
                       a.id, a.construction) for a in self.arcs],
             'splines': splines_data,
+            'constraints': constraints_data,
         }
     
     @classmethod
@@ -848,8 +905,40 @@ class Sketch:
                 for line in lines:
                     sketch.lines.append(line)
 
+        # Constraints wiederherstellen
+        # Entity-ID → Objekt Map aufbauen
+        id_map = {}
+        for p in sketch.points:
+            id_map[p.id] = p
+        for l in sketch.lines:
+            id_map[l.id] = l
+        for c in sketch.circles:
+            id_map[c.id] = c
+        for a in sketch.arcs:
+            id_map[a.id] = a
+
+        from .constraints import Constraint, ConstraintType
+        for cdata in data.get('constraints', []):
+            try:
+                ctype = ConstraintType[cdata['type']]
+                entities = [id_map[eid] for eid in cdata.get('entity_ids', []) if eid in id_map]
+                if not entities:
+                    continue
+                constraint = Constraint(
+                    type=ctype,
+                    id=cdata.get('id', ''),
+                    entities=entities,
+                    value=cdata.get('value'),
+                    formula=cdata.get('formula'),
+                    driving=cdata.get('driving', True),
+                )
+                sketch.constraints.append(constraint)
+            except (KeyError, Exception) as e:
+                from loguru import logger
+                logger.debug(f"Constraint-Wiederherstellung übersprungen: {e}")
+
         return sketch
-    
+
     def __repr__(self):
         return (f"Sketch('{self.name}', "
                 f"{len(self.points)}pts, {len(self.lines)}lines, "

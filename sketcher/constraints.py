@@ -58,11 +58,14 @@ class Constraint:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     entities: List[Any] = field(default_factory=list)  # Betroffene Geometrie
     value: Optional[float] = None  # Für Dimension-Constraints
+    formula: Optional[str] = None  # Parameter-Referenz: "width", "width * 2", etc.
     driving: bool = True  # True = treibend, False = referenz
     satisfied: bool = False
     error: float = 0.0  # Abweichung vom Sollwert
-    
+
     def __repr__(self):
+        if self.formula:
+            return f"{self.type.name}={self.formula}({self.value})"
         val_str = f"={self.value}" if self.value is not None else ""
         return f"{self.type.name}{val_str}"
 
@@ -222,6 +225,34 @@ def make_midpoint(point: Point2D, line: Line2D) -> Constraint:
         type=ConstraintType.MIDPOINT,
         entities=[point, line]
     )
+
+
+# === Parameter Resolution ===
+
+def resolve_constraint_value(constraint: Constraint) -> float:
+    """Löst den Wert eines Constraints auf — aus formula oder direkt.
+    Aktualisiert constraint.value wenn formula gesetzt ist."""
+    if constraint.formula:
+        try:
+            from core.parameters import get_parameters
+            params = get_parameters()
+            if not params:
+                return constraint.value or 0.0
+            # Direkt als temporären Parameter evaluieren
+            params.set("__resolve__", constraint.formula)
+            try:
+                val = params.get("__resolve__")
+                constraint.value = val
+                return val
+            finally:
+                try:
+                    params.delete("__resolve__")
+                except Exception:
+                    pass
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"Formel '{constraint.formula}' konnte nicht aufgelöst werden: {e}")
+    return constraint.value or 0.0
 
 
 # === Constraint Error Calculation ===

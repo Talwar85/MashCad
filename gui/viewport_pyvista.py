@@ -82,6 +82,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     extrude_requested = Signal(list, float, str)
     height_changed = Signal(float)
     face_selected = Signal(int)
+    target_face_selected = Signal(int)  # "Extrude to Face" Ziel-Pick
     transform_changed = Signal(float, float, float) # für UI-Panel Update
     clicked_3d_point = Signal(int, tuple) # body_id, (x,y,z)
     body_clicked = Signal(str)  # body_id - NEU: Für pending transform mode (Fix 1)
@@ -93,6 +94,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     edge_selection_changed = Signal(int)  # NEU: Anzahl selektierter Kanten für Fillet/Chamfer
     sketch_path_clicked = Signal(str, str, int)  # NEU: sketch_id, geom_type ('line', 'arc', 'spline'), index
     texture_face_selected = Signal(int)  # NEU: Anzahl selektierter Faces für Texture
+    measure_point_picked = Signal(tuple)  # (x, y, z) - Punkt fuer Measure-Tool
+    offset_plane_drag_changed = Signal(float)  # Offset-Wert während Drag
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -121,16 +124,34 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.hovered_face = -1
         self.hovered_body_face = None  # (body_id, cell_id, normal, position)
         self.body_face_extrude = None  # Für Extrusion von Body-Flächen
+        self._last_picked_face_center = None
+        self._last_picked_face_normal = None
         
         # Modes
         self.plane_select_mode = False
         self.extrude_mode = False
+        self._to_face_picking = False  # "Extrude to Face" Ziel-Pick-Modus
+        self.measure_mode = False
+        self.offset_plane_mode = False
+        self._offset_plane_base_origin = None
+        self._offset_plane_base_normal = None
+        self._offset_plane_preview_actor = None
+        self._offset_plane_edge_actor = None
+        self._offset_plane_offset = 0.0
+        self._offset_plane_dragging = False
+        self._offset_plane_drag_start = None
+        self._offset_plane_drag_start_offset = 0.0
 
         # Edge Selection Mixin initialisieren
         self._init_edge_selection()
 
         # Section View Mixin initialisieren
         self._init_section_view()
+
+        # Box selection
+        self._box_select_active = False
+        self._box_select_start = None
+        self._box_select_rect = None  # QRubberBand
 
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
         self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
@@ -153,6 +174,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._sketch_actors = []
         self._body_actors = {}
         self._plane_actors = {}
+        self._construction_plane_actors = {}
         self._face_actors = []
         self._preview_actor = None
         self.last_highlighted_plane = None
@@ -195,11 +217,64 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        
+
         if not HAS_PYVISTA:
             self.main_layout.addWidget(QLabel("PyVista fehlt! Installiere: pip install pyvista pyvistaqt"))
             return
+
+        # Selection filter toolbar (floating overlay)
+        self._setup_selection_filter_bar()
             
+    def _setup_selection_filter_bar(self):
+        """Floating selection filter toolbar at top-right of viewport."""
+        from PySide6.QtWidgets import QPushButton, QHBoxLayout
+        self._filter_bar = QFrame(self)
+        self._filter_bar.setStyleSheet("""
+            QFrame { background: rgba(30,30,30,200); border-radius: 4px; border: 1px solid #3f3f46; }
+        """)
+        bar_layout = QHBoxLayout(self._filter_bar)
+        bar_layout.setContentsMargins(4, 2, 4, 2)
+        bar_layout.setSpacing(2)
+
+        self._filter_buttons = {}
+        filters = [
+            ("All", "ALL"),
+            ("Face", "FACE"),
+            ("Edge", "EDGE"),
+            ("Body", "BODY"),
+        ]
+        for label, key in filters:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(key == "ALL")
+            btn.setFixedSize(40, 22)
+            btn.setStyleSheet("""
+                QPushButton { background: #3f3f46; color: #aaa; border: none; border-radius: 3px; font-size: 10px; }
+                QPushButton:checked { background: #0078d4; color: white; }
+                QPushButton:hover { background: #505050; }
+            """)
+            btn.clicked.connect(lambda checked, k=key: self._set_selection_filter(k))
+            bar_layout.addWidget(btn)
+            self._filter_buttons[key] = btn
+
+        self._filter_bar.adjustSize()
+        self._filter_bar.move((self.width() - self._filter_bar.width()) // 2, 10)
+        self._filter_bar.raise_()
+
+    def _set_selection_filter(self, key):
+        """Set active selection filter from toolbar."""
+        from gui.geometry_detector import GeometryDetector
+        mapping = {
+            "ALL": GeometryDetector.SelectionFilter.ALL,
+            "FACE": GeometryDetector.SelectionFilter.FACE,
+            "EDGE": {"body_edge"},
+            "BODY": {"body_face", "sketch_shell", "sketch_profile"},
+        }
+        self.active_selection_filter = mapping.get(key, GeometryDetector.SelectionFilter.ALL)
+        # Update button states (radio-like)
+        for k, btn in self._filter_buttons.items():
+            btn.setChecked(k == key)
+
     def on_mouse_move(self, event):
         """CAD-typisches Hover / Preselect"""
         current_time = time.time()
@@ -345,7 +420,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Home-Button immer oben links halten
         if hasattr(self, 'btn_home'):
             self.btn_home.move(20, 20)
-            self.btn_home.raise_()  # Nach vorne bringen
+            self.btn_home.raise_()
+        # Selection filter bar oben mittig
+        if hasattr(self, '_filter_bar'):
+            self._filter_bar.move((self.width() - self._filter_bar.width()) // 2, 10)
+            self._filter_bar.raise_()
 
     def _toggle_wireframe(self):
         """Togglet zwischen Wireframe und Surface Modus für alle Meshes."""
@@ -599,6 +678,30 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if lines:
             grid = pv.MultiBlock(lines).combine()
             self.plotter.add_mesh(grid, color='#3a3a3a', line_width=1, name='grid_main', pickable=False)
+
+    def update_grid_to_model(self):
+        """Passt Grid-Groesse an die Bounding-Box aller Bodies an."""
+        max_extent = 50.0
+        for bid, info in self.bodies.items():
+            mesh = info.get('mesh')
+            if mesh is not None and hasattr(mesh, 'bounds'):
+                b = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+                extent = max(abs(b[1] - b[0]), abs(b[3] - b[2]), abs(b[5] - b[4]))
+                max_extent = max(max_extent, extent)
+
+        # Grid = 4x groesste Ausdehnung, gerundet auf naechste 10er-Potenz
+        import math
+        grid_size = max_extent * 4
+        # Spacing: ~20 Linien sichtbar
+        spacing = max(1, round(grid_size / 20))
+        # Auf schoene Werte runden (1, 2, 5, 10, 20, 50, ...)
+        magnitude = 10 ** math.floor(math.log10(spacing)) if spacing > 0 else 1
+        for nice in [1, 2, 5, 10]:
+            if spacing <= nice * magnitude:
+                spacing = nice * magnitude
+                break
+        grid_size = spacing * 20
+        self._draw_grid(size=grid_size, spacing=spacing)
     
     def _cache_drag_direction_for_face_v2(self, face):
         """
@@ -717,6 +820,201 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.plotter.add_mesh(pv.Line((0,0,0),(0,length,0)), color='#44ff44', line_width=3, name='axis_y_org')
         self.plotter.add_mesh(pv.Line((0,0,0),(0,0,length)), color='#4444ff', line_width=3, name='axis_z_org')
 
+    # ==================== CONSTRUCTION PLANES ====================
+    def render_construction_planes(self, planes):
+        """Rendert Konstruktionsebenen im Viewport.
+
+        Args:
+            planes: Liste von ConstructionPlane-Objekten
+        """
+        # Alte Plane-Actors entfernen
+        for name in list(self._construction_plane_actors.keys()):
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+        self._construction_plane_actors.clear()
+
+        for cp in planes:
+            if not cp.visible:
+                continue
+            actor_name = f"cp_{cp.id}"
+            try:
+                import numpy as np
+                origin = np.array(cp.origin, dtype=float)
+                normal = np.array(cp.normal, dtype=float)
+                x_dir = np.array(cp.x_dir, dtype=float)
+                plane_mesh = pv.Plane(
+                    center=origin,
+                    direction=normal,
+                    i_size=150,
+                    j_size=150,
+                    i_resolution=1,
+                    j_resolution=1,
+                )
+                self.plotter.add_mesh(
+                    plane_mesh,
+                    color='#bb88dd',
+                    opacity=0.15,
+                    name=actor_name,
+                    pickable=False,
+                )
+                # Rand-Linien für bessere Sichtbarkeit
+                edge_name = f"cp_edge_{cp.id}"
+                edges = plane_mesh.extract_feature_edges(
+                    boundary_edges=True, feature_edges=False,
+                    manifold_edges=False, non_manifold_edges=False,
+                )
+                self.plotter.add_mesh(
+                    edges, color='#bb88dd', opacity=0.4,
+                    line_width=1, name=edge_name, pickable=False,
+                )
+                self._construction_plane_actors[actor_name] = cp.id
+                self._construction_plane_actors[edge_name] = cp.id
+            except Exception as e:
+                from loguru import logger
+                logger.warning(f"Konstruktionsebene '{cp.name}' konnte nicht gerendert werden: {e}")
+
+        try:
+            self.plotter.update()
+        except Exception:
+            pass
+
+    def set_construction_plane_visibility(self, plane_id, visible):
+        """Setzt die Sichtbarkeit einer Konstruktionsebene."""
+        for actor_name, pid in self._construction_plane_actors.items():
+            if pid == plane_id:
+                try:
+                    if actor_name in self.plotter.renderer.actors:
+                        self.plotter.renderer.actors[actor_name].SetVisibility(visible)
+                except Exception:
+                    pass
+        try:
+            self.plotter.update()
+        except Exception:
+            pass
+
+    # ==================== OFFSET PLANE MODE ====================
+    def set_offset_plane_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Offset-Plane-Modus."""
+        self.offset_plane_mode = enabled
+        if not enabled:
+            self.clear_offset_plane_preview()
+            self._offset_plane_dragging = False
+            self._offset_plane_base_origin = None
+            self._offset_plane_base_normal = None
+
+    def set_offset_plane_base(self, origin, normal):
+        """Setzt die Basis-Ebene für den Offset."""
+        import numpy as np
+        self._offset_plane_base_origin = np.array(origin, dtype=float)
+        n = np.array(normal, dtype=float)
+        norm_len = np.linalg.norm(n)
+        if norm_len > 1e-12:
+            n = n / norm_len
+        self._offset_plane_base_normal = n
+        self._offset_plane_offset = 0.0
+        self._draw_offset_plane_preview(0.0)
+
+    def update_offset_plane_preview(self, offset):
+        """Aktualisiert die Preview-Ebene mit neuem Offset."""
+        self._offset_plane_offset = offset
+        self._draw_offset_plane_preview(offset)
+
+    def _draw_offset_plane_preview(self, offset):
+        """Rendert die halbtransparente Preview-Ebene."""
+        if self._offset_plane_base_origin is None:
+            return
+        import numpy as np
+        # Alte Actors entfernen
+        self.clear_offset_plane_preview()
+
+        center = self._offset_plane_base_origin + self._offset_plane_base_normal * offset
+        try:
+            plane_mesh = pv.Plane(
+                center=center,
+                direction=self._offset_plane_base_normal,
+                i_size=200,
+                j_size=200,
+                i_resolution=1,
+                j_resolution=1,
+            )
+            self._offset_plane_preview_actor = 'offset_plane_preview'
+            self.plotter.add_mesh(
+                plane_mesh,
+                color='#bb88dd',
+                opacity=0.25,
+                name='offset_plane_preview',
+                pickable=False,
+            )
+            # Rand-Linien
+            edges = plane_mesh.extract_feature_edges(
+                boundary_edges=True, feature_edges=False,
+                manifold_edges=False, non_manifold_edges=False,
+            )
+            self._offset_plane_edge_actor = 'offset_plane_preview_edge'
+            self.plotter.add_mesh(
+                edges, color='#bb88dd', opacity=0.6,
+                line_width=2, name='offset_plane_preview_edge',
+                pickable=False,
+            )
+            self.plotter.update()
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"Offset Plane Preview Fehler: {e}")
+
+    def clear_offset_plane_preview(self):
+        """Entfernt die Preview-Ebene."""
+        for name in ['offset_plane_preview', 'offset_plane_preview_edge']:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+        self._offset_plane_preview_actor = None
+        self._offset_plane_edge_actor = None
+
+    def handle_offset_plane_mouse_press(self, x, y):
+        """Startet Drag für Offset."""
+        if not self.offset_plane_mode or self._offset_plane_base_origin is None:
+            return False
+        from PySide6.QtCore import QPoint
+        self._offset_plane_dragging = True
+        self._offset_plane_drag_start = QPoint(x, y)
+        self._offset_plane_drag_start_offset = self._offset_plane_offset
+        return True
+
+    def handle_offset_plane_mouse_move(self, x, y):
+        """Aktualisiert Offset durch Mausdrag."""
+        if not self._offset_plane_dragging or self._offset_plane_drag_start is None:
+            return False
+        import numpy as np
+
+        # Berechne Screen-Vektor der Normalen
+        cam = self.plotter.camera
+        if cam is None:
+            return False
+
+        # Pixel-Delta
+        dy = -(y - self._offset_plane_drag_start.y())  # Hoch = positiver Offset
+
+        # Skalierung: Pixel zu Weltkoordinaten
+        anchor = self._offset_plane_base_origin
+        scale = self._get_pixel_to_world_scale(anchor) if hasattr(self, '_get_pixel_to_world_scale') else 0.5
+        delta = dy * scale
+
+        new_offset = self._offset_plane_drag_start_offset + delta
+        self._offset_plane_offset = new_offset
+        self._draw_offset_plane_preview(new_offset)
+        return True
+
+    def handle_offset_plane_mouse_release(self):
+        """Beendet Drag."""
+        if not self._offset_plane_dragging:
+            return False
+        self._offset_plane_dragging = False
+        self._offset_plane_drag_start = None
+        return True
+
     # ==================== EVENT FILTER ====================
     def eventFilter(self, obj, event):
         if not HAS_PYVISTA: return False
@@ -738,7 +1036,22 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 screen_pos = (int(pos.x()), int(pos.y()))
-                
+
+                # Offset Plane Drag
+                if self.offset_plane_mode:
+                    if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                        if self.handle_offset_plane_mouse_press(screen_pos[0], screen_pos[1]):
+                            return True
+                    elif event_type == QEvent.MouseMove and self._offset_plane_dragging:
+                        if self.handle_offset_plane_mouse_move(screen_pos[0], screen_pos[1]):
+                            # Signal an MainWindow für Panel-Sync
+                            if hasattr(self, 'offset_plane_drag_changed'):
+                                self.offset_plane_drag_changed.emit(self._offset_plane_offset)
+                            return True
+                    elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                        if self.handle_offset_plane_mouse_release():
+                            return True
+
                 if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                     if self.handle_transform_mouse_press(screen_pos):
                         return True
@@ -999,6 +1312,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # --- EXTRUDE MODE LOGIK (NEU) ---
         if self.extrude_mode:
+            # Esc: "To Face"-Pick abbrechen
+            if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self._to_face_picking:
+                self._to_face_picking = False
+                self.setCursor(Qt.ArrowCursor)
+                return True
+
             # Rechtsklick zum Bestätigen
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
                 if abs(self.extrude_height) > 0.001:
@@ -1055,10 +1374,43 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self._update_hover(hit_id)
             return False
 
+        # --- BOX SELECT: Mouse move updates rubber band ---
+        if event.type() == QEvent.MouseMove and self._box_select_active:
+            from PySide6.QtCore import QRect, QPoint
+            pos = event.position() if hasattr(event, 'position') else event.pos()
+            cur = QPoint(int(pos.x()), int(pos.y()))
+            if self._box_select_rect:
+                self._box_select_rect.setGeometry(QRect(self._box_select_start, cur).normalized())
+            return True
+
+        # --- BOX SELECT: Release finishes selection ---
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton and self._box_select_active:
+            self._box_select_active = False
+            if self._box_select_rect:
+                rect = self._box_select_rect.geometry()
+                self._box_select_rect.hide()
+                self._box_select_rect.deleteLater()
+                self._box_select_rect = None
+                # Select bodies whose screen-projected center is inside rect
+                self._select_bodies_in_rect(rect)
+            return True
+
         # --- MOUSE PRESS (Left) ---
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             pos = event.position() if hasattr(event, 'position') else event.pos()
             x, y = int(pos.x()), int(pos.y())
+
+            # Box select: Ctrl+drag starts rubber band
+            mods = QApplication.keyboardModifiers()
+            if mods & Qt.ControlModifier and not self.extrude_mode and not self.measure_mode:
+                from PySide6.QtWidgets import QRubberBand
+                from PySide6.QtCore import QPoint, QSize
+                self._box_select_active = True
+                self._box_select_start = QPoint(x, y)
+                self._box_select_rect = QRubberBand(QRubberBand.Rectangle, self)
+                self._box_select_rect.setGeometry(x, y, 0, 0)
+                self._box_select_rect.show()
+                return True
 
             # NEU (Fix 1): Body-Picking NUR für pending transform mode
             # WICHTIG: Nur wenn MainWindow explizit auf Body-Klick wartet!
@@ -1074,6 +1426,32 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 if sketch_id and geom_type in ('line', 'arc', 'spline'):
                     logger.info(f"Sketch-Pfad geklickt: {sketch_id}/{geom_type}/{index}")
                     self.sketch_path_clicked.emit(sketch_id, geom_type, index)
+                    return True
+
+            # Measure-Modus: Punkt auf Modell picken mit Vertex/Edge-Snapping
+            if self.measure_mode:
+                import vtk
+                import numpy as np
+
+                picker = vtk.vtkCellPicker()
+                picker.SetTolerance(0.005)
+                height = self.plotter.interactor.height()
+                picker.Pick(x, height - y, 0, self.plotter.renderer)
+                if picker.GetCellId() != -1:
+                    pos = np.array(picker.GetPickPosition())
+
+                    # Snap zu naechstem Vertex oder Edge-Midpoint
+                    snap_pos = self._snap_measure_point(pos)
+                    self.measure_point_picked.emit(tuple(snap_pos))
+                return True
+
+            # "Extrude to Face" — Ziel-Pick abfangen
+            if self._to_face_picking:
+                hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
+                if hit_id != -1:
+                    self._to_face_picking = False
+                    self.setCursor(Qt.ArrowCursor)
+                    self.target_face_selected.emit(hit_id)
                     return True
 
             # Face-Selection (für Extrude etc.)
@@ -1096,6 +1474,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 if self.extrude_mode:
                     self._is_potential_drag = True
                     self._potential_drag_start = pos
+                    # Reset height bei Face-Wechsel — verhindert Akkumulation
+                    self.extrude_height = 0.0
+                    self._clear_preview()
                     face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
                     if face: self._cache_drag_direction_for_face_v2(face)
                 
@@ -1115,6 +1496,69 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         return False
         #return super().eventFilter(obj, event)
     
+    def _select_bodies_in_rect(self, rect):
+        """Select all bodies whose projected center falls inside the screen rectangle."""
+        import vtk
+        selected = []
+        renderer = self.plotter.renderer
+        for bid, info in self.bodies.items():
+            mesh = info.get('mesh')
+            if mesh is None:
+                continue
+            center = mesh.center
+            coord = vtk.vtkCoordinate()
+            coord.SetCoordinateSystemToWorld()
+            coord.SetValue(center[0], center[1], center[2])
+            display = coord.GetComputedDisplayValue(renderer)
+            # VTK display coords: origin at bottom-left; Qt: origin at top-left
+            sx = display[0]
+            sy = self.plotter.interactor.height() - display[1]
+            if rect.contains(int(sx), int(sy)):
+                selected.append(bid)
+                self.highlight_body(bid)
+        if selected:
+            self.box_selected = selected
+            logger.info(f"Box select: {len(selected)} bodies selected")
+            self.body_clicked.emit(selected[0])  # Signal first selected
+
+    def _snap_measure_point(self, pos):
+        """Snap pick-position to nearest vertex or edge midpoint/center."""
+        import numpy as np
+        best_pt = pos
+        best_dist = 8.0  # Max snap distance in world units
+
+        for bid, info in self.bodies.items():
+            body_obj = info.get("body_obj")
+            if not body_obj:
+                continue
+            solid = getattr(body_obj, "_build123d_solid", None)
+            if solid is None:
+                continue
+            try:
+                # Snap to vertices
+                for v in solid.vertices():
+                    vp = np.array([v.X, v.Y, v.Z])
+                    d = np.linalg.norm(pos - vp)
+                    if d < best_dist:
+                        best_dist = d
+                        best_pt = vp
+
+                # Snap to edge midpoints
+                for e in solid.edges():
+                    try:
+                        mp = e @ 0.5  # Build123d: evaluate at parameter 0.5
+                        ep = np.array([mp.X, mp.Y, mp.Z])
+                        d = np.linalg.norm(pos - ep)
+                        if d < best_dist:
+                            best_dist = d
+                            best_pt = ep
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        return best_pt
+
     def _handle_3d_click(self, x, y):
         """Erkennt Klick auf 3D Körper und sendet Signal"""
         if not self.bodies: return
@@ -1325,6 +1769,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                 # ✅ FIX: Speichere auch die Body-ID für korrektes Targeting
                 self._last_picked_body_id = face.owner_id
+
+                # Face-Daten für PushPull und andere Face-basierte Features
+                self._last_picked_face_center = face.plane_origin
+                self._last_picked_face_normal = face.plane_normal
                 return
 
     def _update_detector_for_picking(self):
@@ -2225,7 +2673,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             # WICHTIG: Erzwinge Render nach dem Hinzufügen
             request_render(self.plotter, immediate=True)
-            
+
+            # Grid an Modellgroesse anpassen
+            self.update_grid_to_model()
+
         except Exception as e:
             logger.error(f"add_body error: {e}")
 

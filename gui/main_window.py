@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         # Cache leeren beim Start (für saubere B-Rep Edges)
         try:
             from modeling.cad_tessellator import CADTessellator
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
         except:
             pass
         
@@ -108,10 +108,11 @@ class MainWindow(QMainWindow):
         self._create_ui()
         self._create_menus()
         self._connect_signals()
-       
+
         QApplication.instance().installEventFilter(self)
         self._set_mode("3d")
-        self.selection_mode = "all" 
+        self.selection_mode = "all"
+        self.statusBar().showMessage("Ready")
         logger.info(tr("Ready"))
         logger.info("Ready. PyVista & Build123d active.")
         
@@ -310,7 +311,7 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0,0,0,0)
         left_layout.setSpacing(0)
 
-        # 1. Spalte: Browser (oben) + TNP Stats + Log (unten)
+        # 1. Spalte: Browser (oben) + Tabs [Log | TNP] (unten)
         browser_log_splitter = QSplitter(Qt.Vertical)
         browser_log_splitter.setHandleWidth(1)
 
@@ -318,18 +319,43 @@ class MainWindow(QMainWindow):
         self.browser.set_document(self.document)
         browser_log_splitter.addWidget(self.browser)
 
-        # TNP Statistiken Panel (Phase 8.2)
+        # Bottom tabs: Log + TNP Stats
+        from PySide6.QtWidgets import QTabWidget
+        self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background: #1e1e1e;
+            }
+            QTabBar::tab {
+                background: #252526;
+                color: #999;
+                border: none;
+                padding: 6px 14px;
+                font-size: 11px;
+                font-family: 'Segoe UI';
+            }
+            QTabBar::tab:selected {
+                color: #ddd;
+                border-bottom: 2px solid #0078d4;
+            }
+            QTabBar::tab:hover {
+                color: #ccc;
+                background: #2d2d30;
+            }
+        """)
+
+        self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
-        self.tnp_stats_panel.setMaximumHeight(200)
-        browser_log_splitter.addWidget(self.tnp_stats_panel)
 
-        self.log_panel = LogPanel() # Log Panel Instanz
-        browser_log_splitter.addWidget(self.log_panel)
+        self.bottom_tabs.addTab(self.log_panel, "Log")
+        self.bottom_tabs.addTab(self.tnp_stats_panel, "TNP")
+        self.bottom_tabs.setCurrentIndex(0)  # Log default
 
-        # Verhältnisse setzen (Browser groß, TNP Stats mittel, Log klein)
-        browser_log_splitter.setStretchFactor(0, 4)
+        browser_log_splitter.addWidget(self.bottom_tabs)
+
+        browser_log_splitter.setStretchFactor(0, 3)
         browser_log_splitter.setStretchFactor(1, 1)
-        browser_log_splitter.setStretchFactor(2, 1)
 
         left_layout.addWidget(browser_log_splitter)
         
@@ -407,7 +433,8 @@ class MainWindow(QMainWindow):
         self.extrude_panel.cancelled.connect(self._on_extrude_cancelled)
         self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
         self.extrude_panel.operation_changed.connect(self._on_extrude_operation_changed)
-        
+        self.extrude_panel.to_face_requested.connect(self._on_to_face_requested)
+
         # Transform Panel
         self.transform_panel = TransformPanel(self)
         self.transform_panel.transform_confirmed.connect(self._on_transform_panel_confirmed)
@@ -415,6 +442,14 @@ class MainWindow(QMainWindow):
         self.transform_panel.mode_changed.connect(self._on_transform_mode_changed)
         self.transform_panel.grid_size_changed.connect(self._on_grid_size_changed)
         self.transform_panel.hide()
+
+        # Offset Plane Input Panel
+        from gui.input_panels import OffsetPlaneInputPanel
+        self.offset_plane_panel = OffsetPlaneInputPanel(self)
+        self.offset_plane_panel.offset_changed.connect(self._on_offset_plane_value_changed)
+        self.offset_plane_panel.confirmed.connect(self._on_offset_plane_confirmed)
+        self.offset_plane_panel.cancelled.connect(self._on_offset_plane_cancelled)
+        self._offset_plane_pending = False
 
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
@@ -491,6 +526,7 @@ class MainWindow(QMainWindow):
         # 2. Vom Editor zum Panel (Wenn man 'X' oder 'G' drückt -> Checkbox Update)
         self.sketch_editor.construction_mode_changed.connect(self.tool_panel.set_construction)
         self.sketch_editor.grid_snap_mode_changed.connect(self.tool_panel.set_grid_snap)
+        self.sketch_editor.exit_requested.connect(self._finish_sketch)
         self._create_toolbar()
      
     def resizeEvent(self, event):
@@ -635,8 +671,10 @@ class MainWindow(QMainWindow):
         file_menu.addAction(tr("Save As..."), self._save_project_as)
         file_menu.addSeparator()
         file_menu.addAction(tr("Export STL..."), self._export_stl)
-        file_menu.addAction("Export STEP...", self._export_step)
-        file_menu.addAction("Import STEP...", self._import_step)
+        file_menu.addAction(tr("Export STEP..."), self._export_step)
+        file_menu.addAction(tr("Import STEP..."), self._import_step)
+        file_menu.addAction(tr("Export SVG..."), self._export_svg)
+        file_menu.addAction(tr("Import SVG..."), self._import_svg)
         file_menu.addSeparator()
         file_menu.addAction(tr("Quit"), self.close, QKeySequence.Quit)
         
@@ -655,16 +693,16 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(tr("Parameters..."), self._show_parameters_dialog, "Ctrl+Shift+P")
 
         # Transform-Menü
-        transform_menu = mb.addMenu("Transform")
-        transform_menu.addAction("Move (G)", lambda: self._start_transform_mode("move"), "G")
-        transform_menu.addAction("Rotate (R)", lambda: self._start_transform_mode("rotate"), "R")
-        transform_menu.addAction("Scale (S)", lambda: self._start_transform_mode("scale"), "S")
+        transform_menu = mb.addMenu(tr("Transform"))
+        transform_menu.addAction(tr("Move (G)"), lambda: self._start_transform_mode("move"), "G")
+        transform_menu.addAction(tr("Rotate (R)"), lambda: self._start_transform_mode("rotate"), "R")
+        transform_menu.addAction(tr("Scale (S)"), lambda: self._start_transform_mode("scale"), "S")
         transform_menu.addSeparator()
-        transform_menu.addAction("Create Pattern...", self._create_pattern)
+        transform_menu.addAction(tr("Create Pattern..."), self._create_pattern)
 
         # Ansicht-Menü
         view_menu = mb.addMenu(tr("View"))
-        view_menu.addAction("Isometric", lambda: self.viewport_3d.set_view('iso'))
+        view_menu.addAction(tr("Isometric"), lambda: self.viewport_3d.set_view('iso'))
         view_menu.addAction(tr("Top"), lambda: self.viewport_3d.set_view('top'))
         view_menu.addAction(tr("Front"), lambda: self.viewport_3d.set_view('front'))
         view_menu.addAction(tr("Right"), lambda: self.viewport_3d.set_view('right'))
@@ -685,19 +723,23 @@ class MainWindow(QMainWindow):
         self.browser.feature_double_clicked.connect(self._edit_feature)
         self.browser.feature_selected.connect(self._on_feature_selected)
         self.browser.feature_deleted.connect(self._on_feature_deleted)  # NEU
+        self.browser.rollback_changed.connect(self._on_rollback_changed)
         self.browser.plane_selected.connect(self._on_browser_plane_selected)
-        
+        self.browser.construction_plane_selected.connect(self._on_construction_plane_selected)
+
         # WICHTIG: Visibility changed muss ALLES neu laden (Sketches + Bodies)
         self.browser.visibility_changed.connect(self._trigger_viewport_update)
         
         if hasattr(self.viewport_3d, 'set_body_visibility'):
             self.browser.body_vis_changed.connect(self.viewport_3d.set_body_visibility)
+        self.browser.construction_plane_vis_changed.connect(self._on_construction_plane_vis_changed)
         
         # Viewport Signale
         self.viewport_3d.plane_clicked.connect(self._on_plane_selected)
         if hasattr(self.viewport_3d, 'custom_plane_clicked'):
             self.viewport_3d.custom_plane_clicked.connect(self._on_custom_plane_selected)
             
+        self.viewport_3d.offset_plane_drag_changed.connect(self._on_offset_plane_drag)
         self.viewport_3d.extrude_requested.connect(self._on_extrusion_finished)
         self.viewport_3d.height_changed.connect(self._on_viewport_height_changed)
         
@@ -725,6 +767,9 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'body_clicked'):
             self.viewport_3d.body_clicked.connect(self._on_viewport_body_clicked)
 
+        # Measure-Tool Signal
+        self.viewport_3d.measure_point_picked.connect(self._on_measure_point_picked)
+
         # NEU: Point-to-Point Move (Fusion 360-Style)
         if hasattr(self.viewport_3d, 'point_to_point_move'):
             self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
@@ -738,7 +783,9 @@ class MainWindow(QMainWindow):
         # NEU: Face-Selection für automatische Operation-Erkennung
         if hasattr(self.viewport_3d, 'face_selected'):
             self.viewport_3d.face_selected.connect(self._on_face_selected_for_extrude)
-    
+        if hasattr(self.viewport_3d, 'target_face_selected'):
+            self.viewport_3d.target_face_selected.connect(self._on_target_face_selected)
+
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
         """Startet den Timer für das Update (Debounce)"""
@@ -879,15 +926,17 @@ class MainWindow(QMainWindow):
         """Verarbeitet 3D-Tool-Aktionen"""
         actions = {
             'new_sketch': self._new_sketch,
+            'offset_plane': self._start_offset_plane,
             'extrude': self._extrude_dialog,
             'import_mesh': self._import_mesh_dialog,
             'export_stl': self._export_stl,
             'export_step': self._export_step,
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),
-            'primitive_box': lambda: self._show_not_implemented("Box Primitiv"),
-            'primitive_cylinder': lambda: self._show_not_implemented("Zylinder Primitiv"),
-            'primitive_sphere': lambda: self._show_not_implemented("Kugel Primitiv"),
-            'revolve': lambda: self._show_not_implemented("Revolve"),
+            'primitive_box': lambda: self._primitive_dialog("box"),
+            'primitive_cylinder': lambda: self._primitive_dialog("cylinder"),
+            'primitive_sphere': lambda: self._primitive_dialog("sphere"),
+            'primitive_cone': lambda: self._primitive_dialog("cone"),
+            'revolve': self._revolve_dialog,
             'sweep': self._start_sweep,
             'loft': self._start_loft,
             
@@ -911,16 +960,24 @@ class MainWindow(QMainWindow):
             'section_view': self._toggle_section_view,
 
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),
-            'primitive_box': lambda: self._show_not_implemented("Box Primitiv"),
 
             'shell': self._start_shell,
             'surface_texture': self._start_texture_mode,
-            'hole': lambda: self._show_not_implemented("Bohrung"),
+            'hole': self._hole_dialog,
+            'draft': self._draft_dialog,
+            'split_body': self._split_body_dialog,
+            'thread': self._thread_dialog,
 
-            'measure': lambda: self._show_not_implemented("Messen"),
+            'measure': self._start_measure_mode,
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
-            'check': lambda: self._show_not_implemented("Geometrie prüfen"),
-            'thread': lambda: self._show_not_implemented("Gewinde"),
+            'geometry_check': self._geometry_check_dialog,
+            'surface_analysis': self._surface_analysis_dialog,
+            'pushpull': self._pushpull_dialog,
+            'nsided_patch': self._nsided_patch_dialog,
+            'mesh_repair': self._mesh_repair_dialog,
+            'hollow': self._hollow_dialog,
+            'wall_thickness': self._wall_thickness_dialog,
+            'lattice': self._lattice_dialog,
             'pattern': lambda: self._show_not_implemented("Muster"),
             'convert_to_brep': self._convert_selected_body_to_brep,
         }
@@ -1035,16 +1092,35 @@ class MainWindow(QMainWindow):
         
     def _on_feature_selected(self, data):
         """Wird aufgerufen wenn ein Feature im Tree ausgewählt wird"""
+        # Vorheriges Highlight entfernen
+        if hasattr(self, '_highlighted_body_id') and self._highlighted_body_id:
+            self.viewport_3d.unhighlight_body(self._highlighted_body_id)
+            self._highlighted_body_id = None
+
         if data and len(data) >= 2:
             if data[0] == 'body':
                 body = data[1]
                 self.body_properties.update_body(body)
-                # Body merken für späteren Transform (G/R/S Taste)
+                self.statusBar().showMessage(f"Body: {body.name}")
                 if hasattr(body, 'id'):
                     self._selected_body_for_transform = body.id
-                # TNP Stats aktualisieren
+                    self.viewport_3d.highlight_body(body.id)
+                    self._highlighted_body_id = body.id
                 self._update_tnp_stats(body)
+                self.browser.show_rollback_bar(body)
+            elif data[0] == 'feature' and len(data) >= 3:
+                feature = data[1]
+                body = data[2]
+                self.statusBar().showMessage(f"Feature: {feature.name}")
+                # Highlight den Body des Features
+                if hasattr(body, 'id'):
+                    self.viewport_3d.highlight_body(body.id)
+                    self._highlighted_body_id = body.id
+                self.body_properties.clear()
+                self._hide_transform_ui()
+                self._update_tnp_stats(None)
             else:
+                self.statusBar().showMessage("Ready")
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats(None)
@@ -1538,7 +1614,7 @@ class MainWindow(QMainWindow):
             new_body._build123d_solid = body._build123d_solid.moved(Location((0, 0, 0)))
             
             # 3. Cache leeren
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             
             # 4. Transform anwenden auf die Kopie
             if mode == "move":
@@ -1605,7 +1681,7 @@ class MainWindow(QMainWindow):
         from modeling.cad_tessellator import CADTessellator
         
         try:
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             
             # Ebene bestimmen
             plane_map = {
@@ -1690,35 +1766,114 @@ class MainWindow(QMainWindow):
         logger.info(tr("Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche"))
         self.setFocus()
 
+    def _start_offset_plane(self):
+        """Startet den interaktiven Offset-Plane-Workflow (Fusion-Style)."""
+        self._offset_plane_pending = True
+        self.viewport_3d.set_plane_select_mode(True)
+        self.statusBar().showMessage(tr("Wähle Basisebene: Klick auf Standardebene oder Körperfläche"))
+        logger.info("Offset Plane: Wähle Basisebene...")
+
+    def _start_offset_plane_drag(self, origin, normal):
+        """Phase 2: Offset einstellen nach Basis-Auswahl."""
+        import numpy as np
+        self._offset_plane_pending = False
+        self.viewport_3d.set_plane_select_mode(False)
+        self.viewport_3d.set_offset_plane_mode(True)
+        self.viewport_3d.set_offset_plane_base(
+            np.array(origin, dtype=float),
+            np.array(normal, dtype=float)
+        )
+        self.offset_plane_panel.reset()
+        self.offset_plane_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage(tr("Offset einstellen: Mausdrag oder Zahleneingabe, Enter = bestätigen"))
+
+    def _on_offset_plane_value_changed(self, offset):
+        """Panel-Wert geändert → Preview aktualisieren."""
+        if self.viewport_3d.offset_plane_mode:
+            self.viewport_3d.update_offset_plane_preview(offset)
+
+    def _on_offset_plane_drag(self, offset):
+        """Viewport-Drag → Panel-Wert synchronisieren."""
+        self.offset_plane_panel.set_offset(offset)
+
+    def _on_offset_plane_confirmed(self):
+        """Offset Plane bestätigen und erstellen."""
+        from modeling import ConstructionPlane
+        offset = self.offset_plane_panel.get_offset()
+        name = self.offset_plane_panel.get_name()
+        origin = self.viewport_3d._offset_plane_base_origin
+        normal = self.viewport_3d._offset_plane_base_normal
+
+        if origin is None or normal is None:
+            logger.error("Keine Basis für Offset Plane gesetzt")
+            self._on_offset_plane_cancelled()
+            return
+
+        plane = ConstructionPlane.from_face(
+            tuple(origin), tuple(normal), offset, name
+        )
+        self.document.planes.append(plane)
+
+        self.viewport_3d.set_offset_plane_mode(False)
+        self.offset_plane_panel.hide()
+        self.browser.refresh()
+        self._render_construction_planes()
+        self.statusBar().showMessage(f"Plane '{plane.name}' erstellt")
+        logger.success(f"Offset Plane erstellt: {plane.name}")
+
+    def _on_offset_plane_cancelled(self):
+        """Offset Plane abbrechen."""
+        self._offset_plane_pending = False
+        self.viewport_3d.set_offset_plane_mode(False)
+        self.viewport_3d.set_plane_select_mode(False)
+        self.offset_plane_panel.hide()
+        self.statusBar().showMessage(tr("Versatzebene abgebrochen"))
+
+    def _render_construction_planes(self):
+        """Rendert alle Konstruktionsebenen im Viewport."""
+        if hasattr(self, 'viewport_3d') and hasattr(self.document, 'planes'):
+            self.viewport_3d.render_construction_planes(self.document.planes)
+
+    def _on_construction_plane_vis_changed(self, plane_id, visible):
+        """Browser hat Plane-Sichtbarkeit geändert."""
+        if hasattr(self, 'viewport_3d'):
+            self.viewport_3d.set_construction_plane_visibility(plane_id, visible)
+            self._render_construction_planes()
+
+    def _on_construction_plane_selected(self, cp):
+        """Create sketch on a construction plane when clicked in browser."""
+        self._create_sketch_at(cp.origin, cp.normal, x_dir_override=cp.x_dir)
+
     def _on_browser_plane_selected(self, plane):
         """Wird aufgerufen wenn eine Ebene im Browser angeklickt wird"""
         self._on_plane_selected(plane)
     
     def _on_plane_selected(self, plane):
-        self.viewport_3d.set_plane_select_mode(False)
-        
         # DEFINITION: (Origin, Normal, X_Direction)
-        # Damit legen wir fest, wo "Rechts" und "Oben" auf dem Bildschirm ist.
         plane_defs = {
-            'xy': ((0,0,0), (0,0,1), (1,0,0)), # Boden: Z hoch, X rechts
-            'xz': ((0,0,0), (0,1,0), (1,0,0)), # Vorne: Y hinten, X rechts (Standard CAD "Front")
-            'yz': ((0,0,0), (1,0,0), (0,1,0))  # Rechts: X rechts, Y hoch (Standard CAD "Right")
+            'xy': ((0,0,0), (0,0,1), (1,0,0)),
+            'xz': ((0,0,0), (0,1,0), (1,0,0)),
+            'yz': ((0,0,0), (1,0,0), (0,1,0))
         }
-        
-        # Standardwerte falls was schiefgeht
         default = ((0,0,0), (0,0,1), (1,0,0))
-        
         origin, normal, x_dir = plane_defs.get(plane, default)
-        
-        # Wir nutzen die neue Logik mit x_dir_override
+
+        # Offset Plane Workflow: Phase 2 starten
+        if self._offset_plane_pending:
+            self._start_offset_plane_drag(origin, normal)
+            return
+
+        self.viewport_3d.set_plane_select_mode(False)
         self._create_sketch_at(origin, normal, x_dir_override=x_dir)
 
     def _on_custom_plane_selected(self, origin, normal):
+        # Offset Plane Workflow: Face-Pick → Phase 2 starten
+        if self._offset_plane_pending:
+            self._start_offset_plane_drag(origin, normal)
+            return
+
         self.viewport_3d.set_plane_select_mode(False)
-        
-        # NEU: Versuchen, die stabile X-Achse vom Viewport zu holen
         x_dir = getattr(self.viewport_3d, '_last_picked_x_dir', None)
-        
         self._create_sketch_at(origin, normal, x_dir)
 
     def _create_sketch_at(self, origin, normal, x_dir_override=None):
@@ -1811,6 +1966,509 @@ class MainWindow(QMainWindow):
         # WICHTIG: Explizit Update anstoßen für sauberen Statuswechsel
         self._trigger_viewport_update()
 
+    def _hole_dialog(self):
+        """Hole-Dialog: Bohrung in selektierten Body."""
+        from gui.dialogs.hole_dialog import HoleDialog
+        from modeling import HoleFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dialog = HoleDialog(self)
+        if dialog.exec():
+            # Position: Mittelpunkt der oberen Flaeche (vereinfacht)
+            solid = body._build123d_solid
+            try:
+                bb = solid.bounding_box()
+                center = ((bb.min.X + bb.max.X) / 2,
+                          (bb.min.Y + bb.max.Y) / 2,
+                          bb.max.Z)
+                direction = (0, 0, -1)
+            except Exception:
+                center = (0, 0, 0)
+                direction = (0, 0, -1)
+
+            feature = HoleFeature(
+                hole_type=dialog.hole_type,
+                diameter=dialog.diameter,
+                depth=dialog.depth,
+                position=center,
+                direction=direction,
+                counterbore_diameter=dialog.counterbore_diameter,
+                counterbore_depth=dialog.counterbore_depth,
+                countersink_angle=dialog.countersink_angle,
+            )
+
+            cmd = AddFeatureCommand(body, feature, self)
+            self.undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Hole D={dialog.diameter}mm created")
+            logger.success(f"Hole {dialog.hole_type} D={dialog.diameter}mm erstellt")
+
+    def _thread_dialog(self):
+        """Thread-Dialog: Gewinde auf Body, oder Schraube/Mutter erzeugen."""
+        from gui.dialogs.thread_dialog import ThreadDialog
+        from modeling import ThreadFeature, Body
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        dialog = ThreadDialog(parent=self)
+        if not dialog.exec():
+            return
+
+        mode = dialog.result_mode  # "thread", "bolt", "nut"
+
+        if mode == "thread":
+            # Apply thread to existing body
+            body = self._get_active_body()
+            if not body or not body._build123d_solid:
+                logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+                return
+            solid = body._build123d_solid
+            try:
+                bb = solid.bounding_box()
+                center = ((bb.min.X + bb.max.X) / 2,
+                          (bb.min.Y + bb.max.Y) / 2,
+                          bb.min.Z)
+            except Exception:
+                center = (0, 0, 0)
+
+            feature = ThreadFeature(
+                thread_type=dialog.thread_type_str,
+                standard="M",
+                diameter=dialog.diameter,
+                pitch=dialog.pitch,
+                depth=dialog.depth,
+                position=center,
+                direction=(0, 0, 1),
+                tolerance_class=dialog.tolerance_class,
+                tolerance_offset=dialog.tolerance_offset,
+            )
+            cmd = AddFeatureCommand(body, feature, self)
+            self.undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Thread M{dialog.diameter}x{dialog.pitch} ({dialog.tolerance_class}) created")
+
+        elif mode == "bolt":
+            self._generate_bolt(dialog)
+
+        elif mode == "nut":
+            self._generate_nut(dialog)
+
+    def _generate_bolt(self, dialog):
+        """Generate a bolt as a new body (hex head + threaded shaft)."""
+        from modeling import Body
+        try:
+            import build123d as bd
+
+            dia = dialog.diameter + dialog.tolerance_offset
+            length = dialog.depth
+            hex_af = dialog.hex_af  # across flats
+            head_h = dialog.head_height
+
+            # Hex head
+            hex_sketch = bd.RegularPolygon(radius=hex_af / 2 / 0.866025, side_count=6)
+            head = bd.extrude(hex_sketch, head_h)
+
+            # Shaft
+            shaft = bd.Pos(0, 0, -length) * bd.extrude(bd.Circle(dia / 2), length)
+
+            bolt_solid = bd.Compound([head, shaft])
+            # Fuse
+            bolt_solid = bd.fuse(head, shaft)
+
+            body = Body(name=f"Bolt_M{dialog.diameter:.0f}x{dialog.pitch}")
+            body._build123d_solid = bolt_solid
+            body.invalidate_mesh()
+            self.document.bodies.append(body)
+            self._update_body_from_build123d(body, bolt_solid)
+            self.browser.refresh()
+            self.statusBar().showMessage(f"Bolt M{dialog.diameter:.0f}x{length:.0f} generated")
+            logger.success(f"Bolt M{dialog.diameter:.0f}x{length:.0f} erzeugt")
+        except Exception as e:
+            logger.error(f"Bolt generation failed: {e}")
+
+    def _generate_nut(self, dialog):
+        """Generate a nut as a new body (hex body with threaded hole)."""
+        from modeling import Body
+        try:
+            import build123d as bd
+
+            dia = dialog.diameter
+            hex_af = dialog.hex_af
+            nut_h = dialog.nut_height
+
+            # Hex outer body
+            hex_sketch = bd.RegularPolygon(radius=hex_af / 2 / 0.866025, side_count=6)
+            hex_body = bd.extrude(hex_sketch, nut_h)
+
+            # Hole through center
+            hole = bd.extrude(bd.Circle(dia / 2), nut_h)
+
+            nut_solid = bd.cut(hex_body, hole)
+
+            body = Body(name=f"Nut_M{dialog.diameter:.0f}")
+            body._build123d_solid = nut_solid
+            body.invalidate_mesh()
+            self.document.bodies.append(body)
+            self._update_body_from_build123d(body, nut_solid)
+            self.browser.refresh()
+            self.statusBar().showMessage(f"Nut M{dialog.diameter:.0f} generated")
+            logger.success(f"Nut M{dialog.diameter:.0f} erzeugt")
+        except Exception as e:
+            logger.error(f"Nut generation failed: {e}")
+
+    def _mesh_repair_dialog(self):
+        """Open mesh repair dialog."""
+        from gui.dialogs.mesh_repair_dialog import MeshRepairDialog
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dlg = MeshRepairDialog(body, parent=self)
+        if dlg.exec() and dlg.repaired_solid is not None:
+            body._build123d_solid = dlg.repaired_solid
+            body.invalidate_mesh()
+            self.viewport.update_body(body)
+            self._refresh_browser()
+            logger.success("Geometry repair angewendet")
+
+    def _nsided_patch_dialog(self):
+        """Open N-Sided Patch dialog for surface filling."""
+        from gui.dialogs.nsided_patch_dialog import NSidedPatchDialog
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dlg = NSidedPatchDialog(body, self.viewport, parent=self)
+        # Übergebe bereits selektierte Kanten aus dem Viewport
+        selected_edges = []
+        if hasattr(self.viewport, 'get_selected_edges'):
+            selected_edges = self.viewport.get_selected_edges() or []
+            if selected_edges:
+                dlg.set_selected_edges(selected_edges)
+        if not dlg.exec():
+            return
+
+        # Edge-Selektoren für Feature-Persistenz erstellen
+        if not selected_edges:
+            selected_edges = dlg.selected_edges
+        if len(selected_edges) < 3:
+            logger.warning("Zu wenige Kanten für N-Sided Patch")
+            return
+
+        import numpy as np
+        edge_selectors = []
+        for edge in selected_edges:
+            try:
+                ec = edge.center()
+                edge_selectors.append((ec.X, ec.Y, ec.Z))
+            except Exception:
+                continue
+
+        from modeling import NSidedPatchFeature
+        feat = NSidedPatchFeature(
+            edge_selectors=edge_selectors,
+            degree=dlg.degree_spin.value(),
+            tangent=dlg.tangent_check.isChecked(),
+        )
+        body.features.append(feat)
+        body._rebuild()
+        self.viewport.update_body(body)
+        self._refresh_browser()
+        logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
+
+    def _pushpull_dialog(self):
+        """Open PushPull: Erst Face-Pick-Modus, dann Dialog mit Distanz."""
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        # Prüfe ob bereits eine Face gepickt wurde
+        face_center = getattr(self.viewport, '_last_picked_face_center', None)
+        face_normal = getattr(self.viewport, '_last_picked_face_normal', None)
+
+        if face_center is not None and face_normal is not None:
+            self._pushpull_with_face(body, face_center, face_normal)
+        else:
+            # Aktiviere Face-Pick-Modus mit PushPull-Callback
+            logger.info("PushPull: Klicke eine Face im Viewport...")
+            self._pushpull_body = body
+            self.viewport.set_plane_select_mode(True)
+            # Temporär umleiten
+            try:
+                self.viewport.custom_plane_clicked.disconnect(self._on_custom_plane_selected)
+            except Exception:
+                pass
+            self.viewport.custom_plane_clicked.connect(self._on_pushpull_face_picked)
+
+    def _on_pushpull_face_picked(self, origin, normal):
+        """Callback wenn Face für PushPull gepickt wurde."""
+        self.viewport.set_plane_select_mode(False)
+        self.viewport.custom_plane_clicked.disconnect(self._on_pushpull_face_picked)
+        self.viewport.custom_plane_clicked.connect(self._on_custom_plane_selected)
+
+        body = getattr(self, '_pushpull_body', None)
+        if body is None:
+            return
+
+        self._pushpull_with_face(body, origin, normal)
+
+    def _pushpull_with_face(self, body, face_center, face_normal):
+        """PushPull Dialog öffnen mit bekannter Face."""
+        from gui.dialogs.pushpull_dialog import PushPullDialog
+        from modeling import PushPullFeature
+
+        dlg = PushPullDialog(face_center=face_center, face_normal=face_normal, parent=self)
+        if not dlg.exec():
+            return
+
+        feat = PushPullFeature(
+            face_selector=(tuple(face_center), tuple(face_normal)),
+            distance=dlg.distance,
+        )
+        body.features.append(feat)
+        body._rebuild()
+        self.viewport.update_body(body)
+        self._refresh_browser()
+        logger.success(f"PushPull {dlg.distance:+.1f}mm angewendet")
+
+    def _surface_analysis_dialog(self):
+        """Open surface analysis dialog (curvature, draft angle, zebra)."""
+        from gui.dialogs.surface_analysis_dialog import SurfaceAnalysisDialog
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        SurfaceAnalysisDialog(body, self.viewport, parent=self).exec()
+
+    def _wall_thickness_dialog(self):
+        """Open wall thickness analysis dialog."""
+        from gui.dialogs.wall_thickness_dialog import WallThicknessDialog
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        WallThicknessDialog(body, parent=self).exec()
+
+    def _lattice_dialog(self):
+        """Open lattice structure dialog for selected body."""
+        from gui.dialogs.lattice_dialog import LatticeDialog
+        from modeling import LatticeFeature
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dlg = LatticeDialog(parent=self)
+        if not dlg.exec():
+            return
+
+        feat = LatticeFeature(
+            cell_type=dlg.cell_type,
+            cell_size=dlg.cell_size,
+            beam_radius=dlg.beam_radius,
+        )
+        body.features.append(feat)
+        body._rebuild()
+        body.invalidate_mesh()
+        self._update_body_from_build123d(body, body._build123d_solid)
+        self._browser.refresh()
+        logger.success(f"Lattice ({dlg.cell_type}) angewendet auf {body.name}")
+
+    def _hollow_dialog(self):
+        """Open hollow dialog for selected body."""
+        from gui.dialogs.hollow_dialog import HollowDialog
+        from modeling import HollowFeature
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dlg = HollowDialog(parent=self)
+        if not dlg.exec():
+            return
+
+        # Drain hole position = center of bounding box bottom
+        drain_pos = (0, 0, 0)
+        try:
+            bb = body._build123d_solid.bounding_box()
+            cx = (bb.min.X + bb.max.X) / 2
+            cy = (bb.min.Y + bb.max.Y) / 2
+            cz = bb.min.Z
+            drain_pos = (cx, cy, cz)
+        except Exception:
+            pass
+
+        feat = HollowFeature(
+            wall_thickness=dlg.wall_thickness,
+            drain_hole=dlg.drain_hole,
+            drain_diameter=dlg.drain_diameter,
+            drain_position=drain_pos,
+            drain_direction=dlg.drain_direction,
+        )
+        body.features.append(feat)
+        body._rebuild()
+        body.invalidate_mesh()
+        self._update_body_from_build123d(body, body._build123d_solid)
+        self._browser.refresh()
+        logger.success(f"Hollow angewendet auf {body.name} (Wandstärke {dlg.wall_thickness}mm)")
+
+    def _geometry_check_dialog(self):
+        """Open geometry validation/healing dialog for selected body."""
+        from gui.dialogs.geometry_check_dialog import GeometryCheckDialog
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dialog = GeometryCheckDialog(body, parent=self)
+        if dialog.exec() and dialog.healed_solid is not None:
+            body._build123d_solid = dialog.healed_solid
+            body.invalidate_mesh()
+            self._update_body_from_build123d(body, dialog.healed_solid)
+            self.statusBar().showMessage(f"Geometry healed: {body.name}")
+            logger.success(f"Geometry healed for {body.name}")
+
+    def _primitive_dialog(self, ptype="box"):
+        """Create a primitive solid (Box, Cylinder, Sphere, Cone) as new body."""
+        from gui.dialogs.primitive_dialog import PrimitiveDialog
+        from modeling import Body
+
+        dialog = PrimitiveDialog(primitive_type=ptype, parent=self)
+        if not dialog.exec():
+            return
+
+        try:
+            import build123d as bd
+
+            t = dialog.result_type
+            if t == "box":
+                solid = bd.Box(dialog.length, dialog.width, dialog.height)
+                name = f"Box_{dialog.length:.0f}x{dialog.width:.0f}x{dialog.height:.0f}"
+            elif t == "cylinder":
+                solid = bd.Cylinder(dialog.radius, dialog.height)
+                name = f"Cylinder_R{dialog.radius:.0f}_H{dialog.height:.0f}"
+            elif t == "sphere":
+                solid = bd.Sphere(dialog.radius)
+                name = f"Sphere_R{dialog.radius:.0f}"
+            elif t == "cone":
+                solid = bd.Cone(dialog.bottom_radius, dialog.top_radius, dialog.height)
+                name = f"Cone_R{dialog.bottom_radius:.0f}_H{dialog.height:.0f}"
+            else:
+                return
+
+            body = Body(name=name)
+            body._build123d_solid = solid
+            body.invalidate_mesh()
+            self.document.bodies.append(body)
+            self._update_body_from_build123d(body, solid)
+            self.browser.refresh()
+            self.statusBar().showMessage(f"{name} created")
+            logger.success(f"Primitive {name} erstellt")
+        except Exception as e:
+            logger.error(f"Primitive creation failed: {e}")
+
+    def _draft_dialog(self):
+        """Draft-Dialog: Entformungsschraege anwenden."""
+        from gui.dialogs.draft_dialog import DraftDialog
+        from modeling import DraftFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dialog = DraftDialog(self)
+        if dialog.exec():
+            feature = DraftFeature(
+                draft_angle=dialog.draft_angle,
+                pull_direction=dialog.pull_direction,
+            )
+
+            cmd = AddFeatureCommand(body, feature, self)
+            self.undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Draft {dialog.draft_angle}° applied")
+            logger.success(f"Draft {dialog.draft_angle}° erstellt")
+
+    def _split_body_dialog(self):
+        """Split-Dialog: Koerper teilen."""
+        from gui.dialogs.split_dialog import SplitDialog
+        from modeling import SplitFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        body = self._get_active_body()
+        if not body or not body._build123d_solid:
+            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            return
+
+        dialog = SplitDialog(self)
+        if dialog.exec():
+            feature = SplitFeature(
+                plane_origin=dialog.plane_origin,
+                plane_normal=dialog.plane_normal,
+                keep_side=dialog.keep_side,
+            )
+
+            cmd = AddFeatureCommand(body, feature, self)
+            self.undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Split ({dialog.keep_side}) applied")
+            logger.success(f"Split Body ({dialog.keep_side}) erstellt")
+
+    def _revolve_dialog(self):
+        """Revolve-Dialog: Sketch um Achse rotieren."""
+        from gui.dialogs.revolve_dialog import RevolveDialog
+        from modeling import RevolveFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        # Verfuegbare Sketches sammeln
+        sketches = []
+        if self.document:
+            for body in self.document.bodies:
+                for f in body.features:
+                    if hasattr(f, 'sketch') and f.sketch:
+                        sketches.append(f.sketch)
+            # Auch freie Sketches
+            if hasattr(self.document, 'sketches'):
+                sketches.extend(self.document.sketches)
+
+        if not sketches:
+            logger.warning("Keine Sketches vorhanden. Erstelle zuerst einen Sketch.")
+            return
+
+        dialog = RevolveDialog(sketches, self)
+        if dialog.exec():
+            # Aktiven Body holen oder neuen erstellen
+            body = self._get_active_body()
+            if not body:
+                from modeling import Body
+                body = Body(name="Body")
+                self.document.bodies.append(body)
+
+            feature = RevolveFeature(
+                sketch=dialog.sketch,
+                angle=dialog.angle,
+                axis=dialog.axis,
+                operation=dialog.operation,
+            )
+
+            cmd = AddFeatureCommand(body, feature, self)
+            self.undo_stack.push(cmd)
+            logger.success(f"Revolve erstellt: {dialog.angle}° um {dialog.axis}")
+
     def _extrude_dialog(self):
         """Startet den Extrude-Modus."""
         # 1. Detector leeren und füllen
@@ -1896,6 +2554,27 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'show_extrude_preview'):
             self.viewport_3d.show_extrude_preview(height, operation)
     
+    def _on_to_face_requested(self):
+        """User hat 'To Face' im Panel geklickt — Ziel-Pick aktivieren."""
+        if not self.viewport_3d.extrude_mode:
+            return
+        self.viewport_3d._to_face_picking = True
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        self.statusBar().showMessage("Zielfläche auswählen...", 0)
+
+    def _on_target_face_selected(self, target_face_id):
+        """Ziel-Face für 'Extrude to Face' wurde gepickt."""
+        height = self.viewport_3d.calculate_to_face_height(target_face_id)
+        if abs(height) < 0.001:
+            self.statusBar().showMessage("Zielfläche liegt auf gleicher Ebene", 3000)
+            self.extrude_panel.set_to_face_mode(False)
+            return
+
+        self.extrude_panel.set_to_face_height(height)
+        operation = self.extrude_panel.get_operation()
+        self.viewport_3d.show_extrude_preview(height, operation)
+        self.statusBar().showMessage(f"Extrude bis Fläche: {height:.2f} mm", 3000)
+
     def _on_face_selected_for_extrude(self, face_id):
         """
         Automatische Operation-Erkennung wenn eine Fläche ausgewählt wird.
@@ -1918,18 +2597,24 @@ class MainWindow(QMainWindow):
 
         if not self.viewport_3d.extrude_mode:
             return
-            
+
+        # Height zurücksetzen bei Face-Wechsel (verhindert Akkumulation)
+        self.extrude_panel.height_input.blockSignals(True)
+        self.extrude_panel._height = 0.0
+        self.extrude_panel.height_input.setValue(0.0)
+        self.extrude_panel.height_input.blockSignals(False)
+
         # Finde die selektierte Fläche
         face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
         if not face:
             return
-            
+
         # Body-Face: Start mit "Join" (positive Extrusion = Material hinzufügen)
         # Die dynamische Anpassung erfolgt in _update_operation_from_height
         if face.domain_type.startswith('body'):
             self.extrude_panel.set_suggested_operation("Join")
             return
-        
+
         # Sketch-Face: Prüfe ob auf einem Body
         if face.domain_type.startswith('sketch'):
             suggested_op = self._detect_extrude_operation(face)
@@ -2637,7 +3322,7 @@ class MainWindow(QMainWindow):
         from modeling.cad_tessellator import CADTessellator
 
         # 1. Cache leeren - das Solid hat sich geändert!
-        CADTessellator.clear_cache()
+        CADTessellator.notify_body_changed()
 
         # 2. Mesh aus dem neuen Solid regenerieren
         body._update_mesh_from_solid(solid)
@@ -2948,6 +3633,17 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QEvent, Qt
 
         if event.type() == QEvent.KeyPress:
+            # Keine Shortcuts wenn ein Dialog offen ist oder ein Textfeld Fokus hat
+            from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox
+            focus_widget = QApplication.focusWidget()
+            if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox)):
+                return False  # Event normal weiterleiten an das Textfeld
+            if isinstance(focus_widget, QComboBox) and focus_widget.isEditable():
+                return False
+            active_modal = QApplication.activeModalWidget()
+            if active_modal and active_modal is not self:
+                return False  # Dialog ist offen → Shortcuts ignorieren
+
             k = event.key()
              # Tab - fokussiert Input-Felder
             if k == Qt.Key_Tab:
@@ -2985,13 +3681,24 @@ class MainWindow(QMainWindow):
                     logger.success("Modus: Skizze")
                     return True
 
-            # Bestätigung für Extrude
+            # Bestätigung für Extrude / Offset Plane
             if k in (Qt.Key_Return, Qt.Key_Enter):
+                if self.viewport_3d.offset_plane_mode:
+                    self._on_offset_plane_confirmed()
+                    return True
                 if self.viewport_3d.extrude_mode:
                     self._on_extrude_confirmed()
                     return True
             
             if k == Qt.Key_Escape:
+                # Priorität 0: Measure abbrechen
+                if getattr(self, '_measure_active', False):
+                    self._cancel_measure_mode()
+                    return True
+                # Priorität 0.5: Offset Plane abbrechen
+                if self.viewport_3d.offset_plane_mode or self._offset_plane_pending:
+                    self._on_offset_plane_cancelled()
+                    return True
                 # Priorität 1: Extrude abbrechen
                 if self.viewport_3d.extrude_mode:
                     self._on_extrude_cancelled()
@@ -3001,10 +3708,8 @@ class MainWindow(QMainWindow):
                     self.viewport_3d.set_plane_select_mode(False)
                     logger.info("Ebenen-Auswahl abgebrochen")
                     return True
-                # Priorität 3: Sketch beenden
-                elif self.mode == "sketch":
-                    self._finish_sketch()
-                    return True
+                # Sketch-Escape wird hierarchisch vom SketchEditor selbst verarbeitet
+                # → exit_requested Signal → _finish_sketch()
                     
            
             
@@ -3029,8 +3734,40 @@ class MainWindow(QMainWindow):
                     return True
                 if k == Qt.Key_S:
                     self._new_sketch()
-                    return True        
-        return False            
+                    return True
+
+                # G/R/S/M - Transform Shortcuts (nur wenn Gizmo sichtbar)
+                if k == Qt.Key_G:
+                    if self.viewport_3d.handle_transform_key('g'):
+                        return True
+                if k == Qt.Key_R:
+                    if self.viewport_3d.handle_transform_key('r'):
+                        return True
+                if k == Qt.Key_M:
+                    if self.viewport_3d.handle_transform_key('m'):
+                        return True
+
+                # H - Hide/Show selektierte Bodies
+                if k == Qt.Key_H:
+                    selected = self.browser.get_selected_bodies()
+                    if selected:
+                        for body in selected:
+                            vis = self.browser.body_visibility.get(body.id, True)
+                            self.browser.body_visibility[body.id] = not vis
+                            self.browser.body_vis_changed.emit(body.id, not vis)
+                        self.browser.refresh()
+                        self.browser.visibility_changed.emit()
+                        return True
+
+                # Delete - Selektierten Body loeschen
+                if k == Qt.Key_Delete:
+                    selected = self.browser.get_selected_bodies()
+                    if selected:
+                        for body in selected:
+                            self.browser._del_body(body)
+                        return True
+
+        return False
         #return super().eventFilter(obj, event)
 
     def _on_opt_change(self, o, v): pass
@@ -3065,13 +3802,23 @@ class MainWindow(QMainWindow):
             logger.success(f"Bearbeite Skizze: {sketch.name}")
 
         elif d[0] == 'feature':
-            # NEU: Transform-Feature editieren
             feature = d[1]
             body = d[2]
 
-            from modeling import TransformFeature, FeatureType
+            from modeling import (TransformFeature, ExtrudeFeature, FilletFeature,
+                                  ChamferFeature, ShellFeature, RevolveFeature, FeatureType)
             if isinstance(feature, TransformFeature) or feature.type == FeatureType.TRANSFORM:
                 self._edit_transform_feature(feature, body)
+            elif isinstance(feature, ExtrudeFeature):
+                self._edit_parametric_feature(feature, body, 'extrude')
+            elif isinstance(feature, FilletFeature):
+                self._edit_parametric_feature(feature, body, 'fillet')
+            elif isinstance(feature, ChamferFeature):
+                self._edit_parametric_feature(feature, body, 'chamfer')
+            elif isinstance(feature, ShellFeature):
+                self._edit_parametric_feature(feature, body, 'shell')
+            elif isinstance(feature, RevolveFeature):
+                self._edit_parametric_feature(feature, body, 'revolve')
             else:
                 logger.info(f"Feature '{feature.name}' kann nicht editiert werden (Typ: {feature.type})")
 
@@ -3098,17 +3845,95 @@ class MainWindow(QMainWindow):
 
             logger.success(f"Transform-Feature '{feature.name}' aktualisiert (Undo: Ctrl+Z)")
 
+    def _edit_parametric_feature(self, feature, body, feature_type: str):
+        """
+        Generischer Edit-Dialog fuer parametrische Features.
+        Unterstuetzt: extrude, fillet, chamfer, shell
+        """
+        from gui.commands.feature_commands import EditFeatureCommand
+
+        # Alte Daten sichern
+        if feature_type == 'extrude':
+            from gui.dialogs.feature_edit_dialogs import ExtrudeEditDialog
+            old_data = {
+                'distance': feature.distance,
+                'direction': feature.direction,
+                'operation': feature.operation,
+            }
+            dialog = ExtrudeEditDialog(feature, body, self)
+        elif feature_type == 'fillet':
+            from gui.dialogs.feature_edit_dialogs import FilletEditDialog
+            old_data = {'radius': feature.radius}
+            dialog = FilletEditDialog(feature, body, self)
+        elif feature_type == 'chamfer':
+            from gui.dialogs.feature_edit_dialogs import ChamferEditDialog
+            old_data = {'distance': feature.distance}
+            dialog = ChamferEditDialog(feature, body, self)
+        elif feature_type == 'shell':
+            from gui.dialogs.feature_edit_dialogs import ShellEditDialog
+            old_data = {'thickness': feature.thickness}
+            dialog = ShellEditDialog(feature, body, self)
+        elif feature_type == 'revolve':
+            from gui.dialogs.feature_edit_dialogs import RevolveEditDialog
+            old_data = {'angle': feature.angle, 'axis': feature.axis, 'operation': feature.operation}
+            dialog = RevolveEditDialog(feature, body, self)
+        else:
+            logger.warning(f"Unbekannter Feature-Typ: {feature_type}")
+            return
+
+        if dialog.exec():
+            # Neue Daten nach Dialog-Aenderung
+            if feature_type == 'extrude':
+                new_data = {
+                    'distance': feature.distance,
+                    'direction': feature.direction,
+                    'operation': feature.operation,
+                }
+            elif feature_type == 'fillet':
+                new_data = {'radius': feature.radius}
+            elif feature_type == 'chamfer':
+                new_data = {'distance': feature.distance}
+            elif feature_type == 'shell':
+                new_data = {'thickness': feature.thickness}
+            elif feature_type == 'revolve':
+                new_data = {'angle': feature.angle, 'axis': feature.axis, 'operation': feature.operation}
+
+            cmd = EditFeatureCommand(body, feature, old_data, new_data, self)
+            self.undo_stack.push(cmd)
+            logger.success(f"Feature '{feature.name}' aktualisiert (Undo: Ctrl+Z)")
+
     def _on_feature_deleted(self, feature, body):
         """
-        Handler für Feature-Löschung aus dem Browser.
-        Triggert Rebuild des betroffenen Bodies.
+        Handler fuer Feature-Loeschung aus dem Browser.
+        Warnt bei abhaengigen Features, triggert Rebuild.
         """
         from gui.commands.feature_commands import DeleteFeatureCommand
+        from modeling import FilletFeature, ChamferFeature, ShellFeature
 
         logger.info(f"Lösche Feature '{feature.name}' aus {body.name}...")
 
-        # Speichere Index für Undo
+        # Abhaengigkeits-Check: Features die NACH diesem kommen und davon abhaengen koennten
         feature_index = body.features.index(feature) if feature in body.features else 0
+        dependent_features = []
+        for f in body.features[feature_index + 1:]:
+            if isinstance(f, (FilletFeature, ChamferFeature, ShellFeature)):
+                dependent_features.append(f.name)
+
+        if dependent_features:
+            from PySide6.QtWidgets import QMessageBox
+            deps_str = ", ".join(dependent_features)
+            reply = QMessageBox.question(
+                self,
+                "Feature loeschen?",
+                f"'{feature.name}' wird von nachfolgenden Features verwendet:\n"
+                f"{deps_str}\n\n"
+                f"Diese Features koennten nach dem Loeschen fehlschlagen.\n"
+                f"Trotzdem loeschen?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
 
         # Push to Undo Stack
         cmd = DeleteFeatureCommand(body, feature, feature_index, self)
@@ -3116,7 +3941,21 @@ class MainWindow(QMainWindow):
 
         logger.success(f"Feature '{feature.name}' gelöscht (Undo: Ctrl+Z)")
 
-    def _new_project(self): 
+    def _on_rollback_changed(self, body, value):
+        """Handle rollback slider change - rebuild body up to given feature index."""
+        from modeling.cad_tessellator import CADTessellator
+        n = len(body.features)
+        rebuild_up_to = value if value < n else None
+        body.rollback_index = rebuild_up_to
+
+        CADTessellator.notify_body_changed()
+        body._rebuild(rebuild_up_to=rebuild_up_to)
+        self._update_body_from_build123d(body, body._build123d_solid)
+        self.browser.refresh()
+        self.browser.show_rollback_bar(body)
+        self.statusBar().showMessage(f"Rollback: {value}/{n} Features")
+
+    def _new_project(self):
         self.document = Document("Projekt1")
         self.browser.set_document(self.document)
         self._set_mode("3d")
@@ -3210,11 +4049,22 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
 
     def _export_stl(self):
-        """STL Export mit Surface Texture Support."""
+        """STL Export mit Quality-Dialog und Surface Texture Support."""
         bodies = self._get_export_candidates()
         if not bodies:
             logger.warning("Keine sichtbaren Körper zum Exportieren.")
             return
+
+        # Show export settings dialog
+        from gui.dialogs.stl_export_dialog import STLExportDialog
+        dlg = STLExportDialog(parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        linear_defl = dlg.linear_deflection
+        angular_tol = dlg.angular_tolerance
+        is_binary = dlg.is_binary
+        scale = dlg.scale_factor
 
         path, _ = QFileDialog.getSaveFileName(self, tr("STL exportieren"), "", "STL Files (*.stl)")
         if not path: return
@@ -3239,7 +4089,8 @@ class MainWindow(QMainWindow):
                         logger.info(f"Tesselliere '{body.name}' mit Textur-Mapping...")
                         mesh, face_mappings = TexturedTessellator.tessellate_with_face_map(
                             body._build123d_solid,
-                            quality=Tolerances.TESSELLATION_QUALITY
+                            quality=linear_defl,
+                            angular_tolerance=angular_tol
                         )
 
                         if mesh is not None:
@@ -3268,7 +4119,7 @@ class MainWindow(QMainWindow):
                 # Standard tessellation (no textures or texture failed)
                 if mesh_to_add is None and HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
                     try:
-                        b3d_mesh = body._build123d_solid.tessellate(tolerance=Tolerances.TESSELLATION_QUALITY)
+                        b3d_mesh = body._build123d_solid.tessellate(tolerance=linear_defl, angular_tolerance=angular_tol)
                         verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
                         faces = []
                         for t in b3d_mesh[1]: faces.extend([3] + list(t))
@@ -3284,11 +4135,17 @@ class MainWindow(QMainWindow):
                     else: merged_polydata = merged_polydata.merge(mesh_to_add)
 
             if merged_polydata:
-                merged_polydata.save(path)
+                # Apply unit scaling if needed (inch)
+                if abs(scale - 1.0) > 1e-6:
+                    merged_polydata.points *= scale
+
+                merged_polydata.save(path, binary=is_binary)
+                qual_name = ["Draft", "Standard", "Fine", "Ultra"][dlg.quality_slider.value()]
                 if texture_applied_count > 0:
-                    logger.success(f"STL gespeichert: {path} ({texture_applied_count} Texturen angewendet)")
+                    logger.success(f"STL gespeichert: {path} ({qual_name}, {texture_applied_count} Texturen)")
                 else:
-                    logger.success(f"STL gespeichert: {path}")
+                    n_tri = merged_polydata.n_cells
+                    logger.success(f"STL gespeichert: {path} ({qual_name}, {n_tri:,} Dreiecke)")
             else:
                 logger.error("Konnte keine Mesh-Daten generieren.")
 
@@ -3336,6 +4193,224 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             logger.error(f"STEP Export Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _export_svg(self):
+        """Export visible bodies as SVG (projected edges onto a plane)."""
+        bodies = self._get_export_candidates()
+        if not bodies:
+            logger.warning("Keine sichtbaren Koerper.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Export SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+
+        try:
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_EDGE
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GCPnts import GCPnts_UniformDeflection
+
+            all_lines = []
+            min_x = min_y = float('inf')
+            max_x = max_y = float('-inf')
+
+            for body in bodies:
+                solid = getattr(body, '_build123d_solid', None)
+                if solid is None:
+                    continue
+                shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+
+                explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+                while explorer.More():
+                    edge = explorer.Current()
+                    try:
+                        curve = BRepAdaptor_Curve(edge)
+                        discretizer = GCPnts_UniformDeflection(curve, 0.1)
+                        if discretizer.IsDone():
+                            points = []
+                            for i in range(1, discretizer.NbPoints() + 1):
+                                p = discretizer.Value(i)
+                                # Project onto XY (top view)
+                                points.append((p.X(), -p.Y()))  # flip Y for SVG
+                                min_x = min(min_x, p.X())
+                                max_x = max(max_x, p.X())
+                                min_y = min(min_y, -p.Y())
+                                max_y = max(max_y, -p.Y())
+                            if len(points) > 1:
+                                all_lines.append(points)
+                    except Exception:
+                        pass
+                    explorer.Next()
+
+            if not all_lines:
+                logger.warning("Keine Kanten gefunden.")
+                return
+
+            # SVG generation
+            margin = 10
+            width = max_x - min_x + 2 * margin
+            height = max_y - min_y + 2 * margin
+
+            svg_lines = [
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'viewBox="{min_x - margin} {min_y - margin} {width} {height}" '
+                f'width="{width}mm" height="{height}mm">',
+                '<g stroke="black" stroke-width="0.2" fill="none">',
+            ]
+            for pts in all_lines:
+                d = f'M {pts[0][0]:.3f},{pts[0][1]:.3f}'
+                for p in pts[1:]:
+                    d += f' L {p[0]:.3f},{p[1]:.3f}'
+                svg_lines.append(f'  <path d="{d}"/>')
+            svg_lines.append('</g>')
+            svg_lines.append('</svg>')
+
+            with open(path, 'w') as f:
+                f.write('\n'.join(svg_lines))
+
+            logger.success(f"SVG exportiert: {path}")
+
+        except Exception as e:
+            logger.error(f"SVG Export Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _import_svg(self):
+        """Import SVG as sketch geometry."""
+        path, _ = QFileDialog.getOpenFileName(self, "Import SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+
+        try:
+            import xml.etree.ElementTree as ET
+            import re
+
+            tree = ET.parse(path)
+            root = tree.getroot()
+            ns = {'svg': 'http://www.w3.org/2000/svg'}
+
+            # Create new sketch
+            from sketcher import Sketch
+            from sketcher.geometry import Line as SketchLine, Point2D
+
+            sketch = Sketch(name=f"SVG Import")
+            sketch.plane_origin = (0, 0, 0)
+            sketch.plane_normal = (0, 0, 1)
+            sketch.plane_x_dir = (1, 0, 0)
+            sketch.plane_y_dir = (0, 1, 0)
+
+            def parse_path_d(d_str):
+                """Parse SVG path d attribute into line segments."""
+                segments = []
+                current = [0.0, 0.0]
+                tokens = re.findall(r'[MLHVZCSQTAmlhvzcsqta]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', d_str)
+                i = 0
+                cmd = 'M'
+                while i < len(tokens):
+                    t = tokens[i]
+                    if t.isalpha():
+                        cmd = t
+                        i += 1
+                        continue
+                    if cmd in ('M', 'm'):
+                        x, y = float(tokens[i]), float(tokens[i+1])
+                        if cmd == 'm':
+                            current = [current[0] + x, current[1] + y]
+                        else:
+                            current = [x, y]
+                        i += 2
+                        cmd = 'L' if cmd == 'M' else 'l'
+                    elif cmd in ('L', 'l'):
+                        x, y = float(tokens[i]), float(tokens[i+1])
+                        start = list(current)
+                        if cmd == 'l':
+                            current = [current[0] + x, current[1] + y]
+                        else:
+                            current = [x, y]
+                        segments.append((start, list(current)))
+                        i += 2
+                    elif cmd in ('H', 'h'):
+                        x = float(tokens[i])
+                        start = list(current)
+                        if cmd == 'h':
+                            current[0] += x
+                        else:
+                            current[0] = x
+                        segments.append((start, list(current)))
+                        i += 1
+                    elif cmd in ('V', 'v'):
+                        y = float(tokens[i])
+                        start = list(current)
+                        if cmd == 'v':
+                            current[1] += y
+                        else:
+                            current[1] = y
+                        segments.append((start, list(current)))
+                        i += 1
+                    elif cmd in ('Z', 'z'):
+                        i += 1
+                    else:
+                        i += 1  # skip unsupported commands
+                return segments
+
+            # Parse all <path> elements
+            line_count = 0
+            for path_elem in root.iter('{http://www.w3.org/2000/svg}path'):
+                d = path_elem.get('d', '')
+                if d:
+                    segs = parse_path_d(d)
+                    for (x1, y1), (x2, y2) in segs:
+                        line = SketchLine(
+                            start=Point2D(x1, -y1),  # flip Y back
+                            end=Point2D(x2, -y2)
+                        )
+                        sketch.geometry.append(line)
+                        line_count += 1
+
+            # Also parse <line> elements
+            for line_elem in root.iter('{http://www.w3.org/2000/svg}line'):
+                x1 = float(line_elem.get('x1', 0))
+                y1 = float(line_elem.get('y1', 0))
+                x2 = float(line_elem.get('x2', 0))
+                y2 = float(line_elem.get('y2', 0))
+                line = SketchLine(
+                    start=Point2D(x1, -y1),
+                    end=Point2D(x2, -y2)
+                )
+                sketch.geometry.append(line)
+                line_count += 1
+
+            # Also parse <rect> elements
+            for rect_elem in root.iter('{http://www.w3.org/2000/svg}rect'):
+                x = float(rect_elem.get('x', 0))
+                y = float(rect_elem.get('y', 0))
+                w = float(rect_elem.get('width', 0))
+                h = float(rect_elem.get('height', 0))
+                corners = [(x, -y), (x+w, -y), (x+w, -(y+h)), (x, -(y+h))]
+                for i in range(4):
+                    p1 = corners[i]
+                    p2 = corners[(i+1) % 4]
+                    line = SketchLine(
+                        start=Point2D(p1[0], p1[1]),
+                        end=Point2D(p2[0], p2[1])
+                    )
+                    sketch.geometry.append(line)
+                    line_count += 1
+
+            if line_count == 0:
+                logger.warning("Keine Geometrie in SVG gefunden.")
+                return
+
+            self.document.sketches.append(sketch)
+            self.browser.refresh()
+            logger.success(f"SVG importiert: {line_count} Linien als Sketch '{sketch.name}'")
+
+        except Exception as e:
+            logger.error(f"SVG Import Fehler: {e}")
             import traceback
             traceback.print_exc()
 
@@ -3439,7 +4514,7 @@ class MainWindow(QMainWindow):
 
                 # ✅ FIX: Clear entire cache for consistency
                 # Deepcopy shouldn't reuse IDs, but full clear is safer
-                CADTessellator.clear_cache()
+                CADTessellator.notify_body_changed()
 
                 # Erstelle Transform-Feature basierend auf Pattern-Typ
                 if pattern_type == "linear":
@@ -3508,6 +4583,93 @@ class MainWindow(QMainWindow):
     def _show_not_implemented(self, feature: str):
         logger.info(f"{feature} - Coming soon!")
 
+    # ── Measure Tool ──────────────────────────────────────────
+
+    def _start_measure_mode(self):
+        """Startet den Mess-Modus: 2 Punkte anklicken -> Distanz anzeigen"""
+        self._measure_points = []
+        self._measure_active = True
+        self.viewport_3d.measure_mode = True
+        self.statusBar().showMessage("Measure: Click first point on model")
+        logger.info("Measure mode: Click 2 points to measure distance. Esc to cancel.")
+
+        # Alten Measure-Actors entfernen
+        self._clear_measure_actors()
+
+    def _on_measure_point_picked(self, point):
+        """Wird aufgerufen wenn ein Punkt im Measure-Modus gepickt wurde"""
+        if not getattr(self, '_measure_active', False):
+            return
+        self._measure_points.append(point)
+
+        # Marker zeichnen
+        import pyvista as pv
+        sphere = pv.Sphere(radius=0.3, center=point)
+        actor_name = f"_measure_pt_{len(self._measure_points)}"
+        self.viewport_3d.plotter.add_mesh(
+            sphere, color="#00ff88", name=actor_name,
+            reset_camera=False, pickable=False
+        )
+
+        if len(self._measure_points) == 1:
+            self.statusBar().showMessage("Measure: Click second point")
+        elif len(self._measure_points) == 2:
+            self._show_measure_result()
+
+    def _show_measure_result(self):
+        """Berechnet und zeigt die Distanz zwischen 2 Punkten"""
+        import numpy as np
+        import pyvista as pv
+
+        p1 = np.array(self._measure_points[0])
+        p2 = np.array(self._measure_points[1])
+        dist = np.linalg.norm(p2 - p1)
+
+        # Linie zeichnen
+        line = pv.Line(p1, p2)
+        self.viewport_3d.plotter.add_mesh(
+            line, color="#ffaa00", line_width=3,
+            name="_measure_line", reset_camera=False, pickable=False
+        )
+
+        # Label am Mittelpunkt
+        mid = (p1 + p2) / 2
+        label_text = f"{dist:.2f} mm"
+        self.viewport_3d.plotter.add_point_labels(
+            [mid], [label_text],
+            name="_measure_label",
+            font_size=16, text_color="#ffaa00",
+            point_color="#ffaa00", point_size=0,
+            shape=None, fill_shape=False,
+            reset_camera=False, pickable=False
+        )
+
+        self.statusBar().showMessage(f"Distance: {dist:.2f} mm")
+        logger.success(f"Measure: {dist:.2f} mm  (P1={p1}, P2={p2})")
+
+        # Modus beenden, Geometrie bleibt sichtbar bis naechstes Measure oder Esc
+        self._measure_active = False
+        self.viewport_3d.measure_mode = False
+
+    def _clear_measure_actors(self):
+        """Entfernt alle Mess-Visualisierungen"""
+        for name in ["_measure_pt_1", "_measure_pt_2", "_measure_line", "_measure_label"]:
+            try:
+                self.viewport_3d.plotter.remove_actor(name)
+            except Exception:
+                pass
+
+    def _cancel_measure_mode(self):
+        """Bricht den Mess-Modus ab"""
+        self._measure_active = False
+        self._measure_points = []
+        self.viewport_3d.measure_mode = False
+        self._clear_measure_actors()
+        self.statusBar().showMessage("Ready")
+        logger.info("Measure cancelled")
+
+    # ── End Measure Tool ──────────────────────────────────────
+
     def _show_parameters_dialog(self):
         """Öffnet den Parameter-Dialog (Fusion 360-Style)."""
         from core.parameters import get_parameters
@@ -3518,11 +4680,63 @@ class MainWindow(QMainWindow):
         dialog.exec_()
 
     def _on_parameters_changed(self):
-        """Reagiert auf Änderungen der Parameter."""
-        # Aktualisiere alle Sketches die Parameter verwenden
+        """Reagiert auf Änderungen der Parameter — re-solve Constraints mit Formeln."""
+        from sketcher.constraints import resolve_constraint_value
+
+        # 1. Alle Sketches: Constraints mit Formeln aktualisieren + re-solve
+        if hasattr(self, 'document') and self.document:
+            for sketch in getattr(self.document, 'sketches', []):
+                needs_solve = False
+                for c in sketch.constraints:
+                    if c.formula:
+                        resolve_constraint_value(c)
+                        needs_solve = True
+                if needs_solve:
+                    sketch.solve()
+
+        # 2. Sketch-Editor aktualisieren
         if hasattr(self, 'sketch_editor') and self.sketch_editor:
             self.sketch_editor.request_update()
-        logger.info("Parameter aktualisiert")
+
+        # 3. 3D-Features mit Formeln aktualisieren
+        if hasattr(self, 'document') and self.document:
+            for body in getattr(self.document, 'bodies', []):
+                if self._resolve_feature_formulas(body):
+                    body._rebuild()
+                    body.invalidate_mesh()
+
+        logger.info("Parameter aktualisiert — Constraints und Features neu berechnet")
+
+    def _resolve_feature_formulas(self, body) -> bool:
+        """Löst Feature-Formeln auf. Gibt True zurück wenn sich etwas geändert hat."""
+        from core.parameters import get_parameters
+        params = get_parameters()
+        if not params:
+            return False
+
+        changed = False
+        for feat in getattr(body, 'features', []):
+            # Prüfe alle *_formula Felder
+            for attr in dir(feat):
+                if attr.endswith('_formula'):
+                    formula = getattr(feat, attr, None)
+                    if formula:
+                        value_attr = attr[:-8]  # Remove '_formula'
+                        try:
+                            params.set("__resolve__", formula)
+                            try:
+                                val = params.get("__resolve__")
+                                if val is not None and getattr(feat, value_attr, None) != val:
+                                    setattr(feat, value_attr, val)
+                                    changed = True
+                            finally:
+                                try:
+                                    params.delete("__resolve__")
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            logger.warning(f"Feature-Formel '{formula}' für {value_attr} fehlgeschlagen: {e}")
+        return changed
 
     def _show_about(self):
         """Über-Dialog"""
@@ -3694,7 +4908,7 @@ class MainWindow(QMainWindow):
 
             if result.success:
                 # Cache leeren und Body aktualisieren
-                CADTessellator.clear_cache()
+                CADTessellator.notify_body_changed()
 
                 body._build123d_solid = result.solid
                 if hasattr(result.solid, 'wrapped'):
@@ -3956,7 +5170,7 @@ class MainWindow(QMainWindow):
             body.features.append(shell_feature)
 
             # Body neu berechnen
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             body._rebuild()
 
             # Visualisierung aktualisieren
@@ -4139,7 +5353,7 @@ class MainWindow(QMainWindow):
         body.features.append(feature)
 
         # Cache invalidieren für nächsten Render
-        CADTessellator.clear_cache()
+        CADTessellator.notify_body_changed()
 
         # Browser aktualisieren
         self.browser.refresh()
@@ -4317,7 +5531,10 @@ class MainWindow(QMainWindow):
                 profile_data=self._sweep_profile_data,
                 path_data=self._sweep_path_data,
                 is_frenet=is_frenet,
-                operation=operation
+                operation=operation,
+                twist_angle=self.sweep_panel.get_twist_angle(),
+                scale_start=self.sweep_panel.get_scale_start(),
+                scale_end=self.sweep_panel.get_scale_end(),
             )
 
             # Body finden oder erstellen
@@ -4334,7 +5551,7 @@ class MainWindow(QMainWindow):
                 target_body.features.append(sweep_feature)
 
             # Body neu berechnen
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             target_body._rebuild()
 
             # Visualisierung aktualisieren
@@ -4681,7 +5898,7 @@ class MainWindow(QMainWindow):
                 target_body.features.append(loft_feature)
 
             # Body neu berechnen
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             target_body._rebuild()
 
             # Visualisierung aktualisieren
@@ -4908,7 +6125,7 @@ class MainWindow(QMainWindow):
                 return
 
         # Mesh generieren
-        CADTessellator.clear_cache()
+        CADTessellator.notify_body_changed()
         self._update_body_from_build123d(new_b, new_b._build123d_solid)
 
         # Zum Document hinzufügen

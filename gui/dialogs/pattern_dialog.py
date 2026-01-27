@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from loguru import logger
+from gui.design_tokens import DesignTokens
+from i18n import tr
 
 
 class PatternDialog(QDialog):
@@ -24,7 +26,7 @@ class PatternDialog(QDialog):
     def __init__(self, body, parent=None):
         super().__init__(parent)
         self.body = body
-        self.setWindowTitle(f"Pattern: {body.name}")
+        self.setWindowTitle(f"{tr('Pattern')}: {body.name}")
         self.setMinimumWidth(450)
 
         self._setup_ui()
@@ -34,19 +36,19 @@ class PatternDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Info-Header
-        info = QLabel(f"<b>Create Pattern</b><br>Body: {self.body.name}")
+        info = QLabel(f"<b>{tr('Create Pattern')}</b><br>Body: {self.body.name}")
         info.setStyleSheet("color: #ddd; padding: 10px; background: #1e1e1e; border-radius: 4px;")
         layout.addWidget(info)
 
         # Pattern-Typ Auswahl
-        type_group = QGroupBox("Pattern Type")
+        type_group = QGroupBox(tr("Pattern Type"))
         type_layout = QHBoxLayout()
 
-        self.linear_radio = QRadioButton("Linear")
+        self.linear_radio = QRadioButton(tr("Linear"))
         self.linear_radio.setChecked(True)
         self.linear_radio.toggled.connect(self._on_type_changed)
 
-        self.circular_radio = QRadioButton("Circular")
+        self.circular_radio = QRadioButton(tr("Circular"))
 
         type_layout.addWidget(self.linear_radio)
         type_layout.addWidget(self.circular_radio)
@@ -56,12 +58,12 @@ class PatternDialog(QDialog):
         layout.addWidget(type_group)
 
         # Linear Pattern Settings
-        self.linear_group = QGroupBox("Linear Pattern Settings")
+        self.linear_group = QGroupBox(tr("Linear Pattern Settings"))
         linear_layout = QVBoxLayout()
 
         # Count
         count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Count:"))
+        count_layout.addWidget(QLabel(tr("Count:")))
         self.linear_count = QLineEdit("3")
         self.linear_count.setValidator(QIntValidator(2, 100))
         count_layout.addWidget(self.linear_count)
@@ -69,7 +71,7 @@ class PatternDialog(QDialog):
 
         # Spacing
         spacing_layout = QHBoxLayout()
-        spacing_layout.addWidget(QLabel("Spacing (mm):"))
+        spacing_layout.addWidget(QLabel(tr("Spacing (mm):")))
         self.linear_spacing = QLineEdit("10.0")
         self.linear_spacing.setValidator(QDoubleValidator(0.01, 10000, 2))
         spacing_layout.addWidget(self.linear_spacing)
@@ -77,7 +79,7 @@ class PatternDialog(QDialog):
 
         # Axis
         axis_layout = QHBoxLayout()
-        axis_layout.addWidget(QLabel("Axis:"))
+        axis_layout.addWidget(QLabel(tr("Axis:")))
         self.linear_axis = QComboBox()
         self.linear_axis.addItems(["X", "Y", "Z"])
         axis_layout.addWidget(self.linear_axis)
@@ -88,12 +90,12 @@ class PatternDialog(QDialog):
         layout.addWidget(self.linear_group)
 
         # Circular Pattern Settings
-        self.circular_group = QGroupBox("Circular Pattern Settings")
+        self.circular_group = QGroupBox(tr("Circular Pattern Settings"))
         circular_layout = QVBoxLayout()
 
         # Count
         count_layout2 = QHBoxLayout()
-        count_layout2.addWidget(QLabel("Count:"))
+        count_layout2.addWidget(QLabel(tr("Count:")))
         self.circular_count = QLineEdit("8")
         self.circular_count.setValidator(QIntValidator(2, 100))
         count_layout2.addWidget(self.circular_count)
@@ -101,7 +103,7 @@ class PatternDialog(QDialog):
 
         # Axis
         axis_layout2 = QHBoxLayout()
-        axis_layout2.addWidget(QLabel("Rotation Axis:"))
+        axis_layout2.addWidget(QLabel(tr("Rotation Axis:")))
         self.circular_axis = QComboBox()
         self.circular_axis.addItems(["X", "Y", "Z"])
         self.circular_axis.setCurrentText("Z")
@@ -111,7 +113,7 @@ class PatternDialog(QDialog):
 
         # Full Circle Option
         full_circle_layout = QHBoxLayout()
-        full_circle_layout.addWidget(QLabel("Full Circle (360°):"))
+        full_circle_layout.addWidget(QLabel(tr("Full Circle (360°):")))
         self.full_circle_check = QComboBox()
         self.full_circle_check.addItems(["Yes", "No"])
         full_circle_layout.addWidget(self.full_circle_check)
@@ -120,7 +122,7 @@ class PatternDialog(QDialog):
 
         # Angle (only if not full circle)
         angle_layout = QHBoxLayout()
-        angle_layout.addWidget(QLabel("Angle (°):"))
+        angle_layout.addWidget(QLabel(tr("Angle (°):")))
         self.circular_angle = QLineEdit("45.0")
         self.circular_angle.setValidator(QDoubleValidator(-360, 360, 2))
         angle_layout.addWidget(self.circular_angle)
@@ -133,25 +135,13 @@ class PatternDialog(QDialog):
         # Buttons
         button_layout = QHBoxLayout()
 
-        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn = QPushButton(tr("Cancel"))
         self.cancel_btn.clicked.connect(self.reject)
 
-        self.apply_btn = QPushButton("Create Pattern")
+        self.apply_btn = QPushButton(tr("Create Pattern"))
         self.apply_btn.setDefault(True)
         self.apply_btn.clicked.connect(self._on_apply)
-        self.apply_btn.setStyleSheet("""
-            QPushButton {
-                background: #0078d4;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #1084d8;
-            }
-        """)
+        self.apply_btn.setObjectName("primary")
 
         button_layout.addStretch()
         button_layout.addWidget(self.cancel_btn)
@@ -161,58 +151,7 @@ class PatternDialog(QDialog):
         layout.addLayout(button_layout)
 
         # Dark Theme
-        self.setStyleSheet("""
-            QDialog {
-                background: #2d2d30;
-            }
-            QLabel {
-                color: #ddd;
-                font-size: 13px;
-            }
-            QLineEdit {
-                background: #1e1e1e;
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #0078d4;
-            }
-            QComboBox {
-                background: #1e1e1e;
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QPushButton {
-                background: #3f3f46;
-                color: #ddd;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #505050;
-            }
-            QGroupBox {
-                color: #ddd;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-            QRadioButton {
-                color: #ddd;
-            }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_dialog())
 
     def _on_type_changed(self, checked: bool):
         """Handler wenn Pattern-Typ gewechselt wird"""

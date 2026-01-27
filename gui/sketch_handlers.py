@@ -1861,7 +1861,14 @@ class SketchHandlersMixin:
             # Wenn Input bestätigt wurde, anwenden
             if new_val is not None and abs(new_val - current) > 0.001:
                  self._save_undo()
-                 self.sketch.add_length(line, new_val)
+                 constraint = self.sketch.add_length(line, new_val)
+                 # Formel-Binding: Rohtext speichern wenn kein reiner Float
+                 if constraint:
+                     raw = self.dim_input.get_raw_texts().get('value', '')
+                     try:
+                         float(raw.replace(',', '.'))
+                     except ValueError:
+                         constraint.formula = raw
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -1885,7 +1892,13 @@ class SketchHandlersMixin:
             current = circle.radius
             if new_val is not None and abs(new_val - current) > 0.001:
                  self._save_undo()
-                 self.sketch.add_radius(circle, new_val)
+                 constraint = self.sketch.add_radius(circle, new_val)
+                 if constraint:
+                     raw = self.dim_input.get_raw_texts().get('value', '')
+                     try:
+                         float(raw.replace(',', '.'))
+                     except ValueError:
+                         constraint.formula = raw
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -1971,7 +1984,13 @@ class SketchHandlersMixin:
                 
                 if new_val is not None:
                     self._save_undo()
-                    self.sketch.add_angle(l1, line, new_val)
+                    constraint = self.sketch.add_angle(l1, line, new_val)
+                    if constraint:
+                        raw = self.dim_input.get_raw_texts().get('angle', '')
+                        try:
+                            float(raw.replace(',', '.'))
+                        except ValueError:
+                            constraint.formula = raw
                     self._solve_async()
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
@@ -2941,4 +2960,186 @@ class SketchHandlersMixin:
         self.sketch.solve()
         self.sketched_changed.emit()
         self.update()
+
+    # ==================== CANVAS (Bildreferenz) ====================
+
+    def _handle_canvas(self, pos, snap_type, snap_entity=None):
+        """Canvas-Tool: Bild als Hintergrund-Referenz laden und platzieren."""
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtGui import QPixmap
+
+        if self.tool_step == 0:
+            path, _ = QFileDialog.getOpenFileName(
+                self, tr("Bildreferenz laden"),
+                "",
+                tr("Bilder") + " (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;All (*)"
+            )
+            if not path:
+                self.set_tool(SketchTool.SELECT)
+                return
+
+            pixmap = QPixmap(path)
+            if pixmap.isNull():
+                logger.error(f"Bild konnte nicht geladen werden: {path}")
+                self.status_message.emit(tr("Fehler: Bild konnte nicht geladen werden"))
+                self.set_tool(SketchTool.SELECT)
+                return
+
+            self._save_undo()
+            self.canvas_image = pixmap
+            self.canvas_file_path = path
+
+            # Default: 100mm Breite, Höhe aus Aspect Ratio
+            default_width = 100.0
+            aspect = pixmap.height() / max(pixmap.width(), 1)
+            default_height = default_width * aspect
+
+            # Zentriert auf Klickposition
+            self.canvas_world_rect = QRectF(
+                pos.x() - default_width / 2,
+                pos.y() - default_height / 2,
+                default_width,
+                default_height
+            )
+            self.canvas_visible = True
+
+            logger.info(f"Canvas geladen: {path} ({pixmap.width()}x{pixmap.height()}px, {default_width:.0f}x{default_height:.0f}mm)")
+            self.status_message.emit(tr("Canvas platziert") + f" ({default_width:.0f}x{default_height:.0f}mm)")
+            self._show_hud(tr("Canvas platziert — Rechtsklick für Optionen"))
+            self.set_tool(SketchTool.SELECT)
+            self.request_update()
+
+    def _canvas_hit_test(self, world_pos):
+        """Prüft ob world_pos innerhalb des Canvas liegt."""
+        if not self.canvas_world_rect or not self.canvas_image:
+            return False
+        return self.canvas_world_rect.contains(QPointF(world_pos.x(), world_pos.y()))
+
+    def _canvas_start_drag(self, world_pos):
+        """Beginnt Canvas-Dragging."""
+        if self.canvas_locked or not self._canvas_hit_test(world_pos):
+            return False
+        self._canvas_dragging = True
+        self._canvas_drag_offset = QPointF(
+            world_pos.x() - self.canvas_world_rect.x(),
+            world_pos.y() - self.canvas_world_rect.y()
+        )
+        self._save_undo()
+        return True
+
+    def _canvas_update_drag(self, world_pos):
+        """Aktualisiert Canvas-Position während Drag."""
+        if not self._canvas_dragging or not self.canvas_world_rect:
+            return
+        new_x = world_pos.x() - self._canvas_drag_offset.x()
+        new_y = world_pos.y() - self._canvas_drag_offset.y()
+        self.canvas_world_rect = QRectF(
+            new_x, new_y,
+            self.canvas_world_rect.width(),
+            self.canvas_world_rect.height()
+        )
+        self.request_update()
+
+    def _canvas_end_drag(self):
+        """Beendet Canvas-Dragging."""
+        self._canvas_dragging = False
+
+    def canvas_remove(self):
+        """Entfernt das Canvas-Bild."""
+        self._save_undo()
+        self.canvas_image = None
+        self.canvas_world_rect = None
+        self.canvas_file_path = None
+        self._canvas_dragging = False
+        logger.info("Canvas entfernt")
+        self.request_update()
+
+    def canvas_set_opacity(self, opacity):
+        """Setzt Canvas-Deckkraft (0.0–1.0)."""
+        self.canvas_opacity = max(0.0, min(1.0, opacity))
+        self.request_update()
+
+    def canvas_set_size(self, width_mm):
+        """Setzt Canvas-Breite in mm (Höhe folgt Aspect Ratio)."""
+        if not self.canvas_image or not self.canvas_world_rect:
+            return
+        aspect = self.canvas_image.height() / max(self.canvas_image.width(), 1)
+        cx = self.canvas_world_rect.x() + self.canvas_world_rect.width() / 2
+        cy = self.canvas_world_rect.y() + self.canvas_world_rect.height() / 2
+        new_h = width_mm * aspect
+        self.canvas_world_rect = QRectF(
+            cx - width_mm / 2, cy - new_h / 2,
+            width_mm, new_h
+        )
+        self.request_update()
+
+    # --- Kalibrierung (Fusion 360-Style) ---
+
+    def canvas_start_calibration(self):
+        """Startet Kalibrierungsmodus: 2 Punkte auf dem Bild klicken, dann reale Distanz eingeben."""
+        if not self.canvas_image or not self.canvas_world_rect:
+            return
+        self._canvas_calibrating = True
+        self._canvas_calib_points = []
+        self.status_message.emit(tr("Kalibrierung: Ersten Punkt auf dem Bild anklicken"))
+        self._show_hud(tr("Kalibrierung — Punkt 1 von 2 setzen"))
+        self.request_update()
+
+    def _canvas_calibration_click(self, world_pos):
+        """Verarbeitet einen Klick im Kalibrierungsmodus. Gibt True zurück wenn konsumiert."""
+        if not self._canvas_calibrating:
+            return False
+
+        self._canvas_calib_points.append(QPointF(world_pos.x(), world_pos.y()))
+
+        if len(self._canvas_calib_points) == 1:
+            self.status_message.emit(tr("Kalibrierung: Zweiten Punkt auf dem Bild anklicken"))
+            self._show_hud(tr("Kalibrierung — Punkt 2 von 2 setzen"))
+            self.request_update()
+            return True
+
+        if len(self._canvas_calib_points) >= 2:
+            p1 = self._canvas_calib_points[0]
+            p2 = self._canvas_calib_points[1]
+            pixel_dist = math.sqrt((p2.x() - p1.x())**2 + (p2.y() - p1.y())**2)
+
+            if pixel_dist < 0.01:
+                self._show_hud(tr("Punkte zu nah beieinander"))
+                self._canvas_calibrating = False
+                self._canvas_calib_points = []
+                return True
+
+            from PySide6.QtWidgets import QInputDialog
+            real_dist, ok = QInputDialog.getDouble(
+                self,
+                tr("Canvas kalibrieren"),
+                tr("Reale Distanz zwischen den Punkten (mm):"),
+                value=round(pixel_dist, 2),
+                min=0.1, max=100000.0, decimals=2
+            )
+
+            if ok and real_dist > 0:
+                scale_factor = real_dist / pixel_dist
+                self._save_undo()
+
+                old_rect = self.canvas_world_rect
+                old_cx = old_rect.x() + old_rect.width() / 2
+                old_cy = old_rect.y() + old_rect.height() / 2
+                new_w = old_rect.width() * scale_factor
+                new_h = old_rect.height() * scale_factor
+                self.canvas_world_rect = QRectF(
+                    old_cx - new_w / 2, old_cy - new_h / 2,
+                    new_w, new_h
+                )
+                logger.info(f"Canvas kalibriert: Faktor {scale_factor:.3f}, {new_w:.1f}x{new_h:.1f}mm")
+                self._show_hud(tr("Canvas kalibriert") + f" ({new_w:.0f}x{new_h:.0f}mm)")
+            else:
+                self._show_hud(tr("Kalibrierung abgebrochen"))
+
+            self._canvas_calibrating = False
+            self._canvas_calib_points = []
+            self.request_update()
+            return True
+
+        return False
     

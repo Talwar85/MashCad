@@ -178,7 +178,8 @@ class MeshToBREPConverter:
                         try:
                             maker = BRepBuilderAPI_MakeSolid(shape.wrapped)
                             if maker.IsDone(): return Solid(maker.Solid())
-                        except: pass
+                        except Exception as e:
+                            logger.debug(f"Shell→Solid fehlgeschlagen: {e}")
                     return shape
             else:
                 logger.warning("SDF Modus angefordert, aber meshlib fehlt. Fallback zu Mechanical.")
@@ -226,6 +227,7 @@ class MeshToBREPConverter:
                 if maker.IsDone():
                     return Solid(maker.Solid())
                 return b3d_shape.fix()
-            except: pass
+            except Exception as e:
+                logger.debug(f"Shell→Solid Vereinfachung fehlgeschlagen: {e}")
 
         return b3d_shape

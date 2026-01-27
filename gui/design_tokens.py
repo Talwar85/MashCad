@@ -72,33 +72,130 @@ class DesignTokens:
         
     @staticmethod
     def stylesheet_dialog():
-        """Zentraler CSS String für Dialoge"""
+        """Zentraler CSS String für Dialoge — Single Source of Truth."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        ph = DesignTokens.COLOR_PRIMARY_HOVER.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        inp = DesignTokens.COLOR_BG_INPUT.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
         return f"""
-            QFrame, QDialog, QWidget {{ 
-                background-color: {DesignTokens.COLOR_BG_PANEL.name()}; 
-                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()}; 
+            QDialog {{
+                background: {bg};
+                color: {txt};
                 font-family: 'Segoe UI', 'Roboto', sans-serif;
-                font-size: 11px;
+                font-size: 13px;
             }}
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-                background-color: {DesignTokens.COLOR_BG_INPUT.name()};
-                border: 1px solid #454545;
-                border-radius: 4px;
-                padding: 4px;
-                color: white;
-                selection-background-color: {DesignTokens.COLOR_PRIMARY.name()};
+            QLabel {{
+                color: {txt};
+                font-size: 13px;
             }}
-            QLineEdit:focus, QSpinBox:focus {{
-                border: 1px solid {DesignTokens.COLOR_PRIMARY.name()};
+            QLineEdit, QSpinBox, QDoubleSpinBox {{
+                background: #1e1e1e;
+                color: {txt};
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 7px;
+                font-size: 13px;
+                selection-background-color: {p};
             }}
-            QLabel {{ color: {DesignTokens.COLOR_TEXT_PRIMARY.name()}; }}
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+                border: 1px solid {p};
+            }}
+            QComboBox {{
+                background: #1e1e1e;
+                color: {txt};
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                padding: 7px;
+                font-size: 13px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 24px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #999;
+                margin-right: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: #1e1e1e;
+                color: {txt};
+                border: 1px solid #3f3f46;
+                selection-background-color: {p};
+            }}
             QPushButton {{
-                background-color: #333337;
-                border: 1px solid #454545;
-                border-radius: 4px;
-                padding: 5px 12px;
-                color: white;
+                background: #3f3f46;
+                color: {txt};
+                border: none;
+                border-radius: 6px;
+                padding: 8px 18px;
+                font-size: 13px;
             }}
-            QPushButton:hover {{ background-color: #3E3E42; }}
-            QPushButton:pressed {{ background-color: {DesignTokens.COLOR_PRIMARY.name()}; }}
+            QPushButton:hover {{
+                background: #505058;
+            }}
+            QPushButton#primary {{
+                background: {p};
+                color: white;
+                font-weight: bold;
+            }}
+            QPushButton#primary:hover {{
+                background: {ph};
+            }}
+            QGroupBox {{
+                color: {txt};
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 16px 10px 10px 10px;
+                font-size: 13px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+            }}
+            QCheckBox {{
+                color: {txt};
+                font-size: 13px;
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background: #1e1e1e;
+                border: 1px solid #3f3f46;
+            }}
+            QCheckBox::indicator:checked {{
+                background: {p};
+                border: 1px solid {p};
+            }}
+            QTextEdit {{
+                background: #1e1e1e;
+                color: {txt};
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                font-family: 'Consolas', 'Cascadia Code', monospace;
+                font-size: 12px;
+                padding: 8px;
+            }}
+            QProgressBar {{
+                background: #1e1e1e;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                text-align: center;
+                color: {txt};
+                height: 16px;
+            }}
+            QProgressBar::chunk {{
+                background: {p};
+                border-radius: 3px;
+            }}
         """

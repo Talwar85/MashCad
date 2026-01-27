@@ -42,7 +42,7 @@ class AddFeatureCommand(QUndoCommand):
 
         # Rebuild & Update UI
         try:
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             self.main_window._update_body_from_build123d(
                 self.body,
                 self.body._build123d_solid
@@ -64,7 +64,7 @@ class AddFeatureCommand(QUndoCommand):
             logger.debug(f"Undo: Removed {self.feature.name} from {self.body.name}")
 
             # Rebuild body ohne das Feature
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             self.body._rebuild()
 
             # Update UI
@@ -105,7 +105,7 @@ class DeleteFeatureCommand(QUndoCommand):
             self.body.features.remove(self.feature)
             logger.debug(f"Redo Delete: Removed {self.feature.name}")
 
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             self.body._rebuild()
             self.main_window._update_body_from_build123d(
                 self.body, self.body._build123d_solid
@@ -122,7 +122,7 @@ class DeleteFeatureCommand(QUndoCommand):
             self.body.features.insert(idx, self.feature)
             logger.debug(f"Undo Delete: Restored {self.feature.name} at index {idx}")
 
-            CADTessellator.clear_cache()
+            CADTessellator.notify_body_changed()
             self.body._rebuild()
             self.main_window._update_body_from_build123d(
                 self.body, self.body._build123d_solid
@@ -167,7 +167,7 @@ class EditFeatureCommand(QUndoCommand):
             if hasattr(self.feature, key):
                 setattr(self.feature, key, value)
 
-        CADTessellator.clear_cache()
+        CADTessellator.notify_body_changed()
         self.body._rebuild()
         self.main_window._update_body_from_build123d(
             self.body, self.body._build123d_solid

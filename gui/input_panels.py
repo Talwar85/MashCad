@@ -42,6 +42,7 @@ class ExtrudeInputPanel(QFrame):
     cancelled = Signal()
     bodies_visibility_toggled = Signal(bool)
     operation_changed = Signal(str)  # NEU: Signal wenn Operation geändert wird
+    to_face_requested = Signal()  # "Extrude to Face" Modus anfordern
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -126,8 +127,23 @@ class ExtrudeInputPanel(QFrame):
         """)
         self.flip_btn.clicked.connect(self._flip_direction)
         layout.addWidget(self.flip_btn)
-        
-        
+
+        # "To Face" Button
+        self.to_face_btn = QPushButton("⬆ To")
+        self.to_face_btn.setToolTip("Extrude bis zu Fläche (T)")
+        self.to_face_btn.setFixedSize(50, 32)
+        self.to_face_btn.setCheckable(True)
+        self.to_face_btn.setStyleSheet("""
+            QPushButton {
+                background: #3a3a3a; border: 1px solid #4a4a4a;
+                border-radius: 3px; color: #ccc; font-size: 11px;
+            }
+            QPushButton:hover { background: #4a4a4a; color: #fff; }
+            QPushButton:checked { background: #0078d4; border-color: #0078d4; color: #fff; }
+        """)
+        self.to_face_btn.clicked.connect(self._on_to_face_clicked)
+        layout.addWidget(self.to_face_btn)
+
         self.btn_vis = QPushButton("👁")
         self.btn_vis.setCheckable(True)
         self.btn_vis.setFixedWidth(35)
@@ -213,13 +229,35 @@ class ExtrudeInputPanel(QFrame):
         self.direction_flipped.emit()
         
         
+    def _on_to_face_clicked(self):
+        if self.to_face_btn.isChecked():
+            self.to_face_requested.emit()
+            self.height_input.setEnabled(False)
+            self.label.setText("Extrude → Face:")
+        else:
+            self.set_to_face_mode(False)
+
+    def set_to_face_mode(self, active: bool):
+        self.to_face_btn.setChecked(active)
+        self.height_input.setEnabled(not active)
+        self.label.setText("Extrude → Face:" if active else "Extrude:")
+
+    def set_to_face_height(self, h: float):
+        """Setzt Höhe aus To-Face Berechnung."""
+        self.set_height(h)
+        self.set_to_face_mode(False)
+        self.height_input.setEnabled(True)
+
     def reset(self):
         self._height = 0.0
         self.height_input.blockSignals(True)
         self.height_input.setValue(0.0)
         self.height_input.blockSignals(False)
+        self.height_input.setEnabled(True)
         self.op_combo.setCurrentIndex(0)
         self.btn_vis.setChecked(False)
+        self.to_face_btn.setChecked(False)
+        self.label.setText("Extrude:")
 
     def _on_height_changed(self, val):
         self._height = val
@@ -639,7 +677,7 @@ class SweepInputPanel(QFrame):
         self._operation = "New Body"
         self._is_frenet = False
 
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(650)
         self.setFixedHeight(60)
 
         self.setStyleSheet("""
@@ -708,6 +746,53 @@ class SweepInputPanel(QFrame):
         self.frenet_check.setToolTip("Verdrehung entlang des Pfads")
         self.frenet_check.stateChanged.connect(self._on_frenet_changed)
         layout.addWidget(self.frenet_check)
+
+        # Twist angle
+        from PySide6.QtGui import QDoubleValidator
+        twist_lbl = QLabel("Twist:")
+        twist_lbl.setStyleSheet("font-weight: normal; font-size: 11px; border: none;")
+        layout.addWidget(twist_lbl)
+        self.twist_input = QLineEdit("0")
+        self.twist_input.setFixedWidth(45)
+        self.twist_input.setStyleSheet(
+            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
+            "border-radius: 4px; padding: 3px; font-size: 11px;"
+        )
+        tv = QDoubleValidator(-3600, 3600, 1)
+        tv.setNotation(QDoubleValidator.StandardNotation)
+        self.twist_input.setValidator(tv)
+        self.twist_input.setToolTip("Twist angle in degrees along path")
+        layout.addWidget(self.twist_input)
+
+        # Scale
+        scale_lbl = QLabel("Scale:")
+        scale_lbl.setStyleSheet("font-weight: normal; font-size: 11px; border: none;")
+        layout.addWidget(scale_lbl)
+        self.scale_start_input = QLineEdit("1.0")
+        self.scale_start_input.setFixedWidth(35)
+        self.scale_start_input.setStyleSheet(
+            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
+            "border-radius: 4px; padding: 3px; font-size: 11px;"
+        )
+        sv = QDoubleValidator(0.01, 100, 2)
+        sv.setNotation(QDoubleValidator.StandardNotation)
+        self.scale_start_input.setValidator(sv)
+        self.scale_start_input.setToolTip("Scale at path start")
+        layout.addWidget(self.scale_start_input)
+
+        arrow_lbl = QLabel("→")
+        arrow_lbl.setStyleSheet("font-weight: normal; font-size: 11px; border: none;")
+        layout.addWidget(arrow_lbl)
+
+        self.scale_end_input = QLineEdit("1.0")
+        self.scale_end_input.setFixedWidth(35)
+        self.scale_end_input.setStyleSheet(
+            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
+            "border-radius: 4px; padding: 3px; font-size: 11px;"
+        )
+        self.scale_end_input.setValidator(sv)
+        self.scale_end_input.setToolTip("Scale at path end")
+        layout.addWidget(self.scale_end_input)
 
         # Operation combo
         self.operation_combo = QComboBox()
@@ -796,6 +881,27 @@ class SweepInputPanel(QFrame):
         """Gibt zurück ob Frenet aktiv ist."""
         return self.frenet_check.isChecked()
 
+    def get_twist_angle(self) -> float:
+        """Returns twist angle in degrees."""
+        try:
+            return float(self.twist_input.text() or "0")
+        except ValueError:
+            return 0.0
+
+    def get_scale_start(self) -> float:
+        """Returns scale factor at path start."""
+        try:
+            return float(self.scale_start_input.text() or "1.0")
+        except ValueError:
+            return 1.0
+
+    def get_scale_end(self) -> float:
+        """Returns scale factor at path end."""
+        try:
+            return float(self.scale_end_input.text() or "1.0")
+        except ValueError:
+            return 1.0
+
     def reset(self):
         """Setzt das Panel zurück."""
         self._profile_data = None
@@ -803,6 +909,9 @@ class SweepInputPanel(QFrame):
         self.clear_profile()
         self.clear_path()
         self.frenet_check.setChecked(False)
+        self.twist_input.setText("0")
+        self.scale_start_input.setText("1.0")
+        self.scale_end_input.setText("1.0")
         self.operation_combo.setCurrentIndex(0)
 
     def _update_ok_button(self):
@@ -1461,3 +1570,116 @@ class CenterHintWidget(QWidget):
         if self._timer:
             self._timer.stop()
         self.hide()
+
+
+class OffsetPlaneInputPanel(QFrame):
+    """Input panel for interactive Offset Plane creation."""
+
+    offset_changed = Signal(float)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._offset = 0.0
+
+        self.setMinimumWidth(380)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #bb88dd;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QLineEdit {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-size: 12px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px; font-weight: bold;
+            }
+            QPushButton:hover { background: #555; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Offset:"))
+
+        self.offset_input = ActionSpinBox()
+        self.offset_input.setRange(-10000.0, 10000.0)
+        self.offset_input.setDecimals(2)
+        self.offset_input.setSuffix(" mm")
+        self.offset_input.setValue(0.0)
+        self.offset_input.valueChanged.connect(self._on_value_changed)
+        self.offset_input.enterPressed.connect(self._confirm)
+        self.offset_input.escapePressed.connect(self._cancel)
+        layout.addWidget(self.offset_input)
+
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Name (auto)")
+        self.name_input.setMaximumWidth(120)
+        layout.addWidget(self.name_input)
+
+        self.ok_btn = QPushButton("OK")
+        self.ok_btn.setStyleSheet("background: #bb88dd; color: #000; border: none;")
+        self.ok_btn.clicked.connect(self._confirm)
+        layout.addWidget(self.ok_btn)
+
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setFixedWidth(30)
+        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.clicked.connect(self._cancel)
+        layout.addWidget(self.cancel_btn)
+
+        self.hide()
+
+    def _on_value_changed(self, value):
+        self._offset = value
+        self.offset_changed.emit(value)
+
+    def _confirm(self):
+        self._offset = self.offset_input.value()
+        self.confirmed.emit()
+
+    def _cancel(self):
+        self.cancelled.emit()
+
+    def get_offset(self) -> float:
+        return self.offset_input.value()
+
+    def set_offset(self, value: float):
+        self.offset_input.blockSignals(True)
+        self.offset_input.setValue(value)
+        self.offset_input.blockSignals(False)
+        self._offset = value
+
+    def get_name(self):
+        text = self.name_input.text().strip()
+        return text if text else None
+
+    def reset(self):
+        self._offset = 0.0
+        self.offset_input.blockSignals(True)
+        self.offset_input.setValue(0.0)
+        self.offset_input.blockSignals(False)
+        self.name_input.clear()
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)

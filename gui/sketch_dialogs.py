@@ -253,6 +253,14 @@ class DimensionInput(QFrame):
                 result[key] = widget.currentText()
         return result
 
+    def get_raw_texts(self) -> dict:
+        """Gibt den Rohtext aller Float-Felder zurück (für Parameter-Formeln)."""
+        result = {}
+        for key, widget in self.fields.items():
+            if self.field_types[key] == 'float':
+                result[key] = widget.text().strip()
+        return result
+
     def set_value(self, key, value):
         if key in self.fields and key not in self.locked_fields:
             if self.field_types[key] == 'float':

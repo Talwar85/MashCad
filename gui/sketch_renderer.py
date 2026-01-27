@@ -63,6 +63,47 @@ class SketchRendererMixin:
         return QRectF(c.x() - r, c.y() - r, 2*r, 2*r).adjusted(-10, -10, 10, 10)
     
 
+    def _draw_canvas(self, p, update_rect=None):
+        """Zeichnet Canvas-Bildreferenz als Hintergrund (Fusion 360-Style)."""
+        if not self.canvas_image or not self.canvas_visible or not self.canvas_world_rect:
+            return
+
+        wr = self.canvas_world_rect
+        # Weltkoordinaten → Screen (Y-Achse ist invertiert)
+        tl = self.world_to_screen(QPointF(wr.x(), wr.y() + wr.height()))
+        br = self.world_to_screen(QPointF(wr.x() + wr.width(), wr.y()))
+        screen_rect = QRectF(tl, br)
+
+        if update_rect and not update_rect.intersects(screen_rect):
+            return
+
+        p.setOpacity(self.canvas_opacity)
+        p.drawPixmap(screen_rect.toRect(), self.canvas_image)
+        p.setOpacity(1.0)
+
+        # Rahmen wenn Canvas-Tool aktiv oder Canvas selektiert
+        if getattr(self, 'current_tool', None) == SketchTool.CANVAS or getattr(self, '_canvas_dragging', False):
+            pen = QPen(QColor(0, 150, 255, 120), 1, Qt.DashLine)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(screen_rect)
+
+        # Kalibrierungspunkte zeichnen
+        calib_pts = getattr(self, '_canvas_calib_points', [])
+        if getattr(self, '_canvas_calibrating', False) and calib_pts:
+            calib_color = QColor(255, 80, 0)
+            p.setPen(QPen(calib_color, 2))
+            p.setBrush(QBrush(calib_color))
+            for cp in calib_pts:
+                sp = self.world_to_screen(cp)
+                p.drawEllipse(sp, 5, 5)
+            if len(calib_pts) == 1:
+                # Linie von Punkt 1 zur aktuellen Mausposition
+                sp1 = self.world_to_screen(calib_pts[0])
+                sp2 = self.world_to_screen(getattr(self, 'mouse_world', QPointF(0, 0)))
+                p.setPen(QPen(calib_color, 1, Qt.DashLine))
+                p.drawLine(sp1, sp2)
+
     def _draw_grid(self, p, update_rect=None):
         # Grid nur zeichnen, wenn es das Update-Rect berührt
         # Da das Grid den ganzen Screen füllt, prüfen wir hier nur grob
@@ -707,7 +748,10 @@ class SketchRendererMixin:
                         p.setPen(QPen(QColor(100, 100, 100, 100), 1, Qt.DashLine))
                         p.drawLine(mid, text_pos)
 
-                    text = f"{c.value:.1f}"
+                    if c.formula:
+                        text = f"{c.formula} = {c.value:.1f}"
+                    else:
+                        text = f"{c.value:.1f}"
 
                     # Box zeichnen
                     fm = QFontMetrics(p.font())
@@ -766,7 +810,10 @@ class SketchRendererMixin:
                     p.drawEllipse(p_rim, 2, 2)
                     
                     # 3. Text Box
-                    text = f"R{c.value:.1f}"
+                    if c.formula:
+                        text = f"R {c.formula} = {c.value:.1f}"
+                    else:
+                        text = f"R{c.value:.1f}"
                     fm = QFontMetrics(p.font())
                     rect = fm.boundingRect(text)
 

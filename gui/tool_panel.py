@@ -270,6 +270,7 @@ class ToolPanel(QFrame):
         tools_import = [
             (f"📥 {tr('DXF Import')}", "import_dxf", "", "Import DXF file", 0, 0),
             (f"📤 {tr('DXF Export')}", "export_dxf", "", "Export to DXF", 0, 1),
+            (f"🖼 {tr('Canvas')}", "canvas", "", "Image Reference", 1, 0),
         ]
 
         for text, name, shortcut, tooltip, row, col in tools_import:

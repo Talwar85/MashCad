@@ -463,7 +463,8 @@ class DXFImportWorker(QThread):
                     try:
                         ctrl_pts = list(entity.control_points)
                         n_ctrl = len(ctrl_pts)
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Spline ctrl_pts Zugriff fehlgeschlagen: {e}")
                         n_ctrl = 999  # Force polyline fallback on error
 
                     # Prüfe ob Spline geschlossen ist (für Schraubenlöcher etc.)
@@ -486,8 +487,8 @@ class DXFImportWorker(QThread):
                             end_pt = (float(bspline_x(t_max)), float(bspline_y(t_max)))
                             gap = math.hypot(end_pt[0] - start_pt[0], end_pt[1] - start_pt[1])
                             is_closed_spline = gap < 0.5  # < 0.5mm = geschlossen
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Closed-Spline Erkennung fehlgeschlagen: {e}")
 
                     logger.debug(f"SPLINE: {n_ctrl} ctrl pts, closed={is_closed_spline}")
 
@@ -624,6 +625,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     status_message = Signal(str)
     construction_mode_changed = Signal(bool)
     grid_snap_mode_changed = Signal(bool)
+    exit_requested = Signal()  # Escape Level 4: Sketch verlassen
     solver_finished_signal = Signal(bool, str, float) # success, message, dof
 
     # Farben
@@ -714,7 +716,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input_active = False
         self.viewport = None
         self.dim_input.value_changed.connect(self._on_dim_value_changed)
-        
+
+        # Canvas / Bildreferenz (Fusion 360-Style)
+        self.canvas_image = None        # QPixmap
+        self.canvas_world_rect = None   # QRectF in Weltkoordinaten
+        self.canvas_opacity = 0.4
+        self.canvas_visible = True
+        self.canvas_locked = False
+        self.canvas_file_path = None
+        self._canvas_dragging = False
+        self._canvas_drag_offset = QPointF(0, 0)
+        self._canvas_calibrating = False
+        self._canvas_calib_points = []  # [(screen_x, screen_y), ...]
+
         self.live_length = 0.0
         self.live_angle = 0.0
         self.live_width = 0.0
@@ -986,7 +1000,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             try:
                 if hasattr(v, 'item'): return self._safe_float(v.item())
                 return self._safe_float(v)
-            except: return 0.0
+            except Exception as e:
+                logger.debug(f"Float-Konvertierung fehlgeschlagen: {e}")
+                return 0.0
 
         # 4. CALCULATE BOUNDS
         min_x, min_y = self._safe_float('inf'), self._safe_float('inf')
@@ -1245,7 +1261,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 try: 
                     c = QColor(raw_color)
                     color = (c.redF(), c.greenF(), c.blueF())
-                except: 
+                except Exception as e:
+                    logger.debug(f"QColor-Parsing fehlgeschlagen für '{raw_color}': {e}")
                     color = (0.5, 0.5, 0.5)
 
             if mesh is None: continue
@@ -1976,8 +1993,47 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return QPointF(x1 + t*(x2-x1), y1 + t*(y2-y1))
         return None
     
+    def _get_canvas_dict(self):
+        """Canvas-State als Dict für Undo/Save."""
+        if not self.canvas_image or not self.canvas_world_rect:
+            return None
+        wr = self.canvas_world_rect
+        return {
+            'file_path': self.canvas_file_path,
+            'rect': [wr.x(), wr.y(), wr.width(), wr.height()],
+            'opacity': self.canvas_opacity,
+            'visible': self.canvas_visible,
+            'locked': self.canvas_locked,
+        }
+
+    def _restore_canvas_dict(self, data):
+        """Canvas-State aus Dict wiederherstellen."""
+        if not data:
+            self.canvas_image = None
+            self.canvas_world_rect = None
+            self.canvas_file_path = None
+            return
+        from PySide6.QtGui import QPixmap
+        path = data.get('file_path')
+        if path:
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                self.canvas_image = pixmap
+                self.canvas_file_path = path
+            else:
+                self.canvas_image = None
+                self.canvas_file_path = None
+                return
+        r = data.get('rect', [0, 0, 100, 100])
+        self.canvas_world_rect = QRectF(r[0], r[1], r[2], r[3])
+        self.canvas_opacity = data.get('opacity', 0.4)
+        self.canvas_visible = data.get('visible', True)
+        self.canvas_locked = data.get('locked', False)
+
     def _save_undo(self):
-        self.undo_stack.append(self.sketch.to_dict())
+        state = self.sketch.to_dict()
+        state['_canvas'] = self._get_canvas_dict()
+        self.undo_stack.append(state)
         self.redo_stack.clear()
         if len(self.undo_stack) > self.max_undo: self.undo_stack.pop(0)
 
@@ -1989,8 +2045,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if not self.undo_stack:
             self.show_message(tr("Nothing to undo"), 1500, QColor(255, 200, 100))
             return
-        self.redo_stack.append(self.sketch.to_dict())
-        self.sketch = Sketch.from_dict(self.undo_stack.pop())
+        redo_state = self.sketch.to_dict()
+        redo_state['_canvas'] = self._get_canvas_dict()
+        self.redo_stack.append(redo_state)
+        state = self.undo_stack.pop()
+        self.sketch = Sketch.from_dict(state)
+        self._restore_canvas_dict(state.get('_canvas'))
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
@@ -2007,8 +2067,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if not self.redo_stack:
             self.show_message(tr("Nothing to redo"), 1500, QColor(255, 200, 100))
             return
-        self.undo_stack.append(self.sketch.to_dict())
-        self.sketch = Sketch.from_dict(self.redo_stack.pop())
+        undo_state = self.sketch.to_dict()
+        undo_state['_canvas'] = self._get_canvas_dict()
+        self.undo_stack.append(undo_state)
+        state = self.redo_stack.pop()
+        self.sketch = Sketch.from_dict(state)
+        self._restore_canvas_dict(state.get('_canvas'))
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
@@ -2637,6 +2701,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.STAR: tr("Star") + " | " + tr("Click=Center"),
             SketchTool.NUT: tr("Nut") + f" {self.nut_size_names[self.nut_size_index]} | +/- " + tr("Tolerance"),
             SketchTool.TEXT: tr("Text") + " | " + tr("Click=Position"),
+            SketchTool.CANVAS: tr("Canvas") + " | " + tr("Click to place image reference"),
         }
         self.status_message.emit(hints.get(self.current_tool, ""))
     
@@ -2766,6 +2831,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Helper für Solver-Check und Profil-Update
         def run_solver_and_update():
             result = self.sketch.solve()
+            if not result.success:
+                logger.warning(f"Solver nicht konvergiert: {result.message}")
             self._find_closed_profiles()
             self.sketched_changed.emit()
             
@@ -3029,6 +3096,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.request_update()
                     return
 
+            # A1.5. Canvas-Kalibrierung (hat höchste Priorität wenn aktiv)
+            if self._canvas_calibrating:
+                if self._canvas_calibration_click(self.mouse_world):
+                    return
+
+            # A2. Canvas-Drag prüfen (SELECT-Modus, Canvas nicht gesperrt)
+            if self.current_tool == SketchTool.SELECT and self.canvas_image and not self.canvas_locked:
+                if self._canvas_hit_test(self.mouse_world):
+                    if self._canvas_start_drag(self.mouse_world):
+                        return
+
             # B. Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
@@ -3096,6 +3174,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if self.spline_dragging:
                 self._finish_spline_drag()
                 self._update_cursor()
+            if self._canvas_dragging:
+                self._canvas_end_drag()
             if self.selection_box_start:
                 self._finish_selection_box()
         self.request_update()
@@ -3241,6 +3321,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update() # Pan braucht Full Redraw
             return
             
+        elif self._canvas_dragging:
+            self._canvas_update_drag(self.mouse_world)
+            return
+
         elif self.spline_dragging:
             self._drag_spline_element(event.modifiers() & Qt.ShiftModifier)
             # Dragging aktualisiert Update selber oder braucht Full Update
@@ -3532,6 +3616,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif key == Qt.Key_A: self._select_all(); return
             elif key == Qt.Key_I: self.import_dxf(); return
             elif key == Qt.Key_E: self.export_dxf(); return
+            elif key == Qt.Key_B: self._canvas_toggle_visible(); return
         
         if key == Qt.Key_Tab:
             self._show_dimension_input()
@@ -3571,35 +3656,42 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _handle_escape_logic(self):
         """
-        Hierarchisches Beenden von Aktionen (Fusion Style).
-        Reihenfolge:
-        1. Laufende Geometrie-Erstellung abbrechen (z.B. ersten Punkt einer Linie vergessen)
-        2. Aktives Tool beenden -> Wechsel zu SELECT
-        3. Auswahl aufheben (Deselect All)
-        4. Sketch Modus verlassen
+        Hierarchisches Beenden von Aktionen (Fusion 360-Style).
+        Jeder Escape bricht nur EINE Ebene ab:
+        0. Canvas-Kalibrierung abbrechen
+        1. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)
+        2. Aktives Tool beenden → SELECT
+        3. Auswahl aufheben
+        4. Signal an main_window → Sketch verlassen
         """
-        # Level 1: Laufende Operation abbrechen (z.B. Linie hat schon Startpunkt)
-        if hasattr(self, 'temp_points') and self.temp_points:
-            self.temp_points = []
-            self.request_update() # Neu zeichnen um Geisterlinien zu entfernen
-            self.status_message.emit("Action cancelled")
+        # Level 0: Canvas-Kalibrierung abbrechen
+        if self._canvas_calibrating:
+            self._canvas_calibrating = False
+            self._canvas_calib_points = []
+            self._show_hud(tr("Kalibrierung abgebrochen"))
+            self.request_update()
+            return
+
+        # Level 1: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
+        if self.tool_step > 0:
+            self._cancel_tool()
+            self.status_message.emit(tr("Aktion abgebrochen"))
             return
 
         # Level 2: Aktives Tool beenden (zurück zu Select)
-        if self.active_tool != SketchTool.SELECT:
+        if self.current_tool != SketchTool.SELECT:
             self.set_tool(SketchTool.SELECT)
-            self.status_message.emit("Tool deactivated")
+            self.status_message.emit(tr("Werkzeug deaktiviert"))
             return
 
         # Level 3: Selektion aufheben
-        if self.selected_lines or self.selected_points or self.selected_circles:
+        if self.selected_lines or self.selected_points or self.selected_circles or self.selected_arcs or self.selected_constraints:
             self._clear_selection()
             self.request_update()
             return
 
-        # Level 4: Sketch Modus wirklich verlassen (nur wenn nichts anderes aktiv war)
-        # Optional: Dialog "Wirklich beenden?" oder direkt raus
-        self.exit_sketch_mode()
+        # Level 4: Sketch verlassen — Signal an main_window
+        self.exit_requested.emit()
             
     def _finish_current_operation(self):
         if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
@@ -3716,7 +3808,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if c in self.sketch.constraints:
                     self.sketch.constraints.remove(c)
             self.selected_constraints.clear()
-            self.sketch.solve()
+            solve_result = self.sketch.solve()
+            if not solve_result.success:
+                logger.warning(f"Solver nach Constraint-Löschung nicht konvergiert: {solve_result.message}")
             self.sketched_changed.emit()
             self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
             logger.debug(f"Deleted {count} constraints")
@@ -4059,6 +4153,35 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         menu.addAction("Alles auswählen (Ctrl+A)", self._select_all)
         menu.addAction("Ansicht einpassen (F)", self._fit_view)
+
+        # === Canvas-Optionen ===
+        if self.canvas_image is not None:
+            menu.addSeparator()
+            canvas_menu = menu.addMenu("🖼 Canvas")
+
+            vis_text = tr("Ausblenden") if self.canvas_visible else tr("Einblenden")
+            canvas_menu.addAction(vis_text, self._canvas_toggle_visible)
+
+            lock_text = tr("Entsperren") if self.canvas_locked else tr("Sperren")
+            canvas_menu.addAction(lock_text, self._canvas_toggle_locked)
+
+            # Opacity sub-menu
+            opacity_menu = canvas_menu.addMenu(tr("Deckkraft"))
+            for pct in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
+                val = pct / 100.0
+                label = f"{pct}%" + (" ●" if abs(self.canvas_opacity - val) < 0.05 else "")
+                opacity_menu.addAction(label, lambda v=val: self.canvas_set_opacity(v))
+
+            # Size sub-menu
+            size_menu = canvas_menu.addMenu(tr("Größe (mm)"))
+            for sz in [50, 100, 150, 200, 300, 500]:
+                size_menu.addAction(f"{sz} mm", lambda s=sz: self.canvas_set_size(float(s)))
+
+            canvas_menu.addSeparator()
+            canvas_menu.addAction(tr("Kalibrieren (2 Punkte)"), self.canvas_start_calibration)
+            canvas_menu.addSeparator()
+            canvas_menu.addAction(tr("Entfernen"), self.canvas_remove)
+
         menu.exec(self.mapToGlobal(pos.toPoint()))
 
     def _get_constraints_for_selection(self):
@@ -4093,7 +4216,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if c in self.sketch.constraints:
                 self.sketch.constraints.remove(c)
 
-        self.sketch.solve()
+        solve_result = self.sketch.solve()
+        if not solve_result.success:
+            logger.warning(f"Solver nach Constraint-Löschung nicht konvergiert: {solve_result.message}")
         self.sketched_changed.emit()
         self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
         logger.info(f"Deleted {count} constraints from selection")
@@ -4113,6 +4238,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         logger.info(f"Deleted all {count} constraints")
         self.request_update()
     
+    def _canvas_toggle_visible(self):
+        self.canvas_visible = not self.canvas_visible
+        self.request_update()
+
+    def _canvas_toggle_locked(self):
+        self.canvas_locked = not self.canvas_locked
+        state = tr("gesperrt") if self.canvas_locked else tr("entsperrt")
+        self._show_hud(f"Canvas {state}")
+
     def _fit_view(self):
         if not self.sketch.lines and not self.sketch.circles:
             self._center_view(); return
@@ -4161,6 +4295,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # "Liegt diese Linie innerhalb von update_rect?" -> Wenn nein, Skip.
         
         self._draw_grid(p, update_rect)
+        self._draw_canvas(p, update_rect)  # Bildreferenz (hinter Geometrie)
         self._draw_body_references(p)   # Falls vorhanden (projizierte 3D-Kanten)
         self._draw_profiles(p, update_rect)
         self._draw_axes(p)

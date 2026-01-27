@@ -103,6 +103,14 @@ class FeatureType(Enum):
     SWEEP = auto()      # Phase 6: Sweep entlang Pfad
     SHELL = auto()      # Phase 6: Körper aushöhlen
     SURFACE_TEXTURE = auto()  # Phase 7: Flächen-Texturierung für 3D-Druck
+    HOLE = auto()             # Bohrung (Simple, Counterbore, Countersink)
+    DRAFT = auto()            # Entformungsschräge
+    SPLIT = auto()            # Körper teilen
+    THREAD = auto()           # Gewinde (kosmetisch + geometrisch)
+    HOLLOW = auto()           # Aushöhlen mit optionalem Drain Hole
+    LATTICE = auto()          # Gitterstruktur für Leichtbau
+    PUSHPULL = auto()         # Face Extrude/Offset entlang Normale
+    NSIDED_PATCH = auto()     # N-seitiger Patch (Surface Fill)
 
 @dataclass
 class Feature:
@@ -117,6 +125,7 @@ class Feature:
 class ExtrudeFeature(Feature):
     sketch: Sketch = None
     distance: float = 10.0
+    distance_formula: Optional[str] = None
     direction: int = 1
     operation: str = "New Body"
     selector: list = None
@@ -135,9 +144,10 @@ class ExtrudeFeature(Feature):
 class RevolveFeature(Feature):
     sketch: Sketch = None
     angle: float = 360.0
+    angle_formula: Optional[str] = None
     axis: Tuple[float, float, float] = (0, 1, 0)
     operation: str = "New Body"
-    
+
     def __post_init__(self):
         self.type = FeatureType.REVOLVE
         if not self.name or self.name == "Feature": self.name = "Revolve"
@@ -153,6 +163,7 @@ class FilletFeature(Feature):
     3. edge_selectors: Legacy Point-Selektoren (Fallback)
     """
     radius: float = 2.0
+    radius_formula: Optional[str] = None
     edge_selectors: List = None  # Legacy: [(x,y,z), ...] Mittelpunkte
 
     # Phase 2 TNP: Erweiterte Selektoren
@@ -180,6 +191,7 @@ class ChamferFeature(Feature):
     Gleiche TNP-Strategie wie FilletFeature.
     """
     distance: float = 2.0
+    distance_formula: Optional[str] = None
     edge_selectors: List = None  # Legacy: [(x,y,z), ...] Mittelpunkte
 
     # Phase 2 TNP: Erweiterte Selektoren
@@ -326,6 +338,7 @@ class ShellFeature(Feature):
     OCP Fallback: BRepOffsetAPI_MakeThickSolid
     """
     thickness: float = 2.0  # Wandstärke in mm
+    thickness_formula: Optional[str] = None
     opening_face_selectors: List[tuple] = field(default_factory=list)
     # Liste von Face-Zentren für TNP-Fallback
 
@@ -335,6 +348,145 @@ class ShellFeature(Feature):
         self.type = FeatureType.SHELL
         if not self.name or self.name == "Feature":
             self.name = "Shell"
+
+
+@dataclass
+class HoleFeature(Feature):
+    """
+    Bohrung in eine Fläche.
+    Typen: simple (Durchgangsbohrung/Sackloch), counterbore, countersink.
+    """
+    hole_type: str = "simple"  # "simple", "counterbore", "countersink"
+    diameter: float = 8.0
+    diameter_formula: Optional[str] = None
+    depth: float = 0.0  # 0 = through all
+    depth_formula: Optional[str] = None
+    face_selectors: List[dict] = field(default_factory=list)
+    position: Tuple[float, float, float] = (0, 0, 0)
+    direction: Tuple[float, float, float] = (0, 0, -1)
+    # Counterbore
+    counterbore_diameter: float = 12.0
+    counterbore_depth: float = 3.0
+    # Countersink
+    countersink_angle: float = 82.0
+
+    def __post_init__(self):
+        self.type = FeatureType.HOLE
+        if not self.name or self.name == "Feature":
+            self.name = f"Hole ({self.hole_type})"
+
+
+@dataclass
+class DraftFeature(Feature):
+    """
+    Entformungsschräge (Draft/Taper) auf Flächen.
+    Build123d: draft() auf selektierte Faces.
+    """
+    draft_angle: float = 5.0  # Grad
+    pull_direction: Tuple[float, float, float] = (0, 0, 1)
+    face_selectors: List[dict] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.type = FeatureType.DRAFT
+        if not self.name or self.name == "Feature":
+            self.name = f"Draft {self.draft_angle}°"
+
+
+@dataclass
+class SplitFeature(Feature):
+    """
+    Körper teilen entlang einer Ebene.
+    Erzeugt zwei Hälften, behält die gewählte Seite.
+    """
+    plane_origin: Tuple[float, float, float] = (0, 0, 0)
+    plane_normal: Tuple[float, float, float] = (0, 0, 1)
+    keep_side: str = "above"  # "above", "below", "both"
+
+    def __post_init__(self):
+        self.type = FeatureType.SPLIT
+        if not self.name or self.name == "Feature":
+            self.name = "Split"
+
+
+@dataclass
+class ThreadFeature(Feature):
+    """
+    Gewinde-Feature: Erzeugt eine helikale Nut auf zylindrischen Flaechen.
+
+    Thread-Standards: M (metrisch), UNC, UNF
+    Typ: internal (Mutter) oder external (Schraube)
+    """
+    thread_type: str = "external"  # "external" or "internal"
+    standard: str = "M"           # "M", "UNC", "UNF"
+    diameter: float = 10.0        # Nenn-Durchmesser
+    pitch: float = 1.5            # Steigung in mm
+    depth: float = 20.0           # Gewindelaenge
+    position: Tuple[float, float, float] = (0, 0, 0)
+    direction: Tuple[float, float, float] = (0, 0, 1)
+    tolerance_class: str = "6g"   # ISO 965-1 fit class
+    tolerance_offset: float = 0.0 # Diameter offset in mm
+
+    def __post_init__(self):
+        self.type = FeatureType.THREAD
+        if not self.name or self.name == "Feature":
+            self.name = f"{self.standard}{self.diameter:.0f}x{self.pitch}"
+
+
+@dataclass
+class HollowFeature(Feature):
+    """
+    Aushöhlen eines Körpers mit optionalem Drain Hole (für SLA/SLS Druck).
+    Intern: Shell (geschlossen) + Boolean Cut Zylinder.
+    """
+    wall_thickness: float = 2.0          # Wandstärke in mm
+    drain_hole: bool = False             # Drain Hole aktiviert?
+    drain_diameter: float = 3.0          # Drain Hole Durchmesser in mm
+    drain_position: Tuple[float, float, float] = (0, 0, 0)  # Startpunkt
+    drain_direction: Tuple[float, float, float] = (0, 0, -1) # Richtung (default: nach unten)
+
+    def __post_init__(self):
+        self.type = FeatureType.HOLLOW
+        if not self.name or self.name == "Feature":
+            self.name = "Hollow"
+
+
+@dataclass
+class LatticeFeature(Feature):
+    """Gitterstruktur für Leichtbau / 3D-Druck."""
+    cell_type: str = "BCC"           # BCC, FCC, Octet, Diamond
+    cell_size: float = 5.0           # Zellgröße in mm
+    beam_radius: float = 0.5         # Strebendurchmesser/2 in mm
+
+    def __post_init__(self):
+        self.type = FeatureType.LATTICE
+        if not self.name or self.name == "Feature":
+            self.name = f"Lattice ({self.cell_type})"
+
+
+@dataclass
+class NSidedPatchFeature(Feature):
+    """N-Sided Patch - Boundary-Edges mit glatter Fläche füllen."""
+    edge_selectors: list = field(default_factory=list)  # Liste von (center, direction) Tupeln
+    degree: int = 3
+    tangent: bool = True
+
+    def __post_init__(self):
+        self.type = FeatureType.NSIDED_PATCH
+        if not self.name or self.name == "Feature":
+            self.name = f"N-Sided Patch ({len(self.edge_selectors)} edges)"
+
+
+@dataclass
+class PushPullFeature(Feature):
+    """PushPull - Face entlang Normale extrudieren/eindrücken."""
+    face_selector: tuple = None   # (center, normal) zur Face-Identifikation
+    distance: float = 10.0       # Positiv = raus, negativ = rein
+    operation: str = "Join"      # Join, Cut, New Body
+
+    def __post_init__(self):
+        self.type = FeatureType.PUSHPULL
+        if not self.name or self.name == "Feature":
+            self.name = f"PushPull ({self.distance:+.1f}mm)"
 
 
 @dataclass
@@ -465,6 +617,44 @@ class ConstructionPlane:
             y_dir=y_dir
         )
 
+    @classmethod
+    def from_face(cls, face_center, face_normal, offset: float = 0.0, name: str = None):
+        """
+        Erstellt Ebene mit Offset von einer Körperfläche.
+
+        Args:
+            face_center: (x, y, z) Schwerpunkt der Fläche
+            face_normal: (x, y, z) Normale der Fläche
+            offset: Abstand in mm entlang der Normalen
+            name: Optional
+        """
+        import numpy as np
+        normal = np.array(face_normal, dtype=float)
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-12:
+            raise ValueError("Flächennormale ist null")
+        normal = normal / norm_len
+
+        center = np.array(face_center, dtype=float) + normal * offset
+
+        # x_dir orthogonal zur Normalen berechnen
+        up = np.array([0, 0, 1], dtype=float)
+        if abs(np.dot(normal, up)) > 0.99:
+            up = np.array([1, 0, 0], dtype=float)
+        x_dir = np.cross(up, normal)
+        x_dir = x_dir / np.linalg.norm(x_dir)
+        y_dir = np.cross(normal, x_dir)
+
+        auto_name = name or f"Face Plane @ {offset:.1f}mm"
+
+        return cls(
+            name=auto_name,
+            origin=tuple(center),
+            normal=tuple(normal),
+            x_dir=tuple(x_dir),
+            y_dir=tuple(y_dir),
+        )
+
 
 # ==================== CORE LOGIC ====================
 
@@ -479,6 +669,7 @@ class Body:
         self.name = name
         self.id = str(uuid.uuid4())[:8]
         self.features: List[Feature] = []
+        self.rollback_index: Optional[int] = None  # None = all features active
 
         # CAD Kernel Objekte
         self._build123d_solid = None
@@ -1356,6 +1547,63 @@ class Body:
 
     # ==================== PHASE 6: COMPUTE METHODS ====================
 
+    def _compute_revolve(self, feature: 'RevolveFeature'):
+        """
+        Berechnet Revolve aus Sketch-Profil um eine Achse.
+        Nutzt Build123d revolve() oder OCP BRepPrimAPI_MakeRevol.
+        """
+        from build123d import (
+            BuildPart, Plane, Axis, revolve as bd_revolve,
+            make_face, Wire, Vector
+        )
+
+        sketch = feature.sketch
+        if not sketch:
+            raise ValueError("Revolve: Kein Sketch vorhanden")
+
+        # Sketch-Koordinaten holen
+        outer_coords = sketch.get_outer_polygon()
+        if not outer_coords or len(outer_coords) < 3:
+            raise ValueError("Revolve: Sketch hat zu wenig Punkte")
+
+        # Sketch-Plane bestimmen
+        plane_origin = getattr(sketch, 'plane_origin', (0, 0, 0))
+        plane_normal = getattr(sketch, 'plane_normal', (0, 0, 1))
+        x_dir = getattr(sketch, 'plane_x_dir', None)
+
+        # 2D -> 3D Konvertierung
+        plane = Plane(
+            origin=Vector(*plane_origin),
+            z_dir=Vector(*plane_normal),
+            x_dir=Vector(*x_dir) if x_dir else None
+        )
+
+        pts_3d = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+
+        # Face erstellen
+        wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
+        face = make_face(wire)
+
+        # Achse bestimmen
+        axis_vec = feature.axis  # (1,0,0), (0,1,0), oder (0,0,1)
+        if axis_vec == (1, 0, 0):
+            axis = Axis.X
+        elif axis_vec == (0, 1, 0):
+            axis = Axis.Y
+        else:
+            axis = Axis.Z
+
+        # Revolve ausfuehren
+        with BuildPart() as part:
+            bd_revolve(face, axis=axis, revolution_arc=feature.angle)
+
+        result = part.part
+        if result is None or (hasattr(result, 'is_null') and result.is_null()):
+            raise ValueError("Revolve erzeugte keine Geometrie")
+
+        logger.info(f"Revolve: {feature.angle}° um {feature.axis}")
+        return result
+
     def _compute_loft(self, feature: 'LoftFeature'):
         """
         Berechnet Loft aus mehreren Profilen.
@@ -1448,11 +1696,12 @@ class Body:
                     if hasattr(result, 'is_valid') and result.is_valid():
                         logger.success("OCP Loft erfolgreich")
                         return result
-                except:
+                except Exception as e_solid:
+                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
                     try:
                         return Shape(result_shape)
-                    except:
-                        pass
+                    except Exception as e_shape:
+                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
 
             logger.warning("OCP Loft IsDone() = False")
             return None
@@ -1527,11 +1776,12 @@ class Body:
                     if hasattr(result, 'is_valid') and result.is_valid():
                         logger.success(f"OCP Loft mit Kontinuität ({start_cont}/{end_cont}) erfolgreich")
                         return result
-                except:
+                except Exception as e_solid:
+                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
                     try:
                         return Shape(result_shape)
-                    except:
-                        pass
+                    except Exception as e_shape:
+                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
 
             logger.warning("OCP Loft mit Kontinuität IsDone() = False")
             return self._ocp_loft(faces, feature.ruled)  # Fallback
@@ -1699,11 +1949,12 @@ class Body:
                     if hasattr(result, 'is_valid') and result.is_valid():
                         logger.success("OCP Sweep erfolgreich")
                         return result
-                except:
+                except Exception as e_solid:
+                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
                     try:
                         return Shape(result_shape)
-                    except:
-                        pass
+                    except Exception as e_shape:
+                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
 
             logger.warning("OCP Sweep IsDone() = False")
             return None
@@ -1934,11 +2185,12 @@ class Body:
                     if hasattr(result, 'is_valid') and result.is_valid():
                         logger.success("OCP Shell erfolgreich")
                         return result
-                except:
+                except Exception as e_solid:
+                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
                     try:
                         return Shape(result_shape)
-                    except:
-                        pass
+                    except Exception as e_shape:
+                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
 
             logger.warning("OCP Shell IsDone() = False")
             return None
@@ -1946,6 +2198,722 @@ class Body:
         except Exception as e:
             logger.error(f"OCP Shell Fehler: {e}")
             return None
+
+    def _compute_pushpull(self, feature: 'PushPullFeature', current_solid):
+        """
+        PushPull: Face entlang ihrer Normale extrudieren.
+        Verwendet BRepFeat_MakePrism (OCP) für echtes Face-Extrude.
+        """
+        if current_solid is None:
+            raise ValueError("PushPull benötigt einen existierenden Körper")
+
+        import numpy as np
+
+        # Face auflösen
+        selector = feature.face_selector
+        if selector is None:
+            raise ValueError("Kein Face ausgewählt")
+
+        # Selector ist ((cx,cy,cz), (nx,ny,nz))
+        if isinstance(selector, (list, tuple)) and len(selector) == 2:
+            center = np.array(selector[0])
+            normal = np.array(selector[1])
+        else:
+            raise ValueError(f"Ungültiger Face-Selector: {selector}")
+
+        # Face im Solid finden
+        all_faces = current_solid.faces() if hasattr(current_solid, 'faces') else []
+        if not all_faces:
+            raise ValueError("Solid hat keine Faces")
+
+        best_face = None
+        best_dist = float('inf')
+        for face in all_faces:
+            try:
+                fc = face.center()
+                fc_arr = np.array([fc.X, fc.Y, fc.Z])
+                dist = np.linalg.norm(fc_arr - center)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_face = face
+            except Exception:
+                continue
+
+        if best_face is None or best_dist > 5.0:
+            raise ValueError(f"Face nicht gefunden (nächste Distanz: {best_dist:.2f}mm)")
+
+        logger.info(f"PushPull: Face gefunden (dist={best_dist:.3f}mm), distance={feature.distance}mm")
+
+        # Extrusionsrichtung = Face-Normale * Distanz
+        norm = np.array(normal)
+        norm_len = np.linalg.norm(norm)
+        if norm_len < 1e-6:
+            raise ValueError("Face-Normale ist Null")
+        norm = norm / norm_len
+
+        distance = feature.distance
+
+        try:
+            from OCP.BRepFeat import BRepFeat_MakePrism
+            from OCP.gp import gp_Dir, gp_Vec
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.TopoDS import TopoDS
+            from build123d import Solid
+
+            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
+
+            direction = gp_Dir(float(norm[0]), float(norm[1]), float(norm[2]))
+
+            # BRepFeat_MakePrism: Extrude face from solid
+            # Args: (base_shape, profile_face, sketch_face, direction, fuse_mode, modify)
+            # fuse_mode: 1=Fuse, 0=Cut
+            fuse_mode = 1 if distance > 0 else 0
+            abs_dist = abs(distance)
+
+            prism = BRepFeat_MakePrism()
+            prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
+            prism.Perform(abs_dist)
+
+            if prism.IsDone():
+                result = Solid(prism.Shape())
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.success(f"PushPull via BRepFeat_MakePrism erfolgreich")
+                    return result
+
+            logger.warning("BRepFeat_MakePrism fehlgeschlagen, versuche Extrude+Boolean")
+        except Exception as e:
+            logger.debug(f"BRepFeat_MakePrism Fehler: {e}")
+
+        # Fallback: Extrude face as wire → solid → Boolean
+        try:
+            from build123d import Solid, extrude
+            from OCP.gp import gp_Vec
+            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut
+
+            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
+
+            vec = gp_Vec(float(norm[0] * distance), float(norm[1] * distance), float(norm[2] * distance))
+            prism = BRepPrimAPI_MakePrism(face_shape, vec)
+            prism.Build()
+
+            if not prism.IsDone():
+                raise RuntimeError("BRepPrimAPI_MakePrism fehlgeschlagen")
+
+            extruded = prism.Shape()
+
+            # Boolean: Fuse (positiv) oder Cut (negativ)
+            if distance > 0:
+                boolean = BRepAlgoAPI_Fuse(shape, extruded)
+            else:
+                boolean = BRepAlgoAPI_Cut(shape, extruded)
+
+            boolean.SetFuzzyValue(1e-4)
+            boolean.Build()
+
+            if boolean.IsDone():
+                result = Solid(boolean.Shape())
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.success(f"PushPull via Extrude+Boolean erfolgreich")
+                    return result
+
+            raise RuntimeError("Boolean fehlgeschlagen")
+        except Exception as e:
+            logger.error(f"PushPull Fallback fehlgeschlagen: {e}")
+            raise
+
+    def _compute_nsided_patch(self, feature: 'NSidedPatchFeature', current_solid):
+        """
+        N-Sided Patch: Boundary-Edges finden und mit BRepFill_Filling füllen.
+        Das Ergebnis wird per Sewing an den bestehenden Solid angefügt.
+        """
+        if current_solid is None:
+            raise ValueError("N-Sided Patch benötigt einen existierenden Körper")
+
+        import numpy as np
+
+        if not feature.edge_selectors or len(feature.edge_selectors) < 3:
+            raise ValueError(f"Mindestens 3 Kanten nötig, erhalten: {len(feature.edge_selectors) if feature.edge_selectors else 0}")
+
+        # Edges im Solid auflösen
+        all_edges = current_solid.edges() if hasattr(current_solid, 'edges') else []
+        if not all_edges:
+            raise ValueError("Solid hat keine Kanten")
+
+        resolved_edges = []
+        for selector in feature.edge_selectors:
+            # Selector ist (center_x, center_y, center_z) oder ((cx,cy,cz), (dx,dy,dz))
+            if isinstance(selector, (list, tuple)) and len(selector) == 2:
+                if isinstance(selector[0], (list, tuple)):
+                    center = np.array(selector[0])
+                else:
+                    center = np.array(selector)
+            else:
+                center = np.array(selector)
+
+            best_edge = None
+            best_dist = float('inf')
+            for edge in all_edges:
+                try:
+                    ec = edge.center()
+                    ec_arr = np.array([ec.X, ec.Y, ec.Z])
+                    dist = np.linalg.norm(ec_arr - center)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_edge = edge
+                except Exception:
+                    continue
+
+            if best_edge is not None and best_dist < 5.0:
+                resolved_edges.append(best_edge)
+            else:
+                logger.warning(f"Edge nicht aufgelöst (dist={best_dist:.2f}mm)")
+
+        if len(resolved_edges) < 3:
+            raise ValueError(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
+
+        logger.info(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
+
+        from modeling.nsided_patch import NSidedPatch
+
+        # Patch erstellen
+        patch_face = NSidedPatch.fill_edges(
+            resolved_edges,
+            tangent_faces=NSidedPatch._find_adjacent_faces(
+                current_solid, resolved_edges
+            ) if feature.tangent else None,
+            degree=feature.degree,
+        )
+
+        if patch_face is None:
+            raise RuntimeError("N-Sided Patch: BRepFill_Filling fehlgeschlagen")
+
+        # Patch an Solid anfügen via Sewing
+        try:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_SHELL
+            from OCP.TopoDS import TopoDS
+            from build123d import Solid
+
+            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+            patch_shape = patch_face.wrapped if hasattr(patch_face, 'wrapped') else patch_face
+
+            sewing = BRepBuilderAPI_Sewing(1e-3)
+            sewing.Add(shape)
+            sewing.Add(patch_shape)
+            sewing.Perform()
+            sewn = sewing.SewedShape()
+
+            # Versuche Solid zu bauen
+            explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+            if explorer.More():
+                maker = BRepBuilderAPI_MakeSolid()
+                maker.Add(TopoDS.Shell_s(explorer.Current()))
+                maker.Build()
+                if maker.IsDone():
+                    result = Solid(maker.Shape())
+                    if hasattr(result, 'is_valid') and result.is_valid():
+                        logger.success("N-Sided Patch: Solid erstellt")
+                        return result
+
+            # Fallback: Shape zurückgeben
+            from build123d import Shape
+            logger.warning("N-Sided Patch: Kein geschlossener Solid, gebe Shape zurück")
+            return Shape(sewn)
+
+        except Exception as e:
+            logger.error(f"N-Sided Patch Sewing fehlgeschlagen: {e}")
+            raise
+
+    def _compute_hollow(self, feature: 'HollowFeature', current_solid):
+        """
+        Aushöhlen mit optionalem Drain Hole.
+        1. Shell (geschlossen) via _compute_shell-Logik
+        2. Optional: Boolean Cut mit Zylinder für Drain Hole
+        """
+        if current_solid is None:
+            raise ValueError("Hollow benötigt einen existierenden Körper")
+
+        # Step 1: Create closed shell (reuse shell logic)
+        shell_feat = ShellFeature(
+            thickness=feature.wall_thickness,
+            opening_face_selectors=[]
+        )
+        hollowed = self._compute_shell(shell_feat, current_solid)
+        if hollowed is None:
+            raise ValueError("Shell-Erzeugung fehlgeschlagen")
+
+        # Step 2: Drain hole (optional)
+        if feature.drain_hole and feature.drain_diameter > 0:
+            try:
+                from build123d import Cylinder, Location, Vector, Solid
+                import math
+
+                pos = feature.drain_position
+                d = feature.drain_direction
+                radius = feature.drain_diameter / 2.0
+
+                # Hole must be long enough to pierce through the wall
+                # Use bounding box diagonal as safe length
+                bb = hollowed.bounding_box()
+                safe_length = 2.0 * max(bb.size.X, bb.size.Y, bb.size.Z)
+
+                cyl = Cylinder(radius, safe_length)
+
+                # Align cylinder along drain direction
+                z_axis = Vector(0, 0, 1)
+                drain_vec = Vector(*d)
+                if drain_vec.length > 1e-9:
+                    drain_vec = drain_vec.normalized()
+                else:
+                    drain_vec = Vector(0, 0, -1)
+
+                # Position at drain point, centered along direction
+                from build123d import Pos, Rot
+                center = Vector(*pos) - drain_vec * (safe_length / 2)
+
+                # Compute rotation from Z to drain direction
+                cross = z_axis.cross(drain_vec)
+                dot = z_axis.dot(drain_vec)
+                if cross.length > 1e-9:
+                    angle = math.degrees(math.acos(max(-1, min(1, dot))))
+                    axis = cross.normalized()
+                    from build123d import Axis
+                    cyl = cyl.rotate(Axis.Z, 0)  # identity
+                    # Use Location with rotation
+                    from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir, gp_Trsf
+                    trsf = gp_Trsf()
+                    trsf.SetRotation(
+                        gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(axis.X, axis.Y, axis.Z)),
+                        math.radians(angle)
+                    )
+                    trsf.SetTranslationPart(
+                        gp_Pnt(center.X, center.Y, center.Z).XYZ()
+                                            )
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+                    builder = BRepBuilderAPI_Transform(cyl.wrapped, trsf, True)
+                    builder.Build()
+                    cyl = Solid(builder.Shape())
+                elif dot < 0:
+                    # Anti-parallel: rotate 180° around X
+                    from build123d import Axis
+                    cyl = cyl.rotate(Axis.X, 180)
+                    cyl = cyl.move(Location((center.X, center.Y, center.Z)))
+                else:
+                    cyl = cyl.move(Location((center.X, center.Y, center.Z)))
+
+                result = hollowed - cyl
+                if result and hasattr(result, 'is_valid') and result.is_valid():
+                    logger.success(f"Hollow mit Drain Hole (⌀{feature.drain_diameter}mm) erfolgreich")
+                    return result
+                else:
+                    logger.warning("Drain Hole Boolean fehlgeschlagen, verwende Shell ohne Drain")
+                    return hollowed
+
+            except Exception as e:
+                logger.warning(f"Drain Hole fehlgeschlagen: {e}, verwende Shell ohne Drain")
+                return hollowed
+
+        logger.success(f"Hollow (Wandstärke {feature.wall_thickness}mm) erfolgreich")
+        return hollowed
+
+    def _compute_hole(self, feature: 'HoleFeature', current_solid):
+        """
+        Erstellt eine Bohrung via Boolean Cut mit Zylinder.
+        Typen: simple, counterbore, countersink.
+        """
+        from build123d import Solid, Cylinder, Location, Vector, Axis, Plane
+        import math
+
+        pos = Vector(*feature.position)
+        d = Vector(*feature.direction)
+        radius = feature.diameter / 2.0
+
+        # Tiefe: 0 = through all (verwende grosse Tiefe)
+        depth = feature.depth if feature.depth > 0 else 1000.0
+
+        logger.info(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
+
+        # Hauptbohrung als Zylinder erstellen
+        hole_cyl = Cylinder(radius, depth,
+                            align=(Align.CENTER, Align.CENTER, Align.MIN))
+
+        # Rotation: Standard-Zylinder zeigt in +Z, wir brauchen feature.direction
+        from build123d import Align
+        from OCP.gp import gp_Trsf, gp_Ax1, gp_Pnt, gp_Dir, gp_Vec
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+        # Zylinder in Position bringen
+        hole_shape = self._position_cylinder(hole_cyl, pos, d, depth)
+        if hole_shape is None:
+            raise ValueError("Hole-Zylinder konnte nicht positioniert werden")
+
+        # Counterbore: zusaetzlicher breiterer Zylinder oben
+        if feature.hole_type == "counterbore":
+            cb_radius = feature.counterbore_diameter / 2.0
+            cb_depth = feature.counterbore_depth
+            cb_cyl = Cylinder(cb_radius, cb_depth,
+                              align=(Align.CENTER, Align.CENTER, Align.MIN))
+            cb_shape = self._position_cylinder(cb_cyl, pos, d, cb_depth)
+            if cb_shape:
+                hole_shape = hole_shape.fuse(cb_shape)
+
+        # Countersink: Kegel oben
+        elif feature.hole_type == "countersink":
+            cs_angle_rad = math.radians(feature.countersink_angle / 2.0)
+            cs_depth = radius / math.tan(cs_angle_rad) if cs_angle_rad > 0 else 2.0
+            from build123d import Cone
+            cs_cone = Cone(feature.diameter, 0.01, cs_depth,
+                           align=(Align.CENTER, Align.CENTER, Align.MIN))
+            cs_shape = self._position_cylinder(cs_cone, pos, d, cs_depth)
+            if cs_shape:
+                hole_shape = hole_shape.fuse(cs_shape)
+
+        # Boolean Cut: Bohrung vom Koerper abziehen
+        result = current_solid.cut(hole_shape)
+        if result and hasattr(result, 'is_valid') and result.is_valid():
+            logger.success(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
+            return result
+
+        raise ValueError(f"Hole Boolean Cut fehlgeschlagen")
+
+    def _position_cylinder(self, cyl_solid, position, direction, depth):
+        """Positioniert einen Zylinder an position entlang direction."""
+        try:
+            from build123d import Vector, Location
+            import numpy as np
+
+            d = np.array([direction[0], direction[1], direction[2]], dtype=float)
+            d_norm = d / (np.linalg.norm(d) + 1e-12)
+
+            # Start etwas vor der Flaeche (damit der Cut sicher durchgeht)
+            start = np.array([position[0], position[1], position[2]]) + d_norm * 0.1
+
+            # Rotation berechnen: Z-Achse -> direction
+            z_axis = np.array([0, 0, 1.0])
+            if abs(np.dot(z_axis, d_norm)) > 0.999:
+                # Parallel zu Z - keine Rotation noetig
+                rotated = cyl_solid
+            else:
+                rot_axis = np.cross(z_axis, d_norm)
+                rot_axis = rot_axis / (np.linalg.norm(rot_axis) + 1e-12)
+                angle = np.arccos(np.clip(np.dot(z_axis, d_norm), -1, 1))
+
+                from OCP.gp import gp_Trsf, gp_Ax1, gp_Pnt, gp_Dir
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+                import math
+
+                trsf = gp_Trsf()
+                ax = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(rot_axis[0], rot_axis[1], rot_axis[2]))
+                trsf.SetRotation(ax, angle)
+
+                shape = cyl_solid.wrapped if hasattr(cyl_solid, 'wrapped') else cyl_solid
+                builder = BRepBuilderAPI_Transform(shape, trsf, True)
+                builder.Build()
+                from build123d import Solid
+                rotated = Solid(builder.Shape())
+
+            # Translation
+            from OCP.gp import gp_Trsf, gp_Vec as gp_V
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            trsf2 = gp_Trsf()
+            trsf2.SetTranslation(gp_V(start[0], start[1], start[2]))
+
+            shape2 = rotated.wrapped if hasattr(rotated, 'wrapped') else rotated
+            builder2 = BRepBuilderAPI_Transform(shape2, trsf2, True)
+            builder2.Build()
+            from build123d import Solid
+            return Solid(builder2.Shape())
+
+        except Exception as e:
+            logger.error(f"Zylinder-Positionierung fehlgeschlagen: {e}")
+            return None
+
+    def _compute_draft(self, feature: 'DraftFeature', current_solid):
+        """
+        Wendet Draft/Taper auf selektierte Flaechen an.
+        Verwendet OCP BRepOffsetAPI_DraftAngle.
+        """
+        import math
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
+        from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+        from OCP.TopAbs import TopAbs_FACE
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+
+        shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+        pull_dir = gp_Dir(
+            feature.pull_direction[0],
+            feature.pull_direction[1],
+            feature.pull_direction[2]
+        )
+        angle_rad = math.radians(feature.draft_angle)
+
+        # Neutrale Ebene (Basis der Entformung)
+        neutral_plane = gp_Pln(gp_Pnt(0, 0, 0), pull_dir)
+
+        draft_op = BRepOffsetAPI_DraftAngle(shape)
+
+        # Alle Faces durchgehen und Draft anwenden
+        # Wenn face_selectors leer: alle nicht-parallelen Faces
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        face_count = 0
+
+        while explorer.More():
+            face = TopoDS.Face_s(explorer.Current())
+            try:
+                draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
+                face_count += 1
+            except Exception:
+                pass  # Face nicht draftbar (z.B. parallel zur Pull-Direction)
+            explorer.Next()
+
+        if face_count == 0:
+            raise ValueError("Keine Flaechen konnten gedraftet werden")
+
+        draft_op.Build()
+        if draft_op.IsDone():
+            result_shape = draft_op.Shape()
+            result_shape = self._fix_shape_ocp(result_shape)
+            from build123d import Solid
+            result = Solid(result_shape)
+            logger.success(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
+            return result
+
+        raise ValueError("Draft-Operation fehlgeschlagen")
+
+    def _compute_split(self, feature: 'SplitFeature', current_solid):
+        """
+        Teilt einen Koerper entlang einer Ebene.
+        Gibt die gewaehlte Haelfte zurueck.
+        """
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+        from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeHalfSpace
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+
+        shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+        origin = gp_Pnt(*feature.plane_origin)
+        normal = gp_Dir(*feature.plane_normal)
+        plane = gp_Pln(origin, normal)
+
+        logger.info(f"Split: origin={feature.plane_origin}, normal={feature.plane_normal}, keep={feature.keep_side}")
+
+        # HalfSpace erzeugen (unendlicher Halbraum)
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeHalfSpace
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+
+        # Grosse Ebene als Face
+        face_builder = BRepBuilderAPI_MakeFace(plane, -1000, 1000, -1000, 1000)
+        face_builder.Build()
+        if not face_builder.IsDone():
+            raise ValueError("Split-Ebene konnte nicht erstellt werden")
+
+        split_face = face_builder.Face()
+
+        # Punkt auf der "above" Seite
+        import numpy as np
+        n = np.array(feature.plane_normal, dtype=float)
+        n = n / (np.linalg.norm(n) + 1e-12)
+        ref_pt = np.array(feature.plane_origin) + n * 100.0
+
+        half_space = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(ref_pt[0], ref_pt[1], ref_pt[2]))
+        half_solid = half_space.Solid()
+
+        # Cut: Body mit HalfSpace schneiden
+        if feature.keep_side == "above":
+            # Behalte die Seite in Normalenrichtung
+            cut_op = BRepAlgoAPI_Cut(shape, half_solid)
+        else:
+            # Behalte die andere Seite
+            cut_op = BRepAlgoAPI_Cut(shape, half_solid)
+            # Invertiere: schneide mit dem ANDEREN HalfSpace
+            ref_pt_below = np.array(feature.plane_origin) - n * 100.0
+            half_space_below = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(ref_pt_below[0], ref_pt_below[1], ref_pt_below[2]))
+            half_solid_below = half_space_below.Solid()
+            cut_op = BRepAlgoAPI_Cut(shape, half_solid_below)
+
+        cut_op.Build()
+        if cut_op.IsDone():
+            result_shape = cut_op.Shape()
+            result_shape = self._fix_shape_ocp(result_shape)
+            from build123d import Solid
+            result = Solid(result_shape)
+            logger.success(f"Split ({feature.keep_side}) erfolgreich")
+            return result
+
+        raise ValueError("Split-Operation fehlgeschlagen")
+
+    def _compute_thread(self, feature: 'ThreadFeature', current_solid):
+        """
+        Erzeugt ein echtes helikales Gewinde via Helix-Sweep + Boolean.
+
+        Strategy:
+        1. ISO 60° Gewindeprofil als Draht erstellen
+        2. Helix-Pfad mit Pitch und Tiefe
+        3. Sweep Profil entlang Helix → Thread-Solid
+        4. Boolean Cut (extern) oder Fuse (intern)
+        """
+        import math
+        import numpy as np
+
+        shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+        pos = np.array(feature.position, dtype=float)
+        direction = np.array(feature.direction, dtype=float)
+        direction = direction / (np.linalg.norm(direction) + 1e-12)
+
+        r = feature.diameter / 2.0
+        pitch = feature.pitch
+        depth = feature.depth
+        n_turns = depth / pitch
+
+        # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
+        H = 0.8660254 * pitch
+        groove_depth = 0.625 * H
+
+        return self._compute_thread_helix(
+            shape, pos, direction, r, pitch, depth, n_turns,
+            groove_depth, feature.thread_type, feature.tolerance_offset
+        )
+
+    def _compute_thread_helix(self, shape, pos, direction, r, pitch, depth, n_turns,
+                               groove_depth, thread_type, tolerance_offset):
+        """Echtes Gewinde via OCP Helix + Sweep."""
+        import math
+        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax1, gp_Pnt2d, gp_Vec
+        from OCP.Geom import Geom_CylindricalSurface
+        from OCP.GCE2d import GCE2d_MakeSegment
+        from OCP.BRepBuilderAPI import (
+            BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeEdge,
+            BRepBuilderAPI_MakeFace
+        )
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+        from OCP.TopoDS import TopoDS_Wire
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+
+        ax = gp_Ax2(gp_Pnt(*pos), gp_Dir(*direction))
+
+        if thread_type == "external":
+            helix_r = r - groove_depth / 2
+        else:
+            helix_r = r + groove_depth / 2
+
+        # Create helix on cylindrical surface
+        cyl_surface = Geom_CylindricalSurface(ax, helix_r)
+
+        # Helix as 2D line on unwrapped cylinder: u = angle, v = height
+        # Full turn = 2*pi in u, pitch in v
+        total_height = depth + pitch  # Extra turn for clean cut
+        total_angle = (total_height / pitch) * 2 * math.pi
+
+        p1 = gp_Pnt2d(0, -pitch / 2)  # Start slightly below
+        p2 = gp_Pnt2d(total_angle, total_height - pitch / 2)
+
+        seg = GCE2d_MakeSegment(p1, p2)
+        helix_edge = BRepBuilderAPI_MakeEdge(seg.Value(), cyl_surface).Edge()
+        helix_wire = BRepBuilderAPI_MakeWire(helix_edge).Wire()
+
+        # ISO 60° triangle profile (cross-section of thread groove)
+        # Profile perpendicular to helix at start
+        # Triangle: base at pitch radius, tip pointing inward/outward
+        h = groove_depth
+        half_pitch = pitch * 0.3  # Width of groove at base
+
+        # Build triangular wire as profile
+        if thread_type == "external":
+            # Profile cuts INTO cylinder (groove)
+            p_top = gp_Pnt(pos[0] + r * 1.01, pos[1], pos[2])
+            p_bl = gp_Pnt(pos[0] + (r - h), pos[1], pos[2] - half_pitch)
+            p_br = gp_Pnt(pos[0] + (r - h), pos[1], pos[2] + half_pitch)
+        else:
+            # Profile adds INTO hole
+            p_top = gp_Pnt(pos[0] + r * 0.99, pos[1], pos[2])
+            p_bl = gp_Pnt(pos[0] + (r + h), pos[1], pos[2] - half_pitch)
+            p_br = gp_Pnt(pos[0] + (r + h), pos[1], pos[2] + half_pitch)
+
+        e1 = BRepBuilderAPI_MakeEdge(p_top, p_bl).Edge()
+        e2 = BRepBuilderAPI_MakeEdge(p_bl, p_br).Edge()
+        e3 = BRepBuilderAPI_MakeEdge(p_br, p_top).Edge()
+
+        profile_wire = BRepBuilderAPI_MakeWire(e1, e2, e3).Wire()
+
+        # Sweep profile along helix
+        pipe = BRepOffsetAPI_MakePipeShell(helix_wire)
+        pipe.Add(profile_wire)
+        pipe.SetMode(False)  # Frenet mode
+        pipe.Build()
+
+        if not pipe.IsDone():
+            raise RuntimeError("Pipe sweep for thread failed")
+
+        thread_shape = pipe.Shape()
+
+        # Boolean operation
+        if thread_type == "external":
+            op = BRepAlgoAPI_Cut(shape, thread_shape)
+        else:
+            op = BRepAlgoAPI_Fuse(shape, thread_shape)
+
+        op.Build()
+        if not op.IsDone():
+            raise RuntimeError("Thread boolean failed")
+
+        result_shape = self._fix_shape_ocp(op.Shape())
+        from build123d import Solid
+        return Solid(result_shape)
+
+    def _compute_thread_rings(self, shape, pos, direction, r, pitch, depth, n_turns,
+                               groove_depth, thread_type):
+        """Ring-Fallback fuer Gewinde (alte Methode)."""
+        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+
+        result_shape = shape
+        if thread_type == "external":
+            minor_r = r - groove_depth
+            for i in range(int(n_turns)):
+                z_offset = pos + direction * (i * pitch + pitch * 0.25)
+                ring_ax = gp_Ax2(gp_Pnt(*z_offset), gp_Dir(*direction))
+                outer = BRepPrimAPI_MakeCylinder(ring_ax, r + 0.01, pitch * 0.5)
+                inner = BRepPrimAPI_MakeCylinder(ring_ax, minor_r, pitch * 0.5)
+                outer.Build()
+                inner.Build()
+                if outer.IsDone() and inner.IsDone():
+                    ring_cut = BRepAlgoAPI_Cut(outer.Shape(), inner.Shape())
+                    ring_cut.Build()
+                    if ring_cut.IsDone():
+                        cut_op = BRepAlgoAPI_Cut(result_shape, ring_cut.Shape())
+                        cut_op.Build()
+                        if cut_op.IsDone():
+                            result_shape = cut_op.Shape()
+        else:
+            outer_r = r + groove_depth
+            for i in range(int(n_turns)):
+                z_offset = pos + direction * (i * pitch + pitch * 0.25)
+                ring_ax = gp_Ax2(gp_Pnt(*z_offset), gp_Dir(*direction))
+                outer = BRepPrimAPI_MakeCylinder(ring_ax, outer_r, pitch * 0.5)
+                inner = BRepPrimAPI_MakeCylinder(ring_ax, r, pitch * 0.5)
+                outer.Build()
+                inner.Build()
+                if outer.IsDone() and inner.IsDone():
+                    ring = BRepAlgoAPI_Cut(outer.Shape(), inner.Shape())
+                    ring.Build()
+                    if ring.IsDone():
+                        fuse_op = BRepAlgoAPI_Fuse(result_shape, ring.Shape())
+                        fuse_op.Build()
+                        if fuse_op.IsDone():
+                            result_shape = fuse_op.Shape()
+
+        result_shape = self._fix_shape_ocp(result_shape)
+        from build123d import Solid
+        return Solid(result_shape)
 
     def _profile_data_to_face(self, profile_data: dict):
         """
@@ -2373,20 +3341,28 @@ class Body:
             traceback.print_exc()
             return None
 
-    def _rebuild(self):
+    def _rebuild(self, rebuild_up_to=None):
         """
         Robuster Rebuild-Prozess (History-basiert).
+
+        Args:
+            rebuild_up_to: Optional int - nur Features bis zu diesem Index (exklusiv) anwenden.
+                           None = alle Features. Wird fuer Rollback-Bar verwendet.
         """
-        logger.info(f"Rebuilding Body '{self.name}' ({len(self.features)} Features)...")
-        
+        max_index = rebuild_up_to if rebuild_up_to is not None else len(self.features)
+        logger.info(f"Rebuilding Body '{self.name}' ({max_index}/{len(self.features)} Features)...")
+
         # Reset Cache (Phase 2: Lazy-Loading)
         self.invalidate_mesh()
         self._mesh_vertices.clear()
         self._mesh_triangles.clear()
-        
+
         current_solid = None
-        
+
         for i, feature in enumerate(self.features):
+            if i >= max_index:
+                feature.status = "ROLLED_BACK"
+                continue
             if feature.suppressed:
                 feature.status = "SUPPRESSED"
                 continue
@@ -2422,50 +3398,45 @@ class Body:
             elif isinstance(feature, FilletFeature):
                 if current_solid:
                     def op_fillet(rad=feature.radius):
-                        # Phase 2 TNP: Multi-Strategie Edge-Auflösung
+                        # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges_to_fillet = self._resolve_edges_tnp(current_solid, feature)
                         if not edges_to_fillet:
                             raise ValueError("No edges selected (TNP resolution failed)")
-                        # Versuche OCP Fillet
+                        # OCP Fillet (primaer)
                         result = self._ocp_fillet(current_solid, edges_to_fillet, rad)
                         if result is not None:
                             return result
-                        # Fallback zu Build123d
+                        # Build123d als Alternative (gleicher Radius)
                         return fillet(edges_to_fillet, radius=rad)
 
-                    def fallback_fillet():
-                        try:
-                            return op_fillet(feature.radius * 0.99)
-                        except:
-                            return op_fillet(feature.radius * 0.5)
-
-                    new_solid, status = self._safe_operation(f"Fillet_{i}", op_fillet, fallback_fillet)
+                    # Fail-Fast: Kein Fallback mit reduziertem Radius
+                    new_solid, status = self._safe_operation(f"Fillet_{i}", op_fillet)
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+                        logger.error(f"Fillet R={feature.radius}mm fehlgeschlagen. Radius evtl. zu gross fuer die gewaehlten Kanten.")
 
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
                 if current_solid:
                     def op_chamfer(dist=feature.distance):
-                        # Phase 2 TNP: Multi-Strategie Edge-Auflösung
+                        # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges = self._resolve_edges_tnp(current_solid, feature)
                         if not edges:
                             raise ValueError("No edges (TNP resolution failed)")
-                        # Versuche OCP Chamfer
+                        # OCP Chamfer (primaer)
                         result = self._ocp_chamfer(current_solid, edges, dist)
                         if result is not None:
                             return result
-                        # Fallback zu Build123d
+                        # Build123d als Alternative (gleiche Distance)
                         return chamfer(edges, length=dist)
 
-                    def fallback_chamfer():
-                        return op_chamfer(feature.distance * 0.5)
-
-                    new_solid, status = self._safe_operation(f"Chamfer_{i}", op_chamfer, fallback_chamfer)
+                    # Fail-Fast: Kein Fallback mit reduzierter Distance
+                    new_solid, status = self._safe_operation(f"Chamfer_{i}", op_chamfer)
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+                        logger.error(f"Chamfer D={feature.distance}mm fehlgeschlagen. Distance evtl. zu gross fuer die gewaehlten Kanten.")
 
             # ================= TRANSFORM =================
             elif isinstance(feature, TransformFeature):
@@ -2477,6 +3448,27 @@ class Body:
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+
+            # ================= REVOLVE =================
+            elif isinstance(feature, RevolveFeature):
+                def op_revolve():
+                    return self._compute_revolve(feature)
+
+                part_geometry, status = self._safe_operation(f"Revolve_{i}", op_revolve)
+
+                if part_geometry:
+                    if current_solid is None or feature.operation == "New Body":
+                        new_solid = part_geometry
+                    else:
+                        result, success = self._safe_boolean_operation(
+                            current_solid, part_geometry, feature.operation
+                        )
+                        if success:
+                            new_solid = result
+                        else:
+                            logger.warning(f"Revolve Boolean fehlgeschlagen")
+                            status = "ERROR"
+                            continue
 
             # ================= LOFT (Phase 6) =================
             elif isinstance(feature, LoftFeature):
@@ -2531,6 +3523,107 @@ class Body:
                         new_solid = current_solid
                         status = "ERROR"
 
+            # ================= HOLLOW (3D-Druck) =================
+            elif isinstance(feature, HollowFeature):
+                if current_solid:
+                    def op_hollow():
+                        return self._compute_hollow(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"Hollow_{i}", op_hollow)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= LATTICE (3D-Druck) =================
+            elif isinstance(feature, LatticeFeature):
+                if current_solid:
+                    def op_lattice():
+                        from modeling.lattice_generator import LatticeGenerator
+                        return LatticeGenerator.generate(
+                            current_solid,
+                            cell_type=feature.cell_type,
+                            cell_size=feature.cell_size,
+                            beam_radius=feature.beam_radius,
+                        )
+
+                    new_solid, status = self._safe_operation(f"Lattice_{i}", op_lattice)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= PUSHPULL =================
+            elif isinstance(feature, PushPullFeature):
+                if current_solid:
+                    def op_pushpull():
+                        return self._compute_pushpull(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"PushPull_{i}", op_pushpull)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= N-SIDED PATCH =================
+            elif isinstance(feature, NSidedPatchFeature):
+                if current_solid:
+                    def op_nsided():
+                        return self._compute_nsided_patch(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"NSidedPatch_{i}", op_nsided)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= HOLE =================
+            elif isinstance(feature, HoleFeature):
+                if current_solid:
+                    def op_hole():
+                        return self._compute_hole(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"Hole_{i}", op_hole)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= DRAFT =================
+            elif isinstance(feature, DraftFeature):
+                if current_solid:
+                    def op_draft():
+                        return self._compute_draft(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"Draft_{i}", op_draft)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= SPLIT =================
+            elif isinstance(feature, SplitFeature):
+                if current_solid:
+                    def op_split():
+                        return self._compute_split(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"Split_{i}", op_split)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= THREAD =================
+            elif isinstance(feature, ThreadFeature):
+                if current_solid:
+                    def op_thread():
+                        return self._compute_thread(feature, current_solid)
+
+                    new_solid, status = self._safe_operation(f"Thread_{i}", op_thread)
+                    if new_solid is None:
+                        new_solid = current_solid
+                        status = "ERROR"
+
+            # ================= SURFACE TEXTURE =================
+            elif isinstance(feature, SurfaceTextureFeature):
+                # Texturen modifizieren NICHT das BREP — nur Metadaten-Layer.
+                # Displacement wird erst beim STL-Export angewendet.
+                status = "OK"
+                logger.debug(f"SurfaceTexture '{feature.name}' — Metadaten-only, kein BREP-Update")
+
             feature.status = status
             
             if new_solid is not None:
@@ -2574,6 +3667,15 @@ class Body:
             self._migrate_tnp_references(current_solid)
         else:
             logger.warning(f"Body '{self.name}' is empty after rebuild.")
+            # Fix: Solid und Mesh auch bei leerem Rebuild aktualisieren
+            self._build123d_solid = None
+            self.shape = None
+            self.invalidate_mesh()
+            self._mesh_cache = None
+            self._edges_cache = None
+            self._mesh_cache_valid = True  # Valid but empty
+            self._mesh_vertices = []
+            self._mesh_triangles = []
 
     def _migrate_tnp_references(self, new_solid):
         """
@@ -3562,7 +4664,8 @@ class Body:
                             if not is_inside:
                                 if outer_poly.contains(potential_hole.centroid):
                                     is_inside = True; reason = "Centroid"
-                        except: pass
+                        except Exception as e_hole:
+                            logger.debug(f"Hole-in-face check fehlgeschlagen: {e_hole}")
 
                         if is_inside:
                             # Nur schneiden, wenn nicht selbst ausgewählt
@@ -3637,29 +4740,17 @@ class Body:
         self._mesh_triangles = []
 
     def export_stl(self, filename: str) -> bool:
-        """STL Export: Versucht Build123d, dann VTK, dann Legacy."""
-        
-        # 1. build123d Export (Analytisch sauber)
-        if HAS_BUILD123D and self.shape is not None:
-            try:
-                export_stl(self._build123d_solid, filename)
-                return True
-            except Exception as e:
-                logger.error(f"Build123d STL export failed, trying mesh fallback: {e}")
-        
-        # 2. VTK Mesh Export (Schnell und robust)
-        if self.vtk_mesh is not None:
-            try:
-                self.vtk_mesh.save(filename)
-                return True
-            except Exception as e:
-                logger.error(f"VTK STL export failed: {e}")
+        """STL Export via Kernel (Build123d). Kein Mesh-Fallback."""
+        if not HAS_BUILD123D or self._build123d_solid is None:
+            logger.error("STL-Export fehlgeschlagen: Kein Build123d-Solid vorhanden")
+            return False
 
-        # 3. Legacy Fallback
-        if self._mesh_vertices and self._mesh_triangles:
-            return self._export_stl_simple(filename)
-            
-        return False
+        try:
+            export_stl(self._build123d_solid, filename)
+            return True
+        except Exception as e:
+            logger.error(f"STL-Export fehlgeschlagen: {e}")
+            return False
 
     def _export_stl_simple(self, filename: str) -> bool:
         """Primitiver STL Export aus Mesh-Daten (Letzter Ausweg)"""
@@ -3679,7 +4770,8 @@ class Body:
                     f.write(f"  endfacet\n")
                 f.write(f"endsolid {self.name}\n")
             return True
-        except:
+        except Exception as e:
+            logger.error(f"Legacy STL-Export fehlgeschlagen: {e}")
             return False
 
     # === PHASE 8.2: Persistente Speicherung für TNP ===
@@ -3713,6 +4805,7 @@ class Body:
                 feat_dict.update({
                     "feature_class": "ExtrudeFeature",
                     "distance": feat.distance,
+                    "distance_formula": feat.distance_formula,
                     "direction": feat.direction,
                     "operation": feat.operation,
                     "plane_origin": list(feat.plane_origin) if feat.plane_origin else None,
@@ -3734,6 +4827,7 @@ class Body:
                 feat_dict.update({
                     "feature_class": "FilletFeature",
                     "radius": feat.radius,
+                    "radius_formula": feat.radius_formula,
                     "edge_selectors": feat.edge_selectors,
                     "depends_on_feature_id": feat.depends_on_feature_id,
                 })
@@ -3748,6 +4842,7 @@ class Body:
                 feat_dict.update({
                     "feature_class": "ChamferFeature",
                     "distance": feat.distance,
+                    "distance_formula": feat.distance_formula,
                     "edge_selectors": feat.edge_selectors,
                     "depends_on_feature_id": feat.depends_on_feature_id,
                 })
@@ -3756,6 +4851,15 @@ class Body:
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
                         for gs in feat.geometric_selectors
                     ]
+
+            elif isinstance(feat, RevolveFeature):
+                feat_dict.update({
+                    "feature_class": "RevolveFeature",
+                    "angle": feat.angle,
+                    "angle_formula": feat.angle_formula,
+                    "axis": list(feat.axis),
+                    "operation": feat.operation,
+                })
 
             elif isinstance(feat, LoftFeature):
                 feat_dict.update({
@@ -3780,7 +4884,58 @@ class Body:
                 feat_dict.update({
                     "feature_class": "ShellFeature",
                     "thickness": feat.thickness,
+                    "thickness_formula": feat.thickness_formula,
                     "opening_face_selectors": feat.opening_face_selectors,
+                })
+
+            elif isinstance(feat, HoleFeature):
+                feat_dict.update({
+                    "feature_class": "HoleFeature",
+                    "hole_type": feat.hole_type,
+                    "diameter": feat.diameter,
+                    "diameter_formula": feat.diameter_formula,
+                    "depth": feat.depth,
+                    "depth_formula": feat.depth_formula,
+                    "face_selectors": feat.face_selectors,
+                    "position": list(feat.position),
+                    "direction": list(feat.direction),
+                    "counterbore_diameter": feat.counterbore_diameter,
+                    "counterbore_depth": feat.counterbore_depth,
+                    "countersink_angle": feat.countersink_angle,
+                })
+
+            elif isinstance(feat, HollowFeature):
+                feat_dict.update({
+                    "feature_class": "HollowFeature",
+                    "wall_thickness": feat.wall_thickness,
+                    "drain_hole": feat.drain_hole,
+                    "drain_diameter": feat.drain_diameter,
+                    "drain_position": list(feat.drain_position),
+                    "drain_direction": list(feat.drain_direction),
+                })
+
+            elif isinstance(feat, LatticeFeature):
+                feat_dict.update({
+                    "feature_class": "LatticeFeature",
+                    "cell_type": feat.cell_type,
+                    "cell_size": feat.cell_size,
+                    "beam_radius": feat.beam_radius,
+                })
+
+            elif isinstance(feat, PushPullFeature):
+                feat_dict.update({
+                    "feature_class": "PushPullFeature",
+                    "face_selector": feat.face_selector,
+                    "distance": feat.distance,
+                    "operation": feat.operation,
+                })
+
+            elif isinstance(feat, NSidedPatchFeature):
+                feat_dict.update({
+                    "feature_class": "NSidedPatchFeature",
+                    "edge_selectors": feat.edge_selectors,
+                    "degree": feat.degree,
+                    "tangent": feat.tangent,
                 })
 
             elif isinstance(feat, SurfaceTextureFeature):
@@ -3862,6 +5017,7 @@ class Body:
                     plane_y_dir=tuple(feat_dict["plane_y_dir"]) if feat_dict.get("plane_y_dir") else None,
                     **base_kwargs
                 )
+                feat.distance_formula = feat_dict.get("distance_formula")
                 # WKT zu Shapely Polygons
                 if "precalculated_polys_wkt" in feat_dict:
                     try:
@@ -3879,6 +5035,7 @@ class Body:
                     depends_on_feature_id=feat_dict.get("depends_on_feature_id"),
                     **base_kwargs
                 )
+                feat.radius_formula = feat_dict.get("radius_formula")
                 # GeometricSelectors deserialisieren
                 if "geometric_selectors" in feat_dict:
                     from modeling.geometric_selector import GeometricEdgeSelector
@@ -3894,12 +5051,23 @@ class Body:
                     depends_on_feature_id=feat_dict.get("depends_on_feature_id"),
                     **base_kwargs
                 )
+                feat.distance_formula = feat_dict.get("distance_formula")
                 if "geometric_selectors" in feat_dict:
                     from modeling.geometric_selector import GeometricEdgeSelector
                     feat.geometric_selectors = [
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
+
+            elif feat_class == "RevolveFeature":
+                feat = RevolveFeature(
+                    sketch=None,
+                    angle=feat_dict.get("angle", 360.0),
+                    axis=tuple(feat_dict.get("axis", (0, 1, 0))),
+                    operation=feat_dict.get("operation", "New Body"),
+                    **base_kwargs
+                )
+                feat.angle_formula = feat_dict.get("angle_formula")
 
             elif feat_class == "LoftFeature":
                 feat = LoftFeature(
@@ -3922,6 +5090,60 @@ class Body:
                 feat = ShellFeature(
                     thickness=feat_dict.get("thickness", 2.0),
                     opening_face_selectors=feat_dict.get("opening_face_selectors", []),
+                    **base_kwargs
+                )
+                feat.thickness_formula = feat_dict.get("thickness_formula")
+
+            elif feat_class == "HoleFeature":
+                feat = HoleFeature(
+                    hole_type=feat_dict.get("hole_type", "simple"),
+                    diameter=feat_dict.get("diameter", 8.0),
+                    depth=feat_dict.get("depth", 0.0),
+                    face_selectors=feat_dict.get("face_selectors", []),
+                    position=tuple(feat_dict.get("position", (0, 0, 0))),
+                    direction=tuple(feat_dict.get("direction", (0, 0, -1))),
+                    counterbore_diameter=feat_dict.get("counterbore_diameter", 12.0),
+                    counterbore_depth=feat_dict.get("counterbore_depth", 3.0),
+                    countersink_angle=feat_dict.get("countersink_angle", 82.0),
+                    **base_kwargs
+                )
+                feat.diameter_formula = feat_dict.get("diameter_formula")
+                feat.depth_formula = feat_dict.get("depth_formula")
+
+            elif feat_class == "HollowFeature":
+                feat = HollowFeature(
+                    wall_thickness=feat_dict.get("wall_thickness", 2.0),
+                    drain_hole=feat_dict.get("drain_hole", False),
+                    drain_diameter=feat_dict.get("drain_diameter", 3.0),
+                    drain_position=tuple(feat_dict.get("drain_position", [0, 0, 0])),
+                    drain_direction=tuple(feat_dict.get("drain_direction", [0, 0, -1])),
+                    **base_kwargs
+                )
+
+            elif feat_class == "LatticeFeature":
+                feat = LatticeFeature(
+                    cell_type=feat_dict.get("cell_type", "BCC"),
+                    cell_size=feat_dict.get("cell_size", 5.0),
+                    beam_radius=feat_dict.get("beam_radius", 0.5),
+                    **base_kwargs
+                )
+
+            elif feat_class == "PushPullFeature":
+                sel = feat_dict.get("face_selector")
+                if sel and isinstance(sel, list):
+                    sel = (tuple(sel[0]), tuple(sel[1])) if len(sel) == 2 else None
+                feat = PushPullFeature(
+                    face_selector=sel,
+                    distance=feat_dict.get("distance", 10.0),
+                    operation=feat_dict.get("operation", "Join"),
+                    **base_kwargs
+                )
+
+            elif feat_class == "NSidedPatchFeature":
+                feat = NSidedPatchFeature(
+                    edge_selectors=feat_dict.get("edge_selectors", []),
+                    degree=feat_dict.get("degree", 3),
+                    tangent=feat_dict.get("tangent", True),
                     **base_kwargs
                 )
 

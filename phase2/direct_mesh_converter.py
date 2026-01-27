@@ -7,6 +7,10 @@ Jedes Mesh-Dreieck wird zu einem BREP-Face.
 Garantiert wasserdichte Ergebnisse durch echtes Edge-Sharing.
 """
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import numpy as np
 from typing import Optional, List, Dict, Tuple
 from loguru import logger
@@ -458,11 +462,16 @@ class DirectMeshConverter:
                     if self.unify_faces:
                         unified_solid = self._unify_coplanar_faces(solid)
                         if unified_solid is not None:
-                            solid = unified_solid
-                            # Update Face-Count
-                            n_faces = self._count_faces(solid)
-                            stats['faces_after_unify'] = n_faces
-                            logger.info(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
+                            # WICHTIG: Nach Vereinigung erneut validieren!
+                            unified_analyzer = BRepCheck_Analyzer(unified_solid)
+                            if unified_analyzer.IsValid():
+                                solid = unified_solid
+                                # Update Face-Count
+                                n_faces = self._count_faces(solid)
+                                stats['faces_after_unify'] = n_faces
+                                logger.info(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
+                            else:
+                                logger.warning("  Face-Merging erzeugte ungültiges Solid - übersprungen")
 
                     logger.success("Solid erfolgreich erstellt und validiert")
                     return ConversionResult(

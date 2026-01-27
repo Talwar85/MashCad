@@ -17,24 +17,53 @@ datas += collect_data_files('pyvista')
 datas += collect_data_files('vtk')
 datas += collect_data_files('vtkmodules')
 
-# Collect hidden imports
+# Lokale MashCad-Module als Source einbinden
+datas += [
+    ('gui', 'gui'),
+    ('modeling', 'modeling'),
+    ('sketcher', 'sketcher'),
+    ('core', 'core'),
+    ('i18n', 'i18n'),
+]
+
+# Collect hidden imports — only what MashCad actually uses
 hiddenimports = []
 hiddenimports += collect_submodules('pyvista')
 hiddenimports += collect_submodules('vtkmodules')
-hiddenimports += collect_submodules('PySide6')
 hiddenimports += [
+    # Qt — nur die tatsächlich genutzten Module
+    'PySide6.QtWidgets',
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtOpenGLWidgets',
+    'PySide6.QtSvg',
+    'PySide6.QtSvgWidgets',
+    # Core
     'numpy',
     'shapely',
+    'shapely.geometry',
+    'shapely.ops',
     'ezdxf',
     'build123d',
-    'pymeshlab',
-    'meshlib',
-    'pyransac3d',
-    'open3d',
+    'lib3mf',
+    'loguru',
+    # Visualization
+    'pyvistaqt',
+    'ocp_tessellate',
+    # Scientific
     'scipy',
+    'scipy.optimize',
+    'scipy.spatial',
     'scipy.spatial.transform',
     'scipy.sparse.csgraph',
-    'alphashape',
+    'scipy.interpolate',
+    'scipy.cluster.hierarchy',
+    'scipy.ndimage',
+    # Mesh conversion (optional — meshlib excluded: native DLL issues in bundled env)
+    'pymeshlab',
+    'pyransac3d',
+    'trimesh',
+    # VTK specifics
     'vtkmodules.vtkRenderingOpenGL2',
     'vtkmodules.vtkInteractionStyle',
     'vtkmodules.vtkRenderingFreeType',
@@ -43,19 +72,48 @@ hiddenimports += [
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
-    binaries=[],
+    pathex=['.'],
+    binaries=[
+        (os.path.join(sys.prefix, 'Library', 'bin', 'lib3mf.dll'), os.path.join('Library', 'bin')),
+    ],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['hooks/hook-lib3mf.py'],
     excludes=[
+        # Nicht benutzt — spart GB an Speicher
+        'torch', 'torchvision', 'torchaudio',
+        'tensorflow', 'keras',
+        'open3d',
+        'opencv-python', 'cv2',
         'matplotlib',
-        'PIL',
+        'pandas',
+        'PIL', 'pillow',
         'tkinter',
-        'PyQt5',
-        'PyQt6',
+        'PyQt5', 'PyQt6',
+        'ipywidgets', 'jupyter',
+        'notebook', 'nbformat',
+        'dash', 'plotly', 'flask',
+        'sympy',
+        'h5py',
+        'sklearn', 'scikit-learn',
+        'gdown',
+        'beautifulsoup4', 'bs4',
+        'meshlib', 'mrmeshpy',  # Native DLL nicht bundlebar
+        # PySide6-Module die MashCad nicht braucht
+        'PySide6.Qt3DAnimation', 'PySide6.Qt3DCore', 'PySide6.Qt3DExtras',
+        'PySide6.Qt3DInput', 'PySide6.Qt3DLogic', 'PySide6.Qt3DRender',
+        'PySide6.QtCharts', 'PySide6.QtDataVisualization',
+        'PySide6.QtGraphs', 'PySide6.QtGraphsWidgets',
+        'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
+        'PySide6.QtQuick', 'PySide6.QtQuick3D', 'PySide6.QtQuickControls2',
+        'PySide6.QtQuickWidgets', 'PySide6.QtQml',
+        'PySide6.QtSpatialAudio',
+        'PySide6.QtWebChannel', 'PySide6.QtWebSockets',
+        'PySide6.QtDBus', 'PySide6.QtDesigner',
+        'PySide6.QtHelp', 'PySide6.QtSql', 'PySide6.QtTest',
+        'PySide6.QtConcurrent', 'PySide6.QtAxContainer',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -105,6 +163,6 @@ if sys.platform == 'darwin':
         info_plist={
             'NSPrincipalClass': 'NSApplication',
             'NSHighResolutionCapable': 'True',
-            'CFBundleShortVersionString': '2.5.0',
+            'CFBundleShortVersionString': '2.6.0',
         },
     )

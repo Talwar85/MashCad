@@ -46,6 +46,7 @@ class SketchTool(Enum):
     NUT = auto()
     TEXT = auto()
     PROJECT = auto()
+    CANVAS = auto()
 
 
 class SnapType(Enum):

@@ -24,7 +24,17 @@
       "Bash(xargs:*)",
       "Bash(git rm:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nMeshconverter aufgeräumt, Fillet-Konvertierung deaktiviert\n\n- 15 ungenutzte Converter-Dateien entfernt \\(alte Experimente\\)\n- Fillet \\(zylindrische\\) Konvertierung temporär deaktiviert\n- Chamfer-Konvertierung funktioniert weiterhin\n- FilletAwareConverter in Package exportiert\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nMeshconverter aufgeräumt, Fillet-Konvertierung deaktiviert\n\n- 15 ungenutzte Converter-Dateien entfernt \\(alte Experimente\\)\n- Fillet \\(zylindrische\\) Konvertierung temporär deaktiviert\n- Chamfer-Konvertierung funktioniert weiterhin\n- FilletAwareConverter in Package exportiert\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(powershell:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(git clone:*)",
+      "Bash(tar:*)",
+      "Bash(xxd:*)",
+      "Bash(set:*)",
+      "Bash(conda run:*)",
+      "Bash(ls:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c:*)"
     ]
   }
 }

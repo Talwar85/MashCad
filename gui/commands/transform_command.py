@@ -78,7 +78,7 @@ class TransformCommand(QUndoCommand):
 
                     # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
                     # Transform creates NEW solid which may reuse Python IDs
-                    CADTessellator.clear_cache()
+                    CADTessellator.notify_body_changed()
                     logger.debug(f"🔄 Cache komplett gelöscht nach Transform")
                     # Mesh aktualisieren
                     logger.info(f"   🔄 Updating mesh from solid...")
@@ -135,7 +135,7 @@ class TransformCommand(QUndoCommand):
                             self.body.shape = new_solid.wrapped
 
                         # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
-                        CADTessellator.clear_cache()
+                        CADTessellator.notify_body_changed()
                         logger.debug(f"🔄 Cache komplett gelöscht nach Inverse Transform")
 
                         self.body._update_mesh_from_solid(new_solid)

@@ -169,13 +169,13 @@ class BodyTransaction:
             # Restore metadata
             self._body.metadata = self._snapshot.metadata
 
-            # Restore cached visualization (if available)
-            if self._snapshot.vtk_mesh is not None:
-                self._body.vtk_mesh = self._snapshot.vtk_mesh
-            if self._snapshot.vtk_edges is not None:
-                self._body.vtk_edges = self._snapshot.vtk_edges
-            if self._snapshot.vtk_normals is not None:
-                self._body.vtk_normals = self._snapshot.vtk_normals
+            # Invalidate mesh cache — lazy regeneration from restored solid
+            if hasattr(self._body, 'invalidate_mesh'):
+                self._body.invalidate_mesh()
+            else:
+                self._body._mesh_cache = None
+                self._body._edges_cache = None
+                self._body._mesh_cache_valid = False
 
             # Log rollback reason
             if exc_type is BooleanOperationError:

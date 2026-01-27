@@ -58,16 +58,31 @@ class ToolPanel3D(QWidget):
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(10) # Reduziert von 15
         
+        # --- Primitives ---
+        self._add_group("Primitives", [
+            (tr("Box"), tr("Create box primitive"), "primitive_box"),
+            (tr("Cylinder"), tr("Create cylinder primitive"), "primitive_cylinder"),
+            (tr("Sphere"), tr("Create sphere primitive"), "primitive_sphere"),
+            (tr("Cone"), tr("Create cone primitive"), "primitive_cone"),
+        ], grid=True)
+
         # --- Sketch & Base ---
         self._add_group("Sketch & Base", [
-            (tr("New Sketch"), tr("Press S for new Sketch"), "new_sketch"),
-            (tr("Extrude..."), tr("Extrude"), "extrude"),
+            (tr("New Sketch"), tr("New Sketch (S)"), "new_sketch"),
+            (tr("Offset Plane..."), tr("Create offset construction plane"), "offset_plane"),
+            (tr("Extrude..."), tr("Extrude (E)"), "extrude"),
+            (tr("Revolve..."), tr("Revolve sketch around axis"), "revolve"),
         ])
         
         # --- Modify ---
         self._add_group(tr("Modify"), [
             (tr("Fillet"), "fillet"),
             (tr("Chamfer"), "chamfer"),
+            (tr("Hole..."), tr("Create hole (simple/counterbore/countersink)"), "hole"),
+            (tr("Draft..."), tr("Add draft/taper angle to faces"), "draft"),
+            (tr("Split Body..."), tr("Split body along a plane"), "split_body"),
+            (tr("Thread..."), tr("Create thread (metric/UNC)"), "thread"),
+            (tr("PushPull"), tr("Extrude face along its normal"), "pushpull"),
         ])
 
         # --- Advanced (Phase 6) ---
@@ -76,6 +91,7 @@ class ToolPanel3D(QWidget):
             (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
             (tr("Loft"), tr("Loft between profiles"), "loft"),
             (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
+            (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
         ])
 
         # --- Transform ---
@@ -95,9 +111,19 @@ class ToolPanel3D(QWidget):
             (tr("Intersect") if tr("Intersect") != "Intersect" else "Intersect", "boolean_intersect"),
         ])
 
+        # --- 3D Print ---
+        self._add_group(tr("3D PRINT"), [
+            (tr("Hollow"), tr("Hollow body with optional drain hole"), "hollow"),
+            (tr("Wall Thickness"), tr("Analyze wall thickness for 3D printing"), "wall_thickness"),
+            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
+        ])
+
         # --- Inspect ---
         self._add_group("Inspect", [
             ("🔪 Section View", "Schnittansicht (wie Fusion 360)", "section_view"),
+            ("Check Geometry", "Validate and heal geometry", "geometry_check"),
+            (tr("Surface Analysis"), tr("Curvature, draft angle, zebra stripes"), "surface_analysis"),
+            (tr("Mesh Repair"), tr("Diagnose and repair geometry"), "mesh_repair"),
         ])
 
         # --- Tools ---

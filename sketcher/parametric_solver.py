@@ -594,8 +594,8 @@ class ParametricSolver:
                             self._add_constraint_coincident(c1.center.id, c2.center.id)
                 
             except Exception as e:
-                # Constraint-Fehler ignorieren, weitermachen
-                pass
+                from loguru import logger
+                logger.warning(f"Constraint-Konvertierung übersprungen ({c.type.name}): {e}")
     
     def _ensure_fixed_point(self):
         """Stellt sicher dass mindestens ein Punkt fixiert ist.

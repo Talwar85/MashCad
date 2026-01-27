@@ -137,6 +137,15 @@ class PrimitiveFitter:
         point_normals = np.zeros((mesh.n_points, 3))
         point_counts = np.zeros(mesh.n_points)
 
+        # Safety check: mesh.faces might be None after extract_cells
+        if mesh.faces is None or len(mesh.faces) == 0:
+            # Fallback: use average cell normal for all points
+            avg_normal = np.mean(cell_normals, axis=0)
+            norm = np.linalg.norm(avg_normal)
+            if norm > 1e-10:
+                avg_normal = avg_normal / norm
+            return np.tile(avg_normal, (mesh.n_points, 1))
+
         faces = mesh.faces.reshape(-1, 4)[:, 1:4]
         for cell_id, face in enumerate(faces):
             for pt_id in face:

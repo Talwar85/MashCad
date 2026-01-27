@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from loguru import logger
+from i18n import tr
 
 
 class TNPStatsPanel(QWidget):
@@ -40,7 +41,7 @@ class TNPStatsPanel(QWidget):
         layout.setSpacing(10)
 
         # Header
-        header = QLabel("TNP Referenz-Statistiken")
+        header = QLabel(tr("TNP Reference Statistics"))
         header_font = QFont()
         header_font.setBold(True)
         header_font.setPointSize(11)
@@ -61,7 +62,7 @@ class TNPStatsPanel(QWidget):
         """)
         success_layout = QVBoxLayout(success_group)
 
-        self._success_label = QLabel("Erfolgsrate: ---%")
+        self._success_label = QLabel(tr("Success Rate: ---%%"))
         self._success_label.setStyleSheet("font-size: 14px; color: #ffffff;")
         self._success_label.setAlignment(Qt.AlignCenter)
         success_layout.addWidget(self._success_label)
@@ -87,7 +88,7 @@ class TNPStatsPanel(QWidget):
         layout.addWidget(success_group)
 
         # Strategie-Details
-        strategy_group = QGroupBox("Auflösungs-Strategien")
+        strategy_group = QGroupBox(tr("Resolution Strategies"))
         strategy_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -107,10 +108,10 @@ class TNPStatsPanel(QWidget):
 
         # Strategie-Labels
         strategies = [
-            ("History", "#0078d4", "history_success"),
-            ("Hash", "#9b59b6", "hash_success"),
-            ("Geometrie", "#f39c12", "geometry_success"),
-            ("Fehlgeschlagen", "#d13438", "failed"),
+            (tr("History"), "#0078d4", "history_success"),
+            (tr("Hash"), "#9b59b6", "hash_success"),
+            (tr("Geometry"), "#f39c12", "geometry_success"),
+            (tr("Failed"), "#d13438", "failed"),
         ]
 
         self._strategy_labels = {}
@@ -136,9 +137,9 @@ class TNPStatsPanel(QWidget):
 
         # Total-Anzeige
         total_layout = QHBoxLayout()
-        total_label = QLabel("Gesamt:")
+        total_label = QLabel(tr("Total:"))
         total_label.setStyleSheet("color: #aaaaaa;")
-        self._total_label = QLabel("0 Auflösungen")
+        self._total_label = QLabel(tr("0 Resolutions"))
         self._total_label.setStyleSheet("color: #ffffff;")
         total_layout.addWidget(total_label)
         total_layout.addStretch()
@@ -146,7 +147,7 @@ class TNPStatsPanel(QWidget):
         layout.addLayout(total_layout)
 
         # Platzhalter-Nachricht
-        self._placeholder = QLabel("Keine Statistiken verfügbar.\nFühre Operationen aus, um Daten zu sammeln.")
+        self._placeholder = QLabel(tr("No statistics available.\nPerform operations to collect data."))
         self._placeholder.setStyleSheet("color: #888888; font-style: italic;")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setWordWrap(True)
@@ -200,7 +201,7 @@ class TNPStatsPanel(QWidget):
 
         # Erfolgsrate
         success_rate = stats.get("success_rate", 0)
-        self._success_label.setText(f"Erfolgsrate: {success_rate:.1f}%")
+        self._success_label.setText(f"{tr('Success Rate:')} {success_rate:.1f}%")
         self._success_bar.setValue(int(success_rate))
 
         # Farbe der Progress-Bar basierend auf Erfolgsrate
@@ -229,17 +230,17 @@ class TNPStatsPanel(QWidget):
             label.setText(str(value))
 
         # Total
-        self._total_label.setText(f"{total} Auflösungen")
+        self._total_label.setText(f"{total} {tr('Resolutions')}")
 
     def _reset_stats(self):
         """Setzt alle Statistik-Anzeigen zurück."""
-        self._success_label.setText("Erfolgsrate: ---%")
+        self._success_label.setText(tr("Success Rate: ---%%"))
         self._success_bar.setValue(0)
 
         for label in self._strategy_labels.values():
             label.setText("0")
 
-        self._total_label.setText("0 Auflösungen")
+        self._total_label.setText(tr("0 Resolutions"))
         self._update_visibility(False)
 
     def refresh(self, body):

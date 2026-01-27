@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QIcon, QFont
+from i18n import tr
 
 class LogPanel(QFrame):
     """
@@ -45,7 +46,7 @@ class LogPanel(QFrame):
         h_layout.setContentsMargins(4, 0, 4, 0)
         h_layout.setSpacing(4)
 
-        title = QLabel("PROTOKOLL")
+        title = QLabel(tr("Protocol"))
         h_layout.addWidget(title)
         
         h_layout.addStretch()
@@ -63,7 +64,7 @@ class LogPanel(QFrame):
         
         btn_clear = QToolButton()
         btn_clear.setText("🗑")
-        btn_clear.setToolTip("Protokoll leeren")
+        btn_clear.setToolTip(tr("Clear log"))
         btn_clear.clicked.connect(self.clear_log)
         h_layout.addWidget(btn_clear)
 
