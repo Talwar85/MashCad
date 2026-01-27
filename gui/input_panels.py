@@ -1572,6 +1572,190 @@ class CenterHintWidget(QWidget):
         self.hide()
 
 
+class RevolveInputPanel(QFrame):
+    """Input panel for interactive Revolve operation (Fusion-Style)."""
+
+    angle_changed = Signal(float)
+    axis_changed = Signal(tuple)
+    direction_flipped = Signal()
+    operation_changed = Signal(str)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    AXIS_MAP = {
+        'X': (1, 0, 0),
+        'Y': (0, 1, 0),
+        'Z': (0, 0, 1),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._angle = 360.0
+        self._axis = (0, 1, 0)
+        self._direction = 1
+        self._current_operation = "New Body"
+
+        self.setMinimumWidth(580)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QComboBox {
+                background: #1e1e1e; border: 1px solid #555;
+                border-radius: 4px; color: #fff; padding: 4px; min-width: 90px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #555; }
+            QPushButton:checked { background: #0078d4; border-color: #0078d4; color: #fff; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Revolve:"))
+
+        # Axis toggle buttons
+        layout.addWidget(QLabel("Achse"))
+        self._axis_buttons = {}
+        for axis_name in ('X', 'Y', 'Z'):
+            btn = QPushButton(axis_name)
+            btn.setCheckable(True)
+            btn.setFixedSize(32, 32)
+            btn.clicked.connect(lambda checked, a=axis_name: self._on_axis_clicked(a))
+            layout.addWidget(btn)
+            self._axis_buttons[axis_name] = btn
+        self._axis_buttons['Y'].setChecked(True)
+
+        # Angle input
+        self.angle_input = ActionSpinBox()
+        self.angle_input.setRange(0.1, 360.0)
+        self.angle_input.setDecimals(1)
+        self.angle_input.setSuffix(" deg")
+        self.angle_input.setValue(360.0)
+        self.angle_input.valueChanged.connect(self._on_angle_changed)
+        self.angle_input.enterPressed.connect(self._confirm)
+        self.angle_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.angle_input)
+
+        # Flip direction button
+        self.flip_btn = QPushButton("⇅")
+        self.flip_btn.setToolTip("Richtung umkehren (F)")
+        self.flip_btn.setFixedSize(32, 32)
+        self.flip_btn.clicked.connect(self._flip_direction)
+        layout.addWidget(self.flip_btn)
+
+        # Operation combo with color indicator
+        self.op_indicator = QLabel("●")
+        self.op_indicator.setFixedWidth(16)
+        self.op_indicator.setStyleSheet("color: #6699ff; font-size: 16px;")
+        layout.addWidget(self.op_indicator)
+
+        self.op_combo = QComboBox()
+        self.op_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        self.op_combo.currentTextChanged.connect(self._on_operation_changed)
+        layout.addWidget(self.op_combo)
+
+        # OK / Cancel
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.setStyleSheet("background: #0078d4; color: white; border: none;")
+        self.btn_ok.clicked.connect(self._confirm)
+        layout.addWidget(self.btn_ok)
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setFixedWidth(30)
+        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _on_axis_clicked(self, axis_name):
+        self._direction = 1
+        for name, btn in self._axis_buttons.items():
+            btn.setChecked(name == axis_name)
+        self._axis = self.AXIS_MAP[axis_name]
+        self.axis_changed.emit(self._axis)
+
+    def _flip_direction(self):
+        self._direction *= -1
+        self._axis = tuple(-v for v in self._axis)
+        self.direction_flipped.emit()
+
+    def _on_angle_changed(self, value):
+        self._angle = value
+        self.angle_changed.emit(value)
+
+    def _on_operation_changed(self, op_text):
+        self._current_operation = op_text
+        colors = {
+            "New Body": "#6699ff", "Join": "#66ff66",
+            "Cut": "#ff6666", "Intersect": "#ffaa66"
+        }
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_text, '#6699ff')}; font-size: 16px;")
+        self.operation_changed.emit(op_text)
+
+    def _confirm(self):
+        self._angle = self.angle_input.value()
+        self.confirmed.emit()
+
+    def get_angle(self) -> float:
+        return self.angle_input.value()
+
+    def set_angle(self, value: float):
+        self.angle_input.blockSignals(True)
+        self.angle_input.setValue(value)
+        self.angle_input.blockSignals(False)
+        self._angle = value
+
+    def get_axis(self) -> tuple:
+        return self._axis
+
+    def set_axis(self, axis_name: str):
+        if axis_name in self._axis_buttons:
+            self._on_axis_clicked(axis_name)
+
+    def get_operation(self) -> str:
+        return self.op_combo.currentText()
+
+    def set_operation(self, op: str):
+        idx = self.op_combo.findText(op)
+        if idx >= 0:
+            self.op_combo.setCurrentIndex(idx)
+
+    def reset(self):
+        self._angle = 360.0
+        self._direction = 1
+        self.angle_input.blockSignals(True)
+        self.angle_input.setValue(360.0)
+        self.angle_input.blockSignals(False)
+        self._on_axis_clicked('Y')
+        self.op_combo.setCurrentIndex(0)
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)
+
+
 class OffsetPlaneInputPanel(QFrame):
     """Input panel for interactive Offset Plane creation."""
 
@@ -1672,6 +1856,276 @@ class OffsetPlaneInputPanel(QFrame):
         self.offset_input.setValue(0.0)
         self.offset_input.blockSignals(False)
         self.name_input.clear()
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)
+
+
+class HoleInputPanel(QFrame):
+    """Input panel for interactive Hole placement (Fusion-style)."""
+
+    diameter_changed = Signal(float)
+    depth_changed = Signal(float)
+    hole_type_changed = Signal(str)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._diameter = 8.0
+        self._depth = 0.0  # 0 = through all
+
+        self.setMinimumWidth(560)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #ff8800;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QComboBox {
+                background: #1e1e1e; border: 1px solid #555;
+                border-radius: 4px; color: #fff; padding: 4px; min-width: 90px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #555; border-color: #777; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Hole:"))
+
+        # Hole type
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["Simple", "Counterbore", "Countersink"])
+        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        layout.addWidget(self.type_combo)
+
+        # Diameter
+        layout.addWidget(QLabel("\u2300"))
+        self.diameter_input = ActionSpinBox()
+        self.diameter_input.setRange(0.1, 500.0)
+        self.diameter_input.setDecimals(2)
+        self.diameter_input.setSuffix(" mm")
+        self.diameter_input.setValue(8.0)
+        self.diameter_input.valueChanged.connect(self._on_diameter_changed)
+        self.diameter_input.enterPressed.connect(self._confirm)
+        self.diameter_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.diameter_input)
+
+        # Depth
+        layout.addWidget(QLabel("Depth:"))
+        self.depth_input = ActionSpinBox()
+        self.depth_input.setRange(0.0, 10000.0)
+        self.depth_input.setDecimals(2)
+        self.depth_input.setSuffix(" mm")
+        self.depth_input.setValue(0.0)
+        self.depth_input.setSpecialValueText("Through All")
+        self.depth_input.valueChanged.connect(self._on_depth_changed)
+        self.depth_input.enterPressed.connect(self._confirm)
+        self.depth_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.depth_input)
+
+        # OK / Cancel
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.setStyleSheet("background: #ff8800; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.clicked.connect(self._confirm)
+        layout.addWidget(self.btn_ok)
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setFixedWidth(35)
+        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _on_type_changed(self, text):
+        self.hole_type_changed.emit(text.lower())
+
+    def _on_diameter_changed(self, value):
+        self._diameter = value
+        self.diameter_changed.emit(value)
+
+    def _on_depth_changed(self, value):
+        self._depth = value
+        self.depth_changed.emit(value)
+
+    def _confirm(self):
+        self._diameter = self.diameter_input.value()
+        self._depth = self.depth_input.value()
+        self.confirmed.emit()
+
+    def get_diameter(self) -> float:
+        return self.diameter_input.value()
+
+    def get_depth(self) -> float:
+        return self.depth_input.value()
+
+    def get_hole_type(self) -> str:
+        return self.type_combo.currentText().lower()
+
+    def reset(self):
+        self._diameter = 8.0
+        self._depth = 0.0
+        self.diameter_input.blockSignals(True)
+        self.diameter_input.setValue(8.0)
+        self.diameter_input.blockSignals(False)
+        self.depth_input.blockSignals(True)
+        self.depth_input.setValue(0.0)
+        self.depth_input.blockSignals(False)
+        self.type_combo.setCurrentIndex(0)
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)
+
+
+class DraftInputPanel(QFrame):
+    """Input panel for interactive Draft (Entformungsschräge) — Fusion-style."""
+
+    angle_changed = Signal(float)
+    axis_changed = Signal(str)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._angle = 5.0
+        self._pull_axis = "Z"
+        self._selected_face_count = 0
+
+        self.setMinimumWidth(520)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #e8a030;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #555; border-color: #777; }
+            QPushButton:checked { background: #e8a030; color: #000; border-color: #e8a030; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Draft:"))
+
+        # Face count indicator
+        self.face_label = QLabel("0 Faces")
+        self.face_label.setStyleSheet("color: #aaa; font-size: 11px; border: none;")
+        layout.addWidget(self.face_label)
+
+        # Angle
+        layout.addWidget(QLabel("\u2220"))
+        self.angle_input = ActionSpinBox()
+        self.angle_input.setRange(0.1, 89.0)
+        self.angle_input.setDecimals(1)
+        self.angle_input.setSuffix("\u00b0")
+        self.angle_input.setValue(5.0)
+        self.angle_input.valueChanged.connect(self._on_angle_changed)
+        self.angle_input.enterPressed.connect(self._confirm)
+        self.angle_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.angle_input)
+
+        # Pull direction axis buttons
+        layout.addWidget(QLabel("Pull:"))
+        self._axis_btns = {}
+        for axis in ["X", "Y", "Z"]:
+            btn = QPushButton(axis)
+            btn.setCheckable(True)
+            btn.setFixedSize(32, 28)
+            btn.clicked.connect(lambda checked, a=axis: self._set_axis(a))
+            self._axis_btns[axis] = btn
+            layout.addWidget(btn)
+        self._axis_btns["Z"].setChecked(True)
+
+        # OK / Cancel
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.setStyleSheet("background: #e8a030; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.clicked.connect(self._confirm)
+        layout.addWidget(self.btn_ok)
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setFixedWidth(35)
+        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _set_axis(self, axis):
+        self._pull_axis = axis
+        for a, btn in self._axis_btns.items():
+            btn.setChecked(a == axis)
+        self.axis_changed.emit(axis)
+
+    def _on_angle_changed(self, value):
+        self._angle = value
+        self.angle_changed.emit(value)
+
+    def _confirm(self):
+        self._angle = self.angle_input.value()
+        self.confirmed.emit()
+
+    def get_angle(self) -> float:
+        return self.angle_input.value()
+
+    def get_pull_direction(self) -> tuple:
+        axis_map = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
+        return axis_map.get(self._pull_axis, (0, 0, 1))
+
+    def set_face_count(self, count: int):
+        self._selected_face_count = count
+        self.face_label.setText(f"{count} Face{'s' if count != 1 else ''}")
+
+    def reset(self):
+        self._angle = 5.0
+        self._pull_axis = "Z"
+        self._selected_face_count = 0
+        self.angle_input.blockSignals(True)
+        self.angle_input.setValue(5.0)
+        self.angle_input.blockSignals(False)
+        self._set_axis("Z")
+        self.face_label.setText("0 Faces")
 
     def show_at(self, pos_widget):
         self.show()

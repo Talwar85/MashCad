@@ -96,6 +96,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     texture_face_selected = Signal(int)  # NEU: Anzahl selektierter Faces für Texture
     measure_point_picked = Signal(tuple)  # (x, y, z) - Punkt fuer Measure-Tool
     offset_plane_drag_changed = Signal(float)  # Offset-Wert während Drag
+    hole_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
+    draft_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -132,6 +134,25 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.extrude_mode = False
         self._to_face_picking = False  # "Extrude to Face" Ziel-Pick-Modus
         self.measure_mode = False
+        self.revolve_mode = False
+        self._revolve_preview_actor = None
+        self._revolve_axis = (0, 1, 0)
+        self._revolve_angle = 360.0
+        self._revolve_selected_faces = []
+
+        self.hole_mode = False
+        self._hole_preview_actor = None
+        self._hole_position = None      # (x, y, z) on face
+        self._hole_normal = None        # face normal
+        self._hole_diameter = 8.0
+        self._hole_depth = 0.0          # 0 = through all
+        self._hole_body_id = None
+
+        self.draft_mode = False
+        self._draft_selected_faces = []  # list of (body_id, cell_id, normal, position)
+        self._draft_body_id = None
+        self._draft_preview_actor = None
+
         self.offset_plane_mode = False
         self._offset_plane_base_origin = None
         self._offset_plane_base_normal = None
@@ -894,6 +915,308 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         except Exception:
             pass
 
+    # ==================== REVOLVE MODE ====================
+
+    def set_revolve_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Revolve-Modus."""
+        self.revolve_mode = enabled
+        if enabled:
+            self._revolve_selected_faces = []
+            self._draw_selectable_faces_from_detector()
+            request_render(self.plotter)
+        else:
+            self._revolve_selected_faces = []
+            self.clear_revolve_preview()
+            self._clear_face_actors()
+            request_render(self.plotter)
+
+    def show_revolve_preview(self, angle, axis, operation="New Body"):
+        """VTK-basierte Revolve-Preview um Standard-Achse."""
+        self.clear_revolve_preview()
+        self._revolve_angle = angle
+        self._revolve_axis = axis
+
+        if not self._revolve_selected_faces or abs(angle) < 0.1:
+            return
+
+        try:
+            import pyvista as pv
+
+            preview_meshes = []
+            for fid in self._revolve_selected_faces:
+                face = next((f for f in self.detector.selection_faces if f.id == fid), None)
+                if not face or face.display_mesh is None:
+                    continue
+
+                mesh = face.display_mesh.copy()
+
+                # Transform mesh so revolve axis aligns with Z,
+                # then use extrude_rotate, then transform back
+                axis_vec = np.array(axis, dtype=float)
+                axis_len = np.linalg.norm(axis_vec)
+                if axis_len < 1e-9:
+                    continue
+                axis_vec = axis_vec / axis_len
+
+                # Build rotation matrix to align axis_vec → Z
+                z = np.array([0.0, 0.0, 1.0])
+                if np.allclose(axis_vec, z):
+                    rot_matrix = np.eye(4)
+                elif np.allclose(axis_vec, -z):
+                    rot_matrix = np.eye(4)
+                    rot_matrix[0, 0] = -1
+                    rot_matrix[2, 2] = -1
+                else:
+                    v = np.cross(axis_vec, z)
+                    s = np.linalg.norm(v)
+                    c = np.dot(axis_vec, z)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R = np.eye(3) + vx + vx @ vx * (1 - c) / (s * s)
+                    rot_matrix = np.eye(4)
+                    rot_matrix[:3, :3] = R
+
+                # Apply forward transform
+                mesh.transform(rot_matrix, inplace=True)
+
+                # extrude_rotate rotates around Z-axis through origin
+                try:
+                    revolved = mesh.extrude_rotate(
+                        resolution=36,
+                        angle=angle,
+                        capping=True,
+                    )
+                    # Apply inverse transform
+                    inv_matrix = np.linalg.inv(rot_matrix)
+                    revolved.transform(inv_matrix, inplace=True)
+                    preview_meshes.append(revolved)
+                except Exception as e:
+                    logger.debug(f"Revolve preview extrude_rotate failed: {e}")
+                    continue
+
+            if preview_meshes:
+                combined = preview_meshes[0]
+                for m in preview_meshes[1:]:
+                    combined = combined.merge(m)
+
+                op_colors = {
+                    "New Body": '#6699ff', "Join": '#66ff66',
+                    "Cut": '#ff6666', "Intersect": '#ffaa66'
+                }
+                col = op_colors.get(operation, '#6699ff')
+                self.plotter.add_mesh(combined, color=col, opacity=0.5,
+                                      name='revolve_preview', pickable=False)
+                self._revolve_preview_actor = 'revolve_preview'
+                request_render(self.plotter)
+        except Exception as e:
+            logger.error(f"Revolve preview error: {e}")
+
+    def clear_revolve_preview(self):
+        """Entfernt die Revolve-Preview."""
+        if self._revolve_preview_actor:
+            try:
+                self.plotter.remove_actor(self._revolve_preview_actor)
+            except Exception:
+                pass
+            self._revolve_preview_actor = None
+
+    # ==================== HOLE MODE ====================
+    def set_hole_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Hole-Modus."""
+        self.hole_mode = enabled
+        if enabled:
+            self._hole_position = None
+            self._hole_normal = None
+            self._hole_body_id = None
+            # Enable body face picking (X-ray not needed, we pick on body surface)
+        else:
+            self.clear_hole_preview()
+            self._hole_position = None
+            self._hole_normal = None
+            self._hole_body_id = None
+
+    def show_hole_preview(self, position, normal, diameter, depth):
+        """Zeigt Hole-Preview als halbtransparenten Zylinder."""
+        self.clear_hole_preview()
+        if position is None or normal is None:
+            return
+
+        try:
+            import pyvista as pv
+            radius = diameter / 2.0
+            actual_depth = depth if depth > 0 else 100.0  # through all = large
+
+            # Create cylinder along Z, then rotate to match normal
+            cyl = pv.Cylinder(
+                center=(0, 0, -actual_depth / 2.0),
+                direction=(0, 0, -1),
+                radius=radius,
+                height=actual_depth,
+                resolution=32,
+                capping=True,
+            )
+
+            # Align cylinder direction to face normal (inverted = drilling into face)
+            n = np.array(normal, dtype=float)
+            n_len = np.linalg.norm(n)
+            if n_len < 1e-9:
+                return
+            n = n / n_len
+
+            # Build transform: translate to position, align -Z to -normal (drill into surface)
+            z = np.array([0.0, 0.0, -1.0])
+            target = -n  # drill into surface
+
+            if np.allclose(z, target):
+                rot = np.eye(4)
+            elif np.allclose(z, -target):
+                rot = np.eye(4)
+                rot[0, 0] = -1
+                rot[2, 2] = -1
+            else:
+                v = np.cross(z, target)
+                s = np.linalg.norm(v)
+                c = np.dot(z, target)
+                vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                R = np.eye(3) + vx + vx @ vx * (1 - c) / (s * s)
+                rot = np.eye(4)
+                rot[:3, :3] = R
+
+            cyl.transform(rot, inplace=True)
+
+            # Translate to position
+            pos = np.array(position, dtype=float)
+            cyl.points += pos
+
+            self.plotter.add_mesh(cyl, color='#ff6666', opacity=0.45,
+                                  name='hole_preview', pickable=False)
+            self._hole_preview_actor = 'hole_preview'
+            self._hole_position = tuple(position)
+            self._hole_normal = tuple(normal)
+            self._hole_diameter = diameter
+            self._hole_depth = depth
+            request_render(self.plotter)
+        except Exception as e:
+            logger.error(f"Hole preview error: {e}")
+
+    def clear_hole_preview(self):
+        """Entfernt die Hole-Preview."""
+        if self._hole_preview_actor:
+            try:
+                self.plotter.remove_actor(self._hole_preview_actor)
+            except Exception:
+                pass
+            self._hole_preview_actor = None
+
+    # ==================== DRAFT MODE ====================
+    def set_draft_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Draft-Modus."""
+        self.draft_mode = enabled
+        if enabled:
+            self._draft_selected_faces = []
+            self._draft_body_id = None
+        else:
+            self._draft_selected_faces = []
+            self._draft_body_id = None
+            self.clear_draft_preview()
+            self._clear_body_face_highlight()
+
+    def _toggle_draft_face(self, face_data):
+        """Toggle Face in Draft-Selektion mit full-face orange Highlight."""
+        new_normal = face_data.get('normal', (0, 0, 0))
+        body_id = face_data.get('body_id')
+
+        # First face sets the body
+        if not self._draft_selected_faces:
+            self._draft_body_id = body_id
+        elif body_id != self._draft_body_id:
+            logger.warning("Draft: Nur Faces vom gleichen Body erlaubt")
+            return
+
+        # Toggle: deselect if same normal already selected
+        for i, f in enumerate(self._draft_selected_faces):
+            fn = f.get('normal', (0, 0, 0))
+            if (abs(fn[0] - new_normal[0]) < 0.05 and
+                abs(fn[1] - new_normal[1]) < 0.05 and
+                abs(fn[2] - new_normal[2]) < 0.05):
+                self._draft_selected_faces.pop(i)
+                self._update_draft_face_highlights()
+                return
+
+        self._draft_selected_faces.append(face_data)
+        self._update_draft_face_highlights()
+
+    def _update_draft_face_highlights(self):
+        """Orange full-face Highlights für Draft-selektierte Faces."""
+        self._clear_draft_face_highlights()
+
+        for i, face_data in enumerate(self._draft_selected_faces):
+            try:
+                mesh = face_data.get('mesh')
+                cell_ids = face_data.get('cell_ids', [])
+
+                if mesh is not None and cell_ids:
+                    face_mesh = mesh.extract_cells(cell_ids)
+                    face_normal = face_data.get('normal', (0, 0, 1))
+                    normal_arr = np.array(face_normal)
+                    norm_len = np.linalg.norm(normal_arr)
+                    if norm_len > 1e-10:
+                        normal_arr = normal_arr / norm_len
+                    face_mesh_copy = face_mesh.copy()
+                    face_mesh_copy.points = face_mesh_copy.points + normal_arr * 0.3
+
+                    self.plotter.add_mesh(
+                        face_mesh_copy,
+                        color='orange',
+                        opacity=0.7,
+                        name=f'draft_face_highlight_{i}',
+                        pickable=False,
+                        show_edges=True,
+                        edge_color='darkorange',
+                        line_width=2
+                    )
+            except Exception as e:
+                logger.debug(f"Draft Face Highlight Error: {e}")
+
+        request_render(self.plotter)
+
+    def _clear_draft_face_highlights(self):
+        """Entfernt Draft-Face-Highlights."""
+        for i in range(50):
+            try:
+                self.plotter.remove_actor(f'draft_face_highlight_{i}')
+            except:
+                pass
+
+    def _show_draft_preview_mesh(self, mesh):
+        """Zeigt halbtransparentes Draft-Ergebnis als Live-Preview."""
+        try:
+            self.plotter.remove_actor('draft_preview')
+        except Exception:
+            pass
+        try:
+            self._draft_preview_actor = self.plotter.add_mesh(
+                mesh,
+                color='#50bb50',
+                opacity=0.4,
+                name='draft_preview',
+                pickable=False,
+                show_edges=True,
+                edge_color='#309030',
+                line_width=1
+            )
+            request_render(self.plotter)
+        except Exception as e:
+            logger.debug(f"Draft preview mesh error: {e}")
+
+    def clear_draft_preview(self):
+        """Entfernt alle Draft-Visualisierungen."""
+        self._clear_draft_face_highlights()
+        try:
+            self.plotter.remove_actor('draft_preview')
+        except Exception:
+            pass
+        self._draft_preview_actor = None
+
     # ==================== OFFSET PLANE MODE ====================
     def set_offset_plane_mode(self, enabled):
         """Aktiviert/deaktiviert den interaktiven Offset-Plane-Modus."""
@@ -1239,6 +1562,56 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 if event.key() == Qt.Key_A:
                     self.select_all_edges()
                     return True
+
+            return False
+
+        # --- HOLE MODE (Body-Face picking for hole placement) ---
+        if self.hole_mode:
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+                return False  # Let VTK handle camera
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    if self.hovered_body_face is not None:
+                        self._click_body_face()
+                        return True
+                    return False
+                return False
+
+            if event_type == QEvent.MouseButtonRelease:
+                return False
+
+            return False
+
+        # --- DRAFT MODE (Body-Face picking for draft) ---
+        if self.draft_mode:
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+                return False
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    if self.hovered_body_face is not None:
+                        self._click_body_face()
+                        return True
+                    return False
+                return False
+
+            if event_type == QEvent.MouseButtonRelease:
+                return False
 
             return False
 
@@ -2241,7 +2614,22 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.plotter.update()
         except:
             pass
-            
+
+    def mark_edge_as_failed(self, edge_idx):
+        """Markiert eine Kante visuell als fehlgeschlagen (rot)."""
+        try:
+            from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
+            if hasattr(self, '_edge_data') and edge_idx < len(self._edge_data):
+                edge = self._edge_data[edge_idx]
+                p1, p2 = edge.get('p1'), edge.get('p2')
+                if p1 is not None and p2 is not None:
+                    import pyvista as pv
+                    line = pv.Line(p1, p2)
+                    self.plotter.add_mesh(line, color='red', line_width=4,
+                                          name=f'failed_edge_{edge_idx}', pickable=False)
+        except Exception as e:
+            logger.debug(f"mark_edge_as_failed: {e}")
+
     def get_ray_from_click(self, x, y):
         """
         Berechnet Ursprung und Richtung für Raycasting an Pixel x,y.
@@ -3707,7 +4095,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
-                        self._draw_body_face_highlight(pos, normal)
+                        # Draft mode: full-face blue highlight
+                        if self.draft_mode:
+                            self._draw_full_face_hover(body_id, rounded_normal, normal)
+                        else:
+                            self._draw_body_face_highlight(pos, normal)
                     return
 
             if self.hovered_body_face is not None:
@@ -3809,6 +4201,52 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.plotter.remove_actor('body_face_arrow')
         except: pass
         # Kein render hier - wird beim nächsten Hover gemacht
+
+    def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal):
+        """Zeichnet full-face blaues Highlight auf gehoverter Body-Fläche (Draft/Texture Mode)."""
+        self._clear_body_face_highlight()
+        try:
+            # Finde detected_face mit passender Normale
+            face_data = None
+            for face in self.detected_faces:
+                if face.get('type') != 'body_face':
+                    continue
+                if face.get('body_id') != body_id:
+                    continue
+                fn = face.get('normal', (0, 0, 0))
+                if (abs(fn[0] - rounded_normal[0]) < 0.05 and
+                    abs(fn[1] - rounded_normal[1]) < 0.05 and
+                    abs(fn[2] - rounded_normal[2]) < 0.05):
+                    face_data = face
+                    break
+
+            if face_data is None:
+                return
+
+            mesh = face_data.get('mesh')
+            cell_ids = face_data.get('cell_ids', [])
+            if mesh is None or not cell_ids:
+                return
+
+            face_mesh = mesh.extract_cells(cell_ids)
+            normal_arr = np.array(raw_normal)
+            norm_len = np.linalg.norm(normal_arr)
+            if norm_len > 1e-10:
+                normal_arr = normal_arr / norm_len
+            face_mesh_copy = face_mesh.copy()
+            face_mesh_copy.points = face_mesh_copy.points + normal_arr * 0.3
+
+            self.plotter.add_mesh(
+                face_mesh_copy,
+                color='#4488ff',
+                opacity=0.5,
+                name='body_face_highlight',
+                pickable=False,
+                show_edges=False
+            )
+            request_render(self.plotter, immediate=True)
+        except Exception as e:
+            logger.debug(f"Full-face hover error: {e}")
     
     def _click_body_face(self):
         """Klick auf Body-Face - bereitet Extrusion oder Texture-Selektion vor"""
@@ -3816,6 +4254,40 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             return
 
         body_id, cell_id, normal, pos = self.hovered_body_face
+
+        # Hole Mode: Emit face click for hole placement
+        if self.hole_mode:
+            self.hole_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
+            self._draw_body_face_selection(pos, normal)
+            return
+
+        # Draft Mode: Full-face selection with orange highlight
+        if self.draft_mode:
+            # Find matching detected_face for full-face mesh extraction
+            rounded_normal = tuple(round(n, 2) for n in normal)
+            face_data = None
+            for face in self.detected_faces:
+                if face.get('type') != 'body_face':
+                    continue
+                if face.get('body_id') != body_id:
+                    continue
+                face_normal = face.get('normal', (0, 0, 0))
+                if (abs(face_normal[0] - rounded_normal[0]) < 0.05 and
+                    abs(face_normal[1] - rounded_normal[1]) < 0.05 and
+                    abs(face_normal[2] - rounded_normal[2]) < 0.05):
+                    face_data = face
+                    break
+
+            if face_data is None:
+                face_data = {
+                    'body_id': body_id, 'cell_ids': [cell_id],
+                    'normal': normal, 'center': pos,
+                    'mesh': self.bodies.get(body_id, {}).get('mesh'),
+                }
+
+            self._toggle_draft_face(face_data)
+            self.draft_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
+            return
 
         # Texture Face Mode: Sammle Faces für Texturierung
         if self.texture_face_mode:

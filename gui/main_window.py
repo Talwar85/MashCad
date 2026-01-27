@@ -443,6 +443,16 @@ class MainWindow(QMainWindow):
         self.transform_panel.grid_size_changed.connect(self._on_grid_size_changed)
         self.transform_panel.hide()
 
+        # Revolve Input Panel
+        from gui.input_panels import RevolveInputPanel
+        self.revolve_panel = RevolveInputPanel(self)
+        self.revolve_panel.angle_changed.connect(self._on_revolve_angle_changed)
+        self.revolve_panel.axis_changed.connect(self._on_revolve_axis_changed)
+        self.revolve_panel.operation_changed.connect(self._on_revolve_operation_changed)
+        self.revolve_panel.confirmed.connect(self._on_revolve_confirmed)
+        self.revolve_panel.cancelled.connect(self._on_revolve_cancelled)
+        self.revolve_panel.direction_flipped.connect(self._on_revolve_direction_flipped)
+
         # Offset Plane Input Panel
         from gui.input_panels import OffsetPlaneInputPanel
         self.offset_plane_panel = OffsetPlaneInputPanel(self)
@@ -450,6 +460,24 @@ class MainWindow(QMainWindow):
         self.offset_plane_panel.confirmed.connect(self._on_offset_plane_confirmed)
         self.offset_plane_panel.cancelled.connect(self._on_offset_plane_cancelled)
         self._offset_plane_pending = False
+
+        # Hole Input Panel
+        from gui.input_panels import HoleInputPanel
+        self.hole_panel = HoleInputPanel(self)
+        self.hole_panel.diameter_changed.connect(self._on_hole_diameter_changed)
+        self.hole_panel.depth_changed.connect(self._on_hole_depth_changed)
+        self.hole_panel.confirmed.connect(self._on_hole_confirmed)
+        self.hole_panel.cancelled.connect(self._on_hole_cancelled)
+        self._hole_mode = False
+
+        # Draft Input Panel
+        from gui.input_panels import DraftInputPanel
+        self.draft_panel = DraftInputPanel(self)
+        self.draft_panel.angle_changed.connect(self._on_draft_angle_changed)
+        self.draft_panel.axis_changed.connect(self._on_draft_axis_changed)
+        self.draft_panel.confirmed.connect(self._on_draft_confirmed)
+        self.draft_panel.cancelled.connect(self._on_draft_cancelled)
+        self._draft_mode = False
 
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
@@ -785,6 +813,10 @@ class MainWindow(QMainWindow):
             self.viewport_3d.face_selected.connect(self._on_face_selected_for_extrude)
         if hasattr(self.viewport_3d, 'target_face_selected'):
             self.viewport_3d.target_face_selected.connect(self._on_target_face_selected)
+        if hasattr(self.viewport_3d, 'hole_face_clicked'):
+            self.viewport_3d.hole_face_clicked.connect(self._on_body_face_clicked_for_hole)
+        if hasattr(self.viewport_3d, 'draft_face_clicked'):
+            self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
 
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
@@ -1967,45 +1999,109 @@ class MainWindow(QMainWindow):
         self._trigger_viewport_update()
 
     def _hole_dialog(self):
-        """Hole-Dialog: Bohrung in selektierten Body."""
-        from gui.dialogs.hole_dialog import HoleDialog
+        """Startet interaktiven Hole-Workflow (Fusion-style).
+        Kein Body muss vorher selektiert sein — einfach auf Face klicken.
+        """
+        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        if not has_bodies:
+            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
+            logger.warning("Hole: Keine Bodies mit Geometrie.")
+            return
+
+        self._hide_transform_ui()
+        self._hole_mode = True
+        self._hole_target_body = None  # wird beim Face-Klick gesetzt
+        self.viewport_3d.set_hole_mode(True)
+        self.hole_panel.reset()
+        self.hole_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage("Hole: Klicke auf eine Fläche eines Bodys")
+        logger.info("Hole-Modus gestartet — Fläche auf Body klicken")
+
+    def _on_hole_diameter_changed(self, value):
+        """Live-Update der Hole-Preview bei Durchmesser-Änderung."""
+        if not self._hole_mode:
+            return
+        pos = self.viewport_3d._hole_position
+        normal = self.viewport_3d._hole_normal
+        if pos and normal:
+            depth = self.hole_panel.get_depth()
+            self.viewport_3d.show_hole_preview(pos, normal, value, depth)
+
+    def _on_hole_depth_changed(self, value):
+        """Live-Update der Hole-Preview bei Tiefen-Änderung."""
+        if not self._hole_mode:
+            return
+        pos = self.viewport_3d._hole_position
+        normal = self.viewport_3d._hole_normal
+        if pos and normal:
+            diameter = self.hole_panel.get_diameter()
+            self.viewport_3d.show_hole_preview(pos, normal, diameter, value)
+
+    def _on_hole_confirmed(self):
+        """Hole bestätigt — Feature erstellen."""
         from modeling import HoleFeature
         from gui.commands.feature_commands import AddFeatureCommand
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        pos = self.viewport_3d._hole_position
+        normal = self.viewport_3d._hole_normal
+        if not pos or not normal:
+            self.statusBar().showMessage("Keine Fläche ausgewählt!")
             return
 
-        dialog = HoleDialog(self)
-        if dialog.exec():
-            # Position: Mittelpunkt der oberen Flaeche (vereinfacht)
-            solid = body._build123d_solid
-            try:
-                bb = solid.bounding_box()
-                center = ((bb.min.X + bb.max.X) / 2,
-                          (bb.min.Y + bb.max.Y) / 2,
-                          bb.max.Z)
-                direction = (0, 0, -1)
-            except Exception:
-                center = (0, 0, 0)
-                direction = (0, 0, -1)
+        body = getattr(self, '_hole_target_body', None)
+        if not body:
+            self._finish_hole_ui()
+            return
 
-            feature = HoleFeature(
-                hole_type=dialog.hole_type,
-                diameter=dialog.diameter,
-                depth=dialog.depth,
-                position=center,
-                direction=direction,
-                counterbore_diameter=dialog.counterbore_diameter,
-                counterbore_depth=dialog.counterbore_depth,
-                countersink_angle=dialog.countersink_angle,
-            )
+        diameter = self.hole_panel.get_diameter()
+        depth = self.hole_panel.get_depth()
+        hole_type = self.hole_panel.get_hole_type()
 
-            cmd = AddFeatureCommand(body, feature, self)
-            self.undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Hole D={dialog.diameter}mm created")
-            logger.success(f"Hole {dialog.hole_type} D={dialog.diameter}mm erstellt")
+        feature = HoleFeature(
+            hole_type=hole_type,
+            diameter=diameter,
+            depth=depth,
+            position=pos,
+            direction=tuple(-n for n in normal),  # drill INTO face
+        )
+
+        cmd = AddFeatureCommand(body, feature, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Hole D={diameter}mm erstellt")
+        logger.success(f"Hole {hole_type} D={diameter}mm at {pos}")
+        self._finish_hole_ui()
+
+    def _on_hole_cancelled(self):
+        """Hole abgebrochen."""
+        self._finish_hole_ui()
+        self.statusBar().showMessage("Hole abgebrochen")
+
+    def _finish_hole_ui(self):
+        """Hole-UI aufräumen."""
+        self._hole_mode = False
+        self._hole_target_body = None
+        self.viewport_3d.set_hole_mode(False)
+        self.hole_panel.hide()
+
+    def _on_body_face_clicked_for_hole(self, body_id, cell_id, normal, position):
+        """Body-Face wurde im Hole-Modus geklickt."""
+        if not self._hole_mode:
+            return
+
+        # Auto-detect body from click
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body or not body._build123d_solid:
+            self.statusBar().showMessage("Kein gültiger Body getroffen")
+            return
+
+        self._hole_target_body = body
+        self.viewport_3d._hole_position = tuple(position)
+        self.viewport_3d._hole_normal = tuple(normal)
+
+        diameter = self.hole_panel.get_diameter()
+        depth = self.hole_panel.get_depth()
+        self.viewport_3d.show_hole_preview(position, normal, diameter, depth)
+        self.statusBar().showMessage(f"Hole auf {body.name} — Parameter einstellen, Enter bestätigen")
 
     def _thread_dialog(self):
         """Thread-Dialog: Gewinde auf Body, oder Schraube/Mutter erzeugen."""
@@ -2382,27 +2478,135 @@ class MainWindow(QMainWindow):
             logger.error(f"Primitive creation failed: {e}")
 
     def _draft_dialog(self):
-        """Draft-Dialog: Entformungsschraege anwenden."""
-        from gui.dialogs.draft_dialog import DraftDialog
+        """Startet interaktiven Draft-Workflow (Fusion-style).
+        Klick auf Body-Faces → Winkel einstellen → Enter.
+        """
+        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        if not has_bodies:
+            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
+            return
+
+        self._hide_transform_ui()
+        self._draft_mode = True
+        self._draft_target_body = None
+        # Body-Faces erkennen für full-face Highlighting
+        self.viewport_3d.detected_faces = []
+        self.viewport_3d._detect_body_faces()
+        logger.info(f"Draft: {len(self.viewport_3d.detected_faces)} Body-Faces erkannt")
+        self.viewport_3d.set_draft_mode(True)
+        self.draft_panel.reset()
+        self.draft_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage("Draft: Klicke auf Flächen des Bodys (Mehrfachselektion mit Klick)")
+        logger.info("Draft-Modus gestartet — Flächen auf Body klicken")
+
+    def _on_body_face_clicked_for_draft(self, body_id, cell_id, normal, position):
+        """Body-Face wurde im Draft-Modus geklickt.
+        Face-Toggle passiert schon im Viewport (_toggle_draft_face).
+        Hier nur Body setzen und UI updaten.
+        """
+        if not self._draft_mode:
+            return
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body or not body._build123d_solid:
+            return
+
+        self._draft_target_body = body
+        count = len(self.viewport_3d._draft_selected_faces)
+        self.draft_panel.set_face_count(count)
+        self.statusBar().showMessage(f"Draft: {count} Face(s) ausgewählt — Winkel einstellen, Enter bestätigen")
+        self._update_draft_preview()
+
+    def _on_draft_angle_changed(self, value):
+        """Draft-Winkel geändert."""
+        self._update_draft_preview()
+
+    def _on_draft_axis_changed(self, axis):
+        """Draft Pull-Richtung geändert."""
+        self._update_draft_preview()
+
+    def _update_draft_preview(self):
+        """Live-Preview des Draft-Ergebnisses."""
+        body = getattr(self, '_draft_target_body', None)
+        faces = self.viewport_3d._draft_selected_faces
+        if not body or not body._build123d_solid or not faces:
+            self.viewport_3d.clear_draft_preview()
+            return
+
+        try:
+            from modeling import DraftFeature
+            angle = self.draft_panel.get_angle()
+            pull_dir = self.draft_panel.get_pull_direction()
+            face_normals = [tuple(f.get('normal', (0, 0, 0))) for f in faces]
+
+            feature = DraftFeature(
+                draft_angle=angle,
+                pull_direction=pull_dir,
+                face_selectors=[{'normal': n} for n in face_normals],
+            )
+
+            # Compute draft on kernel (temporary, not committed)
+            result_solid = body._compute_draft(feature, body._build123d_solid)
+            if result_solid is None:
+                self.viewport_3d.clear_draft_preview()
+                return
+
+            # Tessellate and show preview
+            from modeling.cad_tessellator import CADTessellator
+            mesh, _ = CADTessellator.tessellate(result_solid)
+            if mesh is not None:
+                self.viewport_3d._show_draft_preview_mesh(mesh)
+            else:
+                self.viewport_3d.clear_draft_preview()
+        except Exception as e:
+            logger.debug(f"Draft preview error: {e}")
+            self.viewport_3d.clear_draft_preview()
+
+    def _on_draft_confirmed(self):
+        """Draft bestätigt — Feature erstellen."""
         from modeling import DraftFeature
         from gui.commands.feature_commands import AddFeatureCommand
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        body = getattr(self, '_draft_target_body', None)
+        if not body:
+            self.statusBar().showMessage("Kein Body ausgewählt!")
+            self._finish_draft_ui()
             return
 
-        dialog = DraftDialog(self)
-        if dialog.exec():
-            feature = DraftFeature(
-                draft_angle=dialog.draft_angle,
-                pull_direction=dialog.pull_direction,
-            )
+        faces = self.viewport_3d._draft_selected_faces
+        if not faces:
+            self.statusBar().showMessage("Keine Flächen ausgewählt!")
+            return
 
-            cmd = AddFeatureCommand(body, feature, self)
-            self.undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Draft {dialog.draft_angle}° applied")
-            logger.success(f"Draft {dialog.draft_angle}° erstellt")
+        angle = self.draft_panel.get_angle()
+        pull_dir = self.draft_panel.get_pull_direction()
+
+        # Sammle Face-Normalen für selektive Draft-Anwendung
+        face_normals = [tuple(f.get('normal', (0, 0, 0))) for f in faces]
+
+        feature = DraftFeature(
+            draft_angle=angle,
+            pull_direction=pull_dir,
+            face_selectors=[{'normal': n} for n in face_normals],
+        )
+
+        cmd = AddFeatureCommand(body, feature, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Draft {angle}° auf {len(faces)} Faces erstellt")
+        logger.success(f"Draft {angle}° auf {len(faces)} Faces")
+        self._finish_draft_ui()
+
+    def _on_draft_cancelled(self):
+        """Draft abgebrochen."""
+        self._finish_draft_ui()
+        self.statusBar().showMessage("Draft abgebrochen")
+
+    def _finish_draft_ui(self):
+        """Draft-UI aufräumen."""
+        self._draft_mode = False
+        self._draft_target_body = None
+        self.viewport_3d.set_draft_mode(False)
+        self.draft_panel.hide()
 
     def _split_body_dialog(self):
         """Split-Dialog: Koerper teilen."""
@@ -2429,45 +2633,153 @@ class MainWindow(QMainWindow):
             logger.success(f"Split Body ({dialog.keep_side}) erstellt")
 
     def _revolve_dialog(self):
-        """Revolve-Dialog: Sketch um Achse rotieren."""
-        from gui.dialogs.revolve_dialog import RevolveDialog
+        """Startet den interaktiven Revolve-Workflow (Fusion-Style)."""
+        self._update_detector()
+
+        if not self.viewport_3d.detector.selection_faces:
+            logger.warning("Keine Sketch-Profile gefunden. Erstelle zuerst einen Sketch.")
+            return
+
+        self._hide_transform_ui()
+        self.viewport_3d.set_revolve_mode(True)
+        self.viewport_3d.set_selection_mode("face")
+        self.revolve_panel.reset()
+        self.revolve_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage(tr("Revolve: Wähle Profil-Fläche"))
+
+    def _on_revolve_angle_changed(self, angle):
+        """Panel-Winkel geändert → Preview aktualisieren."""
+        if self.viewport_3d.revolve_mode and self.viewport_3d._revolve_selected_faces:
+            self.viewport_3d.show_revolve_preview(
+                angle, self.revolve_panel.get_axis(),
+                self.revolve_panel.get_operation()
+            )
+
+    def _on_revolve_axis_changed(self, axis):
+        """Panel-Achse geändert → Preview aktualisieren."""
+        if self.viewport_3d.revolve_mode and self.viewport_3d._revolve_selected_faces:
+            self.viewport_3d.show_revolve_preview(
+                self.revolve_panel.get_angle(), axis,
+                self.revolve_panel.get_operation()
+            )
+
+    def _on_revolve_operation_changed(self, operation):
+        """Panel-Operation geändert → Preview-Farbe aktualisieren."""
+        if self.viewport_3d.revolve_mode and self.viewport_3d._revolve_selected_faces:
+            self.viewport_3d.show_revolve_preview(
+                self.revolve_panel.get_angle(),
+                self.revolve_panel.get_axis(), operation
+            )
+
+    def _on_revolve_direction_flipped(self):
+        """Revolve-Richtung umkehren → Preview aktualisieren."""
+        if self.viewport_3d.revolve_mode and self.viewport_3d._revolve_selected_faces:
+            self.viewport_3d.show_revolve_preview(
+                self.revolve_panel.get_angle(),
+                self.revolve_panel.get_axis(),
+                self.revolve_panel.get_operation()
+            )
+
+    def _on_revolve_confirmed(self):
+        """Revolve bestätigen und Feature erstellen."""
         from modeling import RevolveFeature
         from gui.commands.feature_commands import AddFeatureCommand
 
-        # Verfuegbare Sketches sammeln
-        sketches = []
-        if self.document:
-            for body in self.document.bodies:
-                for f in body.features:
-                    if hasattr(f, 'sketch') and f.sketch:
-                        sketches.append(f.sketch)
-            # Auch freie Sketches
-            if hasattr(self.document, 'sketches'):
-                sketches.extend(self.document.sketches)
-
-        if not sketches:
-            logger.warning("Keine Sketches vorhanden. Erstelle zuerst einen Sketch.")
+        face_ids = self.viewport_3d._revolve_selected_faces
+        if not face_ids:
+            logger.warning("Keine Fläche selektiert.")
+            self._on_revolve_cancelled()
             return
 
-        dialog = RevolveDialog(sketches, self)
-        if dialog.exec():
-            # Aktiven Body holen oder neuen erstellen
+        angle = self.revolve_panel.get_angle()
+        axis = self.revolve_panel.get_axis()
+        operation = self.revolve_panel.get_operation()
+
+        # Sketch + Polygone aus Detector extrahieren (wie Extrude)
+        selection_data = []
+        for fid in face_ids:
+            face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == fid), None)
+            if face:
+                selection_data.append(face)
+
+        if not selection_data:
+            logger.warning("Keine Face-Daten gefunden.")
+            self._on_revolve_cancelled()
+            return
+
+        first_face = selection_data[0]
+        source_id = first_face.owner_id
+        target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
+        polys = [f.shapely_poly for f in selection_data]
+
+        if not target_sketch:
+            logger.error("Sketch nicht gefunden.")
+            self._on_revolve_cancelled()
+            return
+
+        # Target Body bestimmen
+        if operation == "New Body":
+            body = self.document.new_body()
+        else:
             body = self._get_active_body()
             if not body:
-                from modeling import Body
-                body = Body(name="Body")
-                self.document.bodies.append(body)
+                body = self.document.new_body()
 
-            feature = RevolveFeature(
-                sketch=dialog.sketch,
-                angle=dialog.angle,
-                axis=dialog.axis,
-                operation=dialog.operation,
-            )
+        feature = RevolveFeature(
+            sketch=target_sketch,
+            angle=angle,
+            axis=axis,
+            operation=operation,
+            precalculated_polys=polys,
+        )
 
-            cmd = AddFeatureCommand(body, feature, self)
+        is_new_body = (operation == "New Body")
+        try:
+            cmd = AddFeatureCommand(body, feature, self, description=f"Revolve ({operation})")
             self.undo_stack.push(cmd)
-            logger.success(f"Revolve erstellt: {dialog.angle}° um {dialog.axis}")
+
+            # Safety check
+            if hasattr(body, 'vtk_mesh') and (body.vtk_mesh is None or body.vtk_mesh.n_points == 0):
+                logger.warning("Revolve ließ Body verschwinden. Undo.")
+                self.undo_stack.undo()
+                # Leeren Body entfernen wenn neu erstellt
+                if is_new_body and body in self.document.bodies and not body.features:
+                    self.document.bodies.remove(body)
+            else:
+                logger.success(f"Revolve erstellt: {angle}° um {axis}")
+        except Exception as e:
+            logger.error(f"Revolve fehlgeschlagen: {e}")
+            if is_new_body and body in self.document.bodies and not body.features:
+                self.document.bodies.remove(body)
+
+        self._finish_revolve_ui()
+
+    def _on_revolve_cancelled(self):
+        """Revolve abbrechen."""
+        self._finish_revolve_ui()
+        self.statusBar().showMessage(tr("Revolve abgebrochen"))
+
+    def _finish_revolve_ui(self):
+        """Revolve UI aufräumen."""
+        self.revolve_panel.hide()
+        self.viewport_3d.set_revolve_mode(False)
+        self.viewport_3d.set_all_bodies_visible(True)
+        if hasattr(self.viewport_3d, 'detector'):
+            self.viewport_3d.detector.clear()
+        self.viewport_3d._draw_selectable_faces_from_detector()
+        self.browser.refresh()
+        self._update_tnp_stats()
+
+    def _on_face_selected_for_revolve(self, face_id):
+        """Face-Klick im Revolve-Modus → Selektion speichern + Preview."""
+        self.viewport_3d._revolve_selected_faces = list(self.viewport_3d.selected_face_ids)
+        self.statusBar().showMessage(tr("Revolve: Achse wählen (X/Y/Z) und Winkel einstellen"))
+        # Sofort Preview mit aktuellen Panel-Werten
+        self.viewport_3d.show_revolve_preview(
+            self.revolve_panel.get_angle(),
+            self.revolve_panel.get_axis(),
+            self.revolve_panel.get_operation()
+        )
 
     def _extrude_dialog(self):
         """Startet den Extrude-Modus."""
@@ -2593,6 +2905,11 @@ class MainWindow(QMainWindow):
         # Loft-Mode (Phase 6)
         if getattr(self, '_loft_mode', False):
             self._on_face_selected_for_loft(face_id)
+            return
+
+        # Revolve-Mode: Face-Pick → Preview anzeigen
+        if self.viewport_3d.revolve_mode:
+            self._on_face_selected_for_revolve(face_id)
             return
 
         if not self.viewport_3d.extrude_mode:
@@ -3656,6 +3973,25 @@ class MainWindow(QMainWindow):
                     self.extrude_panel.height_input.selectAll()
                     return True
             
+            # Revolve-Modus: Achsen-Shortcuts
+            if self.viewport_3d.revolve_mode:
+                if k == Qt.Key_X:
+                    self.revolve_panel.set_axis('X')
+                    return True
+                if k == Qt.Key_Y:
+                    self.revolve_panel.set_axis('Y')
+                    return True
+                if k == Qt.Key_Z:
+                    self.revolve_panel.set_axis('Z')
+                    return True
+                if k == Qt.Key_F:
+                    self.revolve_panel._flip_direction()
+                    return True
+                if k == Qt.Key_Tab:
+                    self.revolve_panel.angle_input.setFocus()
+                    self.revolve_panel.angle_input.selectAll()
+                    return True
+
             if k == Qt.Key_E:
                 if not self.viewport_3d.extrude_mode:
                     self._extrude_dialog()
@@ -3681,8 +4017,40 @@ class MainWindow(QMainWindow):
                     logger.success("Modus: Skizze")
                     return True
 
-            # Bestätigung für Extrude / Offset Plane
+            # Hole-Modus: Tab für Fokus
+            if self._hole_mode:
+                if k == Qt.Key_Tab:
+                    self.hole_panel.diameter_input.setFocus()
+                    self.hole_panel.diameter_input.selectAll()
+                    return True
+
+            # Draft-Modus: Achsen-Shortcuts + Tab
+            if self._draft_mode:
+                if k == Qt.Key_X:
+                    self.draft_panel._set_axis('X')
+                    return True
+                if k == Qt.Key_Y:
+                    self.draft_panel._set_axis('Y')
+                    return True
+                if k == Qt.Key_Z:
+                    self.draft_panel._set_axis('Z')
+                    return True
+                if k == Qt.Key_Tab:
+                    self.draft_panel.angle_input.setFocus()
+                    self.draft_panel.angle_input.selectAll()
+                    return True
+
+            # Bestätigung für Revolve / Extrude / Offset Plane / Hole / Draft
             if k in (Qt.Key_Return, Qt.Key_Enter):
+                if self._draft_mode:
+                    self._on_draft_confirmed()
+                    return True
+                if self._hole_mode:
+                    self._on_hole_confirmed()
+                    return True
+                if self.viewport_3d.revolve_mode:
+                    self._on_revolve_confirmed()
+                    return True
                 if self.viewport_3d.offset_plane_mode:
                     self._on_offset_plane_confirmed()
                     return True
@@ -3695,7 +4063,19 @@ class MainWindow(QMainWindow):
                 if getattr(self, '_measure_active', False):
                     self._cancel_measure_mode()
                     return True
-                # Priorität 0.5: Offset Plane abbrechen
+                # Draft abbrechen
+                if self._draft_mode:
+                    self._on_draft_cancelled()
+                    return True
+                # Hole abbrechen
+                if self._hole_mode:
+                    self._on_hole_cancelled()
+                    return True
+                # Priorität 0.5: Revolve abbrechen
+                if self.viewport_3d.revolve_mode:
+                    self._on_revolve_cancelled()
+                    return True
+                # Priorität 0.6: Offset Plane abbrechen
                 if self.viewport_3d.offset_plane_mode or self._offset_plane_pending:
                     self._on_offset_plane_cancelled()
                     return True

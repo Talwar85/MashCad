@@ -146,7 +146,9 @@ class RevolveFeature(Feature):
     angle: float = 360.0
     angle_formula: Optional[str] = None
     axis: Tuple[float, float, float] = (0, 1, 0)
+    axis_origin: Tuple[float, float, float] = (0, 0, 0)
     operation: str = "New Body"
+    precalculated_polys: list = None
 
     def __post_init__(self):
         self.type = FeatureType.REVOLVE
@@ -1550,7 +1552,8 @@ class Body:
     def _compute_revolve(self, feature: 'RevolveFeature'):
         """
         Berechnet Revolve aus Sketch-Profil um eine Achse.
-        Nutzt Build123d revolve() oder OCP BRepPrimAPI_MakeRevol.
+        Unterstützt precalculated_polys (aus interaktivem Workflow) oder
+        get_outer_polygon() Fallback.
         """
         from build123d import (
             BuildPart, Plane, Axis, revolve as bd_revolve,
@@ -1561,41 +1564,62 @@ class Body:
         if not sketch:
             raise ValueError("Revolve: Kein Sketch vorhanden")
 
-        # Sketch-Koordinaten holen
-        outer_coords = sketch.get_outer_polygon()
-        if not outer_coords or len(outer_coords) < 3:
-            raise ValueError("Revolve: Sketch hat zu wenig Punkte")
-
         # Sketch-Plane bestimmen
         plane_origin = getattr(sketch, 'plane_origin', (0, 0, 0))
         plane_normal = getattr(sketch, 'plane_normal', (0, 0, 1))
         x_dir = getattr(sketch, 'plane_x_dir', None)
 
-        # 2D -> 3D Konvertierung
         plane = Plane(
             origin=Vector(*plane_origin),
             z_dir=Vector(*plane_normal),
             x_dir=Vector(*x_dir) if x_dir else None
         )
 
-        pts_3d = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+        # Profile bestimmen: precalculated_polys oder Fallback
+        faces_to_revolve = []
 
-        # Face erstellen
-        wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
-        face = make_face(wire)
+        if feature.precalculated_polys:
+            # Interaktiver Workflow: Shapely-Polygone → Build123d Faces
+            for poly in feature.precalculated_polys:
+                try:
+                    coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
+                    if len(coords) < 3:
+                        continue
+                    pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                    wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
+                    faces_to_revolve.append(make_face(wire))
+                except Exception as e:
+                    logger.debug(f"Revolve: Polygon-Konvertierung fehlgeschlagen: {e}")
+        else:
+            # Fallback: get_outer_polygon
+            outer_coords = sketch.get_outer_polygon()
+            if not outer_coords or len(outer_coords) < 3:
+                raise ValueError("Revolve: Sketch hat zu wenig Punkte")
+            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+            wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
+            faces_to_revolve.append(make_face(wire))
+
+        if not faces_to_revolve:
+            raise ValueError("Revolve: Keine gültigen Profile gefunden")
 
         # Achse bestimmen
-        axis_vec = feature.axis  # (1,0,0), (0,1,0), oder (0,0,1)
-        if axis_vec == (1, 0, 0):
-            axis = Axis.X
-        elif axis_vec == (0, 1, 0):
-            axis = Axis.Y
-        else:
-            axis = Axis.Z
+        axis_vec = feature.axis
+        axis_origin_vec = Vector(*feature.axis_origin) if feature.axis_origin else Vector(0, 0, 0)
 
-        # Revolve ausfuehren
+        if tuple(axis_vec) == (1, 0, 0) and tuple(feature.axis_origin) == (0, 0, 0):
+            axis = Axis.X
+        elif tuple(axis_vec) == (0, 1, 0) and tuple(feature.axis_origin) == (0, 0, 0):
+            axis = Axis.Y
+        elif tuple(axis_vec) == (0, 0, 1) and tuple(feature.axis_origin) == (0, 0, 0):
+            axis = Axis.Z
+        else:
+            # Custom axis
+            axis = Axis(axis_origin_vec, Vector(*axis_vec))
+
+        # Revolve ausführen (erstes Profil)
         with BuildPart() as part:
-            bd_revolve(face, axis=axis, revolution_arc=feature.angle)
+            for face in faces_to_revolve:
+                bd_revolve(face, axis=axis, revolution_arc=feature.angle)
 
         result = part.part
         if result is None or (hasattr(result, 'is_null') and result.is_null()):
@@ -2525,7 +2549,7 @@ class Body:
         Erstellt eine Bohrung via Boolean Cut mit Zylinder.
         Typen: simple, counterbore, countersink.
         """
-        from build123d import Solid, Cylinder, Location, Vector, Axis, Plane
+        from build123d import Solid, Cylinder, Location, Vector, Axis, Plane, Align
         import math
 
         pos = Vector(*feature.position)
@@ -2542,7 +2566,6 @@ class Body:
                             align=(Align.CENTER, Align.CENTER, Align.MIN))
 
         # Rotation: Standard-Zylinder zeigt in +Z, wir brauchen feature.direction
-        from build123d import Align
         from OCP.gp import gp_Trsf, gp_Ax1, gp_Pnt, gp_Dir, gp_Vec
         from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 
@@ -2586,11 +2609,19 @@ class Body:
             from build123d import Vector, Location
             import numpy as np
 
-            d = np.array([direction[0], direction[1], direction[2]], dtype=float)
+            # Support both tuples and Build123d Vectors
+            if hasattr(direction, 'X'):
+                d = np.array([direction.X, direction.Y, direction.Z], dtype=float)
+            else:
+                d = np.array([direction[0], direction[1], direction[2]], dtype=float)
             d_norm = d / (np.linalg.norm(d) + 1e-12)
 
             # Start etwas vor der Flaeche (damit der Cut sicher durchgeht)
-            start = np.array([position[0], position[1], position[2]]) + d_norm * 0.1
+            if hasattr(position, 'X'):
+                pos = np.array([position.X, position.Y, position.Z])
+            else:
+                pos = np.array([position[0], position[1], position[2]])
+            start = pos - d_norm * 0.5
 
             # Rotation berechnen: Z-Achse -> direction
             z_axis = np.array([0, 0, 1.0])
@@ -2636,13 +2667,18 @@ class Body:
         """
         Wendet Draft/Taper auf selektierte Flaechen an.
         Verwendet OCP BRepOffsetAPI_DraftAngle.
+        Wenn face_selectors vorhanden: nur passende Faces draften.
         """
         import math
+        import numpy as np
         from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
         from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
         from OCP.TopAbs import TopAbs_FACE
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopoDS import TopoDS
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_Plane
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
@@ -2656,15 +2692,47 @@ class Body:
         # Neutrale Ebene (Basis der Entformung)
         neutral_plane = gp_Pln(gp_Pnt(0, 0, 0), pull_dir)
 
+        # Selektierte Normalen (wenn vorhanden)
+        selected_normals = None
+        if feature.face_selectors:
+            selected_normals = [s.get('normal') for s in feature.face_selectors if 'normal' in s]
+
         draft_op = BRepOffsetAPI_DraftAngle(shape)
 
-        # Alle Faces durchgehen und Draft anwenden
-        # Wenn face_selectors leer: alle nicht-parallelen Faces
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         face_count = 0
 
         while explorer.More():
             face = TopoDS.Face_s(explorer.Current())
+
+            # Wenn Faces selektiert: nur passende draften
+            if selected_normals:
+                try:
+                    adaptor = BRepAdaptor_Surface(face)
+                    if adaptor.GetType() == GeomAbs_Plane:
+                        pln = adaptor.Plane()
+                        ax = pln.Axis().Direction()
+                        face_normal = np.array([ax.X(), ax.Y(), ax.Z()])
+                        # Orientierung beachten
+                        if face.IsEqual(face):  # immer True, aber face orientation check
+                            from OCP.TopAbs import TopAbs_REVERSED
+                            if face.Orientation() == TopAbs_REVERSED:
+                                face_normal = -face_normal
+
+                        # Prüfe ob diese Normale in der Selektion ist
+                        matched = False
+                        for sel_n in selected_normals:
+                            sel_arr = np.array(sel_n)
+                            if np.allclose(face_normal, sel_arr, atol=0.1):
+                                matched = True
+                                break
+                        if not matched:
+                            explorer.Next()
+                            continue
+                except Exception:
+                    explorer.Next()
+                    continue
+
             try:
                 draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
                 face_count += 1

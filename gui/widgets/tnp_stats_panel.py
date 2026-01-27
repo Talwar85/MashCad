@@ -192,12 +192,21 @@ class TNPStatsPanel(QWidget):
     def _display_stats(self, stats: dict):
         """Zeigt die Statistiken an."""
         total = stats.get("total", 0)
+        tracked = stats.get("tracked_references", 0)
 
-        if total == 0:
+        if total == 0 and tracked == 0:
             self._update_visibility(False)
             return
 
         self._update_visibility(True)
+
+        if total == 0 and tracked > 0:
+            self._success_label.setText(f"{tracked} {tr('References tracked')} — {tr('no rebuilds yet')}")
+            self._success_bar.setValue(0)
+            for label in self._strategy_labels.values():
+                label.setText("0")
+            self._total_label.setText(f"0 {tr('Resolutions')}")
+            return
 
         # Erfolgsrate
         success_rate = stats.get("success_rate", 0)

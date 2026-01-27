@@ -749,6 +749,49 @@ class Sketch:
         self._profiles_valid = True
         return profiles
 
+    def get_outer_polygon(self, tolerance: float = 0.5):
+        """Gibt das größte geschlossene Profil als 2D-Koordinatenliste zurück.
+
+        Returns:
+            List[Tuple[float, float]] oder None wenn kein Profil gefunden.
+        """
+        profiles = self._find_closed_profiles(tolerance)
+        if not profiles:
+            return None
+
+        # Wähle das Profil mit der größten Fläche (= Außenprofil)
+        best_profile = None
+        best_area = 0.0
+        for profile_lines in profiles:
+            coords = [(l.start.x, l.start.y) for l in profile_lines]
+            # Shoelace-Formel für Fläche
+            area = 0.0
+            n = len(coords)
+            for i in range(n):
+                x1, y1 = coords[i]
+                x2, y2 = coords[(i + 1) % n]
+                area += x1 * y2 - x2 * y1
+            area = abs(area) / 2.0
+            if area > best_area:
+                best_area = area
+                best_profile = coords
+
+        return best_profile
+
+    def get_all_profiles(self, tolerance: float = 0.5):
+        """Gibt alle geschlossenen Profile als 2D-Koordinatenlisten zurück.
+
+        Returns:
+            List[List[Tuple[float, float]]] - Alle Profile als Koordinatenlisten.
+        """
+        profiles = self._find_closed_profiles(tolerance)
+        result = []
+        for profile_lines in profiles:
+            coords = [(l.start.x, l.start.y) for l in profile_lines]
+            if len(coords) >= 3:
+                result.append(coords)
+        return result
+
     def _adj_key(self, pt, tolerance: float = 0.5):
         """Rundet Punkt auf Adjacency-Key."""
         prec = max(1, int(-1 * round(math.log10(tolerance)))) if tolerance > 0 else 1
