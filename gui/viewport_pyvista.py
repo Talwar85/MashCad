@@ -98,6 +98,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     offset_plane_drag_changed = Signal(float)  # Offset-Wert während Drag
     hole_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     draft_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
+    split_body_clicked = Signal(str)  # body_id
+    split_drag_changed = Signal(float)  # position during drag
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -152,6 +154,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._draft_selected_faces = []  # list of (body_id, cell_id, normal, position)
         self._draft_body_id = None
         self._draft_preview_actor = None
+
+        self.split_mode = False
+        self._split_body_id = None
+        self._split_plane_axis = "XY"
+        self._split_position = 0.0
+        self._split_angle = 0.0         # cut angle in degrees
+        self._split_bb = None           # body bounding box
+        self._split_dragging = False
+        self._split_drag_start = None
+        self._split_drag_start_pos = 0.0
 
         self.offset_plane_mode = False
         self._offset_plane_base_origin = None
@@ -1217,6 +1229,209 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             pass
         self._draft_preview_actor = None
 
+    # ==================== SPLIT MODE ====================
+    def set_split_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Split-Modus."""
+        self.split_mode = enabled
+        if enabled:
+            self._split_body_id = None
+            self._split_bb = None
+            self._split_dragging = False
+        else:
+            self._split_body_id = None
+            self._split_bb = None
+            self._split_dragging = False
+            self.clear_split_preview()
+
+    def set_split_body(self, body_id):
+        """Body setzen und Schnittebene auf Mitte der Bounding Box."""
+        import numpy as np
+        self._split_body_id = body_id
+        body_data = self.bodies.get(body_id)
+        if body_data is None:
+            return
+
+        mesh = body_data.get('mesh')
+        if mesh is None:
+            return
+
+        bounds = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+        self._split_bb = bounds
+
+        # Default position: center of BB along current axis
+        axis_map = {"XY": 4, "XZ": 2, "YZ": 0}  # index into bounds (min)
+        idx = axis_map.get(self._split_plane_axis, 4)
+        center = (bounds[idx] + bounds[idx + 1]) / 2.0
+        self._split_position = center
+        self._draw_split_plane()
+        return center
+
+    def update_split_plane(self, axis, position):
+        """Aktualisiert Schnittebene."""
+        self._split_plane_axis = axis
+        self._split_position = position
+        self._draw_split_plane()
+
+    def _draw_split_plane(self):
+        """Rendert die halbtransparente Schnittebene."""
+        import numpy as np
+        # Remove old plane
+        for name in ['split_plane', 'split_plane_edge']:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+
+        if self._split_bb is None:
+            return
+
+        bounds = self._split_bb
+        # Compute plane size from BB diagonal
+        dx = bounds[1] - bounds[0]
+        dy = bounds[3] - bounds[2]
+        dz = bounds[5] - bounds[4]
+        diag = max(dx, dy, dz) * 1.5
+        if diag < 10:
+            diag = 50
+
+        pos = self._split_position
+        axis = self._split_plane_axis
+
+        if axis == "XY":
+            center = ((bounds[0] + bounds[1]) / 2, (bounds[2] + bounds[3]) / 2, pos)
+            direction = np.array([0.0, 0.0, 1.0])
+            rot_axis = np.array([1.0, 0.0, 0.0])
+        elif axis == "XZ":
+            center = ((bounds[0] + bounds[1]) / 2, pos, (bounds[4] + bounds[5]) / 2)
+            direction = np.array([0.0, 1.0, 0.0])
+            rot_axis = np.array([1.0, 0.0, 0.0])
+        else:  # YZ
+            center = (pos, (bounds[2] + bounds[3]) / 2, (bounds[4] + bounds[5]) / 2)
+            direction = np.array([1.0, 0.0, 0.0])
+            rot_axis = np.array([0.0, 1.0, 0.0])
+
+        # Apply angle rotation (Rodrigues)
+        angle_deg = self._split_angle
+        if abs(angle_deg) > 0.01:
+            angle_rad = np.radians(angle_deg)
+            k = rot_axis
+            c, s = np.cos(angle_rad), np.sin(angle_rad)
+            direction = direction * c + np.cross(k, direction) * s + k * np.dot(k, direction) * (1 - c)
+            direction = direction / (np.linalg.norm(direction) + 1e-12)
+
+        try:
+            plane_mesh = pv.Plane(
+                center=center,
+                direction=direction,
+                i_size=diag,
+                j_size=diag,
+                i_resolution=1,
+                j_resolution=1,
+            )
+            self.plotter.add_mesh(
+                plane_mesh,
+                color='#5599dd',
+                opacity=0.25,
+                name='split_plane',
+                pickable=False,
+            )
+            edges = plane_mesh.extract_feature_edges(
+                boundary_edges=True, feature_edges=False,
+                manifold_edges=False, non_manifold_edges=False,
+            )
+            self.plotter.add_mesh(
+                edges, color='#5599dd', opacity=0.6,
+                line_width=2, name='split_plane_edge',
+                pickable=False,
+            )
+            request_render(self.plotter)
+        except Exception as e:
+            logger.debug(f"Split plane draw error: {e}")
+
+    def show_split_preview(self, above_mesh, below_mesh):
+        """Zeigt beide Hälften als farbige Preview."""
+        self.clear_split_preview_meshes()
+        try:
+            if above_mesh is not None:
+                self.plotter.add_mesh(
+                    above_mesh, color='#00cccc', opacity=0.45,
+                    name='split_preview_above', pickable=False,
+                    show_edges=True, edge_color='#009999', line_width=1
+                )
+            if below_mesh is not None:
+                self.plotter.add_mesh(
+                    below_mesh, color='#cc44cc', opacity=0.45,
+                    name='split_preview_below', pickable=False,
+                    show_edges=True, edge_color='#993399', line_width=1
+                )
+            request_render(self.plotter)
+        except Exception as e:
+            logger.debug(f"Split preview error: {e}")
+
+    def clear_split_preview_meshes(self):
+        """Entfernt nur die Preview-Meshes (nicht die Ebene)."""
+        for name in ['split_preview_above', 'split_preview_below']:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+
+    def clear_split_preview(self):
+        """Entfernt alle Split-Visualisierungen."""
+        self.clear_split_preview_meshes()
+        for name in ['split_plane', 'split_plane_edge']:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+
+    def handle_split_mouse_press(self, x, y):
+        """Startet Split-Plane Drag oder Body-Click."""
+        if not self.split_mode:
+            return False
+
+        # If no body selected yet, use hovered_body_face from hover
+        if self._split_body_id is None:
+            if self.hovered_body_face is not None:
+                body_id = self.hovered_body_face[0]
+                logger.debug(f"Split: Body '{body_id}' geklickt")
+                self.split_body_clicked.emit(body_id)
+                return True
+            return False
+
+        # Body already selected — start drag
+        from PySide6.QtCore import QPoint
+        self._split_dragging = True
+        self._split_drag_start = QPoint(x, y)
+        self._split_drag_start_pos = self._split_position
+        return True
+
+    def handle_split_mouse_move(self, x, y):
+        """Drag für Split-Position."""
+        if not self._split_dragging or self._split_drag_start is None:
+            return False
+        import numpy as np
+
+        dy = -(y - self._split_drag_start.y())
+        scale = self._get_pixel_to_world_scale(
+            np.array([0, 0, self._split_position])
+        ) if hasattr(self, '_get_pixel_to_world_scale') else 0.5
+        delta = dy * scale
+
+        new_pos = self._split_drag_start_pos + delta
+        self._split_position = new_pos
+        self._draw_split_plane()
+        self.split_drag_changed.emit(new_pos)
+        return True
+
+    def handle_split_mouse_release(self):
+        """Beendet Split-Drag."""
+        if not self._split_dragging:
+            return False
+        self._split_dragging = False
+        self._split_drag_start = None
+        return True
+
     # ==================== OFFSET PLANE MODE ====================
     def set_offset_plane_mode(self, enabled):
         """Aktiviert/deaktiviert den interaktiven Offset-Plane-Modus."""
@@ -1359,6 +1574,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 screen_pos = (int(pos.x()), int(pos.y()))
+
+                # Split Mode Drag / Body-Click
+                if self.split_mode:
+                    if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                        if self.handle_split_mouse_press(screen_pos[0], screen_pos[1]):
+                            return True
+                    elif event_type == QEvent.MouseMove and self._split_dragging:
+                        if self.handle_split_mouse_move(screen_pos[0], screen_pos[1]):
+                            return True
+                    elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                        if self.handle_split_mouse_release():
+                            return True
 
                 # Offset Plane Drag
                 if self.offset_plane_mode:
@@ -1591,6 +1818,33 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             return False
 
         # --- DRAFT MODE (Body-Face picking for draft) ---
+        # --- SPLIT MODE (body already selected, drag/keyboard) ---
+        if self.split_mode and self._split_body_id is not None:
+            event_type = event.type()
+
+            if event_type == QEvent.KeyPress:
+                key = event.key()
+                if key == Qt.Key_X:
+                    self.split_drag_changed.emit(self._split_position)  # trigger sync
+                    return True
+                elif key == Qt.Key_Y:
+                    return True
+                elif key == Qt.Key_Z:
+                    return True
+                elif key == Qt.Key_Up:
+                    self._split_position += 1.0
+                    self._draw_split_plane()
+                    self.split_drag_changed.emit(self._split_position)
+                    return True
+                elif key == Qt.Key_Down:
+                    self._split_position -= 1.0
+                    self._draw_split_plane()
+                    self.split_drag_changed.emit(self._split_position)
+                    return True
+
+            # Let mouse events pass through to eventFilter split handler above
+            return False
+
         if self.draft_mode:
             event_type = event.type()
 

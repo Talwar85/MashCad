@@ -479,6 +479,17 @@ class MainWindow(QMainWindow):
         self.draft_panel.cancelled.connect(self._on_draft_cancelled)
         self._draft_mode = False
 
+        # Split Input Panel
+        from gui.input_panels import SplitInputPanel
+        self.split_panel = SplitInputPanel(self)
+        self.split_panel.plane_changed.connect(self._on_split_plane_changed)
+        self.split_panel.position_changed.connect(self._on_split_position_changed)
+        self.split_panel.angle_changed.connect(self._on_split_angle_changed)
+        self.split_panel.keep_changed.connect(self._on_split_keep_changed)
+        self.split_panel.confirmed.connect(self._on_split_confirmed)
+        self.split_panel.cancelled.connect(self._on_split_cancelled)
+        self._split_mode = False
+
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
         self.center_hint.hide()
@@ -817,6 +828,10 @@ class MainWindow(QMainWindow):
             self.viewport_3d.hole_face_clicked.connect(self._on_body_face_clicked_for_hole)
         if hasattr(self.viewport_3d, 'draft_face_clicked'):
             self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
+        if hasattr(self.viewport_3d, 'split_body_clicked'):
+            self.viewport_3d.split_body_clicked.connect(self._on_split_body_clicked)
+        if hasattr(self.viewport_3d, 'split_drag_changed'):
+            self.viewport_3d.split_drag_changed.connect(self._on_split_drag)
 
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
@@ -1299,6 +1314,15 @@ class MainWindow(QMainWindow):
         - Pending Fillet/Chamfer Mode
         - Point-to-Point Move
         """
+        # Prüfe auf Split Pending Mode
+        if getattr(self, '_pending_split_mode', False):
+            self._pending_split_mode = False
+            self.viewport_3d.setCursor(Qt.ArrowCursor)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(False)
+            self._on_split_body_clicked(body_id)
+            return
+
         # Prüfe auf Fillet/Chamfer Pending Mode (NEU)
         if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
             self._on_body_clicked_for_fillet(body_id)
@@ -2609,28 +2633,241 @@ class MainWindow(QMainWindow):
         self.draft_panel.hide()
 
     def _split_body_dialog(self):
-        """Split-Dialog: Koerper teilen."""
-        from gui.dialogs.split_dialog import SplitDialog
+        """Startet interaktiven Split-Workflow (PrusaSlicer-style)."""
+        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        if not has_bodies:
+            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
+            return
+
+        self._hide_transform_ui()
+        self._split_mode = True
+        self._split_target_body = None
+        self.split_panel.reset()
+        self.split_panel.show_at(self.viewport_3d)
+
+        # Use proven body-pick mechanism (same as fillet/chamfer/transform)
+        self._pending_split_mode = True
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(True)
+
+        self.statusBar().showMessage("Split: Klicke auf einen Body im Viewport")
+        logger.info("Split-Modus gestartet — Body im Viewport klicken")
+
+    def _on_split_body_clicked(self, body_id):
+        """Body wurde im Split-Modus geklickt."""
+        if not self._split_mode:
+            return
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body or not body._build123d_solid:
+            return
+
+        self._split_target_body = body
+        # Now activate split viewport mode for drag interaction
+        self.viewport_3d.set_split_mode(True)
+        center = self.viewport_3d.set_split_body(body_id)
+        if center is not None:
+            self.split_panel.set_position(center)
+        self.statusBar().showMessage("Split: Ebene verschieben (Drag/Zahleneingabe), Enter bestätigen")
+        self._update_split_preview()
+
+    def _on_split_plane_changed(self, plane):
+        """Schnittebene geändert (XY/XZ/YZ)."""
+        if not self._split_mode or not self._split_target_body:
+            return
+        self.viewport_3d._split_plane_axis = plane
+        # Recenter position for new axis
+        center = self.viewport_3d.set_split_body(self._split_target_body.id)
+        if center is not None:
+            self.split_panel.set_position(center)
+        self._update_split_preview()
+
+    def _on_split_position_changed(self, value):
+        """Position per Panel geändert."""
+        if not self._split_mode or not self._split_target_body:
+            return
+        self.viewport_3d.update_split_plane(self.viewport_3d._split_plane_axis, value)
+        self._update_split_preview()
+
+    def _on_split_angle_changed(self, angle):
+        """Schnittwinkel geändert."""
+        if not self._split_mode or not self._split_target_body:
+            return
+        self.viewport_3d._split_angle = angle
+        self.viewport_3d._draw_split_plane()
+        self._schedule_split_preview()
+
+    def _on_split_keep_changed(self, keep):
+        """Keep-Seite geändert."""
+        self._update_split_preview()
+
+    def _on_split_drag(self, position):
+        """Viewport-Drag → Panel synchronisieren."""
+        self.split_panel.set_position(position)
+        self._schedule_split_preview()
+
+    def _schedule_split_preview(self):
+        """Debounced split preview — verhindert Spam bei schnellem Drag."""
+        if not hasattr(self, '_split_preview_timer'):
+            from PySide6.QtCore import QTimer
+            self._split_preview_timer = QTimer(self)
+            self._split_preview_timer.setSingleShot(True)
+            self._split_preview_timer.timeout.connect(self._update_split_preview)
+        self._split_preview_timer.start(150)  # 150ms debounce
+
+    def _split_origin_normal(self):
+        """Berechnet Origin und Normal für die aktuelle Split-Konfiguration (inkl. Winkel)."""
+        import numpy as np
+        axis = self.viewport_3d._split_plane_axis
+        pos = self.viewport_3d._split_position
+        angle_deg = self.split_panel.get_angle()
+
+        if axis == "XY":
+            origin, normal = (0, 0, pos), np.array([0.0, 0.0, 1.0])
+        elif axis == "XZ":
+            origin, normal = (0, pos, 0), np.array([0.0, 1.0, 0.0])
+        else:
+            origin, normal = (pos, 0, 0), np.array([1.0, 0.0, 0.0])
+
+        if abs(angle_deg) > 0.01:
+            # Rotate normal around a perpendicular axis
+            angle_rad = np.radians(angle_deg)
+            # Pick rotation axis perpendicular to normal
+            if axis == "XY":
+                rot_axis = np.array([1.0, 0.0, 0.0])  # rotate around X
+            elif axis == "XZ":
+                rot_axis = np.array([1.0, 0.0, 0.0])  # rotate around X
+            else:
+                rot_axis = np.array([0.0, 1.0, 0.0])  # rotate around Y
+            # Rodrigues rotation
+            k = rot_axis
+            c, s = np.cos(angle_rad), np.sin(angle_rad)
+            normal = normal * c + np.cross(k, normal) * s + k * np.dot(k, normal) * (1 - c)
+            normal = normal / (np.linalg.norm(normal) + 1e-12)
+
+        return origin, tuple(normal)
+
+    def _update_split_preview(self):
+        """Live-Preview beider Hälften."""
+        body = getattr(self, '_split_target_body', None)
+        if not body or not body._build123d_solid:
+            self.viewport_3d.clear_split_preview_meshes()
+            return
+
+        try:
+            from modeling import SplitFeature
+            from modeling.cad_tessellator import CADTessellator
+
+            origin, normal = self._split_origin_normal()
+
+            above_mesh = None
+            below_mesh = None
+
+            for side in ["above", "below"]:
+                feature = SplitFeature(
+                    plane_origin=origin,
+                    plane_normal=normal,
+                    keep_side=side,
+                )
+                try:
+                    result = body._compute_split(feature, body._build123d_solid)
+                    if result is not None:
+                        mesh, _ = CADTessellator.tessellate(result)
+                        if side == "above":
+                            above_mesh = mesh
+                        else:
+                            below_mesh = mesh
+                except Exception:
+                    pass
+
+            self.viewport_3d.show_split_preview(above_mesh, below_mesh)
+
+            # Dim original body — use correct actor name (body_<id>_m)
+            body_data = self.viewport_3d.bodies.get(body.id)
+            if body_data and 'mesh' in body_data:
+                try:
+                    self.viewport_3d.plotter.add_mesh(
+                        body_data['mesh'], color='#666666', opacity=0.15,
+                        name=f"body_{body.id}_m", pickable=False
+                    )
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.debug(f"Split preview error: {e}")
+            self.viewport_3d.clear_split_preview_meshes()
+
+    def _on_split_confirmed(self):
+        """Split bestätigt — Feature erstellen."""
         from modeling import SplitFeature
         from gui.commands.feature_commands import AddFeatureCommand
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        body = getattr(self, '_split_target_body', None)
+        if not body:
+            self.statusBar().showMessage("Kein Body ausgewählt!")
+            self._finish_split_ui()
             return
 
-        dialog = SplitDialog(self)
-        if dialog.exec():
-            feature = SplitFeature(
-                plane_origin=dialog.plane_origin,
-                plane_normal=dialog.plane_normal,
-                keep_side=dialog.keep_side,
-            )
+        keep = self.split_panel.get_keep_side()
+        origin, normal = self._split_origin_normal()
 
+        if keep == "both":
+            # Compute below half BEFORE modifying the body
+            from modeling import Body
+            below_solid = None
+            try:
+                below_solid = body._compute_split(
+                    SplitFeature(plane_origin=origin, plane_normal=normal, keep_side="below"),
+                    body._build123d_solid
+                )
+            except Exception as e:
+                logger.error(f"Split Both - below half failed: {e}")
+
+            # Apply above to original body
+            feature_above = SplitFeature(
+                plane_origin=origin, plane_normal=normal, keep_side="above",
+            )
+            cmd = AddFeatureCommand(body, feature_above, self)
+            self.undo_stack.push(cmd)
+
+            # Create new body with below half
+            if below_solid:
+                new_body = Body(name=f"{body.name}_B")
+                new_body._build123d_solid = below_solid
+                new_body.invalidate_mesh()
+                self.document.bodies.append(new_body)
+                self.browser.refresh()
+
+            self.statusBar().showMessage("Split (both) — 2 Bodies erstellt")
+            logger.success("Split Body (both) erstellt")
+        else:
+            feature = SplitFeature(
+                plane_origin=origin, plane_normal=normal, keep_side=keep,
+            )
             cmd = AddFeatureCommand(body, feature, self)
             self.undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Split ({dialog.keep_side}) applied")
-            logger.success(f"Split Body ({dialog.keep_side}) erstellt")
+            self.statusBar().showMessage(f"Split ({keep}) applied")
+            logger.success(f"Split Body ({keep}) erstellt")
+
+        self._finish_split_ui()
+
+    def _on_split_cancelled(self):
+        """Split abgebrochen."""
+        self._finish_split_ui()
+        self.statusBar().showMessage("Split abgebrochen")
+
+    def _finish_split_ui(self):
+        """Split-UI aufräumen."""
+        self._split_mode = False
+        self._pending_split_mode = False
+        self._split_target_body = None
+        self.viewport_3d.set_split_mode(False)
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        self.split_panel.hide()
+        # Restore body visibility — full re-render
+        self._trigger_viewport_update()
 
     def _revolve_dialog(self):
         """Startet den interaktiven Revolve-Workflow (Fusion-Style)."""

@@ -2137,3 +2137,177 @@ class DraftInputPanel(QFrame):
             if y < 0:
                 y = 50
             self.move(x, y)
+
+
+class SplitInputPanel(QFrame):
+    """Input panel for interactive Split Body — PrusaSlicer-style."""
+
+    plane_changed = Signal(str)
+    position_changed = Signal(float)
+    angle_changed = Signal(float)
+    keep_changed = Signal(str)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._plane = "XY"
+        self._position = 0.0
+        self._angle = 0.0
+        self._keep = "above"
+
+        self.setMinimumWidth(640)
+        self.setFixedHeight(60)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #5599dd;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 13px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #555; border-color: #777; }
+            QPushButton:checked { background: #5599dd; color: #000; border-color: #5599dd; }
+            QComboBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 4px; font-size: 12px;
+            }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(15, 5, 15, 5)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Split:"))
+
+        # Plane buttons
+        self._plane_btns = {}
+        for plane in ["XY", "XZ", "YZ"]:
+            btn = QPushButton(plane)
+            btn.setCheckable(True)
+            btn.setFixedSize(36, 28)
+            btn.clicked.connect(lambda checked, p=plane: self._set_plane(p))
+            self._plane_btns[plane] = btn
+            layout.addWidget(btn)
+        self._plane_btns["XY"].setChecked(True)
+
+        # Position
+        layout.addWidget(QLabel("Pos:"))
+        self.pos_input = ActionSpinBox()
+        self.pos_input.setRange(-1000.0, 1000.0)
+        self.pos_input.setDecimals(2)
+        self.pos_input.setSuffix(" mm")
+        self.pos_input.setValue(0.0)
+        self.pos_input.setSingleStep(1.0)
+        self.pos_input.valueChanged.connect(self._on_pos_changed)
+        self.pos_input.enterPressed.connect(self._confirm)
+        self.pos_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.pos_input)
+
+        # Angle
+        layout.addWidget(QLabel("Angle:"))
+        self.angle_input = ActionSpinBox()
+        self.angle_input.setRange(-89.0, 89.0)
+        self.angle_input.setDecimals(1)
+        self.angle_input.setSuffix("°")
+        self.angle_input.setValue(0.0)
+        self.angle_input.setSingleStep(5.0)
+        self.angle_input.valueChanged.connect(self._on_angle_changed)
+        self.angle_input.enterPressed.connect(self._confirm)
+        self.angle_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.angle_input)
+
+        # Keep side
+        layout.addWidget(QLabel("Keep:"))
+        self.keep_combo = QComboBox()
+        self.keep_combo.addItems(["Above", "Below", "Both"])
+        self.keep_combo.currentTextChanged.connect(self._on_keep_changed)
+        self.keep_combo.setFixedWidth(80)
+        layout.addWidget(self.keep_combo)
+
+        # OK / Cancel
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.setStyleSheet("background: #5599dd; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.clicked.connect(self._confirm)
+        layout.addWidget(self.btn_ok)
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setFixedWidth(35)
+        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _set_plane(self, plane):
+        self._plane = plane
+        for p, btn in self._plane_btns.items():
+            btn.setChecked(p == plane)
+        self.plane_changed.emit(plane)
+
+    def _on_pos_changed(self, value):
+        self._position = value
+        self.position_changed.emit(value)
+
+    def _on_angle_changed(self, value):
+        self._angle = value
+        self.angle_changed.emit(value)
+
+    def _on_keep_changed(self, text):
+        self._keep = text.lower()
+        self.keep_changed.emit(self._keep)
+
+    def _confirm(self):
+        self._position = self.pos_input.value()
+        self.confirmed.emit()
+
+    def get_plane(self) -> str:
+        return self._plane
+
+    def get_position(self) -> float:
+        return self.pos_input.value()
+
+    def set_position(self, value: float):
+        self.pos_input.blockSignals(True)
+        self.pos_input.setValue(value)
+        self.pos_input.blockSignals(False)
+        self._position = value
+
+    def get_angle(self) -> float:
+        return self.angle_input.value()
+
+    def get_keep_side(self) -> str:
+        return self._keep
+
+    def reset(self):
+        self._plane = "XY"
+        self._position = 0.0
+        self._angle = 0.0
+        self._keep = "above"
+        self.pos_input.blockSignals(True)
+        self.pos_input.setValue(0.0)
+        self.pos_input.blockSignals(False)
+        self.angle_input.blockSignals(True)
+        self.angle_input.setValue(0.0)
+        self.angle_input.blockSignals(False)
+        self._set_plane("XY")
+        self.keep_combo.setCurrentText("Above")
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)
