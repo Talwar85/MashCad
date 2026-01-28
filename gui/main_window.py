@@ -6975,10 +6975,18 @@ class MainWindow(QMainWindow):
 
         self._loft_mode = True
         self._loft_profiles = []
+        logger.info(f"Loft: Modus aktiviert. _loft_mode={self._loft_mode}")
 
         # Face-Detection aktivieren
         self.viewport_3d.set_extrude_mode(True)
         self._update_detector()
+
+        # Debug: Zeige Detector-Status
+        face_count = len(self.viewport_3d.detector.selection_faces)
+        sketch_faces = [f for f in self.viewport_3d.detector.selection_faces if f.domain_type.startswith('sketch')]
+        logger.info(f"Loft: Detector hat {face_count} Faces ({len(sketch_faces)} Sketch-Faces)")
+        for sf in sketch_faces:
+            logger.info(f"  - Face {sf.id}: {sf.domain_type}, owner={sf.owner_id}")
 
         # Panel anzeigen und zurücksetzen
         self.loft_panel.reset()
@@ -6997,12 +7005,22 @@ class MainWindow(QMainWindow):
         """
         Callback wenn eine Fläche für Loft-Profil ausgewählt wird.
         """
+        logger.info(f"Loft: _on_face_selected_for_loft aufgerufen mit face_id={face_id}")
+
         if not self._loft_mode:
+            logger.warning("Loft: Nicht im Loft-Modus!")
             return
+
+        # Debug: Zeige alle verfügbaren Faces
+        all_faces = self.viewport_3d.detector.selection_faces
+        logger.debug(f"Loft: {len(all_faces)} selection_faces verfügbar")
+        for f in all_faces:
+            logger.debug(f"  Face id={f.id}, type={f.domain_type}, owner={f.owner_id}")
 
         # Finde die Face-Daten
         face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
         if not face:
+            logger.warning(f"Loft: Face mit id={face_id} nicht in selection_faces gefunden!")
             return
 
         # Profil-Daten erstellen
@@ -7016,20 +7034,43 @@ class MainWindow(QMainWindow):
             'shapely_poly': face.shapely_poly
         }
 
-        # Prüfen ob schon ausgewählt (gleiche Z-Ebene)
-        z_new = profile_data['plane_origin'][2] if isinstance(profile_data['plane_origin'], (list, tuple)) else 0
+        # Prüfen ob schon ausgewählt (gleiche Ebenen-Position)
+        # Berechne Position entlang der Normalen für korrekten Vergleich bei beliebigen Ebenen
+        import numpy as np
+        origin_new = np.array(profile_data['plane_origin'])
+        normal_new = np.array(profile_data['plane_normal'])
 
         for existing in self._loft_profiles:
-            z_existing = existing['plane_origin'][2] if isinstance(existing['plane_origin'], (list, tuple)) else 0
-            if abs(z_new - z_existing) < 0.1:
-                logger.warning(f"Loft: Profil auf Z={z_new:.0f} bereits vorhanden - übersprungen")
+            origin_existing = np.array(existing['plane_origin'])
+            normal_existing = np.array(existing['plane_normal'])
+
+            # Prüfe ob Ebenen parallel sind (gleiche Normale)
+            dot_normals = abs(np.dot(normal_new, normal_existing))
+            if dot_normals < 0.99:
+                # Nicht parallel - verschiedene Ebenen-Orientierung, erlauben
+                continue
+
+            # Für parallele Ebenen: Distanz entlang der Normalen prüfen
+            dist_along_normal = abs(np.dot(origin_new - origin_existing, normal_new))
+            if dist_along_normal < 0.1:
+                logger.warning(f"Loft: Profil auf gleicher Ebene bereits vorhanden (dist={dist_along_normal:.2f}mm) - übersprungen")
                 return
 
         # Profil hinzufügen
         self._loft_profiles.append(profile_data)
         self.loft_panel.add_profile(profile_data)
 
-        logger.info(f"Loft: Profil auf Z={z_new:.0f} hinzugefügt ({len(self._loft_profiles)} Profile)")
+        # Highlighting für das neue Profil
+        profile_index = len(self._loft_profiles) - 1
+        self._highlight_loft_profile(profile_data, profile_index)
+
+        # Preview aktualisieren wenn mindestens 2 Profile
+        if len(self._loft_profiles) >= 2:
+            self._update_loft_preview()
+
+        # Berechne Position für Log
+        pos_along_normal = np.dot(origin_new, normal_new)
+        logger.info(f"Loft: Profil hinzugefügt (pos={pos_along_normal:.1f}mm, {len(self._loft_profiles)} Profile)")
 
     def _on_loft_confirmed(self):
         """
@@ -7099,7 +7140,169 @@ class MainWindow(QMainWindow):
         """Beendet den Loft-Modus und räumt auf."""
         self._loft_mode = False
         self._loft_profiles = []
+        self._clear_loft_highlights()
+        self._clear_loft_preview()
         self.loft_panel.hide()
+
+    def _clear_loft_highlights(self):
+        """Entfernt alle Loft-Profile-Highlights."""
+        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
+            # Entferne bis zu 10 Profile-Highlights
+            for i in range(10):
+                try:
+                    self.viewport_3d.plotter.remove_actor(f"loft_profile_{i}_highlight")
+                except Exception:
+                    pass
+            try:
+                self.viewport_3d.plotter.render()
+            except Exception:
+                pass
+
+    def _clear_loft_preview(self):
+        """Entfernt die Loft-Preview."""
+        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
+            try:
+                self.viewport_3d.plotter.remove_actor("loft_preview")
+                self.viewport_3d.plotter.render()
+            except Exception:
+                pass
+
+    def _highlight_loft_profile(self, profile_data: dict, profile_index: int):
+        """Highlightet ein Loft-Profil im Viewport."""
+        import pyvista as pv
+        import numpy as np
+
+        if not hasattr(self.viewport_3d, 'plotter') or not self.viewport_3d.plotter:
+            return
+
+        try:
+            shapely_poly = profile_data.get('shapely_poly')
+            if not shapely_poly:
+                return
+
+            plane_origin = profile_data.get('plane_origin', (0, 0, 0))
+            plane_x = profile_data.get('plane_x', (1, 0, 0))
+            plane_y = profile_data.get('plane_y', (0, 1, 0))
+
+            # Konvertiere Shapely-Polygon zu 3D-Punkten
+            if hasattr(shapely_poly, 'exterior'):
+                coords = list(shapely_poly.exterior.coords)
+            else:
+                coords = list(shapely_poly.coords)
+
+            if len(coords) < 2:
+                return
+
+            # 2D zu 3D Transformation
+            points_3d = []
+            for x2d, y2d in coords:
+                p3d = (
+                    plane_origin[0] + x2d * plane_x[0] + y2d * plane_y[0],
+                    plane_origin[1] + x2d * plane_x[1] + y2d * plane_y[1],
+                    plane_origin[2] + x2d * plane_x[2] + y2d * plane_y[2]
+                )
+                points_3d.append(p3d)
+
+            points = np.array(points_3d, dtype=np.float32)
+
+            # Erstelle Linien-Mesh für das Profil
+            n = len(points)
+            lines = []
+            for i in range(n - 1):
+                lines.extend([2, i, i + 1])
+            lines = np.array(lines, dtype=np.int32)
+
+            # Verschiedene Farben für verschiedene Profile
+            colors = ["#00ff00", "#00ccff", "#ff9900", "#ff00ff", "#ffff00"]
+            color = colors[profile_index % len(colors)]
+
+            poly = pv.PolyData(points, lines=lines)
+            self.viewport_3d.plotter.add_mesh(
+                poly,
+                name=f"loft_profile_{profile_index}_highlight",
+                color=color,
+                line_width=4,
+                render_lines_as_tubes=True
+            )
+            self.viewport_3d.plotter.render()
+
+        except Exception as e:
+            logger.warning(f"Loft-Profil-Highlight fehlgeschlagen: {e}")
+
+    def _update_loft_preview(self):
+        """Zeigt eine Preview des Loft-Ergebnisses."""
+        import pyvista as pv
+        import numpy as np
+
+        if len(self._loft_profiles) < 2:
+            self._clear_loft_preview()
+            return
+
+        try:
+            # Einfache Linien-Preview zwischen Profilen
+            self._clear_loft_preview()
+
+            all_points = []
+            all_lines = []
+            point_offset = 0
+
+            # Sammle alle Profil-Punkte
+            profile_points_list = []
+            for profile_data in sorted(self._loft_profiles, key=lambda p: p['plane_origin'][2]):
+                shapely_poly = profile_data.get('shapely_poly')
+                if not shapely_poly or not hasattr(shapely_poly, 'exterior'):
+                    continue
+
+                plane_origin = profile_data.get('plane_origin', (0, 0, 0))
+                plane_x = profile_data.get('plane_x', (1, 0, 0))
+                plane_y = profile_data.get('plane_y', (0, 1, 0))
+
+                coords = list(shapely_poly.exterior.coords)[:-1]  # Ohne Schluss-Duplikat
+                points_3d = []
+                for x2d, y2d in coords:
+                    p3d = [
+                        plane_origin[0] + x2d * plane_x[0] + y2d * plane_y[0],
+                        plane_origin[1] + x2d * plane_x[1] + y2d * plane_y[1],
+                        plane_origin[2] + x2d * plane_x[2] + y2d * plane_y[2]
+                    ]
+                    points_3d.append(p3d)
+                profile_points_list.append(points_3d)
+
+            if len(profile_points_list) < 2:
+                return
+
+            # Verbindungslinien zwischen Profilen
+            for i in range(len(profile_points_list) - 1):
+                prof1 = profile_points_list[i]
+                prof2 = profile_points_list[i + 1]
+
+                # Einfache Verbindung: Verbinde entsprechende Punkte
+                n_points = min(len(prof1), len(prof2))
+                for j in range(0, n_points, max(1, n_points // 8)):  # Nur einige Punkte verbinden
+                    all_points.append(prof1[j])
+                    all_points.append(prof2[j % len(prof2)])
+                    all_lines.extend([2, point_offset, point_offset + 1])
+                    point_offset += 2
+
+            if not all_points:
+                return
+
+            points = np.array(all_points, dtype=np.float32)
+            lines = np.array(all_lines, dtype=np.int32)
+
+            poly = pv.PolyData(points, lines=lines)
+            self.viewport_3d.plotter.add_mesh(
+                poly,
+                name="loft_preview",
+                color="#8888ff",  # Hellblau für Preview
+                line_width=2,
+                opacity=0.6,
+                render_lines_as_tubes=True
+            )
+            self.viewport_3d.plotter.render()
+
+        except Exception as e:
+            logger.warning(f"Loft-Preview fehlgeschlagen: {e}")
 
     # ==================== SECTION VIEW ====================
 

@@ -4473,82 +4473,87 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
              from gui.geometry_detector import GeometryDetector
              selection_filter = GeometryDetector.SelectionFilter.ALL
 
+        # Sammle alle Hits (Body + Sketch) um das beste zu wählen
+        all_hits = []  # (priority, distance, face_id)
+
+        # Ray für alle Berechnungen
+        ray_origin, ray_dir = self.get_ray_from_click(x, y)
+        ray_start = np.array(ray_origin)
+
         # --- 1. BODY FACES (Hardware Picking) ---
         # Wir fragen VTK: Was sieht die Kamera an Pixel x,y?
         if "body_face" in selection_filter:
             import vtk
             picker = vtk.vtkCellPicker()
             picker.SetTolerance(Tolerances.PICKER_TOLERANCE)  # Präzises Picking
-            
+
             # Wichtig: VTK Y-Koordinate ist invertiert
             height = self.plotter.interactor.height()
             picker.Pick(x, height - y, 0, self.plotter.renderer)
-            
+
             cell_id = picker.GetCellId()
-            
+
             if cell_id != -1:
                 # Wir haben etwas getroffen! Position holen.
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
-                
+
+                # Distanz zur Kamera
+                body_dist = np.linalg.norm(pos - ray_start)
+
                 # Jetzt suchen wir im Detector, welche logische Fläche zu diesem Punkt passt.
-                # Wir suchen die Fläche, die:
-                # 1. Zum selben Body gehört (oder wir prüfen nur Distanz)
-                # 2. Den Punkt 'pos' enthält (Distanz < Toleranz)
-                # 3. Eine ähnliche Normale hat
-                
-                best_face = None
-                best_dist = float('inf')
-                
                 for face in self.detector.selection_faces:
                     if face.domain_type != "body_face": continue
-                    
+
                     # Distanz des Pick-Punkts zur Ebene der Fläche
                     dist_plane = abs(np.dot(pos - np.array(face.plane_origin), np.array(face.plane_normal)))
-                    
+
                     # Normale vergleichen (Dot Product > 0.9 bedeutet fast parallel)
                     dot_normal = np.dot(normal, np.array(face.plane_normal))
-                    
+
                     if dist_plane < 1.0 and dot_normal > 0.8:
-                        # Prüfen, ob der Punkt auch wirklich nahe am Zentrum/Mesh liegt
-                        # Einfache Distanz ist hier oft gut genug, da wir den exakten Klickpunkt haben
-                        dist_center = np.linalg.norm(pos - np.array(face.plane_origin))
-                        if dist_center < best_dist:
-                            best_dist = dist_center
-                            best_face = face
-                
-                if best_face:
-                    return best_face.id
+                        # Body-Face gefunden - mit Priorität 5 (niedriger als Sketch-Profile)
+                        all_hits.append((5, body_dist, face.id))
+                        break  # Nur eine Body-Face pro VTK-Hit
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---
         # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch
-        # Aber nur, wenn wir kein Body-Face getroffen haben (oder Sketches bevorzugt sind)
-        
-        # Ray für Sketch-Berechnung
-        ray_origin, ray_dir = self.get_ray_from_click(x, y)
-        ray_start = np.array(ray_origin)
-        
-        hits = []
+
         for face in self.detector.selection_faces:
             if face.domain_type.startswith("sketch") and face.domain_type in selection_filter:
                 hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
-                if hit is None: continue
-                
+                if hit is None:
+                    continue
+
                 # Prüfen ob Punkt im 2D-Polygon liegt
                 proj_x, proj_y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
-                
+
                 # Performance: Erst Bounding Box Check im 2D
                 minx, miny, maxx, maxy = face.shapely_poly.bounds
                 if not (minx <= proj_x <= maxx and miny <= proj_y <= maxy):
                     continue
-                    
-                if face.shapely_poly.contains(Point(proj_x, proj_y)):
-                    dist = np.linalg.norm(np.array(hit) - ray_start)
-                    hits.append((face.pick_priority, dist, face.id))
 
-        if hits:
-            hits.sort(key=lambda h: (-h[0], h[1]))
-            return hits[0][2]
+                # Prüfe contains() oder intersects() mit kleinem Puffer für Randtreffer
+                pt = Point(proj_x, proj_y)
+                try:
+                    # Erst exakte Prüfung
+                    if face.shapely_poly.contains(pt):
+                        dist = np.linalg.norm(np.array(hit) - ray_start)
+                        # Sketch-Faces haben höhere Priorität (10+) als Body-Faces (5)
+                        all_hits.append((face.pick_priority, dist, face.id))
+                    # Dann mit kleinem Puffer für Rand-Klicks (1mm Toleranz)
+                    elif face.shapely_poly.buffer(1.0).contains(pt):
+                        dist = np.linalg.norm(np.array(hit) - ray_start)
+                        all_hits.append((face.pick_priority - 1, dist, face.id))  # Niedrigere Priorität
+                except Exception:
+                    pass  # Polygon-Check Fehler ignorieren
+
+        # --- 3. BESTE AUSWÄHLEN (Priorität > Distanz) ---
+        if all_hits:
+            # Sortiere nach: Höchste Priorität zuerst, dann kürzeste Distanz
+            all_hits.sort(key=lambda h: (-h[0], h[1]))
+            best = all_hits[0]
+            return best[2]
 
         return -1
         

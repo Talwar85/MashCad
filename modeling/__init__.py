@@ -3053,10 +3053,29 @@ class Body:
                     pt_3d = plane.from_local_coords((x, y))
                     points_3d.append(pt_3d)
 
-                # Wire erstellen
+                # Äußeres Wire erstellen
                 if len(points_3d) >= 3:
-                    wire = Wire.make_polygon(points_3d, close=True)
-                    face = make_face(wire)
+                    outer_wire = Wire.make_polygon(points_3d, close=True)
+
+                    # Innere Löcher verarbeiten (falls vorhanden)
+                    inner_wires = []
+                    if hasattr(shapely_poly, 'interiors') and shapely_poly.interiors:
+                        for interior in shapely_poly.interiors:
+                            inner_coords = list(interior.coords)
+                            inner_points_3d = []
+                            for x, y in inner_coords:
+                                pt_3d = plane.from_local_coords((x, y))
+                                inner_points_3d.append(pt_3d)
+                            if len(inner_points_3d) >= 3:
+                                inner_wire = Wire.make_polygon(inner_points_3d, close=True)
+                                inner_wires.append(inner_wire)
+
+                    # Face mit Löchern erstellen
+                    if inner_wires:
+                        logger.debug(f"Profil hat {len(inner_wires)} innere Löcher")
+                        face = make_face(outer_wire, inner_wires)
+                    else:
+                        face = make_face(outer_wire)
                     return face
 
             return None
