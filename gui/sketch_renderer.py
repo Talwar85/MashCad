@@ -488,7 +488,7 @@ class SketchRendererMixin:
                 if not cps: continue
                 # ... (hier vereinfacht, im Zweifel zeichnen) ...
 
-            is_selected = spline == self.selected_spline
+            is_selected = spline in self.selected_splines
             is_dragging = (spline == self.spline_drag_spline)
             
             col = DesignTokens.COLOR_GEO_CONSTRUCTION if spline.construction else DesignTokens.COLOR_GEO_BODY

@@ -34,7 +34,8 @@
       "Bash(conda run:*)",
       "Bash(ls:*)",
       "Bash(taskkill:*)",
-      "Bash(cmd /c:*)"
+      "Bash(cmd /c:*)",
+      "Bash(del c:LiteCadtest_shapely.py)"
     ]
   }
 }

@@ -574,6 +574,7 @@ class MainWindow(QMainWindow):
         self.sketch_editor.construction_mode_changed.connect(self.tool_panel.set_construction)
         self.sketch_editor.grid_snap_mode_changed.connect(self.tool_panel.set_grid_snap)
         self.sketch_editor.exit_requested.connect(self._finish_sketch)
+        self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
         self._create_toolbar()
      
     def resizeEvent(self, event):
@@ -2019,6 +2020,10 @@ class MainWindow(QMainWindow):
                 origin, 
                 plane_x=x_dir_override  # Das verhindert die Rotation!
             )
+
+    def _on_sketch_changed_refresh_viewport(self):
+        """Aktualisiert Sketch-Wireframes im 3D-Viewport nach Sketch-Änderungen."""
+        self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
 
     def _finish_sketch(self):
         """Beendet den Sketch-Modus und räumt auf."""
@@ -3747,31 +3752,48 @@ class MainWindow(QMainWindow):
             points_3d = []
             edge_exp = BRepTools_WireExplorer(outer_wire)
 
+            def _add_unique(pt_list, new_pt, tol=1e-8):
+                """Fügt Punkt hinzu, wenn er nicht fast-identisch mit dem letzten ist."""
+                if not pt_list or sum((a-b)**2 for a, b in zip(pt_list[-1], new_pt)) > tol:
+                    pt_list.append(new_pt)
+
             while edge_exp.More():
                 edge = edge_exp.Current()
+                vertex = edge_exp.CurrentVertex()
 
                 try:
                     from OCP.GeomAbs import GeomAbs_Line
+                    from OCP.BRep import BRep_Tool as BRT
                     adaptor = BRepAdaptor_Curve(edge)
-                    first = adaptor.FirstParameter()
-                    last = adaptor.LastParameter()
 
                     if adaptor.GetType() == GeomAbs_Line:
-                        # Lineare Kante: nur Startpunkt (Endpunkt kommt von nächster Kante)
-                        pt = adaptor.Value(first)
-                        points_3d.append((pt.X(), pt.Y(), pt.Z()))
+                        # Lineare Kante: Vertex aus Wire-Reihenfolge (orientierungssicher)
+                        vpt = BRT.Pnt_s(vertex)
+                        _add_unique(points_3d, (vpt.X(), vpt.Y(), vpt.Z()))
                     else:
-                        # Gekrümmte Kante: Sample-Punkte
+                        # Gekrümmte Kante: orientierungsgerecht samplen
+                        from OCP.TopAbs import TopAbs_REVERSED
+                        reversed_edge = edge.Orientation() == TopAbs_REVERSED
+                        first = adaptor.FirstParameter()
+                        last = adaptor.LastParameter()
                         n_samples = 10
                         for i in range(n_samples):
-                            t = first + (last - first) * i / n_samples
+                            if reversed_edge:
+                                t = last - (last - first) * i / n_samples
+                            else:
+                                t = first + (last - first) * i / n_samples
                             pt = adaptor.Value(t)
-                            points_3d.append((pt.X(), pt.Y(), pt.Z()))
+                            _add_unique(points_3d, (pt.X(), pt.Y(), pt.Z()))
 
                 except Exception as edge_err:
                     logger.debug(f"Edge-Sampling fehlgeschlagen: {edge_err}")
 
                 edge_exp.Next()
+
+            # Letzten Punkt entfernen falls er mit erstem identisch ist (Ringschluss)
+            if len(points_3d) > 2:
+                if sum((a-b)**2 for a, b in zip(points_3d[-1], points_3d[0])) < 1e-8:
+                    points_3d.pop()
 
             if len(points_3d) < 3:
                 logger.warning(f"Zu wenige Punkte extrahiert: {len(points_3d)}")
@@ -3796,13 +3818,30 @@ class MainWindow(QMainWindow):
                 p = np.array(p3d) - origin
                 x = np.dot(p, x_dir)
                 y = np.dot(p, y_dir)
-                points_2d.append((x, y))
+                new_2d = (x, y)
+                # Dedupliziere in 2D
+                if not points_2d or (points_2d[-1][0] - new_2d[0])**2 + (points_2d[-1][1] - new_2d[1])**2 > 1e-10:
+                    points_2d.append(new_2d)
+            # Auch letzten mit erstem Punkt prüfen
+            if len(points_2d) > 2 and (points_2d[-1][0] - points_2d[0][0])**2 + (points_2d[-1][1] - points_2d[0][1])**2 < 1e-10:
+                points_2d.pop()
 
             # 6. Erstelle Shapely Polygon
             try:
                 polygon = ShapelyPolygon(points_2d)
                 if not polygon.is_valid:
-                    polygon = polygon.buffer(0)  # Reparatur
+                    from shapely.validation import make_valid
+                    repaired = make_valid(polygon)
+                    # make_valid kann GeometryCollection zurückgeben - größtes Polygon extrahieren
+                    if repaired.geom_type == 'Polygon':
+                        polygon = repaired
+                    elif repaired.geom_type in ('MultiPolygon', 'GeometryCollection'):
+                        from shapely.geometry import MultiPolygon
+                        polys = [g for g in repaired.geoms if g.geom_type == 'Polygon']
+                        if polys:
+                            polygon = max(polys, key=lambda p: p.area)
+                        else:
+                            polygon = ShapelyPolygon(points_2d).buffer(0)
 
                 # ✅ FIX: y_dir als Tuple speichern für korrekte 2D→3D Transformation beim Rebuild
                 plane_y_dir = tuple(y_dir.tolist())
@@ -3966,6 +4005,14 @@ class MainWindow(QMainWindow):
                         new_solid = old_solid + new_geo
                     elif operation == "Intersect":
                         new_solid = old_solid & new_geo
+
+                    # ShapeList → größtes Solid nehmen
+                    if hasattr(new_solid, '__iter__') and not hasattr(new_solid, 'is_null'):
+                        solids = list(new_solid)
+                        if solids:
+                            new_solid = max(solids, key=lambda s: s.volume if hasattr(s, 'volume') else 0)
+                        else:
+                            new_solid = None
 
                     # Nur speichern, wenn das Ergebnis valide ist und nicht leer
                     if new_solid is not None and not new_solid.is_null():

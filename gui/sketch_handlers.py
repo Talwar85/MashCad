@@ -479,7 +479,7 @@ class SketchHandlersMixin:
                 self.sketch.points.append(lines[-1].end)
             
             # Spline auswählen für sofortiges Editing
-            self.selected_spline = spline
+            self.selected_splines = [spline]
             
             self.sketched_changed.emit()
             self._find_closed_profiles()

@@ -774,7 +774,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.spline_drag_type = None  # 'point', 'handle_in', 'handle_out'
         self.spline_drag_spline = None  # Die Spline die bearbeitet wird
         self.spline_drag_cp_index = None  # Index des Kontrollpunkts
-        self.selected_spline = None  # Aktuell ausgewählte Spline
+        self.selected_splines = []  # Ausgewählte Splines (Liste)
         self.hovered_spline_element = None  # (spline, cp_index, element_type)
         
         # Schwebende Optionen-Palette
@@ -3116,7 +3116,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.spline_drag_spline = spline
                     self.spline_drag_cp_index = cp_idx
                     self.spline_drag_type = elem_type
-                    self.selected_spline = spline
+                    self.selected_splines = [spline]
                     self._save_undo()
                     self.setCursor(Qt.ClosedHandCursor)
                     self.status_message.emit(tr("Drag spline {type} | Shift=Corner").format(type=elem_type))
@@ -3131,8 +3131,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 # Auch Spline-Kurve selbst prüfen (Body-Klick)
                 spline = self._find_spline_at(self.mouse_world)
                 if spline:
-                    self.selected_spline = spline
                     self._clear_selection()
+                    self.selected_splines = [spline]
                     self.status_message.emit(tr("Spline selected - drag points/handles"))
                     self.request_update()
                     return
@@ -3737,7 +3737,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_arcs.clear()
         self.selected_points.clear()
         self.selected_constraints.clear()
-        self.selected_spline = None
+        self.selected_splines.clear()
     
     def _select_all(self):
         self._clear_selection()
@@ -3754,8 +3754,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         for arc in self.sketch.arcs:
             used_point_ids.add(arc.center.id)
         self.selected_points = [p for p in self.sketch.points if p.id not in used_point_ids]
+        self.selected_splines = list(self.sketch.splines)
         self.request_update()
-    
+
     def _finish_selection_box(self):
         if not self.selection_box_start or not self.selection_box_end: return
         x1, y1 = self.selection_box_start.x(), self.selection_box_start.y()
@@ -3784,6 +3785,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 pos = self.world_to_screen(QPointF(pt.x, pt.y))
                 if rect.contains(pos) and pt not in self.selected_points:
                     self.selected_points.append(pt)
+        for spline in self.sketch.splines:
+            all_inside = True
+            for cp in spline.control_points:
+                sp = self.world_to_screen(QPointF(cp.point.x, cp.point.y))
+                if not rect.contains(sp):
+                    all_inside = False
+                    break
+            if all_inside and spline not in self.selected_splines:
+                self.selected_splines.append(spline)
         self.selection_box_start = None
         self.selection_box_end = None
     
@@ -3817,10 +3827,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
             return
 
-        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points:
+        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points and not self.selected_splines:
             return
         self._save_undo()
-        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points)
+        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points) + len(self.selected_splines)
         for line in self.selected_lines[:]:
             self.sketch.delete_line(line)
         for circle in self.selected_circles[:]:
@@ -3830,6 +3840,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         for pt in self.selected_points[:]:
             if pt in self.sketch.points:
                 self.sketch.points.remove(pt)
+        for spline in self.selected_splines[:]:
+            if spline in self.sketch.splines:
+                self.sketch.splines.remove(spline)
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
