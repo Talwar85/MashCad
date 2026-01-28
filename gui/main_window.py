@@ -2493,6 +2493,7 @@ class MainWindow(QMainWindow):
         cell_type = dlg.cell_type
         cell_size = dlg.cell_size
         beam_radius = dlg.beam_radius
+        shell_thickness = dlg.shell_thickness
         solid = body._build123d_solid
 
         # Worker thread
@@ -2507,6 +2508,7 @@ class MainWindow(QMainWindow):
                         solid, cell_type=cell_type, cell_size=cell_size,
                         beam_radius=beam_radius,
                         progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+                        shell_thickness=shell_thickness,
                     )
                     self.finished_ok.emit(result)
                 except Exception as e:
@@ -2539,6 +2541,7 @@ class MainWindow(QMainWindow):
                 body._build123d_solid = lattice_solid
                 feat = LatticeFeature(
                     cell_type=cell_type, cell_size=cell_size, beam_radius=beam_radius,
+                    shell_thickness=shell_thickness,
                 )
                 body.features.append(feat)
                 body.invalidate_mesh()
@@ -3598,9 +3601,12 @@ class MainWindow(QMainWindow):
 
             # Fall B: Body-Face Extrusion (Push/Pull)
             elif first_face.domain_type == 'body_face':
+                # WICHTIG: sample_point statt plane_origin für B-Rep Matching!
+                # Bei Ring-Flächen liegt plane_origin im Loch, sample_point auf der Fläche
+                matching_point = getattr(first_face, 'sample_point', None) or first_face.plane_origin
                 success = self._extrude_body_face_build123d({
-                    'body_id': first_face.owner_id,       
-                    'center_3d': first_face.plane_origin, 
+                    'body_id': first_face.owner_id,
+                    'center_3d': matching_point,
                     'normal': first_face.plane_normal
                 }, height, operation)
                 

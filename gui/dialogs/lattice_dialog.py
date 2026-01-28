@@ -78,6 +78,23 @@ class LatticeDialog(QDialog):
         beam_row.addWidget(QLabel("mm"))
         param_layout.addLayout(beam_row)
 
+        # Shell thickness
+        shell_row = QHBoxLayout()
+        shlbl = QLabel(tr("Shell Thickness:"))
+        shlbl.setMinimumWidth(120)
+        shell_row.addWidget(shlbl)
+        self.shell_input = QLineEdit("1.0")
+        shv = QDoubleValidator(0.0, 50.0, 2)
+        shv.setNotation(QDoubleValidator.StandardNotation)
+        self.shell_input.setValidator(shv)
+        shell_row.addWidget(self.shell_input)
+        shell_row.addWidget(QLabel("mm"))
+        param_layout.addLayout(shell_row)
+
+        shell_hint = QLabel(tr("0 = no shell (lattice only), >0 = preserve outer wall"))
+        shell_hint.setStyleSheet("color: #999; font-size: 10px;")
+        param_layout.addWidget(shell_hint)
+
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
@@ -120,6 +137,7 @@ class LatticeDialog(QDialog):
             self.cell_type = self.type_combo.currentText()
             self.cell_size = float(self.size_input.text() or "5.0")
             self.beam_radius = float(self.beam_input.text() or "0.5")
+            self.shell_thickness = float(self.shell_input.text() or "0.0")
 
             if self.cell_size <= 0 or self.beam_radius <= 0:
                 logger.warning("All values must be > 0")

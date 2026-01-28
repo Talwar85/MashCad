@@ -458,6 +458,7 @@ class LatticeFeature(Feature):
     cell_type: str = "BCC"           # BCC, FCC, Octet, Diamond
     cell_size: float = 5.0           # Zellgröße in mm
     beam_radius: float = 0.5         # Strebendurchmesser/2 in mm
+    shell_thickness: float = 0.0     # Wandstärke der Außenhülle in mm (0 = keine)
 
     def __post_init__(self):
         self.type = FeatureType.LATTICE
@@ -3619,6 +3620,7 @@ class Body:
                             cell_type=feature.cell_type,
                             cell_size=feature.cell_size,
                             beam_radius=feature.beam_radius,
+                            shell_thickness=feature.shell_thickness,
                         )
 
                     new_solid, status = self._safe_operation(f"Lattice_{i}", op_lattice)
@@ -5009,6 +5011,7 @@ class Body:
                     "cell_type": feat.cell_type,
                     "cell_size": feat.cell_size,
                     "beam_radius": feat.beam_radius,
+                    "shell_thickness": feat.shell_thickness,
                 })
 
             elif isinstance(feat, ThreadFeature):
@@ -5263,6 +5266,7 @@ class Body:
                     cell_type=feat_dict.get("cell_type", "BCC"),
                     cell_size=feat_dict.get("cell_size", 5.0),
                     beam_radius=feat_dict.get("beam_radius", 0.5),
+                    shell_thickness=feat_dict.get("shell_thickness", 0.0),
                     **base_kwargs
                 )
 

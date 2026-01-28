@@ -72,7 +72,7 @@ class LatticeGenerator:
     @staticmethod
     def generate(solid, cell_type: str = "BCC", cell_size: float = 5.0,
                  beam_radius: float = 0.5, max_cells: int = 500,
-                 progress_callback=None):
+                 progress_callback=None, shell_thickness: float = 0.0):
         """
         Generate a lattice structure within the bounding box of the solid,
         then intersect with the original solid.
@@ -84,6 +84,7 @@ class LatticeGenerator:
             beam_radius: Radius of each beam strut in mm
             max_cells: Maximum number of cells (safety limit)
             progress_callback: Optional callable(percent: int, message: str)
+            shell_thickness: If > 0, preserve outer shell with this wall thickness (mm)
 
         Returns:
             Build123d Solid of the lattice, or None on failure
@@ -180,15 +181,72 @@ class LatticeGenerator:
                 raise RuntimeError("Boolean Common (lattice ∩ body) failed")
 
             from build123d import Solid
-            lattice_solid = Solid(common.Shape())
+            lattice_result = common.Shape()
+
+            # Shell: Außenhülle beibehalten und mit Lattice-Innenleben vereinigen
+            if shell_thickness > 0:
+                logger.info(f"Creating shell (thickness={shell_thickness}mm)...")
+                if progress_callback:
+                    progress_callback(95, "Creating outer shell...")
+                try:
+                    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+                    from OCP.TopTools import TopTools_ListOfShape
+                    from OCP.TopExp import TopExp_Explorer
+                    from OCP.TopAbs import TopAbs_FACE
+
+                    # Shell = Offset aller Faces nach innen (kein Face entfernt → geschlossene Hülle)
+                    # Wir erstellen eine "hohle" Version: Original - Offset-Innen
+                    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+                    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffsetShape
+                    from OCP.BRepOffset import BRepOffset_Skin
+
+                    offset_builder = BRepOffsetAPI_MakeOffsetShape()
+                    offset_builder.PerformByJoin(
+                        shape,                    # Original-Shape
+                        -shell_thickness,         # Negativ = nach innen
+                        1e-3,                     # Toleranz
+                        BRepOffset_Skin,          # Modus
+                    )
+
+                    if offset_builder.IsDone():
+                        inner_shape = offset_builder.Shape()
+
+                        # Shell = Original - Innen (Hohlkörper)
+                        shell_cut = BRepAlgoAPI_Cut(shape, inner_shape)
+                        shell_cut.SetFuzzyValue(1e-3)
+                        shell_cut.Build()
+
+                        if shell_cut.IsDone():
+                            # Lattice + Shell vereinigen
+                            final_fuse = BRepAlgoAPI_Fuse(shell_cut.Shape(), lattice_result)
+                            final_fuse.SetFuzzyValue(1e-3)
+                            final_fuse.Build()
+
+                            if final_fuse.IsDone():
+                                lattice_result = final_fuse.Shape()
+                                logger.success(f"Shell + Lattice vereinigt (wall={shell_thickness}mm)")
+                            else:
+                                logger.warning("Shell+Lattice Fuse fehlgeschlagen, nutze nur Lattice")
+                        else:
+                            logger.warning("Shell Cut fehlgeschlagen, nutze nur Lattice")
+                    else:
+                        logger.warning("Offset fehlgeschlagen, nutze nur Lattice")
+                except Exception as shell_err:
+                    logger.warning(f"Shell-Erzeugung fehlgeschlagen: {shell_err}, nutze nur Lattice")
+
+            if progress_callback:
+                progress_callback(98, "Finalizing...")
+
+            lattice_solid = Solid(lattice_result)
 
             if hasattr(lattice_solid, 'is_valid') and lattice_solid.is_valid():
-                logger.success(f"Lattice generated: {cell_type}, {len(beam_shapes)} beams")
+                logger.success(f"Lattice generated: {cell_type}, {len(beam_shapes)} beams"
+                               + (f", shell={shell_thickness}mm" if shell_thickness > 0 else ""))
                 return lattice_solid
             else:
                 logger.warning("Lattice result is invalid, returning raw shape")
                 from build123d import Shape
-                return Shape(common.Shape())
+                return Shape(lattice_result)
 
         except Exception as e:
             logger.error(f"Lattice generation failed: {e}")

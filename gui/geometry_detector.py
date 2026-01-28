@@ -49,6 +49,10 @@ class SelectionFace:
     pick_priority: int = 0
     display_mesh: Any = None
 
+    # WICHTIG: sample_point = tatsächlicher Punkt auf der Fläche (nicht Zentroid!)
+    # Bei Ring-Flächen liegt plane_origin im Loch, sample_point liegt auf der Fläche
+    sample_point: Tuple[float, float, float] = None
+
     # Pre-computed numpy arrays for fast picking (avoid per-pick conversion)
     _np_origin: Any = field(default=None, repr=False)
     _np_normal: Any = field(default=None, repr=False)
@@ -56,6 +60,9 @@ class SelectionFace:
     def __post_init__(self):
         self._np_origin = np.asarray(self.plane_origin, dtype=np.float64)
         self._np_normal = np.asarray(self.plane_normal, dtype=np.float64)
+        # Fallback: sample_point = plane_origin wenn nicht gesetzt
+        if self.sample_point is None:
+            self.sample_point = self.plane_origin
 
 
 class GeometryDetector:
@@ -680,19 +687,27 @@ class GeometryDetector:
     def _add_single_face(self, body_id, mesh, normal):
         if mesh.n_points < 3: return
         center = np.mean(mesh.points, axis=0)
-        
+
+        # sample_point = erster Punkt des Meshes (garantiert auf der Fläche!)
+        # Bei Ring-Flächen liegt center im Loch, sample_point auf der Fläche
+        sample_point = mesh.points[0]
+
         # Triangulieren für sauberes Rendering/Bounds
         if not mesh.is_all_triangles:
             mesh = mesh.triangulate()
-            
-        self._add_body_face(body_id, center, normal, mesh)
+
+        self._add_body_face(body_id, center, normal, mesh, sample_point)
     
-    def _add_body_face(self, body_id, center, normal, mesh):
+    def _add_body_face(self, body_id, center, normal, mesh, sample_point=None):
         # Performance Optimization Phase 2.2: Dynamic Priority
         # Im Extrude-Mode: Faces bekommen HÖCHSTE Priorität (50) für besseres Picking
         # Normal-Mode: Niedrige Priorität (5) damit Body-Mesh nicht stört
         extrude_mode = getattr(self, '_current_extrude_mode', False)
         face_priority = 50 if extrude_mode else 5
+
+        # sample_point Fallback: ersten Mesh-Punkt verwenden wenn nicht übergeben
+        if sample_point is None:
+            sample_point = mesh.points[0] if mesh.n_points > 0 else center
 
         face = SelectionFace(
             id=self._counter,
@@ -701,7 +716,8 @@ class GeometryDetector:
             plane_origin=tuple(center),
             plane_normal=tuple(normal),
             pick_priority=face_priority,  # DYNAMIC!
-            display_mesh=mesh
+            display_mesh=mesh,
+            sample_point=tuple(sample_point)
         )
         self.selection_faces.append(face)
         self._counter += 1

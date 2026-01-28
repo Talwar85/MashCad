@@ -3101,6 +3101,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     group_centers = all_cell_centers[cell_mask]
                     center_3d = np.mean(group_centers, axis=0)
 
+                    # WICHTIG: sample_point = ein TATSÄCHLICHER Punkt auf der Fläche
+                    # (nicht der Mittelwert, der bei Ring-Flächen im Loch liegt!)
+                    sample_point = group_centers[0]  # Erstes Dreieckszentrum
+
                     normal_key = tuple(normal)
 
                     # Fläche registrieren
@@ -3110,6 +3114,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         'cell_ids': cell_ids,
                         'normal': normal_key,
                         'center_3d': tuple(center_3d),
+                        'sample_point': tuple(sample_point),  # Punkt auf der Fläche für B-Rep Matching
                         'center_2d': (center_3d[0], center_3d[1]),
                         'origin': tuple(center_3d),
                         'mesh': mesh

@@ -87,7 +87,7 @@ class ToolPanel3D(QWidget):
             (tr("Loft"), tr("Loft between profiles"), "loft"),
             (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
             (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
-            
+            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),           
         ])
 
         # --- Transform ---
@@ -118,18 +118,13 @@ class ToolPanel3D(QWidget):
             (tr("Measure") if tr("Measure") != "Measure" else "Measure", "measure"),
         ])
 
-        # --- Tools ---
-        self._add_group(tr("TOOLS"), [
-            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
-            (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"),
-            
-        ])
-
         # --- Import/Export ---
         self._add_group(tr("File"), [
             (tr("Import Mesh") if tr("Import Mesh") != "Import Mesh" else "Import Mesh", "Lade STL/OBJ Datei", "import_mesh"),
+            (tr("Convert Mesh to CAD"), "Konvertiert Mesh zu Solid (BREP)", "convert_to_brep"),
             (tr("Export STL..."), "export_stl"),
             ("Export STEP...", "export_step"),
+
         ])
 
         # --- Advanced (Phase 6) ---
