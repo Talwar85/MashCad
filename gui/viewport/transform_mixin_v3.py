@@ -44,6 +44,11 @@ class TransformMixinV3:
         """Versteckt das Gizmo"""
         if hasattr(self, '_transform_ctrl'):
             self._transform_ctrl.deselect()
+
+    def update_transform_gizmo_position(self):
+        """Aktualisiert die Gizmo-Position für den aktuell selektierten Body."""
+        if hasattr(self, '_transform_ctrl') and self._transform_ctrl.selected_body_id:
+            self._transform_ctrl.select_body(self._transform_ctrl.selected_body_id, force_refresh=True)
             
     def set_transform_mode(self, mode: str):
         """Setzt den Transform-Modus

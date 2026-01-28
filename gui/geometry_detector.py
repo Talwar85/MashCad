@@ -696,7 +696,18 @@ class GeometryDetector:
         if not mesh.is_all_triangles:
             mesh = mesh.triangulate()
 
-        self._add_body_face(body_id, center, normal, mesh, sample_point)
+        # FIX: Echte Normale aus Mesh berechnen statt gerundete zu verwenden
+        # Die gerundete Normale ist nur für Gruppierung, nicht für B-Rep Matching
+        actual_normal = normal
+        if 'Normals' in mesh.cell_data and mesh.n_cells > 0:
+            # Durchschnitt der Cell-Normalen für echte Normale
+            actual_normal = np.mean(mesh.cell_data['Normals'], axis=0)
+            # Normalisieren
+            norm_len = np.linalg.norm(actual_normal)
+            if norm_len > 0.001:
+                actual_normal = actual_normal / norm_len
+
+        self._add_body_face(body_id, center, actual_normal, mesh, sample_point)
     
     def _add_body_face(self, body_id, center, normal, mesh, sample_point=None):
         # Performance Optimization Phase 2.2: Dynamic Priority

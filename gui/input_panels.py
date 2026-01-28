@@ -40,14 +40,21 @@ class ExtrudeInputPanel(QFrame):
     direction_flipped = Signal()
     confirmed = Signal()
     cancelled = Signal()
-    bodies_visibility_toggled = Signal(bool)
+    bodies_visibility_toggled = Signal(bool)  # Legacy (für Kompatibilität)
+    bodies_visibility_state_changed = Signal(int)  # 0=normal, 1=xray, 2=hidden
     operation_changed = Signal(str)  # NEU: Signal wenn Operation geändert wird
     to_face_requested = Signal()  # "Extrude to Face" Modus anfordern
-    
+
+    # Visibility States
+    VIS_NORMAL = 0   # 100% sichtbar
+    VIS_XRAY = 1     # 20% transparent (X-Ray)
+    VIS_HIDDEN = 2   # Komplett versteckt
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._height = 0.0
         self._bodies_hidden = False
+        self._visibility_state = 0  # 0=normal, 1=xray, 2=hidden
         self._direction = 1  # 1 or -1
         self._current_operation = "New Body"
         self.setMinimumWidth(520)
@@ -145,8 +152,9 @@ class ExtrudeInputPanel(QFrame):
         layout.addWidget(self.to_face_btn)
 
         self.btn_vis = QPushButton("👁")
-        self.btn_vis.setCheckable(True)
+        self.btn_vis.setCheckable(False)  # 3-Stufen-Toggle statt an/aus
         self.btn_vis.setFixedWidth(35)
+        self.btn_vis.setToolTip("Bodies sichtbar (Klick → X-Ray)")
         self.btn_vis.clicked.connect(self._toggle_vis)
         layout.addWidget(self.btn_vis)
         
@@ -255,7 +263,10 @@ class ExtrudeInputPanel(QFrame):
         self.height_input.blockSignals(False)
         self.height_input.setEnabled(True)
         self.op_combo.setCurrentIndex(0)
-        self.btn_vis.setChecked(False)
+        # Visibility State zurücksetzen
+        self._visibility_state = 0
+        self.btn_vis.setText("👁")
+        self.btn_vis.setToolTip("Bodies sichtbar (Klick → X-Ray)")
         self.to_face_btn.setChecked(False)
         self.label.setText("Extrude:")
 
@@ -273,7 +284,24 @@ class ExtrudeInputPanel(QFrame):
             self.cancelled.emit()
 
     def _toggle_vis(self):
-        self._bodies_hidden = self.btn_vis.isChecked()
+        """3-Stufen Toggle: Normal → X-Ray → Versteckt → Normal"""
+        self._visibility_state = (self._visibility_state + 1) % 3
+
+        # Button-Aussehen und Tooltip aktualisieren
+        icons = ["👁", "👁‍🗨", "🚫"]  # Normal, X-Ray, Hidden
+        tooltips = [
+            "Bodies sichtbar (Klick → X-Ray)",
+            "X-Ray Mode aktiv (Klick → Verstecken)",
+            "Bodies versteckt (Klick → Sichtbar)"
+        ]
+        self.btn_vis.setText(icons[self._visibility_state])
+        self.btn_vis.setToolTip(tooltips[self._visibility_state])
+
+        # Neues Signal mit State
+        self.bodies_visibility_state_changed.emit(self._visibility_state)
+
+        # Legacy-Signal (für Kompatibilität)
+        self._bodies_hidden = (self._visibility_state == self.VIS_HIDDEN)
         self.bodies_visibility_toggled.emit(self._bodies_hidden)
 
     def show_at(self, pos_widget):
@@ -669,6 +697,8 @@ class SweepInputPanel(QFrame):
     cancelled = Signal()
     operation_changed = Signal(str)
     sketch_path_requested = Signal()  # Fordert Pfad aus Sketch an
+    profile_cleared = Signal()  # Profil-Auswahl entfernt
+    path_cleared = Signal()  # Pfad-Auswahl entfernt
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -712,7 +742,13 @@ class SweepInputPanel(QFrame):
         self.label = QLabel("Sweep:")
         layout.addWidget(self.label)
 
-        # Profile status
+        # Profile status with clear button
+        profile_container = QWidget()
+        profile_container.setStyleSheet("background: transparent; border: none;")
+        profile_layout = QHBoxLayout(profile_container)
+        profile_layout.setContentsMargins(0, 0, 0, 0)
+        profile_layout.setSpacing(2)
+
         self.profile_status = QLabel("⬜ Profil")
         self.profile_status.setStyleSheet("""
             color: #ffaa00;
@@ -720,10 +756,35 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
-        self.profile_status.setMinimumWidth(70)
-        layout.addWidget(self.profile_status)
+        profile_layout.addWidget(self.profile_status)
 
-        # Path status
+        self.profile_clear_btn = QPushButton("×")
+        self.profile_clear_btn.setFixedSize(16, 16)
+        self.profile_clear_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #888;
+                border: none;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #ff6666;
+            }
+        """)
+        self.profile_clear_btn.setToolTip("Profil-Auswahl entfernen")
+        self.profile_clear_btn.clicked.connect(self._on_profile_clear_clicked)
+        self.profile_clear_btn.hide()  # Initially hidden
+        profile_layout.addWidget(self.profile_clear_btn)
+        layout.addWidget(profile_container)
+
+        # Path status with clear button
+        path_container = QWidget()
+        path_container.setStyleSheet("background: transparent; border: none;")
+        path_layout = QHBoxLayout(path_container)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        path_layout.setSpacing(2)
+
         self.path_status = QLabel("⬜ Pfad")
         self.path_status.setStyleSheet("""
             color: #ffaa00;
@@ -731,8 +792,27 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
-        self.path_status.setMinimumWidth(70)
-        layout.addWidget(self.path_status)
+        path_layout.addWidget(self.path_status)
+
+        self.path_clear_btn = QPushButton("×")
+        self.path_clear_btn.setFixedSize(16, 16)
+        self.path_clear_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #888;
+                border: none;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #ff6666;
+            }
+        """)
+        self.path_clear_btn.setToolTip("Pfad-Auswahl entfernen")
+        self.path_clear_btn.clicked.connect(self._on_path_clear_clicked)
+        self.path_clear_btn.hide()  # Initially hidden
+        path_layout.addWidget(self.path_clear_btn)
+        layout.addWidget(path_container)
 
         # Sketch Path button
         self.sketch_path_btn = QPushButton("Sketch")
@@ -827,6 +907,7 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
+        self.profile_clear_btn.show()
         self._update_ok_button()
 
     def clear_profile(self):
@@ -839,6 +920,7 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
+        self.profile_clear_btn.hide()
         self._update_ok_button()
 
     def set_path(self, path_data: dict):
@@ -851,6 +933,7 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
+        self.path_clear_btn.show()
         self._update_ok_button()
 
     def clear_path(self):
@@ -863,6 +946,7 @@ class SweepInputPanel(QFrame):
             font-weight: normal;
             border: none;
         """)
+        self.path_clear_btn.hide()
         self._update_ok_button()
 
     def get_profile_data(self) -> dict:
@@ -935,6 +1019,16 @@ class SweepInputPanel(QFrame):
     def _cancel(self):
         """Bricht die Operation ab."""
         self.cancelled.emit()
+
+    def _on_profile_clear_clicked(self):
+        """Callback beim Klick auf Profil-Clear-Button."""
+        self.clear_profile()
+        self.profile_cleared.emit()
+
+    def _on_path_clear_clicked(self):
+        """Callback beim Klick auf Pfad-Clear-Button."""
+        self.clear_path()
+        self.path_cleared.emit()
 
     def show_at(self, pos_widget=None):
         """Zeigt das Panel zentriert unten im Parent-Widget."""

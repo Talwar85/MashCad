@@ -7,18 +7,26 @@ from PySide6.QtGui import QColor, QFont, QPen, QBrush
 from PySide6.QtCore import Qt
 
 class DesignTokens:
-    # --- Palette (Basis-Werte) ---
+    # --- Palette (Figma neutral-Palette) ---
     # Backgrounds - Abgestuft für Tiefe
-    COLOR_BG_CANVAS = QColor("#181818")     # Sehr dunkel, fast schwarz für hohen Kontrast
-    COLOR_BG_PANEL = QColor("#252526")      # VS Code Panel Grau
-    COLOR_BG_INPUT = QColor("#333337")      # Input Felder
-    COLOR_BG_TOOLTIP = QColor("#202020")
-    
-    # Primärfarben (Accent)
-    COLOR_PRIMARY = QColor("#0078D4")       # Fusion Blue
-    COLOR_PRIMARY_HOVER = QColor("#2B88D8")
-    COLOR_ACCENT = QColor("#005FB8")
-    
+    COLOR_BG_CANVAS = QColor("#171717")     # neutral-900 (Viewport)
+    COLOR_BG_PANEL = QColor("#262626")      # neutral-800 (Panels)
+    COLOR_BG_ELEVATED = QColor("#404040")   # neutral-700 (Hover, Cards)
+    COLOR_BG_INPUT = QColor("#404040")      # neutral-700 (Input Felder)
+    COLOR_BG_TOOLTIP = QColor("#171717")    # neutral-900
+
+    # Primärfarben (Figma blue)
+    COLOR_PRIMARY = QColor("#2563eb")       # blue-600
+    COLOR_PRIMARY_HOVER = QColor("#3b82f6") # blue-500
+    COLOR_ACCENT = QColor("#1d4ed8")        # blue-700
+
+    # Borders
+    COLOR_BORDER = QColor("#404040")        # neutral-700
+
+    # Status
+    COLOR_SUCCESS = QColor("#22c55e")       # green-500
+    COLOR_ERROR = QColor("#ef4444")         # red-500
+
     # Geometrie
     COLOR_GEO_BODY = QColor("#E0E0E0")          # Helles Grauweiß (Standard Linien)
     COLOR_GEO_CONSTRUCTION = QColor("#FF9900")  # Klassisches Orange
@@ -41,9 +49,10 @@ class DesignTokens:
     COLOR_AXIS_X = QColor("#F44336")        # Material Red
     COLOR_AXIS_Y = QColor("#4CAF50")        # Material Green
     
-    # Text
-    COLOR_TEXT_PRIMARY = QColor("#CCCCCC")
-    COLOR_TEXT_MUTED = QColor("#858585")
+    # Text (Figma neutral-Palette)
+    COLOR_TEXT_PRIMARY = QColor("#fafafa")  # neutral-50 (weiß)
+    COLOR_TEXT_SECONDARY = QColor("#d4d4d4")# neutral-300 (Labels)
+    COLOR_TEXT_MUTED = QColor("#a3a3a3")    # neutral-400 (Hints)
     
     # --- Pens (Vorkonfigurierte Stifte) ---
     @staticmethod
@@ -91,9 +100,9 @@ class DesignTokens:
                 font-size: 13px;
             }}
             QLineEdit, QSpinBox, QDoubleSpinBox {{
-                background: #1e1e1e;
+                background: #404040;
                 color: {txt};
-                border: 1px solid #3f3f46;
+                border: 1px solid #525252;
                 border-radius: 6px;
                 padding: 7px;
                 font-size: 13px;
@@ -103,9 +112,9 @@ class DesignTokens:
                 border: 1px solid {p};
             }}
             QComboBox {{
-                background: #1e1e1e;
+                background: #404040;
                 color: {txt};
-                border: 1px solid #3f3f46;
+                border: 1px solid #525252;
                 border-radius: 6px;
                 padding: 7px;
                 font-size: 13px;
@@ -118,17 +127,17 @@ class DesignTokens:
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 5px solid #999;
+                border-top: 5px solid #a3a3a3;
                 margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
-                background: #1e1e1e;
+                background: #262626;
                 color: {txt};
-                border: 1px solid #3f3f46;
+                border: 1px solid #404040;
                 selection-background-color: {p};
             }}
             QPushButton {{
-                background: #3f3f46;
+                background: #404040;
                 color: {txt};
                 border: none;
                 border-radius: 6px;
@@ -136,7 +145,7 @@ class DesignTokens:
                 font-size: 13px;
             }}
             QPushButton:hover {{
-                background: #505058;
+                background: #525252;
             }}
             QPushButton#primary {{
                 background: {p};
@@ -148,7 +157,7 @@ class DesignTokens:
             }}
             QGroupBox {{
                 color: {txt};
-                border: 1px solid #3f3f46;
+                border: 1px solid #404040;
                 border-radius: 6px;
                 margin-top: 14px;
                 padding: 16px 10px 10px 10px;
@@ -167,28 +176,28 @@ class DesignTokens:
             QCheckBox::indicator {{
                 width: 16px;
                 height: 16px;
-                border-radius: 3px;
+                border-radius: 4px;
             }}
             QCheckBox::indicator:unchecked {{
-                background: #1e1e1e;
-                border: 1px solid #3f3f46;
+                background: #404040;
+                border: 1px solid #525252;
             }}
             QCheckBox::indicator:checked {{
                 background: {p};
                 border: 1px solid {p};
             }}
             QTextEdit {{
-                background: #1e1e1e;
+                background: #404040;
                 color: {txt};
-                border: 1px solid #3f3f46;
+                border: 1px solid #525252;
                 border-radius: 6px;
                 font-family: 'Consolas', 'Cascadia Code', monospace;
                 font-size: 12px;
                 padding: 8px;
             }}
             QProgressBar {{
-                background: #1e1e1e;
-                border: 1px solid #3f3f46;
+                background: #404040;
+                border: 1px solid #525252;
                 border-radius: 4px;
                 text-align: center;
                 color: {txt};

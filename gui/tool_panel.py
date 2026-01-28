@@ -62,9 +62,10 @@ class ToolButton(QToolButton):
 
 class ToolPanel(QFrame):
     """Werkzeug-Panel mit allen Sketch-Tools"""
-    
+
     tool_selected = Signal(str)
     option_changed = Signal(str, object)
+    finish_sketch_requested = Signal()  # Signal zum Beenden des Sketches
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -106,6 +107,32 @@ class ToolPanel(QFrame):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        # === SKETCH BEENDEN BUTTON (ganz oben, immer sichtbar) ===
+        finish_container = QWidget()
+        finish_container.setStyleSheet("background: #262626;")
+        finish_layout = QHBoxLayout(finish_container)
+        finish_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.btn_finish_sketch = QPushButton("✓ Sketch beenden (Esc)")
+        self.btn_finish_sketch.setStyleSheet("""
+            QPushButton {
+                background: #22c55e;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 16px;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: #16a34a;
+            }
+        """)
+        self.btn_finish_sketch.setCursor(Qt.PointingHandCursor)
+        self.btn_finish_sketch.clicked.connect(self.finish_sketch_requested.emit)
+        finish_layout.addWidget(self.btn_finish_sketch)
+        main_layout.addWidget(finish_container)
 
         # Scroll Area Setup
         scroll = QScrollArea()

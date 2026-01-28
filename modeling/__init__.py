@@ -3720,6 +3720,29 @@ class Body:
                 elif not heal_result.success:
                     logger.warning(f"⚠️ Auto-Healing fehlgeschlagen: {heal_result.message}")
 
+            # Phase 9: UnifySameDomain - Koplanare Faces vereinigen
+            # Das reduziert die Face-Anzahl nach Boolean-Operationen erheblich
+            try:
+                from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+                from build123d import Solid
+
+                ocp_shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                n_faces_before = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
+
+                upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
+                upgrader.Build()
+                unified_shape = upgrader.Shape()
+
+                if unified_shape and not unified_shape.IsNull():
+                    unified_solid = Solid.make_solid(unified_shape) if hasattr(Solid, 'make_solid') else Solid(unified_shape)
+                    n_faces_after = len(unified_solid.faces()) if hasattr(unified_solid, 'faces') else 0
+
+                    if n_faces_after < n_faces_before:
+                        logger.debug(f"UnifySameDomain: {n_faces_before} → {n_faces_after} Faces")
+                        current_solid = unified_solid
+            except Exception as e:
+                logger.debug(f"UnifySameDomain übersprungen: {e}")
+
             self._build123d_solid = current_solid
             if hasattr(current_solid, 'wrapped'):
                 self.shape = current_solid.wrapped

@@ -110,8 +110,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # NEU: Referenz auf zentrale TransformState (wird später von MainWindow gesetzt)
         self.transform_state = None
 
-        # Dunkler Hintergrund für das Widget selbst
-        self.setStyleSheet("background-color: #1e1e1e;")
+        # Dunkler Hintergrund für das Widget selbst (Figma neutral-900)
+        self.setStyleSheet("background-color: #171717;")
         self.setAutoFillBackground(True)
 
         self._setup_ui()
@@ -265,32 +265,52 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._setup_selection_filter_bar()
             
     def _setup_selection_filter_bar(self):
-        """Floating selection filter toolbar at top-right of viewport."""
+        """Floating selection filter toolbar (Figma-Style) at top-center of viewport."""
         from PySide6.QtWidgets import QPushButton, QHBoxLayout
         self._filter_bar = QFrame(self)
         self._filter_bar.setStyleSheet("""
-            QFrame { background: rgba(30,30,30,200); border-radius: 4px; border: 1px solid #3f3f46; }
+            QFrame {
+                background: rgba(38, 38, 38, 0.95);
+                border-radius: 6px;
+                border: 1px solid #404040;
+            }
         """)
         bar_layout = QHBoxLayout(self._filter_bar)
-        bar_layout.setContentsMargins(4, 2, 4, 2)
-        bar_layout.setSpacing(2)
+        bar_layout.setContentsMargins(6, 4, 6, 4)
+        bar_layout.setSpacing(4)
 
         self._filter_buttons = {}
+        # Figma-Style Labels mit Symbolen
         filters = [
-            ("All", "ALL"),
-            ("Face", "FACE"),
-            ("Edge", "EDGE"),
-            ("Body", "BODY"),
+            ("● Vertex", "VERTEX"),
+            ("— Edge", "EDGE"),
+            ("□ Face", "FACE"),
+            ("⬡ Body", "BODY"),
         ]
         for label, key in filters:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setChecked(key == "ALL")
-            btn.setFixedSize(40, 22)
+            btn.setChecked(key == "BODY")  # Body ist default
             btn.setStyleSheet("""
-                QPushButton { background: #3f3f46; color: #aaa; border: none; border-radius: 3px; font-size: 10px; }
-                QPushButton:checked { background: #0078d4; color: white; }
-                QPushButton:hover { background: #505050; }
+                QPushButton {
+                    background: transparent;
+                    color: #d4d4d4;
+                    border: 1px solid #404040;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    font-family: 'Segoe UI', sans-serif;
+                    padding: 6px 12px;
+                    min-width: 70px;
+                }
+                QPushButton:hover {
+                    background: #404040;
+                    border-color: #525252;
+                }
+                QPushButton:checked {
+                    background: #2563eb;
+                    border-color: #2563eb;
+                    color: white;
+                }
             """)
             btn.clicked.connect(lambda checked, k=key: self._set_selection_filter(k))
             bar_layout.addWidget(btn)
@@ -301,12 +321,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._filter_bar.raise_()
 
     def _set_selection_filter(self, key):
-        """Set active selection filter from toolbar."""
+        """Set active selection filter from toolbar (Figma-Style)."""
         from gui.geometry_detector import GeometryDetector
         mapping = {
-            "ALL": GeometryDetector.SelectionFilter.ALL,
-            "FACE": GeometryDetector.SelectionFilter.FACE,
+            "VERTEX": {"vertex"},  # Vertex-Selektion
             "EDGE": {"body_edge"},
+            "FACE": GeometryDetector.SelectionFilter.FACE,
             "BODY": {"body_face", "sketch_shell", "sketch_profile"},
         }
         self.active_selection_filter = mapping.get(key, GeometryDetector.SelectionFilter.ALL)
@@ -2152,12 +2172,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     return True
 
             # NEU: Sketch-Pfad-Selektion für Sweep (direkter Viewport-Klick)
+            logger.debug(f"sketch_path_mode={self.sketch_path_mode}, sketch_actors={len(self._sketch_actors)}")
             if self.sketch_path_mode:
                 sketch_id, geom_type, index = self._pick_sketch_element_at(x, y)
+                logger.debug(f"Sketch-Pfad Pick Ergebnis: sketch_id={sketch_id}, geom_type={geom_type}, index={index}")
                 if sketch_id and geom_type in ('line', 'arc', 'spline'):
                     logger.info(f"Sketch-Pfad geklickt: {sketch_id}/{geom_type}/{index}")
                     self.sketch_path_clicked.emit(sketch_id, geom_type, index)
                     return True
+                else:
+                    logger.debug(f"Sketch-Pfad nicht erkannt oder ungültiger Typ")
 
             # Measure-Modus: Punkt auf Modell picken mit Vertex/Edge-Snapping
             if self.measure_mode:
@@ -2764,50 +2788,144 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
     def _pick_sketch_element_at(self, x: int, y: int) -> tuple:
         """
-        Prüft ob bei (x, y) ein Sketch-Element getroffen wird.
+        Findet ein Sketch-Element (Linie, Bogen, Spline) an der Klickposition.
+        Verwendet Proximity-basiertes Picking für maximale Zuverlässigkeit.
 
         Returns:
             Tuple (sketch_id, geom_type, index) oder (None, None, None) wenn nichts getroffen.
             geom_type: 'line', 'arc', 'circle', 'spline'
         """
-        import vtk
+        # Proximity-Picking ist zuverlässiger als VTK Actor-Matching
+        result = self._pick_sketch_element_by_proximity(x, y)
+        if result[0]:
+            logger.info(f"Sketch-Element gefunden bei ({x}, {y}): {result}")
+        else:
+            logger.debug(f"Kein Sketch-Element bei ({x}, {y}) gefunden")
+        return result
+
+    def _pick_sketch_element_by_proximity(self, x: int, y: int) -> tuple:
+        """
+        Findet Sketch-Element durch Proximity-Check.
+        Liest Geometrie direkt aus den Sketch-Objekten (nicht aus Actors).
+        """
+        import numpy as np
+        import math
 
         try:
-            picker = vtk.vtkCellPicker()
-            picker.SetTolerance(0.01)
-            picker.Pick(x, self.plotter.interactor.height() - y, 0, self.plotter.renderer)
+            height = self.plotter.interactor.height()
+            best_dist = float('inf')
+            best_result = (None, None, None)
 
-            actor = picker.GetActor()
-            if not actor:
-                return (None, None, None)
+            logger.debug(f"Proximity-Picking: Suche in {len(self.sketches)} Sketches bei ({x}, {y})")
 
-            # Finde den Actor-Namen
-            for actor_name in self._sketch_actors:
-                try:
-                    if self.plotter.renderer.actors.get(actor_name) == actor:
-                        # Parse: s_{sketch_id}_l_{index}, s_{sketch_id}_a_{index}, etc.
-                        parts = actor_name.split('_')
-                        if len(parts) >= 4:
-                            sketch_id = parts[1]
-                            geom_type_code = parts[2]
-                            index = int(parts[3])
-
-                            geom_type_map = {
-                                'l': 'line',
-                                'a': 'arc',
-                                'c': 'circle',
-                                'sp': 'spline'
-                            }
-                            geom_type = geom_type_map.get(geom_type_code, geom_type_code)
-
-                            return (sketch_id, geom_type, index)
-                except:
+            for sketch, visible in self.sketches:
+                if not visible:
                     continue
 
-        except Exception as e:
-            logger.debug(f"Sketch-Element Picking Fehler: {e}")
+                sid = str(getattr(sketch, 'id', id(sketch)))
+                norm = tuple(getattr(sketch, 'plane_normal', (0, 0, 1)))
+                orig = getattr(sketch, 'plane_origin', (0, 0, 0))
+                cached_x = getattr(sketch, 'plane_x_dir', None)
+                cached_y = getattr(sketch, 'plane_y_dir', None)
 
-        return (None, None, None)
+                # Berechne Transformation 2D -> 3D
+                if cached_x and cached_y:
+                    ux, uy, uz = cached_x
+                    vx, vy, vz = cached_y
+                else:
+                    (ux, uy, uz), (vx, vy, vz) = self._calculate_plane_axes(norm)
+                ox, oy, oz = orig
+
+                def to_3d(lx, ly):
+                    return (ox + lx * ux + ly * vx, oy + lx * uy + ly * vy, oz + lx * uz + ly * vz)
+
+                def to_screen(pt_3d):
+                    self.plotter.renderer.SetWorldPoint(pt_3d[0], pt_3d[1], pt_3d[2], 1.0)
+                    self.plotter.renderer.WorldToDisplay()
+                    display = self.plotter.renderer.GetDisplayPoint()
+                    return display[0], height - display[1]
+
+                # Prüfe Linien
+                for i, line in enumerate(getattr(sketch, 'lines', [])):
+                    if getattr(line, 'construction', False):
+                        continue  # Konstruktionslinien überspringen
+                    p1_3d = to_3d(line.start.x, line.start.y)
+                    p2_3d = to_3d(line.end.x, line.end.y)
+                    p1_screen = to_screen(p1_3d)
+                    p2_screen = to_screen(p2_3d)
+
+                    # Distanz Punkt zu Liniensegment
+                    dist = self._point_to_segment_distance(x, y, p1_screen[0], p1_screen[1], p2_screen[0], p2_screen[1])
+                    if dist < best_dist and dist < 50:
+                        best_dist = dist
+                        best_result = (sid, 'line', i)
+
+                # Prüfe Bögen
+                for i, arc in enumerate(getattr(sketch, 'arcs', [])):
+                    if getattr(arc, 'construction', False):
+                        continue
+                    # Mittelwert der Bogenpunkte
+                    start_a = math.radians(arc.start_angle)
+                    end_a = math.radians(arc.end_angle)
+                    mid_a = (start_a + end_a) / 2
+                    mid_x = arc.center.x + arc.radius * math.cos(mid_a)
+                    mid_y = arc.center.y + arc.radius * math.sin(mid_a)
+                    mid_3d = to_3d(mid_x, mid_y)
+                    mid_screen = to_screen(mid_3d)
+                    dist = ((mid_screen[0] - x)**2 + (mid_screen[1] - y)**2)**0.5
+                    if dist < best_dist and dist < 50:
+                        best_dist = dist
+                        best_result = (sid, 'arc', i)
+
+                # Prüfe Splines
+                for i, spline in enumerate(getattr(sketch, 'splines', []) + getattr(sketch, 'native_splines', [])):
+                    if getattr(spline, 'construction', False):
+                        continue
+                    ctrl_pts = getattr(spline, 'control_points', getattr(spline, 'points', []))
+                    if ctrl_pts:
+                        # Mittelwert der Kontrollpunkte
+                        if hasattr(ctrl_pts[0], 'x'):
+                            mid_x = sum(p.x for p in ctrl_pts) / len(ctrl_pts)
+                            mid_y = sum(p.y for p in ctrl_pts) / len(ctrl_pts)
+                        else:
+                            mid_x = sum(p[0] for p in ctrl_pts) / len(ctrl_pts)
+                            mid_y = sum(p[1] for p in ctrl_pts) / len(ctrl_pts)
+                        mid_3d = to_3d(mid_x, mid_y)
+                        mid_screen = to_screen(mid_3d)
+                        dist = ((mid_screen[0] - x)**2 + (mid_screen[1] - y)**2)**0.5
+                        if dist < best_dist and dist < 50:
+                            best_dist = dist
+                            best_result = (sid, 'spline', i)
+
+            if best_result[0]:
+                logger.info(f"Proximity-Picking Erfolg: sketch={best_result[0]}, type={best_result[1]}, idx={best_result[2]} (dist={best_dist:.1f}px)")
+            else:
+                logger.debug(f"Proximity-Picking: Nichts gefunden in {len(self.sketches)} Sketches")
+            return best_result
+
+        except Exception as e:
+            logger.error(f"Proximity-Picking Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return (None, None, None)
+
+    def _point_to_segment_distance(self, px, py, x1, y1, x2, y2):
+        """Berechnet die kürzeste Distanz von Punkt (px, py) zum Liniensegment (x1,y1)-(x2,y2)."""
+        import math
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = dx * dx + dy * dy
+
+        if length_sq == 0:
+            # Segment ist ein Punkt
+            return math.sqrt((px - x1)**2 + (py - y1)**2)
+
+        # Projektion des Punktes auf die Linie
+        t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+        proj_x = x1 + t * dx
+        proj_y = y1 + t * dy
+
+        return math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
 
     def get_extrusion_data_for_kernel(self):
         """Gibt die Shapely-Polygone für den Kernel zurück"""
@@ -3450,6 +3568,52 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.plotter.renderer.actors[m].SetVisibility(visible)
                 self.plotter.renderer.actors[e].SetVisibility(visible)
             except: pass
+        request_render(self.plotter)
+
+    def set_all_bodies_opacity(self, opacity: float):
+        """
+        Setzt die Transparenz aller Bodies (X-Ray Mode).
+
+        Args:
+            opacity: 0.0 = vollständig transparent, 1.0 = vollständig undurchsichtig
+        """
+        opacity = max(0.0, min(1.0, opacity))  # Clamp to [0, 1]
+        for body_id in self._body_actors:
+            try:
+                m, e = self._body_actors[body_id]
+                mesh_actor = self.plotter.renderer.actors.get(m)
+                edge_actor = self.plotter.renderer.actors.get(e)
+                if mesh_actor:
+                    mesh_actor.GetProperty().SetOpacity(opacity)
+                if edge_actor:
+                    # Edges etwas sichtbarer lassen für bessere Orientierung
+                    edge_actor.GetProperty().SetOpacity(min(1.0, opacity + 0.3))
+            except: pass
+        request_render(self.plotter)
+
+    def set_body_opacity(self, body_id: str, opacity: float):
+        """
+        Setzt die Transparenz eines einzelnen Bodies.
+
+        Args:
+            body_id: ID des Bodies
+            opacity: 0.0 = vollständig transparent, 1.0 = vollständig undurchsichtig
+        """
+        opacity = max(0.0, min(1.0, opacity))
+        if body_id not in self._body_actors:
+            return
+        try:
+            m, e = self._body_actors[body_id]
+            mesh_actor = self.plotter.renderer.actors.get(m)
+            edge_actor = self.plotter.renderer.actors.get(e)
+            if mesh_actor:
+                mesh_actor.GetProperty().SetOpacity(opacity)
+            if edge_actor:
+                edge_actor.GetProperty().SetOpacity(min(1.0, opacity + 0.3))
+            # Speichere Opacity im Body-Dict für spätere Referenz
+            if body_id in self.bodies:
+                self.bodies[body_id]['opacity'] = opacity
+        except: pass
         request_render(self.plotter)
 
     def clear_bodies(self):

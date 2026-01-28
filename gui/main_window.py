@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QApplication, QDialog, QFormLayout,
     QDoubleSpinBox, QDialogButtonBox, QSpinBox, QLineEdit,
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QComboBox,
-    QScrollArea, QGraphicsOpacityEffect
+    QScrollArea, QGraphicsOpacityEffect, QSizePolicy
 )
 
 from PySide6.QtCore import Qt, Signal, QSize, QTimer, QPointF, QEvent, QPropertyAnimation, QEasingCurve, QObject, QPoint
@@ -47,6 +47,7 @@ from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
 from gui.widgets.section_view_panel import SectionViewPanel
+from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
@@ -219,34 +220,36 @@ class MainWindow(QMainWindow):
             
     def _apply_theme(self):
         self.setStyleSheet("""
-            QMainWindow { background: #1e1e1e; }
-            QMenuBar { background: #1e1e1e; color: #ccc; padding: 2px; border-bottom: 1px solid #333; }
+            QMainWindow { background: #262626; }
+            QMenuBar { background: #262626; color: #ccc; padding: 2px; border-bottom: 1px solid #333; }
             QMenuBar::item { padding: 4px 8px; }
             QMenuBar::item:selected { background: #333; }
-            QMenu { background: #252526; color: #ccc; border: 1px solid #333; }
+            QMenu { background: #262626; color: #ccc; border: 1px solid #333; }
             QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background: #0078d4; }
-            QToolBar { 
-                background: #1e1e1e; 
+            QMenu::item:selected { background: #2563eb; }
+            QToolBar {
+                background: #262626;
                 border: none;
-                border-bottom: 1px solid #333;
-                padding: 2px;
-                spacing: 2px;
+                border-bottom: 1px solid #404040;
+                padding: 0 16px;
+                spacing: 4px;
+                min-height: 56px;
+                max-height: 56px;
             }
             QToolBar QToolButton {
                 background: transparent;
-                border: 1px solid transparent;
-                border-radius: 3px;
-                color: #ccc;
-                padding: 4px 8px;
-                font-size: 11px;
+                border: none;
+                border-radius: 6px;
+                color: #d4d4d4;
+                padding: 8px;
+                font-size: 12px;
             }
             QToolBar QToolButton:hover {
-                background: #333;
-                border-color: #444;
+                background: #404040;
             }
-            QToolBar QToolButton:pressed {
-                background: #0078d4;
+            QToolBar QToolButton:pressed, QToolBar QToolButton:checked {
+                background: #2563eb;
+                color: white;
             }
             QSplitter::handle {
                 background: #333;
@@ -258,10 +261,10 @@ class MainWindow(QMainWindow):
                 height: 1px;
             }
             QSplitter::handle:hover {
-                background: #0078d4;
+                background: #2563eb;
             }
             QStatusBar { 
-                background: #1e1e1e; 
+                background: #262626; 
                 color: #888; 
                 border-top: 1px solid #333;
             }
@@ -295,15 +298,25 @@ class MainWindow(QMainWindow):
         
     def _create_ui(self):
         central = QWidget()
-        central.setStyleSheet("background-color: #1e1e1e;")
+        central.setStyleSheet("background-color: #262626;")
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
+
+        # Haupt-Layout: Vertikal (Content oben, StatusBar unten)
+        main_vertical = QVBoxLayout(central)
+        main_vertical.setContentsMargins(0, 0, 0, 0)
+        main_vertical.setSpacing(0)
+
+        # Content-Container für horizontales Layout
+        content_widget = QWidget()
+        content_widget.setStyleSheet("background-color: #262626;")
+        layout = QHBoxLayout(content_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        main_vertical.addWidget(content_widget, stretch=1)
         
         # === HAUPTSPLITTER ===
         self.main_splitter = QSplitter(Qt.Horizontal)
-        self.main_splitter.setStyleSheet("QSplitter { background: #1e1e1e; }")
+        self.main_splitter.setStyleSheet("QSplitter { background: #262626; }")
         
         # === LINKE SEITE: Browser + Tools horizontal ===
         left_container = QWidget()  # <--- Hier heißt die Variable "left_container"
@@ -325,10 +338,10 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setStyleSheet("""
             QTabWidget::pane {
                 border: none;
-                background: #1e1e1e;
+                background: #262626;
             }
             QTabBar::tab {
-                background: #252526;
+                background: #262626;
                 color: #999;
                 border: none;
                 padding: 6px 14px;
@@ -337,7 +350,7 @@ class MainWindow(QMainWindow):
             }
             QTabBar::tab:selected {
                 color: #ddd;
-                border-bottom: 2px solid #0078d4;
+                border-bottom: 2px solid #2563eb;
             }
             QTabBar::tab:hover {
                 color: #ccc;
@@ -362,7 +375,7 @@ class MainWindow(QMainWindow):
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
         self.tool_stack.setMinimumWidth(220)
-        self.tool_stack.setStyleSheet("background-color: #1e1e1e;")
+        self.tool_stack.setStyleSheet("background-color: #262626;")
         
         self.transform_panel = TransformPanel(self)
         self.transform_panel.values_changed.connect(self._on_transform_val_change)
@@ -391,7 +404,7 @@ class MainWindow(QMainWindow):
         
         # === MITTE: Viewport / Sketch Editor ===
         self.center_stack = QStackedWidget()
-        self.center_stack.setStyleSheet("background-color: #1e1e1e;")
+        self.center_stack.setStyleSheet("background-color: #262626;")
         
         self.viewport_3d = PyVistaViewport()
         self.center_stack.addWidget(self.viewport_3d)
@@ -413,25 +426,31 @@ class MainWindow(QMainWindow):
         self.right_stack = QStackedWidget()
         self.right_stack.setMinimumWidth(140)
         self.right_stack.setMaximumWidth(200)
-        self.right_stack.setStyleSheet("background-color: #1e1e1e;")
+        self.right_stack.setStyleSheet("background-color: #262626;")
         
         # 3D-Properties (Index 0)
         self.body_properties = BodyPropertiesPanel()
+        self.body_properties.opacity_changed.connect(self._on_body_opacity_changed)
         self.right_stack.addWidget(self.body_properties)
-        
+
         # 2D-Properties (Index 1)
         self.properties_panel = PropertiesPanel()
         self.right_stack.addWidget(self.properties_panel)
         
         self.right_stack.setVisible(False)
         layout.addWidget(self.right_stack)
-        
+
+        # === STATUS BAR (unten) ===
+        self.mashcad_status_bar = MashCadStatusBar()
+        main_vertical.addWidget(self.mashcad_status_bar)
+
         # Extrude Input Panel (immer sichtbar während Extrude-Modus)
         self.extrude_panel = ExtrudeInputPanel(self)
         self.extrude_panel.height_changed.connect(self._on_extrude_panel_height_changed)
         self.extrude_panel.confirmed.connect(self._on_extrude_confirmed)
         self.extrude_panel.cancelled.connect(self._on_extrude_cancelled)
         self.extrude_panel.bodies_visibility_toggled.connect(self._on_toggle_bodies_visibility)
+        self.extrude_panel.bodies_visibility_state_changed.connect(self._on_bodies_visibility_state_changed)
         self.extrude_panel.operation_changed.connect(self._on_extrude_operation_changed)
         self.extrude_panel.to_face_requested.connect(self._on_to_face_requested)
 
@@ -536,6 +555,8 @@ class MainWindow(QMainWindow):
         self.sweep_panel.confirmed.connect(self._on_sweep_confirmed)
         self.sweep_panel.cancelled.connect(self._on_sweep_cancelled)
         self.sweep_panel.sketch_path_requested.connect(self._on_sweep_sketch_path_requested)
+        self.sweep_panel.profile_cleared.connect(self._on_sweep_profile_cleared)
+        self.sweep_panel.path_cleared.connect(self._on_sweep_path_cleared)
 
         self._sweep_mode = False
         self._sweep_phase = None  # 'profile' or 'path'
@@ -575,7 +596,7 @@ class MainWindow(QMainWindow):
         self.sketch_editor.grid_snap_mode_changed.connect(self.tool_panel.set_grid_snap)
         self.sketch_editor.exit_requested.connect(self._finish_sketch)
         self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
-        self._create_toolbar()
+        # Toolbar entfernt - war nutzlos laut User
      
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -694,23 +715,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'transform_panel') and self.transform_panel.isVisible():
             self.transform_panel.set_values(x, y, z)
 
-    def _create_toolbar(self):
-        """Minimale Toolbar - nur Modus-Umschaltung"""
-        tb = QToolBar("Main")
-        tb.setMovable(False)
-        tb.setIconSize(QSize(16, 16))
-        self.addToolBar(tb)
-        
-        # Nur Sketch-Fertig Button (erscheint im Sketch-Modus)
-        self.btn_finish_sketch = tb.addAction("✓ Fertig (Esc)")
-        self.btn_finish_sketch.triggered.connect(self._finish_sketch)
-        self.btn_finish_sketch.setToolTip("Sketch beenden und zurück zum 3D-Modus")
-        self.btn_finish_sketch.setVisible(False)
-        
-        # Versteckte Buttons für Tastenkürzel
-        self.btn_new_sketch = None  # Wird über Tool Panel gesteuert
-        self.btn_extrude = None     # Wird über Tool Panel gesteuert
-
     def _create_menus(self):
         mb = self.menuBar()
         
@@ -766,6 +770,7 @@ class MainWindow(QMainWindow):
         # 2D Tool Panel
         self.tool_panel.tool_selected.connect(self._on_sketch_tool_selected)
         self.tool_panel.option_changed.connect(self._on_opt_change)
+        self.tool_panel.finish_sketch_requested.connect(self._finish_sketch)
         
         # 3D Tool Panel
         self.tool_panel_3d.action_triggered.connect(self._on_3d_action)
@@ -1480,10 +1485,10 @@ class MainWindow(QMainWindow):
                 # Mesh aktualisieren
                 self._update_body_from_build123d(body, body._build123d_solid)
                 logger.success(f"Transform {self._transform_mode} applied via Build123d")
-                
+
             except Exception as e:
                 logger.exception(f"Transform Error: {e}")
-                
+
         else:
             # Fallback Mesh-Only (wenn kein Build123d Objekt da ist)
             mesh = self.viewport_3d.get_body_mesh(body.id)
@@ -1498,7 +1503,10 @@ class MainWindow(QMainWindow):
                     mesh.rotate_z(dz, inplace=True)
                 self._update_body_mesh(body, mesh)
 
-        self._on_transform_cancelled() # Cleanup UI
+        # Reset panel values but keep gizmo and panel visible for further transforms
+        self.transform_panel.reset_values()
+        # Refresh gizmo position to new body position
+        self.viewport_3d.update_transform_gizmo_position()
         self.browser.refresh()
 
     def _on_transform_cancelled(self):
@@ -1800,7 +1808,24 @@ class MainWindow(QMainWindow):
             self._on_body_mirror_requested(body_id, "XZ")
         elif clicked == btn_yz:
             self._on_body_mirror_requested(body_id, "YZ")
-        
+
+    def _on_body_opacity_changed(self, body_id: str, opacity: float):
+        """
+        Handler für Transparenz-Änderungen aus dem BodyPropertiesPanel.
+
+        Args:
+            body_id: ID des Bodies
+            opacity: Transparenz (0.0 = unsichtbar, 1.0 = undurchsichtig)
+        """
+        # Im Viewport anwenden
+        self.viewport_3d.set_body_opacity(body_id, opacity)
+
+        # Im Body-Model speichern für Persistenz
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if body:
+            body.display_opacity = opacity
+            logger.debug(f"Body '{body.name}' Transparenz: {int(opacity * 100)}%")
+
     def _update_viewport_all(self):
         """Aktualisiert ALLES im Viewport"""
         # Sketches
@@ -1820,16 +1845,19 @@ class MainWindow(QMainWindow):
             self.tool_stack.setCurrentIndex(0)  # 3D-ToolPanel
             self.center_stack.setCurrentIndex(0)  # Viewport
             self.right_stack.setVisible(False)
-            self.btn_finish_sketch.setVisible(False)
-            #self._update_viewport_all()
+            # Update UI
+            if hasattr(self, 'mashcad_status_bar'):
+                self.mashcad_status_bar.set_mode("3D")
         else:
             # Sketch-Modus
             self.tool_stack.setCurrentIndex(1)  # 2D-ToolPanel
             self.center_stack.setCurrentIndex(1)  # Sketch Editor
             self.right_stack.setCurrentIndex(1)  # 2D Properties
             self.right_stack.setVisible(True)
-            self.btn_finish_sketch.setVisible(True)
             self.sketch_editor.setFocus()
+            # Update UI
+            if hasattr(self, 'mashcad_status_bar'):
+                self.mashcad_status_bar.set_mode("2D")
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
@@ -3406,8 +3434,9 @@ class MainWindow(QMainWindow):
         """Extrude abgebrochen"""
         self.viewport_3d.set_extrude_mode(False)
         self.extrude_panel.setVisible(False)
-        # Bodies wieder einblenden falls versteckt
+        # Bodies wieder einblenden und Opacity zurücksetzen (X-Ray Mode)
         self.viewport_3d.set_all_bodies_visible(True)
+        self.viewport_3d.set_all_bodies_opacity(1.0)
         if hasattr(self.viewport_3d, 'detector'):
             self.viewport_3d.detector.clear()
         self.viewport_3d.selected_face_ids.clear()
@@ -3416,15 +3445,31 @@ class MainWindow(QMainWindow):
         logger.info(tr("Extrude abgebrochen"), 2000)
     
     def _on_toggle_bodies_visibility(self, hide: bool):
-        """Toggle alle Bodies sichtbar/unsichtbar im Extrude-Modus"""
-        self.viewport_3d.set_all_bodies_visible(not hide)
-        
-        # NEU: Detector aktualisieren wenn Sichtbarkeit geändert wird
+        """Legacy Handler - wird von bodies_visibility_state_changed ersetzt"""
+        # Wird noch für Kompatibilität aufgerufen, eigentliche Logik in _on_bodies_visibility_state_changed
+        pass
+
+    def _on_bodies_visibility_state_changed(self, state: int):
+        """
+        3-Stufen Visibility Toggle:
+        0 = Normal (100% sichtbar)
+        1 = X-Ray (20% transparent)
+        2 = Versteckt (komplett unsichtbar)
+        """
+        if state == 0:  # Normal
+            self.viewport_3d.set_all_bodies_visible(True)
+            self.viewport_3d.set_all_bodies_opacity(1.0)
+        elif state == 1:  # X-Ray
+            self.viewport_3d.set_all_bodies_visible(True)
+            self.viewport_3d.set_all_bodies_opacity(0.2)
+        else:  # state == 2: Versteckt
+            self.viewport_3d.set_all_bodies_visible(False)
+
+        # Detector aktualisieren
         if self.viewport_3d.extrude_mode:
             self._update_detector()
             self.viewport_3d._draw_selectable_faces_from_detector()
-        
-    
+
     def _update_detector(self):
         """
         Lädt ALLE sichtbaren Geometrien in den Detector.
@@ -3678,13 +3723,14 @@ class MainWindow(QMainWindow):
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
         self.viewport_3d.set_all_bodies_visible(True)
-        
+        self.viewport_3d.set_all_bodies_opacity(1.0)  # X-Ray Mode zurücksetzen
+
         if hasattr(self.viewport_3d, 'detector'):
             self.viewport_3d.detector.clear()
         self.viewport_3d.selected_face_ids.clear()
         self.viewport_3d.hover_face_id = -1
-        self.viewport_3d._draw_selectable_faces_from_detector()    
-            
+        self.viewport_3d._draw_selectable_faces_from_detector()
+
         if success:
             self.browser.refresh()
             # TNP Statistiken aktualisieren
@@ -3912,8 +3958,25 @@ class MainWindow(QMainWindow):
             mesh_center = Vector(face_data['center_3d'])
             ocp_pt_vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(mesh_center.X, mesh_center.Y, mesh_center.Z)).Vertex()
 
+            # Normale aus face_data für korrektes Matching
+            expected_normal = face_data.get('normal')
+            use_normal = False
+            if expected_normal:
+                import numpy as np
+                n_arr = np.array(expected_normal)
+                n_len = np.linalg.norm(n_arr)
+                if n_len > 0.1:
+                    expected_normal = n_arr / n_len  # Normalisieren
+                    use_normal = True
+                    logger.debug(f"Face-Suche: Normale=({expected_normal[0]:.2f}, {expected_normal[1]:.2f}, {expected_normal[2]:.2f})")
+
+            # Face-Suche: BREP-Face mit passender Normale UND nächster Distanz finden
             best_face = None
             best_dist = float('inf')
+
+            # Fallback: Falls kein Normal-Match, bestes per Distanz
+            fallback_face = None
+            fallback_dist = float('inf')
 
             logger.debug(f"Face-Suche: mesh_center=({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f}), {len(candidate_faces)} Kandidaten")
 
@@ -3922,11 +3985,35 @@ class MainWindow(QMainWindow):
                     extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, f.wrapped)
                     if extrema.IsDone():
                         dist = extrema.Value()
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_face = f
+
+                        # Fallback tracken (für den Fall dass Normal-Match fehlschlägt)
+                        if dist < fallback_dist:
+                            fallback_dist = dist
+                            fallback_face = f
+
+                        # Normal-Matching wenn Normale verfügbar
+                        if use_normal:
+                            f_center = f.center()
+                            f_normal = f.normal_at(f_center)
+                            import numpy as np
+                            dot = np.dot(expected_normal, [f_normal.X, f_normal.Y, f_normal.Z])
+                            # Nur Faces mit ähnlicher Normale (dot > 0.7 = ~45° Toleranz)
+                            if dot > 0.7 and dist < best_dist:
+                                best_dist = dist
+                                best_face = f
+                        else:
+                            # Ohne Normale: nur Distanz
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_face = f
                 except Exception as ex:
                     logger.debug(f"Face-Distanz-Fehler: {ex}")
+
+            # Fallback wenn Normal-Match nichts gefunden hat
+            if best_face is None and fallback_face is not None:
+                logger.warning(f"Normal-Match fehlgeschlagen, nutze Distanz-Fallback")
+                best_face = fallback_face
+                best_dist = fallback_dist
 
             # Dynamischer Schwellenwert basierend auf Body-Bounding-Box-Diagonale
             try:
@@ -4572,7 +4659,7 @@ class MainWindow(QMainWindow):
                 if k == Qt.Key_E:
                     self._extrude_dialog()
                     return True
-                if k == Qt.Key_S:
+                if k == Qt.Key_N:
                     self._new_sketch()
                     return True
 
@@ -4611,7 +4698,14 @@ class MainWindow(QMainWindow):
         #return super().eventFilter(obj, event)
 
     def _on_opt_change(self, o, v): pass
-    
+
+    def _delete_selected(self):
+        """Löscht alle ausgewählten Bodies."""
+        selected = self.browser.get_selected_bodies()
+        if selected:
+            for body in selected:
+                self.browser._del_body(body)
+
     def _edit_feature(self, d): 
         """
         Wird aufgerufen durch Doppelklick im Browser.
@@ -6307,6 +6401,9 @@ class MainWindow(QMainWindow):
         self._sweep_profile_data = profile_data
         self.sweep_panel.set_profile(profile_data)
 
+        # Profil im Viewport highlighten
+        self._highlight_sweep_profile(profile_data)
+
         # Zur Pfad-Phase wechseln
         self._sweep_phase = 'path'
         logger.info("Sweep: Profil ausgewählt. Klicke auf einen Pfad im Viewport (Sketch-Linie/Bogen/Spline oder Body-Edge)")
@@ -6355,6 +6452,9 @@ class MainWindow(QMainWindow):
         self._sweep_path_data = path_data
         self.sweep_panel.set_path(path_data)
 
+        # Pfad im Viewport highlighten
+        self._highlight_sweep_path(path_data)
+
         logger.info(f"Sweep: Pfad ausgewählt ({len(build123d_edges)} Edges). Drücke OK zum Ausführen")
 
     def _on_sweep_confirmed(self):
@@ -6386,13 +6486,12 @@ class MainWindow(QMainWindow):
             )
 
             # Body finden oder erstellen
-            if operation == "New Body" or not self.document.bodies:
-                # Neuen Body erstellen
+            is_new_body = operation == "New Body" or not self.document.bodies
+            if is_new_body:
+                # Neuen Body erstellen (aber noch NICHT zum Dokument hinzufügen!)
                 from modeling import Body
-                new_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}")
-                new_body.features.append(sweep_feature)
-                self.document.bodies.append(new_body)
-                target_body = new_body
+                target_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}")
+                target_body.features.append(sweep_feature)
             else:
                 # Existierenden Body verwenden
                 target_body = self.document.bodies[0]
@@ -6401,6 +6500,17 @@ class MainWindow(QMainWindow):
             # Body neu berechnen
             CADTessellator.notify_body_changed()
             target_body._rebuild()
+
+            # Prüfe ob Rebuild erfolgreich war
+            if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
+                # Rebuild fehlgeschlagen - Feature wieder entfernen
+                if sweep_feature in target_body.features:
+                    target_body.features.remove(sweep_feature)
+                raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
+
+            # Erst JETZT den neuen Body zum Dokument hinzufügen (nach erfolgreichem Rebuild)
+            if is_new_body:
+                self.document.bodies.append(target_body)
 
             # Visualisierung aktualisieren
             self._update_body_from_build123d(target_body, target_body._build123d_solid)
@@ -6422,6 +6532,210 @@ class MainWindow(QMainWindow):
         self._stop_sweep_mode()
         logger.info("Sweep abgebrochen")
 
+    def _on_sweep_profile_cleared(self):
+        """Handler wenn Profil-Auswahl entfernt wird."""
+        self._sweep_profile_data = None
+        logger.info("Sweep Profil-Auswahl entfernt")
+        # Entferne Highlight im Viewport
+        self._clear_sweep_highlight('profile')
+
+    def _on_sweep_path_cleared(self):
+        """Handler wenn Pfad-Auswahl entfernt wird."""
+        self._sweep_path_data = None
+        logger.info("Sweep Pfad-Auswahl entfernt")
+        # Entferne Highlight im Viewport
+        self._clear_sweep_highlight('path')
+
+    def _clear_sweep_highlight(self, element_type: str):
+        """Entfernt das Sweep-Highlight für Profil oder Pfad."""
+        actor_name = f"sweep_{element_type}_highlight"
+        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
+            try:
+                self.viewport_3d.plotter.remove_actor(actor_name)
+                self.viewport_3d.plotter.render()
+            except Exception:
+                pass  # Actor existiert nicht, ignorieren
+
+    def _highlight_sweep_profile(self, profile_data: dict):
+        """Highlightet das ausgewählte Sweep-Profil im Viewport."""
+        import pyvista as pv
+        import numpy as np
+
+        if not hasattr(self.viewport_3d, 'plotter') or not self.viewport_3d.plotter:
+            return
+
+        try:
+            # Entferne altes Highlight
+            self._clear_sweep_highlight('profile')
+
+            shapely_poly = profile_data.get('shapely_poly')
+            if not shapely_poly:
+                return
+
+            plane_origin = profile_data.get('plane_origin', (0, 0, 0))
+            plane_normal = profile_data.get('plane_normal', (0, 0, 1))
+            plane_x = profile_data.get('plane_x', (1, 0, 0))
+            plane_y = profile_data.get('plane_y', (0, 1, 0))
+
+            # Konvertiere Shapely-Polygon zu 3D-Punkten
+            if hasattr(shapely_poly, 'exterior'):
+                coords = list(shapely_poly.exterior.coords)
+            else:
+                coords = list(shapely_poly.coords)
+
+            if len(coords) < 2:
+                return
+
+            # 2D zu 3D Transformation
+            points_3d = []
+            for x2d, y2d in coords:
+                p3d = (
+                    plane_origin[0] + x2d * plane_x[0] + y2d * plane_y[0],
+                    plane_origin[1] + x2d * plane_x[1] + y2d * plane_y[1],
+                    plane_origin[2] + x2d * plane_x[2] + y2d * plane_y[2]
+                )
+                points_3d.append(p3d)
+
+            points = np.array(points_3d, dtype=np.float32)
+
+            # Erstelle Linien-Mesh für das Profil
+            n = len(points)
+            lines = []
+            for i in range(n - 1):
+                lines.extend([2, i, i + 1])
+            lines = np.array(lines, dtype=np.int32)
+
+            poly = pv.PolyData(points, lines=lines)
+            self.viewport_3d.plotter.add_mesh(
+                poly,
+                name="sweep_profile_highlight",
+                color="#00ff00",  # Grün für Profil
+                line_width=4,
+                render_lines_as_tubes=True
+            )
+            self.viewport_3d.plotter.render()
+
+        except Exception as e:
+            logger.warning(f"Profil-Highlight fehlgeschlagen: {e}")
+
+    def _highlight_sweep_path(self, path_data: dict):
+        """Highlightet den ausgewählten Sweep-Pfad im Viewport."""
+        import pyvista as pv
+        import numpy as np
+
+        if not hasattr(self.viewport_3d, 'plotter') or not self.viewport_3d.plotter:
+            return
+
+        try:
+            # Entferne altes Highlight
+            self._clear_sweep_highlight('path')
+
+            path_type = path_data.get('type')
+
+            if path_type == 'sketch_edge':
+                # Sketch-basierter Pfad
+                geom_type = path_data.get('geometry_type')
+                plane_origin = path_data.get('plane_origin', (0, 0, 0))
+                plane_x = path_data.get('plane_x', (1, 0, 0))
+                plane_y = path_data.get('plane_y', (0, 1, 0))
+
+                points_2d = []
+
+                if geom_type == 'line':
+                    start = path_data.get('start')
+                    end = path_data.get('end')
+                    if start and end:
+                        points_2d = [start, end]
+
+                elif geom_type == 'arc':
+                    # Generiere Punkte entlang des Bogens
+                    center = path_data.get('center', (0, 0))
+                    radius = path_data.get('radius', 1)
+                    start_angle = path_data.get('start_angle', 0)
+                    end_angle = path_data.get('end_angle', np.pi)
+
+                    n_pts = 32
+                    angles = np.linspace(start_angle, end_angle, n_pts)
+                    for a in angles:
+                        x = center[0] + radius * np.cos(a)
+                        y = center[1] + radius * np.sin(a)
+                        points_2d.append((x, y))
+
+                elif geom_type == 'spline':
+                    ctrl_pts = path_data.get('control_points', [])
+                    if ctrl_pts:
+                        # Für Splines: Interpoliere Punkte
+                        points_2d = ctrl_pts
+
+                if not points_2d:
+                    return
+
+                # 2D zu 3D Transformation
+                points_3d = []
+                for x2d, y2d in points_2d:
+                    p3d = (
+                        plane_origin[0] + x2d * plane_x[0] + y2d * plane_y[0],
+                        plane_origin[1] + x2d * plane_x[1] + y2d * plane_y[1],
+                        plane_origin[2] + x2d * plane_x[2] + y2d * plane_y[2]
+                    )
+                    points_3d.append(p3d)
+
+                points = np.array(points_3d, dtype=np.float32)
+
+            elif path_type == 'body_edge':
+                # Body-Edge-basierter Pfad
+                build123d_edges = path_data.get('build123d_edges', [])
+                if not build123d_edges:
+                    return
+
+                # Tesselliere die Edges
+                points_3d = []
+                for edge in build123d_edges:
+                    if hasattr(edge, 'wrapped'):
+                        from OCP.BRepAdaptor import BRepAdaptor_Curve
+                        from OCP.GCPnts import GCPnts_UniformAbscissa
+
+                        curve = BRepAdaptor_Curve(edge.wrapped)
+                        u_start = curve.FirstParameter()
+                        u_end = curve.LastParameter()
+
+                        n_pts = 32
+                        for i in range(n_pts + 1):
+                            u = u_start + (u_end - u_start) * i / n_pts
+                            pnt = curve.Value(u)
+                            points_3d.append((pnt.X(), pnt.Y(), pnt.Z()))
+
+                if not points_3d:
+                    return
+
+                points = np.array(points_3d, dtype=np.float32)
+
+            else:
+                return
+
+            # Erstelle Linien-Mesh für den Pfad
+            n = len(points)
+            if n < 2:
+                return
+
+            lines = []
+            for i in range(n - 1):
+                lines.extend([2, i, i + 1])
+            lines = np.array(lines, dtype=np.int32)
+
+            poly = pv.PolyData(points, lines=lines)
+            self.viewport_3d.plotter.add_mesh(
+                poly,
+                name="sweep_path_highlight",
+                color="#ff8800",  # Orange für Pfad
+                line_width=4,
+                render_lines_as_tubes=True
+            )
+            self.viewport_3d.plotter.render()
+
+        except Exception as e:
+            logger.warning(f"Pfad-Highlight fehlgeschlagen: {e}")
+
     def _on_sketch_path_clicked(self, sketch_id: str, geom_type: str, index: int):
         """
         Handler für direkten Viewport-Klick auf Sketch-Element.
@@ -6430,10 +6744,12 @@ class MainWindow(QMainWindow):
         if not self._sweep_mode or self._sweep_phase != 'path':
             return
 
-        # Finde den Sketch
-        sketch = next((s for s in self.document.sketches if s.id == sketch_id), None)
+        logger.info(f"Sketch-Pfad Handler aufgerufen: sketch_id={sketch_id}, geom_type={geom_type}, index={index}")
+
+        # Finde den Sketch (robuster Vergleich: String-Konvertierung)
+        sketch = next((s for s in self.document.sketches if str(s.id) == str(sketch_id)), None)
         if not sketch:
-            logger.warning(f"Sketch {sketch_id} nicht gefunden")
+            logger.warning(f"Sketch {sketch_id} nicht gefunden. Verfügbare IDs: {[s.id for s in self.document.sketches]}")
             return
 
         # Finde das Geometrie-Element
@@ -6487,6 +6803,9 @@ class MainWindow(QMainWindow):
         # Pfad setzen
         self._sweep_path_data = path_data
         self.sweep_panel.set_path(path_data)
+
+        # Pfad im Viewport highlighten
+        self._highlight_sweep_path(path_data)
 
         # Sketch-Pfad-Modus beenden (Pfad wurde ausgewählt)
         self.viewport_3d.stop_sketch_path_mode()
@@ -6617,6 +6936,9 @@ class MainWindow(QMainWindow):
         self._sweep_path_data = path_data
         self.sweep_panel.set_path(path_data)
 
+        # Pfad im Viewport highlighten
+        self._highlight_sweep_path(path_data)
+
         logger.info(f"Sweep: Pfad aus Sketch gewählt - {name}")
 
     def _stop_sweep_mode(self):
@@ -6626,6 +6948,10 @@ class MainWindow(QMainWindow):
         self._sweep_profile_data = None
         self._sweep_path_data = None
         self.sweep_panel.hide()
+
+        # Highlights entfernen
+        self._clear_sweep_highlight('profile')
+        self._clear_sweep_highlight('path')
 
         # Sketch-Pfad-Modus stoppen
         if hasattr(self.viewport_3d, 'stop_sketch_path_mode'):
