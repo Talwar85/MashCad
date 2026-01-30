@@ -10,7 +10,15 @@ def _patched_find_library(name):
         # In PyInstaller bundle, check _MEIPASS (internal dir)
         meipass = getattr(sys, '_MEIPASS', None)
         if meipass:
+            # Windows
             candidate = os.path.join(meipass, 'Library', 'bin', 'lib3mf.dll')
+            if os.path.isfile(candidate):
+                return candidate
+            # Linux
+            candidate = os.path.join(meipass, 'lib3mf.so')
+            if os.path.isfile(candidate):
+                return candidate
+            candidate = os.path.join(meipass, 'lib', 'lib3mf.so')
             if os.path.isfile(candidate):
                 return candidate
     return _original_find_library(name)

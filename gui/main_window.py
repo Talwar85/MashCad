@@ -129,9 +129,10 @@ class MainWindow(QMainWindow):
         self.qt_log_handler = QtLogHandler()
         # Verbinde Signal mit neuer zentraler Log-Methode
         self.qt_log_handler.new_message.connect(self._handle_log_message)
-        
-        # Konsole (stderr) für Debugging
-        logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
+
+        # Konsole (stderr) für Debugging - nur wenn verfügbar (nicht in gebündelter App ohne Konsole)
+        if sys.stderr is not None:
+            logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
         # Qt Handler für GUI
         logger.add(self.qt_log_handler.write, format="{message}", level="INFO")
 

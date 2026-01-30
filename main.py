@@ -16,34 +16,51 @@ def main():
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
 
-    # Info über verfügbare Bibliotheken
-    try:
-        import pyvista
-        print(f"Info: PyVista {pyvista.__version__} verfügbar")
-    except ImportError:
-        print("Warning: PyVista nicht verfügbar - verwende OpenGL-Fallback")
-
-    try:
-        import build123d
-        print("Info: build123d erfolgreich geladen.")
-    except ImportError:
-        print("Warning: build123d nicht verfügbar")
-
-    from gui.main_window import MainWindow
-
+    # App erstellen (muss vor Splash sein)
     app = QApplication(sys.argv)
     app.setApplicationName("MashCAD")
     app.setOrganizationName("MashCAD")
-    app.setApplicationVersion("2.5.0")
+    app.setApplicationVersion("0.1-alpha")
 
     # App-Icon setzen (für Taskleiste)
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
-    
+
+    # Splash Screen anzeigen
+    from gui.splash_screen import MashCADSplash
+    splash = MashCADSplash()
+    splash.show()
+    app.processEvents()
+
+    # Bibliotheken laden mit Fortschrittsanzeige
+    splash.set_progress(10, "Loading PyVista...")
+    try:
+        import pyvista
+        splash.set_progress(30, f"PyVista {pyvista.__version__} loaded")
+    except ImportError:
+        splash.set_progress(30, "PyVista not available")
+
+    splash.set_progress(40, "Loading Build123d...")
+    try:
+        import build123d
+        splash.set_progress(60, "Build123d loaded")
+    except ImportError:
+        splash.set_progress(60, "Build123d not available")
+
+    splash.set_progress(70, "Initializing GUI...")
+    from gui.main_window import MainWindow
+
+    splash.set_progress(85, "Creating main window...")
     window = MainWindow()
+
+    splash.set_progress(100, "Ready!")
+    app.processEvents()
+
+    # Splash ausblenden und Hauptfenster zeigen
     window.show()
-    
+    splash.finish(window)
+
     sys.exit(app.exec())
 
 
