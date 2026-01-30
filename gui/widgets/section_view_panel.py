@@ -46,42 +46,86 @@ class SectionViewPanel(QWidget):
         self.setMaximumWidth(350)
         self.setMinimumHeight(400)
 
-        # Styling
+        # Styling - Dark Theme für alle Widgets
         self.setStyleSheet("""
             QWidget {
                 background-color: #2b2b2b;
                 color: #ffffff;
-                border: 1px solid #555;
+            }
+            SectionViewPanel {
+                border: 2px solid #0078d4;
                 border-radius: 8px;
+            }
+            QGroupBox {
+                background-color: #333333;
+                border: 1px solid #555;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 8px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 5px;
+                color: #aaa;
             }
             QPushButton {
                 background-color: #3a3a3a;
                 border: 1px solid #555;
-                padding: 6px 12px;
+                padding: 8px 16px;
                 border-radius: 4px;
+                font-size: 12px;
             }
             QPushButton:hover {
                 background-color: #4a4a4a;
             }
             QPushButton:checked {
-                background-color: #0d7ea3;
+                background-color: #0078d4;
+                border-color: #0078d4;
             }
             QComboBox {
                 background-color: #3a3a3a;
                 border: 1px solid #555;
-                padding: 4px;
+                padding: 8px 12px;
                 border-radius: 4px;
+                min-width: 150px;
+                font-size: 12px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2b2b2b;
+                color: #fff;
+                selection-background-color: #0078d4;
+                border: 1px solid #555;
+                padding: 4px;
+            }
+            QCheckBox {
+                font-size: 12px;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
             }
             QSlider::groove:horizontal {
                 background: #3a3a3a;
-                height: 6px;
-                border-radius: 3px;
+                height: 8px;
+                border-radius: 4px;
             }
             QSlider::handle:horizontal {
-                background: #0d7ea3;
-                width: 16px;
+                background: #0078d4;
+                width: 18px;
                 margin: -5px 0;
-                border-radius: 8px;
+                border-radius: 9px;
+            }
+            QLabel {
+                font-size: 12px;
             }
         """)
 
@@ -165,7 +209,7 @@ class SectionViewPanel(QWidget):
             "• <b>Strg+Shift+S</b>: Toggle Section View"
         )
         help_text.setWordWrap(True)
-        help_text.setStyleSheet("background: #f0f0f0; padding: 8px; border-radius: 4px; font-size: 10px;")
+        help_text.setStyleSheet("background: #1e1e1e; padding: 10px; border-radius: 4px; font-size: 11px; color: #aaa;")
         layout.addWidget(help_text)
 
         layout.addStretch()

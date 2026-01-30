@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QComboBox, QGroupBox, QRadioButton
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QIntValidator
+from PySide6.QtGui import QIntValidator
 from loguru import logger
-from gui.design_tokens import DesignTokens
+from gui.design_tokens import DesignTokens, create_decimal_validator, parse_decimal
 from i18n import tr
 
 
@@ -73,7 +73,8 @@ class PatternDialog(QDialog):
         spacing_layout = QHBoxLayout()
         spacing_layout.addWidget(QLabel(tr("Spacing (mm):")))
         self.linear_spacing = QLineEdit("10.0")
-        self.linear_spacing.setValidator(QDoubleValidator(0.01, 10000, 2))
+        self.linear_spacing.setValidator(create_decimal_validator())
+        self.linear_spacing.setPlaceholderText("0.01 - 10000")
         spacing_layout.addWidget(self.linear_spacing)
         linear_layout.addLayout(spacing_layout)
 
@@ -124,7 +125,8 @@ class PatternDialog(QDialog):
         angle_layout = QHBoxLayout()
         angle_layout.addWidget(QLabel(tr("Angle (°):")))
         self.circular_angle = QLineEdit("45.0")
-        self.circular_angle.setValidator(QDoubleValidator(-360, 360, 2))
+        self.circular_angle.setValidator(create_decimal_validator())
+        self.circular_angle.setPlaceholderText("-360 - 360")
         angle_layout.addWidget(self.circular_angle)
         circular_layout.addLayout(angle_layout)
 
@@ -168,7 +170,7 @@ class PatternDialog(QDialog):
             if self.linear_radio.isChecked():
                 # Linear Pattern
                 count = int(self.linear_count.text() or "3")
-                spacing = float(self.linear_spacing.text() or "10.0")
+                spacing = parse_decimal(self.linear_spacing.text(), 10.0)
                 axis = self.linear_axis.currentText()
 
                 if count < 2:
@@ -200,7 +202,7 @@ class PatternDialog(QDialog):
                     # 360° verteilt auf N Kopien
                     angle = 360.0 / count
                 else:
-                    angle = float(self.circular_angle.text() or "45.0")
+                    angle = parse_decimal(self.circular_angle.text(), 45.0)
 
                 self.pattern_data = {
                     "type": "circular",

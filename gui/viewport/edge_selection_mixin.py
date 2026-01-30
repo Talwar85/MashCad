@@ -74,32 +74,47 @@ class EdgeSelectionMixin:
 
     def start_edge_selection_mode(self, body_id: str):
         if not HAS_PYVISTA: return
-        self._init_edge_selection() 
-        
-        self.edge_select_mode = True
-        self._edge_selection_body_id = body_id
-        
-        if hasattr(self, 'set_pending_transform_mode'):
-            self.set_pending_transform_mode(False)
 
-        # Detector aktualisieren
-        if hasattr(self, '_update_detector_for_picking'):
-            self._update_detector_for_picking()
+        try:
+            self._init_edge_selection()
 
-        # Kanten laden
-        self._extract_edges_from_body(body_id)
-        
-        # WICHTIG: Hier einmalig alte Actors löschen, bevor wir neu zeichnen
-        self._clear_edge_actors()
-        
-        # Zeichnen (erstellt die Actors initial)
-        self._draw_edges_modern()
-        
-        from PySide6.QtCore import Qt
-        self.setCursor(Qt.PointingHandCursor)
-        request_render(self.plotter)
-        
-        logger.info(f"Fillet Mode: {len(self._selectable_edges)} Kanten bereit.")
+            self.edge_select_mode = True
+            self._edge_selection_body_id = body_id
+
+            if hasattr(self, 'set_pending_transform_mode'):
+                self.set_pending_transform_mode(False)
+
+            # Detector aktualisieren
+            if hasattr(self, '_update_detector_for_picking'):
+                self._update_detector_for_picking()
+
+            # Kanten laden
+            self._extract_edges_from_body(body_id)
+
+            # Warnung bei sehr vielen Kanten
+            n_edges = len(self._selectable_edges)
+            if n_edges > 1000:
+                logger.warning(f"Komplexes Modell: {n_edges} Kanten (Performance reduziert)")
+            elif n_edges == 0:
+                logger.warning("Keine Kanten gefunden für Fillet/Chamfer")
+                return
+
+            # WICHTIG: Hier einmalig alte Actors löschen, bevor wir neu zeichnen
+            self._clear_edge_actors()
+
+            # Zeichnen (erstellt die Actors initial)
+            self._draw_edges_modern()
+
+            from PySide6.QtCore import Qt
+            self.setCursor(Qt.PointingHandCursor)
+            request_render(self.plotter)
+
+            logger.info(f"Fillet Mode: {n_edges} Kanten bereit.")
+
+        except Exception as e:
+            logger.error(f"Edge Selection Mode konnte nicht gestartet werden: {e}")
+            self.edge_select_mode = False
+            self._clear_edge_actors()
 
     def stop_edge_selection_mode(self):
         self.edge_select_mode = False
@@ -150,19 +165,36 @@ class EdgeSelectionMixin:
 
     def _create_edge_polyline(self, edge) -> Optional[object]:
         try:
+            # Skip degenerate edges (sehr kurze Kanten)
+            edge_length = getattr(edge, 'length', 0.0)
+            if edge_length < 0.001:  # < 1 Mikron
+                return None
+
             from build123d import GeomType
             try: is_line = edge.geom_type() == GeomType.LINE
             except: is_line = False
             resolution = 2 if is_line else 32
-            
+
             points = []
             for t in np.linspace(0, 1, resolution):
-                pt = edge.position_at(t)
-                points.append([pt.X, pt.Y, pt.Z])
-            
+                try:
+                    pt = edge.position_at(t)
+                    if pt is not None:
+                        points.append([pt.X, pt.Y, pt.Z])
+                except:
+                    continue
+
             if len(points) < 2: return None
-            return pv.lines_from_points(np.array(points))
-        except: return None
+
+            # Check for degenerate polyline (alle Punkte gleich)
+            points_arr = np.array(points)
+            if np.allclose(points_arr[0], points_arr[-1], atol=1e-6):
+                return None
+
+            return pv.lines_from_points(points_arr)
+        except Exception as e:
+            logger.debug(f"Edge polyline creation failed: {e}")
+            return None
 
     # ==================== Visualisierung ====================
 
@@ -172,23 +204,30 @@ class EdgeSelectionMixin:
         PERFORMANCE-FIX: Nutzt Property-Updates statt Löschen/Neu-Erstellen.
         Verhindert das Flackern bei Mausbewegungen.
         """
-        # HINWEIS: self._clear_edge_actors() HIER ENTFERNT! 
+        # HINWEIS: self._clear_edge_actors() HIER ENTFERNT!
         # Wir wollen existierende Actors behalten und nur updaten.
+
+        # Performance: Bei sehr vielen Kanten Tubes deaktivieren
+        use_tubes = len(self._selectable_edges) < 500
 
         for edge in self._selectable_edges:
             name = f"edge_line_{edge.id}"
-            
+
+            # Skip ungültige/degenierte Kanten
+            if edge.line_mesh is None:
+                continue
+
             # 1. Status bestimmen
             is_sel = edge.id in self._selected_edge_ids
             is_hov = edge.id == self._hovered_edge_id
             is_loop = edge.id in self._hovered_loop_ids
-            
+
             # 2. Visuelle Parameter festlegen
             if is_sel:
                 col = EDGE_COLORS["selected"]
                 width = self._line_width_hover
                 prio = 10
-            elif is_hov or is_loop: 
+            elif is_hov or is_loop:
                 col = EDGE_COLORS["hover"]
                 width = self._line_width_hover
                 prio = 10
@@ -196,36 +235,42 @@ class EdgeSelectionMixin:
                 col = EDGE_COLORS["normal"]
                 width = self._line_width_normal
                 prio = 1 # Niedrige Prio, damit selektierte darüber liegen
-            
+
             # 3. Actor holen oder erstellen
             actor = self.plotter.renderer.actors.get(name)
-            
+
             if actor:
                 # A. UPDATE (Schnell & Flackerfrei)
-                prop = actor.GetProperty()
-                
-                # Farbe setzen
-                rgb = pv.Color(col).float_rgb
-                prop.SetColor(rgb)
-                prop.SetLineWidth(width)
-                
-                # Tiefen-Offset aktualisieren (damit Selektiertes "vorne" ist)
-                self._set_actor_on_top(name, prio)
-                
+                try:
+                    prop = actor.GetProperty()
+
+                    # Farbe setzen
+                    rgb = pv.Color(col).float_rgb
+                    prop.SetColor(rgb)
+                    prop.SetLineWidth(width)
+
+                    # Tiefen-Offset aktualisieren (damit Selektiertes "vorne" ist)
+                    self._set_actor_on_top(name, prio)
+                except Exception as e:
+                    logger.debug(f"Edge update failed for {name}: {e}")
+
             else:
                 # B. NEU ERSTELLEN (Nur beim ersten Aufruf)
-                self.plotter.add_mesh(
-                    edge.line_mesh,
-                    color=col,
-                    opacity=1.0,
-                    line_width=width,
-                    render_lines_as_tubes=True,
-                    lighting=False, # Neon-Effekt
-                    name=name,
-                    pickable=True
-                )
-                self._edge_actors.append(name)
-                self._set_actor_on_top(name, prio)
+                try:
+                    self.plotter.add_mesh(
+                        edge.line_mesh,
+                        color=col,
+                        opacity=1.0,
+                        line_width=width,
+                        render_lines_as_tubes=use_tubes,
+                        lighting=False, # Neon-Effekt
+                        name=name,
+                        pickable=True
+                    )
+                    self._edge_actors.append(name)
+                    self._set_actor_on_top(name, prio)
+                except Exception as e:
+                    logger.debug(f"Edge creation failed for {name}: {e}")
 
     def _set_actor_on_top(self, name, priority=1):
         try:

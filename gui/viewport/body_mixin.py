@@ -44,24 +44,32 @@ class BodyRenderingMixin:
                     pass
         
         actors_list = []
+        # Verbesserte Standardfarbe: Warmes Silber-Grau (wie Fusion 360)
         if color is None:
-            col_rgb = (0.5, 0.5, 0.5)
+            col_rgb = (0.72, 0.72, 0.75)  # Silber-Grau statt neutralgrau
         elif isinstance(color, str):
             c = QColor(color)
             col_rgb = (c.redF(), c.greenF(), c.blueF())
         else:
             col_rgb = tuple(color)
-            
+
         try:
             # Pfad A: Modernes PyVista Objekt
             if mesh_obj is not None:
                 n_mesh = f"body_{bid}_m"
                 has_normals = "Normals" in mesh_obj.point_data
-                
+
+                # Hochwertige CAD-Darstellung mit PBR (Physical Based Rendering)
                 self.plotter.add_mesh(
                     mesh_obj, color=col_rgb, name=n_mesh, show_edges=False,
-                    smooth_shading=has_normals, pbr=not has_normals,
-                    metallic=0.1, roughness=0.6, pickable=True
+                    smooth_shading=True,  # Immer smooth für professionelles Aussehen
+                    pbr=True,             # PBR für realistischere Beleuchtung
+                    metallic=0.15,        # Leicht metallisch für CAD-Look
+                    roughness=0.45,       # Glatter für mehr Reflexion
+                    diffuse=0.9,          # Gute Grundbeleuchtung
+                    specular=0.6,         # Highlights für 3D-Tiefe
+                    specular_power=30,    # Schärfere Highlights
+                    pickable=True
                 )
 
                 if n_mesh in self.plotter.renderer.actors:
@@ -80,14 +88,30 @@ class BodyRenderingMixin:
                 
                 if edge_mesh_obj is not None:
                     n_edge = f"body_{bid}_e"
-                    self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
 
-                    # ✅ Force-Update Edge Mapper too
+                    # ✅ HIDDEN LINE FIX: Kanten-Mesh als Tubes rendern mit Tiefentest
+                    # Standard Lines in VTK respektieren Tiefenpuffer nicht korrekt
+                    # render_lines_as_tubes=True erzeugt echte 3D-Geometrie die verdeckt wird
+                    self.plotter.add_mesh(
+                        edge_mesh_obj,
+                        color=(0.2, 0.2, 0.22),  # Etwas heller für bessere Sichtbarkeit
+                        line_width=2.0,
+                        name=n_edge,
+                        pickable=False,
+                        render_lines_as_tubes=True,  # ✅ KEY: Echte 3D-Tubes werden verdeckt!
+                        lighting=False,  # Kanten nicht beleuchten (konstante Farbe)
+                    )
+
+                    # Force-Update Edge Mapper
                     if n_edge in self.plotter.renderer.actors:
                         edge_actor = self.plotter.renderer.actors[n_edge]
                         edge_mapper = edge_actor.GetMapper()
                         edge_mapper.SetInputData(edge_mesh_obj)
                         edge_mapper.Modified()
+
+                        # Polygon Offset für Z-Fighting Vermeidung
+                        edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                        edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
 
                     actors_list.append(n_edge)
                 

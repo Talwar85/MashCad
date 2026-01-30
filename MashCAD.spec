@@ -16,6 +16,8 @@ datas = []
 datas += collect_data_files('pyvista')
 datas += collect_data_files('vtk')
 datas += collect_data_files('vtkmodules')
+datas += collect_data_files('matplotlib')
+datas += collect_data_files('PIL')
 
 # Lokale MashCad-Module als Source einbinden
 datas += [
@@ -23,13 +25,17 @@ datas += [
     ('modeling', 'modeling'),
     ('sketcher', 'sketcher'),
     ('core', 'core'),
+    ('config', 'config'),
     ('i18n', 'i18n'),
+    ('icon.ico', '.'),
+    ('app.png', '.'),
 ]
 
 # Collect hidden imports — only what MashCad actually uses
 hiddenimports = []
 hiddenimports += collect_submodules('pyvista')
 hiddenimports += collect_submodules('vtkmodules')
+hiddenimports += collect_submodules('PIL')
 hiddenimports += [
     # Qt — nur die tatsächlich genutzten Module
     'PySide6.QtWidgets',
@@ -68,6 +74,14 @@ hiddenimports += [
     'vtkmodules.vtkInteractionStyle',
     'vtkmodules.vtkRenderingFreeType',
     'vtkmodules.vtkRenderingContextOpenGL2',
+    # Matplotlib (benötigt von PyVista)
+    'matplotlib',
+    'matplotlib.pyplot',
+    'matplotlib.colors',
+    'matplotlib.cm',
+    # PIL (benötigt von matplotlib)
+    'PIL',
+    'PIL.Image',
 ]
 
 a = Analysis(
@@ -87,9 +101,9 @@ a = Analysis(
         'tensorflow', 'keras',
         'open3d',
         'opencv-python', 'cv2',
-        'matplotlib',
+        # 'matplotlib',  # BENÖTIGT von PyVista für Colors!
         'pandas',
-        'PIL', 'pillow',
+        # 'PIL', 'pillow',  # BENÖTIGT von matplotlib!
         'tkinter',
         'PyQt5', 'PyQt6',
         'ipywidgets', 'jupyter',
@@ -139,7 +153,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add icon path here if you have one: 'icon.ico' (Windows) or 'icon.icns' (macOS)
+    icon='icon.ico',  # Windows icon
 )
 
 coll = COLLECT(

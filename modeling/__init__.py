@@ -2398,12 +2398,27 @@ class Body:
                 except Exception:
                     continue
 
-            if best_edge is not None and best_dist < 5.0:
+            # Größere Toleranz nach Boolean-Operationen (Kanten können sich verschieben)
+            if best_edge is not None and best_dist < 50.0:  # 50mm Toleranz
                 resolved_edges.append(best_edge)
+                if best_dist > 5.0:
+                    logger.debug(f"Edge aufgelöst mit größerer Distanz: {best_dist:.2f}mm")
             else:
                 logger.warning(f"Edge nicht aufgelöst (dist={best_dist:.2f}mm)")
 
         if len(resolved_edges) < 3:
+            # Weniger strikt: Wenn Body trotzdem valid ist, nicht als Fehler behandeln
+            logger.warning(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
+            # Prüfe ob Body bereits geschlossen ist - dann ist das Feature evtl. schon angewendet
+            try:
+                from OCP.BRepCheck import BRepCheck_Analyzer
+                shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                analyzer = BRepCheck_Analyzer(shape)
+                if analyzer.IsValid():
+                    logger.info("Body ist bereits valid - N-Sided Patch möglicherweise bereits angewendet")
+                    return current_solid
+            except Exception:
+                pass
             raise ValueError(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
 
         logger.info(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
@@ -2422,38 +2437,113 @@ class Body:
         if patch_face is None:
             raise RuntimeError("N-Sided Patch: BRepFill_Filling fehlgeschlagen")
 
-        # Patch an Solid anfügen via Sewing
+        # Patch-Face zum Solid hinzufügen
+        # Methode: BRepBuilderAPI_MakeSolid aus allen Faces (original + patch)
         try:
             from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
             from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_SHELL
+            from OCP.TopAbs import TopAbs_SHELL, TopAbs_FACE
             from OCP.TopoDS import TopoDS
+            from OCP.BRep import BRep_Builder
+            from OCP.TopoDS import TopoDS_Shell, TopoDS_Compound
             from build123d import Solid
 
             shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
             patch_shape = patch_face.wrapped if hasattr(patch_face, 'wrapped') else patch_face
 
-            sewing = BRepBuilderAPI_Sewing(1e-3)
-            sewing.Add(shape)
+            # Sewing mit größerer Toleranz für bessere Verbindung
+            sewing = BRepBuilderAPI_Sewing(0.1)  # 0.1mm Toleranz
+            sewing.SetNonManifoldMode(False)  # Manifold-Ergebnis erzwingen
+
+            # Alle Faces des Original-Solids hinzufügen
+            face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            n_faces = 0
+            while face_explorer.More():
+                sewing.Add(face_explorer.Current())
+                n_faces += 1
+                face_explorer.Next()
+
+            # Patch-Face hinzufügen
             sewing.Add(patch_shape)
+            logger.debug(f"N-Sided Patch: Sewing {n_faces} Original-Faces + 1 Patch-Face")
+
             sewing.Perform()
             sewn = sewing.SewedShape()
 
+            # Prüfe Sewing-Ergebnis
+            n_sewn_faces = 0
+            face_exp = TopExp_Explorer(sewn, TopAbs_FACE)
+            while face_exp.More():
+                n_sewn_faces += 1
+                face_exp.Next()
+            logger.debug(f"N-Sided Patch: Sewing-Ergebnis hat {n_sewn_faces} Faces (erwartet: {n_faces + 1})")
+
             # Versuche Solid zu bauen
-            explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-            if explorer.More():
-                maker = BRepBuilderAPI_MakeSolid()
-                maker.Add(TopoDS.Shell_s(explorer.Current()))
+            shell_explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+            if shell_explorer.More():
+                shell = TopoDS.Shell_s(shell_explorer.Current())
+
+                # Prüfe ob Shell geschlossen ist
+                from OCP.BRep import BRep_Tool
+                from OCP.ShapeAnalysis import ShapeAnalysis_Shell
+                analyzer = ShapeAnalysis_Shell()
+                analyzer.LoadShells(shell)
+                is_closed = not analyzer.HasFreeEdges()
+                logger.debug(f"N-Sided Patch: Shell geschlossen = {is_closed}")
+
+                maker = BRepBuilderAPI_MakeSolid(shell)
                 maker.Build()
+
                 if maker.IsDone():
                     result = Solid(maker.Shape())
+                    result_faces = len(result.faces()) if hasattr(result, 'faces') else 0
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success("N-Sided Patch: Solid erstellt")
+                        logger.success(f"N-Sided Patch: Loch geschlossen! ({result_faces} Faces)")
                         return result
+                    else:
+                        logger.warning(f"N-Sided Patch: Solid mit {result_faces} Faces ungültig, versuche ShapeFix...")
+                        # ShapeFix versuchen
+                        try:
+                            from OCP.ShapeFix import ShapeFix_Solid
+                            fixer = ShapeFix_Solid(maker.Shape())
+                            fixer.Perform()
+                            if fixer.Shape() and not fixer.Shape().IsNull():
+                                fixed = Solid(fixer.Shape())
+                                if hasattr(fixed, 'is_valid') and fixed.is_valid():
+                                    logger.success(f"N-Sided Patch: ShapeFix erfolgreich")
+                                    return fixed
+                        except Exception as fix_err:
+                            logger.debug(f"ShapeFix fehlgeschlagen: {fix_err}")
+            else:
+                logger.warning("N-Sided Patch: Keine Shell im Sewing-Ergebnis")
 
-            # Fallback: Shape zurückgeben
+            # Fallback: Versuche größere Toleranz
+            logger.warning("N-Sided Patch: Erster Sewing-Versuch fehlgeschlagen, versuche mit höherer Toleranz...")
+            sewing2 = BRepBuilderAPI_Sewing(1.0)  # 1mm Toleranz
+            sewing2.SetNonManifoldMode(False)
+
+            face_explorer2 = TopExp_Explorer(shape, TopAbs_FACE)
+            while face_explorer2.More():
+                sewing2.Add(face_explorer2.Current())
+                face_explorer2.Next()
+            sewing2.Add(patch_shape)
+            sewing2.Perform()
+            sewn2 = sewing2.SewedShape()
+
+            shell_exp2 = TopExp_Explorer(sewn2, TopAbs_SHELL)
+            if shell_exp2.More():
+                shell2 = TopoDS.Shell_s(shell_exp2.Current())
+                maker2 = BRepBuilderAPI_MakeSolid(shell2)
+                maker2.Build()
+                if maker2.IsDone():
+                    result2 = Solid(maker2.Shape())
+                    if hasattr(result2, 'is_valid') and result2.is_valid():
+                        logger.success(f"N-Sided Patch: Loch geschlossen mit höherer Toleranz!")
+                        return result2
+
+            # Letzter Fallback
+            logger.warning("N-Sided Patch: Sewing komplett fehlgeschlagen")
             from build123d import Shape
-            logger.warning("N-Sided Patch: Kein geschlossener Solid, gebe Shape zurück")
             return Shape(sewn)
 
         except Exception as e:

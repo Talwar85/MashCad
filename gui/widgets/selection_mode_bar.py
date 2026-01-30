@@ -10,7 +10,7 @@ from PySide6.QtCore import Signal
 class SelectionModeBar(QWidget):
     """Floating Selection Mode Bar für den Viewport."""
 
-    mode_changed = Signal(str)  # "vertex", "edge", "face", "body"
+    mode_changed = Signal(str)  # "all", "sketch", "vertex", "edge", "face", "body"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,6 +25,8 @@ class SelectionModeBar(QWidget):
         self._buttons = {}
 
         modes = [
+            ("all", "✱ All"),
+            ("sketch", "✎ Sketch"),
             ("vertex", "● Vertex"),
             ("edge", "— Edge"),
             ("face", "□ Face"),

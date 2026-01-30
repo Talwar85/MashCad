@@ -41,7 +41,7 @@ class ToolPanel3D(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(256)  # Figma: w-64
+        self.setMinimumWidth(300)  # Breiter für bessere Lesbarkeit
         self.setStyleSheet("""
             QWidget {
                 background-color: #262626;
@@ -96,7 +96,7 @@ class ToolPanel3D(QWidget):
             (tr("Cylinder"), tr("Create cylinder primitive"), "primitive_cylinder"),
             (tr("Sphere"), tr("Create sphere primitive"), "primitive_sphere"),
             (tr("Cone"), tr("Create cone primitive"), "primitive_cone"),
-        ], grid=True, expanded=True)
+        ],  expanded=False)
 
         # --- Modeling ---
         self._add_group("Modeling", [
@@ -129,6 +129,7 @@ class ToolPanel3D(QWidget):
             (tr("Mirror"), tr("Mirror body"), "mirror_body", "M"),
             (tr("Copy"), tr("Duplicate body"), "copy_body", "D"),
             ("Point Move", "Point-to-Point Move", "point_to_point_move"),
+            (tr("Pattern"), tr("Create linear or circular pattern"), "pattern"),
         ])
 
         # --- Boolean ---
@@ -140,12 +141,12 @@ class ToolPanel3D(QWidget):
 
         # --- Inspect ---
         self._add_group("Inspect", [
-            ("Section View", tr("Section analysis"), "section_view"),
-            ("Check Geometry", tr("Validate and heal geometry"), "geometry_check"),
-            (tr("Surface Analysis"), tr("Curvature, draft angle, zebra stripes"), "surface_analysis"),
-            (tr("Mesh Repair"), tr("Diagnose and repair geometry"), "mesh_repair"),
-            (tr("Wall Thickness"), tr("Analyze wall thickness for 3D printing"), "wall_thickness"),
-            ("Measure", tr("Measure distances"), "measure"),
+            ("Section View", tr("Cut through body to see internal structure"), "section_view"),
+            ("Check Geometry", tr("Find and fix invalid topology (open shells, bad faces)"), "geometry_check"),
+            (tr("Surface Analysis"), tr("Visualize curvature, draft angles for moldability, zebra stripes for continuity"), "surface_analysis"),
+            (tr("Mesh Repair"), tr("Fix mesh errors: gaps, self-intersections, degenerate faces"), "mesh_repair"),
+            (tr("Wall Thickness"), tr("Check minimum wall thickness for 3D printing strength"), "wall_thickness"),
+            ("Measure", tr("Measure distances, angles, areas"), "measure"),
         ])
 
         # --- File ---

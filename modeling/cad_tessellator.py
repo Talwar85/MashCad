@@ -134,69 +134,136 @@ class CADTessellator:
     @staticmethod
     def extract_brep_edges(solid, deflection=0.1) -> Optional[pv.PolyData]:
         """
-        Extrahiert die ECHTEN B-Rep Kanten aus einem Solid.
-        Diese sind die CAD-Kanten (wie in Fusion), nicht die Tessellations-Kanten.
+        Extrahiert die SICHTBAREN B-Rep Kanten aus einem Solid.
+        Filtert Naht-Kanten (seam edges) und degenerierte Kanten heraus.
+
+        Sichtbare Kanten sind:
+        - Kanten zwischen zwei Flächen mit unterschiedlicher Normalen-Richtung (Feature-Edges)
+        - Boundary-Kanten (nur eine Fläche)
+        - NICHT: Glatte Übergänge (smooth edges) oder interne Naht-Kanten
         """
         if not HAS_OCP or solid is None:
             return None
-        
+
         try:
             from OCP.TopoDS import TopoDS
-            
+            from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+            from OCP.TopExp import TopExp
+            from OCP.BRep import BRep_Tool
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.gp import gp_Vec
+            import math
+
             all_points = []
             all_lines = []
             point_offset = 0
-            
+
+            # Baue Map: Edge -> Liste der angrenzenden Faces
+            edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
+            TopExp.MapShapesAndAncestors_s(solid.wrapped, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
+
             explorer = TopExp_Explorer(solid.wrapped, TopAbs_EDGE)
-            
+
             while explorer.More():
                 edge_shape = explorer.Current()
-                
+
                 try:
-                    # Explizit zu TopoDS_Edge casten
                     edge = TopoDS.Edge_s(edge_shape)
-                    
-                    # Kante in Kurve konvertieren
+
+                    # Prüfe ob Kante degeneriert ist
+                    if BRep_Tool.Degenerated_s(edge):
+                        explorer.Next()
+                        continue
+
+                    # Hole angrenzende Faces
+                    face_list = edge_face_map.FindFromKey(edge)
+                    n_faces = face_list.Size()
+
+                    # Boundary-Kanten (nur 1 Face) - immer anzeigen
+                    is_boundary = (n_faces == 1)
+
+                    # Feature-Edge Test: Winkel zwischen angrenzenden Flächen
+                    is_feature_edge = False
+                    FEATURE_ANGLE_THRESHOLD = 25.0  # Grad - Kanten mit > diesem Winkel anzeigen
+
+                    if n_faces >= 2:
+                        # Hole erste zwei Faces
+                        it = face_list.cbegin()
+                        face1 = TopoDS.Face_s(it.Value())
+                        it.Next()
+                        face2 = TopoDS.Face_s(it.Value())
+
+                        # Berechne Normalen in der Mitte der Kante
+                        adaptor = BRepAdaptor_Curve(edge)
+                        mid_param = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
+                        mid_pnt = adaptor.Value(mid_param)
+
+                        try:
+                            # UV-Parameter auf Face1 finden
+                            surf1 = BRepAdaptor_Surface(face1)
+                            surf2 = BRepAdaptor_Surface(face2)
+
+                            # Approximiere Normalen am Mittelpunkt
+                            u1, v1 = surf1.FirstUParameter(), surf1.FirstVParameter()
+                            u2, v2 = surf2.FirstUParameter(), surf2.FirstVParameter()
+
+                            # Berechne Normalen
+                            from OCP.GeomLProp import GeomLProp_SLProps
+                            props1 = GeomLProp_SLProps(surf1.Surface().Surface(), u1, v1, 1, 0.01)
+                            props2 = GeomLProp_SLProps(surf2.Surface().Surface(), u2, v2, 1, 0.01)
+
+                            if props1.IsNormalDefined() and props2.IsNormalDefined():
+                                n1 = props1.Normal()
+                                n2 = props2.Normal()
+                                # Winkel zwischen Normalen
+                                dot = n1.X()*n2.X() + n1.Y()*n2.Y() + n1.Z()*n2.Z()
+                                dot = max(-1.0, min(1.0, dot))  # Clamp für acos
+                                angle = math.degrees(math.acos(abs(dot)))
+                                is_feature_edge = angle > FEATURE_ANGLE_THRESHOLD
+                        except:
+                            # Bei Fehler: Kante als Feature annehmen
+                            is_feature_edge = True
+
+                    # Nur sichtbare Kanten extrahieren
+                    if not (is_boundary or is_feature_edge):
+                        explorer.Next()
+                        continue
+
+                    # Kante in Kurve konvertieren und samplen
                     adaptor = BRepAdaptor_Curve(edge)
-                    first = adaptor.FirstParameter()
-                    last = adaptor.LastParameter()
-                    
-                    # Punkte entlang der Kante samplen
                     discretizer = GCPnts_TangentialDeflection(adaptor, deflection, 0.1)
-                    
+
                     n_points = discretizer.NbPoints()
                     if n_points < 2:
                         explorer.Next()
                         continue
-                    
+
                     edge_points = []
                     for i in range(1, n_points + 1):
                         pnt = discretizer.Value(i)
                         edge_points.append([pnt.X(), pnt.Y(), pnt.Z()])
-                    
-                    # Punkte hinzufügen
+
                     all_points.extend(edge_points)
-                    
-                    # Linien-Segmente für diese Kante
+
                     for i in range(len(edge_points) - 1):
                         all_lines.append([2, point_offset + i, point_offset + i + 1])
-                    
+
                     point_offset += len(edge_points)
-                    
+
                 except Exception as e:
                     logger.debug(f"Edge extraction error: {e}")
-                
+
                 explorer.Next()
-            
+
             if not all_points:
                 return None
-            
+
             points = np.array(all_points, dtype=np.float32)
             lines = np.array(all_lines, dtype=np.int32).flatten()
-            
-            logger.debug(f"B-Rep Edges extrahiert: {len(all_lines)} Linien")
+
+            logger.debug(f"B-Rep Edges extrahiert: {len(all_lines)} Feature-Kanten")
             return pv.PolyData(points, lines=lines)
-            
+
         except Exception as e:
             logger.debug(f"B-Rep Edge extraction failed: {e}")
             return None

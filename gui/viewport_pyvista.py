@@ -282,6 +282,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._filter_buttons = {}
         # Figma-Style Labels mit Symbolen
         filters = [
+            ("✱ All", "ALL"),
+            ("✎ Sketch", "SKETCH"),
             ("● Vertex", "VERTEX"),
             ("— Edge", "EDGE"),
             ("□ Face", "FACE"),
@@ -324,6 +326,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Set active selection filter from toolbar (Figma-Style)."""
         from gui.geometry_detector import GeometryDetector
         mapping = {
+            "ALL": GeometryDetector.SelectionFilter.ALL,  # Alles selektierbar
+            "SKETCH": {"sketch_profile", "sketch_shell"},  # Nur Sketch-Elemente (für Extrude!)
             "VERTEX": {"vertex"},  # Vertex-Selektion
             "EDGE": {"body_edge"},
             "FACE": GeometryDetector.SelectionFilter.FACE,

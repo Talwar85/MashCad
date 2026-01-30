@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QComboBox, QGroupBox
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator
 from loguru import logger
 from gui.design_tokens import DesignTokens
 from i18n import tr
@@ -52,15 +51,21 @@ class LatticeDialog(QDialog):
         param_group = QGroupBox(tr("Parameters"))
         param_layout = QVBoxLayout()
 
+        # Regex-Validator der sowohl Komma als auch Punkt akzeptiert
+        from PySide6.QtGui import QRegularExpressionValidator
+        from PySide6.QtCore import QRegularExpression
+        # Erlaubt: 0, 1.5, 1,5, 10.25, 10,25 etc.
+        decimal_regex = QRegularExpression(r"^\d+([.,]\d*)?$")
+        decimal_validator = QRegularExpressionValidator(decimal_regex)
+
         # Cell size
         size_row = QHBoxLayout()
         slbl = QLabel(tr("Cell Size:"))
         slbl.setMinimumWidth(120)
         size_row.addWidget(slbl)
         self.size_input = QLineEdit("5.0")
-        sv = QDoubleValidator(1.0, 100.0, 2)
-        sv.setNotation(QDoubleValidator.StandardNotation)
-        self.size_input.setValidator(sv)
+        self.size_input.setValidator(decimal_validator)
+        self.size_input.setPlaceholderText("1.0 - 100.0")
         size_row.addWidget(self.size_input)
         size_row.addWidget(QLabel("mm"))
         param_layout.addLayout(size_row)
@@ -71,9 +76,8 @@ class LatticeDialog(QDialog):
         blbl.setMinimumWidth(120)
         beam_row.addWidget(blbl)
         self.beam_input = QLineEdit("0.5")
-        bv = QDoubleValidator(0.1, 10.0, 2)
-        bv.setNotation(QDoubleValidator.StandardNotation)
-        self.beam_input.setValidator(bv)
+        self.beam_input.setValidator(decimal_validator)
+        self.beam_input.setPlaceholderText("0.1 - 10.0")
         beam_row.addWidget(self.beam_input)
         beam_row.addWidget(QLabel("mm"))
         param_layout.addLayout(beam_row)
@@ -84,9 +88,8 @@ class LatticeDialog(QDialog):
         shlbl.setMinimumWidth(120)
         shell_row.addWidget(shlbl)
         self.shell_input = QLineEdit("1.0")
-        shv = QDoubleValidator(0.0, 50.0, 2)
-        shv.setNotation(QDoubleValidator.StandardNotation)
-        self.shell_input.setValidator(shv)
+        self.shell_input.setValidator(decimal_validator)
+        self.shell_input.setPlaceholderText("0 - 50.0")
         shell_row.addWidget(self.shell_input)
         shell_row.addWidget(QLabel("mm"))
         param_layout.addLayout(shell_row)
@@ -133,19 +136,64 @@ class LatticeDialog(QDialog):
         self.desc_label.setText(descs[index] if index < len(descs) else "")
 
     def _on_create(self):
+        from PySide6.QtWidgets import QMessageBox
+        import math
+
+        def parse_float(text, default):
+            """Parse float mit Komma oder Punkt als Dezimaltrenner."""
+            if not text:
+                return default
+            # Ersetze Komma durch Punkt für float()
+            return float(text.replace(",", "."))
+
         try:
             self.cell_type = self.type_combo.currentText()
-            self.cell_size = float(self.size_input.text() or "5.0")
-            self.beam_radius = float(self.beam_input.text() or "0.5")
-            self.shell_thickness = float(self.shell_input.text() or "0.0")
+            self.cell_size = parse_float(self.size_input.text(), 5.0)
+            self.beam_radius = parse_float(self.beam_input.text(), 0.5)
+            self.shell_thickness = parse_float(self.shell_input.text(), 0.0)
 
-            if self.cell_size <= 0 or self.beam_radius <= 0:
-                logger.warning("All values must be > 0")
+            # Wertbereichs-Validierung
+            if self.cell_size < 1.0 or self.cell_size > 100.0:
+                QMessageBox.warning(self, tr("Invalid Input"),
+                    tr(f"Cell Size must be between 1.0 and 100.0 mm.\nEntered: {self.cell_size}"))
                 return
+
+            if self.beam_radius < 0.1 or self.beam_radius > 10.0:
+                QMessageBox.warning(self, tr("Invalid Input"),
+                    tr(f"Beam Radius must be between 0.1 and 10.0 mm.\nEntered: {self.beam_radius}"))
+                return
+
+            if self.shell_thickness < 0 or self.shell_thickness > 50.0:
+                QMessageBox.warning(self, tr("Invalid Input"),
+                    tr(f"Shell Thickness must be between 0 and 50.0 mm.\nEntered: {self.shell_thickness}"))
+                return
+
+            # Bei BCC ist kürzeste Beam-Länge ~0.866 * cell_size (Diagonale)
+            min_beam_length = 0.5 * math.sqrt(3) * self.cell_size
+            max_sensible_radius = min_beam_length / 4
 
             if self.beam_radius >= self.cell_size / 2:
-                logger.warning("Beam radius must be < cell_size / 2")
+                QMessageBox.warning(
+                    self, tr("Invalid Input"),
+                    tr("Beam radius must be < cell_size / 2.\n"
+                       f"Maximum: {self.cell_size / 2:.1f}mm")
+                )
                 return
+
+            if self.beam_radius > max_sensible_radius:
+                reply = QMessageBox.question(
+                    self, tr("Large Beam Radius"),
+                    tr(f"Beam radius ({self.beam_radius}mm) is very large relative to "
+                       f"cell size ({self.cell_size}mm).\n\n"
+                       f"Recommended maximum: {max_sensible_radius:.1f}mm\n\n"
+                       f"Large beams may result in a nearly solid structure "
+                       f"instead of a visible lattice.\n\n"
+                       f"Continue anyway?"),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
 
             self.accept()
         except ValueError as e:

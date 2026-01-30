@@ -6,6 +6,7 @@ Creates a smooth surface that fills an N-sided boundary of edges.
 Similar to Rhino's Patch command or Plasticity's xNURBS Fill.
 """
 
+import numpy as np
 from loguru import logger
 
 
@@ -39,6 +40,15 @@ class NSidedPatch:
         if not edges or len(edges) < 3:
             raise ValueError(f"N-Sided Patch benötigt mindestens 3 Kanten, erhalten: {len(edges) if edges else 0}")
 
+        # Dedupliziere Kanten (verhindert Crash bei doppelten Kanten)
+        unique_edges = NSidedPatch._deduplicate_edges(edges)
+        if len(unique_edges) < 3:
+            raise ValueError(f"Nach Deduplizierung nur {len(unique_edges)} Kanten übrig")
+
+        if len(unique_edges) != len(edges):
+            logger.warning(f"N-Sided Patch: {len(edges) - len(unique_edges)} doppelte Kanten entfernt")
+            edges = unique_edges
+
         try:
             from OCP.BRepFill import BRepFill_Filling
             from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
@@ -46,11 +56,43 @@ class NSidedPatch:
             from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
             from build123d import Face
 
+            # Versuche erst MIT Tangent-Constraints
+            result = NSidedPatch._try_fill(edges, tangent_faces, degree, max_segments)
+
+            if result is None and tangent_faces:
+                # Fallback: Ohne Tangent-Constraints versuchen
+                logger.warning("N-Sided Patch: Retry ohne Tangent-Constraints")
+                result = NSidedPatch._try_fill(edges, None, degree, max_segments)
+
+            if result is None:
+                raise RuntimeError("BRepFill_Filling konnte keine Fläche erstellen")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"N-Sided Patch fehlgeschlagen: {e}")
+            raise
+
+    @staticmethod
+    def _try_fill(edges, tangent_faces, degree, max_segments):
+        """Versucht einen Fill mit gegebenen Parametern."""
+        try:
+            from OCP.BRepFill import BRepFill_Filling
+            from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
+            from OCP.TopoDS import TopoDS
+            from build123d import Face
+
             filler = BRepFill_Filling(degree, max_segments, 15)
 
             # Add boundary edges
+            added_count = 0
             for i, edge in enumerate(edges):
                 edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
+
+                # Validiere Edge
+                if edge_shape is None or edge_shape.IsNull():
+                    logger.debug(f"Überspringe ungültige Kante {i}")
+                    continue
 
                 # Check if this edge has tangency constraint
                 has_tangency = False
@@ -58,34 +100,74 @@ class NSidedPatch:
                     for ei, face in tangent_faces:
                         if ei == i:
                             face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-                            filler.Add(TopoDS.Edge_s(edge_shape),
-                                       TopoDS.Face_s(face_shape),
-                                       GeomAbs_G1)
-                            has_tangency = True
+                            if face_shape is not None and not face_shape.IsNull():
+                                try:
+                                    filler.Add(TopoDS.Edge_s(edge_shape),
+                                               TopoDS.Face_s(face_shape),
+                                               GeomAbs_G1)
+                                    has_tangency = True
+                                    added_count += 1
+                                except Exception as e:
+                                    logger.debug(f"Tangent-Constraint für Kante {i} fehlgeschlagen: {e}")
                             break
 
                 if not has_tangency:
-                    filler.Add(TopoDS.Edge_s(edge_shape), GeomAbs_C0)
+                    try:
+                        filler.Add(TopoDS.Edge_s(edge_shape), GeomAbs_C0)
+                        added_count += 1
+                    except Exception as e:
+                        logger.debug(f"Kante {i} hinzufügen fehlgeschlagen: {e}")
 
-            logger.info(f"N-Sided Patch: {len(edges)} Kanten, Grad={degree}")
+            if added_count < 3:
+                logger.warning(f"Nur {added_count} Kanten erfolgreich hinzugefügt")
+                return None
 
+            logger.info(f"N-Sided Patch: {added_count} Kanten, Grad={degree}, Tangent={tangent_faces is not None}")
+
+            # Build - kann bei ungültiger Geometrie crashen
             filler.Build()
 
             if not filler.IsDone():
-                raise RuntimeError("BRepFill_Filling fehlgeschlagen")
+                logger.debug("BRepFill_Filling.IsDone() = False")
+                return None
 
             result_face = filler.Face()
 
             if result_face.IsNull():
-                raise RuntimeError("Resultat-Face ist null")
+                logger.debug("Resultat-Face ist null")
+                return None
 
             face = Face(result_face)
-            logger.success(f"N-Sided Patch erfolgreich: {len(edges)} Kanten")
+            logger.success(f"N-Sided Patch erfolgreich: {added_count} Kanten")
             return face
 
         except Exception as e:
-            logger.error(f"N-Sided Patch fehlgeschlagen: {e}")
-            raise
+            logger.debug(f"Fill-Versuch fehlgeschlagen: {e}")
+            return None
+
+    @staticmethod
+    def _deduplicate_edges(edges):
+        """Entfernt doppelte Kanten basierend auf Center-Position."""
+        if not edges:
+            return []
+
+        seen_centers = set()
+        unique = []
+
+        for edge in edges:
+            try:
+                center = edge.center()
+                # Runde auf 0.01mm für Vergleich
+                key = (round(center.X, 2), round(center.Y, 2), round(center.Z, 2))
+
+                if key not in seen_centers:
+                    seen_centers.add(key)
+                    unique.append(edge)
+            except Exception:
+                # Bei Fehler Edge trotzdem behalten
+                unique.append(edge)
+
+        return unique
 
     @staticmethod
     def fill_hole(solid, hole_edges, tangent=True):

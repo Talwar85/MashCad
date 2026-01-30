@@ -39,7 +39,7 @@ from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
-from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel
+from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel, PatternInputPanel, NSidedPatchInputPanel, LatticeInputPanel
 from gui.widgets.texture_panel import SurfaceTexturePanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
@@ -79,7 +79,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("MashCAD")
         self.setMinimumSize(1400, 900)
-        
+
+        # Window Icon setzen
+        import os as _os
+        from PySide6.QtGui import QIcon
+        _icon_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "icon.ico")
+        if _os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
+
         # Cache leeren beim Start (für saubere B-Rep Edges)
         try:
             from modeling.cad_tessellator import CADTessellator
@@ -549,6 +556,7 @@ class MainWindow(QMainWindow):
         self._texture_mode = False
         self._texture_target_body = None
         self._pending_texture_mode = False  # Für Body-Selektion im Viewport
+        self._pending_mesh_convert_mode = False  # Für Mesh-zu-CAD Viewport-Selektion
 
         # Sweep Panel (Phase 6)
         self.sweep_panel = SweepInputPanel(self)
@@ -571,6 +579,37 @@ class MainWindow(QMainWindow):
 
         self._loft_mode = False
         self._loft_profiles = []
+
+        # Pattern Panel
+        self.pattern_panel = PatternInputPanel(self)
+        self.pattern_panel.parameters_changed.connect(self._on_pattern_parameters_changed)
+        self.pattern_panel.confirmed.connect(self._on_pattern_confirmed)
+        self.pattern_panel.cancelled.connect(self._on_pattern_cancelled)
+        self.pattern_panel.center_pick_requested.connect(self._on_pattern_center_pick_requested)
+
+        self._pattern_mode = False
+        self._pattern_target_body = None
+        self._pattern_center_pick_mode = False
+        self._pattern_preview_bodies = []  # Preview bodies
+        self._pending_pattern_mode = False  # Für Viewport-Selektion
+
+        # N-Sided Patch Panel
+        self.nsided_patch_panel = NSidedPatchInputPanel(self)
+        self.nsided_patch_panel.confirmed.connect(self._on_nsided_patch_confirmed)
+        self.nsided_patch_panel.cancelled.connect(self._on_nsided_patch_cancelled)
+
+        self._nsided_patch_mode = False
+        self._nsided_patch_target_body = None
+        self._pending_nsided_patch_mode = False
+
+        # Lattice Panel (wie Pattern - mit Viewport Body-Selektion)
+        self.lattice_panel = LatticeInputPanel(self)
+        self.lattice_panel.confirmed.connect(self._on_lattice_confirmed)
+        self.lattice_panel.cancelled.connect(self._on_lattice_cancelled)
+
+        self._lattice_mode = False
+        self._lattice_target_body = None
+        self._pending_lattice_mode = False
 
         # Section View Panel (Schnittansicht wie Fusion 360)
         self.section_panel = SectionViewPanel(self)
@@ -753,7 +792,7 @@ class MainWindow(QMainWindow):
         transform_menu.addAction(tr("Rotate (R)"), lambda: self._start_transform_mode("rotate"), "R")
         transform_menu.addAction(tr("Scale (S)"), lambda: self._start_transform_mode("scale"), "S")
         transform_menu.addSeparator()
-        transform_menu.addAction(tr("Create Pattern..."), self._create_pattern)
+        transform_menu.addAction(tr("Pattern..."), self._start_pattern)
 
         # Ansicht-Menü
         view_menu = mb.addMenu(tr("View"))
@@ -1043,8 +1082,8 @@ class MainWindow(QMainWindow):
             'mesh_repair': self._mesh_repair_dialog,
             'hollow': self._hollow_dialog,
             'wall_thickness': self._wall_thickness_dialog,
-            'lattice': self._lattice_dialog,
-            'pattern': lambda: self._show_not_implemented("Muster"),
+            'lattice': self._start_lattice,
+            'pattern': self._start_pattern,
             'convert_to_brep': self._convert_selected_body_to_brep,
         }
         
@@ -1060,7 +1099,14 @@ class MainWindow(QMainWindow):
 
         body = self._get_active_body()
         if not body:
-            logger.warning("Kein Körper ausgewählt.")
+            # Kein Body gewählt → Pending-Mode (wie bei Fillet/Chamfer)
+            self._pending_mesh_convert_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Mesh zu CAD: Klicke auf einen Mesh-Körper in der 3D-Ansicht")
             return
 
         if body._build123d_solid is not None:
@@ -1117,7 +1163,77 @@ class MainWindow(QMainWindow):
 
         finally:
             QApplication.restoreOverrideCursor()
-            
+
+    def _on_body_clicked_for_mesh_convert(self, body_id: str):
+        """
+        Callback wenn im Pending-Mode ein Body für Mesh-Konvertierung angeklickt wird.
+        """
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtCore import Qt
+
+        self._pending_mesh_convert_mode = False
+
+        # Pending-Mode deaktivieren
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Body finden
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        # Prüfungen
+        if body._build123d_solid is not None:
+            logger.info(f"'{body.name}' ist bereits ein CAD-Solid.")
+            return
+
+        if body.vtk_mesh is None:
+            logger.warning("Kein Mesh vorhanden zum Konvertieren.")
+            return
+
+        logger.info(f"Konvertiere '{body.name}' zu BREP (bitte warten)...")
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+
+        try:
+            success = body.convert_to_brep()
+
+            if success:
+                logger.success(f"Erfolg! '{body.name}' ist jetzt ein CAD-Solid.")
+                self.browser.refresh()
+
+                if body.id in self.viewport_3d._body_actors:
+                    for actor_name in self.viewport_3d._body_actors[body.id]:
+                        try:
+                            self.viewport_3d.plotter.remove_actor(actor_name)
+                        except: pass
+
+                self._update_viewport_all_impl()
+
+                if hasattr(self.viewport_3d, 'plotter'):
+                    request_render(self.viewport_3d.plotter, immediate=True)
+                    self.viewport_3d.update()
+            else:
+                QApplication.restoreOverrideCursor()
+                QMessageBox.warning(
+                    self,
+                    "Fehler",
+                    "Konvertierung fehlgeschlagen.\nIst das Mesh geschlossen und valide?"
+                )
+                logger.error("Mesh-zu-BREP Konvertierung fehlgeschlagen")
+
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Fehler", f"Kritischer Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _show_not_implemented(self, feature: str):
         """Zeigt Hinweis für noch nicht implementierte Features"""
         logger.warning(f"{feature} - {tr('Coming soon!')}", 3000)
@@ -1234,6 +1350,10 @@ class MainWindow(QMainWindow):
 
             # Transform-UI zeigen
             self._show_transform_ui(body.id, body.name)
+
+            # WICHTIG: Mode auf Viewport setzen, damit Gizmo korrekt angezeigt wird
+            if hasattr(self.viewport_3d, 'set_transform_mode'):
+                self.viewport_3d.set_transform_mode(mode)
 
             logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
 
@@ -1355,6 +1475,46 @@ class MainWindow(QMainWindow):
         # Prüfe auf Texture Pending Mode (Phase 7)
         if getattr(self, '_pending_texture_mode', False):
             self._on_body_clicked_for_texture(body_id)
+            return
+
+        # Prüfe auf Mesh Convert Pending Mode
+        if getattr(self, '_pending_mesh_convert_mode', False):
+            self._on_body_clicked_for_mesh_convert(body_id)
+            return
+
+        # Prüfe auf Pattern Pending Mode
+        if getattr(self, '_pending_pattern_mode', False):
+            self._on_body_clicked_for_pattern(body_id)
+            return
+
+        # Prüfe auf Lattice Pending Mode
+        if getattr(self, '_pending_lattice_mode', False):
+            self._on_body_clicked_for_lattice(body_id)
+            return
+
+        # Prüfe auf N-Sided Patch Pending Mode
+        if getattr(self, '_pending_nsided_patch_mode', False):
+            self._on_body_clicked_for_nsided_patch(body_id)
+            return
+
+        # Prüfe auf Geometry Check Pending Mode
+        if getattr(self, '_pending_geometry_check_mode', False):
+            self._on_body_clicked_for_geometry_check(body_id)
+            return
+
+        # Prüfe auf Mesh Repair Pending Mode
+        if getattr(self, '_pending_mesh_repair_mode', False):
+            self._on_body_clicked_for_mesh_repair(body_id)
+            return
+
+        # Prüfe auf Surface Analysis Pending Mode
+        if getattr(self, '_pending_surface_analysis_mode', False):
+            self._on_body_clicked_for_surface_analysis(body_id)
+            return
+
+        # Prüfe auf Wall Thickness Pending Mode
+        if getattr(self, '_pending_wall_thickness_mode', False):
+            self._on_body_clicked_for_wall_thickness(body_id)
             return
 
         # Nur reagieren wenn wir auf Body-Selektion warten (Transform)
@@ -2285,49 +2445,151 @@ class MainWindow(QMainWindow):
             logger.error(f"Nut generation failed: {e}")
 
     def _mesh_repair_dialog(self):
-        """Open mesh repair dialog."""
+        """
+        Open mesh repair dialog with viewport selection support.
+
+        UX-Pattern (wie Fillet/Chamfer):
+        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
+        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_mesh_repair_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Mesh Repair: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt Dialog öffnen
+        body = selected_bodies[0]
+        self._open_mesh_repair_for_body(body)
+
+    def _on_body_clicked_for_mesh_repair(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        self._pending_mesh_repair_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._open_mesh_repair_for_body(body)
+
+    def _open_mesh_repair_for_body(self, body):
+        """Öffnet den Mesh Repair Dialog für einen spezifischen Body."""
         from gui.dialogs.mesh_repair_dialog import MeshRepairDialog
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
             return
 
         dlg = MeshRepairDialog(body, parent=self)
         if dlg.exec() and dlg.repaired_solid is not None:
             body._build123d_solid = dlg.repaired_solid
             body.invalidate_mesh()
-            self.viewport_3d.update_body(body)
-            self._refresh_browser()
+            self._update_body_mesh(body)
+            self.browser.refresh()
             logger.success("Geometry repair angewendet")
 
     def _nsided_patch_dialog(self):
-        """Open N-Sided Patch dialog for surface filling."""
-        from gui.dialogs.nsided_patch_dialog import NSidedPatchDialog
+        """
+        Startet N-Sided Patch mit Viewport-Selektion (wie Fillet/Chamfer).
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        UX-Pattern:
+        - Falls Body ausgewählt → sofort Edge-Selektion starten
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt → Pending-Mode
+        if not selected_bodies:
+            self._pending_nsided_patch_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("N-Sided Patch: Klicke auf einen Körper in der 3D-Ansicht")
             return
 
-        dlg = NSidedPatchDialog(body, self.viewport_3d, parent=self)
-        # Übergebe bereits selektierte Kanten aus dem Viewport
+        # Fall 2: Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_nsided_patch_for_body(body)
+
+    def _on_body_clicked_for_nsided_patch(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body für N-Sided Patch angeklickt wird."""
+        self._pending_nsided_patch_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_nsided_patch_for_body(body)
+
+    def _activate_nsided_patch_for_body(self, body):
+        """Aktiviert N-Sided Patch-Modus für einen Body."""
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
+            return
+
+        # Transform-Gizmo ausblenden
+        if hasattr(self.viewport_3d, 'hide_gizmo'):
+            self.viewport_3d.hide_gizmo()
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        self._nsided_patch_mode = True
+        self._nsided_patch_target_body = body
+        self.nsided_patch_panel.set_target_body(body)
+        self.nsided_patch_panel.reset()
+
+        # Body-Lookup Callback setzen (wie bei Fillet/Chamfer)
+        self.viewport_3d.set_edge_selection_callbacks(
+            get_body_by_id=lambda bid: next((b for b in self.document.bodies if b.id == bid), None)
+        )
+
+        # Edge-Selection-Modus starten (wie bei Fillet/Chamfer)
+        if hasattr(self.viewport_3d, 'start_edge_selection_mode'):
+            self.viewport_3d.start_edge_selection_mode(body.id)
+
+        self.nsided_patch_panel.show_at(self.viewport_3d)
+        logger.info(f"N-Sided Patch für '{body.name}' - Wähle mindestens 3 zusammenhängende Boundary-Kanten")
+
+    def _on_nsided_patch_edge_selection_changed(self, count: int):
+        """Handler wenn sich die Kanten-Selektion für N-Sided Patch ändert."""
+        if self._nsided_patch_mode:
+            self.nsided_patch_panel.update_edge_count(count)
+
+    def _on_nsided_patch_confirmed(self):
+        """Handler wenn N-Sided Patch bestätigt wird."""
+        if not self._nsided_patch_mode or not self._nsided_patch_target_body:
+            return
+
+        body = self._nsided_patch_target_body
+
+        # Kanten aus Edge-Selection holen
         selected_edges = []
         if hasattr(self.viewport_3d, 'get_selected_edges'):
             selected_edges = self.viewport_3d.get_selected_edges() or []
-            if selected_edges:
-                dlg.set_selected_edges(selected_edges)
-        if not dlg.exec():
-            return
 
-        # Edge-Selektoren für Feature-Persistenz erstellen
-        if not selected_edges:
-            selected_edges = dlg.selected_edges
         if len(selected_edges) < 3:
-            logger.warning("Zu wenige Kanten für N-Sided Patch")
+            logger.warning("N-Sided Patch benötigt mindestens 3 Kanten")
             return
 
-        import numpy as np
+        # Edge-Selektoren für Feature-Persistenz
         edge_selectors = []
         for edge in selected_edges:
             try:
@@ -2336,17 +2598,44 @@ class MainWindow(QMainWindow):
             except Exception:
                 continue
 
+        degree = self.nsided_patch_panel.get_degree()
+        tangent = self.nsided_patch_panel.get_tangent()
+
         from modeling import NSidedPatchFeature
         feat = NSidedPatchFeature(
             edge_selectors=edge_selectors,
-            degree=dlg.degree_spin.value(),
-            tangent=dlg.tangent_check.isChecked(),
+            degree=degree,
+            tangent=tangent,
         )
-        body.features.append(feat)
-        body._rebuild()
-        self.viewport_3d.update_body(body)
-        self._refresh_browser()
-        logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
+
+        try:
+            body.features.append(feat)
+            body._rebuild()
+            self._update_body_mesh(body)
+            self.browser.refresh()
+            logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
+        except Exception as e:
+            logger.error(f"N-Sided Patch fehlgeschlagen: {e}")
+
+        # Mode beenden
+        self._stop_nsided_patch_mode()
+
+    def _on_nsided_patch_cancelled(self):
+        """Handler wenn N-Sided Patch abgebrochen wird."""
+        self._stop_nsided_patch_mode()
+        logger.info("N-Sided Patch abgebrochen")
+
+    def _stop_nsided_patch_mode(self):
+        """Beendet den N-Sided Patch Modus."""
+        self._nsided_patch_mode = False
+        self._nsided_patch_target_body = None
+        self._pending_nsided_patch_mode = False
+
+        # Edge-Selection stoppen
+        if hasattr(self.viewport_3d, 'stop_edge_selection_mode'):
+            self.viewport_3d.stop_edge_selection_mode()
+
+        self.nsided_patch_panel.hide()
 
     def _pushpull_dialog(self):
         """Startet interaktiven PushPull-Workflow (Draft-style Face-Select + Live-Preview)."""
@@ -2480,51 +2769,180 @@ class MainWindow(QMainWindow):
         self._trigger_viewport_update()
 
     def _surface_analysis_dialog(self):
-        """Open surface analysis dialog (curvature, draft angle, zebra)."""
+        """
+        Open surface analysis dialog with viewport selection support.
+
+        UX-Pattern (wie Fillet/Chamfer):
+        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
+        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_surface_analysis_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Surface Analysis: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt Dialog öffnen
+        body = selected_bodies[0]
+        self._open_surface_analysis_for_body(body)
+
+    def _on_body_clicked_for_surface_analysis(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        self._pending_surface_analysis_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._open_surface_analysis_for_body(body)
+
+    def _open_surface_analysis_for_body(self, body):
+        """Öffnet den Surface Analysis Dialog für einen spezifischen Body."""
         from gui.dialogs.surface_analysis_dialog import SurfaceAnalysisDialog
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
             return
 
         SurfaceAnalysisDialog(body, self.viewport_3d, parent=self).exec()
 
     def _wall_thickness_dialog(self):
-        """Open wall thickness analysis dialog."""
+        """
+        Open wall thickness analysis dialog with viewport selection support.
+
+        UX-Pattern (wie Fillet/Chamfer):
+        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
+        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_wall_thickness_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Wall Thickness: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt Dialog öffnen
+        body = selected_bodies[0]
+        self._open_wall_thickness_for_body(body)
+
+    def _on_body_clicked_for_wall_thickness(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        self._pending_wall_thickness_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._open_wall_thickness_for_body(body)
+
+    def _open_wall_thickness_for_body(self, body):
+        """Öffnet den Wall Thickness Dialog für einen spezifischen Body."""
         from gui.dialogs.wall_thickness_dialog import WallThicknessDialog
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
             return
 
         WallThicknessDialog(body, parent=self).exec()
 
-    def _lattice_dialog(self):
-        """Open lattice structure dialog for selected body."""
-        from gui.dialogs.lattice_dialog import LatticeDialog
+    def _start_lattice(self):
+        """
+        Startet Lattice-Modus mit Viewport-Selektion (wie Pattern/Fillet).
+
+        UX-Pattern:
+        - Falls Body ausgewählt → sofort Panel anzeigen
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_lattice_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Lattice: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_lattice_for_body(body)
+
+    def _on_body_clicked_for_lattice(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body für Lattice angeklickt wird."""
+        self._pending_lattice_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_lattice_for_body(body)
+
+    def _activate_lattice_for_body(self, body):
+        """Aktiviert Lattice-Modus für einen Body."""
+        if body._build123d_solid is None:
+            logger.warning("Lattice erfordert einen CAD-Body (kein Mesh)")
+            return
+
+        self._lattice_mode = True
+        self._lattice_target_body = body
+        self.lattice_panel.set_target_body(body)
+        self.lattice_panel.reset()
+        self.lattice_panel.show_at(self.viewport_3d)
+
+        logger.info(f"Lattice für '{body.name}' - Parameter anpassen, Generate zum Anwenden")
+
+    def _on_lattice_confirmed(self):
+        """Wird aufgerufen wenn der User im Lattice-Panel 'Generate' klickt."""
         from modeling import LatticeFeature
         from modeling.lattice_generator import LatticeGenerator
-        from PySide6.QtCore import QThread, Signal as QSignal, QObject
+        from PySide6.QtCore import QThread, Signal as QSignal
         from PySide6.QtWidgets import QProgressDialog
 
-        body = self._get_active_body()
+        body = self.lattice_panel.get_target_body()
         if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+            logger.warning("Kein gültiger Body für Lattice")
             return
 
-        dlg = LatticeDialog(parent=self)
-        if not dlg.exec():
-            return
-
-        cell_type = dlg.cell_type
-        cell_size = dlg.cell_size
-        beam_radius = dlg.beam_radius
-        shell_thickness = dlg.shell_thickness
+        params = self.lattice_panel.get_parameters()
+        cell_type = params["cell_type"]
+        cell_size = params["cell_size"]
+        beam_radius = params["beam_radius"]
+        shell_thickness = params["shell_thickness"]
         solid = body._build123d_solid
 
-        # Worker thread
+        # Panel ausblenden während Berechnung
+        self.lattice_panel.hide()
+
+        # Worker thread für lange Berechnung
         class LatticeWorker(QThread):
             progress = QSignal(int, str)
             finished_ok = QSignal(object)
@@ -2566,6 +2984,58 @@ class MainWindow(QMainWindow):
             progress_dlg.setValue(100)
             progress_dlg.close()
             if lattice_solid is not None:
+                # Validierung: Zähle Faces im Ergebnis vs Original
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopAbs import TopAbs_FACE
+
+                # Original Face-Count
+                original_faces = 0
+                if hasattr(solid, 'wrapped'):
+                    exp = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
+                else:
+                    exp = TopExp_Explorer(solid, TopAbs_FACE)
+                while exp.More():
+                    original_faces += 1
+                    exp.Next()
+
+                # Lattice Face-Count
+                lattice_faces = 0
+                if hasattr(lattice_solid, 'wrapped'):
+                    exp = TopExp_Explorer(lattice_solid.wrapped, TopAbs_FACE)
+                else:
+                    exp = TopExp_Explorer(lattice_solid, TopAbs_FACE)
+                while exp.More():
+                    lattice_faces += 1
+                    exp.Next()
+
+                logger.info(f"Lattice Validierung: Original={original_faces} Faces, Lattice={lattice_faces} Faces")
+
+                # Lattice sollte VIEL mehr Faces haben als Original (mindestens 3x)
+                # Ein einfacher Box hat 6 Faces, ein Lattice mit 50 Beams hat ~600+ Faces
+                MIN_FACE_RATIO = 3.0
+                if lattice_faces <= original_faces * MIN_FACE_RATIO:
+                    logger.error(
+                        f"Lattice-Generierung fehlgeschlagen: Ergebnis hat nur {lattice_faces} Faces "
+                        f"(erwartet mindestens {int(original_faces * MIN_FACE_RATIO)}). "
+                        f"Boolean-Schnitt hat wahrscheinlich nicht funktioniert."
+                    )
+                    QMessageBox.warning(
+                        self, "Lattice fehlgeschlagen",
+                        f"Die Lattice-Generierung hat keine gültige Gitterstruktur erzeugt.\n\n"
+                        f"Original: {original_faces} Flächen\n"
+                        f"Ergebnis: {lattice_faces} Flächen\n\n"
+                        f"Mögliche Ursachen:\n"
+                        f"• Cell-Size zu groß für den Body\n"
+                        f"• Beam-Radius zu klein\n"
+                        f"• Body-Geometrie zu komplex\n\n"
+                        f"Versuchen Sie eine kleinere Cell-Size oder größeren Beam-Radius."
+                    )
+                    self._lattice_mode = False
+                    self._lattice_target_body = None
+                    worker.deleteLater()
+                    return
+
+                # Validierung bestanden - Lattice anwenden
                 body._build123d_solid = lattice_solid
                 feat = LatticeFeature(
                     cell_type=cell_type, cell_size=cell_size, beam_radius=beam_radius,
@@ -2575,12 +3045,16 @@ class MainWindow(QMainWindow):
                 body.invalidate_mesh()
                 self._update_body_from_build123d(body, body._build123d_solid)
                 self.browser.refresh()
-                logger.success(f"Lattice ({cell_type}) angewendet auf {body.name}")
+                logger.success(f"Lattice ({cell_type}) angewendet auf {body.name} ({lattice_faces} Faces)")
+            self._lattice_mode = False
+            self._lattice_target_body = None
             worker.deleteLater()
 
         def on_error(msg):
             progress_dlg.close()
             logger.error(f"Lattice fehlgeschlagen: {msg}")
+            self._lattice_mode = False
+            self._lattice_target_body = None
             worker.deleteLater()
 
         worker.progress.connect(on_progress, QtConst.QueuedConnection)
@@ -2590,6 +3064,14 @@ class MainWindow(QMainWindow):
         # Keep reference to prevent GC
         self._lattice_worker = worker
         worker.start()
+
+    def _on_lattice_cancelled(self):
+        """Wird aufgerufen wenn der User das Lattice-Panel abbricht."""
+        self.lattice_panel.hide()
+        self._lattice_mode = False
+        self._lattice_target_body = None
+        self._pending_lattice_mode = False
+        logger.info("Lattice abgebrochen")
 
     def _hollow_dialog(self):
         """Open hollow dialog for selected body."""
@@ -2631,12 +3113,50 @@ class MainWindow(QMainWindow):
         logger.success(f"Hollow angewendet auf {body.name} (Wandstärke {dlg.wall_thickness}mm)")
 
     def _geometry_check_dialog(self):
-        """Open geometry validation/healing dialog for selected body."""
+        """
+        Open geometry validation/healing dialog with viewport selection support.
+
+        UX-Pattern (wie Fillet/Chamfer):
+        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
+        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_geometry_check_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Check Geometry: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt Dialog öffnen
+        body = selected_bodies[0]
+        self._open_geometry_check_for_body(body)
+
+    def _on_body_clicked_for_geometry_check(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        self._pending_geometry_check_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._open_geometry_check_for_body(body)
+
+    def _open_geometry_check_for_body(self, body):
+        """Öffnet den Geometry Check Dialog für einen spezifischen Body."""
         from gui.dialogs.geometry_check_dialog import GeometryCheckDialog
 
-        body = self._get_active_body()
-        if not body or not body._build123d_solid:
-            logger.warning("Kein Body mit Geometrie ausgewaehlt.")
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
             return
 
         dialog = GeometryCheckDialog(body, parent=self)
@@ -5525,6 +6045,350 @@ class MainWindow(QMainWindow):
     def _show_not_implemented(self, feature: str):
         logger.info(f"{feature} - Coming soon!")
 
+    # ── Pattern Feature (New UX) ──────────────────────────────
+
+    def _get_body_center(self, body) -> tuple:
+        """Berechnet das Zentrum eines Bodies aus Bounding Box."""
+        try:
+            if body.vtk_mesh is not None:
+                bounds = body.vtk_mesh.bounds
+                center = (
+                    (bounds[0] + bounds[1]) / 2,
+                    (bounds[2] + bounds[3]) / 2,
+                    (bounds[4] + bounds[5]) / 2
+                )
+                return center
+            elif body._build123d_solid is not None:
+                bb = body._build123d_solid.bounding_box()
+                return (
+                    (bb.min.X + bb.max.X) / 2,
+                    (bb.min.Y + bb.max.Y) / 2,
+                    (bb.min.Z + bb.max.Z) / 2
+                )
+        except Exception as e:
+            logger.debug(f"Body center calculation failed: {e}")
+        return (0.0, 0.0, 0.0)
+
+    def _duplicate_body(self, body, new_name: str):
+        """Erstellt eine Kopie eines Bodies mit transformiertem Solid."""
+        from modeling import Body
+        from build123d import Solid
+
+        new_body = Body(name=new_name)
+        new_body.id = f"{body.id}_{new_name.replace(' ', '_')}"
+
+        if body._build123d_solid is not None:
+            # Kopiere das Solid (build123d .copy() auf dem Solid)
+            try:
+                new_body._build123d_solid = body._build123d_solid.copy()
+            except:
+                # Fallback: Wrapped Shape kopieren
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+                copier = BRepBuilderAPI_Copy(body._build123d_solid.wrapped)
+                new_body._build123d_solid = Solid(copier.Shape())
+
+        new_body.invalidate_mesh()
+        return new_body
+
+    def _start_pattern(self):
+        """
+        Startet Pattern-Modus mit Viewport-Selektion (wie Fillet/Chamfer).
+
+        UX-Pattern:
+        - Falls Body ausgewählt → sofort starten
+        - Falls kein Body → Pending-Mode, warte auf Klick
+        """
+        selected_bodies = self.browser.get_selected_bodies()
+
+        if not selected_bodies:
+            # Pending Mode aktivieren
+            self._pending_pattern_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("Pattern: Klicke auf einen Körper in der 3D-Ansicht")
+            return
+
+        # Body gewählt → direkt starten
+        body = selected_bodies[0]
+        self._activate_pattern_for_body(body)
+
+    def _on_body_clicked_for_pattern(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body für Pattern angeklickt wird."""
+        self._pending_pattern_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_pattern_for_body(body)
+
+    def _activate_pattern_for_body(self, body):
+        """Aktiviert Pattern-Modus für einen Body."""
+        if body._build123d_solid is None:
+            logger.warning("Pattern erfordert einen CAD-Body (kein Mesh)")
+            return
+
+        self._pattern_mode = True
+        self._pattern_target_body = body
+        self.pattern_panel.set_target_body(body)
+        self.pattern_panel.reset()
+        self.pattern_panel.show_at(self.viewport_3d)
+
+        logger.info(f"Pattern für '{body.name}' - Parameter anpassen, OK zum Bestätigen")
+
+        # Initial preview generieren
+        self._update_pattern_preview(self.pattern_panel.get_pattern_data())
+
+    def _on_pattern_parameters_changed(self, params: dict):
+        """Handler für Live-Preview wenn Parameter geändert werden."""
+        if self._pattern_mode:
+            self._update_pattern_preview(params)
+
+    def _update_pattern_preview(self, params: dict):
+        """Generiert/aktualisiert Pattern-Preview."""
+        # Alte Preview entfernen
+        self._clear_pattern_preview()
+
+        if not self._pattern_target_body:
+            return
+
+        body = self._pattern_target_body
+        count = params.get("count", 3)
+        pattern_type = params.get("type", "linear")
+
+        try:
+            import pyvista as pv
+            from build123d import Rotation, Location, Vector
+
+            solid = body._build123d_solid
+            if solid is None:
+                return
+
+            for i in range(1, count):  # Skip original (i=0)
+                if pattern_type == "linear":
+                    spacing = params.get("spacing", 10.0)
+                    axis = params.get("axis", "X")
+
+                    offset = {"X": (spacing * i, 0, 0),
+                              "Y": (0, spacing * i, 0),
+                              "Z": (0, 0, spacing * i)}[axis]
+
+                    loc = Location(Vector(*offset))
+                    preview_solid = solid.moved(loc)
+
+                else:  # circular
+                    total_angle = params.get("angle", 360.0)
+                    axis = params.get("axis", "Z")
+                    full_circle = params.get("full_circle", True)
+
+                    if full_circle:
+                        angle_per_copy = total_angle / count
+                    else:
+                        angle_per_copy = total_angle / (count - 1) if count > 1 else total_angle
+
+                    angle = angle_per_copy * i
+
+                    # Center from params (body_center, origin, or custom)
+                    center_mode = params.get("center_mode", "body_center")
+                    if center_mode == "origin":
+                        center = (0.0, 0.0, 0.0)
+                    elif center_mode == "custom" and params.get("center"):
+                        center = params["center"]
+                    else:
+                        center = self._get_body_center(body)
+
+                    rot = Rotation(
+                        *(1 if axis == "X" else 0, 1 if axis == "Y" else 0, 1 if axis == "Z" else 0),
+                        angle
+                    )
+                    loc = Location(Vector(*center)) * Location(rot) * Location(Vector(*[-c for c in center]))
+                    preview_solid = solid.moved(loc)
+
+                # Tessellieren und als Preview anzeigen
+                from modeling.cad_tessellator import CADTessellator
+                mesh, _ = CADTessellator.tessellate(preview_solid)
+
+                if mesh:
+                    actor_name = f"_pattern_preview_{i}"
+                    self.viewport_3d.plotter.add_mesh(
+                        mesh,
+                        color="#4488ff",
+                        opacity=0.5,
+                        name=actor_name
+                    )
+                    self._pattern_preview_bodies.append(actor_name)
+
+            request_render(self.viewport_3d.plotter)
+
+        except Exception as e:
+            logger.debug(f"Pattern preview error: {e}")
+
+    def _clear_pattern_preview(self):
+        """Entfernt Pattern-Preview."""
+        for name in self._pattern_preview_bodies:
+            try:
+                self.viewport_3d.plotter.remove_actor(name)
+            except:
+                pass
+        self._pattern_preview_bodies.clear()
+
+    def _on_pattern_confirmed(self):
+        """Handler wenn Pattern bestätigt wird."""
+        if not self._pattern_mode or not self._pattern_target_body:
+            return
+
+        body = self._pattern_target_body
+        params = self.pattern_panel.get_pattern_data()
+
+        # Preview entfernen
+        self._clear_pattern_preview()
+
+        # Pattern erstellen (alte Logik nutzen)
+        self._execute_pattern(body, params)
+
+        # Mode beenden
+        self._pattern_mode = False
+        self._pattern_target_body = None
+        self.pattern_panel.hide()
+
+    def _on_pattern_cancelled(self):
+        """Handler wenn Pattern abgebrochen wird."""
+        self._clear_pattern_preview()
+        self._pattern_mode = False
+        self._pattern_target_body = None
+        self._pattern_center_pick_mode = False
+        self.pattern_panel.hide()
+        logger.info("Pattern abgebrochen")
+
+    def _on_pattern_center_pick_requested(self):
+        """Handler wenn User Custom Center auswählen will."""
+        self._pattern_center_pick_mode = True
+        from PySide6.QtCore import Qt
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        # Enable point picking mode in viewport (reuse measure mode infrastructure)
+        self.viewport_3d.measure_mode = True
+        self.statusBar().showMessage("Klicke auf einen Punkt im Viewport als Rotationszentrum")
+        logger.info("Pattern: Klicke Punkt für Rotationszentrum")
+
+    def _on_pattern_center_picked(self, point: tuple):
+        """Handler wenn ein Zentrum-Punkt gepickt wurde."""
+        if not self._pattern_center_pick_mode:
+            return
+
+        self._pattern_center_pick_mode = False
+        from PySide6.QtCore import Qt
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        # Disable point picking mode
+        self.viewport_3d.measure_mode = False
+
+        # Set the custom center in the panel
+        self.pattern_panel.set_custom_center(point[0], point[1], point[2])
+        self.statusBar().showMessage(f"Rotationszentrum: ({point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f})")
+        logger.info(f"Pattern Center gesetzt: {point}")
+
+    def _execute_pattern(self, body, params: dict):
+        """Führt Pattern aus und erstellt die Bodies.
+
+        WICHTIG: Pattern-Bodies bekommen KEINE Features!
+        Der Solid wird direkt kopiert und transformiert.
+        Das verhindert leere Bodies nach _rebuild().
+        """
+        from modeling import Body
+        from build123d import Location, Axis
+
+        pattern_type = params["type"]
+        count = params["count"]
+
+        logger.info(f"Erstelle {pattern_type} Pattern mit {count} Kopien für {body.name}")
+
+        if body._build123d_solid is None:
+            logger.error("Pattern: Source-Body hat keinen Solid!")
+            return
+
+        new_bodies = []
+
+        try:
+            for i in range(1, count):
+                # 1. Body mit Solid-Kopie erstellen
+                new_body = self._duplicate_body(body, f"{body.name} ({i+1})")
+                new_body.id = f"{body.id}_pattern_{i}"
+
+                # 2. Transform DIREKT auf den kopierten Solid anwenden (ohne Features!)
+                if new_body._build123d_solid is not None:
+                    solid = new_body._build123d_solid
+
+                    if pattern_type == "linear":
+                        spacing = params["spacing"]
+                        axis = params["axis"]
+
+                        # Linear translation
+                        if axis == "X":
+                            solid = solid.move(Location((spacing * i, 0, 0)))
+                        elif axis == "Y":
+                            solid = solid.move(Location((0, spacing * i, 0)))
+                        else:  # Z
+                            solid = solid.move(Location((0, 0, spacing * i)))
+
+                    else:  # circular
+                        axis_name = params["axis"]
+                        total_angle = params["angle"]
+                        full_circle = params.get("full_circle", True)
+
+                        if full_circle:
+                            angle_per_copy = total_angle / count
+                        else:
+                            angle_per_copy = total_angle / (count - 1) if count > 1 else total_angle
+
+                        total_angle_for_copy = angle_per_copy * i
+
+                        # Center ermitteln
+                        center_mode = params.get("center_mode", "body_center")
+                        if center_mode == "origin":
+                            center = (0.0, 0.0, 0.0)
+                        elif center_mode == "custom" and params.get("center"):
+                            center = params["center"]
+                        else:
+                            center = self._get_body_center(body)
+
+                        cx, cy, cz = center
+
+                        # Rotation um beliebigen Punkt:
+                        # 1. Move to origin, 2. Rotate, 3. Move back
+                        axis_map = {"X": Axis.X, "Y": Axis.Y, "Z": Axis.Z}
+                        rot_axis = axis_map.get(axis_name, Axis.Z)
+
+                        solid = solid.move(Location((-cx, -cy, -cz)))
+                        solid = solid.rotate(rot_axis, total_angle_for_copy)
+                        solid = solid.move(Location((cx, cy, cz)))
+
+                    # Transformierten Solid zuweisen
+                    new_body._build123d_solid = solid
+                    new_body.invalidate_mesh()
+
+                # Body zu Document hinzufügen
+                self.document.bodies.append(new_body)
+                new_bodies.append(new_body)
+
+            # UI aktualisieren
+            for new_body in new_bodies:
+                self._update_body_mesh(new_body)
+
+            self.browser.refresh()
+            self._update_viewport_all_impl()
+
+            logger.success(f"Pattern erstellt: {count} Kopien von {body.name}")
+
+        except Exception as e:
+            logger.exception(f"Pattern-Error: {e}")
+
     # ── Measure Tool ──────────────────────────────────────────
 
     def _start_measure_mode(self):
@@ -5540,6 +6404,11 @@ class MainWindow(QMainWindow):
 
     def _on_measure_point_picked(self, point):
         """Wird aufgerufen wenn ein Punkt im Measure-Modus gepickt wurde"""
+        # Pattern Center Pick hat Priorität
+        if getattr(self, '_pattern_center_pick_mode', False):
+            self._on_pattern_center_picked(point)
+            return
+
         if not getattr(self, '_measure_active', False):
             return
         self._measure_points.append(point)
@@ -5805,6 +6674,10 @@ class MainWindow(QMainWindow):
         # Fillet/Chamfer Panel
         if hasattr(self, 'fillet_panel') and self.fillet_panel.isVisible():
             self.fillet_panel.update_edge_count(count)
+
+        # N-Sided Patch Panel
+        if getattr(self, '_nsided_patch_mode', False) and hasattr(self, 'nsided_patch_panel'):
+            self.nsided_patch_panel.update_edge_count(count)
 
         # Sweep Path Phase (Phase 6)
         if getattr(self, '_sweep_mode', False) and getattr(self, '_sweep_phase', None) == 'path':
@@ -7483,6 +8356,7 @@ class MainWindow(QMainWindow):
         """Kopiert den aktiven Body als neuen Body."""
         body = self._get_active_body()
         if not body:
+            logger.warning("Kein Body ausgewählt für Kopieren")
             return
 
         from modeling.cad_tessellator import CADTessellator
@@ -7491,15 +8365,32 @@ class MainWindow(QMainWindow):
         # Neuen Body erstellen
         new_b = Body(name=f"{body.name}_Kopie")
 
-        # Build123d Solid kopieren (NICHT deepcopy - das funktioniert nicht für OCP!)
+        # Build123d Solid kopieren
+        # HINWEIS: Build123d Part/Solid hat keine .copy() Methode!
+        # Workaround: moved(Location((0,0,0))) erstellt eine Kopie
         if hasattr(body, '_build123d_solid') and body._build123d_solid:
             try:
-                # Build123d.copy() ist die korrekte Methode
-                new_b._build123d_solid = body._build123d_solid.copy()
+                from build123d import Location
+                # Identity-Move erstellt eine Kopie des Shapes
+                new_b._build123d_solid = body._build123d_solid.moved(Location((0, 0, 0)))
                 logger.debug(f"Build123d Solid kopiert für {new_b.name}")
             except Exception as e:
-                logger.error(f"Solid-Kopie fehlgeschlagen: {e}")
-                return
+                logger.error(f"Solid-Kopie mit moved() fehlgeschlagen: {e}")
+                # Fallback: OCP BRepBuilderAPI_Copy
+                try:
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+                    from build123d import Solid
+                    copier = BRepBuilderAPI_Copy(body._build123d_solid.wrapped)
+                    copier.Perform(body._build123d_solid.wrapped)
+                    if copier.IsDone():
+                        new_b._build123d_solid = Solid(copier.Shape())
+                        logger.debug(f"OCP Copy erfolgreich für {new_b.name}")
+                    else:
+                        logger.error("OCP Copy fehlgeschlagen")
+                        return
+                except Exception as e2:
+                    logger.error(f"Auch OCP Copy fehlgeschlagen: {e2}")
+                    return
 
         # Mesh generieren
         CADTessellator.notify_body_changed()

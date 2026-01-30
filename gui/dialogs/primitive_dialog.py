@@ -7,9 +7,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QComboBox, QGroupBox, QStackedWidget
 )
-from PySide6.QtGui import QDoubleValidator
 from loguru import logger
-from gui.design_tokens import DesignTokens
+from gui.design_tokens import DesignTokens, create_decimal_validator, parse_decimal
 from i18n import tr
 
 
@@ -20,9 +19,8 @@ def _num_row(label_text, default, parent_layout, unit="mm", min_val=0.1, max_val
     lbl.setMinimumWidth(100)
     row.addWidget(lbl)
     inp = QLineEdit(str(default))
-    v = QDoubleValidator(min_val, max_val, 3)
-    v.setNotation(QDoubleValidator.StandardNotation)
-    inp.setValidator(v)
+    inp.setValidator(create_decimal_validator())
+    inp.setPlaceholderText(f"{min_val} - {max_val}")
     row.addWidget(inp)
     row.addWidget(QLabel(unit))
     parent_layout.addLayout(row)
@@ -118,27 +116,27 @@ class PrimitiveDialog(QDialog):
             self.result_type = ["box", "cylinder", "sphere", "cone"][idx]
 
             if self.result_type == "box":
-                self.length = float(self.box_length.text() or "20")
-                self.width = float(self.box_width.text() or "20")
-                self.height = float(self.box_height.text() or "20")
+                self.length = parse_decimal(self.box_length.text(), 20.0)
+                self.width = parse_decimal(self.box_width.text(), 20.0)
+                self.height = parse_decimal(self.box_height.text(), 20.0)
                 if self.length <= 0 or self.width <= 0 or self.height <= 0:
                     logger.warning("All dimensions must be > 0")
                     return
             elif self.result_type == "cylinder":
-                self.radius = float(self.cyl_radius.text() or "10")
-                self.height = float(self.cyl_height.text() or "30")
+                self.radius = parse_decimal(self.cyl_radius.text(), 10.0)
+                self.height = parse_decimal(self.cyl_height.text(), 30.0)
                 if self.radius <= 0 or self.height <= 0:
                     logger.warning("Radius and height must be > 0")
                     return
             elif self.result_type == "sphere":
-                self.radius = float(self.sph_radius.text() or "10")
+                self.radius = parse_decimal(self.sph_radius.text(), 10.0)
                 if self.radius <= 0:
                     logger.warning("Radius must be > 0")
                     return
             elif self.result_type == "cone":
-                self.bottom_radius = float(self.cone_bottom_radius.text() or "10")
-                self.top_radius = float(self.cone_top_radius.text() or "0")
-                self.height = float(self.cone_height.text() or "20")
+                self.bottom_radius = parse_decimal(self.cone_bottom_radius.text(), 10.0)
+                self.top_radius = parse_decimal(self.cone_top_radius.text(), 0.0)
+                self.height = parse_decimal(self.cone_height.text(), 20.0)
                 if self.bottom_radius <= 0 or self.top_radius < 0 or self.height <= 0:
                     logger.warning("Invalid cone dimensions")
                     return

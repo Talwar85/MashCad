@@ -208,3 +208,52 @@ class DesignTokens:
                 border-radius: 3px;
             }}
         """
+
+
+# =============================================================================
+# Decimal Input Utilities - Für konsistente Zahleingabe mit Komma und Punkt
+# =============================================================================
+
+def create_decimal_validator():
+    """
+    Erstellt einen Validator der sowohl Komma als auch Punkt als Dezimaltrenner akzeptiert.
+    Verwenden für alle numerischen Eingabefelder.
+    """
+    from PySide6.QtGui import QRegularExpressionValidator
+    from PySide6.QtCore import QRegularExpression
+    # Erlaubt: 0, 1.5, 1,5, 10.25, 10,25, -5.0, -5,0 etc.
+    decimal_regex = QRegularExpression(r"^-?\d+([.,]\d*)?$")
+    return QRegularExpressionValidator(decimal_regex)
+
+
+def parse_decimal(text: str, default: float = 0.0) -> float:
+    """
+    Parst eine Dezimalzahl aus Text, akzeptiert sowohl Komma als auch Punkt.
+
+    Args:
+        text: Eingabetext (z.B. "4,5" oder "4.5")
+        default: Fallback-Wert bei leerem oder ungültigem Text
+
+    Returns:
+        Geparster Float-Wert
+    """
+    if not text or not text.strip():
+        return default
+    try:
+        # Ersetze Komma durch Punkt für float()
+        return float(text.strip().replace(",", "."))
+    except ValueError:
+        return default
+
+
+def setup_decimal_input(line_edit, placeholder: str = None):
+    """
+    Konfiguriert ein QLineEdit für Dezimaleingabe mit Komma/Punkt-Unterstützung.
+
+    Args:
+        line_edit: QLineEdit Widget
+        placeholder: Optionaler Placeholder-Text (z.B. "0.1 - 10.0")
+    """
+    line_edit.setValidator(create_decimal_validator())
+    if placeholder:
+        line_edit.setPlaceholderText(placeholder)

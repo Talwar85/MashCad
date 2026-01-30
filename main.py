@@ -14,26 +14,32 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def main():
     """Startet LiteCAD"""
     from PySide6.QtWidgets import QApplication
-    
+    from PySide6.QtGui import QIcon
+
     # Info über verfügbare Bibliotheken
     try:
         import pyvista
         print(f"Info: PyVista {pyvista.__version__} verfügbar")
     except ImportError:
         print("Warning: PyVista nicht verfügbar - verwende OpenGL-Fallback")
-    
+
     try:
         import build123d
         print("Info: build123d erfolgreich geladen.")
     except ImportError:
         print("Warning: build123d nicht verfügbar")
-    
+
     from gui.main_window import MainWindow
-    
+
     app = QApplication(sys.argv)
-    app.setApplicationName("LiteCAD")
-    app.setOrganizationName("LiteCAD")
+    app.setApplicationName("MashCAD")
+    app.setOrganizationName("MashCAD")
     app.setApplicationVersion("2.5.0")
+
+    # App-Icon setzen (für Taskleiste)
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
     window = MainWindow()
     window.show()
