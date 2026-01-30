@@ -26,6 +26,10 @@ class ExtrudeMixin:
         if enabled:
             self.selected_face_ids.clear()
             self._drag_screen_vector = np.array([0.0, -1.0])
+            # FIX: Drag-State immer resetten beim Aktivieren
+            self.is_dragging = False
+            self._is_potential_drag = False
+            self.extrude_height = 0.0
 
             # X-RAY VISION: Bodies halbtransparent machen
             logger.debug(f"🔍 X-Ray Vision: Aktiviere für {len(self._body_actors)} Bodies")
@@ -53,14 +57,27 @@ class ExtrudeMixin:
             # Performance Optimization Phase 2.3: Display-Mesh Force-Refresh
             # Lade Detector neu mit extrude_mode=True, um Bodies mit höherer Pick-Priority zu laden
             logger.debug("🔄 Force-Refresh: Lade Detector neu mit Extrude-Mode Priority")
-            self._load_detector_mesh_data()
+            self._update_detector_for_picking()
 
             self._draw_selectable_faces_from_detector()
-            request_render(self.plotter)
+
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            # request_render ist queued, aber Picking braucht sofortigen Render
+            try:
+                self.plotter.render()
+                # Zusätzlich: Force render_window update für Picking
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
         else:
             self.selected_face_ids.clear()
             self._clear_face_actors()
             self._clear_preview()
+            # FIX: Drag-State auch beim Deaktivieren resetten
+            self.is_dragging = False
+            self._is_potential_drag = False
 
             # X-RAY VISION: Bodies zurück zu normal (90% opacity)
             logger.debug(f"🔍 X-Ray Vision: Deaktiviere für {len(self._body_actors)} Bodies")

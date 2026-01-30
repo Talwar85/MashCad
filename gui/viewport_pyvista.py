@@ -234,6 +234,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._last_mouse_move_time = 0
         self._mouse_move_interval = 0.016  # ~60 FPS max (16ms)
 
+        # PERFORMANCE: Reusable cell picker (avoid creating new picker per hover)
+        self._body_cell_picker = None  # Lazy init on first use
+
+        # PERFORMANCE: Hover pick cache (avoid redundant picks within same frame)
+        self._hover_pick_cache = None  # (timestamp, x, y, body_id, cell_id, normal, position)
+        self._hover_pick_cache_ttl = 0.008  # 8ms cache validity (~120 FPS worth)
+
     def set_selection_mode(self, mode: str):
         """Übersetzt den String-Modus aus dem MainWindow in Detector-Filter."""
         from gui.geometry_detector import GeometryDetector
@@ -503,7 +510,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 else:
                     prop.SetRepresentationToSurface()
 
-        self.plotter.render()
+        request_render(self.plotter)  # PERFORMANCE: Use debounced render queue
         logger.debug(f"Wireframe Toggle: {style}")
 
     def _setup_scene(self):
@@ -965,7 +972,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if enabled:
             self._revolve_selected_faces = []
             self._draw_selectable_faces_from_detector()
-            request_render(self.plotter)
+
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            try:
+                self.plotter.render()
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
         else:
             self._revolve_selected_faces = []
             self.clear_revolve_preview()
@@ -1265,6 +1280,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if enabled:
             self._pushpull_body_id = None
             self._pushpull_selected_face = None
+
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            try:
+                self.plotter.render()
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
         else:
             self._pushpull_body_id = None
             self._pushpull_selected_face = None
@@ -1539,7 +1563,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def set_offset_plane_mode(self, enabled):
         """Aktiviert/deaktiviert den interaktiven Offset-Plane-Modus."""
         self.offset_plane_mode = enabled
-        if not enabled:
+        if enabled:
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            try:
+                self.plotter.render()
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
+        else:
             self.clear_offset_plane_preview()
             self._offset_plane_dragging = False
             self._offset_plane_base_origin = None
@@ -2251,10 +2284,32 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if self.extrude_mode:
                 self.is_dragging = False
                 self._is_potential_drag = False
-        
+
         return False
         #return super().eventFilter(obj, event)
-    
+
+    def leaveEvent(self, event):
+        """
+        FIX: Reset drag state wenn Maus den Viewport verlässt.
+        Verhindert "stuck" Extrude-Drag wenn Maus außerhalb losgelassen wird.
+        """
+        if self.extrude_mode:
+            if getattr(self, 'is_dragging', False) or getattr(self, '_is_potential_drag', False):
+                logger.debug("🔄 leaveEvent: Reset drag state (Maus hat Viewport verlassen)")
+                self.is_dragging = False
+                self._is_potential_drag = False
+
+        # Auch andere Drag-States resetten
+        if getattr(self, '_split_dragging', False):
+            self._split_dragging = False
+            self._split_drag_start = None
+
+        if getattr(self, '_offset_plane_dragging', False):
+            self._offset_plane_dragging = False
+            self._offset_plane_drag_start = None
+
+        super().leaveEvent(event)
+
     def _select_bodies_in_rect(self, rect):
         """Select all bodies whose projected center falls inside the screen rectangle."""
         import vtk
@@ -2712,15 +2767,22 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.hover_face_id = -1
         self.selected_face_ids.clear()
         
-        if enabled: 
+        if enabled:
             self._show_selection_planes()
-            
+
             # WICHTIG: Detector mit Geometrie füllen, genau wie beim Extrude!
             # Wir nutzen die Hilfsfunktion, um nicht alles doppelt zu schreiben
             self._update_detector_for_picking()
-            
-            request_render(self.plotter)
-        else: 
+
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            try:
+                self.plotter.render()
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
+        else:
             self._hide_selection_planes()
             # Aufräumen
             self._clear_face_actors()
@@ -4592,15 +4654,33 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def _hover_body_face(self, x, y):
         """Hebt Body-Flächen beim Hover hervor.
 
-        OPTIMIERT: O(1) Actor-zu-BodyID Lookup statt O(n*m).
+        OPTIMIERT:
+        - O(1) Actor-zu-BodyID Lookup statt O(n*m)
+        - Wiederverwendung des CellPickers (kein new pro Call)
+        - Time-based Cache für identische Koordinaten
         """
         if not self.bodies:
             return
 
         try:
             import vtk
-            cell_picker = vtk.vtkCellPicker()
-            cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
+            import time
+
+            # PERFORMANCE: Check cache first (same coordinates within 8ms = reuse result)
+            current_time = time.time()
+            if self._hover_pick_cache is not None:
+                cache_time, cache_x, cache_y, _, _, _, _ = self._hover_pick_cache
+                if (current_time - cache_time < self._hover_pick_cache_ttl and
+                    cache_x == x and cache_y == y):
+                    # Cache hit - skip VTK pick entirely
+                    return
+
+            # PERFORMANCE: Reuse picker instead of creating new one each time
+            if self._body_cell_picker is None:
+                self._body_cell_picker = vtk.vtkCellPicker()
+                self._body_cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
+
+            cell_picker = self._body_cell_picker
             height = self.plotter.interactor.height()
 
             picked = cell_picker.Pick(x, height - y, 0, self.plotter.renderer)
@@ -4609,6 +4689,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if picked and cell_id != -1:
                 actor = cell_picker.GetActor()
                 if actor is None or not actor.GetVisibility():
+                    # Update cache even on miss
+                    self._hover_pick_cache = (current_time, x, y, None, -1, None, None)
                     if self.hovered_body_face is not None:
                         self.hovered_body_face = None
                         self._clear_body_face_highlight()
@@ -4629,6 +4711,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     rounded_normal = tuple(round(n, 2) for n in normal)
                     new_hover = (body_id, cell_id, rounded_normal, tuple(pos))
 
+                    # Update cache with successful pick
+                    self._hover_pick_cache = (current_time, x, y, body_id, cell_id, rounded_normal, tuple(pos))
+
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
                         # Draft/PushPull mode: full-face blue highlight
@@ -4637,6 +4722,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         else:
                             self._draw_body_face_highlight(pos, normal)
                     return
+
+            # Update cache for miss
+            self._hover_pick_cache = (current_time, x, y, None, -1, None, None)
 
             if self.hovered_body_face is not None:
                 self.hovered_body_face = None

@@ -88,6 +88,8 @@ class GeometryDetector:
     def clear(self):
         self.selection_faces.clear()
         self._counter = 0
+        # FIX: Cache auch leeren, sonst werden stale Faces zurückgegeben!
+        self._body_face_cache.clear()
 
     def clear_full(self):
         """Vollständiger Reset inkl. Cache."""

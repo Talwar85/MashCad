@@ -9,11 +9,14 @@ Production-ready Boolean operations with:
 - Geometry-change verification
 - No multi-strategy fallbacks (keeps it simple)
 
+PERFORMANCE (Phase 3):
+- VolumeCache: Cached volume calculations (avoid redundant GProp calls)
+
 Author: Claude (Architecture Refactoring Phase 1)
 Date: 2026-01-22
 """
 
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict
 from loguru import logger
 
 try:
@@ -32,6 +35,86 @@ except ImportError:
 from modeling.result_types import BooleanResult, ResultStatus
 from modeling.body_transaction import BodyTransaction, BooleanOperationError
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+
+
+class VolumeCache:
+    """
+    PERFORMANCE (Phase 3): Cached Volume-Berechnungen.
+
+    GProp_GProps.VolumeProperties ist teuer (~5-20ms pro Shape).
+    Während einer Boolean-Operation wird Volume oft 3-4× berechnet:
+    - Tool volume logging
+    - Original volume logging
+    - Result volume validation
+    - Geometry change verification
+
+    Mit diesem Cache: 1× berechnen, dann O(1) lookup.
+
+    WICHTIG: Cache wird per-Operation invalidiert da Shapes mutieren können.
+    """
+
+    _cache: Dict[int, float] = {}  # shape_id -> volume
+    _bbox_cache: Dict[int, Tuple[float, ...]] = {}  # shape_id -> (xmin, ymin, zmin, xmax, ymax, zmax)
+
+    @classmethod
+    def get_volume(cls, shape) -> float:
+        """
+        Gibt Volume für Shape zurück (cached).
+
+        Args:
+            shape: OCP TopoDS_Shape oder Build123d Solid/Shape
+
+        Returns:
+            Volume in mm³
+        """
+        # Get underlying OCP shape if wrapped
+        ocp_shape = shape.wrapped if hasattr(shape, 'wrapped') else shape
+        shape_id = id(ocp_shape)
+
+        if shape_id not in cls._cache:
+            props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(ocp_shape, props)
+            cls._cache[shape_id] = props.Mass()
+            logger.debug(f"VolumeCache MISS: shape_id={shape_id}, vol={cls._cache[shape_id]:.1f}")
+        else:
+            logger.debug(f"VolumeCache HIT: shape_id={shape_id}, vol={cls._cache[shape_id]:.1f}")
+
+        return cls._cache[shape_id]
+
+    @classmethod
+    def get_bbox(cls, shape) -> Tuple[float, float, float, float, float, float]:
+        """
+        Gibt Bounding Box für Shape zurück (cached).
+
+        Returns:
+            (xmin, ymin, zmin, xmax, ymax, zmax)
+        """
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+
+        ocp_shape = shape.wrapped if hasattr(shape, 'wrapped') else shape
+        shape_id = id(ocp_shape)
+
+        if shape_id not in cls._bbox_cache:
+            bbox = Bnd_Box()
+            BRepBndLib.Add_s(ocp_shape, bbox)
+            cls._bbox_cache[shape_id] = bbox.Get()
+
+        return cls._bbox_cache[shape_id]
+
+    @classmethod
+    def invalidate(cls, shape):
+        """Entfernt Shape aus Cache (nach Mutation)."""
+        ocp_shape = shape.wrapped if hasattr(shape, 'wrapped') else shape
+        shape_id = id(ocp_shape)
+        cls._cache.pop(shape_id, None)
+        cls._bbox_cache.pop(shape_id, None)
+
+    @classmethod
+    def clear(cls):
+        """Leert gesamten Cache (am Ende einer Operation)."""
+        cls._cache.clear()
+        cls._bbox_cache.clear()
 
 
 class BooleanEngineV4:
@@ -78,6 +161,10 @@ class BooleanEngineV4:
                 operation_type=operation
             )
 
+        # PERFORMANCE: Clear VolumeCache at start of each operation (Phase 3)
+        # Prevents stale cache entries from previous operations
+        VolumeCache.clear()
+
         # Use production defaults unless overridden
         if fuzzy_tolerance is None:
             fuzzy_tolerance = BooleanEngineV4.PRODUCTION_FUZZY_TOLERANCE
@@ -107,37 +194,24 @@ class BooleanEngineV4:
                 body_shape = body._build123d_solid.wrapped
                 tool_shape = tool_solid.wrapped if hasattr(tool_solid, 'wrapped') else tool_solid
 
-                # Debug: Log bounding boxes to verify positions
-                from OCP.Bnd import Bnd_Box
-                from OCP.BRepBndLib import BRepBndLib
-
-                def log_bbox(shape, name):
+                # PERFORMANCE: Use VolumeCache for bbox logging (Phase 3)
+                def log_bbox_cached(shape, name):
                     try:
-                        bbox = Bnd_Box()
-                        BRepBndLib.Add_s(shape, bbox)
-                        xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+                        xmin, ymin, zmin, xmax, ymax, zmax = VolumeCache.get_bbox(shape)
                         logger.info(f"{name} BBox: ({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
                     except Exception as e:
                         logger.debug(f"{name} bbox error: {e}")
 
-                log_bbox(body_shape, "Body")
-                log_bbox(tool_shape, "Tool")
+                log_bbox_cached(body_shape, "Body")
+                log_bbox_cached(tool_shape, "Tool")
 
                 # Debug: Log shape info
                 from OCP.TopAbs import TopAbs_SOLID, TopAbs_COMPOUND
                 logger.debug(f"Shape types - Body: {body_shape.ShapeType()}, Tool: {tool_shape.ShapeType()}")
 
-                # Debug: Log tool volume and bounding box
-                tool_vol_props = GProp_GProps()
-                BRepGProp.VolumeProperties_s(tool_shape, tool_vol_props)
-                tool_volume = tool_vol_props.Mass()
-
-                # Get tool bounding box to verify position
-                from OCP.Bnd import Bnd_Box
-                from OCP.BRepBndLib import BRepBndLib
-                tool_bbox = Bnd_Box()
-                BRepBndLib.Add_s(tool_shape, tool_bbox)
-                xmin, ymin, zmin, xmax, ymax, zmax = tool_bbox.Get()
+                # PERFORMANCE: Use VolumeCache for tool volume (Phase 3)
+                tool_volume = VolumeCache.get_volume(tool_shape)
+                xmin, ymin, zmin, xmax, ymax, zmax = VolumeCache.get_bbox(tool_shape)
                 logger.debug(f"Tool: Vol={tool_volume:.1f}, BBox=({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
 
                 result_shape, history = BooleanEngineV4._execute_ocp_boolean(
@@ -181,14 +255,9 @@ class BooleanEngineV4:
                         f"→ Check tool size and position."
                     )
 
-                # 5. Calculate OCP result volume BEFORE wrapping (for debugging)
-                ocp_vol_props = GProp_GProps()
-                BRepGProp.VolumeProperties_s(result_shape, ocp_vol_props)
-                ocp_result_volume = ocp_vol_props.Mass()
-
-                ocp_orig_props = GProp_GProps()
-                BRepGProp.VolumeProperties_s(body._build123d_solid.wrapped, ocp_orig_props)
-                ocp_original_volume = ocp_orig_props.Mass()
+                # 5. PERFORMANCE: Use VolumeCache for volume comparison (Phase 3)
+                ocp_result_volume = VolumeCache.get_volume(result_shape)
+                ocp_original_volume = VolumeCache.get_volume(body._build123d_solid.wrapped)
 
                 logger.info(f"OCP Volumes: Original={ocp_original_volume:.1f}, Result={ocp_result_volume:.1f}")
 
@@ -386,14 +455,9 @@ class BooleanEngineV4:
             # Debug: Check if result is different from input
             logger.info(f"Result shape id: {id(result_shape)}, Input shape1 id: {id(shape1)}")
 
-            # Debug: Calculate result volume immediately
-            result_props = GProp_GProps()
-            BRepGProp.VolumeProperties_s(result_shape, result_props)
-            result_vol = result_props.Mass()
-
-            input_props = GProp_GProps()
-            BRepGProp.VolumeProperties_s(shape1, input_props)
-            input_vol = input_props.Mass()
+            # PERFORMANCE: Use VolumeCache for volume logging (Phase 3)
+            result_vol = VolumeCache.get_volume(result_shape)
+            input_vol = VolumeCache.get_volume(shape1)
 
             logger.info(f"OCP Result: input_vol={input_vol:.1f}, result_vol={result_vol:.1f}, diff={input_vol - result_vol:.1f}")
 
@@ -451,15 +515,9 @@ class BooleanEngineV4:
             True if geometry changed, False if false-positive
         """
         try:
-            # Calculate volumes
-            props_original = GProp_GProps()
-            props_result = GProp_GProps()
-
-            BRepGProp.VolumeProperties_s(original_shape, props_original)
-            BRepGProp.VolumeProperties_s(result_shape, props_result)
-
-            vol_original = props_original.Mass()
-            vol_result = props_result.Mass()
+            # PERFORMANCE: Use VolumeCache (Phase 3)
+            vol_original = VolumeCache.get_volume(original_shape)
+            vol_result = VolumeCache.get_volume(result_shape)
 
             # Calculate face counts
             def count_faces(shape):

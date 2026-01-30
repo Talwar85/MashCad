@@ -29,6 +29,7 @@ pymeshlab
 meshlib
 pyransac3d
 trimesh>=4.0.0
+gmsh >= 4.15.0
 
 # === Dev / Test ===
 pytest>=7.0.0

@@ -48,6 +48,20 @@ class PickingMixin:
             if cell_id != -1:
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
+                picked_actor = picker.GetActor()
+
+                # FIX: Identifiziere welcher Body TATSÄCHLICH gepickt wurde
+                # Damit wird verhindert dass Faces von anderen Bodies selektiert werden
+                picked_body_id = None
+                if picked_actor is not None and hasattr(self, '_body_actors'):
+                    for bid, actor_names in self._body_actors.items():
+                        for name in actor_names:
+                            if name in self.plotter.renderer.actors:
+                                if self.plotter.renderer.actors[name] is picked_actor:
+                                    picked_body_id = bid
+                                    break
+                        if picked_body_id is not None:
+                            break
 
                 # Sichtbare Body-IDs vorfiltern
                 visible_bodies = None
@@ -61,6 +75,9 @@ class PickingMixin:
                     if face.domain_type != "body_face":
                         continue
                     if visible_bodies is not None and face.owner_id not in visible_bodies:
+                        continue
+                    # FIX: Nur Faces vom gepickten Body berücksichtigen!
+                    if picked_body_id is not None and face.owner_id != picked_body_id:
                         continue
 
                     # Pre-computed numpy arrays (keine Tuple→Array Konvertierung)

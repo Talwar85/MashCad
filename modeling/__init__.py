@@ -24,8 +24,6 @@ except ImportError:
 # WICHTIG: Unser neuer Helper
 from modeling.cad_tessellator import CADTessellator
 from modeling.mesh_converter import MeshToBREPConverter # NEU
-from modeling.mesh_converter_functional_parts import MeshToBREPV5 # NEU
-from modeling.mesh_converter_v6 import SmartMeshConverter # V6 - Feature Detection
 from modeling.result_types import OperationResult, BooleanResult, ResultStatus  # Result-Pattern
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from modeling.geometry_validator import GeometryValidator, ValidationResult, ValidationLevel  # Phase 7

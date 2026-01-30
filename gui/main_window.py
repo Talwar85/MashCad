@@ -43,6 +43,7 @@ from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPan
 from gui.widgets.texture_panel import SurfaceTexturePanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
+from gui.workers.export_worker import STLExportWorker, STEPExportWorker  # Phase 6: Async Export
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
@@ -384,11 +385,9 @@ class MainWindow(QMainWindow):
         self.tool_stack = QStackedWidget()
         self.tool_stack.setMinimumWidth(220)
         self.tool_stack.setStyleSheet("background-color: #262626;")
-        
-        self.transform_panel = TransformPanel(self)
-        self.transform_panel.values_changed.connect(self._on_transform_val_change)
-        self.transform_panel.confirmed.connect(self._on_transform_confirmed)
-        self.transform_panel.cancelled.connect(self._on_transform_cancelled)
+
+        # PERFORMANCE: TransformPanel wird später bei line 466 erstellt
+        # Doppelte Erstellung entfernt (Memory Leak verhindert)
 
         # NEU: Zentrale Transform-State-Machine
         self.transform_state = TransformState()
@@ -950,9 +949,7 @@ class MainWindow(QMainWindow):
             # self.viewport_3d.plotter.reset_camera()
 
         except Exception as e:
-            from loguru import logger
-            logger.error(f"Import Fehler: {e}")
-            logger.error(f"Import fehlgeschlagen: {str(e)}")
+            logger.error(f"Import fehlgeschlagen: {e}")
     
     def _update_viewport_all_impl(self):
         """Das eigentliche Update, wird vom Timer aufgerufen"""
@@ -5512,7 +5509,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
 
     def _export_stl(self):
-        """STL Export mit Quality-Dialog und Surface Texture Support."""
+        """STL Export mit Quality-Dialog und Surface Texture Support.
+
+        PERFORMANCE (Phase 6): Async Export für große Meshes.
+        """
         bodies = self._get_export_candidates()
         if not bodies:
             logger.warning("Keine sichtbaren Körper zum Exportieren.")
@@ -5531,6 +5531,15 @@ class MainWindow(QMainWindow):
 
         path, _ = QFileDialog.getSaveFileName(self, tr("STL exportieren"), "", "STL Files (*.stl)")
         if not path: return
+
+        # PERFORMANCE Phase 6: Async export für große Meshes
+        # Schätze Mesh-Größe basierend auf Body-Count und Quality
+        estimated_complexity = len(bodies) * (1.0 / max(0.01, linear_defl))
+        use_async = estimated_complexity > 100 or len(bodies) > 3
+
+        if use_async:
+            self._export_stl_async(bodies, path, linear_defl, angular_tol, is_binary, scale)
+            return
 
         try:
             import pyvista as pv
@@ -5616,6 +5625,64 @@ class MainWindow(QMainWindow):
             logger.error(f"STL Export Fehler: {e}")
             import traceback
             traceback.print_exc()
+
+    def _export_stl_async(self, bodies, filepath, linear_defl, angular_tol, is_binary, scale):
+        """
+        PERFORMANCE (Phase 6): Async STL Export mit Progress-Dialog.
+
+        UI bleibt responsiv während des Exports.
+        """
+        from PySide6.QtWidgets import QProgressDialog
+
+        # Progress-Dialog erstellen
+        progress = QProgressDialog(
+            "Exportiere STL...",
+            "Abbrechen",
+            0, 100,
+            self
+        )
+        progress.setWindowTitle("STL Export")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        # Worker erstellen
+        self._export_worker = STLExportWorker(
+            bodies=bodies,
+            filepath=filepath,
+            linear_deflection=linear_defl,
+            angular_tolerance=angular_tol,
+            binary=is_binary,
+            scale=scale
+        )
+
+        # Signals verbinden
+        def on_progress(percent, status):
+            progress.setValue(percent)
+            progress.setLabelText(status)
+
+        def on_finished(result):
+            progress.close()
+            logger.success(f"STL gespeichert: {result}")
+            self._export_worker = None
+
+        def on_error(error_msg):
+            progress.close()
+            logger.error(f"STL Export Fehler: {error_msg}")
+            self._export_worker = None
+
+        def on_cancel():
+            if hasattr(self, '_export_worker') and self._export_worker:
+                self._export_worker.cancel()
+
+        self._export_worker.progress.connect(on_progress)
+        self._export_worker.finished.connect(on_finished)
+        self._export_worker.error.connect(on_error)
+        progress.canceled.connect(on_cancel)
+
+        # Worker starten
+        logger.info("Starting async STL export...")
+        self._export_worker.start()
 
     def _export_step(self):
         """STEP Export mit FIX für 'Part object has no attribute export_step'"""
@@ -5927,7 +5994,7 @@ class MainWindow(QMainWindow):
         try:
             if HAS_PYVISTA and self.viewport_3d and self.viewport_3d.plotter:
                 self.viewport_3d.plotter.reset_camera()
-                self.viewport_3d.plotter.render()
+                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
         except Exception as e:
             logger.debug(f"Camera focus Fehler (ignoriert): {e}")
 
@@ -7426,7 +7493,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
             try:
                 self.viewport_3d.plotter.remove_actor(actor_name)
-                self.viewport_3d.plotter.render()
+                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
             except Exception:
                 pass  # Actor existiert nicht, ignorieren
 
@@ -7487,7 +7554,7 @@ class MainWindow(QMainWindow):
                 line_width=4,
                 render_lines_as_tubes=True
             )
-            self.viewport_3d.plotter.render()
+            request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
             logger.warning(f"Profil-Highlight fehlgeschlagen: {e}")
@@ -7605,7 +7672,7 @@ class MainWindow(QMainWindow):
                 line_width=4,
                 render_lines_as_tubes=True
             )
-            self.viewport_3d.plotter.render()
+            request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
             logger.warning(f"Pfad-Highlight fehlgeschlagen: {e}")
@@ -8028,7 +8095,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             try:
-                self.viewport_3d.plotter.render()
+                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
             except Exception:
                 pass
 
@@ -8037,7 +8104,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
             try:
                 self.viewport_3d.plotter.remove_actor("loft_preview")
-                self.viewport_3d.plotter.render()
+                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
             except Exception:
                 pass
 
@@ -8098,7 +8165,7 @@ class MainWindow(QMainWindow):
                 line_width=4,
                 render_lines_as_tubes=True
             )
-            self.viewport_3d.plotter.render()
+            request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
             logger.warning(f"Loft-Profil-Highlight fehlgeschlagen: {e}")
@@ -8173,7 +8240,7 @@ class MainWindow(QMainWindow):
                 opacity=0.6,
                 render_lines_as_tubes=True
             )
-            self.viewport_3d.plotter.render()
+            request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
             logger.warning(f"Loft-Preview fehlgeschlagen: {e}")
