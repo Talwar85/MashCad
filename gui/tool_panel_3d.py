@@ -147,6 +147,7 @@ class ToolPanel3D(QWidget):
             (tr("Mesh Repair"), tr("Fix mesh errors: gaps, self-intersections, degenerate faces"), "mesh_repair"),
             (tr("Wall Thickness"), tr("Check minimum wall thickness for 3D printing strength"), "wall_thickness"),
             ("Measure", tr("Measure distances, angles, areas"), "measure"),
+            (tr("BREP Cleanup"), tr("Merge faces after mesh→BREP conversion (holes, fillets, pockets)"), "brep_cleanup"),
         ])
 
         # --- File ---

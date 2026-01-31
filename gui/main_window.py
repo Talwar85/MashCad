@@ -48,6 +48,7 @@ from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
 from gui.widgets.section_view_panel import SectionViewPanel
+from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.parameter_dialog import ParameterDialog
@@ -620,6 +621,22 @@ class MainWindow(QMainWindow):
         self.section_panel.section_invert_toggled.connect(self._on_section_invert_toggled)
         self.section_panel.hide()  # Initially hidden
 
+        # BREP Cleanup Panel
+        self.brep_cleanup_panel = BRepCleanupPanel(self)
+        self.brep_cleanup_panel.feature_selected.connect(self._on_brep_cleanup_feature_selected)
+        self.brep_cleanup_panel.merge_requested.connect(self._on_brep_cleanup_merge)
+        self.brep_cleanup_panel.merge_all_requested.connect(self._on_brep_cleanup_merge_all)
+        self.brep_cleanup_panel.close_requested.connect(self._close_brep_cleanup)
+        self.brep_cleanup_panel.hide()  # Initially hidden
+        self._pending_brep_cleanup_mode = False
+
+        # BREP Cleanup Viewport Signals
+        self.viewport_3d.brep_cleanup_features_changed.connect(self.brep_cleanup_panel.set_features)
+        self.viewport_3d.brep_cleanup_selection_changed.connect(self.brep_cleanup_panel.update_selection)
+        self.viewport_3d.brep_cleanup_face_hovered.connect(
+            lambda idx, info: self.brep_cleanup_panel.update_face_info(info)
+        )
+
         # Edge Selection Signal verbinden
         self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
 
@@ -1083,6 +1100,7 @@ class MainWindow(QMainWindow):
             'lattice': self._start_lattice,
             'pattern': self._start_pattern,
             'convert_to_brep': self._convert_selected_body_to_brep,
+            'brep_cleanup': self._toggle_brep_cleanup,
         }
         
         if action in actions:
@@ -1463,6 +1481,11 @@ class MainWindow(QMainWindow):
         # Prüfe auf Fillet/Chamfer Pending Mode (NEU)
         if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
             self._on_body_clicked_for_fillet(body_id)
+            return
+
+        # Prüfe auf BREP Cleanup Pending Mode
+        if getattr(self, '_pending_brep_cleanup_mode', False):
+            self._on_body_clicked_for_brep_cleanup(body_id)
             return
 
         # Prüfe auf Shell Pending Mode (Phase 6)
@@ -8313,6 +8336,134 @@ class MainWindow(QMainWindow):
             logger.info("🔪 Section View Panel geöffnet & aktiviert")
             logger.info("Tipp: Bewege Position-Slider um durch den Körper zu schneiden!")
 
+    # ==================== BREP CLEANUP ====================
+
+    def _toggle_brep_cleanup(self):
+        """
+        Oeffnet/Schliesst BREP Cleanup Panel.
+
+        UX wie Fillet/Chamfer:
+        - Falls Body ausgewaehlt -> sofort starten
+        - Falls kein Body -> Pending-Mode, warte auf Viewport-Klick
+        """
+        if self.brep_cleanup_panel.isVisible():
+            self._close_brep_cleanup()
+            return
+
+        # Prüfe ob Body im Browser ausgewählt
+        selected_bodies = self.browser.get_selected_bodies()
+
+        # Fall 1: Kein Body gewählt -> Pending-Mode
+        if not selected_bodies:
+            self._pending_brep_cleanup_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+
+            # Aktiviere Body-Highlighting
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+
+            logger.info("BREP Cleanup: Klicke auf einen Koerper in der 3D-Ansicht")
+            self.show_notification("Body waehlen", "Klicke auf einen Koerper fuer BREP Cleanup", "info")
+            return
+
+        # Fall 2: Body gewählt -> direkt starten
+        body = selected_bodies[0]
+        self._activate_brep_cleanup_for_body(body)
+
+    def _on_body_clicked_for_brep_cleanup(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        self._pending_brep_cleanup_mode = False
+
+        # Pending-Mode deaktivieren
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Body finden
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body:
+            logger.warning(f"Body {body_id} nicht gefunden")
+            return
+
+        self._activate_brep_cleanup_for_body(body)
+
+    def _activate_brep_cleanup_for_body(self, body):
+        """Startet BREP Cleanup fuer einen Body."""
+        if not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+            self.show_notification("Kein BREP", "Der Body hat kein BREP. Zuerst Mesh zu CAD konvertieren.", "warning")
+            return
+
+        # Body-Lookup Callback setzen (damit Viewport den Body finden kann)
+        self.viewport_3d._get_body_by_id = lambda bid: next(
+            (b for b in self.document.bodies if b.id == bid), None
+        )
+
+        # Cleanup-Modus im Viewport starten
+        success = self.viewport_3d.start_brep_cleanup_mode(body.id)
+        if not success:
+            self.show_notification("Fehler", "BREP Cleanup konnte nicht gestartet werden.", "error")
+            return
+
+        # Panel positionieren und zeigen
+        viewport_geom = self.viewport_3d.geometry()
+        panel_width = 350
+        panel_x = viewport_geom.right() - panel_width - 30
+        panel_y = viewport_geom.top() + 30
+
+        self.brep_cleanup_panel.move(panel_x, panel_y)
+        self.brep_cleanup_panel.show()
+        self.brep_cleanup_panel.raise_()
+
+        logger.info(f"BREP Cleanup gestartet fuer Body: {body.name}")
+
+    def _close_brep_cleanup(self):
+        """Schliesst BREP Cleanup Modus."""
+        self._pending_brep_cleanup_mode = False
+        self.brep_cleanup_panel.hide()
+        self.viewport_3d.stop_brep_cleanup_mode()
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        logger.info("BREP Cleanup Panel geschlossen")
+
+    def _on_brep_cleanup_feature_selected(self, feature_idx: int, additive: bool = False):
+        """Feature im Panel ausgewaehlt."""
+        self.viewport_3d.select_feature_by_index(feature_idx, additive)
+
+    def _on_brep_cleanup_merge(self):
+        """Merge-Button geklickt."""
+        success = self.viewport_3d.execute_brep_cleanup_merge()
+        if success:
+            self.show_notification("Merge erfolgreich", "Faces wurden zusammengefuehrt.", "success")
+            # Browser aktualisieren
+            self._refresh_browser()
+        else:
+            self.show_notification("Merge fehlgeschlagen", "Konnte Faces nicht zusammenfuehren.", "error")
+
+    def _on_brep_cleanup_merge_all(self):
+        """Alle-Merge-Button geklickt."""
+        body = self._get_active_body()
+        if not body:
+            return
+
+        try:
+            from modeling.brep_face_merger import merge_with_transaction
+            result = merge_with_transaction(body)
+
+            if result.is_success:
+                self.show_notification("Auto-Merge erfolgreich", result.message, "success")
+                self.viewport_3d.update_body_in_viewport(body.id)
+                self._refresh_browser()
+
+                # Analyse neu starten
+                if self.viewport_3d.brep_cleanup_active:
+                    self.viewport_3d.stop_brep_cleanup_mode()
+                    self.viewport_3d.start_brep_cleanup_mode(body.id)
+            else:
+                self.show_notification("Auto-Merge fehlgeschlagen", result.message, "error")
+
+        except Exception as e:
+            self.show_notification("Fehler", f"Auto-Merge fehlgeschlagen: {e}", "error")
 
 
     # ==================== 3D OPERATIONEN ====================

@@ -95,7 +95,7 @@ class BodyTransaction:
         self._snapshot = BodySnapshot(
             solid=self._body._build123d_solid,
             features=self._body.features,
-            metadata=copy.deepcopy(self._body.metadata),
+            metadata=copy.deepcopy(getattr(self._body, 'metadata', {})),
             vtk_mesh=getattr(self._body, 'vtk_mesh', None),
             vtk_edges=getattr(self._body, 'vtk_edges', None),
             vtk_normals=getattr(self._body, 'vtk_normals', None)
@@ -166,8 +166,9 @@ class BodyTransaction:
             # Restore feature history
             self._body.features = self._snapshot.features
 
-            # Restore metadata
-            self._body.metadata = self._snapshot.metadata
+            # Restore metadata (if body supports it)
+            if hasattr(self._body, 'metadata'):
+                self._body.metadata = self._snapshot.metadata
 
             # Invalidate mesh cache — lazy regeneration from restored solid
             if hasattr(self._body, 'invalidate_mesh'):

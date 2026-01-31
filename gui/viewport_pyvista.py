@@ -18,6 +18,7 @@ from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
 from gui.viewport.section_view_mixin import SectionViewMixin
+from gui.viewport.brep_cleanup_mixin import BRepCleanupMixin
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
@@ -75,7 +76,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin):
+class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin, BRepCleanupMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -101,6 +102,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     pushpull_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     split_body_clicked = Signal(str)  # body_id
     split_drag_changed = Signal(float)  # position during drag
+    # BREP Cleanup Signals
+    brep_cleanup_face_hovered = Signal(int, dict)  # face_idx, info
+    brep_cleanup_face_selected = Signal(int)  # face_idx
+    brep_cleanup_features_changed = Signal(list)  # features
+    brep_cleanup_selection_changed = Signal(list)  # face_indices
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,6 +167,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._split_plane_axis = "XY"
         self._split_position = 0.0
         self._split_angle = 0.0         # cut angle in degrees
+
+        # BREP Cleanup Mode
+        self._init_brep_cleanup_state()
         self._split_bb = None           # body bounding box
         self._split_dragging = False
         self._split_drag_start = None
@@ -1171,6 +1180,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if enabled:
             self._draft_selected_faces = []
             self._draft_body_id = None
+
+            # FIX: VTK Picker braucht echten Render für aktuellen Depth-Buffer
+            try:
+                self.plotter.render()
+                if hasattr(self.plotter, 'render_window') and self.plotter.render_window:
+                    self.plotter.render_window.Render()
+            except Exception as e:
+                logger.debug(f"Force render failed: {e}")
+                request_render(self.plotter, immediate=True)
         else:
             self._draft_selected_faces = []
             self._draft_body_id = None
@@ -1900,6 +1918,36 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     return True
 
             # Alle anderen Events (Wheel, etc.) durchlassen
+            return False
+
+        # --- BREP CLEANUP MODE (Face-Picking für Merge) ---
+        if getattr(self, '_brep_cleanup_mode', False):
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    if hasattr(self, '_brep_cleanup_handle_hover'):
+                        self._brep_cleanup_handle_hover(x, y)
+                return False  # Kamera-Kontrolle erlauben
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    if hasattr(self, '_brep_cleanup_handle_click'):
+                        self._brep_cleanup_handle_click(x, y)
+                        return True
+                return False
+
+            if event_type == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    if hasattr(self, 'stop_brep_cleanup_mode'):
+                        self.stop_brep_cleanup_mode()
+                    return True
+
             return False
 
         # --- EDGE SELECTION MODE (Fillet/Chamfer) ---
