@@ -561,7 +561,7 @@ class CADTessellator:
             from OCP.BRepGProp import BRepGProp
             from OCP.GProp import GProp_GProps
             from OCP.BRepAdaptor import BRepAdaptor_Surface
-            from OCP.GeomLProp import GeomLProp_SLProps
+            from OCP.BRepLProp import BRepLProp_SLProps
 
             # 1. Tesselliere das gesamte Solid
             BRepMesh_IncrementalMesh(solid.wrapped, quality, False, quality * 5, True)
@@ -577,7 +577,9 @@ class CADTessellator:
             # 2. Iteriere über jedes B-Rep Face
             explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
             while explorer.More():
-                face = explorer.Current()
+                # WICHTIG: Cast zu TopoDS_Face (explorer.Current() gibt TopoDS_Shape zurück)
+                from OCP.TopoDS import TopoDS
+                face = TopoDS.Face_s(explorer.Current())
 
                 # Face-Eigenschaften extrahieren
                 props = GProp_GProps()
@@ -588,12 +590,21 @@ class CADTessellator:
                 adaptor = BRepAdaptor_Surface(face)
                 u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2
                 v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2
-                slprops = GeomLProp_SLProps(adaptor, u_mid, v_mid, 1, 1e-6)
+                slprops = BRepLProp_SLProps(adaptor, u_mid, v_mid, 1, 1e-6)
 
                 if slprops.IsNormalDefined():
                     normal = slprops.Normal()
+                    nx, ny, nz = normal.X(), normal.Y(), normal.Z()
+
+                    # FIX: Face-Orientierung berücksichtigen!
+                    # BRepLProp_SLProps.Normal() gibt die GEOMETRISCHE Normale zurück,
+                    # nicht die nach-außen-zeigende. Bei REVERSED Faces muss invertiert werden.
+                    from OCP.TopAbs import TopAbs_REVERSED
+                    if face.Orientation() == TopAbs_REVERSED:
+                        nx, ny, nz = -nx, -ny, -nz
+
                     face_info[face_id] = {
-                        "normal": (normal.X(), normal.Y(), normal.Z()),
+                        "normal": (nx, ny, nz),
                         "center": (center.X(), center.Y(), center.Z())
                     }
                 else:

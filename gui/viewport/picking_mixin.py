@@ -63,6 +63,25 @@ class PickingMixin:
                         if picked_body_id is not None:
                             break
 
+                # === METHODE 1: EXAKT via face_id cell_data ===
+                # Wenn Body bekannt und Mesh face_id hat → direkte Lookup (keine Heuristik!)
+                if picked_body_id is not None and hasattr(self, 'bodies'):
+                    body_data = self.bodies.get(picked_body_id)
+                    if body_data and 'mesh' in body_data:
+                        mesh = body_data['mesh']
+                        if mesh is not None and "face_id" in mesh.cell_data:
+                            face_ids = mesh.cell_data["face_id"]
+                            if 0 <= cell_id < len(face_ids):
+                                ocp_face_id = int(face_ids[cell_id])
+                                # Finde SelectionFace mit dieser OCP Face-ID
+                                for face in self.detector.selection_faces:
+                                    if (face.domain_type == "body_face" and
+                                        face.owner_id == picked_body_id and
+                                        getattr(face, 'ocp_face_id', None) == ocp_face_id):
+                                        logger.debug(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id} → face.id={face.id}")
+                                        return face.id
+
+                # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
                 # Sichtbare Body-IDs vorfiltern
                 visible_bodies = None
                 if hasattr(self, 'bodies') and hasattr(self, 'is_body_visible'):
@@ -94,6 +113,7 @@ class PickingMixin:
                             best_face = face
 
                 if best_face:
+                    logger.debug(f"Pick HEURISTIK: face.id={best_face.id}")
                     return best_face.id
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---

@@ -714,7 +714,7 @@ class GeometryDetector:
     
     
 
-    def process_body_mesh(self, body_id, vtk_mesh, extrude_mode=False):
+    def process_body_mesh(self, body_id, vtk_mesh, extrude_mode=False, face_info=None):
         """
         Zerlegt das Body-Mesh in planare Flächen.
 
@@ -725,23 +725,40 @@ class GeometryDetector:
             body_id: ID des Bodies
             vtk_mesh: PyVista Mesh
             extrude_mode: True wenn Viewport im Extrude-Mode ist (Default: False)
+            face_info: Optional dict {face_id: {"normal": (x,y,z), "center": (x,y,z)}} mit B-Rep Normalen
         """
         self._current_extrude_mode = extrude_mode
+        self._current_face_info = face_info  # Speichern für _process_body_mesh_exact
         if not HAS_VTK or vtk_mesh is None:
             return
 
-        # Cache-Check: Mesh unverändert? → Faces aus Cache nehmen
+        # Cache-Check: Mesh UND face_info unverändert? → Faces aus Cache nehmen
+        # WICHTIG: Cache invalidieren wenn face_info jetzt verfügbar ist aber vorher nicht war
+        # FIX V2: Cache NICHT verwenden wenn face_info vorhanden - immer neu berechnen für korrekte B-Rep Normalen
         mesh_key = id(vtk_mesh)
-        if body_id in self._body_face_cache:
-            cached_key, cached_faces = self._body_face_cache[body_id]
-            if cached_key == mesh_key:
-                face_priority = 50 if extrude_mode else 5
-                for face in cached_faces:
-                    face.id = self._counter
-                    face.pick_priority = face_priority
-                    self.selection_faces.append(face)
-                    self._counter += 1
-                return
+
+        # Wenn face_info vorhanden ist, Cache umgehen und neu berechnen
+        # (Cache enthält möglicherweise alte Mesh-Normalen statt B-Rep Normalen)
+        if face_info and len(face_info) > 0:
+            logger.debug(f"Body {body_id}: Bypassing cache, using B-Rep face_info ({len(face_info)} faces)")
+            # Cache für diesen Body löschen damit er beim nächsten Mal neu gebaut wird
+            if body_id in self._body_face_cache:
+                del self._body_face_cache[body_id]
+        else:
+            # Ohne face_info: Cache verwenden wenn verfügbar
+            face_info_key = 0
+            cache_key = (mesh_key, face_info_key)
+
+            if body_id in self._body_face_cache:
+                cached_key, cached_faces = self._body_face_cache[body_id]
+                if cached_key == cache_key:
+                    face_priority = 50 if extrude_mode else 5
+                    for face in cached_faces:
+                        face.id = self._counter
+                        face.pick_priority = face_priority
+                        self.selection_faces.append(face)
+                        self._counter += 1
+                    return
 
         _cache_start = len(self.selection_faces)
 
@@ -758,10 +775,15 @@ class GeometryDetector:
             # === METHODE 2: FALLBACK - Gruppierung nach Normalen ===
             self._process_body_mesh_heuristic(body_id, vtk_mesh)
 
-        # Cache speichern
+        # Cache speichern - NUR wenn KEINE face_info vorhanden ist
+        # (mit face_info wollen wir immer neu berechnen für korrekte B-Rep Normalen)
         new_faces = self.selection_faces[_cache_start:]
-        self._body_face_cache[body_id] = (mesh_key, list(new_faces))
-        logger.debug(f"Body {body_id}: {len(new_faces)} Faces gecacht")
+        if not (face_info and len(face_info) > 0):
+            cache_key = (mesh_key, 0)
+            self._body_face_cache[body_id] = (cache_key, list(new_faces))
+            logger.debug(f"Body {body_id}: {len(new_faces)} Faces gecacht")
+        else:
+            logger.debug(f"Body {body_id}: {len(new_faces)} Faces (mit B-Rep Normalen, nicht gecacht)")
 
     def _process_body_mesh_exact(self, body_id, vtk_mesh):
         """Exakte Face-Erkennung über OCP face_id in cell_data."""
@@ -770,6 +792,7 @@ class GeometryDetector:
         all_cell_centers = vtk_mesh.cell_centers().points
 
         unique_face_ids = np.unique(face_ids)
+        face_info = getattr(self, '_current_face_info', None)
         logger.debug(f"Body {body_id}: {len(unique_face_ids)} Faces (EXAKT via face_id)")
 
         for ocp_face_id in unique_face_ids:
@@ -779,12 +802,24 @@ class GeometryDetector:
             if len(cell_ids) < 1:
                 continue
 
-            # Durchschnittliche Normale und Zentrum
-            group_normals = cell_normals[cell_mask]
-            avg_normal = np.mean(group_normals, axis=0)
-            norm_len = np.linalg.norm(avg_normal)
-            if norm_len > 0.001:
-                avg_normal = avg_normal / norm_len
+            # === FIX: B-Rep Normale aus face_info verwenden wenn verfügbar ===
+            # Die Mesh-Normale kann invertiert sein (VTK Tessellation Bug)
+            if face_info and int(ocp_face_id) in face_info:
+                brep_info = face_info[int(ocp_face_id)]
+                final_normal = np.array(brep_info.get("normal", (0, 0, 1)))
+                # Normalisieren (sollte schon normalisiert sein, aber sicher ist sicher)
+                norm_len = np.linalg.norm(final_normal)
+                if norm_len > 0.001:
+                    final_normal = final_normal / norm_len
+                logger.debug(f"Face {ocp_face_id}: Using B-Rep normal {tuple(final_normal)}")
+            else:
+                # Fallback: Durchschnittliche Mesh-Normale
+                group_normals = cell_normals[cell_mask]
+                final_normal = np.mean(group_normals, axis=0)
+                norm_len = np.linalg.norm(final_normal)
+                if norm_len > 0.001:
+                    final_normal = final_normal / norm_len
+                logger.debug(f"Face {ocp_face_id}: Using MESH normal (fallback) {tuple(final_normal)}")
 
             group_centers = all_cell_centers[cell_mask]
             center = np.mean(group_centers, axis=0)
@@ -794,7 +829,7 @@ class GeometryDetector:
             group_mesh = vtk_mesh.extract_cells(cell_ids).extract_surface()
 
             self._add_body_face_with_ocp_id(
-                body_id, center, avg_normal, group_mesh, sample_point, int(ocp_face_id)
+                body_id, center, final_normal, group_mesh, sample_point, int(ocp_face_id)
             )
 
     def _process_body_mesh_heuristic(self, body_id, vtk_mesh):

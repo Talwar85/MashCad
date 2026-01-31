@@ -871,6 +871,7 @@ class MainWindow(QMainWindow):
         self.viewport_3d.offset_plane_drag_changed.connect(self._on_offset_plane_drag)
         self.viewport_3d.extrude_requested.connect(self._on_extrusion_finished)
         self.viewport_3d.height_changed.connect(self._on_viewport_height_changed)
+        self.viewport_3d.extrude_cancelled.connect(self._on_extrude_cancelled)
         
         # NEU: Transform-Signal vom neuen Gizmo-System
         if hasattr(self.viewport_3d, 'body_transform_requested'):
@@ -4418,7 +4419,11 @@ class MainWindow(QMainWindow):
             if self.viewport_3d.is_body_visible(body.id):
                 mesh = self.viewport_3d.get_body_mesh(body.id)
                 if mesh:
-                    self.viewport_3d.detector.process_body_mesh(body.id, mesh, extrude_mode=extrude_mode)
+                    # FIX: B-Rep face_info übergeben für korrekte Normalen
+                    face_info = getattr(body, 'face_info', None)
+                    self.viewport_3d.detector.process_body_mesh(
+                        body.id, mesh, extrude_mode=extrude_mode, face_info=face_info
+                    )
 
         count = len(self.viewport_3d.detector.selection_faces)
         if count == 0:
@@ -4617,7 +4622,8 @@ class MainWindow(QMainWindow):
                 success = self._extrude_body_face_build123d({
                     'body_id': first_face.owner_id,
                     'center_3d': matching_point,
-                    'normal': first_face.plane_normal
+                    'normal': first_face.plane_normal,
+                    'ocp_face_id': getattr(first_face, 'ocp_face_id', None)  # Exakte Face-ID!
                 }, height, operation)
                 
                 if success:
@@ -4939,46 +4945,64 @@ class MainWindow(QMainWindow):
             best_face = None
             best_dist = float('inf')
 
-            # Fallback: Falls kein Normal-Match, bestes per Distanz
-            fallback_face = None
-            fallback_dist = float('inf')
+            # === NEU: DIREKTE FACE-SUCHE via ocp_face_id ===
+            ocp_face_id = face_data.get('ocp_face_id')
+            if ocp_face_id is not None:
+                # Iteriere durch B-Rep Faces und finde die mit passender ID
+                explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
+                face_idx = 0
+                while explorer.More():
+                    if face_idx == ocp_face_id:
+                        from build123d import Face
+                        best_face = Face(TopoDS.Face_s(explorer.Current()))
+                        best_dist = 0.0  # Exakter Match!
+                        logger.info(f"Face direkt via ocp_face_id={ocp_face_id} gefunden")
+                        break
+                    face_idx += 1
+                    explorer.Next()
 
-            logger.debug(f"Face-Suche: mesh_center=({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f}), {len(candidate_faces)} Kandidaten")
+            # Fallback: Distanz-basierte Suche (nur wenn ocp_face_id nicht gefunden)
+            if best_face is None:
+                # Fallback: Falls kein Normal-Match, bestes per Distanz
+                fallback_face = None
+                fallback_dist = float('inf')
 
-            for f in candidate_faces:
-                try:
-                    extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, f.wrapped)
-                    if extrema.IsDone():
-                        dist = extrema.Value()
+                logger.debug(f"Face-Suche: mesh_center=({mesh_center.X:.2f}, {mesh_center.Y:.2f}, {mesh_center.Z:.2f}), {len(candidate_faces)} Kandidaten")
 
-                        # Fallback tracken (für den Fall dass Normal-Match fehlschlägt)
-                        if dist < fallback_dist:
-                            fallback_dist = dist
-                            fallback_face = f
+                for f in candidate_faces:
+                    try:
+                        extrema = BRepExtrema_DistShapeShape(ocp_pt_vertex, f.wrapped)
+                        if extrema.IsDone():
+                            dist = extrema.Value()
 
-                        # Normal-Matching wenn Normale verfügbar
-                        if use_normal:
-                            f_center = f.center()
-                            f_normal = f.normal_at(f_center)
-                            import numpy as np
-                            dot = np.dot(expected_normal, [f_normal.X, f_normal.Y, f_normal.Z])
-                            # Nur Faces mit ähnlicher Normale (dot > 0.7 = ~45° Toleranz)
-                            if dot > 0.7 and dist < best_dist:
-                                best_dist = dist
-                                best_face = f
-                        else:
-                            # Ohne Normale: nur Distanz
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_face = f
-                except Exception as ex:
-                    logger.debug(f"Face-Distanz-Fehler: {ex}")
+                            # Fallback tracken (für den Fall dass Normal-Match fehlschlägt)
+                            if dist < fallback_dist:
+                                fallback_dist = dist
+                                fallback_face = f
 
-            # Fallback wenn Normal-Match nichts gefunden hat
-            if best_face is None and fallback_face is not None:
-                logger.warning(f"Normal-Match fehlgeschlagen, nutze Distanz-Fallback")
-                best_face = fallback_face
-                best_dist = fallback_dist
+                            # Normal-Matching wenn Normale verfügbar
+                            if use_normal:
+                                f_center = f.center()
+                                f_normal = f.normal_at(f_center)
+                                import numpy as np
+                                dot = np.dot(expected_normal, [f_normal.X, f_normal.Y, f_normal.Z])
+                                # FIX: abs(dot) erlaubt invertierte Normalen (z.B. bei Z-Faces)
+                                if abs(dot) > 0.7 and dist < best_dist:
+                                    best_dist = dist
+                                    best_face = f
+                            else:
+                                # Ohne Normale: nur Distanz
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_face = f
+                    except Exception as ex:
+                        logger.debug(f"Face-Distanz-Fehler: {ex}")
+
+                # Fallback wenn Normal-Match nichts gefunden hat
+                if best_face is None and fallback_face is not None:
+                    logger.warning(f"Normal-Match fehlgeschlagen, nutze Distanz-Fallback")
+                    best_face = fallback_face
+                    best_dist = fallback_dist
 
             # Dynamischer Schwellenwert basierend auf Body-Bounding-Box-Diagonale
             try:
@@ -4999,6 +5023,10 @@ class MainWindow(QMainWindow):
                 return False
 
             logger.info(f"Face gefunden: dist={best_dist:.3f}")
+
+            # NOTE: Height-Inversion basierend auf Mesh vs B-Rep Normale wurde entfernt.
+            # Das Face wird jetzt direkt via ocp_face_id gefunden, und die Preview-Logik
+            # berechnet height bereits korrekt basierend auf der Drag-Richtung.
 
             # --- SCHRITT B: Face-Kontur als Polygon extrahieren ---
             # KEIN FALLBACK! Push/Pull MUSS parametrisch sein.
@@ -5071,6 +5099,24 @@ class MainWindow(QMainWindow):
                         new_solid = old_solid - new_geo
                     elif operation == "Join":
                         new_solid = old_solid + new_geo
+
+                        # FIX: UnifySameDomain sofort nach Join mit relaxierten Toleranzen
+                        # Dies verschmilzt koplanare Faces und verhindert interne Kanten
+                        try:
+                            from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+                            from build123d import Solid
+                            ocp_shape = new_solid.wrapped
+                            upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
+                            upgrader.SetLinearTolerance(0.01)   # 0.01mm - relaxierter als Standard
+                            upgrader.SetAngularTolerance(0.01)  # ~0.5° - relaxierter als Standard
+                            upgrader.Build()
+                            unified = upgrader.Shape()
+                            if unified and not unified.IsNull():
+                                new_solid = Solid(unified)
+                                logger.debug("Post-Join UnifySameDomain angewendet")
+                        except Exception as unify_err:
+                            logger.debug(f"Post-Join UnifySameDomain: {unify_err}")
+
                     elif operation == "Intersect":
                         new_solid = old_solid & new_geo
 

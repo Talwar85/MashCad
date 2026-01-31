@@ -103,6 +103,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     pushpull_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     split_body_clicked = Signal(str)  # body_id
     split_drag_changed = Signal(float)  # position during drag
+    extrude_cancelled = Signal()  # Rechtsklick/Esc bricht Extrude ab
     # BREP Cleanup Signals
     brep_cleanup_face_hovered = Signal(int, dict)  # face_idx, info
     brep_cleanup_face_selected = Signal(int)  # face_idx
@@ -2356,11 +2357,17 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.setCursor(Qt.ArrowCursor)
                 return True
 
-            # Rechtsklick zum Bestätigen
+            # Rechtsklick zum ABBRECHEN (nicht Bestätigen!)
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
-                if abs(self.extrude_height) > 0.001:
-                    self.confirm_extrusion() 
-                    return True
+                logger.debug("Extrude: Rechtsklick → Abbruch")
+                self._clear_preview()
+                self.extrude_height = 0.0
+                self.selected_face_ids.clear()
+                self.is_dragging = False
+                self._is_potential_drag = False
+                self._draw_selectable_faces_from_detector()
+                self.extrude_cancelled.emit()
+                return True
             
             # Enter Taste zum Bestätigen
             if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -2872,9 +2879,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Nur Bodies laden (Sketches brauchen wir nicht um darauf zu sketchen)
         # Performance Optimization Phase 2.2: Übergebe extrude_mode für Dynamic Priority
         extrude_mode = getattr(self, 'extrude_mode', False)
-        for bid, body in self.bodies.items():
-            if self.is_body_visible(bid) and 'mesh' in body:
-                self.detector.process_body_mesh(bid, body['mesh'], extrude_mode=extrude_mode)
+        for bid, body_data in self.bodies.items():
+            if self.is_body_visible(bid) and 'mesh' in body_data:
+                # FIX: B-Rep face_info übergeben wenn Body-Objekt verfügbar
+                face_info = None
+                body_obj = body_data.get('body')
+                if body_obj and hasattr(body_obj, 'face_info'):
+                    face_info = body_obj.face_info
+                self.detector.process_body_mesh(
+                    bid, body_data['mesh'], extrude_mode=extrude_mode, face_info=face_info
+                )
             
    
         
@@ -4848,37 +4862,47 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         break
 
                 if picked_body_id is not None:
-                    # SCHRITT 2: NUR Faces von diesem Body durchsuchen
-                    best_face = None
-                    best_score = float('inf')
+                    # === METHODE 1: EXAKT via face_id cell_data ===
+                    body_data = self.bodies.get(picked_body_id)
+                    if body_data and 'mesh' in body_data:
+                        mesh = body_data['mesh']
+                        if mesh is not None and "face_id" in mesh.cell_data:
+                            face_ids = mesh.cell_data["face_id"]
+                            if 0 <= cell_id < len(face_ids):
+                                ocp_face_id = int(face_ids[cell_id])
+                                # Finde SelectionFace mit dieser OCP Face-ID
+                                for face in self.detector.selection_faces:
+                                    if (face.domain_type == "body_face" and
+                                        face.owner_id == picked_body_id and
+                                        getattr(face, 'ocp_face_id', None) == ocp_face_id):
+                                        logger.debug(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id}")
+                                        all_hits.append((5, body_dist, face.id))
+                                        break
 
-                    for face in self.detector.selection_faces:
-                        if face.domain_type != "body_face":
-                            continue
-                        # FIX: Nur Faces vom gepickten Body!
-                        if face.owner_id != picked_body_id:
-                            continue
+                    # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
+                    if not all_hits:
+                        best_face = None
+                        best_score = float('inf')
 
-                        face_normal = np.array(face.plane_normal)
+                        for face in self.detector.selection_faces:
+                            if face.domain_type != "body_face":
+                                continue
+                            if face.owner_id != picked_body_id:
+                                continue
 
-                        # Distanz des Pick-Punkts zur Ebene der Fläche
-                        dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
+                            face_normal = np.array(face.plane_normal)
+                            dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
+                            dot_normal = abs(np.dot(normal, face_normal))
 
-                        # Normal-Übereinstimmung
-                        dot_normal = abs(np.dot(normal, face_normal))
+                            if dist_plane < 5.0:
+                                score = (1.0 - dot_normal) * 5.0 + dist_plane
+                                if score < best_score:
+                                    best_score = score
+                                    best_face = face
 
-                        # FIX: Kein strenger Normal-Filter mehr!
-                        # Da wir bereits wissen welcher Body gepickt wurde,
-                        # reicht Distanz zur Ebene als Kriterium
-                        if dist_plane < 5.0:  # 5mm Toleranz zur Ebene
-                            # Scoring: Normal-Match + Distanz
-                            score = (1.0 - dot_normal) * 5.0 + dist_plane
-                            if score < best_score:
-                                best_score = score
-                                best_face = face
-
-                    if best_face:
-                        all_hits.append((5, body_dist, best_face.id))
+                        if best_face:
+                            logger.debug(f"Pick HEURISTIK: face.id={best_face.id}")
+                            all_hits.append((5, body_dist, best_face.id))
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---
         # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch

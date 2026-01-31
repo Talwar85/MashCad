@@ -703,6 +703,7 @@ class Body:
         # PyVista/VTK Objekte - LAZY LOADED aus _build123d_solid
         self._mesh_cache = None       # pv.PolyData (Faces) - privat!
         self._edges_cache = None      # pv.PolyData (Edges) - privat!
+        self._face_info_cache = {}    # {face_id: {"normal": (x,y,z), "center": (x,y,z)}} - B-Rep Info!
         self._mesh_cache_valid = False  # Invalidiert wenn Solid sich ändert
 
         # Legacy Visualisierungs-Daten (Nur als Fallback)
@@ -732,6 +733,20 @@ class Body:
             self._regenerate_mesh()
         return self._edges_cache
 
+    @property
+    def face_info(self):
+        """B-Rep Face Info: {face_id: {"normal": (x,y,z), "center": (x,y,z)}}"""
+        if not self._mesh_cache_valid:
+            self._regenerate_mesh()
+        return self._face_info_cache
+
+    def get_brep_normal(self, face_id: int):
+        """Gibt die B-Rep Normale für eine Face-ID zurück (oder None)."""
+        info = self.face_info.get(face_id)
+        if info:
+            return info.get("normal")
+        return None
+
     def _regenerate_mesh(self):
         """Single point of mesh generation - called automatically when needed"""
         if self._build123d_solid is None:
@@ -740,14 +755,16 @@ class Body:
             self._mesh_cache_valid = True
             return
 
-        # Generate from solid via CADTessellator
-        self._mesh_cache, self._edges_cache = CADTessellator.tessellate(
+        # Generate from solid via CADTessellator WITH FACE IDs!
+        # Dies ermöglicht exakte Face-Selektion (statt Heuristik nach Normalen)
+        self._mesh_cache, self._edges_cache, self._face_info_cache = CADTessellator.tessellate_with_face_ids(
             self._build123d_solid
         )
         self._mesh_cache_valid = True
         n_pts = self._mesh_cache.n_points if self._mesh_cache else 0
         n_edges = self._edges_cache.n_lines if self._edges_cache else 0
-        logger.debug(f"Mesh regenerated for '{self.name}': {n_pts} pts, {n_edges} edges")
+        n_faces = len(self._face_info_cache) if self._face_info_cache else 0
+        logger.debug(f"Mesh regenerated for '{self.name}': {n_pts} pts, {n_edges} edges, {n_faces} B-Rep faces")
 
     def invalidate_mesh(self):
         """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
