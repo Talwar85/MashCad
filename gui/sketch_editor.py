@@ -1913,7 +1913,63 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Hinweis: Diese Methode erzeugt jetzt Shapely-Polygone, die Löcher enthalten können!
         # Der Renderer muss das verstehen.
         self._build_profile_hierarchy()
-        
+
+        # CAD Kernel First: Synchronisiere Profile auf das Sketch-Objekt
+        # Damit kann _compute_extrude_part/_compute_revolve die Profile direkt
+        # aus dem Sketch abrufen (ohne SketchEditor zu benötigen)
+        self._sync_profiles_to_sketch()
+
+    def _sync_profiles_to_sketch(self):
+        """
+        CAD Kernel First: Kopiert die closed_profiles auf das Sketch-Objekt.
+
+        Dies ermöglicht es dem Rebuild-Prozess, Profile direkt aus dem Sketch
+        abzurufen, ohne den SketchEditor zu benötigen.
+
+        WICHTIG: Wir speichern ALLE selektierbaren Faces - sowohl Parents
+        als auch Löcher (Interiors). Das ermöglicht dem User, einzelne
+        Löcher zu extrudieren.
+        """
+        if not self.sketch:
+            return
+
+        from shapely.geometry import Polygon as ShapelyPolygon
+
+        # Extrahiere Shapely Polygone (nicht die Metadaten)
+        polys = []
+        for profile_tuple in self.closed_profiles:
+            if len(profile_tuple) >= 2:
+                p_type = profile_tuple[0]
+                p_data = profile_tuple[1]
+                if p_type == 'polygon' and hasattr(p_data, 'exterior'):
+                    polys.append(p_data)
+
+                    # NEU: Auch die Interiors (Löcher) als separate Polygone hinzufügen
+                    # damit sie bei der Selektion gematcht werden können
+                    for interior in p_data.interiors:
+                        try:
+                            hole_poly = ShapelyPolygon(interior.coords)
+                            if hole_poly.is_valid and hole_poly.area > 0.01:
+                                polys.append(hole_poly)
+                                logger.debug(f"  → Hole als Profil: area={hole_poly.area:.1f} @ ({hole_poly.centroid.x:.2f}, {hole_poly.centroid.y:.2f})")
+                        except Exception as e:
+                            logger.warning(f"Hole zu Polygon fehlgeschlagen: {e}")
+
+                elif p_type == 'circle':
+                    # Kreis zu Polygon konvertieren
+                    circle = p_data
+                    coords = []
+                    for i in range(32):
+                        angle = 2 * math.pi * i / 32
+                        x = circle.center.x + circle.radius * math.cos(angle)
+                        y = circle.center.y + circle.radius * math.sin(angle)
+                        coords.append((x, y))
+                    if coords:
+                        polys.append(ShapelyPolygon(coords))
+
+        self.sketch.closed_profiles = polys
+        logger.debug(f"[CAD Kernel First] Synced {len(polys)} profiles to sketch (inkl. Holes)")
+
     def _build_profile_hierarchy(self):
         """Baut Containment-Hierarchie auf: Welche Faces sind Löcher in anderen?"""
         from shapely.geometry import Polygon as ShapelyPolygon, Point as ShapelyPoint

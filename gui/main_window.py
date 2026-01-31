@@ -2255,8 +2255,84 @@ class MainWindow(QMainWindow):
             )
 
     def _on_sketch_changed_refresh_viewport(self):
-        """Aktualisiert Sketch-Wireframes im 3D-Viewport nach Sketch-Änderungen."""
+        """
+        Aktualisiert Sketch-Wireframes im 3D-Viewport nach Sketch-Änderungen.
+        KRITISCH: Triggert auch Rebuild von Bodies die von diesem Sketch abhängen!
+        """
         self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
+
+        # Parametric CAD: Update bodies that depend on this sketch (DEBOUNCED)
+        if self.mode == "sketch" and hasattr(self.sketch_editor, 'sketch'):
+            self._schedule_parametric_rebuild()
+
+    def _schedule_parametric_rebuild(self):
+        """
+        Debounced Rebuild für parametrische Updates.
+        Wartet 300ms nach der letzten Sketch-Änderung bevor Rebuild getriggert wird.
+        """
+        if not hasattr(self, '_parametric_rebuild_timer'):
+            from PySide6.QtCore import QTimer
+            self._parametric_rebuild_timer = QTimer()
+            self._parametric_rebuild_timer.setSingleShot(True)
+            self._parametric_rebuild_timer.timeout.connect(self._do_parametric_rebuild)
+
+        # Timer neu starten (Debounce)
+        self._parametric_rebuild_timer.stop()
+        self._parametric_rebuild_timer.start(300)  # 300ms Debounce
+
+    def _do_parametric_rebuild(self):
+        """Führt den tatsächlichen parametrischen Rebuild aus."""
+        if self.mode == "sketch" and hasattr(self.sketch_editor, 'sketch'):
+            self._update_bodies_depending_on_sketch(self.sketch_editor.sketch)
+
+    def _update_bodies_depending_on_sketch(self, sketch):
+        """
+        CAD Kernel First: Findet alle Bodies mit Features die von diesem Sketch
+        abhängen und triggert Rebuild.
+
+        WICHTIG: Keine precalculated_polys Updates mehr!
+        Profile werden beim Rebuild direkt aus dem Sketch abgeleitet.
+
+        Args:
+            sketch: Der geänderte Sketch
+        """
+        if not sketch:
+            return
+
+        from modeling import ExtrudeFeature, RevolveFeature
+
+        sketch_id = getattr(sketch, 'id', None)
+        bodies_to_rebuild = []
+
+        for body in self.document.bodies:
+            for feature in body.features:
+                # ExtrudeFeature oder RevolveFeature mit diesem Sketch?
+                if isinstance(feature, (ExtrudeFeature, RevolveFeature)):
+                    # Vergleiche sowohl per Objekt-Identität ALS AUCH per ID (für geladene Projekte)
+                    feature_sketch = feature.sketch
+                    is_same_sketch = (
+                        feature_sketch is sketch or
+                        (feature_sketch and sketch_id and getattr(feature_sketch, 'id', None) == sketch_id)
+                    )
+
+                    if is_same_sketch and body not in bodies_to_rebuild:
+                        bodies_to_rebuild.append(body)
+                        logger.debug(f"[PARAMETRIC] Body '{body.name}' depends on modified sketch")
+
+        # Rebuild alle betroffenen Bodies
+        # CAD KERNEL FIRST: Profile werden beim Rebuild aus dem Sketch abgeleitet!
+        if bodies_to_rebuild:
+            logger.info(f"[PARAMETRIC] Rebuilding {len(bodies_to_rebuild)} bodies (Kernel First)...")
+
+        for body in bodies_to_rebuild:
+            try:
+                from modeling.cad_tessellator import CADTessellator
+                CADTessellator.notify_body_changed()
+                body._rebuild()
+                self._update_body_from_build123d(body, body._build123d_solid)
+                logger.info(f"[PARAMETRIC] Rebuilt body '{body.name}' after sketch change")
+            except Exception as e:
+                logger.error(f"[PARAMETRIC] Rebuild failed for '{body.name}': {e}")
 
     def _on_solver_dof_updated(self, success: bool, message: str, dof: float):
         """
@@ -3934,6 +4010,54 @@ class MainWindow(QMainWindow):
             self._on_revolve_cancelled()
             return
 
+        # CAD KERNEL FIRST: Finde die passenden Profile in sketch.closed_profiles
+        # und speichere DEREN Centroids (nicht die aus der UI-Auswahl!)
+        # Das garantiert dass die Centroids beim Rebuild übereinstimmen.
+        sketch_profiles = getattr(target_sketch, 'closed_profiles', [])
+        profile_selector = []
+
+        for sel_poly in polys:
+            try:
+                sel_centroid = sel_poly.centroid
+                sel_cx, sel_cy = sel_centroid.x, sel_centroid.y
+                sel_area = sel_poly.area
+
+                # Finde das passende Profil in sketch.closed_profiles
+                best_match = None
+                best_dist = float('inf')
+
+                for sketch_poly in sketch_profiles:
+                    sk_centroid = sketch_poly.centroid
+                    sk_cx, sk_cy = sk_centroid.x, sk_centroid.y
+                    sk_area = sketch_poly.area
+
+                    # Centroid-Distanz
+                    import math
+                    dist = math.hypot(sel_cx - sk_cx, sel_cy - sk_cy)
+
+                    # Area-Check (innerhalb 20% Toleranz)
+                    area_diff = abs(sel_area - sk_area) / max(sel_area, sk_area, 1)
+
+                    if dist < best_dist and area_diff < 0.2:
+                        best_dist = dist
+                        best_match = (sk_cx, sk_cy)
+
+                if best_match:
+                    profile_selector.append(best_match)
+                    logger.debug(f"[REVOLVE] Matched selection ({sel_cx:.2f}, {sel_cy:.2f}) → sketch ({best_match[0]:.2f}, {best_match[1]:.2f})")
+                else:
+                    # Kein Match gefunden - Fehler!
+                    logger.error(f"[REVOLVE] No match in sketch.closed_profiles for ({sel_cx:.2f}, {sel_cy:.2f})")
+                    logger.error(f"[REVOLVE] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+            except Exception as e:
+                logger.warning(f"Profile-Matching fehlgeschlagen: {e}")
+
+        # CAD KERNEL FIRST: Wenn Auswahl getroffen aber kein Match → Abbruch!
+        if polys and not profile_selector:
+            logger.error(f"[REVOLVE] Matching fehlgeschlagen! {len(polys)} selektiert, 0 gematcht. Abbruch.")
+            self._on_revolve_cancelled()
+            return
+
         # Target Body bestimmen
         if operation == "New Body":
             body = self.document.new_body()
@@ -3947,7 +4071,8 @@ class MainWindow(QMainWindow):
             angle=angle,
             axis=axis,
             operation=operation,
-            precalculated_polys=polys,
+            profile_selector=profile_selector,  # CAD Kernel First!
+            precalculated_polys=polys,  # Nur für sketchless mode
         )
 
         is_new_body = (operation == "New Body")
@@ -4396,12 +4521,61 @@ class MainWindow(QMainWindow):
                     from modeling import ExtrudeFeature
                     from gui.commands.feature_commands import AddFeatureCommand
 
+                    # CAD KERNEL FIRST: Finde die passenden Profile in sketch.closed_profiles
+                    # und speichere DEREN Centroids (nicht die aus der UI-Auswahl!)
+                    # Das garantiert dass die Centroids beim Rebuild übereinstimmen.
+                    sketch_profiles = getattr(target_sketch, 'closed_profiles', [])
+                    profile_selector = []
+
+                    for sel_poly in polys:
+                        try:
+                            sel_centroid = sel_poly.centroid
+                            sel_cx, sel_cy = sel_centroid.x, sel_centroid.y
+                            sel_area = sel_poly.area
+
+                            # Finde das passende Profil in sketch.closed_profiles
+                            best_match = None
+                            best_dist = float('inf')
+
+                            for sketch_poly in sketch_profiles:
+                                sk_centroid = sketch_poly.centroid
+                                sk_cx, sk_cy = sk_centroid.x, sk_centroid.y
+                                sk_area = sketch_poly.area
+
+                                # Centroid-Distanz
+                                import math
+                                dist = math.hypot(sel_cx - sk_cx, sel_cy - sk_cy)
+
+                                # Area-Check (innerhalb 20% Toleranz)
+                                area_diff = abs(sel_area - sk_area) / max(sel_area, sk_area, 1)
+
+                                if dist < best_dist and area_diff < 0.2:
+                                    best_dist = dist
+                                    best_match = (sk_cx, sk_cy)
+
+                            if best_match:
+                                profile_selector.append(best_match)
+                                logger.debug(f"[EXTRUDE] Matched selection ({sel_cx:.2f}, {sel_cy:.2f}) → sketch ({best_match[0]:.2f}, {best_match[1]:.2f})")
+                            else:
+                                # Kein Match gefunden - Fehler!
+                                logger.error(f"[EXTRUDE] No match in sketch.closed_profiles for ({sel_cx:.2f}, {sel_cy:.2f})")
+                                logger.error(f"[EXTRUDE] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        except Exception as e:
+                            logger.warning(f"Profile-Matching fehlgeschlagen: {e}")
+
+                    # CAD KERNEL FIRST: Wenn Auswahl getroffen aber kein Match → Abbruch!
+                    if polys and not profile_selector:
+                        logger.error(f"[EXTRUDE] Matching fehlgeschlagen! {len(polys)} selektiert, 0 gematcht. Abbruch.")
+                        self._on_extrude_cancelled()
+                        return
+
                     for body in target_bodies:
                         feature = ExtrudeFeature(
                             sketch=target_sketch,
                             distance=height,
                             operation=operation,
-                            precalculated_polys=polys,
+                            profile_selector=profile_selector,  # CAD Kernel First!
+                            precalculated_polys=polys,  # Nur für Push/Pull (sketchless)
                             plane_origin=getattr(target_sketch, 'plane_origin', (0, 0, 0)),
                             plane_normal=getattr(target_sketch, 'plane_normal', (0, 0, 1)),
                             plane_x_dir=getattr(target_sketch, 'plane_x_dir', None),

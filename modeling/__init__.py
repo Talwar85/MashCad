@@ -121,12 +121,23 @@ class Feature:
 
 @dataclass
 class ExtrudeFeature(Feature):
+    """
+    Extrude Feature - CAD Kernel First Architektur.
+
+    Profile werden IMMER aus dem Sketch abgeleitet (wenn sketch vorhanden).
+    profile_selector identifiziert welche Profile gewählt wurden (via Centroid).
+    precalculated_polys ist NUR für sketchlose Operationen (Push/Pull).
+    """
     sketch: Sketch = None
     distance: float = 10.0
     distance_formula: Optional[str] = None
     direction: int = 1
     operation: str = "New Body"
     selector: list = None
+    # CAD Kernel First: Profile-Selektor (Centroids der gewählten Profile)
+    # Bei Rebuild werden Profile aus Sketch berechnet und per Centroid-Match gefiltert
+    profile_selector: list = field(default_factory=list)  # [(cx, cy), ...] Centroids
+    # Legacy: Nur für sketchlose Operationen (Push/Pull auf 3D-Face)
     precalculated_polys: list = field(default_factory=list)
     # Plane-Info für Rebuild (wenn sketch=None)
     plane_origin: tuple = field(default_factory=lambda: (0, 0, 0))
@@ -140,12 +151,21 @@ class ExtrudeFeature(Feature):
 
 @dataclass
 class RevolveFeature(Feature):
+    """
+    Revolve Feature - CAD Kernel First Architektur.
+
+    Profile werden IMMER aus dem Sketch abgeleitet (wenn sketch vorhanden).
+    profile_selector identifiziert welche Profile gewählt wurden (via Centroid).
+    """
     sketch: Sketch = None
     angle: float = 360.0
     angle_formula: Optional[str] = None
     axis: Tuple[float, float, float] = (0, 1, 0)
     axis_origin: Tuple[float, float, float] = (0, 0, 0)
     operation: str = "New Body"
+    # CAD Kernel First: Profile-Selektor (Centroids der gewählten Profile)
+    profile_selector: list = field(default_factory=list)  # [(cx, cy), ...] Centroids
+    # Legacy: Nur für sketchlose Operationen
     precalculated_polys: list = None
 
     def __post_init__(self):
@@ -1550,9 +1570,12 @@ class Body:
 
     def _compute_revolve(self, feature: 'RevolveFeature'):
         """
-        Berechnet Revolve aus Sketch-Profil um eine Achse.
-        Unterstützt precalculated_polys (aus interaktivem Workflow) oder
-        get_outer_polygon() Fallback.
+        CAD Kernel First: Profile werden IMMER aus dem Sketch abgeleitet.
+
+        Architektur:
+        1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
+           - profile_selector filtert welche Profile gewählt wurden
+        2. Ohne Sketch: precalculated_polys als Geometrie-Quelle (Legacy)
         """
         from build123d import (
             BuildPart, Plane, Axis, revolve as bd_revolve,
@@ -1581,29 +1604,45 @@ class Body:
             x_dir=Vector(*x_dir) if x_dir else None
         )
 
-        # Profile bestimmen: precalculated_polys oder Fallback
-        faces_to_revolve = []
+        # === CAD KERNEL FIRST: Profile-Bestimmung ===
+        polys_to_revolve = []
 
-        if feature.precalculated_polys:
-            # Interaktiver Workflow: Shapely-Polygone → Build123d Faces
-            for poly in feature.precalculated_polys:
-                try:
-                    coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
-                    if len(coords) < 3:
-                        continue
-                    pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                    wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
-                    faces_to_revolve.append(make_face(wire))
-                except Exception as e:
-                    logger.debug(f"Revolve: Polygon-Konvertierung fehlgeschlagen: {e}")
+        # KERNEL FIRST: Profile aus Sketch ableiten (nicht aus Cache!)
+        sketch_profiles = getattr(sketch, 'closed_profiles', [])
+        profile_selector = getattr(feature, 'profile_selector', [])
+
+        if sketch_profiles and profile_selector:
+            # Selektor-Match (CAD KERNEL FIRST - KEINE FALLBACKS!)
+            polys_to_revolve = self._filter_profiles_by_selector(
+                sketch_profiles, profile_selector
+            )
+            if polys_to_revolve:
+                logger.info(f"Revolve: {len(polys_to_revolve)}/{len(sketch_profiles)} Profile via Selektor")
+            else:
+                # Selektor hat nicht gematcht → Fehler, kein Fallback!
+                logger.error(f"Revolve: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
+                logger.error(f"Revolve: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                # Leere Liste → keine Revolve
+        elif sketch_profiles:
+            # Kein Selektor → alle Profile verwenden (Legacy/Import)
+            polys_to_revolve = list(sketch_profiles)
+            logger.info(f"Revolve: Alle {len(polys_to_revolve)} Profile (kein Selektor)")
         else:
-            # Fallback: get_outer_polygon
-            outer_coords = sketch.get_outer_polygon()
-            if not outer_coords or len(outer_coords) < 3:
-                raise ValueError("Revolve: Sketch hat zu wenig Punkte")
-            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
-            wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
-            faces_to_revolve.append(make_face(wire))
+            # Sketch hat keine closed_profiles
+            logger.warning(f"Revolve: Sketch hat keine closed_profiles!")
+
+        # Profile zu Build123d Faces konvertieren
+        faces_to_revolve = []
+        for poly in polys_to_revolve:
+            try:
+                coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
+                if len(coords) < 3:
+                    continue
+                pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                wire = Wire.make_polygon([Vector(*p) for p in pts_3d])
+                faces_to_revolve.append(make_face(wire))
+            except Exception as e:
+                logger.debug(f"Revolve: Polygon-Konvertierung fehlgeschlagen: {e}")
 
         if not faces_to_revolve:
             raise ValueError("Revolve: Keine gültigen Profile gefunden")
@@ -4241,13 +4280,20 @@ class Body:
 
     def _compute_extrude_part(self, feature: ExtrudeFeature):
         """
-        Kombiniert "What you see is what you get" (Detector) mit 
-        robuster Fallback-Berechnung (Alter Code).
+        CAD Kernel First: Profile werden IMMER aus dem Sketch abgeleitet.
+
+        Architektur:
+        1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
+           - profile_selector filtert welche Profile gewählt wurden
+        2. Ohne Sketch (Push/Pull): precalculated_polys als Geometrie-Quelle
         """
         if not HAS_BUILD123D: return None
-        # Allow rebuild without sketch if precalculated_polys exist (loaded from file)
+
+        # Prüfe ob wir eine Geometrie-Quelle haben
+        has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
-        if not feature.sketch and not has_polys: return None
+        if not has_sketch and not has_polys:
+            return None
 
         try:
             from build123d import make_face, Wire, Compound
@@ -4257,7 +4303,7 @@ class Body:
             if sketch:
                 plane = self._get_plane_from_sketch(sketch)
             else:
-                # Reconstruct plane from saved feature data
+                # Reconstruct plane from saved feature data (Push/Pull ohne Sketch)
                 from build123d import Plane as B3DPlane, Vector
                 origin = Vector(*feature.plane_origin)
                 normal = Vector(*feature.plane_normal)
@@ -4267,15 +4313,45 @@ class Body:
                 else:
                     plane = B3DPlane(origin=origin, z_dir=normal)
             solids = []
-            
-            # === PFAD A: Exakte Polygone vom Detector (Neu & Stabil) ===
-            # Das löst das Hexagon-Loch-Problem, weil wir genau den "Ring" bekommen, 
-            # den der Detector berechnet hat.
-            if hasattr(feature, 'precalculated_polys') and feature.precalculated_polys:
-                logger.info(f"Extrude: Nutze {len(feature.precalculated_polys)} vorausgewählte Profile.")
-                
+
+            # === CAD KERNEL FIRST: Profile-Bestimmung ===
+            polys_to_extrude = []
+
+            if has_sketch:
+                # KERNEL FIRST: Profile aus Sketch ableiten (nicht aus Cache!)
+                sketch_profiles = getattr(sketch, 'closed_profiles', [])
+                profile_selector = getattr(feature, 'profile_selector', [])
+
+                if sketch_profiles and profile_selector:
+                    # Selektor-Match (CAD KERNEL FIRST - KEINE FALLBACKS!)
+                    polys_to_extrude = self._filter_profiles_by_selector(
+                        sketch_profiles, profile_selector
+                    )
+                    if polys_to_extrude:
+                        logger.info(f"Extrude: {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
+                    else:
+                        # Selektor hat nicht gematcht → Fehler, kein Fallback!
+                        logger.error(f"Extrude: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
+                        logger.error(f"Extrude: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        # Leere Liste → keine Extrusion
+                elif sketch_profiles:
+                    # Kein Selektor → alle Profile verwenden (Legacy/Import)
+                    polys_to_extrude = list(sketch_profiles)
+                    logger.info(f"Extrude: Alle {len(polys_to_extrude)} Profile (kein Selektor)")
+                else:
+                    # Sketch hat keine closed_profiles
+                    logger.warning(f"Extrude: Sketch hat keine closed_profiles!")
+            else:
+                # Ohne Sketch (Push/Pull): precalculated_polys ist die Geometrie-Quelle
+                polys_to_extrude = list(feature.precalculated_polys)
+                logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+
+            # === Extrude-Logik ===
+            if polys_to_extrude:
+                logger.info(f"Extrude: Verarbeite {len(polys_to_extrude)} Profile.")
+
                 faces_to_extrude = []
-                for idx, poly in enumerate(feature.precalculated_polys):
+                for idx, poly in enumerate(polys_to_extrude):
                     try:
                         # DEBUG: Polygon-Info loggen
                         n_interiors = len(list(poly.interiors)) if hasattr(poly, 'interiors') else 0
@@ -4414,6 +4490,82 @@ class Body:
         except Exception as e:
             logger.error(f"Extrude Fehler: {e}")
             return None
+
+    def _filter_profiles_by_selector(self, profiles: list, selector: list, tolerance: float = 5.0) -> list:
+        """
+        CAD Kernel First: Filtert Profile anhand ihrer Centroids.
+
+        Der Selektor enthält Centroids [(cx, cy), ...] der ursprünglich gewählten Profile.
+        Bei Sketch-Änderungen können Profile sich verschieben - wir matchen mit Toleranz.
+
+        WICHTIG: Für jeden Selektor wird nur das BESTE Match (kleinste Distanz) verwendet!
+        Das verhindert dass bei überlappenden Toleranzbereichen mehrere Profile gematcht werden.
+
+        FAIL-FAST: Wenn kein Match gefunden wird, geben wir eine LEERE Liste zurück,
+        NICHT alle Profile! Das ist CAD Kernel First konform.
+
+        Args:
+            profiles: Liste von Shapely Polygons (aktuelle Profile aus Sketch)
+            selector: Liste von (cx, cy) Tupeln (gespeicherte Centroids)
+            tolerance: Abstand-Toleranz für Centroid-Match in mm
+
+        Returns:
+            Gefilterte Liste von Polygons die zum Selektor passen (kann leer sein!)
+        """
+        if not profiles or not selector:
+            return list(profiles) if profiles else []
+
+        import math
+        matched = []
+        used_profile_indices = set()  # Verhindert doppeltes Matchen
+
+        # Debug: Zeige alle verfügbaren Profile
+        logger.debug(f"[SELECTOR] {len(profiles)} Profile verfügbar, {len(selector)} Selektoren")
+        for i, poly in enumerate(profiles):
+            try:
+                c = poly.centroid
+                logger.debug(f"  Profile {i}: centroid=({c.x:.2f}, {c.y:.2f}), area={poly.area:.1f}")
+            except:
+                pass
+
+        logger.debug(f"[SELECTOR] Selektoren: {selector}")
+
+        # Für JEDEN Selektor das BESTE Match finden (nicht alle innerhalb Toleranz!)
+        for sel_cx, sel_cy in selector:
+            best_match_idx = None
+            best_match_dist = float('inf')
+
+            for i, poly in enumerate(profiles):
+                if i in used_profile_indices:
+                    continue  # Bereits verwendet
+
+                try:
+                    centroid = poly.centroid
+                    cx, cy = centroid.x, centroid.y
+                    dist = math.hypot(cx - sel_cx, cy - sel_cy)
+
+                    # Nur innerhalb Toleranz UND besser als bisheriges Match
+                    if dist < tolerance and dist < best_match_dist:
+                        best_match_idx = i
+                        best_match_dist = dist
+                except Exception as e:
+                    logger.warning(f"Centroid-Berechnung fehlgeschlagen: {e}")
+                    continue
+
+            # Bestes Match für diesen Selektor hinzufügen
+            if best_match_idx is not None:
+                matched.append(profiles[best_match_idx])
+                used_profile_indices.add(best_match_idx)
+                c = profiles[best_match_idx].centroid
+                logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) ≈ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
+            else:
+                logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
+
+        # FAIL-FAST: Kein Fallback auf alle Profile!
+        if not matched:
+            logger.warning(f"[SELECTOR] Kein Profil-Match! Selector passt zu keinem der {len(profiles)} Profile.")
+
+        return matched
 
     def _detect_circle_from_points(self, points, tolerance=0.02):
         """
@@ -5045,8 +5197,12 @@ class Body:
                     "plane_normal": list(feat.plane_normal) if feat.plane_normal else None,
                     "plane_x_dir": list(feat.plane_x_dir) if feat.plane_x_dir else None,
                     "plane_y_dir": list(feat.plane_y_dir) if feat.plane_y_dir else None,
+                    # KRITISCH für parametrisches CAD: Sketch-ID speichern
+                    "sketch_id": feat.sketch.id if feat.sketch else None,
+                    # CAD Kernel First: Profile-Selektor (Centroids)
+                    "profile_selector": feat.profile_selector if feat.profile_selector else None,
                 })
-                # Serialisiere precalculated_polys (Shapely zu WKT)
+                # Serialisiere precalculated_polys (Shapely zu WKT) - Legacy Fallback
                 if feat.precalculated_polys:
                     try:
                         feat_dict["precalculated_polys_wkt"] = [
@@ -5092,6 +5248,10 @@ class Body:
                     "angle_formula": feat.angle_formula,
                     "axis": list(feat.axis),
                     "operation": feat.operation,
+                    # KRITISCH für parametrisches CAD: Sketch-ID speichern
+                    "sketch_id": feat.sketch.id if feat.sketch else None,
+                    # CAD Kernel First: Profile-Selektor (Centroids)
+                    "profile_selector": feat.profile_selector if feat.profile_selector else None,
                 })
 
             elif isinstance(feat, LoftFeature):
@@ -5301,7 +5461,12 @@ class Body:
                     **base_kwargs
                 )
                 feat.distance_formula = feat_dict.get("distance_formula")
-                # WKT zu Shapely Polygons
+                # Sketch-ID für spätere Referenz-Wiederherstellung speichern
+                feat._sketch_id = feat_dict.get("sketch_id")
+                # CAD Kernel First: Profile-Selektor laden
+                if "profile_selector" in feat_dict and feat_dict["profile_selector"]:
+                    feat.profile_selector = [tuple(p) for p in feat_dict["profile_selector"]]
+                # WKT zu Shapely Polygons (Legacy Fallback)
                 if "precalculated_polys_wkt" in feat_dict:
                     try:
                         from shapely import wkt
@@ -5351,6 +5516,11 @@ class Body:
                     **base_kwargs
                 )
                 feat.angle_formula = feat_dict.get("angle_formula")
+                # Sketch-ID für spätere Referenz-Wiederherstellung speichern
+                feat._sketch_id = feat_dict.get("sketch_id")
+                # CAD Kernel First: Profile-Selektor laden
+                if "profile_selector" in feat_dict and feat_dict["profile_selector"]:
+                    feat.profile_selector = [tuple(p) for p in feat_dict["profile_selector"]]
 
             elif feat_class == "LoftFeature":
                 feat = LoftFeature(
@@ -5830,8 +6000,30 @@ class Document:
         if active_sketch_id:
             doc.active_sketch = next((s for s in doc.sketches if s.id == active_sketch_id), None)
 
+        # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
+        doc._restore_sketch_references()
+
         logger.info(f"Projekt geladen: {len(doc.bodies)} Bodies, {len(doc.sketches)} Sketches")
         return doc
+
+    def _restore_sketch_references(self):
+        """
+        Stellt Sketch-Referenzen in Features wieder her (nach dem Laden).
+        Ermöglicht parametrische Updates wenn Sketches geändert werden.
+        """
+        sketch_map = {s.id: s for s in self.sketches}
+        restored_count = 0
+
+        for body in self.bodies:
+            for feature in body.features:
+                sketch_id = getattr(feature, '_sketch_id', None)
+                if sketch_id and sketch_id in sketch_map:
+                    feature.sketch = sketch_map[sketch_id]
+                    restored_count += 1
+                    logger.debug(f"Sketch-Referenz wiederhergestellt: {feature.name} → {sketch_map[sketch_id].name}")
+
+        if restored_count > 0:
+            logger.info(f"[PARAMETRIC] {restored_count} Sketch-Referenzen wiederhergestellt")
 
     def save_project(self, filename: str) -> bool:
         """

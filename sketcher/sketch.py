@@ -74,6 +74,10 @@ class Sketch:
     _profiles_valid: bool = field(default=False, repr=False)
     _cached_profiles: list = field(default_factory=list, repr=False)
     _adjacency: dict = field(default_factory=dict, repr=False)  # {(rx,ry): [line, ...]}
+
+    # CAD Kernel First: Aktuelle geschlossene Profile (Shapely Polygons)
+    # Wird vom SketchEditor synchronisiert, genutzt von _compute_extrude_part/_compute_revolve
+    closed_profiles: list = field(default_factory=list, repr=False)
     
     # === Geometrie-Erstellung ===
     
