@@ -53,7 +53,9 @@
       "Bash(del guiwidgetssketch_dimension_bar.py)",
       "Bash(timeout:*)",
       "Bash(ping:*)",
-      "Bash(del c:LiteCadtest_surface_fitting.py)"
+      "Bash(del c:LiteCadtest_surface_fitting.py)",
+      "Bash(del test_circle_intersection.py)",
+      "Bash(del c:LiteCad_test_phase2.py c:LiteCad_test_imports.py)"
     ]
   }
 }

@@ -354,6 +354,90 @@ def circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Point2D'
         
     return points
 
+
+def circle_circle_intersection_v2(c1: 'Circle2D', c2: 'Circle2D',
+                                   tolerance: float = 1e-6) -> List['Point2D']:
+    """
+    Robuste Kreis-Kreis Intersection mit Tangent-Handling.
+
+    Fixes gegenüber V1:
+    - Toleranz für Tangent-Fälle (d ≈ r1+r2 oder d ≈ |r1-r2|)
+    - Numerisch stabil bei fast-konzentrischen Kreisen
+    - Gibt genau 1 Punkt bei Tangenz zurück
+
+    Args:
+        c1: Erster Kreis
+        c2: Zweiter Kreis
+        tolerance: Toleranz für Tangent-Detection (Standard: 1e-6)
+
+    Returns:
+        Liste von Schnittpunkten (0, 1, oder 2 Punkte)
+    """
+    dx = c2.center.x - c1.center.x
+    dy = c2.center.y - c1.center.y
+    d = math.hypot(dx, dy)
+    r1, r2 = c1.radius, c2.radius
+
+    # Konzentrisch (mit Toleranz) - keine Schnittpunkte
+    if d < tolerance:
+        return []
+
+    # Extern tangent: d ≈ r1 + r2
+    if abs(d - (r1 + r2)) < tolerance:
+        t = r1 / d
+        return [Point2D(c1.center.x + t * dx, c1.center.y + t * dy)]
+
+    # Intern tangent: d ≈ |r1 - r2|
+    if abs(d - abs(r1 - r2)) < tolerance:
+        # Punkt liegt auf der Verbindungslinie, in Richtung des größeren Kreises
+        if r1 >= r2:
+            t = r1 / d
+        else:
+            t = -r1 / d
+        return [Point2D(c1.center.x + t * dx, c1.center.y + t * dy)]
+
+    # Disjunkt (außen)
+    if d > r1 + r2:
+        return []
+
+    # Einer im anderen (kein Schnitt)
+    if d < abs(r1 - r2):
+        return []
+
+    # Standard 2-Punkt Lösung (Radical Axis Methode)
+    a = (r1**2 - r2**2 + d**2) / (2 * d)
+    h_sq = r1**2 - a**2
+
+    if h_sq < 0:
+        return []
+
+    h = math.sqrt(h_sq)
+
+    # Punkt auf der Verbindungslinie
+    px = c1.center.x + a * dx / d
+    py = c1.center.y + a * dy / d
+
+    # Zwei Schnittpunkte senkrecht zur Verbindungslinie
+    return [
+        Point2D(px + h * dy / d, py - h * dx / d),
+        Point2D(px - h * dy / d, py + h * dx / d)
+    ]
+
+
+def get_circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Point2D']:
+    """
+    Dispatcher für Kreis-Kreis Intersection.
+    Nutzt V2 wenn Feature-Flag aktiviert, sonst V1.
+    """
+    try:
+        from config.feature_flags import is_enabled
+        if is_enabled("use_robust_circle_intersection"):
+            return circle_circle_intersection_v2(c1, c2)
+    except ImportError:
+        pass
+    return circle_circle_intersection(c1, c2)
+
+
 def is_point_on_arc(point: 'Point2D', arc: 'Arc2D', tolerance: float = 1e-4) -> bool:
     """Prüft, ob ein Punkt winkeltechnisch auf dem Bogen liegt."""
     import math
@@ -388,7 +472,7 @@ def arc_line_intersection(arc: 'Arc2D', line: 'Line2D') -> List['Point2D']:
 def arc_circle_intersection(arc: 'Arc2D', circle: 'Circle2D') -> List['Point2D']:
     """Schnitt Arc-Kreis."""
     full_circle_arc = Circle2D(arc.center, arc.radius)
-    candidates = circle_circle_intersection(full_circle_arc, circle)
+    candidates = get_circle_circle_intersection(full_circle_arc, circle)
     return [p for p in candidates if is_point_on_arc(p, arc)]
 
 

@@ -4684,8 +4684,19 @@ class MainWindow(QMainWindow):
             
     def _extrude_with_build123d(self, face_indices, height, operation="New Body"):
         try:
+            # Feature-Flag: Build123d-basierte Profile-Detection (Phase 2)
+            use_v2 = False
+            try:
+                from config.feature_flags import is_enabled
+                use_v2 = is_enabled("use_build123d_profiles")
+            except ImportError:
+                pass
+
             # 1. Solid erstellen
-            solid, verts, faces = self.sketch_editor.get_build123d_part(height, operation)
+            if use_v2:
+                solid, verts, faces = self.sketch_editor.get_build123d_part_v2(height, operation)
+            else:
+                solid, verts, faces = self.sketch_editor.get_build123d_part(height, operation)
             
             if solid is None or not verts:
                 logger.error("Build123d: Keine Geometrie erzeugt.")

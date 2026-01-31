@@ -1498,24 +1498,121 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             except Exception as e:
                 logger.warning(f"Spline-Konvertierung für Profil fehlgeschlagen: {e}")
 
-        # --- 3. KREISE (FEHLENDER BLOCK HINZUGEFÜGT) ---
+        # --- 3. KREISE ---
         # Kreise müssen in Polygone umgewandelt werden, da Shapely keine echten Kreise kennt
+        # NEU: Überlappende Kreise werden als Arcs behandelt für korrekte Profile-Erkennung
         standalone_polys = []
         circles = [c for c in self.sketch.circles if not c.construction]
 
         if circles:
             logger.debug(f"Verarbeite {len(circles)} Kreise für Profil-Erkennung")
 
-        for circle in circles:
-            cx, cy, r = circle.center.x, circle.center.y, circle.radius
-            pts = []
-            segments = 64  # Auflösung für Collision Detection
-            for i in range(segments):
-                a = 2 * math.pi * i / segments
-                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-            circle_poly = ShapelyPolygon(pts)
-            standalone_polys.append(circle_poly)
-            logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
+        # Feature-Flag prüfen für Kreis-Überlappungs-Erkennung
+        try:
+            from config.feature_flags import is_enabled
+            use_overlap_detection = is_enabled("use_circle_overlap_profiles")
+        except ImportError:
+            use_overlap_detection = False
+
+        if use_overlap_detection and circles:
+            # NEU: Kreis-Überlappungs-Erkennung (Kreis-Kreis UND Kreis-Linie)
+            from sketcher.geometry import get_circle_circle_intersection, circle_line_intersection
+            from sketcher import Circle2D
+
+            # Finde alle Schnittpunkte für jeden Kreis
+            circle_intersections = {i: [] for i in range(len(circles))}
+            overlapping_circles = set()
+
+            # 1. Kreis-Kreis Schnittpunkte
+            for i in range(len(circles)):
+                for j in range(i + 1, len(circles)):
+                    c1, c2 = circles[i], circles[j]
+                    pts = get_circle_circle_intersection(c1, c2)
+
+                    if len(pts) >= 1:
+                        overlapping_circles.add(i)
+                        overlapping_circles.add(j)
+
+                        for pt in pts:
+                            angle1 = math.atan2(pt.y - c1.center.y, pt.x - c1.center.x)
+                            circle_intersections[i].append((angle1, pt))
+
+                            angle2 = math.atan2(pt.y - c2.center.y, pt.x - c2.center.x)
+                            circle_intersections[j].append((angle2, pt))
+
+            # 2. Kreis-Linie Schnittpunkte (NEU!)
+            for idx, circle in enumerate(circles):
+                for line in lines:
+                    try:
+                        pts = circle_line_intersection(circle, line)
+                        if pts:
+                            overlapping_circles.add(idx)
+                            for pt in pts:
+                                angle = math.atan2(pt.y - circle.center.y, pt.x - circle.center.x)
+                                circle_intersections[idx].append((angle, pt))
+                    except Exception:
+                        pass  # Intersection-Fehler ignorieren
+
+            # Verarbeite Kreise
+            for idx, circle in enumerate(circles):
+                cx, cy, r = circle.center.x, circle.center.y, circle.radius
+
+                if idx in overlapping_circles and circle_intersections[idx]:
+                    # Überlappender Kreis: Teile in Arcs und füge zu shapely_lines hinzu
+                    intersections = circle_intersections[idx]
+                    # Sortiere nach Winkel
+                    intersections.sort(key=lambda x: x[0])
+
+                    logger.debug(f"  Kreis {idx} überlappt: {len(intersections)} Schnittpunkte")
+
+                    # Erstelle Arcs zwischen Schnittpunkten
+                    for seg_idx in range(len(intersections)):
+                        start_angle = intersections[seg_idx][0]
+                        end_angle = intersections[(seg_idx + 1) % len(intersections)][0]
+
+                        # Handle Wrap-Around
+                        if end_angle <= start_angle:
+                            end_angle += 2 * math.pi
+
+                        # Erstelle Arc als LineString
+                        arc_pts = []
+                        sweep = end_angle - start_angle
+                        steps = max(8, int(sweep / 0.1))  # ~0.1 rad pro Segment
+
+                        for step in range(steps + 1):
+                            t = step / steps
+                            a = start_angle + sweep * t
+                            px = cx + r * math.cos(a)
+                            py = cy + r * math.sin(a)
+                            arc_pts.append(get_welded_pt(px, py))
+
+                        if len(arc_pts) >= 2:
+                            shapely_lines.append(LineString(arc_pts))
+                            # Segment-Info für Geometry-Matching
+                            for s in range(len(arc_pts) - 1):
+                                geometry_sources.append(('circle_arc', circle, arc_pts[s], arc_pts[s + 1]))
+                else:
+                    # Nicht-überlappender Kreis: Behandle als standalone Polygon
+                    pts = []
+                    segments = 64
+                    for i in range(segments):
+                        a = 2 * math.pi * i / segments
+                        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+                    circle_poly = ShapelyPolygon(pts)
+                    standalone_polys.append(circle_poly)
+                    logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
+        else:
+            # Alte Logik: Alle Kreise als standalone Polygone
+            for circle in circles:
+                cx, cy, r = circle.center.x, circle.center.y, circle.radius
+                pts = []
+                segments = 64  # Auflösung für Collision Detection
+                for i in range(segments):
+                    a = 2 * math.pi * i / segments
+                    pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+                circle_poly = ShapelyPolygon(pts)
+                standalone_polys.append(circle_poly)
+                logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
 
         # Geschlossene Splines hinzufügen (wie Kreise behandeln)
         if closed_spline_polys:
@@ -2362,40 +2459,53 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         p_data = profile_tuple[1]
                         # Fall 1: Polygon
                         if p_type == 'polygon':
-                            coords = list(p_data.exterior.coords)
-                            # Duplikate entfernen und zu Floats konvertieren
-                            pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in coords]
-                            if len(pts) > 0 and pts[0] == pts[-1]:
-                                pts.pop() # Letzten Punkt weg, wenn doppelt
-                            
-                            if len(pts) >= 3:
-                                logger.debug(f"Erstelle Polygon mit {len(pts)} Punkten")
-                                Polygon(*pts, align=None)
-                                created_any = True
-                                
-                                # Löcher (Interiors)
-                                if hasattr(p_data, 'interiors'):
-                                    for idx, interior in enumerate(p_data.interiors):
-                                        hole_coords = list(interior.coords)
-                                        h_pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in hole_coords]
-                                        if len(h_pts)>0 and h_pts[0]==h_pts[-1]: h_pts.pop()
-                                        
-                                        logger.debug(f"  Loch {idx}: {len(h_pts)} Punkte")
-                                        
-                                        if len(h_pts) >= 3:
-                                            # FIX: Prüfen ob das Loch ein Kreis ist
-                                            circle_info = self._detect_circle_from_points(h_pts)
-                                            
-                                            if circle_info:
-                                                # Echten Kreis verwenden!
-                                                cx, cy, radius = circle_info
-                                                logger.info(f"  → Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
-                                                with Locations([(cx, cy)]):
-                                                    B3DCircle(radius=radius, mode=Mode.SUBTRACT)
-                                            else:
-                                                # Normales Polygon-Loch
-                                                logger.warning(f"  → Loch als POLYGON ({len(h_pts)} Punkte)")
-                                                Polygon(*h_pts, align=None, mode=Mode.SUBTRACT)
+                            # FIX: MultiPolygon behandeln (kann von difference() kommen)
+                            from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+
+                            polygons_to_process = []
+                            if isinstance(p_data, ShapelyMultiPolygon):
+                                polygons_to_process = list(p_data.geoms)
+                            else:
+                                polygons_to_process = [p_data]
+
+                            for sub_poly in polygons_to_process:
+                                if not hasattr(sub_poly, 'exterior'):
+                                    continue
+
+                                coords = list(sub_poly.exterior.coords)
+                                # Duplikate entfernen und zu Floats konvertieren
+                                pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in coords]
+                                if len(pts) > 0 and pts[0] == pts[-1]:
+                                    pts.pop() # Letzten Punkt weg, wenn doppelt
+
+                                if len(pts) >= 3:
+                                    logger.debug(f"Erstelle Polygon mit {len(pts)} Punkten")
+                                    Polygon(*pts, align=None)
+                                    created_any = True
+
+                                    # Löcher (Interiors)
+                                    if hasattr(sub_poly, 'interiors'):
+                                        for idx, interior in enumerate(sub_poly.interiors):
+                                            hole_coords = list(interior.coords)
+                                            h_pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in hole_coords]
+                                            if len(h_pts)>0 and h_pts[0]==h_pts[-1]: h_pts.pop()
+
+                                            logger.debug(f"  Loch {idx}: {len(h_pts)} Punkte")
+
+                                            if len(h_pts) >= 3:
+                                                # FIX: Prüfen ob das Loch ein Kreis ist
+                                                circle_info = self._detect_circle_from_points(h_pts)
+
+                                                if circle_info:
+                                                    # Echten Kreis verwenden!
+                                                    cx, cy, radius = circle_info
+                                                    logger.info(f"  → Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+                                                    with Locations([(cx, cy)]):
+                                                        B3DCircle(radius=radius, mode=Mode.SUBTRACT)
+                                                else:
+                                                    # Normales Polygon-Loch
+                                                    logger.warning(f"  → Loch als POLYGON ({len(h_pts)} Punkte)")
+                                                    Polygon(*h_pts, align=None, mode=Mode.SUBTRACT)
 
                         # Fall 2: Kreis
                         elif p_type == 'circle':
@@ -2423,7 +2533,99 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Statt GUI-Absturz nur Log-Ausgabe
             logger.error(f"Extrude Fehler: {e}")
             return None, None, None
-    
+
+    def get_build123d_profiles(self):
+        """
+        Holt Profile mittels Build123d-basierter Detection (Phase 2).
+
+        Nutzt OpenCASCADE für exakte Geometrie statt Shapely-Approximation.
+        Kreise bleiben echte Kreise, keine 64-Eck Polygone.
+
+        Returns:
+            Tuple (faces, error) - faces ist Liste von Build123d Face-Objekten
+        """
+        try:
+            from config.feature_flags import is_enabled
+            if not is_enabled("use_build123d_profiles"):
+                return None, "Feature nicht aktiviert"
+        except ImportError:
+            return None, "Feature-Flags nicht verfügbar"
+
+        try:
+            from sketcher.profile_detector_b3d import Build123dProfileDetector, is_available
+
+            if not is_available():
+                return None, "Build123d nicht verfügbar"
+
+            plane = self.get_build123d_plane()
+            detector = Build123dProfileDetector()
+            faces, error = detector.get_profiles_for_extrude(self.sketch, plane)
+
+            if error:
+                logger.warning(f"Build123d Profile-Detection: {error}")
+                return None, error
+
+            logger.info(f"Build123d Profile-Detection: {len(faces)} exakte Faces gefunden")
+            return faces, None
+
+        except Exception as e:
+            logger.error(f"Build123d Profile-Detection Fehler: {e}")
+            return None, str(e)
+
+    def get_build123d_part_v2(self, height: float, operation: str = "New Body"):
+        """
+        Extrudiert mit Build123d-basierter Profile-Detection (Phase 2).
+
+        Vorteile gegenüber get_build123d_part():
+        - Kreise sind echte analytische Kurven
+        - Überlappende Geometrie wird exakt berechnet
+        - Konsistenz zwischen 2D und 3D
+
+        Returns:
+            Tuple (solid, vertices, faces) oder (None, None, None) bei Fehler
+        """
+        if not HAS_BUILD123D:
+            return None, None, None
+
+        # Versuche Build123d Profile-Detection
+        b3d_faces, error = self.get_build123d_profiles()
+
+        if b3d_faces is None or not b3d_faces:
+            # Fallback zur alten Methode
+            logger.debug(f"Build123d Profile-Detection nicht verfügbar ({error}), nutze Shapely-Fallback")
+            return self.get_build123d_part(height, operation)
+
+        plane = self.get_build123d_plane()
+
+        try:
+            from build123d import BuildPart, extrude
+            from config import Tolerances
+
+            with BuildPart() as part:
+                # Faces direkt extrudieren
+                for face in b3d_faces:
+                    extrude(face, amount=height)
+
+                solid = part.part
+
+            if solid is None:
+                return None, None, None
+
+            # Mesh generieren
+            mesh_data = solid.tessellate(tolerance=Tolerances.TESSELLATION_PREVIEW)
+            verts = [(v.X, v.Y, v.Z) for v in mesh_data[0]]
+            faces = [tuple(t) for t in mesh_data[1]]
+
+            logger.success(f"Build123d V2 Extrude erfolgreich: {len(verts)} Vertices")
+            return solid, verts, faces
+
+        except Exception as e:
+            logger.error(f"Build123d V2 Extrude Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback
+            return self.get_build123d_part(height, operation)
+
     def _build123d_direct(self, height: float, plane):
         """Erstellt Build123d Part direkt aus Sketch-Linien (Fallback)"""
         if not HAS_BUILD123D:

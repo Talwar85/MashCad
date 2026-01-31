@@ -222,7 +222,7 @@ class SmartSnapper:
 
             # 3. Kreis - Kreis
             elif is_c1 and is_c2:
-                return geometry.circle_circle_intersection(e1, e2)
+                return geometry.get_circle_circle_intersection(e1, e2)
 
             # 4. Arc - Linie (und umgekehrt)
             elif is_a1 and is_l2:

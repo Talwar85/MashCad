@@ -155,10 +155,99 @@ class GeometryDetector:
                 if p1 != p2:  # Keine Zero-Length Linien
                     lines.append(LineString([p1, p2]))
         
-        # Circles - Mit mehr Segmenten für bessere Präzision
-        for c in getattr(sketch, 'circles', []):
-            if not c.construction:
-                # 128 Segmente für glattere Kreise
+        # Circles - Mit Überlappungs-Detection (wie in sketch_editor.py)
+        circles = [c for c in getattr(sketch, 'circles', []) if not c.construction]
+
+        # Feature-Flag prüfen für Kreis-Überlappungs-Erkennung
+        try:
+            from config.feature_flags import is_enabled
+            use_overlap_detection = is_enabled("use_circle_overlap_profiles")
+        except ImportError:
+            use_overlap_detection = False
+
+        if use_overlap_detection and circles:
+            # Kreis-Überlappungs-Erkennung (gleiche Logik wie sketch_editor.py)
+            from sketcher.geometry import get_circle_circle_intersection, circle_line_intersection
+
+            # Finde alle Schnittpunkte für jeden Kreis
+            circle_intersections = {i: [] for i in range(len(circles))}
+            overlapping_circles = set()
+
+            # 1. Kreis-Kreis Schnittpunkte
+            for i in range(len(circles)):
+                for j in range(i + 1, len(circles)):
+                    c1, c2 = circles[i], circles[j]
+                    pts = get_circle_circle_intersection(c1, c2)
+
+                    if len(pts) >= 1:
+                        overlapping_circles.add(i)
+                        overlapping_circles.add(j)
+
+                        for pt in pts:
+                            angle1 = math.atan2(pt.y - c1.center.y, pt.x - c1.center.x)
+                            circle_intersections[i].append((angle1, pt))
+
+                            angle2 = math.atan2(pt.y - c2.center.y, pt.x - c2.center.x)
+                            circle_intersections[j].append((angle2, pt))
+
+            # 2. Kreis-Linie Schnittpunkte
+            sketch_lines = [l for l in getattr(sketch, 'lines', []) if not l.construction]
+            for idx, circle in enumerate(circles):
+                for line in sketch_lines:
+                    try:
+                        pts = circle_line_intersection(circle, line)
+                        if pts:
+                            overlapping_circles.add(idx)
+                            for pt in pts:
+                                angle = math.atan2(pt.y - circle.center.y, pt.x - circle.center.x)
+                                circle_intersections[idx].append((angle, pt))
+                    except Exception:
+                        pass
+
+            # Verarbeite Kreise
+            for idx, circle in enumerate(circles):
+                cx, cy, r = circle.center.x, circle.center.y, circle.radius
+
+                if idx in overlapping_circles and circle_intersections[idx]:
+                    # Überlappender Kreis: Teile in Arcs
+                    intersections = circle_intersections[idx]
+                    intersections.sort(key=lambda x: x[0])
+
+                    # Erstelle Arcs zwischen Schnittpunkten
+                    for seg_idx in range(len(intersections)):
+                        start_angle = intersections[seg_idx][0]
+                        end_angle = intersections[(seg_idx + 1) % len(intersections)][0]
+
+                        # Handle Wrap-Around
+                        if end_angle <= start_angle:
+                            end_angle += 2 * math.pi
+
+                        # Erstelle Arc als LineString
+                        arc_pts = []
+                        sweep = end_angle - start_angle
+                        steps = max(16, int(sweep / 0.1))
+
+                        for step in range(steps + 1):
+                            t = step / steps
+                            a = start_angle + sweep * t
+                            px = cx + r * math.cos(a)
+                            py = cy + r * math.sin(a)
+                            arc_pts.append(get_welded_pt(px, py))
+
+                        if len(arc_pts) >= 2:
+                            lines.append(LineString(arc_pts))
+                else:
+                    # Nicht-überlappender Kreis: Als geschlossenes LineString
+                    num_segments = 128
+                    pts = []
+                    for i in range(num_segments + 1):
+                        angle = i * 2 * math.pi / num_segments
+                        pts.append((rnd(cx + r * math.cos(angle)), rnd(cy + r * math.sin(angle))))
+                    lines.append(LineString(pts))
+                    standalone_circles.append(Polygon(pts[:-1]))
+        else:
+            # Alte Logik: Alle Kreise als geschlossene LineStrings
+            for c in circles:
                 num_segments = 128
                 pts = []
                 for i in range(num_segments + 1):
@@ -167,10 +256,7 @@ class GeometryDetector:
                         rnd(c.center.x + c.radius * math.cos(angle)),
                         rnd(c.center.y + c.radius * math.sin(angle))
                     ))
-                circle_line = LineString(pts)
-                lines.append(circle_line)
-                
-                # Speichere als eigenständiges Polygon für den Fall dass polygonize fehlschlägt
+                lines.append(LineString(pts))
                 standalone_circles.append(Polygon(pts[:-1]))
         
         # Arcs - mit Welding für Start/End-Punkte
@@ -340,32 +426,49 @@ class GeometryDetector:
             # B. Erzeuge die "Ring"-Fläche (Parent minus alle direkten Holes)
             shell_poly = parent
             logger.debug(f"Parent Polygon {i}: area={parent.area:.1f}, holes_found={len(holes)}")
-            
+
             for h in holes:
                 logger.debug(f"  Subtrahiere Loch: area={h.area:.1f}")
                 shell_poly = shell_poly.difference(h)
-            
+
+            # FIX: difference() kann MultiPolygon zurückgeben
+            from shapely.geometry import MultiPolygon
+
             # DEBUG: Prüfen ob Interiors erstellt wurden
-            n_interiors = len(list(shell_poly.interiors)) if hasattr(shell_poly, 'interiors') else 0
-            logger.info(f"  → Shell nach difference: area={shell_poly.area:.1f}, interiors={n_interiors}")
-            
-            if n_interiors > 0:
-                for idx, interior in enumerate(shell_poly.interiors):
-                    logger.debug(f"    Interior {idx}: {len(list(interior.coords))} Punkte")
-            
-            # Erzeuge SelectionFace für den Ring (Hexagon ohne Kreis)
-            self.selection_faces.append(
-                self._create_selection_face(
-                    owner_id=sketch.id,
-                    domain_type="sketch_profile", # Neu: Profile statt Shell
-                    poly=shell_poly,
-                    plane_origin=plane_origin,
-                    plane_normal=plane_normal,
-                    plane_x=plane_x_dir,
-                    plane_y=plane_y_dir,
-                    priority=10
-                )
-            )
+            if isinstance(shell_poly, MultiPolygon):
+                n_interiors = sum(len(list(p.interiors)) for p in shell_poly.geoms)
+                logger.info(f"  → Shell nach difference: MultiPolygon mit {len(shell_poly.geoms)} Teilen, area={shell_poly.area:.1f}, total_interiors={n_interiors}")
+            elif hasattr(shell_poly, 'interiors'):
+                n_interiors = len(list(shell_poly.interiors))
+                logger.info(f"  → Shell nach difference: area={shell_poly.area:.1f}, interiors={n_interiors}")
+                if n_interiors > 0:
+                    for idx, interior in enumerate(shell_poly.interiors):
+                        logger.debug(f"    Interior {idx}: {len(list(interior.coords))} Punkte")
+            else:
+                logger.info(f"  → Shell nach difference: area={shell_poly.area:.1f}")
+
+            # Erzeuge SelectionFace(s) für den Ring
+            # FIX: Bei MultiPolygon mehrere Faces erstellen
+            polys_to_add = []
+            if isinstance(shell_poly, MultiPolygon):
+                polys_to_add = list(shell_poly.geoms)
+            elif not shell_poly.is_empty:
+                polys_to_add = [shell_poly]
+
+            for sub_poly in polys_to_add:
+                if sub_poly.area > 0.01:  # Minimale Fläche
+                    self.selection_faces.append(
+                        self._create_selection_face(
+                            owner_id=sketch.id,
+                            domain_type="sketch_profile",
+                            poly=sub_poly,
+                            plane_origin=plane_origin,
+                            plane_normal=plane_normal,
+                            plane_x=plane_x_dir,
+                            plane_y=plane_y_dir,
+                            priority=10
+                        )
+                    )
             
             # C. Erzeuge SelectionFaces für die Löcher selbst (damit man den Kreis wieder füllen kann)
             # Das ist wichtig: Das Loch ist jetzt eine eigenständige, klickbare Fläche
@@ -449,28 +552,38 @@ class GeometryDetector:
         # Ein Profil ist immer: Polygon minus seine direkten Kinder.
         processed_indices = set()
         
+        from shapely.geometry import MultiPolygon
+
         for i in range(len(raw_polys)):
             poly = raw_polys[i]
             children_indices = direct_children[i]
-            
+
             # Subtrahiere alle direkten Kinder
             display_poly = poly
             for child_idx in children_indices:
                 display_poly = display_poly.difference(raw_polys[child_idx])
-            
-            if not display_poly.is_empty and display_poly.area > 0.0001:
-                self.selection_faces.append(
-                    self._create_selection_face(
-                        owner_id=sketch.id,
-                        domain_type="sketch_profile",
-                        poly=display_poly, # Das ist der Ring (oder der Kreis, wenn er keine Kinder hat)
-                        plane_origin=plane_origin,
-                        plane_normal=plane_normal,
-                        plane_x=plane_x_dir,
-                        plane_y=plane_y_dir,
-                        priority=10 + len(children_indices) # Ringe bevorzugen
+
+            # FIX: difference() kann MultiPolygon zurückgeben
+            polys_to_add = []
+            if isinstance(display_poly, MultiPolygon):
+                polys_to_add = list(display_poly.geoms)
+            elif not display_poly.is_empty:
+                polys_to_add = [display_poly]
+
+            for sub_poly in polys_to_add:
+                if sub_poly.area > 0.0001:
+                    self.selection_faces.append(
+                        self._create_selection_face(
+                            owner_id=sketch.id,
+                            domain_type="sketch_profile",
+                            poly=sub_poly,  # Das ist der Ring (oder der Kreis, wenn er keine Kinder hat)
+                            plane_origin=plane_origin,
+                            plane_normal=plane_normal,
+                            plane_x=plane_x_dir,
+                            plane_y=plane_y_dir,
+                            priority=10 + len(children_indices)  # Ringe bevorzugen
+                        )
                     )
-                )
 
     def _create_selection_face(self, owner_id, domain_type, poly, plane_origin, plane_normal, plane_x, plane_y, priority):
         # FIX: Hier fehlte die Weitergabe von plane_y an _shapely_to_pv_mesh
@@ -809,12 +922,23 @@ class GeometryDetector:
 
             # FIX 3: Holes (Interior-Ringe) als Exclusion-Zonen
             # Dreiecke die im Hole liegen, müssen ausgeschlossen werden
-            from shapely.geometry import Polygon as ShapelyPolygon
+            from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon
             hole_polys = []
-            for interior in poly.interiors:
-                hole_poly = ShapelyPolygon(interior).buffer(-Tolerances.SKETCH_SNAP)  # Leicht nach innen puffern
-                if hole_poly.is_valid and not hole_poly.is_empty:
-                    hole_polys.append(hole_poly)
+
+            # FIX: MultiPolygon hat keine .interiors - nur einzelne Polygons haben das
+            if isinstance(poly, MultiPolygon):
+                # Bei MultiPolygon: Alle Interiors aller Teil-Polygone sammeln
+                for sub_poly in poly.geoms:
+                    if hasattr(sub_poly, 'interiors'):
+                        for interior in sub_poly.interiors:
+                            hole_poly = ShapelyPolygon(interior).buffer(-Tolerances.SKETCH_SNAP)
+                            if hole_poly.is_valid and not hole_poly.is_empty:
+                                hole_polys.append(hole_poly)
+            elif hasattr(poly, 'interiors'):
+                for interior in poly.interiors:
+                    hole_poly = ShapelyPolygon(interior).buffer(-Tolerances.SKETCH_SNAP)  # Leicht nach innen puffern
+                    if hole_poly.is_valid and not hole_poly.is_empty:
+                        hole_polys.append(hole_poly)
 
             valid_tris = []
             for t in tris:

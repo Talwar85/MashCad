@@ -1075,7 +1075,7 @@ class SketchHandlersMixin:
                     pt = geometry.line_line_intersection(target, other)
                     if pt: intersects = [pt]
                 elif isinstance(target, Circle2D) and isinstance(other, Circle2D):
-                    intersects = geometry.circle_circle_intersection(target, other)
+                    intersects = geometry.get_circle_circle_intersection(target, other)
                 elif isinstance(target, Line2D) and isinstance(other, Circle2D):
                     intersects = geometry.circle_line_intersection(other, target)
                 elif isinstance(target, Circle2D) and isinstance(other, Line2D):
@@ -1123,27 +1123,47 @@ class SketchHandlersMixin:
             if not cut_points:
                 segment_to_remove = "ALL"
             else:
-                first_t, first_p = cut_points[0]
-                cut_points_loop = cut_points + [(first_t + 2*math.pi, first_p)]
-                
+                # V2: Verbesserte Winkel-Normalisierung und Segment-Findung
+                def normalize_angle(t):
+                    """Normalisiert Winkel auf [0, 2π)"""
+                    TWO_PI = 2 * math.pi
+                    while t < 0:
+                        t += TWO_PI
+                    while t >= TWO_PI:
+                        t -= TWO_PI
+                    return t
+
+                # Normalisiere Mausposition
+                t_mouse_norm = normalize_angle(t_mouse)
+
+                # Sortiere alle Schnittpunkte nach normalisiertem Winkel
+                sorted_cuts = sorted(cut_points, key=lambda x: normalize_angle(x[0]))
+                n = len(sorted_cuts)
+
                 found = False
-                for i in range(len(cut_points_loop) - 1):
-                    t_s, p_s = cut_points_loop[i]
-                    t_e, p_e = cut_points_loop[i+1]
-                    
-                    if t_s <= t_mouse <= t_e:
-                        segment_to_remove = (p_s, p_e, i, cut_points)
-                        found = True
-                        break
-                    # Wrap-Around Check
-                    if t_mouse + 2*math.pi <= t_e:
-                         if t_s <= t_mouse + 2*math.pi:
-                            segment_to_remove = (p_s, p_e, i, cut_points)
+                for i in range(n):
+                    t_s = normalize_angle(sorted_cuts[i][0])
+                    t_e = normalize_angle(sorted_cuts[(i + 1) % n][0])
+                    p_s = sorted_cuts[i][1]
+                    p_e = sorted_cuts[(i + 1) % n][1]
+
+                    # Prüfe ob Maus im Segment liegt
+                    if t_s < t_e:
+                        # Normales Segment (kein Wrap-Around)
+                        if t_s <= t_mouse_norm <= t_e:
+                            segment_to_remove = (p_s, p_e, i, sorted_cuts)
                             found = True
                             break
-                            
-                if not found and cut_points:
-                     segment_to_remove = (cut_points[-1][1], cut_points[0][1], -1, cut_points)
+                    else:
+                        # Wrap-Around Segment (geht über 0)
+                        if t_mouse_norm >= t_s or t_mouse_norm <= t_e:
+                            segment_to_remove = (p_s, p_e, i, sorted_cuts)
+                            found = True
+                            break
+
+                # Fallback: Wenn nichts gefunden, nehme letztes Segment
+                if not found and sorted_cuts:
+                    segment_to_remove = (sorted_cuts[-1][1], sorted_cuts[0][1], -1, sorted_cuts)
 
         # 6. Aktion ausführen
         if segment_to_remove:

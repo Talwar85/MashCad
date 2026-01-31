@@ -308,7 +308,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for label, key in filters:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setChecked(key == "BODY")  # Body ist default
+            btn.setChecked(key == "ALL")  # ALL ist default
             btn.setStyleSheet("""
                 QPushButton {
                     background: transparent;
@@ -2294,6 +2294,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     self.target_face_selected.emit(hit_id)
                     return True
 
+            # FIX: In Extrude-Mode vor dem Pick aufräumen
+            if self.extrude_mode:
+                # Preview löschen falls vorhanden
+                if getattr(self, '_preview_actor', None):
+                    self._clear_preview()
+                    logger.debug(f"Extrude-Mode: Preview cleared before pick")
+
+                # WICHTIG: State für neuen Drag vorbereiten
+                # Ohne diesen Reset kann der zweite Drag-Versuch fehlschlagen
+                self.is_dragging = False
+                logger.debug(f"Extrude-Mode: Preparing for new drag, is_dragging={self.is_dragging}")
+
             # Face-Selection (für Extrude etc.)
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
             logger.info(f"Viewport: Klick bei ({x}, {y}), hit_id={hit_id}, extrude_mode={self.extrude_mode}")
@@ -2303,35 +2315,46 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
                 if not is_multi:
                     self.selected_face_ids.clear()
-                    
+
                 # Toggle bei Multi-Select
                 if is_multi and hit_id in self.selected_face_ids:
                     self.selected_face_ids.discard(hit_id)
                 else:
                     self.selected_face_ids.add(hit_id)
-                
+
                 # Extrude Drag vorbereiten
                 if self.extrude_mode:
                     self._is_potential_drag = True
                     self._potential_drag_start = pos
-                    # Reset height bei Face-Wechsel — verhindert Akkumulation
+                    # Reset height bei Face-Wechsel
                     self.extrude_height = 0.0
-                    self._clear_preview()
                     face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
-                    if face: self._cache_drag_direction_for_face_v2(face)
-                
+                    if face:
+                        self._cache_drag_direction_for_face_v2(face)
+                    logger.debug(f"Extrude: Face {hit_id} selected, _is_potential_drag=True")
+
                 self._draw_selectable_faces_from_detector()
 
-                # NEU: Signal für automatische Operation-Erkennung
+                # Signal für automatische Operation-Erkennung
                 logger.debug(f"Viewport: Emitting face_selected({hit_id})")
                 self.face_selected.emit(hit_id)
                 return True
+            else:
+                # Kein Face getroffen - im Extrude-Mode State sauber halten
+                if self.extrude_mode:
+                    logger.debug(f"Extrude: Kein Face getroffen bei ({x}, {y})")
 
         # --- MOUSE RELEASE ---
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
             if self.extrude_mode:
-                self.is_dragging = False
-                self._is_potential_drag = False
+                # NUR resetten wenn wir tatsächlich gedraggt haben
+                # Sonst bleibt _is_potential_drag True für den nächsten Drag-Versuch
+                if getattr(self, 'is_dragging', False):
+                    logger.debug("Extrude: Drag ended, resetting state")
+                    self.is_dragging = False
+                    self._is_potential_drag = False
+                # Bei einfachem Klick (ohne Drag) _is_potential_drag NICHT resetten
+                # damit der User sofort nach dem Klick draggen kann
 
         return False
         #return super().eventFilter(obj, event)
@@ -4599,7 +4622,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if "body_face" in selection_filter:
             import vtk
             picker = vtk.vtkCellPicker()
-            picker.SetTolerance(Tolerances.PICKER_TOLERANCE)  # Präzises Picking
+            # GRÖSSERE Toleranz für besseres Picking bei steilen Winkeln
+            picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
 
             # Wichtig: VTK Y-Koordinate ist invertiert
             height = self.plotter.interactor.height()
@@ -4616,19 +4640,30 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 body_dist = np.linalg.norm(pos - ray_start)
 
                 # Jetzt suchen wir im Detector, welche logische Fläche zu diesem Punkt passt.
+                # NEUER ANSATZ: Nur Distanz zur Ebene prüfen, Normal-Check ist optional
+                best_face = None
+                best_dist = float('inf')
+
                 for face in self.detector.selection_faces:
-                    if face.domain_type != "body_face": continue
+                    if face.domain_type != "body_face":
+                        continue
 
                     # Distanz des Pick-Punkts zur Ebene der Fläche
                     dist_plane = abs(np.dot(pos - np.array(face.plane_origin), np.array(face.plane_normal)))
 
-                    # Normale vergleichen (Dot Product > 0.9 bedeutet fast parallel)
-                    dot_normal = np.dot(normal, np.array(face.plane_normal))
+                    # Normal-Check als Bonus, nicht als Requirement
+                    dot_normal = abs(np.dot(normal, np.array(face.plane_normal)))
 
-                    if dist_plane < 1.0 and dot_normal > 0.8:
-                        # Body-Face gefunden - mit Priorität 5 (niedriger als Sketch-Profile)
-                        all_hits.append((5, body_dist, face.id))
-                        break  # Nur eine Body-Face pro VTK-Hit
+                    # Akzeptiere die Fläche wenn der Punkt nahe der Ebene ist
+                    if dist_plane < 5.0:  # 5mm Toleranz
+                        # Scoring: Kleinere Distanz + gute Normal-Übereinstimmung = besser
+                        score = dist_plane - (dot_normal * 2.0)  # Normal-Bonus
+                        if score < best_dist:
+                            best_dist = score
+                            best_face = face
+
+                if best_face:
+                    all_hits.append((5, body_dist, best_face.id))
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---
         # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch
