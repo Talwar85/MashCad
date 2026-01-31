@@ -4,13 +4,7 @@ on:
   push:
     tags:
       - 'v*'  # Triggers on version tags like v1.0.0, v2.5.0
-  workflow_dispatch:  # Allows manual triggering from GitHub UI
-    inputs:
-      create_release:
-        description: 'Create GitHub Release'
-        required: false
-        default: false
-        type: boolean
+  workflow_dispatch:  # Allows manual triggering from GitHub UI (builds only, no release)
 
 env:
   PYTHON_VERSION: '3.10'
@@ -30,17 +24,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip wheel setuptools
           pip install pyinstaller
-          # Install core dependencies (skip problematic ones)
-          pip install PySide6 build123d loguru numpy
+          # Install from requirements (skip optional ones that may fail)
+          pip install PySide6 loguru numpy
           pip install pyvista pyvistaqt vtk
-          pip install shapely ocp-tessellate ezdxf scipy
-          pip install trimesh
-          pip install matplotlib pillow
+          pip install shapely ezdxf scipy
+          pip install trimesh matplotlib pillow
+          # OCP/build123d - these are large and may take time
+          pip install cadquery-ocp
+          pip install build123d
+          pip install ocp-tessellate
           # These may fail - that's OK
           pip install pymeshlab || echo "pymeshlab not available"
           pip install pyransac3d || echo "pyransac3d not available"
+          pip install gmsh || echo "gmsh not available"
         shell: pwsh
 
       - name: Create hooks directory
@@ -52,11 +50,21 @@ jobs:
           }
         shell: pwsh
 
+      - name: Verify imports
+        run: |
+          python -c "import PySide6; print('PySide6 OK')"
+          python -c "import pyvista; print('PyVista OK')"
+          python -c "import build123d; print('build123d OK')"
+          python -c "import ocp_tessellate; print('ocp_tessellate OK')"
+        shell: pwsh
+        continue-on-error: true
+
       - name: Build Windows executable
         run: |
           $env:KMP_DUPLICATE_LIB_OK = "TRUE"
           pyinstaller MashCAD.spec
         shell: pwsh
+        timeout-minutes: 30
 
       - name: Cleanup unnecessary files
         run: |
@@ -110,17 +118,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip wheel setuptools
           pip install pyinstaller
-          # Install core dependencies
-          pip install PySide6 build123d loguru numpy
+          # Install from requirements (skip optional ones that may fail)
+          pip install PySide6 loguru numpy
           pip install pyvista pyvistaqt vtk
-          pip install shapely ocp-tessellate ezdxf scipy
-          pip install trimesh
-          pip install matplotlib pillow
+          pip install shapely ezdxf scipy
+          pip install trimesh matplotlib pillow
+          # OCP/build123d - these are large and may take time
+          pip install cadquery-ocp
+          pip install build123d
+          pip install ocp-tessellate
           # These may fail - that's OK
           pip install pymeshlab || echo "pymeshlab not available"
           pip install pyransac3d || echo "pyransac3d not available"
+          pip install gmsh || echo "gmsh not available"
 
       - name: Create hooks directory
         run: |
@@ -165,7 +177,7 @@ jobs:
   create-release:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+    if: startsWith(github.ref, 'refs/tags/')  # Only create releases on tag pushes
     permissions:
       contents: write
     steps:
