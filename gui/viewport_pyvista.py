@@ -98,6 +98,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     measure_point_picked = Signal(tuple)  # (x, y, z) - Punkt fuer Measure-Tool
     offset_plane_drag_changed = Signal(float)  # Offset-Wert während Drag
     hole_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
+    thread_face_clicked = Signal(str, int, tuple, tuple, float)  # body_id, cell_id, normal, position, cylinder_diameter
     draft_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     pushpull_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     split_body_clicked = Signal(str)  # body_id
@@ -156,6 +157,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._hole_diameter = 8.0
         self._hole_depth = 0.0          # 0 = through all
         self._hole_body_id = None
+
+        self.thread_mode = False
+        self._thread_preview_actor = None
+        self._thread_position = None    # (x, y, z) on cylindrical face
+        self._thread_direction = None   # axis direction of cylinder
+        self._thread_diameter = 10.0
+        self._thread_depth = 20.0
+        self._thread_body_id = None
+        self._thread_is_internal = False  # True for holes, False for shafts
 
         self.draft_mode = False
         self._draft_selected_faces = []  # list of (body_id, cell_id, normal, position)
@@ -1172,6 +1182,198 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             except Exception:
                 pass
             self._hole_preview_actor = None
+
+    # ==================== THREAD MODE ====================
+    def set_thread_mode(self, enabled):
+        """Aktiviert/deaktiviert den interaktiven Thread-Modus für zylindrische Flächen."""
+        self.thread_mode = enabled
+        if enabled:
+            self._thread_position = None
+            self._thread_direction = None
+            self._thread_body_id = None
+            self._thread_is_internal = False
+        else:
+            self.clear_thread_preview()
+            self._thread_position = None
+            self._thread_direction = None
+            self._thread_body_id = None
+
+    def show_thread_preview(self, position, direction, diameter, depth, is_internal=False):
+        """Zeigt Thread-Preview als Zylinder mit Spirallinie."""
+        self.clear_thread_preview()
+        if position is None or direction is None:
+            return
+
+        try:
+            import pyvista as pv
+            radius = diameter / 2.0
+
+            # Create cylinder along the axis direction
+            cyl = pv.Cylinder(
+                center=(0, 0, depth / 2.0),
+                direction=(0, 0, 1),
+                radius=radius,
+                height=depth,
+                resolution=32,
+                capping=True,
+            )
+
+            # Align cylinder to thread direction
+            d = np.array(direction, dtype=float)
+            d_len = np.linalg.norm(d)
+            if d_len < 1e-9:
+                return
+            d = d / d_len
+
+            # Build rotation from Z to direction
+            z = np.array([0.0, 0.0, 1.0])
+            if np.allclose(z, d):
+                rot = np.eye(4)
+            elif np.allclose(z, -d):
+                rot = np.eye(4)
+                rot[0, 0] = -1
+                rot[2, 2] = -1
+            else:
+                v = np.cross(z, d)
+                s = np.linalg.norm(v)
+                c = np.dot(z, d)
+                vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                R = np.eye(3) + vx + vx @ vx * (1 - c) / (s * s)
+                rot = np.eye(4)
+                rot[:3, :3] = R
+
+            cyl.transform(rot, inplace=True)
+
+            # Translate to position
+            pos = np.array(position, dtype=float)
+            cyl.points += pos
+
+            # Different color for internal vs external threads
+            color = '#66aaff' if not is_internal else '#ffaa66'
+
+            self.plotter.add_mesh(cyl, color=color, opacity=0.45,
+                                  name='thread_preview', pickable=False)
+            self._thread_preview_actor = 'thread_preview'
+            self._thread_position = tuple(position)
+            self._thread_direction = tuple(direction)
+            self._thread_diameter = diameter
+            self._thread_depth = depth
+            self._thread_is_internal = is_internal
+            request_render(self.plotter)
+        except Exception as e:
+            logger.error(f"Thread preview error: {e}")
+
+    def clear_thread_preview(self):
+        """Entfernt die Thread-Preview."""
+        if self._thread_preview_actor:
+            try:
+                self.plotter.remove_actor(self._thread_preview_actor)
+            except Exception:
+                pass
+            self._thread_preview_actor = None
+
+    def _detect_cylindrical_face(self, body_id: str, cell_id: int, click_pos) -> Optional[Tuple[float, Tuple[float, float, float], bool]]:
+        """
+        Erkennt ob eine Face zylindrisch ist und gibt Durchmesser, Achsrichtung und Typ zurück.
+
+        Args:
+            body_id: ID des Bodies
+            cell_id: Cell-ID im Mesh (approximiert Face-Index)
+            click_pos: Klick-Position (x, y, z)
+
+        Returns:
+            Tuple (diameter, axis_direction, is_internal) oder None wenn keine Zylinderfläche
+        """
+        try:
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.GeomAbs import GeomAbs_Cylinder
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+            from OCP.TopoDS import TopoDS
+            from OCP.BRep import BRep_Tool
+            from OCP.BRepGProp import BRepGProp
+            from OCP.GProp import GProp_GProps
+
+            # Finde Body
+            body_data = self.bodies.get(body_id)
+            if not body_data:
+                logger.warning(f"Thread: Body {body_id} nicht gefunden")
+                return None
+
+            # Hole das Solid vom Body
+            body_ref = body_data.get('body_ref')
+            if not body_ref or not hasattr(body_ref, '_build123d_solid'):
+                logger.warning(f"Thread: Body {body_id} hat kein Solid")
+                return None
+
+            solid = body_ref._build123d_solid
+            if solid is None:
+                return None
+
+            ocp_shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+
+            # Iteriere über alle Faces und finde die nächste zur Klick-Position
+            explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+            click_pt = np.array(click_pos)
+            best_face = None
+            best_dist = float('inf')
+            best_idx = -1
+            face_idx = 0
+
+            while explorer.More():
+                face = TopoDS.Face_s(explorer.Current())
+
+                # Berechne Face-Zentrum
+                props = GProp_GProps()
+                BRepGProp.SurfaceProperties_s(face, props)
+                center = props.CentreOfMass()
+                face_center = np.array([center.X(), center.Y(), center.Z()])
+
+                dist = np.linalg.norm(face_center - click_pt)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_face = face
+                    best_idx = face_idx
+
+                explorer.Next()
+                face_idx += 1
+
+            if best_face is None:
+                logger.warning("Thread: Keine Face gefunden")
+                return None
+
+            # Analysiere die gefundene Face
+            adaptor = BRepAdaptor_Surface(best_face)
+            surf_type = adaptor.GetType()
+
+            if surf_type != GeomAbs_Cylinder:
+                logger.info(f"Thread: Face {best_idx} ist keine Zylinderfläche (Typ: {surf_type})")
+                return None
+
+            # Extrahiere Zylinderparameter
+            cyl = adaptor.Cylinder()
+            axis = cyl.Axis()
+            loc = axis.Location()
+            direction = axis.Direction()
+
+            axis_dir = (direction.X(), direction.Y(), direction.Z())
+            radius = cyl.Radius()
+            diameter = radius * 2.0
+
+            # Bestimme ob Internal (Loch) oder External (Bolzen)
+            # REVERSED = Loch, FORWARD = Bolzen
+            is_internal = (best_face.Orientation() == TopAbs_REVERSED)
+
+            logger.info(f"Thread: Zylinderfläche erkannt - D={diameter:.2f}mm, "
+                       f"{'Internal (Loch)' if is_internal else 'External (Bolzen)'}")
+
+            return (diameter, axis_dir, is_internal)
+
+        except Exception as e:
+            logger.error(f"Thread: Fehler bei Zylindererkennung: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     # ==================== DRAFT MODE ====================
     def set_draft_mode(self, enabled):
@@ -4976,6 +5178,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if self.hole_mode:
             self.hole_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
             self._draw_body_face_selection(pos, normal)
+            return
+
+        # Thread Mode: Emit face click for thread placement on cylindrical faces
+        if self.thread_mode:
+            # Detect if face is cylindrical and get its properties
+            cyl_info = self._detect_cylindrical_face(body_id, cell_id, pos)
+            if cyl_info:
+                diameter, axis_dir, is_internal = cyl_info
+                self.thread_face_clicked.emit(body_id, cell_id, tuple(axis_dir), tuple(pos), diameter)
+                self._draw_body_face_selection(pos, axis_dir)
+            else:
+                logger.warning("Thread: Keine zylindrische Fläche erkannt")
             return
 
         # Draft Mode: Full-face selection with orange highlight

@@ -3114,3 +3114,258 @@ class LatticeInputPanel(QFrame):
             if y < 0:
                 y = 50
             self.move(x, y)
+
+
+# ISO metric coarse threads: (nominal_dia, pitch)
+METRIC_THREADS_PANEL = {
+    "M3": (3.0, 0.5),
+    "M4": (4.0, 0.7),
+    "M5": (5.0, 0.8),
+    "M6": (6.0, 1.0),
+    "M8": (8.0, 1.25),
+    "M10": (10.0, 1.5),
+    "M12": (12.0, 1.75),
+    "M16": (16.0, 2.0),
+    "M20": (20.0, 2.5),
+    "M24": (24.0, 3.0),
+}
+
+
+class ThreadInputPanel(QFrame):
+    """Input panel for interactive Thread placement on cylindrical faces (Fusion-style)."""
+
+    diameter_changed = Signal(float)
+    pitch_changed = Signal(float)
+    depth_changed = Signal(float)
+    thread_type_changed = Signal(str)  # "external" or "internal"
+    tolerance_changed = Signal(float)
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._diameter = 10.0
+        self._pitch = 1.5
+        self._depth = 20.0
+        self._thread_type = "external"
+        self._tolerance_offset = 0.0
+        self._detected_diameter = None  # Auto-detected from cylindrical face
+
+        self.setMinimumWidth(680)
+        self.setFixedHeight(75)
+
+        self.setStyleSheet("""
+            QFrame {
+                background: #2d2d30;
+                border: 2px solid #00aaff;
+                border-radius: 8px;
+            }
+            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
+            QDoubleSpinBox {
+                background: #1e1e1e; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
+            }
+            QComboBox {
+                background: #1e1e1e; border: 1px solid #555;
+                border-radius: 4px; color: #fff; padding: 4px; min-width: 80px;
+            }
+            QPushButton {
+                background: #444; color: #fff; border: 1px solid #555;
+                border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #555; border-color: #777; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("Thread:"))
+
+        # Thread type (External/Internal)
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["External", "Internal"])
+        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        layout.addWidget(self.type_combo)
+
+        # Size preset
+        self.size_combo = QComboBox()
+        self.size_combo.addItem("Custom")
+        for name in METRIC_THREADS_PANEL:
+            self.size_combo.addItem(name)
+        self.size_combo.setCurrentText("M10")
+        self.size_combo.currentTextChanged.connect(self._on_preset_changed)
+        layout.addWidget(self.size_combo)
+
+        # Diameter
+        layout.addWidget(QLabel("\u2300"))  # ⌀
+        self.diameter_input = ActionSpinBox()
+        self.diameter_input.setRange(0.5, 500.0)
+        self.diameter_input.setDecimals(2)
+        self.diameter_input.setSuffix(" mm")
+        self.diameter_input.setValue(10.0)
+        self.diameter_input.valueChanged.connect(self._on_diameter_changed)
+        self.diameter_input.enterPressed.connect(self._confirm)
+        self.diameter_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.diameter_input)
+
+        # Pitch
+        layout.addWidget(QLabel("P:"))
+        self.pitch_input = ActionSpinBox()
+        self.pitch_input.setRange(0.1, 10.0)
+        self.pitch_input.setDecimals(2)
+        self.pitch_input.setSuffix(" mm")
+        self.pitch_input.setValue(1.5)
+        self.pitch_input.valueChanged.connect(self._on_pitch_changed)
+        self.pitch_input.enterPressed.connect(self._confirm)
+        self.pitch_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.pitch_input)
+
+        # Depth
+        layout.addWidget(QLabel("Depth:"))
+        self.depth_input = ActionSpinBox()
+        self.depth_input.setRange(0.1, 10000.0)
+        self.depth_input.setDecimals(2)
+        self.depth_input.setSuffix(" mm")
+        self.depth_input.setValue(20.0)
+        self.depth_input.valueChanged.connect(self._on_depth_changed)
+        self.depth_input.enterPressed.connect(self._confirm)
+        self.depth_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.depth_input)
+
+        # Tolerance offset
+        layout.addWidget(QLabel("Tol:"))
+        self.tolerance_input = ActionSpinBox()
+        self.tolerance_input.setRange(-1.0, 1.0)
+        self.tolerance_input.setDecimals(3)
+        self.tolerance_input.setSuffix(" mm")
+        self.tolerance_input.setValue(0.0)
+        self.tolerance_input.valueChanged.connect(self._on_tolerance_changed)
+        self.tolerance_input.enterPressed.connect(self._confirm)
+        self.tolerance_input.escapePressed.connect(self.cancelled.emit)
+        layout.addWidget(self.tolerance_input)
+
+        # OK / Cancel
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.setStyleSheet("background: #00aaff; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.clicked.connect(self._confirm)
+        layout.addWidget(self.btn_ok)
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setFixedWidth(35)
+        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _on_type_changed(self, text):
+        self._thread_type = text.lower()
+        self.thread_type_changed.emit(self._thread_type)
+
+    def _on_preset_changed(self, text):
+        if text in METRIC_THREADS_PANEL:
+            dia, pitch = METRIC_THREADS_PANEL[text]
+            self.diameter_input.blockSignals(True)
+            self.diameter_input.setValue(dia)
+            self.diameter_input.blockSignals(False)
+            self._diameter = dia
+            self.pitch_input.blockSignals(True)
+            self.pitch_input.setValue(pitch)
+            self.pitch_input.blockSignals(False)
+            self._pitch = pitch
+            self.diameter_changed.emit(dia)
+            self.pitch_changed.emit(pitch)
+
+    def _on_diameter_changed(self, value):
+        self._diameter = value
+        self.diameter_changed.emit(value)
+
+    def _on_pitch_changed(self, value):
+        self._pitch = value
+        self.pitch_changed.emit(value)
+
+    def _on_depth_changed(self, value):
+        self._depth = value
+        self.depth_changed.emit(value)
+
+    def _on_tolerance_changed(self, value):
+        self._tolerance_offset = value
+        self.tolerance_changed.emit(value)
+
+    def _confirm(self):
+        self._diameter = self.diameter_input.value()
+        self._pitch = self.pitch_input.value()
+        self._depth = self.depth_input.value()
+        self._tolerance_offset = self.tolerance_input.value()
+        self.confirmed.emit()
+
+    def get_diameter(self) -> float:
+        return self.diameter_input.value()
+
+    def get_pitch(self) -> float:
+        return self.pitch_input.value()
+
+    def get_depth(self) -> float:
+        return self.depth_input.value()
+
+    def get_thread_type(self) -> str:
+        return self._thread_type
+
+    def get_tolerance_offset(self) -> float:
+        return self.tolerance_input.value()
+
+    def set_detected_diameter(self, diameter: float):
+        """Set diameter from auto-detected cylindrical face."""
+        self._detected_diameter = diameter
+        # Find closest metric thread
+        closest = None
+        min_diff = float('inf')
+        for name, (dia, pitch) in METRIC_THREADS_PANEL.items():
+            diff = abs(dia - diameter)
+            if diff < min_diff:
+                min_diff = diff
+                closest = name
+
+        if closest and min_diff < 1.0:
+            # Close enough to a standard size
+            self.size_combo.setCurrentText(closest)
+        else:
+            # Custom diameter
+            self.size_combo.setCurrentText("Custom")
+            self.diameter_input.blockSignals(True)
+            self.diameter_input.setValue(diameter)
+            self.diameter_input.blockSignals(False)
+            self._diameter = diameter
+
+    def reset(self):
+        self._diameter = 10.0
+        self._pitch = 1.5
+        self._depth = 20.0
+        self._tolerance_offset = 0.0
+        self._detected_diameter = None
+        self.diameter_input.blockSignals(True)
+        self.diameter_input.setValue(10.0)
+        self.diameter_input.blockSignals(False)
+        self.pitch_input.blockSignals(True)
+        self.pitch_input.setValue(1.5)
+        self.pitch_input.blockSignals(False)
+        self.depth_input.blockSignals(True)
+        self.depth_input.setValue(20.0)
+        self.depth_input.blockSignals(False)
+        self.tolerance_input.blockSignals(True)
+        self.tolerance_input.setValue(0.0)
+        self.tolerance_input.blockSignals(False)
+        self.type_combo.setCurrentIndex(0)
+        self.size_combo.setCurrentText("M10")
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        if pos_widget:
+            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
+            x = (parent.width() - self.width()) // 2
+            y = parent.height() - self.height() - 50
+            if y < 0:
+                y = 50
+            self.move(x, y)

@@ -22,11 +22,27 @@ Feature-Flags:
 """
 
 from .trim import TrimOperation, TrimResult
+from .extend import ExtendOperation, ExtendResult
+from .fillet2d import Fillet2DOperation, FilletResult, CornerData, CornerResult
+from .chamfer2d import Chamfer2DOperation, ChamferResult
 from .base import OperationResult, SketchOperation
 
 __all__ = [
-    'TrimOperation',
-    'TrimResult',
+    # Core
     'OperationResult',
     'SketchOperation',
+    # Trim
+    'TrimOperation',
+    'TrimResult',
+    # Extend
+    'ExtendOperation',
+    'ExtendResult',
+    # Fillet 2D
+    'Fillet2DOperation',
+    'FilletResult',
+    'CornerData',
+    'CornerResult',
+    # Chamfer 2D
+    'Chamfer2DOperation',
+    'ChamferResult',
 ]

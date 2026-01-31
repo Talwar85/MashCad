@@ -2949,7 +2949,7 @@ class Body:
                                groove_depth, thread_type, tolerance_offset):
         """Echtes Gewinde via OCP Helix + Sweep."""
         import math
-        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax1, gp_Pnt2d, gp_Vec
+        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax3, gp_Ax1, gp_Pnt2d, gp_Vec
         from OCP.Geom import Geom_CylindricalSurface
         from OCP.GCE2d import GCE2d_MakeSegment
         from OCP.BRepBuilderAPI import (
@@ -2961,7 +2961,8 @@ class Body:
         from OCP.TopoDS import TopoDS_Wire
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 
-        ax = gp_Ax2(gp_Pnt(*pos), gp_Dir(*direction))
+        # gp_Ax3 für Geom_CylindricalSurface (nicht gp_Ax2!)
+        ax3 = gp_Ax3(gp_Pnt(*pos), gp_Dir(*direction))
 
         if thread_type == "external":
             helix_r = r - groove_depth / 2
@@ -2969,7 +2970,7 @@ class Body:
             helix_r = r + groove_depth / 2
 
         # Create helix on cylindrical surface
-        cyl_surface = Geom_CylindricalSurface(ax, helix_r)
+        cyl_surface = Geom_CylindricalSurface(ax3, helix_r)
 
         # Helix as 2D line on unwrapped cylinder: u = angle, v = height
         # Full turn = 2*pi in u, pitch in v

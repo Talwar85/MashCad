@@ -6,7 +6,8 @@ Supports ISO metric threads with tolerance classes.
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QComboBox, QGroupBox, QCheckBox
+    QLineEdit, QPushButton, QComboBox, QGroupBox, QCheckBox,
+    QRadioButton, QDoubleSpinBox, QButtonGroup
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
@@ -158,23 +159,51 @@ class ThreadDialog(QDialog):
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
-        # Tolerance group
-        tol_group = QGroupBox(tr("Tolerance (ISO 965-1)"))
+        # Tolerance group - ISO Preset or Custom
+        tol_group = QGroupBox(tr("Tolerance"))
         tol_layout = QVBoxLayout()
 
-        tol_row = QHBoxLayout()
-        tol_row.addWidget(QLabel(tr("Fit Class:")))
+        # Radio button group
+        self.tol_button_group = QButtonGroup(self)
+
+        # ISO Preset row
+        iso_row = QHBoxLayout()
+        self.tol_iso_radio = QRadioButton(tr("ISO Preset:"))
+        self.tol_iso_radio.setChecked(True)
+        self.tol_button_group.addButton(self.tol_iso_radio)
+        iso_row.addWidget(self.tol_iso_radio)
         self.tolerance_combo = QComboBox()
         self._update_tolerance_options()
-        tol_row.addWidget(self.tolerance_combo)
-        tol_row.addStretch()
-        tol_layout.addLayout(tol_row)
+        iso_row.addWidget(self.tolerance_combo)
+        iso_row.addStretch()
+        tol_layout.addLayout(iso_row)
+
+        # Custom tolerance row
+        custom_row = QHBoxLayout()
+        self.tol_custom_radio = QRadioButton(tr("Custom:"))
+        self.tol_button_group.addButton(self.tol_custom_radio)
+        custom_row.addWidget(self.tol_custom_radio)
+        self.custom_tolerance_input = QDoubleSpinBox()
+        self.custom_tolerance_input.setRange(-1.0, 1.0)
+        self.custom_tolerance_input.setSingleStep(0.01)
+        self.custom_tolerance_input.setDecimals(3)
+        self.custom_tolerance_input.setValue(0.0)
+        self.custom_tolerance_input.setSuffix(" mm")
+        self.custom_tolerance_input.setEnabled(False)
+        custom_row.addWidget(self.custom_tolerance_input)
+        custom_row.addStretch()
+        tol_layout.addLayout(custom_row)
+
+        # Radio toggle connections
+        self.tol_iso_radio.toggled.connect(self._on_tolerance_mode_changed)
+        self.tol_custom_radio.toggled.connect(self._on_tolerance_mode_changed)
 
         # Tolerance info label
         self.tol_info = QLabel("")
         self.tol_info.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
         tol_layout.addWidget(self.tol_info)
         self.tolerance_combo.currentTextChanged.connect(self._update_tolerance_info)
+        self.custom_tolerance_input.valueChanged.connect(self._update_custom_tolerance_info)
 
         tol_group.setLayout(tol_layout)
         layout.addWidget(tol_group)
@@ -235,6 +264,29 @@ class ThreadDialog(QDialog):
 
         self._update_tolerance_options()
 
+    def _on_tolerance_mode_changed(self):
+        """Toggle between ISO preset and custom tolerance."""
+        if not hasattr(self, 'custom_tolerance_input'):
+            return
+        is_custom = self.tol_custom_radio.isChecked()
+        self.tolerance_combo.setEnabled(not is_custom)
+        self.custom_tolerance_input.setEnabled(is_custom)
+        if is_custom:
+            self._update_custom_tolerance_info(self.custom_tolerance_input.value())
+        else:
+            self._update_tolerance_info(self.tolerance_combo.currentText())
+
+    def _update_custom_tolerance_info(self, value):
+        """Update info label for custom tolerance."""
+        if not hasattr(self, 'tol_info'):
+            return
+        if value > 0:
+            self.tol_info.setText(tr("Clearance fit") + f" | {tr('Diameter offset')}: +{value:.3f} mm")
+        elif value < 0:
+            self.tol_info.setText(tr("Interference fit") + f" | {tr('Diameter offset')}: {value:.3f} mm")
+        else:
+            self.tol_info.setText(tr("Nominal (no offset)"))
+
     def _update_tolerance_options(self):
         self.tolerance_combo.clear()
         is_external = self.type_combo.currentIndex() == 0
@@ -242,9 +294,13 @@ class ThreadDialog(QDialog):
             self.tolerance_combo.addItems(["6g (Standard)", "6h (Close)", "4g (Tight)", "8g (Loose)"])
         else:
             self.tolerance_combo.addItems(["6H (Standard)", "5H (Close)", "7H (Loose)"])
-        self._update_tolerance_info(self.tolerance_combo.currentText())
+        # Only update info if tol_info exists (not during initial setup)
+        if hasattr(self, 'tol_info'):
+            self._update_tolerance_info(self.tolerance_combo.currentText())
 
     def _update_tolerance_info(self, text):
+        if not hasattr(self, 'tol_info'):
+            return
         key = text.split(" ")[0] if text else ""
         if key in TOLERANCE_CLASSES:
             desc, offset = TOLERANCE_CLASSES[key]
@@ -279,11 +335,17 @@ class ThreadDialog(QDialog):
                 logger.warning("All values must be > 0")
                 return
 
-            # Tolerance
-            tol_text = self.tolerance_combo.currentText().split(" ")[0]
-            self.tolerance_class = tol_text
-            tol_data = TOLERANCE_CLASSES.get(tol_text, ("", 0.0))
-            self.tolerance_offset = tol_data[1] * (self.diameter / 10.0)
+            # Tolerance - ISO preset or custom
+            if self.tol_custom_radio.isChecked():
+                # Custom tolerance - use directly
+                self.tolerance_offset = self.custom_tolerance_input.value()
+                self.tolerance_class = "custom"
+            else:
+                # ISO preset
+                tol_text = self.tolerance_combo.currentText().split(" ")[0]
+                self.tolerance_class = tol_text
+                tol_data = TOLERANCE_CLASSES.get(tol_text, ("", 0.0))
+                self.tolerance_offset = tol_data[1] * (self.diameter / 10.0)
 
             # Head type for bolt/nut
             self.head_type = self.head_combo.currentText().lower().replace(" ", "_")

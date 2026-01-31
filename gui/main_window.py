@@ -497,6 +497,22 @@ class MainWindow(QMainWindow):
         self.hole_panel.cancelled.connect(self._on_hole_cancelled)
         self._hole_mode = False
 
+        # Thread Input Panel (für interaktive Gewinde auf zylindrischen Flächen)
+        from gui.input_panels import ThreadInputPanel
+        self.thread_panel = ThreadInputPanel(self)
+        self.thread_panel.diameter_changed.connect(self._on_thread_diameter_changed)
+        self.thread_panel.pitch_changed.connect(self._on_thread_pitch_changed)
+        self.thread_panel.depth_changed.connect(self._on_thread_depth_changed)
+        self.thread_panel.tolerance_changed.connect(self._on_thread_tolerance_changed)
+        self.thread_panel.confirmed.connect(self._on_thread_confirmed)
+        self.thread_panel.cancelled.connect(self._on_thread_cancelled)
+        self._thread_mode = False
+        self._thread_target_body = None
+        self._thread_position = None
+        self._thread_direction = None
+        self._thread_detected_diameter = None
+        self._thread_is_internal = False
+
         # Draft Input Panel
         from gui.input_panels import DraftInputPanel
         self.draft_panel = DraftInputPanel(self)
@@ -900,6 +916,8 @@ class MainWindow(QMainWindow):
             self.viewport_3d.target_face_selected.connect(self._on_target_face_selected)
         if hasattr(self.viewport_3d, 'hole_face_clicked'):
             self.viewport_3d.hole_face_clicked.connect(self._on_body_face_clicked_for_hole)
+        if hasattr(self.viewport_3d, 'thread_face_clicked'):
+            self.viewport_3d.thread_face_clicked.connect(self._on_cylindrical_face_clicked_for_thread)
         if hasattr(self.viewport_3d, 'draft_face_clicked'):
             self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
         if hasattr(self.viewport_3d, 'pushpull_face_clicked'):
@@ -1482,6 +1500,11 @@ class MainWindow(QMainWindow):
         # Prüfe auf Fillet/Chamfer Pending Mode (NEU)
         if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
             self._on_body_clicked_for_fillet(body_id)
+            return
+
+        # Prüfe auf Thread Pending Mode
+        if getattr(self, '_pending_thread_mode', False):
+            self._on_body_clicked_for_thread(body_id)
             return
 
         # Prüfe auf BREP Cleanup Pending Mode
@@ -2375,10 +2398,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Hole auf {body.name} — Parameter einstellen, Enter bestätigen")
 
     def _thread_dialog(self):
-        """Thread-Dialog: Gewinde auf Body, oder Schraube/Mutter erzeugen."""
+        """Thread-Dialog: Interaktives Gewinde auf zylindrische Fläche (wie Hole),
+        oder Schraube/Mutter erzeugen."""
         from gui.dialogs.thread_dialog import ThreadDialog
-        from modeling import ThreadFeature, Body
-        from gui.commands.feature_commands import AddFeatureCommand
 
         dialog = ThreadDialog(parent=self)
         if not dialog.exec():
@@ -2387,34 +2409,8 @@ class MainWindow(QMainWindow):
         mode = dialog.result_mode  # "thread", "bolt", "nut"
 
         if mode == "thread":
-            # Apply thread to existing body
-            body = self._get_active_body()
-            if not body or not body._build123d_solid:
-                logger.warning("Kein Body mit Geometrie ausgewaehlt.")
-                return
-            solid = body._build123d_solid
-            try:
-                bb = solid.bounding_box()
-                center = ((bb.min.X + bb.max.X) / 2,
-                          (bb.min.Y + bb.max.Y) / 2,
-                          bb.min.Z)
-            except Exception:
-                center = (0, 0, 0)
-
-            feature = ThreadFeature(
-                thread_type=dialog.thread_type_str,
-                standard="M",
-                diameter=dialog.diameter,
-                pitch=dialog.pitch,
-                depth=dialog.depth,
-                position=center,
-                direction=(0, 0, 1),
-                tolerance_class=dialog.tolerance_class,
-                tolerance_offset=dialog.tolerance_offset,
-            )
-            cmd = AddFeatureCommand(body, feature, self)
-            self.undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Thread M{dialog.diameter}x{dialog.pitch} ({dialog.tolerance_class}) created")
+            # Thread on Body - interaktiver Modus wie Hole
+            self._start_interactive_thread_mode()
 
         elif mode == "bolt":
             self._generate_bolt(dialog)
@@ -2422,66 +2418,271 @@ class MainWindow(QMainWindow):
         elif mode == "nut":
             self._generate_nut(dialog)
 
+    def _start_interactive_thread_mode(self):
+        """Startet interaktiven Thread-Workflow (Fusion-style).
+        Klicke auf eine zylindrische Fläche, um ein Gewinde zu erstellen.
+        """
+        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        if not has_bodies:
+            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
+            logger.warning("Thread: Keine Bodies mit Geometrie.")
+            return
+
+        self._hide_transform_ui()
+        self._thread_mode = True
+        self._thread_target_body = None
+        self._thread_position = None
+        self._thread_direction = None
+        self._thread_detected_diameter = None
+        self._thread_is_internal = False
+        self.viewport_3d.set_thread_mode(True)
+        self.thread_panel.reset()
+        self.thread_panel.show_at(self.viewport_3d)
+        self.statusBar().showMessage("Thread: Klicke auf eine zylindrische Fläche (Loch oder Bolzen)")
+        logger.info("Thread-Modus gestartet — zylindrische Fläche auf Body klicken")
+
+    def _on_thread_diameter_changed(self, value):
+        """Live-Update der Thread-Preview bei Durchmesser-Änderung."""
+        if not self._thread_mode:
+            return
+        self._update_thread_preview()
+
+    def _on_thread_pitch_changed(self, value):
+        """Live-Update bei Pitch-Änderung."""
+        if not self._thread_mode:
+            return
+        # Pitch beeinflusst nur die Geometrie, nicht die Preview
+        pass
+
+    def _on_thread_depth_changed(self, value):
+        """Live-Update der Thread-Preview bei Tiefen-Änderung."""
+        if not self._thread_mode:
+            return
+        self._update_thread_preview()
+
+    def _on_thread_tolerance_changed(self, value):
+        """Live-Update bei Toleranz-Änderung."""
+        if not self._thread_mode:
+            return
+        # Toleranz beeinflusst nur die Endgeometrie, nicht die Preview
+
+    def _update_thread_preview(self):
+        """Aktualisiert die Thread-Preview basierend auf aktuellen Panel-Werten."""
+        pos = self._thread_position
+        direction = self._thread_direction
+        if pos and direction:
+            diameter = self.thread_panel.get_diameter()
+            depth = self.thread_panel.get_depth()
+            is_internal = self._thread_is_internal
+            self.viewport_3d.show_thread_preview(pos, direction, diameter, depth, is_internal)
+
+    def _on_cylindrical_face_clicked_for_thread(self, body_id, cell_id, axis_dir, position, diameter):
+        """Zylindrische Fläche wurde im Thread-Modus geklickt."""
+        if not self._thread_mode:
+            return
+
+        # Finde Body
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if not body or not body._build123d_solid:
+            self.statusBar().showMessage("Kein gültiger Body getroffen")
+            return
+
+        self._thread_target_body = body
+        self._thread_position = tuple(position)
+        self._thread_direction = tuple(axis_dir)
+        self._thread_detected_diameter = diameter
+
+        # Bestimme ob internal (Loch) oder external (Bolzen)
+        # Das wird vom Viewport über die detect-Funktion bestimmt
+        # Hier nutzen wir die Information aus dem Signal
+
+        # Auto-detect thread type basierend auf Zylinder-Typ
+        # (wird im viewport_pyvista bestimmt)
+        cyl_info = self.viewport_3d._detect_cylindrical_face(body_id, cell_id, position)
+        if cyl_info:
+            _, _, is_internal = cyl_info
+            self._thread_is_internal = is_internal
+            # Setze Thread-Typ im Panel
+            self.thread_panel.type_combo.setCurrentIndex(1 if is_internal else 0)
+
+        # Setze erkannten Durchmesser im Panel
+        self.thread_panel.set_detected_diameter(diameter)
+
+        # Zeige Preview
+        depth = self.thread_panel.get_depth()
+        self.viewport_3d.show_thread_preview(position, axis_dir, diameter, depth, self._thread_is_internal)
+
+        thread_type_str = "Internal (Loch)" if self._thread_is_internal else "External (Bolzen)"
+        self.statusBar().showMessage(
+            f"Thread auf {body.name} — D={diameter:.2f}mm, {thread_type_str} — Parameter einstellen, Enter bestätigen"
+        )
+
+    def _on_thread_confirmed(self):
+        """Thread bestätigt — Feature erstellen."""
+        from modeling import ThreadFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
+        pos = self._thread_position
+        direction = self._thread_direction
+        if not pos or not direction:
+            self.statusBar().showMessage("Keine zylindrische Fläche ausgewählt!")
+            return
+
+        body = getattr(self, '_thread_target_body', None)
+        if not body:
+            self._finish_thread_ui()
+            return
+
+        diameter = self.thread_panel.get_diameter()
+        pitch = self.thread_panel.get_pitch()
+        depth = self.thread_panel.get_depth()
+        thread_type = self.thread_panel.get_thread_type()
+        tolerance_offset = self.thread_panel.get_tolerance_offset()
+
+        feature = ThreadFeature(
+            thread_type=thread_type,
+            standard="M",
+            diameter=diameter,
+            pitch=pitch,
+            depth=depth,
+            position=pos,
+            direction=direction,
+            tolerance_class="custom" if tolerance_offset != 0 else "6g" if thread_type == "external" else "6H",
+            tolerance_offset=tolerance_offset,
+        )
+
+        cmd = AddFeatureCommand(body, feature, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Thread M{diameter:.0f}x{pitch} erstellt")
+        logger.success(f"Thread M{diameter:.0f}x{pitch} ({thread_type}) at {pos}")
+        self._finish_thread_ui()
+
+    def _on_thread_cancelled(self):
+        """Thread abgebrochen."""
+        self._finish_thread_ui()
+        self.statusBar().showMessage("Thread abgebrochen")
+
+    def _finish_thread_ui(self):
+        """Thread-UI aufräumen."""
+        self._thread_mode = False
+        self._thread_target_body = None
+        self._thread_position = None
+        self._thread_direction = None
+        self._thread_detected_diameter = None
+        self._thread_is_internal = False
+        self.viewport_3d.set_thread_mode(False)
+        self.thread_panel.hide()
+
     def _generate_bolt(self, dialog):
-        """Generate a bolt as a new body (hex head + threaded shaft)."""
-        from modeling import Body
+        """Generate a bolt as a new body (hex head + REAL threaded shaft)."""
+        from modeling import Body, ThreadFeature
         try:
             import build123d as bd
 
-            dia = dialog.diameter + dialog.tolerance_offset
+            dia = dialog.diameter
             length = dialog.depth
             hex_af = dialog.hex_af  # across flats
             head_h = dialog.head_height
+            pitch = dialog.pitch
+            tolerance_offset = dialog.tolerance_offset
 
-            # Hex head
+            # 1. Hex head
             hex_sketch = bd.RegularPolygon(radius=hex_af / 2 / 0.866025, side_count=6)
             head = bd.extrude(hex_sketch, head_h)
 
-            # Shaft
-            shaft = bd.Pos(0, 0, -length) * bd.extrude(bd.Circle(dia / 2), length)
+            # 2. Shaft (mit Toleranz-Offset)
+            shaft_dia = dia + tolerance_offset
+            shaft = bd.Pos(0, 0, -length) * bd.extrude(bd.Circle(shaft_dia / 2), length)
 
-            bolt_solid = bd.Compound([head, shaft])
-            # Fuse
+            # 3. Fuse head + shaft
             bolt_solid = bd.fuse(head, shaft)
 
-            body = Body(name=f"Bolt_M{dialog.diameter:.0f}x{dialog.pitch}")
+            body = Body(name=f"Bolt_M{dia:.0f}x{pitch}")
             body._build123d_solid = bolt_solid
+
+            # 4. Echte Gewinde auf Schaft anwenden
+            try:
+                feature = ThreadFeature(
+                    thread_type="external",
+                    standard="M",
+                    diameter=shaft_dia,
+                    pitch=pitch,
+                    depth=length,
+                    position=(0, 0, -length),  # Start am Schaft-Ende
+                    direction=(0, 0, 1),        # Nach oben
+                    tolerance_class=dialog.tolerance_class,
+                    tolerance_offset=tolerance_offset,
+                )
+                threaded_solid = self._body_feature_engine._compute_thread(feature, bolt_solid)
+                body._build123d_solid = threaded_solid
+                logger.info(f"[BOLT] Echte Gewinde M{dia}x{pitch} erstellt")
+            except Exception as thread_err:
+                logger.warning(f"Thread creation failed, using smooth shaft: {thread_err}")
+                # Fallback: Glatter Schaft (wie vorher)
+
             body.invalidate_mesh()
             self.document.bodies.append(body)
-            self._update_body_from_build123d(body, bolt_solid)
+            self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
-            self.statusBar().showMessage(f"Bolt M{dialog.diameter:.0f}x{length:.0f} generated")
-            logger.success(f"Bolt M{dialog.diameter:.0f}x{length:.0f} erzeugt")
+            tol_str = f" ({dialog.tolerance_class})" if dialog.tolerance_class != "custom" else f" (+{tolerance_offset:.3f}mm)"
+            self.statusBar().showMessage(f"Bolt M{dia:.0f}x{length:.0f}{tol_str} generated")
+            logger.success(f"Bolt M{dia:.0f}x{length:.0f} erzeugt")
         except Exception as e:
             logger.error(f"Bolt generation failed: {e}")
 
     def _generate_nut(self, dialog):
-        """Generate a nut as a new body (hex body with threaded hole)."""
-        from modeling import Body
+        """Generate a nut as a new body (hex body with REAL internal threads)."""
+        from modeling import Body, ThreadFeature
         try:
             import build123d as bd
 
             dia = dialog.diameter
             hex_af = dialog.hex_af
             nut_h = dialog.nut_height
+            pitch = dialog.pitch
+            tolerance_offset = dialog.tolerance_offset
 
-            # Hex outer body
+            # 1. Hex outer body
             hex_sketch = bd.RegularPolygon(radius=hex_af / 2 / 0.866025, side_count=6)
             hex_body = bd.extrude(hex_sketch, nut_h)
 
-            # Hole through center
-            hole = bd.extrude(bd.Circle(dia / 2), nut_h)
+            # 2. Kernloch-Durchmesser für Innengewinde
+            # ISO: Kernloch = Nenndurchmesser - 1.0825 * Pitch
+            core_dia = dia - 1.0825 * pitch + tolerance_offset
+            hole = bd.extrude(bd.Circle(core_dia / 2), nut_h)
 
             nut_solid = bd.cut(hex_body, hole)
 
-            body = Body(name=f"Nut_M{dialog.diameter:.0f}")
+            body = Body(name=f"Nut_M{dia:.0f}")
             body._build123d_solid = nut_solid
+
+            # 3. Echte Innengewinde anwenden
+            try:
+                feature = ThreadFeature(
+                    thread_type="internal",
+                    standard="M",
+                    diameter=dia,
+                    pitch=pitch,
+                    depth=nut_h,
+                    position=(0, 0, 0),
+                    direction=(0, 0, 1),
+                    tolerance_class=dialog.tolerance_class,
+                    tolerance_offset=tolerance_offset,
+                )
+                threaded_solid = self._body_feature_engine._compute_thread(feature, nut_solid)
+                body._build123d_solid = threaded_solid
+                logger.info(f"[NUT] Echte Innengewinde M{dia}x{pitch} erstellt")
+            except Exception as thread_err:
+                logger.warning(f"Internal thread creation failed, using smooth hole: {thread_err}")
+                # Fallback: Glatte Bohrung (wie vorher)
+
             body.invalidate_mesh()
             self.document.bodies.append(body)
-            self._update_body_from_build123d(body, nut_solid)
+            self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
-            self.statusBar().showMessage(f"Nut M{dialog.diameter:.0f} generated")
-            logger.success(f"Nut M{dialog.diameter:.0f} erzeugt")
+            tol_str = f" ({dialog.tolerance_class})" if dialog.tolerance_class != "custom" else f" (+{tolerance_offset:.3f}mm)"
+            self.statusBar().showMessage(f"Nut M{dia:.0f}{tol_str} generated")
+            logger.success(f"Nut M{dia:.0f} erzeugt")
         except Exception as e:
             logger.error(f"Nut generation failed: {e}")
 

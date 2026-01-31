@@ -27,7 +27,14 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Phase 4a: Extrahierte Trim-Operation
     "use_extracted_trim": True,  # Neue TrimOperation Klasse
-    "trim_comparison_mode": True,  # Vergleicht alte und neue Implementierung (für Testing)
+    "trim_comparison_mode": False,  # Vergleicht alte und neue Implementierung (für Testing)
+
+    # Phase 4b: Extrahierte Extend-Operation
+    "use_extracted_extend": True,  # Neue ExtendOperation Klasse
+
+    # Phase 4c: Extrahierte Fillet/Chamfer 2D Operationen
+    "use_extracted_fillet_2d": True,  # Neue Fillet2DOperation Klasse
+    "use_extracted_chamfer_2d": True,  # Neue Chamfer2DOperation Klasse
 }
 
 
