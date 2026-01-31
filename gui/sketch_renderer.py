@@ -451,58 +451,44 @@ class SketchRendererMixin:
             else:
                 path_normal.addEllipse(ctr, r, r)
 
-        # --- 3. Arcs sammeln ---
-        # --- 3. Arcs sammeln (Robust Screen-Space Method) ---
+        # --- 3. Arcs sammeln (Point-Based Method - keine Winkel-Mathe-Probleme) ---
         for arc in self.sketch.arcs:
             bounds = self._get_arc_bounds(arc)
             if not is_visible(bounds): continue
 
-            # 1. Bildschirm-Koordinaten aller wichtigen Punkte holen
-            ctr = self.world_to_screen(arc.center)
-            
-            # Wir berechnen die Endpunkte basierend auf den Welt-Winkeln,
-            # um sicherzugehen, dass wir exakt die Geometrie abbilden
-            p_start_world = QPointF(
-                arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
-                arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle))
-            )
-            p_end_world = QPointF(
-                arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
-                arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
-            )
-            
-            p1 = self.world_to_screen(p_start_world) # Screen Start
-            p2 = self.world_to_screen(p_end_world)   # Screen End
-            
-            # Rechteck für Qt definieren
-            r = arc.radius * self.view_scale
-            rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
+            # Point-based Ansatz: Arc als Polyline durch gesampelte Punkte
+            # Das vermeidet alle Winkel-Konvertierungsprobleme mit Qt
+            sweep = arc.end_angle - arc.start_angle
+            # Normalisiere auf positive Werte für korrekten Bogen
+            while sweep < 0:
+                sweep += 360
+            while sweep > 360:
+                sweep -= 360
+            if sweep < 0.1:
+                sweep = 360  # Fast geschlossener Bogen
 
-            # 2. Winkel direkt auf dem Bildschirm messen (atan2)
-            # math.atan2(y, x) gibt Winkel in Radians. 
-            # Im Screen-Space (Y nach unten): 0=Rechts, 90=Unten, -90=Oben
-            screen_a1 = math.degrees(math.atan2(p1.y() - ctr.y(), p1.x() - ctr.x()))
-            screen_a2 = math.degrees(math.atan2(p2.y() - ctr.y(), p2.x() - ctr.x()))
-
-            # 3. Konvertierung für Qt's arcTo
-            # Qt erwartet: 0=Rechts, Positiv=Gegen-Uhrzeigersinn (nach Oben auf Screen)
-            # Da unsere screen_a Werte "Positiv=Unten" sind, müssen wir sie negieren.
-            qt_start = -screen_a1
-            qt_end = -screen_a2
-            
-            # Differenz berechnen
-            qt_sweep = qt_end - qt_start
-
-            # 4. Shortest Path erzwingen (-180 bis 180)
-            # Das garantiert, dass wir immer die "kleine Ecke" malen, nie den Pac-Man
-            qt_sweep = (qt_sweep + 180) % 360 - 180
-
-            # Sicherheitscheck
-            if abs(qt_sweep) < 0.01: continue
+            # Anzahl Segmente basierend auf Sweep (mehr = glatter)
+            steps = max(16, int(sweep / 3))  # ~3° pro Segment für glatten Bogen
 
             temp_path = QPainterPath()
-            temp_path.arcMoveTo(rect, qt_start)
-            temp_path.arcTo(rect, qt_start, qt_sweep)
+            first_point = None
+            last_point = None
+
+            for i in range(steps + 1):
+                t = i / steps
+                angle_rad = math.radians(arc.start_angle + sweep * t)
+                world_pt = QPointF(
+                    arc.center.x + arc.radius * math.cos(angle_rad),
+                    arc.center.y + arc.radius * math.sin(angle_rad)
+                )
+                screen_pt = self.world_to_screen(world_pt)
+
+                if i == 0:
+                    temp_path.moveTo(screen_pt)
+                    first_point = screen_pt
+                else:
+                    temp_path.lineTo(screen_pt)
+                last_point = screen_pt
 
             # --- Zuweisung zu Styles ---
             is_sel = arc in self.selected_arcs
@@ -521,9 +507,11 @@ class SketchRendererMixin:
             else:
                 path_normal.addPath(temp_path)
 
-            # Endpunkte zeichnen (Visual Debugging Hilfe)
-            path_endpoints.addEllipse(p1, 3, 3)
-            path_endpoints.addEllipse(p2, 3, 3)
+            # Endpunkte zeichnen
+            if first_point:
+                path_endpoints.addEllipse(first_point, 3, 3)
+            if last_point:
+                path_endpoints.addEllipse(last_point, 3, 3)
 
         # --- 4. ZEICHNEN ---
 

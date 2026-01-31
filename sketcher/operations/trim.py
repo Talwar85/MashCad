@@ -370,19 +370,28 @@ class TrimOperation(SketchOperation):
         p_start_remove = segment.start_point
         p_end_remove = segment.end_point
 
-        ang_start = geometry.get_param_on_entity(p_end_remove, target)
-        ang_end = geometry.get_param_on_entity(p_start_remove, target)
+        # get_param_on_entity gibt Radiant zurück (0 bis 2π)
+        # Der BLEIBENDE Arc geht von p_end_remove zu p_start_remove
+        # (die andere Seite des Kreises, entgegengesetzt zum entfernten Segment)
+        ang_start_rad = geometry.get_param_on_entity(p_end_remove, target)
+        ang_end_rad = geometry.get_param_on_entity(p_start_remove, target)
 
-        if ang_end < ang_start:
-            ang_end += 2 * math.pi
+        if ang_end_rad < ang_start_rad:
+            ang_end_rad += 2 * math.pi
 
-        if abs(ang_end - ang_start) > 1e-4:
+        # Arc2D erwartet Grad, nicht Radiant!
+        ang_start_deg = math.degrees(ang_start_rad)
+        ang_end_deg = math.degrees(ang_end_rad)
+
+        logger.debug(f"[TRIM] Arc angles: {ang_start_deg:.1f}° to {ang_end_deg:.1f}°")
+
+        if abs(ang_end_deg - ang_start_deg) > 0.1:  # Mindestens 0.1° Bogen
             self.sketch.add_arc(
                 target.center.x,
                 target.center.y,
                 target.radius,
-                ang_start,
-                ang_end
+                ang_start_deg,
+                ang_end_deg
             )
             return OperationResult.ok("Arc erstellt")
 

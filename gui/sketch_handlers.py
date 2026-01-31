@@ -1257,15 +1257,22 @@ class SketchHandlersMixin:
 
                 elif isinstance(target, Circle2D) and segment_to_remove != "ALL":
                     p_start_remove, p_end_remove, idx, _ = segment_to_remove
-                    
-                    ang_start = geometry.get_param_on_entity(p_end_remove, target)
-                    ang_end = geometry.get_param_on_entity(p_start_remove, target)
-                    
-                    if ang_end < ang_start: 
-                        ang_end += 2*math.pi
-                        
-                    if abs(ang_end - ang_start) > 1e-4:
-                        self.sketch.add_arc(target.center.x, target.center.y, target.radius, ang_start, ang_end)
+
+                    # get_param_on_entity gibt Radiant zurück
+                    # Der BLEIBENDE Arc geht von p_end_remove zu p_start_remove
+                    # (die andere Seite des Kreises)
+                    ang_start_rad = geometry.get_param_on_entity(p_end_remove, target)
+                    ang_end_rad = geometry.get_param_on_entity(p_start_remove, target)
+
+                    if ang_end_rad < ang_start_rad:
+                        ang_end_rad += 2*math.pi
+
+                    # Arc2D erwartet Grad!
+                    ang_start_deg = math.degrees(ang_start_rad)
+                    ang_end_deg = math.degrees(ang_end_rad)
+
+                    if abs(ang_end_deg - ang_start_deg) > 0.1:
+                        self.sketch.add_arc(target.center.x, target.center.y, target.radius, ang_start_deg, ang_end_deg)
 
                 self.sketched_changed.emit()
                 self._find_closed_profiles()

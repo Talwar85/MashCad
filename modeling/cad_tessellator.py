@@ -218,12 +218,10 @@ class CADTessellator:
                     FEATURE_ANGLE_THRESHOLD = 25.0  # Grad - Kanten mit > diesem Winkel anzeigen
 
                     if n_faces >= 2:
-                        # Hole erste zwei Faces
-                        from OCP.TopTools import TopTools_ListIteratorOfListOfShape
-                        it = TopTools_ListIteratorOfListOfShape(face_list)
-                        face1 = TopoDS.Face_s(it.Value())
-                        it.Next()
-                        face2 = TopoDS.Face_s(it.Value())
+                        # Hole erste zwei Faces via Python Iterator
+                        face_iter = iter(face_list)
+                        face1 = TopoDS.Face_s(next(face_iter))
+                        face2 = TopoDS.Face_s(next(face_iter))
 
                         # Berechne Normalen in der Mitte der Kante
                         adaptor = BRepAdaptor_Curve(edge)
