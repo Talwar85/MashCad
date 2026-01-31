@@ -173,3 +173,64 @@ class EditFeatureCommand(QUndoCommand):
             self.body, self.body._build123d_solid
         )
         self.main_window.browser.refresh()
+
+
+class AddBodyCommand(QUndoCommand):
+    """
+    Undoable command for adding a new body to the document.
+    Used for: Sweep (New Body), Loft (New Body), Push/Pull (New Body), etc.
+    """
+
+    def __init__(self, document, body, main_window, description=None):
+        """
+        Args:
+            document: Document instance
+            body: Body instance to add
+            main_window: MainWindow reference for UI updates
+            description: Optional description for undo menu
+        """
+        desc = description or f"Add Body {body.name}"
+        super().__init__(desc)
+        self.document = document
+        self.body = body
+        self.main_window = main_window
+
+    def redo(self):
+        """Add body to document."""
+        from modeling.cad_tessellator import CADTessellator
+
+        if self.body not in self.document.bodies:
+            self.document.bodies.append(self.body)
+            logger.debug(f"Redo: Added body {self.body.name}")
+
+        # Update UI
+        try:
+            CADTessellator.notify_body_changed()
+            self.main_window._update_body_from_build123d(
+                self.body,
+                self.body._build123d_solid
+            )
+            self.main_window.browser.refresh()
+        except Exception as e:
+            logger.error(f"Fehler bei UI-Update nach AddBody Redo: {e}")
+
+    def undo(self):
+        """Remove body from document."""
+        from modeling.cad_tessellator import CADTessellator
+
+        if self.body in self.document.bodies:
+            # Remove from viewport first
+            try:
+                self.main_window.viewport_3d.remove_body(self.body.id)
+            except Exception:
+                pass
+
+            self.document.bodies.remove(self.body)
+            logger.debug(f"Undo: Removed body {self.body.name}")
+
+            # Update UI
+            try:
+                CADTessellator.notify_body_changed()
+                self.main_window.browser.refresh()
+            except Exception as e:
+                logger.error(f"Fehler bei UI-Update nach AddBody Undo: {e}")

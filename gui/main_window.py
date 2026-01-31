@@ -2844,20 +2844,27 @@ class MainWindow(QMainWindow):
         tangent = self.nsided_patch_panel.get_tangent()
 
         from modeling import NSidedPatchFeature
+        from gui.commands.feature_commands import AddFeatureCommand
+
         feat = NSidedPatchFeature(
             edge_selectors=edge_selectors,
             degree=degree,
             tangent=tangent,
         )
 
-        try:
-            body.features.append(feat)
-            body._rebuild()
+        # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+        cmd = AddFeatureCommand(body, feat, self, description=f"N-Sided Patch ({len(edge_selectors)} edges)")
+        self.undo_stack.push(cmd)
+
+        # Prüfe ob Operation erfolgreich war
+        if body._build123d_solid is None:
+            logger.warning("N-Sided Patch ließ Body leer - Undo")
+            self.undo_stack.undo()
+            logger.error("N-Sided Patch fehlgeschlagen: Geometrie ungültig")
+        else:
             self._update_body_mesh(body)
             self.browser.refresh()
             logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
-        except Exception as e:
-            logger.error(f"N-Sided Patch fehlgeschlagen: {e}")
 
         # Mode beenden
         self._stop_nsided_patch_mode()
@@ -3278,12 +3285,20 @@ class MainWindow(QMainWindow):
                     return
 
                 # Validierung bestanden - Lattice anwenden
-                body._build123d_solid = lattice_solid
+                from gui.commands.feature_commands import AddFeatureCommand
+
                 feat = LatticeFeature(
                     cell_type=cell_type, cell_size=cell_size, beam_radius=beam_radius,
                     shell_thickness=shell_thickness,
                 )
-                body.features.append(feat)
+
+                # Speichere pre-computed solid damit _rebuild() es verwenden kann
+                feat._precomputed_solid = lattice_solid
+
+                # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+                cmd = AddFeatureCommand(body, feat, self, description=f"Lattice ({cell_type})")
+                self.undo_stack.push(cmd)
+
                 body.invalidate_mesh()
                 self._update_body_from_build123d(body, body._build123d_solid)
                 self.browser.refresh()
@@ -3340,6 +3355,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        from gui.commands.feature_commands import AddFeatureCommand
+
         feat = HollowFeature(
             wall_thickness=dlg.wall_thickness,
             drain_hole=dlg.drain_hole,
@@ -3347,12 +3364,21 @@ class MainWindow(QMainWindow):
             drain_position=drain_pos,
             drain_direction=dlg.drain_direction,
         )
-        body.features.append(feat)
-        body._rebuild()
-        body.invalidate_mesh()
-        self._update_body_from_build123d(body, body._build123d_solid)
-        self._browser.refresh()
-        logger.success(f"Hollow angewendet auf {body.name} (Wandstärke {dlg.wall_thickness}mm)")
+
+        # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+        cmd = AddFeatureCommand(body, feat, self, description=f"Hollow (Wandstärke {dlg.wall_thickness}mm)")
+        self.undo_stack.push(cmd)
+
+        # Prüfe ob Operation erfolgreich war
+        if body._build123d_solid is None:
+            logger.warning("Hollow ließ Body leer - Undo")
+            self.undo_stack.undo()
+            logger.error("Hollow fehlgeschlagen: Geometrie ungültig")
+        else:
+            body.invalidate_mesh()
+            self._update_body_from_build123d(body, body._build123d_solid)
+            self._browser.refresh()
+            logger.success(f"Hollow angewendet auf {body.name} (Wandstärke {dlg.wall_thickness}mm)")
 
     def _geometry_check_dialog(self):
         """
@@ -4818,9 +4844,14 @@ class MainWindow(QMainWindow):
 
             if operation == "New Body":
                 # Neuer Body mit parametrischem Feature
-                new_body = self.document.new_body()
-
                 from modeling import ExtrudeFeature
+                from gui.commands.feature_commands import AddBodyCommand
+
+                new_body = self.document.new_body()
+                # Entferne Body erstmal wieder - wird durch AddBodyCommand hinzugefügt
+                if new_body in self.document.bodies:
+                    self.document.bodies.remove(new_body)
+
                 feat = ExtrudeFeature(
                     sketch=None,
                     distance=height,
@@ -4830,11 +4861,16 @@ class MainWindow(QMainWindow):
                     plane_origin=plane_origin,
                     plane_normal=plane_normal,
                     plane_x_dir=plane_x_dir,
-                    plane_y_dir=plane_y_dir  # ✅ FIX: Y-Richtung speichern
+                    plane_y_dir=plane_y_dir
                 )
                 new_body.features.append(feat)
                 new_body._build123d_solid = new_geo
-                self._update_body_from_build123d(new_body, new_geo)
+                new_body.invalidate_mesh()
+
+                # KRITISCH: AddBodyCommand für korrektes Undo/Redo!
+                cmd = AddBodyCommand(self.document, new_body, self, description="Push/Pull (New Body)")
+                self.undo_stack.push(cmd)
+
                 logger.info(f"✅ Push/Pull New Body '{new_body.name}' erstellt")
                 return True
 
@@ -4876,6 +4912,8 @@ class MainWindow(QMainWindow):
                     if new_solid is not None and not new_solid.is_null():
                         # Parametrisches Feature erstellen
                         from modeling import ExtrudeFeature
+                        from gui.commands.feature_commands import AddFeatureCommand
+
                         feat = ExtrudeFeature(
                             sketch=None,
                             distance=height,
@@ -4885,12 +4923,13 @@ class MainWindow(QMainWindow):
                             plane_origin=plane_origin,
                             plane_normal=plane_normal,
                             plane_x_dir=plane_x_dir,
-                            plane_y_dir=plane_y_dir  # ✅ FIX: Y-Richtung speichern
+                            plane_y_dir=plane_y_dir
                         )
-                        target.features.append(feat)
 
-                        target._build123d_solid = new_solid
-                        self._update_body_from_build123d(target, new_solid)
+                        # KRITISCH: AddFeatureCommand für korrektes Undo/Redo!
+                        cmd = AddFeatureCommand(target, feat, self, description=f"Push/Pull ({operation})")
+                        self.undo_stack.push(cmd)
+
                         success_count += 1
                         logger.info(f"✅ Push/Pull {operation} auf '{target.name}' (parametrisch)")
                         
@@ -7038,81 +7077,69 @@ class MainWindow(QMainWindow):
             else:
                 return
 
-        # Robuste Operation anwenden
+        # Feature erstellen und via Undo-Stack anwenden
         logger.info(f"Wende {mode} auf {len(edges)} Kanten an (r={radius})...")
 
         try:
+            from gui.commands.feature_commands import AddFeatureCommand
+            from modeling.geometric_selector import create_geometric_selectors_from_edges
+
+            # Legacy Point-Selectors (backward-compat)
+            selectors = self.viewport_3d.get_edge_selectors()
+
+            # TNP Phase 1: GeometricSelectors erstellen
+            selected_edges = self.viewport_3d.get_selected_edges()
+            geometric_selectors = create_geometric_selectors_from_edges(selected_edges)
+            logger.debug(f"TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
+
+            # TNP Phase 2: OCP Edge Shapes speichern
+            ocp_edge_shapes = []
+            for edge in selected_edges:
+                if hasattr(edge, 'wrapped'):
+                    ocp_edge_shapes.append(edge.wrapped)
+
+            # TNP Phase 2: Finde vorheriges Boolean-Feature (für History-Lookup)
+            depends_on_feature_id = None
+            from modeling import ExtrudeFeature
+            for feat in reversed(body.features):
+                if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
+                    depends_on_feature_id = feat.id
+                    logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
+                    break
+
+            # Feature erstellen
             if mode == "chamfer":
-                result = apply_robust_chamfer(body, edges, radius)
+                feature = ChamferFeature(
+                    distance=radius,
+                    edge_selectors=selectors,
+                    geometric_selectors=geometric_selectors,
+                    ocp_edge_shapes=ocp_edge_shapes,
+                    depends_on_feature_id=depends_on_feature_id
+                )
             else:
-                result = apply_robust_fillet(body, edges, radius)
+                feature = FilletFeature(
+                    radius=radius,
+                    edge_selectors=selectors,
+                    geometric_selectors=geometric_selectors,
+                    ocp_edge_shapes=ocp_edge_shapes,
+                    depends_on_feature_id=depends_on_feature_id
+                )
 
-            if result.success:
-                # Cache leeren und Body aktualisieren
-                CADTessellator.notify_body_changed()
+            # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+            # Das ruft body.add_feature() auf, was _rebuild() triggert.
+            cmd = AddFeatureCommand(body, feature, self, description=f"{mode.capitalize()} R={radius}")
+            self.undo_stack.push(cmd)
 
-                body._build123d_solid = result.solid
-                if hasattr(result.solid, 'wrapped'):
-                    body.shape = result.solid.wrapped
-
-                # Mesh aktualisieren
-                body._update_mesh_from_solid(result.solid)
-
-                # Fehlgeschlagene Kanten markieren
-                for edge_idx in result.failed_edge_indices:
-                    self.viewport_3d.mark_edge_as_failed(edge_idx)
-
-                # Feature zur History hinzufügen
-                # Legacy Point-Selectors (backward-compat)
-                selectors = self.viewport_3d.get_edge_selectors()
-
-                # TNP Phase 1: GeometricSelectors erstellen
-                from modeling.geometric_selector import create_geometric_selectors_from_edges
-                selected_edges = self.viewport_3d.get_selected_edges()
-                geometric_selectors = create_geometric_selectors_from_edges(selected_edges)
-                logger.debug(f"🎯 TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
-
-                # ✅ TNP Phase 2: OCP Edge Shapes speichern
-                ocp_edge_shapes = []
-                for edge in selected_edges:
-                    if hasattr(edge, 'wrapped'):
-                        ocp_edge_shapes.append(edge.wrapped)
-                    else:
-                        logger.warning("Edge hat kein 'wrapped' Attribut - Phase 2 TNP nicht möglich")
-
-                # ✅ TNP Phase 2: Finde vorheriges Boolean-Feature (für History-Lookup)
-                depends_on_feature_id = None
-                from modeling import ExtrudeFeature
-                for feat in reversed(body.features):
-                    if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
-                        depends_on_feature_id = feat.id
-                        logger.debug(f"🎯 TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
-                        break
-
-                if mode == "chamfer":
-                    feat = ChamferFeature(
-                        distance=radius,
-                        edge_selectors=selectors,
-                        geometric_selectors=geometric_selectors,
-                        ocp_edge_shapes=ocp_edge_shapes,  # ✅ Phase 2 TNP
-                        depends_on_feature_id=depends_on_feature_id  # ✅ Phase 2 TNP
-                    )
-                else:
-                    feat = FilletFeature(
-                        radius=radius,
-                        edge_selectors=selectors,
-                        geometric_selectors=geometric_selectors,
-                        ocp_edge_shapes=ocp_edge_shapes,  # ✅ Phase 2 TNP
-                        depends_on_feature_id=depends_on_feature_id  # ✅ Phase 2 TNP
-                    )
-
-                logger.debug(f"✅ TNP Phase 2: Feature mit {len(ocp_edge_shapes)} OCP Edges erstellt")
-                body.features.append(feat)
-
-                # Visualisierung aktualisieren
-                self._update_body_from_build123d(body, body._build123d_solid)
-
-                # Aufräumen
+            # Prüfe ob Operation erfolgreich war
+            if body._build123d_solid is None or (hasattr(body, 'vtk_mesh') and body.vtk_mesh is None):
+                logger.warning(f"{mode.capitalize()} ließ Body leer - Undo")
+                self.undo_stack.undo()
+                QMessageBox.warning(
+                    self, "Fehler",
+                    f"{mode.capitalize()} fehlgeschlagen: Geometrie ungültig"
+                )
+            else:
+                # Aufräumen bei Erfolg
                 self.viewport_3d.stop_edge_selection_mode()
                 self.fillet_panel.hide()
                 self.browser.refresh()
@@ -7120,14 +7147,7 @@ class MainWindow(QMainWindow):
                 # TNP Statistiken aktualisieren
                 self._update_tnp_stats(body)
 
-                logger.success(f"{mode.capitalize()}: {result.message}")
-
-            else:
-                QMessageBox.warning(
-                    self, "Fehler",
-                    f"{mode.capitalize()} fehlgeschlagen:\n{result.message}"
-                )
-                logger.error(f"{mode.capitalize()} fehlgeschlagen: {result.message}")
+                logger.success(f"{mode.capitalize()} R={radius}mm angewendet")
 
         except Exception as e:
             logger.error(f"Feature Creation Error: {e}")
@@ -7301,20 +7321,27 @@ class MainWindow(QMainWindow):
         logger.info(f"Wende Shell auf '{body.name}' an (Wandstärke={thickness}mm, {len(self._shell_opening_faces)} Öffnungen)...")
 
         try:
+            from gui.commands.feature_commands import AddFeatureCommand
+
             # Shell Feature erstellen
             shell_feature = ShellFeature(
                 thickness=thickness,
                 opening_face_selectors=self._shell_opening_faces.copy()
             )
 
-            # Feature zur History hinzufügen
-            body.features.append(shell_feature)
+            # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+            cmd = AddFeatureCommand(body, shell_feature, self, description=f"Shell ({thickness}mm)")
+            self.undo_stack.push(cmd)
 
-            # Body neu berechnen
-            CADTessellator.notify_body_changed()
-            body._rebuild()
+            # Prüfe ob Operation erfolgreich war
+            if body._build123d_solid is None:
+                logger.warning("Shell ließ Body leer - Undo")
+                self.undo_stack.undo()
+                QMessageBox.critical(self, "Fehler", "Shell fehlgeschlagen: Geometrie ungültig")
+                return
 
             # Visualisierung aktualisieren
+            CADTessellator.notify_body_changed()
             self._update_body_from_build123d(body, body._build123d_solid)
 
             # Aufräumen
@@ -7477,6 +7504,8 @@ class MainWindow(QMainWindow):
                 # texture_feature wird unten gesetzt!
             })
 
+        from gui.commands.feature_commands import AddFeatureCommand
+
         # SurfaceTextureFeature erstellen
         feature = SurfaceTextureFeature(
             name=f"Texture: {config['texture_type'].capitalize()}",
@@ -7490,8 +7519,10 @@ class MainWindow(QMainWindow):
             export_subdivisions=config.get('export_subdivisions', 4)
         )
 
-        # Feature zum Body hinzufügen
-        body.features.append(feature)
+        # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+        # SurfaceTexture modifiziert den Solid nicht, nur die Feature-Liste
+        cmd = AddFeatureCommand(body, feature, self, description=f"Texture ({config['texture_type']})")
+        self.undo_stack.push(cmd)
 
         # Cache invalidieren für nächsten Render
         CADTessellator.notify_body_changed()
@@ -7673,6 +7704,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Wende Sweep an (Operation={operation}, Frenet={is_frenet})...")
 
         try:
+            from gui.commands.feature_commands import AddFeatureCommand, AddBodyCommand
+
             # Sweep Feature erstellen
             sweep_feature = SweepFeature(
                 profile_data=self._sweep_profile_data,
@@ -7687,29 +7720,32 @@ class MainWindow(QMainWindow):
             # Body finden oder erstellen
             is_new_body = operation == "New Body" or not self.document.bodies
             if is_new_body:
-                # Neuen Body erstellen (aber noch NICHT zum Dokument hinzufügen!)
+                # Neuen Body erstellen
                 from modeling import Body
                 target_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}")
                 target_body.features.append(sweep_feature)
+
+                # Rebuild vor AddBodyCommand
+                CADTessellator.notify_body_changed()
+                target_body._rebuild()
+
+                # Prüfe ob erfolgreich
+                if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
+                    raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
+
+                # KRITISCH: AddBodyCommand für korrektes Undo/Redo!
+                cmd = AddBodyCommand(self.document, target_body, self, description=f"Sweep (New Body)")
+                self.undo_stack.push(cmd)
             else:
-                # Existierenden Body verwenden
+                # Existierenden Body verwenden - KRITISCH: AddFeatureCommand für Undo!
                 target_body = self.document.bodies[0]
-                target_body.features.append(sweep_feature)
+                cmd = AddFeatureCommand(target_body, sweep_feature, self, description=f"Sweep ({operation})")
+                self.undo_stack.push(cmd)
 
-            # Body neu berechnen
-            CADTessellator.notify_body_changed()
-            target_body._rebuild()
-
-            # Prüfe ob Rebuild erfolgreich war
-            if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
-                # Rebuild fehlgeschlagen - Feature wieder entfernen
-                if sweep_feature in target_body.features:
-                    target_body.features.remove(sweep_feature)
-                raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
-
-            # Erst JETZT den neuen Body zum Dokument hinzufügen (nach erfolgreichem Rebuild)
-            if is_new_body:
-                self.document.bodies.append(target_body)
+                # Prüfe ob Rebuild erfolgreich war
+                if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
+                    self.undo_stack.undo()
+                    raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
 
             # Visualisierung aktualisieren
             self._update_body_from_build123d(target_body, target_body._build123d_solid)
@@ -8290,6 +8326,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Wende Loft an ({len(profiles)} Profile, Operation={operation}, Ruled={ruled})...")
 
         try:
+            from gui.commands.feature_commands import AddFeatureCommand, AddBodyCommand
+
             # Profile nach Z sortieren
             profiles_sorted = sorted(profiles, key=lambda p: p['plane_origin'][2] if isinstance(p['plane_origin'], (list, tuple)) else 0)
 
@@ -8301,19 +8339,33 @@ class MainWindow(QMainWindow):
             )
 
             # Body finden oder erstellen
-            if operation == "New Body" or not self.document.bodies:
+            is_new_body = operation == "New Body" or not self.document.bodies
+            if is_new_body:
                 from modeling import Body
-                new_body = Body(name=f"Loft_{len(self.document.bodies) + 1}")
-                new_body.features.append(loft_feature)
-                self.document.bodies.append(new_body)
-                target_body = new_body
-            else:
-                target_body = self.document.bodies[0]
+                target_body = Body(name=f"Loft_{len(self.document.bodies) + 1}")
                 target_body.features.append(loft_feature)
 
-            # Body neu berechnen
-            CADTessellator.notify_body_changed()
-            target_body._rebuild()
+                # Rebuild vor AddBodyCommand
+                CADTessellator.notify_body_changed()
+                target_body._rebuild()
+
+                # Prüfe ob erfolgreich
+                if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
+                    raise ValueError("Loft konnte keinen gültigen Solid erzeugen")
+
+                # KRITISCH: AddBodyCommand für korrektes Undo/Redo!
+                cmd = AddBodyCommand(self.document, target_body, self, description=f"Loft (New Body)")
+                self.undo_stack.push(cmd)
+            else:
+                # Existierenden Body verwenden - KRITISCH: AddFeatureCommand für Undo!
+                target_body = self.document.bodies[0]
+                cmd = AddFeatureCommand(target_body, loft_feature, self, description=f"Loft ({operation})")
+                self.undo_stack.push(cmd)
+
+                # Prüfe ob Rebuild erfolgreich war
+                if not target_body._build123d_solid or (hasattr(target_body._build123d_solid, 'is_null') and target_body._build123d_solid.is_null()):
+                    self.undo_stack.undo()
+                    raise ValueError("Loft konnte keinen gültigen Solid erzeugen")
 
             # Visualisierung aktualisieren
             self._update_body_from_build123d(target_body, target_body._build123d_solid)
