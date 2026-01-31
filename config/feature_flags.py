@@ -22,8 +22,12 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # Phase 3: DOF-Anzeige
     "use_dof_display": True,  # Zeigt Freiheitsgrade im Sketch-Modus
 
-    # Phase 4: Extrahierte Module (noch nicht implementiert)
+    # Phase 4: Extrahierte Module
     "use_extracted_profile_detector": False,
+
+    # Phase 4a: Extrahierte Trim-Operation
+    "use_extracted_trim": True,  # Neue TrimOperation Klasse
+    "trim_comparison_mode": True,  # Vergleicht alte und neue Implementierung (für Testing)
 }
 
 

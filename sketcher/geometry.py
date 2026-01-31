@@ -269,8 +269,19 @@ def line_line_intersection(l1: Line2D, l2: Line2D) -> Optional[Point2D]:
     return Point2D(x, y)
 
 
-def circle_line_intersection(circle: Circle2D, line: Line2D) -> List[Point2D]:
-    """Schnittpunkte Kreis/Linie"""
+def circle_line_intersection(circle: Circle2D, line: Line2D, segment_only: bool = True) -> List[Point2D]:
+    """
+    Schnittpunkte Kreis/Linie.
+
+    Args:
+        circle: Der Kreis
+        line: Die Linie
+        segment_only: Wenn True (default), nur Punkte auf dem SEGMENT [0,1] zurückgeben.
+                      Wenn False, auch Punkte auf der unendlichen Linie zurückgeben.
+
+    Returns:
+        Liste der Schnittpunkte
+    """
     # Linie in parametrischer Form: P = start + t * (end - start)
     dx = line.end.x - line.start.x
     dy = line.end.y - line.start.y
@@ -297,16 +308,25 @@ def circle_line_intersection(circle: Circle2D, line: Line2D) -> List[Point2D]:
         return []
 
     points = []
+    # Kleine Toleranz für Segment-Grenzen (um numerische Ungenauigkeiten zu behandeln)
+    SEGMENT_TOLERANCE = 1e-6
+
     if discriminant == 0:
         t = -b / (2*a)
-        points.append(line.point_at_parameter(t))
+        # Nur hinzufügen wenn auf dem Segment (oder segment_only=False)
+        if not segment_only or (-SEGMENT_TOLERANCE <= t <= 1 + SEGMENT_TOLERANCE):
+            points.append(line.point_at_parameter(t))
     else:
         sqrt_disc = math.sqrt(discriminant)
         t1 = (-b - sqrt_disc) / (2*a)
         t2 = (-b + sqrt_disc) / (2*a)
-        points.append(line.point_at_parameter(t1))
-        points.append(line.point_at_parameter(t2))
-    
+
+        # Nur Punkte hinzufügen die auf dem Segment liegen (oder segment_only=False)
+        if not segment_only or (-SEGMENT_TOLERANCE <= t1 <= 1 + SEGMENT_TOLERANCE):
+            points.append(line.point_at_parameter(t1))
+        if not segment_only or (-SEGMENT_TOLERANCE <= t2 <= 1 + SEGMENT_TOLERANCE):
+            points.append(line.point_at_parameter(t2))
+
     return points
 
 

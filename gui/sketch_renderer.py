@@ -261,11 +261,16 @@ class SketchRendererMixin:
         """
         Zeichnet rote Markierungen an Punkten, die nicht geschlossen sind.
         Hilft dem User zu erkennen, warum eine Fläche nicht gefüllt wird.
+
+        Ein Punkt gilt als "geschlossen" wenn:
+        - Er mit mindestens einem anderen Endpunkt übereinstimmt (Count >= 2)
+        - ODER er auf einem Kreis liegt (Toleranz-basiert)
+        - ODER er auf einer Linie liegt (T-Kreuzung)
         """
-        # Dictionary, um zu zählen, wie oft ein Punkt (Koordinaten) vorkommt
-        # Wir runden auf 4 Dezimalstellen, um Mikro-Lücken zu finden
-        coord_counts = {}
-        
+        import math
+
+        TOLERANCE = 0.5  # 0.5mm Toleranz für Punkt-auf-Geometrie
+
         # Alle Endpunkte von Linien und Bögen sammeln
         endpoints = []
         for l in self.sketch.lines:
@@ -274,30 +279,86 @@ class SketchRendererMixin:
                 endpoints.append(l.end)
         for a in self.sketch.arcs:
             if not a.construction:
-                # Start und Endpunkt berechnen
                 endpoints.append(a.start_point)
                 endpoints.append(a.end_point)
-                
-        # Koordinaten zählen
+
+        # Dictionary um zu zählen wie oft ein Punkt vorkommt
+        coord_counts = {}
+        ENDPOINT_TOLERANCE_DECIMALS = 1  # 0.1mm für Endpunkt-Matching
+
         for pt in endpoints:
-            key = (round(pt.x, 2), round(pt.y, 2))
+            key = (round(pt.x, ENDPOINT_TOLERANCE_DECIMALS), round(pt.y, ENDPOINT_TOLERANCE_DECIMALS))
             coord_counts[key] = coord_counts.get(key, 0) + 1
-            
-        # Zeichne rote Punkte für "einsame" Enden (Count == 1)
-        # Ein geschlossener Loop muss an jedem Punkt mind. 2 Verbindungen haben
+
+        def point_on_circle(pt, circle, tol):
+            """Prüft ob Punkt auf Kreisumfang liegt."""
+            dist = math.hypot(pt.x - circle.center.x, pt.y - circle.center.y)
+            return abs(dist - circle.radius) < tol
+
+        def point_on_line(pt, line, tol):
+            """Prüft ob Punkt auf Linie liegt (nicht nur Endpunkte)."""
+            # Distanz Punkt zu Liniensegment
+            x1, y1 = line.start.x, line.start.y
+            x2, y2 = line.end.x, line.end.y
+            px, py = pt.x, pt.y
+
+            dx, dy = x2 - x1, y2 - y1
+            length_sq = dx*dx + dy*dy
+            if length_sq < 1e-10:
+                return False
+
+            t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+            closest_x = x1 + t * dx
+            closest_y = y1 + t * dy
+            dist = math.hypot(px - closest_x, py - closest_y)
+
+            # Nur als "auf Linie" zählen wenn NICHT an den Endpunkten
+            if t > 0.01 and t < 0.99 and dist < tol:
+                return True
+            return False
+
+        # Zeichne rote Punkte für "einsame" Enden
         p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(QColor(255, 0, 50, 180))) # Leuchtendes Rot
-        
+        p.setBrush(QBrush(QColor(255, 0, 50, 180)))
+
         for pt in endpoints:
-            key = (round(pt.x, 2), round(pt.y, 2))
-            if coord_counts[key] == 1:
-                # Das ist ein offenes Ende!
-                screen_pos = self.world_to_screen(QPointF(pt.x, pt.y))
-                p.drawEllipse(screen_pos, 5, 5)
-                # Optional: Kleiner Kreis um die Lücke
-                p.setPen(QPen(QColor(255, 0, 0), 1))
-                p.setBrush(Qt.NoBrush)
-                p.drawEllipse(screen_pos, 10, 10)
+            key = (round(pt.x, ENDPOINT_TOLERANCE_DECIMALS), round(pt.y, ENDPOINT_TOLERANCE_DECIMALS))
+
+            # Bereits verbunden durch anderen Endpunkt?
+            if coord_counts[key] >= 2:
+                continue
+
+            # Liegt auf einem Kreis?
+            on_circle = False
+            for circle in self.sketch.circles:
+                if not circle.construction and point_on_circle(pt, circle, TOLERANCE):
+                    on_circle = True
+                    break
+
+            if on_circle:
+                continue
+
+            # Liegt auf einer Linie (T-Kreuzung)?
+            on_line = False
+            for line in self.sketch.lines:
+                if not line.construction:
+                    # Nicht die eigene Linie prüfen
+                    if pt != line.start and pt != line.end:
+                        if point_on_line(pt, line, TOLERANCE):
+                            on_line = True
+                            break
+
+            if on_line:
+                continue
+
+            # Wirklich ein offenes Ende!
+            screen_pos = self.world_to_screen(QPointF(pt.x, pt.y))
+            p.drawEllipse(screen_pos, 5, 5)
+            p.setPen(QPen(QColor(255, 0, 0), 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(screen_pos, 10, 10)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(255, 0, 50, 180)))
                 
     def _draw_geometry(self, p, update_rect=None):
         """
@@ -391,35 +452,62 @@ class SketchRendererMixin:
                 path_normal.addEllipse(ctr, r, r)
 
         # --- 3. Arcs sammeln ---
+        # --- 3. Arcs sammeln (Robust Screen-Space Method) ---
         for arc in self.sketch.arcs:
             bounds = self._get_arc_bounds(arc)
             if not is_visible(bounds): continue
 
+            # 1. Bildschirm-Koordinaten aller wichtigen Punkte holen
             ctr = self.world_to_screen(arc.center)
+            
+            # Wir berechnen die Endpunkte basierend auf den Welt-Winkeln,
+            # um sicherzugehen, dass wir exakt die Geometrie abbilden
+            p_start_world = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle))
+            )
+            p_end_world = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
+            )
+            
+            p1 = self.world_to_screen(p_start_world) # Screen Start
+            p2 = self.world_to_screen(p_end_world)   # Screen End
+            
+            # Rechteck für Qt definieren
             r = arc.radius * self.view_scale
             rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
 
-            start_angle = arc.start_angle
-            sweep = arc.end_angle - arc.start_angle
+            # 2. Winkel direkt auf dem Bildschirm messen (atan2)
+            # math.atan2(y, x) gibt Winkel in Radians. 
+            # Im Screen-Space (Y nach unten): 0=Rechts, 90=Unten, -90=Oben
+            screen_a1 = math.degrees(math.atan2(p1.y() - ctr.y(), p1.x() - ctr.x()))
+            screen_a2 = math.degrees(math.atan2(p2.y() - ctr.y(), p2.x() - ctr.x()))
 
-            # Wenn sweep 0 ist oder sehr klein, mache nichts
-            if abs(sweep) < 0.01:
-                continue
+            # 3. Konvertierung für Qt's arcTo
+            # Qt erwartet: 0=Rechts, Positiv=Gegen-Uhrzeigersinn (nach Oben auf Screen)
+            # Da unsere screen_a Werte "Positiv=Unten" sind, müssen wir sie negieren.
+            qt_start = -screen_a1
+            qt_end = -screen_a2
+            
+            # Differenz berechnen
+            qt_sweep = qt_end - qt_start
 
-            # Normalisiere sweep auf [-360, 360] Bereich
-            while sweep > 360: sweep -= 360
-            while sweep < -360: sweep += 360
+            # 4. Shortest Path erzwingen (-180 bis 180)
+            # Das garantiert, dass wir immer die "kleine Ecke" malen, nie den Pac-Man
+            qt_sweep = (qt_sweep + 180) % 360 - 180
 
+            # Sicherheitscheck
+            if abs(qt_sweep) < 0.01: continue
+
+            temp_path = QPainterPath()
+            temp_path.arcMoveTo(rect, qt_start)
+            temp_path.arcTo(rect, qt_start, qt_sweep)
+
+            # --- Zuweisung zu Styles ---
             is_sel = arc in self.selected_arcs
             is_hov = self.hovered_entity == arc
             is_fixed = getattr(arc, 'fixed', False)
-
-            temp_path = QPainterPath()
-            # Y-Achse ist in Screen-Koordinaten umgekehrt:
-            # - Start-Winkel muss negiert werden für korrekte Position
-            # - Sweep-Richtung NICHT negieren, sonst geht Arc auf die falsche Seite
-            temp_path.arcMoveTo(rect, -start_angle)
-            temp_path.arcTo(rect, -start_angle, sweep)
 
             if is_sel:
                 path_selected.addPath(temp_path)
@@ -433,14 +521,9 @@ class SketchRendererMixin:
             else:
                 path_normal.addPath(temp_path)
 
-            # Endpunkte für Arcs zeichnen (FIX: arc.end_angle statt end_angle)
-            sx = arc.center.x + arc.radius * math.cos(math.radians(start_angle))
-            sy = arc.center.y + arc.radius * math.sin(math.radians(start_angle))
-            ex = arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle))
-            ey = arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
-            
-            path_endpoints.addEllipse(self.world_to_screen(QPointF(sx, sy)), 3, 3)
-            path_endpoints.addEllipse(self.world_to_screen(QPointF(ex, ey)), 3, 3)
+            # Endpunkte zeichnen (Visual Debugging Hilfe)
+            path_endpoints.addEllipse(p1, 3, 3)
+            path_endpoints.addEllipse(p2, 3, 3)
 
         # --- 4. ZEICHNEN ---
 
@@ -1020,27 +1103,32 @@ class SketchRendererMixin:
                     p1_screen = self.world_to_screen(p1)
                     p2_screen = self.world_to_screen(p2)
                     hw_screen = hw * self.view_scale
-                    
-                    # Winkel der Mittellinie
-                    angle = math.degrees(math.atan2(dy, dx))
-                    
+
+                    # Winkel der Mittellinie - direkt im Screen-Space berechnen!
+                    # (Robuster Ansatz: Punkte transformieren, dann Winkel messen)
+                    screen_dx = p2_screen.x() - p1_screen.x()
+                    screen_dy = p2_screen.y() - p1_screen.y()
+                    screen_angle = math.degrees(math.atan2(screen_dy, screen_dx))
+                    # Qt-Konvention: Negieren weil screen Y nach unten zeigt
+                    qt_angle = -screen_angle
+
                     # Obere Linie
                     top1 = self.world_to_screen(QPointF(p1.x()+nx*hw, p1.y()+ny*hw))
                     top2 = self.world_to_screen(QPointF(p2.x()+nx*hw, p2.y()+ny*hw))
                     # Untere Linie
                     bot1 = self.world_to_screen(QPointF(p1.x()-nx*hw, p1.y()-ny*hw))
                     bot2 = self.world_to_screen(QPointF(p2.x()-nx*hw, p2.y()-ny*hw))
-                    
+
                     # Path aufbauen
                     path.moveTo(top1)
                     path.lineTo(top2)
                     # Halbkreis um p2
                     rect2 = QRectF(p2_screen.x()-hw_screen, p2_screen.y()-hw_screen, hw_screen*2, hw_screen*2)
-                    path.arcTo(rect2, angle + 90, -180)
+                    path.arcTo(rect2, qt_angle + 90, -180)
                     path.lineTo(bot1)
                     # Halbkreis um p1
                     rect1 = QRectF(p1_screen.x()-hw_screen, p1_screen.y()-hw_screen, hw_screen*2, hw_screen*2)
-                    path.arcTo(rect1, angle - 90, -180)
+                    path.arcTo(rect1, qt_angle - 90, -180)
                     path.closeSubpath()
                     
                     p.drawPath(path)
@@ -1302,14 +1390,30 @@ class SketchRendererMixin:
                     p.drawEllipse(ctr, r, r)
 
                 for arc in self.selected_arcs:
-                    ctr = self.world_to_screen(QPointF(arc.center.x + offset_x, arc.center.y + offset_y))
+                    # Screen-Space Arc Rendering (robust)
+                    arc_cx = arc.center.x + offset_x
+                    arc_cy = arc.center.y + offset_y
+                    ctr = self.world_to_screen(QPointF(arc_cx, arc_cy))
                     r = arc.radius * self.view_scale
                     rect = QRectF(ctr.x() - r, ctr.y() - r, 2 * r, 2 * r)
-                    start_angle = arc.start_angle
-                    sweep = arc.end_angle - arc.start_angle
-                    if sweep <= 0:
-                        sweep += 360
-                    p.drawArc(rect, int(-start_angle * 16), int(-sweep * 16))
+
+                    # Berechne Start/End in World, transformiere zu Screen
+                    p_start = self.world_to_screen(QPointF(
+                        arc_cx + arc.radius * math.cos(math.radians(arc.start_angle)),
+                        arc_cy + arc.radius * math.sin(math.radians(arc.start_angle))
+                    ))
+                    p_end = self.world_to_screen(QPointF(
+                        arc_cx + arc.radius * math.cos(math.radians(arc.end_angle)),
+                        arc_cy + arc.radius * math.sin(math.radians(arc.end_angle))
+                    ))
+
+                    # Winkel im Screen-Space messen
+                    screen_a1 = math.degrees(math.atan2(p_start.y() - ctr.y(), p_start.x() - ctr.x()))
+                    screen_a2 = math.degrees(math.atan2(p_end.y() - ctr.y(), p_end.x() - ctr.x()))
+                    qt_start = -screen_a1
+                    qt_sweep = ((-screen_a2) - qt_start + 180) % 360 - 180
+
+                    p.drawArc(rect, int(qt_start * 16), int(qt_sweep * 16))
 
             # Richtungspfeil und Info
             p.setPen(QPen(QColor(255, 200, 0), 2))
@@ -1359,12 +1463,29 @@ class SketchRendererMixin:
                     ctr = self.world_to_screen(QPointF(acx, acy))
                     r = arc.radius * self.view_scale
                     rect = QRectF(ctr.x() - r, ctr.y() - r, 2 * r, 2 * r)
-                    # Arc-Winkel um den gleichen Betrag rotieren
-                    new_start = arc.start_angle + math.degrees(angle)
-                    sweep = arc.end_angle - arc.start_angle
-                    if sweep <= 0:
-                        sweep += 360
-                    p.drawArc(rect, int(-new_start * 16), int(-sweep * 16))
+
+                    # Screen-Space Arc Rendering (robust)
+                    # Arc-Winkel um den Pattern-Winkel rotieren
+                    new_start_world = arc.start_angle + math.degrees(angle)
+                    new_end_world = arc.end_angle + math.degrees(angle)
+
+                    # Berechne Start/End in World, transformiere zu Screen
+                    p_start = self.world_to_screen(QPointF(
+                        acx + arc.radius * math.cos(math.radians(new_start_world)),
+                        acy + arc.radius * math.sin(math.radians(new_start_world))
+                    ))
+                    p_end = self.world_to_screen(QPointF(
+                        acx + arc.radius * math.cos(math.radians(new_end_world)),
+                        acy + arc.radius * math.sin(math.radians(new_end_world))
+                    ))
+
+                    # Winkel im Screen-Space messen
+                    screen_a1 = math.degrees(math.atan2(p_start.y() - ctr.y(), p_start.x() - ctr.x()))
+                    screen_a2 = math.degrees(math.atan2(p_end.y() - ctr.y(), p_end.x() - ctr.x()))
+                    qt_start = -screen_a1
+                    qt_sweep = ((-screen_a2) - qt_start + 180) % 360 - 180
+
+                    p.drawArc(rect, int(qt_start * 16), int(qt_sweep * 16))
 
             # Zentrum und Info
             p.setPen(QPen(QColor(255, 200, 0), 2))

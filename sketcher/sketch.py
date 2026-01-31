@@ -564,7 +564,37 @@ class Sketch:
         """Entfernt einen Constraint"""
         if constraint in self.constraints:
             self.constraints.remove(constraint)
-    
+
+    def remove_constraints_for_entity(self, entity) -> int:
+        """
+        Entfernt alle Constraints die diese Entity referenzieren.
+
+        Args:
+            entity: Line2D, Circle2D, Arc2D oder Point2D
+
+        Returns:
+            Anzahl der entfernten Constraints
+        """
+        to_remove = []
+        for c in self.constraints:
+            # Prüfe ob Entity in den Constraint-Entities ist
+            if entity in c.entities:
+                to_remove.append(c)
+            # Prüfe auch Punkte (für Linien: start/end)
+            elif hasattr(entity, 'start') and (entity.start in c.entities or entity.end in c.entities):
+                # Nur entfernen wenn BEIDE Punkte zur Entity gehören (z.B. LENGTH constraint)
+                # NICHT entfernen wenn nur ein Punkt referenziert wird (z.B. COINCIDENT mit anderer Linie)
+                if entity.start in c.entities and entity.end in c.entities:
+                    to_remove.append(c)
+            # Für Kreise: center Punkt
+            elif hasattr(entity, 'center') and entity.center in c.entities:
+                to_remove.append(c)
+
+        for c in to_remove:
+            self.constraints.remove(c)
+
+        return len(to_remove)
+
     def clear_constraints(self):
         """Entfernt alle Constraints"""
         self.constraints.clear()

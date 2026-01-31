@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
 
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
+from config import is_enabled
 
 # Importiere SketchTool und SnapType
 try:
@@ -55,7 +56,65 @@ class SketchHandlersMixin:
             elif isinstance(hit, Point2D):
                 if hit in self.selected_points: self.selected_points.remove(hit)
                 else: self.selected_points.append(hit)
-    
+
+    def _add_point_constraint(self, point, pos, snap_type, snap_entity, new_line):
+        """
+        Fügt automatisch Constraints für einen Punkt hinzu basierend auf Snap-Info.
+
+        Args:
+            point: Der Point2D der neuen Linie (start oder end)
+            pos: Die Snap-Position (QPointF)
+            snap_type: SnapType
+            snap_entity: Die gesnappte Entity
+            new_line: Die neue Linie (um Selbst-Referenz zu vermeiden)
+        """
+        if not snap_entity or snap_type == SnapType.NONE:
+            return
+
+        # ENDPOINT: COINCIDENT Constraint
+        if snap_type == SnapType.ENDPOINT:
+            snapped_point = None
+            if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
+                # Linie - prüfe welcher Endpunkt näher ist
+                dist_start = math.hypot(pos.x() - snap_entity.start.x, pos.y() - snap_entity.start.y)
+                dist_end = math.hypot(pos.x() - snap_entity.end.x, pos.y() - snap_entity.end.y)
+                snapped_point = snap_entity.start if dist_start < dist_end else snap_entity.end
+
+            if snapped_point and snapped_point != point:
+                if hasattr(self.sketch, 'add_coincident'):
+                    self.sketch.add_coincident(point, snapped_point)
+                    logger.debug(f"Auto: COINCIDENT für {type(snap_entity).__name__}")
+                else:
+                    # Fallback: Koordinaten direkt setzen
+                    point.x = snapped_point.x
+                    point.y = snapped_point.y
+
+        # EDGE: POINT_ON_LINE oder POINT_ON_CIRCLE Constraint
+        elif snap_type == SnapType.EDGE:
+            if hasattr(snap_entity, 'start'):  # Linie
+                if snap_entity != new_line:
+                    if hasattr(self.sketch, 'add_point_on_line'):
+                        self.sketch.add_point_on_line(point, snap_entity)
+                        logger.debug(f"Auto: POINT_ON_LINE")
+            elif hasattr(snap_entity, 'radius'):  # Kreis
+                if hasattr(self.sketch, 'add_point_on_circle'):
+                    self.sketch.add_point_on_circle(point, snap_entity)
+                    logger.debug(f"Auto: POINT_ON_CIRCLE")
+
+        # CENTER: COINCIDENT mit Kreismittelpunkt
+        elif snap_type == SnapType.CENTER:
+            if hasattr(snap_entity, 'center'):
+                if hasattr(self.sketch, 'add_coincident'):
+                    self.sketch.add_coincident(point, snap_entity.center)
+                    logger.debug(f"Auto: COINCIDENT mit Center")
+
+        # MIDPOINT: MIDPOINT Constraint (falls vorhanden)
+        elif snap_type == SnapType.MIDPOINT:
+            if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
+                if hasattr(self.sketch, 'add_midpoint'):
+                    self.sketch.add_midpoint(point, snap_entity)
+                    logger.debug(f"Auto: MIDPOINT")
+
     def _handle_line(self, pos, snap_type, snap_entity=None):
         """
         Erstellt Linien und nutzt die existierenden Constraint-Methoden des Sketch-Objekts.
@@ -63,6 +122,8 @@ class SketchHandlersMixin:
         # Schritt 1: Startpunkt setzen
         if self.tool_step == 0:
             self.tool_points = [pos]
+            # WICHTIG: Snap-Info für Startpunkt speichern!
+            self._line_start_snap = (snap_type, snap_entity)
             self.tool_step = 1
             self.status_message.emit("Endpunkt wählen | Tab=Länge/Winkel | Rechts=Fertig")
         
@@ -96,34 +157,14 @@ class SketchHandlersMixin:
                             self.status_message.emit("Auto: Vertical")
 
                 # --- B. Auto-Constraints: Verbindungen (Das neue Snapping) ---
-                # Statt über alle Linien zu loopen, nutzen wir das snap_entity direkt!
-                
-                if snap_entity and snap_type == SnapType.EDGE:
-                    
-                    # 1. Verbindung mit LINIE
-                    if hasattr(snap_entity, 'start'): 
-                        # Verhindern, dass wir die Linie an sich selbst kleben
-                        if snap_entity != line:
-                            # Nutze deine existierende Methode!
-                            if hasattr(self.sketch, 'add_point_on_line'):
-                                self.sketch.add_point_on_line(line.end, snap_entity)
-                                self.status_message.emit("Auto: Punkt auf Linie")
-                    
-                    # 2. Verbindung mit KREIS (Das fehlte vorher!)
-                    elif hasattr(snap_entity, 'radius'):
-                        # Prüfen ob du add_point_on_circle hast, sonst manuell
-                        if hasattr(self.sketch, 'add_point_on_circle'):
-                            self.sketch.add_point_on_circle(line.end, snap_entity)
-                            self.status_message.emit("Auto: Punkt auf Kreis")
-                        else:
-                            # Fallback: Direktes Einfügen, falls die Methode fehlt
-                            try:
-                                from constraints import Constraint, ConstraintType
-                                c = Constraint(ConstraintType.POINT_ON_CIRCLE, [line.end, snap_entity])
-                                self.sketch.constraints.append(c)
-                                self.status_message.emit("Auto: Punkt auf Kreis (Manuell)")
-                            except Exception as e:
-                                print(f"Konnte Kreis-Constraint nicht erstellen: {e}")
+                # Behandelt sowohl START als auch END der neuen Linie
+
+                # B.1: START-Punkt Constraints (aus gespeicherter Snap-Info)
+                start_snap_type, start_snap_entity = getattr(self, '_line_start_snap', (SnapType.NONE, None))
+                self._add_point_constraint(line.start, start, start_snap_type, start_snap_entity, line)
+
+                # B.2: END-Punkt Constraints (aktueller Snap)
+                self._add_point_constraint(line.end, pos, snap_type, snap_entity, line)
 
                 # --- C. Abschluss ---
                 self._solve_async() 
@@ -1028,12 +1069,25 @@ class SketchHandlersMixin:
         1. Findet Entity unter Maus
         2. Berechnet ALLE Schnittpunkte gegen ALLE anderen Geometrien
         3. Löscht Segment
+
+        Feature-Flags:
+        - use_extracted_trim: Nutzt neue TrimOperation Klasse
+        - trim_comparison_mode: Vergleicht beide Implementierungen (Debug)
         """
+        # --- Feature-Flag Dispatch ---
+        # Comparison-Mode läuft IMMER zuerst (wenn aktiv)
+        if is_enabled("trim_comparison_mode"):
+            self._compare_trim_implementations(pos, snap_type, snap_entity)
+
+        if is_enabled("use_extracted_trim"):
+            self._handle_trim_v2(pos, snap_type, snap_entity)
+            return
+
         # --- Imports Setup ---
         try:
             import sketcher.geometry as geometry
         except ImportError:
-            import geometry 
+            import geometry
         from sketcher import Point2D, Line2D, Circle2D, Arc2D
         # ---------------------
 
@@ -1175,7 +1229,13 @@ class SketchHandlersMixin:
 
             if QApplication.mouseButtons() & Qt.LeftButton:
                 self._save_undo()
-                
+
+                # WICHTIG: Constraints für diese Entity entfernen BEVOR die Entity gelöscht wird!
+                if hasattr(self.sketch, 'remove_constraints_for_entity'):
+                    removed_count = self.sketch.remove_constraints_for_entity(target)
+                    if removed_count > 0:
+                        logger.debug(f"Trim: {removed_count} Constraints entfernt für {type(target).__name__}")
+
                 # Entfernen (Sicher, ohne .entities Property)
                 if target in self.sketch.points: self.sketch.points.remove(target)
                 elif target in self.sketch.lines: self.sketch.lines.remove(target)
@@ -1210,7 +1270,97 @@ class SketchHandlersMixin:
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 self.mouse_buttons = Qt.NoButton
-    
+
+    def _handle_trim_v2(self, pos, snap_type, snap_entity=None):
+        """
+        Neue Trim-Implementierung mit extrahierter TrimOperation.
+
+        Feature-Flag: use_extracted_trim
+        """
+        from sketcher.operations import TrimOperation
+
+        # Target bestimmen
+        target = snap_entity
+        if not target:
+            target = self._find_entity_at(pos)
+
+        if not target:
+            self.preview_geometry = []
+            self.update()
+            return
+
+        # TrimOperation nutzen
+        trim_op = TrimOperation(self.sketch)
+        click_point = Point2D(pos.x(), pos.y())
+
+        result = trim_op.find_segment(target, click_point)
+
+        # Debug: Zeige was gefunden wurde
+        logger.info(f"[TRIM V2] Target: {type(target).__name__}, cut_points: {len(result.cut_points)}")
+        if result.success and result.segment:
+            seg = result.segment
+            logger.info(f"[TRIM V2] Segment idx={seg.segment_index}, "
+                       f"start=({seg.start_point.x:.2f}, {seg.start_point.y:.2f}), "
+                       f"end=({seg.end_point.x:.2f}, {seg.end_point.y:.2f}), "
+                       f"all_cuts={len(seg.all_cut_points)}")
+
+        if not result.success:
+            self.status_message.emit(result.error)
+            logger.warning(f"[TRIM V2] Failed: {result.error}")
+            return
+
+        # Preview
+        segment = result.segment
+        if isinstance(target, Line2D) and segment and not segment.is_full_delete:
+            self.preview_geometry = [Line2D(segment.start_point, segment.end_point)]
+
+        self.status_message.emit("Klicken zum Trimmen")
+
+        # Ausführen bei Klick
+        if QApplication.mouseButtons() & Qt.LeftButton:
+            self._save_undo()
+            op_result = trim_op.execute_trim(segment)
+
+            if op_result.success:
+                logger.info(f"[TRIM V2] Success: {op_result.message}")
+            else:
+                logger.warning(f"[TRIM V2] Failed: {op_result.message}")
+
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            self.mouse_buttons = Qt.NoButton
+
+    def _compare_trim_implementations(self, pos, snap_type, snap_entity=None):
+        """
+        Vergleicht alte und neue Trim-Implementierung (Debug-Modus).
+
+        Feature-Flag: trim_comparison_mode
+        """
+        from sketcher.operations import TrimOperation
+
+        target = snap_entity
+        if not target:
+            target = self._find_entity_at(pos)
+
+        if not target:
+            return
+
+        # Neue Implementierung analysieren (ohne auszuführen)
+        trim_op = TrimOperation(self.sketch)
+        click_point = Point2D(pos.x(), pos.y())
+
+        new_result = trim_op.find_segment(target, click_point)
+
+        if new_result.success and new_result.segment:
+            seg = new_result.segment
+            logger.info(
+                f"[TRIM COMPARE] New impl: idx={seg.segment_index}, "
+                f"start=({seg.start_point.x:.3f}, {seg.start_point.y:.3f}), "
+                f"end=({seg.end_point.x:.3f}, {seg.end_point.y:.3f})"
+            )
+        else:
+            logger.info(f"[TRIM COMPARE] New impl: {new_result.error}")
+
     def _handle_extend(self, pos, snap_type):
         line = self._find_line_at(pos)
         if not line: self.status_message.emit(tr("No line found")); return
@@ -2877,14 +3027,13 @@ class SketchHandlersMixin:
     
     def _handle_text(self, pos, snap_type):
         """
-        Text Tool: Erstellt Vektor-Geometrie aus Text.
-        Zeigt einen modernen Dialog zur Auswahl von Font, Text und Größe.
+        Text Tool: Robust & Performant.
+        Nutzt simplify() gegen Grafikfehler und moderate Auflösung für Geschwindigkeit.
         """
-        # --- 1. Custom Dialog erstellen (kein Windows-Standard) ---
+        # --- 1. Dialog ---
         dialog = QDialog(self)
-        dialog.setWindowTitle(tr("Create Text Profile"))
+        dialog.setWindowTitle(tr("Text erstellen"))
         dialog.setMinimumWidth(300)
-        # Dark Theme Style für den Dialog
         dialog.setStyleSheet("""
             QDialog { background-color: #2d2d30; color: #e0e0e0; }
             QLabel { color: #aaaaaa; }
@@ -2898,98 +3047,103 @@ class SketchHandlersMixin:
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         
-        # Inputs
-        txt_input = QLineEdit("MashCad")
+        # Eingabefelder
+        txt_input = QLineEdit("Text")
         font_input = QFontComboBox()
         font_input.setCurrentFont(QFont("Arial"))
         
         size_input = QDoubleSpinBox()
-        size_input.setRange(1.0, 1000.0)
+        size_input.setRange(1.0, 500.0)
         size_input.setValue(10.0)
         size_input.setSuffix(" mm")
         
-        form.addRow(tr("Text:"), txt_input)
-        form.addRow(tr("Font:"), font_input)
-        form.addRow(tr("Height:"), size_input)
+        form.addRow(tr("Inhalt:"), txt_input)
+        form.addRow(tr("Schriftart:"), font_input)
+        form.addRow(tr("Höhe:"), size_input)
         
+        # WICHTIG: Diese Zeile hatte gefehlt! Jetzt ist das Formular sichtbar.
         layout.addLayout(form)
         
-        # Buttons
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dialog.accept)
         btns.rejected.connect(dialog.reject)
         layout.addWidget(btns)
         
-        # Dialog ausführen
         if dialog.exec() != QDialog.Accepted:
             self._cancel_tool()
             return
             
-        # Werte holen
         text_str = txt_input.text()
         if not text_str: return
-        
-        selected_font = font_input.currentFont()
-        # Wichtig: Outline Strategy für saubere Pfade
-        selected_font.setStyleStrategy(QFont.PreferOutline)
-        # Größe groß setzen für interne Pfad-Präzision, wir skalieren später
-        selected_font.setPointSize(100) 
         
         desired_height = size_input.value()
         
         self._save_undo()
         
-        # --- 2. Pfad generieren ---
+        # --- 2. Setup für saubere Kurven ---
+        selected_font = font_input.currentFont()
+        # 96pt ist ein guter Standard: Genug Details, aber keine 10k Punkte
+        selected_font.setPointSize(96) 
+        selected_font.setStyleStrategy(QFont.PreferOutline)
+        
+        # --- 3. Pfad generieren ---
         path = QPainterPath()
         path.addText(0, 0, selected_font, text_str)
         
-        # --- 3. Skalierung berechnen ---
+        # WICHTIG: simplify() entfernt Überlappungen und repariert defekte Font-Geometrie
+        # Das verhindert den "Spinnennetz"-Effekt.
+        path = path.simplified()
+        
+        # --- 4. Skalierung berechnen ---
         rect = path.boundingRect()
-        if rect.height() > 0.001:
+        if rect.height() > 0:
             scale_factor = desired_height / rect.height()
         else:
             scale_factor = 1.0
             
-        # Zum Mauszeiger verschieben (Zentriert)
-        # Y ist in Qt Screens oft invertiert zu CAD, hier Skizze ist math (Y up) vs Qt (Y down)
-        # QPainterPath addText generiert Text Upside-Down wenn wir in Cartesian rendern? 
-        # Wir spiegeln Y vorsichtshalber mit scale(s, -s) und verschieben dann.
+        # Wir holen die Polygone OHNE Transformation (Identity)
+        polygons = path.toSubpathPolygons(QTransform())
         
-        # Berechnung Offset zum Zentrieren
-        center_x = rect.width() * scale_factor / 2
-        center_y = rect.height() * scale_factor / 2
+        # Zentrierungs-Offset berechnen
+        cx = rect.x() + rect.width() / 2
+        cy = rect.y() + rect.height() / 2
         
-        # Transform: Skalieren & Spiegeln (damit Text aufrecht steht in math. System)
-        transform = QTransform()
-        transform.translate(pos.x(), pos.y()) # Zum Klickpunkt
-        transform.scale(scale_factor, -scale_factor) # Y Flip für CAD Koordinaten
-        transform.translate(-rect.width()/2, rect.height()/2) # Zentrieren relativ zum Ursprung
-        
-        try:
-            polygons = path.toSubpathPolygons(transform)
-        except Exception as e:
-            logger.error(f"Text path conversion failed: {e}")
-            return
-
-        # --- 4. Linien erzeugen ---
         count = 0
+        
+        # --- 5. Geometrie erzeugen ---
         for poly in polygons:
+            if poly.count() < 3: continue
+            
             pts = []
             for p in poly:
-                pts.append(Point2D(p.x(), p.y()))
+                # 1. Zentrieren (lokal)
+                lx = p.x() - cx
+                ly = p.y() - cy
+                
+                # 2. Skalieren
+                lx *= scale_factor
+                ly *= scale_factor
+                
+                # 3. Platzieren & Y-Flip (CAD Y ist oben, Screen Y ist unten)
+                final_x = pos.x() + lx
+                final_y = pos.y() - ly 
+                
+                pts.append(Point2D(final_x, final_y))
             
-            # Punkte verbinden
-            for i in range(len(pts) - 1):
-                self.sketch.add_line(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y)
-                count += 1
-            # Schließen
-            if len(pts) > 2:
-                self.sketch.add_line(pts[-1].x, pts[-1].y, pts[0].x, pts[0].y)
-                count += 1
+            # Linien erzeugen (geschlossener Loop)
+            num_pts = len(pts)
+            for i in range(num_pts):
+                p1 = pts[i]
+                p2 = pts[(i + 1) % num_pts] # Verbindet Letzten mit Erstem
+                
+                # Filter: Winzige Segmente < 0.05mm weglassen
+                if math.hypot(p1.x - p2.x, p1.y - p2.y) > 0.05:
+                    self.sketch.add_line(p1.x, p1.y, p2.x, p2.y)
+                    count += 1
 
         self.sketched_changed.emit()
         self._find_closed_profiles()
-        self.status_message.emit(tr(f"Text '{text_str}' created ({count} lines)"))
+        self.status_message.emit(tr(f"Text '{text_str}' erstellt ({count} Linien)"))
         self._cancel_tool()
     
     def _handle_point(self, pos, snap_type):

@@ -219,7 +219,8 @@ class CADTessellator:
 
                     if n_faces >= 2:
                         # Hole erste zwei Faces
-                        it = face_list.cbegin()
+                        from OCP.TopTools import TopTools_ListIteratorOfListOfShape
+                        it = TopTools_ListIteratorOfListOfShape(face_list)
                         face1 = TopoDS.Face_s(it.Value())
                         it.Next()
                         face2 = TopoDS.Face_s(it.Value())
