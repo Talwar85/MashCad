@@ -66,6 +66,29 @@ Es ist noch keine sinnvolle produktive Bedienbarkeit möglich.
 - **Mesh-Processing**: PyMeshLab, MeshLib, Gmsh (optional)
 - **ML (optional)**: PyTorch, ParSeNet
 
+## Development Setup
+
+**Voraussetzung:** [Miniconda](https://docs.conda.io/en/latest/miniconda.html) oder [Miniforge](https://github.com/conda-forge/miniforge)
+
+```bash
+# Environment erstellen
+conda create -n cad_env -c conda-forge python=3.11 \
+    PySide6 pyvista pyvistaqt build123d ocp vtk \
+    numpy scipy shapely ezdxf loguru trimesh \
+    matplotlib pillow lib3mf
+
+# Aktivieren
+conda activate cad_env
+
+# Optionale Dependencies (pip)
+pip install ocp-tessellate pyinstaller
+
+# Starten
+python main.py
+```
+
+> **Warum conda?** Build123d und lib3mf benötigen native Binaries (OpenCASCADE, lib3mf.dll), die nur über conda-forge korrekt installiert werden. Mit pip allein fehlen diese DLLs auf Windows.
+
 ## Keyboard Shortcuts
 
 

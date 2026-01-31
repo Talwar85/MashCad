@@ -86,15 +86,35 @@ hiddenimports += [
 
 # Cross-platform binaries
 binaries = []
+
+# lib3mf DLL - check multiple locations
 if sys.platform == 'win32':
-    lib3mf_path = os.path.join(sys.prefix, 'Library', 'bin', 'lib3mf.dll')
-    if os.path.exists(lib3mf_path):
-        binaries.append((lib3mf_path, os.path.join('Library', 'bin')))
+    lib3mf_locations = [
+        # pip install lib3mf location
+        os.path.join(sys.prefix, 'Lib', 'site-packages', 'lib3mf', 'lib3mf.dll'),
+        # conda location
+        os.path.join(sys.prefix, 'Library', 'bin', 'lib3mf.dll'),
+        # Alternative pip location
+        os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages', 'lib3mf', 'lib3mf.dll'),
+    ]
+    for lib3mf_path in lib3mf_locations:
+        if os.path.exists(lib3mf_path):
+            # Bundle to lib3mf/ subdirectory (where lib3mf package expects it)
+            binaries.append((lib3mf_path, 'lib3mf'))
+            print(f"Found lib3mf.dll at: {lib3mf_path}")
+            break
+    else:
+        print("WARNING: lib3mf.dll not found - 3MF export may not work")
 elif sys.platform == 'linux':
     # Linux: lib3mf might be in different locations
-    for lib_path in ['/usr/lib/lib3mf.so', '/usr/local/lib/lib3mf.so']:
+    lib3mf_locations = [
+        os.path.join(sys.prefix, 'lib', 'python3.10', 'site-packages', 'lib3mf', 'lib3mf.so'),
+        '/usr/lib/lib3mf.so',
+        '/usr/local/lib/lib3mf.so',
+    ]
+    for lib_path in lib3mf_locations:
         if os.path.exists(lib_path):
-            binaries.append((lib_path, 'lib'))
+            binaries.append((lib_path, 'lib3mf'))
             break
 
 a = Analysis(

@@ -6,82 +6,64 @@ on:
       - 'v*'  # Triggers on version tags like v1.0.0, v2.5.0
   workflow_dispatch:  # Allows manual triggering from GitHub UI (builds only, no release)
 
-env:
-  PYTHON_VERSION: '3.10'
-
 jobs:
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
+          python-version: '3.11'
+          miniforge-version: latest
+          activate-environment: cad_env
+          auto-activate-base: false
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip wheel setuptools
-          pip install pyinstaller
-          # Install from requirements (skip optional ones that may fail)
-          pip install PySide6 loguru numpy
-          pip install pyvista pyvistaqt vtk
-          pip install shapely ezdxf scipy
-          pip install trimesh matplotlib pillow
-          # OCP/build123d - these are large and may take time
-          pip install cadquery-ocp
-          pip install build123d
-          pip install ocp-tessellate
-          # These may fail - that's OK
-          pip install pymeshlab || echo "pymeshlab not available"
-          pip install pyransac3d || echo "pyransac3d not available"
-          pip install gmsh || echo "gmsh not available"
-        shell: pwsh
-
-      - name: Create hooks directory
-        run: |
-          if (!(Test-Path "hooks")) { New-Item -ItemType Directory -Path "hooks" }
-          # Create minimal hook file if not exists
-          if (!(Test-Path "hooks/hook-lib3mf.py")) {
-            Set-Content -Path "hooks/hook-lib3mf.py" -Value "# lib3mf hook`nimport os"
-          }
-        shell: pwsh
+          conda install -c conda-forge -y \
+            pyside6 \
+            build123d \
+            ocp \
+            vtk \
+            pyvista \
+            pyvistaqt \
+            numpy \
+            scipy \
+            shapely \
+            ezdxf \
+            loguru \
+            trimesh \
+            matplotlib \
+            pillow \
+            lib3mf
+          pip install pyinstaller ocp-tessellate
 
       - name: Verify imports
         run: |
           python -c "import PySide6; print('PySide6 OK')"
           python -c "import pyvista; print('PyVista OK')"
+          python -c "import lib3mf; print('lib3mf OK')"
           python -c "import build123d; print('build123d OK')"
           python -c "import ocp_tessellate; print('ocp_tessellate OK')"
-        shell: pwsh
-        continue-on-error: true
+          # Show lib3mf.dll location
+          python -c "import os, lib3mf; print('lib3mf path:', os.path.dirname(lib3mf.__file__))"
 
       - name: Build Windows executable
         run: |
-          $env:KMP_DUPLICATE_LIB_OK = "TRUE"
+          export KMP_DUPLICATE_LIB_OK=TRUE
           pyinstaller MashCAD.spec
-        shell: pwsh
         timeout-minutes: 30
-
-      - name: Cleanup unnecessary files
-        run: |
-          cd dist/MashCAD
-          # Remove unnecessary locales (keep only en/de)
-          Get-ChildItem -Path "PySide6/translations" -Exclude "qt_en*","qt_de*","qtbase_en*","qtbase_de*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-          # Remove test files
-          Get-ChildItem -Recurse -Include "test_*","*_test.py","tests" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          # Remove __pycache__
-          Get-ChildItem -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        shell: pwsh
-        continue-on-error: true
 
       - name: Create Windows archive (7z)
         run: |
           cd dist
-          7z a -t7z -mx=9 -mfb=273 -ms -md=31 -myx=9 MashCAD-Windows-x64.7z MashCAD
+          7z a -t7z -mx=9 MashCAD-Windows-x64.7z MashCAD
         shell: pwsh
 
       - name: Upload Windows artifact
@@ -93,15 +75,12 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash -el {0}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
 
       - name: Install system dependencies
         run: |
@@ -116,56 +95,51 @@ jobs:
             libfontconfig1 libfreetype6 \
             p7zip-full
 
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          miniforge-version: latest
+          activate-environment: cad_env
+          auto-activate-base: false
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip wheel setuptools
-          pip install pyinstaller
-          # Install from requirements (skip optional ones that may fail)
-          pip install PySide6 loguru numpy
-          pip install pyvista pyvistaqt vtk
-          pip install shapely ezdxf scipy
-          pip install trimesh matplotlib pillow
-          # OCP/build123d - these are large and may take time
-          pip install cadquery-ocp
-          pip install build123d
-          pip install ocp-tessellate
-          # These may fail - that's OK
-          pip install pymeshlab || echo "pymeshlab not available"
-          pip install pyransac3d || echo "pyransac3d not available"
-          pip install gmsh || echo "gmsh not available"
+          conda install -c conda-forge -y \
+            pyside6 \
+            build123d \
+            ocp \
+            vtk \
+            pyvista \
+            pyvistaqt \
+            numpy \
+            scipy \
+            shapely \
+            ezdxf \
+            loguru \
+            trimesh \
+            matplotlib \
+            pillow \
+            lib3mf
+          pip install pyinstaller ocp-tessellate
 
-      - name: Create hooks directory
+      - name: Verify imports
         run: |
-          mkdir -p hooks
-          # Create minimal hook file if not exists
-          if [ ! -f "hooks/hook-lib3mf.py" ]; then
-            echo "# lib3mf hook" > hooks/hook-lib3mf.py
-            echo "import os" >> hooks/hook-lib3mf.py
-          fi
+          python -c "import PySide6; print('PySide6 OK')"
+          python -c "import pyvista; print('PyVista OK')"
+          python -c "import lib3mf; print('lib3mf OK')"
+          python -c "import build123d; print('build123d OK')"
 
       - name: Build Linux executable
         run: |
           export KMP_DUPLICATE_LIB_OK=TRUE
-          # Modify spec for Linux (no lib3mf.dll)
-          sed -i "s|os.path.join(sys.prefix, 'Library', 'bin', 'lib3mf.dll')|'/nonexistent'|g" MashCAD.spec || true
-          sed -i "s|binaries=\[|binaries=[  # Linux: no lib3mf|g" MashCAD.spec || true
           pyinstaller MashCAD.spec
-
-      - name: Cleanup unnecessary files
-        run: |
-          cd dist/MashCAD
-          # Remove unnecessary locales
-          find . -path "*/translations/*" ! -name "qt_en*" ! -name "qt_de*" ! -name "qtbase_en*" ! -name "qtbase_de*" -type f -delete 2>/dev/null || true
-          # Remove test files
-          find . -name "test_*" -o -name "*_test.py" | xargs rm -f 2>/dev/null || true
-          # Remove __pycache__
-          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-        continue-on-error: true
+        timeout-minutes: 30
 
       - name: Create Linux archive (7z)
         run: |
           cd dist
-          7z a -t7z -mx=9 -mfb=273 -ms -md=31 MashCAD-Linux-x86_64.7z MashCAD
+          7z a -t7z -mx=9 MashCAD-Linux-x86_64.7z MashCAD
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
