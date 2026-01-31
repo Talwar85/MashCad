@@ -53,6 +53,9 @@ class SelectionFace:
     # Bei Ring-Flächen liegt plane_origin im Loch, sample_point liegt auf der Fläche
     sample_point: Tuple[float, float, float] = None
 
+    # OCP Face-ID für exakte Face-Erkennung (wenn verfügbar)
+    ocp_face_id: Optional[int] = None
+
     # Pre-computed numpy arrays for fast picking (avoid per-pick conversion)
     _np_origin: Any = field(default=None, repr=False)
     _np_normal: Any = field(default=None, repr=False)
@@ -714,7 +717,9 @@ class GeometryDetector:
     def process_body_mesh(self, body_id, vtk_mesh, extrude_mode=False):
         """
         Zerlegt das Body-Mesh in planare Flächen.
-        Nutzt per-Body Cache um wiederholte Verarbeitung zu vermeiden.
+
+        EXAKT: Wenn cell_data["face_id"] vorhanden, nutze echte OCP Face-IDs.
+        FALLBACK: Gruppierung nach Normalen (Heuristik).
 
         Args:
             body_id: ID des Bodies
@@ -730,7 +735,6 @@ class GeometryDetector:
         if body_id in self._body_face_cache:
             cached_key, cached_faces = self._body_face_cache[body_id]
             if cached_key == mesh_key:
-                # Priority ggf. aktualisieren und IDs neu vergeben
                 face_priority = 50 if extrude_mode else 5
                 for face in cached_faces:
                     face.id = self._counter
@@ -739,7 +743,6 @@ class GeometryDetector:
                     self._counter += 1
                 return
 
-        # Merke Start-Index für Cache
         _cache_start = len(self.selection_faces)
 
         if not vtk_mesh.is_all_triangles:
@@ -748,56 +751,93 @@ class GeometryDetector:
         if 'Normals' not in vtk_mesh.cell_data:
             vtk_mesh.compute_normals(cell_normals=True, inplace=True)
 
-        # FIX: Gröbere Rundung (1 Dezimalstelle) für bessere Gruppierung
-        # Das fasst Dreiecke mit ähnlicher Normale zusammen (z.B. Zylinder-Mantel)
-        normals = np.round(vtk_mesh.cell_data['Normals'], 1)
-        unique_normals, groups = np.unique(normals, axis=0, return_inverse=True)
-        
-        logger.debug(f"Body {body_id}: {len(unique_normals)} Normalen-Gruppen aus {vtk_mesh.n_cells} Dreiecken")
-
-        for group_idx, normal in enumerate(unique_normals):
-            cell_ids = np.where(groups == group_idx)[0]
-            if len(cell_ids) < 1: continue
-
-            # Sub-Mesh extrahieren
-            group_mesh_ugrid = vtk_mesh.extract_cells(cell_ids)
-            group_mesh = group_mesh_ugrid.extract_surface()
-
-            try:
-                # 2. Connectivity Check (Inseln trennen)
-                conn = group_mesh.connectivity(extraction_mode='all')
-                
-                # FIX: Array direkt holen statt get_data_range()
-                region_ids = None
-                if 'RegionId' in conn.point_data:
-                    region_ids = conn.point_data['RegionId']
-                elif 'RegionId' in conn.cell_data:
-                    region_ids = conn.cell_data['RegionId']
-                
-                if region_ids is None:
-                    # Keine Regionen gefunden -> Alles ist eine Fläche
-                    self._add_single_face(body_id, group_mesh, normal)
-                    continue
-
-                # Min/Max direkt aus den Daten holen
-                min_id, max_id = region_ids.min(), region_ids.max()
-                
-                for i in range(int(min_id), int(max_id) + 1):
-                    region = conn.threshold([i, i], scalars='RegionId')
-                    region_surf = region.extract_surface()
-                    
-                    if region_surf.n_points < 3: continue
-                    self._add_single_face(body_id, region_surf, normal)
-
-            except Exception as e:
-                # Fallback bei Fehler
-                logger.warning(f"Connectivity Fallback: {e}")
-                self._add_single_face(body_id, group_mesh, normal)
+        # === METHODE 1: EXAKT mit face_id aus cell_data ===
+        if "face_id" in vtk_mesh.cell_data:
+            self._process_body_mesh_exact(body_id, vtk_mesh)
+        else:
+            # === METHODE 2: FALLBACK - Gruppierung nach Normalen ===
+            self._process_body_mesh_heuristic(body_id, vtk_mesh)
 
         # Cache speichern
         new_faces = self.selection_faces[_cache_start:]
         self._body_face_cache[body_id] = (mesh_key, list(new_faces))
         logger.debug(f"Body {body_id}: {len(new_faces)} Faces gecacht")
+
+    def _process_body_mesh_exact(self, body_id, vtk_mesh):
+        """Exakte Face-Erkennung über OCP face_id in cell_data."""
+        face_ids = vtk_mesh.cell_data["face_id"]
+        cell_normals = vtk_mesh.cell_data['Normals']
+        all_cell_centers = vtk_mesh.cell_centers().points
+
+        unique_face_ids = np.unique(face_ids)
+        logger.debug(f"Body {body_id}: {len(unique_face_ids)} Faces (EXAKT via face_id)")
+
+        for ocp_face_id in unique_face_ids:
+            cell_mask = (face_ids == ocp_face_id)
+            cell_ids = np.where(cell_mask)[0]
+
+            if len(cell_ids) < 1:
+                continue
+
+            # Durchschnittliche Normale und Zentrum
+            group_normals = cell_normals[cell_mask]
+            avg_normal = np.mean(group_normals, axis=0)
+            norm_len = np.linalg.norm(avg_normal)
+            if norm_len > 0.001:
+                avg_normal = avg_normal / norm_len
+
+            group_centers = all_cell_centers[cell_mask]
+            center = np.mean(group_centers, axis=0)
+            sample_point = group_centers[0]
+
+            # Sub-Mesh für Display extrahieren
+            group_mesh = vtk_mesh.extract_cells(cell_ids).extract_surface()
+
+            self._add_body_face_with_ocp_id(
+                body_id, center, avg_normal, group_mesh, sample_point, int(ocp_face_id)
+            )
+
+    def _process_body_mesh_heuristic(self, body_id, vtk_mesh):
+        """Fallback: Gruppierung nach gerundeten Normalen."""
+        normals = np.round(vtk_mesh.cell_data['Normals'], 1)
+        unique_normals, groups = np.unique(normals, axis=0, return_inverse=True)
+
+        logger.debug(f"Body {body_id}: {len(unique_normals)} Normalen-Gruppen (Heuristik)")
+
+        for group_idx, normal in enumerate(unique_normals):
+            cell_ids = np.where(groups == group_idx)[0]
+            if len(cell_ids) < 1:
+                continue
+
+            group_mesh_ugrid = vtk_mesh.extract_cells(cell_ids)
+            group_mesh = group_mesh_ugrid.extract_surface()
+
+            try:
+                conn = group_mesh.connectivity(extraction_mode='all')
+
+                region_ids = None
+                if 'RegionId' in conn.point_data:
+                    region_ids = conn.point_data['RegionId']
+                elif 'RegionId' in conn.cell_data:
+                    region_ids = conn.cell_data['RegionId']
+
+                if region_ids is None:
+                    self._add_single_face(body_id, group_mesh, normal)
+                    continue
+
+                min_id, max_id = region_ids.min(), region_ids.max()
+
+                for i in range(int(min_id), int(max_id) + 1):
+                    region = conn.threshold([i, i], scalars='RegionId')
+                    region_surf = region.extract_surface()
+
+                    if region_surf.n_points < 3:
+                        continue
+                    self._add_single_face(body_id, region_surf, normal)
+
+            except Exception as e:
+                logger.warning(f"Connectivity Fallback: {e}")
+                self._add_single_face(body_id, group_mesh, normal)
 
     def _add_single_face(self, body_id, mesh, normal):
         if mesh.n_points < 3: return
@@ -825,13 +865,14 @@ class GeometryDetector:
         self._add_body_face(body_id, center, actual_normal, mesh, sample_point)
     
     def _add_body_face(self, body_id, center, normal, mesh, sample_point=None):
-        # Performance Optimization Phase 2.2: Dynamic Priority
-        # Im Extrude-Mode: Faces bekommen HÖCHSTE Priorität (50) für besseres Picking
-        # Normal-Mode: Niedrige Priorität (5) damit Body-Mesh nicht stört
+        """Fügt Body-Face ohne OCP-ID hinzu (Heuristik-Modus)."""
+        self._add_body_face_with_ocp_id(body_id, center, normal, mesh, sample_point, None)
+
+    def _add_body_face_with_ocp_id(self, body_id, center, normal, mesh, sample_point=None, ocp_face_id=None):
+        """Fügt Body-Face mit optionaler OCP Face-ID hinzu."""
         extrude_mode = getattr(self, '_current_extrude_mode', False)
         face_priority = 50 if extrude_mode else 5
 
-        # sample_point Fallback: ersten Mesh-Punkt verwenden wenn nicht übergeben
         if sample_point is None:
             sample_point = mesh.points[0] if mesh.n_points > 0 else center
 
@@ -841,9 +882,10 @@ class GeometryDetector:
             domain_type="body_face",
             plane_origin=tuple(center),
             plane_normal=tuple(normal),
-            pick_priority=face_priority,  # DYNAMIC!
+            pick_priority=face_priority,
             display_mesh=mesh,
-            sample_point=tuple(sample_point)
+            sample_point=tuple(sample_point),
+            ocp_face_id=ocp_face_id  # EXAKTE OCP FACE-ID!
         )
         self.selection_faces.append(face)
         self._counter += 1

@@ -383,7 +383,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             return
 
         self.hover_face_id = face_id
-        
+
         # Zeichnen aktualisieren (das kümmert sich jetzt um Hover UND Selection)
         self._draw_selectable_faces_from_detector()
         
@@ -3105,10 +3105,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for face in self.detector.selection_faces:
             if face.id not in relevant_ids:
                 continue
-                
+
             is_selected = face.id in self.selected_face_ids
             is_hovered = face.id == getattr(self, 'hover_face_id', -1)
-            
+
             # Farbe und Transparenz
             if is_selected:
                 color = 'orange'
@@ -3118,7 +3118,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 opacity = 0.6
             else:
                 continue
-            
+
             if face.display_mesh:
                 name = f"det_face_{face.id}"
 
@@ -4622,53 +4622,61 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if "body_face" in selection_filter:
             import vtk
             picker = vtk.vtkCellPicker()
-            # GRÖSSERE Toleranz für besseres Picking bei steilen Winkeln
             picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
 
-            # Wichtig: VTK Y-Koordinate ist invertiert
             height = self.plotter.interactor.height()
             picker.Pick(x, height - y, 0, self.plotter.renderer)
 
             cell_id = picker.GetCellId()
+            picked_actor = picker.GetActor()
 
-            if cell_id != -1:
-                # Wir haben etwas getroffen! Position holen.
+            if cell_id != -1 and picked_actor is not None:
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
-
-                # Distanz zur Kamera
                 body_dist = np.linalg.norm(pos - ray_start)
 
-                # Jetzt suchen wir im Detector, welche logische Fläche zu diesem Punkt passt.
-                # WICHTIG: Normal-Match hat PRIORITÄT über Distanz!
-                # Sonst wird das falsche Face gewählt (z.B. Bottom statt Front)
-                best_face = None
-                best_score = float('inf')
+                # SCHRITT 1: Actor → Body-ID zuordnen (actors sind NAMEN, nicht Objekte!)
+                picked_body_id = None
+                for bid, actor_names in self._body_actors.items():
+                    for name in actor_names:
+                        if self.plotter.renderer.actors.get(name) == picked_actor:
+                            picked_body_id = bid
+                            break
+                    if picked_body_id is not None:
+                        break
 
-                for face in self.detector.selection_faces:
-                    if face.domain_type != "body_face":
-                        continue
+                if picked_body_id is not None:
+                    # SCHRITT 2: NUR Faces von diesem Body durchsuchen
+                    best_face = None
+                    best_score = float('inf')
 
-                    face_normal = np.array(face.plane_normal)
+                    for face in self.detector.selection_faces:
+                        if face.domain_type != "body_face":
+                            continue
+                        # FIX: Nur Faces vom gepickten Body!
+                        if face.owner_id != picked_body_id:
+                            continue
 
-                    # Distanz des Pick-Punkts zur Ebene der Fläche
-                    dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
+                        face_normal = np.array(face.plane_normal)
 
-                    # Normal-Übereinstimmung (ABS weil Picker-Normal Richtung variiert)
-                    dot_normal = abs(np.dot(normal, face_normal))
+                        # Distanz des Pick-Punkts zur Ebene der Fläche
+                        dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
 
-                    # Filter: Punkt muss nahe der Ebene sein UND Normal muss grob stimmen
-                    # dot_normal > 0.5 = Winkel < 60° zum Face
-                    if dist_plane < 2.0 and dot_normal > 0.5:
-                        # Scoring: Normal-Match ist 10x wichtiger als Distanz!
-                        # Hoher dot_normal (1.0) = niedriger Score = besser
-                        score = (1.0 - dot_normal) * 10.0 + dist_plane
-                        if score < best_score:
-                            best_score = score
-                            best_face = face
+                        # Normal-Übereinstimmung
+                        dot_normal = abs(np.dot(normal, face_normal))
 
-                if best_face:
-                    all_hits.append((5, body_dist, best_face.id))
+                        # FIX: Kein strenger Normal-Filter mehr!
+                        # Da wir bereits wissen welcher Body gepickt wurde,
+                        # reicht Distanz zur Ebene als Kriterium
+                        if dist_plane < 5.0:  # 5mm Toleranz zur Ebene
+                            # Scoring: Normal-Match + Distanz
+                            score = (1.0 - dot_normal) * 5.0 + dist_plane
+                            if score < best_score:
+                                best_score = score
+                                best_face = face
+
+                    if best_face:
+                        all_hits.append((5, body_dist, best_face.id))
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---
         # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch

@@ -179,6 +179,7 @@ class CADTessellator:
             from OCP.TopoDS import TopoDS
             from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
             from OCP.TopExp import TopExp
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE  # FIX: Fehlende Imports
             from OCP.BRep import BRep_Tool
             from OCP.BRepAdaptor import BRepAdaptor_Surface
             from OCP.gp import gp_Vec
@@ -532,3 +533,133 @@ class CADTessellator:
         except Exception as e:
             logger.debug(f"Face-Count fehlgeschlagen: {e}")
             return 0
+
+    @staticmethod
+    def tessellate_with_face_ids(solid, quality=None) -> Tuple[Optional[pv.PolyData], Optional[pv.PolyData], dict]:
+        """
+        Tesselliert mit exakten Face-IDs pro Dreieck.
+
+        Im Gegensatz zu tessellate() wird hier jedes B-Rep Face einzeln
+        tesselliert und die Face-ID als cell_data gespeichert.
+
+        Returns:
+            Tuple von (mesh, edge_mesh, face_info)
+            - mesh: PyVista PolyData mit cell_data["face_id"]
+            - edge_mesh: Kanten-Mesh
+            - face_info: Dict {face_id: {"normal": (x,y,z), "center": (x,y,z)}}
+        """
+        if not HAS_OCP or solid is None:
+            return None, None, {}
+
+        if quality is None:
+            quality = Tolerances.TESSELLATION_QUALITY
+
+        try:
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.TopLoc import TopLoc_Location
+            from OCP.BRep import BRep_Tool
+            from OCP.BRepGProp import BRepGProp
+            from OCP.GProp import GProp_GProps
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.GeomLProp import GeomLProp_SLProps
+
+            # 1. Tesselliere das gesamte Solid
+            BRepMesh_IncrementalMesh(solid.wrapped, quality, False, quality * 5, True)
+
+            all_vertices = []
+            all_triangles = []
+            all_face_ids = []
+            face_info = {}
+
+            vertex_offset = 0
+            face_id = 0
+
+            # 2. Iteriere über jedes B-Rep Face
+            explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
+            while explorer.More():
+                face = explorer.Current()
+
+                # Face-Eigenschaften extrahieren
+                props = GProp_GProps()
+                BRepGProp.SurfaceProperties_s(face, props)
+                center = props.CentreOfMass()
+
+                # Normal am Zentrum berechnen
+                adaptor = BRepAdaptor_Surface(face)
+                u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2
+                v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2
+                slprops = GeomLProp_SLProps(adaptor, u_mid, v_mid, 1, 1e-6)
+
+                if slprops.IsNormalDefined():
+                    normal = slprops.Normal()
+                    face_info[face_id] = {
+                        "normal": (normal.X(), normal.Y(), normal.Z()),
+                        "center": (center.X(), center.Y(), center.Z())
+                    }
+                else:
+                    face_info[face_id] = {
+                        "normal": (0, 0, 1),
+                        "center": (center.X(), center.Y(), center.Z())
+                    }
+
+                # Triangulation des Faces holen
+                loc = TopLoc_Location()
+                triangulation = BRep_Tool.Triangulation_s(face, loc)
+
+                if triangulation is not None:
+                    transform = loc.Transformation()
+
+                    # Vertices
+                    n_verts = triangulation.NbNodes()
+                    for i in range(1, n_verts + 1):
+                        p = triangulation.Node(i)
+                        if not loc.IsIdentity():
+                            p = p.Transformed(transform)
+                        all_vertices.append([p.X(), p.Y(), p.Z()])
+
+                    # Triangles mit Face-ID
+                    n_tris = triangulation.NbTriangles()
+                    for i in range(1, n_tris + 1):
+                        tri = triangulation.Triangle(i)
+                        v1, v2, v3 = tri.Get()
+                        # Offset zu globalen Vertex-Indizes
+                        all_triangles.append([
+                            v1 - 1 + vertex_offset,
+                            v2 - 1 + vertex_offset,
+                            v3 - 1 + vertex_offset
+                        ])
+                        all_face_ids.append(face_id)
+
+                    vertex_offset += n_verts
+
+                face_id += 1
+                explorer.Next()
+
+            if not all_vertices or not all_triangles:
+                return None, None, {}
+
+            # 3. PyVista Mesh erstellen
+            verts = np.array(all_vertices, dtype=np.float32)
+            tris = np.array(all_triangles, dtype=np.int32)
+
+            padding = np.full((tris.shape[0], 1), 3, dtype=np.int32)
+            faces_combined = np.hstack((padding, tris)).flatten()
+
+            mesh = pv.PolyData(verts, faces_combined)
+
+            # WICHTIG: Face-IDs als Cell-Data speichern!
+            mesh.cell_data["face_id"] = np.array(all_face_ids, dtype=np.int32)
+
+            logger.info(f"Tessellated with face IDs: {len(all_triangles)} triangles, {face_id} faces")
+
+            # Edges extrahieren
+            edge_mesh = CADTessellator.extract_brep_edges(solid, deflection=quality * 10)
+
+            return mesh, edge_mesh, face_info
+
+        except Exception as e:
+            logger.error(f"tessellate_with_face_ids failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None, {}

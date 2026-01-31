@@ -4075,12 +4075,15 @@ class MainWindow(QMainWindow):
 
         try:
             # 1. Daten sammeln
+            # Nutze face_indices aus dem Signal wenn vorhanden, sonst selected_face_ids
+            face_ids = face_indices if face_indices else list(self.viewport_3d.selected_face_ids)
+
             selection_data = []
-            for fid in self.viewport_3d.selected_face_ids:
+            for fid in face_ids:
                 face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == fid), None)
                 if face: selection_data.append(face)
-            
-            if not selection_data: 
+
+            if not selection_data:
                 logger.warning(tr("Nichts selektiert."))
                 return
 
