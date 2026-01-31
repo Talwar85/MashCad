@@ -17,10 +17,10 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "use_circle_overlap_profiles": True,  # Überlappende Kreise als 3 Flächen erkennen
 
     # Phase 2: Build123d Profile-Detection für Extrude
-    "use_build123d_profiles": True,  # Exakte BREP-Profile statt Shapely-Approximation
+    "use_build123d_profiles": False,  # DEAKTIVIERT - Shapely+GeometryMapping funktioniert besser
 
-    # Phase 3: DOF-Anzeige (noch nicht implementiert)
-    "use_dof_display": False,
+    # Phase 3: DOF-Anzeige
+    "use_dof_display": True,  # Zeigt Freiheitsgrade im Sketch-Modus
 
     # Phase 4: Extrahierte Module (noch nicht implementiert)
     "use_extracted_profile_detector": False,

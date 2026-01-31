@@ -71,6 +71,21 @@ class MashCadStatusBar(QWidget):
 
         layout.addWidget(self._create_separator())
 
+        # DOF Badge (nur im Sketch-Modus sichtbar)
+        self.dof_badge = QLabel("")
+        self.dof_badge.setStyleSheet("""
+            background: #404040;
+            border-radius: 4px;
+            padding: 2px 8px;
+            color: #d4d4d4;
+        """)
+        self.dof_badge.setVisible(False)
+        layout.addWidget(self.dof_badge)
+
+        self._dof_separator = self._create_separator()
+        self._dof_separator.setVisible(False)
+        layout.addWidget(self._dof_separator)
+
         self.zoom_badge = QLabel("100%")
         self.zoom_badge.setStyleSheet("""
             background: #404040;
@@ -121,3 +136,45 @@ class MashCadStatusBar(QWidget):
     def set_zoom(self, zoom_percent: int):
         """Setzt die Zoom-Anzeige."""
         self.zoom_badge.setText(f"{zoom_percent}%")
+
+    def set_dof(self, dof: int, visible: bool = True):
+        """
+        Setzt die DOF-Anzeige (Degrees of Freedom).
+
+        Args:
+            dof: Anzahl der Freiheitsgrade (-1 = Fehler/unbekannt)
+            visible: Ob das Badge sichtbar sein soll (False im 3D-Modus)
+        """
+        self.dof_badge.setVisible(visible)
+        self._dof_separator.setVisible(visible)
+
+        if not visible:
+            return
+
+        if dof < 0:
+            # Fehler oder unbekannt
+            self.dof_badge.setText("DOF: ?")
+            self.dof_badge.setStyleSheet("""
+                background: #404040;
+                border-radius: 4px;
+                padding: 2px 8px;
+                color: #a3a3a3;
+            """)
+        elif dof == 0:
+            # Fully Constrained - Grün
+            self.dof_badge.setText("Fully Constrained")
+            self.dof_badge.setStyleSheet("""
+                background: #166534;
+                border-radius: 4px;
+                padding: 2px 8px;
+                color: #22c55e;
+            """)
+        else:
+            # Under-Constrained - Gelb/Orange
+            self.dof_badge.setText(f"DOF: {dof}")
+            self.dof_badge.setStyleSheet("""
+                background: #854d0e;
+                border-radius: 4px;
+                padding: 2px 8px;
+                color: #eab308;
+            """)

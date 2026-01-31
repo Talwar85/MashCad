@@ -1633,11 +1633,10 @@ class SketchHandlersMixin:
     
     def _handle_fillet_2d(self, pos, snap_type):
         """Fillet: Klicke auf eine Ecke. Zeigt Input automatisch an."""
-        
         # 1. Input-Feld automatisch anzeigen, wenn noch nicht aktiv
         if not self.dim_input_active:
             self._show_dimension_input()
-        
+
         # Radius aus Input übernehmen (Live-Update)
         if self.dim_input_active:
             # Holen ohne zu sperren, damit Tastatureingaben funktionieren
@@ -1646,7 +1645,7 @@ class SketchHandlersMixin:
                 self.fillet_radius = vals['radius']
 
         r = self.snap_radius / self.view_scale
-        
+
         # Suche Ecken (wo zwei Linien sich treffen)
         for i, l1 in enumerate(self.sketch.lines):
             for l2 in self.sketch.lines[i+1:]:
@@ -1676,87 +1675,116 @@ class SketchHandlersMixin:
     def _create_fillet_v2(self, l1, l2, corner, other1, other2, attr1, attr2, radius):
         """
         Erstellt ein Fillet mit korrigierter Geometrie und fügt Radius-Constraint hinzu.
+
+        Geometrie: Der Fillet-Bogen ist tangent zu beiden Linien und hat den angegebenen Radius.
+        Das Zentrum liegt auf der Winkelhalbierenden, Abstand = radius / sin(half_angle).
         """
         from sketcher.geometry import Point2D
-        
-        # Richtungsvektoren VON der Ecke WEG
+
+        # Richtungsvektoren VON der Ecke WEG entlang der Linien
         d1 = (other1.x - corner.x, other1.y - corner.y)
         d2 = (other2.x - corner.x, other2.y - corner.y)
-        
+
         # Normalisieren
         len1 = math.hypot(d1[0], d1[1])
         len2 = math.hypot(d2[0], d2[1])
         if len1 < 0.01 or len2 < 0.01:
             self.status_message.emit(tr("Lines too short"))
             return False
-        
+
         d1 = (d1[0]/len1, d1[1]/len1)
         d2 = (d2[0]/len2, d2[1]/len2)
-        
-        # Winkel zwischen den Linien
+
+        # Winkel zwischen den Linien (immer der kleinere Winkel, 0 bis π)
         dot = d1[0]*d2[0] + d1[1]*d2[1]
         dot = max(-1, min(1, dot))
         angle_between = math.acos(dot)
-        
+
         # Geometrie-Check
+        if angle_between < 0.01 or angle_between > math.pi - 0.01:
+            self.status_message.emit(tr("Lines too parallel"))
+            return False
+
         half_angle = angle_between / 2
+
+        # Abstand vom Corner zu den Tangentenpunkten
         tan_dist = radius / math.tan(half_angle)
-        
+
         if tan_dist > len1 * 0.99 or tan_dist > len2 * 0.99:
             self.status_message.emit(tr("Radius too large"))
             return False
-        
-        # Tangentenpunkte (Start/Ende des Bogens)
+
+        # Tangentenpunkte auf den Linien
         t1_x = corner.x + d1[0] * tan_dist
         t1_y = corner.y + d1[1] * tan_dist
         t2_x = corner.x + d2[0] * tan_dist
         t2_y = corner.y + d2[1] * tan_dist
-        
-        # Bogenzentrum berechnen
-        # Das Zentrum liegt auf der Winkelhalbierenden
-        bisect = (d1[0] + d2[0], d1[1] + d2[1])
-        bisect_len = math.hypot(bisect[0], bisect[1])
-        if bisect_len < 0.001: return False
-        
-        bisect = (bisect[0]/bisect_len, bisect[1]/bisect_len)
+
+        # Winkelhalbierender Vektor (d1 + d2)
+        # Für konvexe Ecken (wie Rechteck) zeigt d1+d2 nach INNEN
+        # Das ist korrekt für Fillets - NICHT negieren!
+        bisect_x = d1[0] + d2[0]
+        bisect_y = d1[1] + d2[1]
+        bisect_len = math.hypot(bisect_x, bisect_y)
+
+        if bisect_len < 0.001:
+            self.status_message.emit(tr("Invalid corner geometry"))
+            return False
+
+        bisect_x /= bisect_len
+        bisect_y /= bisect_len
+
+        # Abstand vom Corner zum Arc-Zentrum
         center_dist = radius / math.sin(half_angle)
-        
-        center_x = corner.x + bisect[0] * center_dist
-        center_y = corner.y + bisect[1] * center_dist
-        
-        # Punkte aktualisieren (Linien verkürzen)
-        # Wir müssen neue Punkt-Objekte für die Tangentenpunkte erstellen
+
+        # Arc-Zentrum (jetzt auf der INNENSEITE der Ecke)
+        center_x = corner.x + bisect_x * center_dist
+        center_y = corner.y + bisect_y * center_dist
+
+        # Linien verkürzen - neue Endpunkte an den Tangentenpunkten
         new_pt1 = Point2D(t1_x, t1_y)
         new_pt2 = Point2D(t2_x, t2_y)
         self.sketch.points.append(new_pt1)
         self.sketch.points.append(new_pt2)
-        
-        if attr1 == 'start': l1.start = new_pt1
-        else: l1.end = new_pt1
-            
-        if attr2 == 'start': l2.start = new_pt2
-        else: l2.end = new_pt2
-        
-        # Winkel für Bogen berechnen
+
+        if attr1 == 'start':
+            l1.start = new_pt1
+        else:
+            l1.end = new_pt1
+
+        if attr2 == 'start':
+            l2.start = new_pt2
+        else:
+            l2.end = new_pt2
+
+        # Arc-Winkel berechnen (vom Zentrum aus gesehen)
         angle1 = math.degrees(math.atan2(t1_y - center_y, t1_x - center_x))
         angle2 = math.degrees(math.atan2(t2_y - center_y, t2_x - center_x))
-        
-        # FIX für invertierte Bögen: 
-        # Wir wollen immer den kurzen Weg herum gehen (den Innenwinkel)
-        diff = angle2 - angle1
-        while diff <= -180: diff += 360
-        while diff > 180: diff -= 360
-        
-        # arc erwartet start und end. Wenn diff negativ ist, müssen wir swapen oder sweep anpassen
-        # Sketch.add_arc(cx, cy, r, start, end)
-        if diff < 0:
-            arc = self.sketch.add_arc(center_x, center_y, radius, angle2, angle1)
+
+        # Berechne den Sweep von angle1 zu angle2
+        sweep = angle2 - angle1
+        # Normalisiere auf [-180, 180] um den kurzen Weg zu finden
+        while sweep > 180: sweep -= 360
+        while sweep < -180: sweep += 360
+
+        # Wähle Start/End so dass der Sweep positiv ist (CCW)
+        if sweep >= 0:
+            start_angle = angle1
+            end_angle = angle2
         else:
-            arc = self.sketch.add_arc(center_x, center_y, radius, angle1, angle2)
-            
-        # CONSTRAINT HINZUFÜGEN: Damit der Radius sichtbar bleibt!
+            # Negativer sweep → tausche für positiven Sweep
+            start_angle = angle2
+            end_angle = angle1
+
+        # Stelle sicher dass end > start (für positiven Sweep im Renderer)
+        if end_angle < start_angle:
+            end_angle += 360
+
+        arc = self.sketch.add_arc(center_x, center_y, radius, start_angle, end_angle)
+
+        # Radius-Constraint hinzufügen
         self.sketch.add_radius(arc, radius)
-        
+
         self.status_message.emit(tr("Fillet R={radius}mm created").format(radius=f"{radius:.1f}"))
         return True
 

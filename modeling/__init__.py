@@ -4280,74 +4280,85 @@ class Body:
                         n_interiors = len(list(poly.interiors)) if hasattr(poly, 'interiors') else 0
                         logger.debug(f"  Polygon {idx}: area={poly.area:.1f}, interiors={n_interiors}")
                         
-                        # 1. Außenkontur - Prüfen ob es ein Kreis ist!
+                        # 1. Außenkontur
                         outer_coords = list(poly.exterior.coords)[:-1]  # Ohne Schlusspunkt
                         logger.debug(f"  Außenkontur: {len(outer_coords)} Punkte")
-                        
-                        # FIX: Prüfen ob die Außenkontur ein Kreis ist!
-                        outer_circle_info = self._detect_circle_from_points(outer_coords)
-                        logger.debug(f"  Außenkontur Kreis-Check: {outer_circle_info is not None}")
-                        
-                        if outer_circle_info and n_interiors == 0:
-                            # Die Außenkontur IST ein Kreis (standalone Kreis ohne Löcher)
-                            cx, cy, radius = outer_circle_info
-                            logger.info(f"  → Außenkontur als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
 
-                            center_3d = plane.from_local_coords((cx, cy))
-                            from build123d import Plane as B3DPlane
-                            circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
-                            circle_wire = Wire.make_circle(radius, circle_plane)
-                            face = make_face(circle_wire)
-                        else:
-                            # NEU: Prüfen ob gemischte Geometrie (Line + Arc + Spline) vorliegt
-                            geometry_list = self._lookup_geometry_for_polygon(poly, feature.sketch)
+                        # WICHTIG: Zuerst prüfen ob gemischte Geometrie vorliegt!
+                        # Erst wenn KEINE gemischte Geometrie, dann Kreis-Check.
+                        # Sonst werden abgerundete Rechtecke als Kreise erkannt!
+                        geometry_list = self._lookup_geometry_for_polygon(poly, feature.sketch)
+                        has_mixed_geometry = geometry_list and any(g[0] in ('spline', 'arc') for g in geometry_list if g[0] != 'gap')
 
-                            if geometry_list and any(g[0] in ('spline', 'arc') for g in geometry_list if g[0] != 'gap'):
-                                # GEMISCHTE GEOMETRIE → Echte Kurven verwenden!
-                                geom_types = set(g[0] for g in geometry_list if g[0] != 'gap' and g[1] is not None)
-                                logger.info(f"  → Außenkontur als GEMISCHTE GEOMETRIE: {geom_types}")
+                        if has_mixed_geometry:
+                            # GEMISCHTE GEOMETRIE → Echte Kurven verwenden!
+                            geom_types = set(g[0] for g in geometry_list if g[0] != 'gap' and g[1] is not None)
+                            logger.info(f"  → Außenkontur als GEMISCHTE GEOMETRIE: {geom_types}")
 
-                                mixed_wire = self._create_wire_from_mixed_geometry(geometry_list, outer_coords, plane)
+                            mixed_wire = self._create_wire_from_mixed_geometry(geometry_list, outer_coords, plane)
 
-                                if mixed_wire is not None:
-                                    face = make_face(mixed_wire)
-                                else:
-                                    # Fallback: Prüfe auf einzelnen Spline
-                                    native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
-                                    if native_spline is not None:
-                                        logger.info(f"  → Fallback: NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
-                                        spline_wire = self._create_wire_from_native_spline(native_spline, plane)
-                                        if spline_wire is not None:
-                                            face = make_face(spline_wire)
-                                        else:
-                                            logger.warning("  → Spline Wire Fallback: Verwende Polygon")
-                                            outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
-                                            face = make_face(Wire.make_polygon(outer_pts))
-                                    else:
-                                        # Letzter Fallback: Polygon
-                                        logger.warning("  → Mixed Geometry Fallback: Verwende Polygon")
-                                        outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
-                                        face = make_face(Wire.make_polygon(outer_pts))
+                            if mixed_wire is not None:
+                                face = make_face(mixed_wire)
                             else:
-                                # Prüfen ob Außenkontur von einem Native Spline stammt
+                                # Fallback: Prüfe auf einzelnen Spline
                                 native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
-
                                 if native_spline is not None:
-                                    # NATIVE SPLINE → Saubere Kurve mit wenigen Flächen!
-                                    logger.info(f"  → Außenkontur als NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
+                                    logger.info(f"  → Fallback: NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
                                     spline_wire = self._create_wire_from_native_spline(native_spline, plane)
-
                                     if spline_wire is not None:
                                         face = make_face(spline_wire)
                                     else:
-                                        # Fallback: Polygon
                                         logger.warning("  → Spline Wire Fallback: Verwende Polygon")
                                         outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                         face = make_face(Wire.make_polygon(outer_pts))
                                 else:
-                                    # Normale Polygon-Außenkontur (Rechteck, Hexagon, etc.)
+                                    # Letzter Fallback: Polygon
+                                    logger.warning("  → Mixed Geometry Fallback: Verwende Polygon")
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
+
+                        elif n_interiors == 0:
+                            # Keine gemischte Geometrie - prüfen ob es ein Kreis ist
+                            outer_circle_info = self._detect_circle_from_points(outer_coords)
+                            logger.debug(f"  Außenkontur Kreis-Check: {outer_circle_info is not None}")
+
+                            if outer_circle_info:
+                                # Die Außenkontur IST ein Kreis (standalone Kreis ohne Löcher)
+                                cx, cy, radius = outer_circle_info
+                                logger.info(f"  → Außenkontur als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+
+                                center_3d = plane.from_local_coords((cx, cy))
+                                from build123d import Plane as B3DPlane
+                                circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                                circle_wire = Wire.make_circle(radius, circle_plane)
+                                face = make_face(circle_wire)
+                            else:
+                                # Kein Kreis, keine gemischte Geometrie → Polygon
+                                outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                                face = make_face(Wire.make_polygon(outer_pts))
+                        else:
+                            # Hat Löcher (n_interiors > 0), aber KEINE gemischte Geometrie
+                            # (mixed geometry wurde bereits oben bei has_mixed_geometry behandelt)
+
+                            # Prüfen ob Außenkontur von einem Native Spline stammt
+                            native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
+
+                            if native_spline is not None:
+                                # NATIVE SPLINE → Saubere Kurve mit wenigen Flächen!
+                                logger.info(f"  → Außenkontur als NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
+                                spline_wire = self._create_wire_from_native_spline(native_spline, plane)
+
+                                if spline_wire is not None:
+                                    face = make_face(spline_wire)
+                                else:
+                                    # Fallback: Polygon
+                                    logger.warning("  → Spline Wire Fallback: Verwende Polygon")
+                                    outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                                    face = make_face(Wire.make_polygon(outer_pts))
+                            else:
+                                # Normale Polygon-Außenkontur (Rechteck, Hexagon, etc.)
+                                outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                                face = make_face(Wire.make_polygon(outer_pts))
                         
                         # 2. Löcher abziehen (Shapely Interiors)
                         for int_idx, interior in enumerate(poly.interiors):

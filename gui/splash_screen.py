@@ -33,42 +33,36 @@ class MashCADSplash(QSplashScreen):
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(1, 1, 598, 378, 12, 12)
 
-        # App-Icon laden falls vorhanden
+        # Logo laden (enthält bereits "MashCAD" Text)
         base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        icon_path = os.path.join(base_path, "app.png")
-        if os.path.exists(icon_path):
-            icon = QPixmap(icon_path)
-            if not icon.isNull():
-                # Icon groesser skalieren
-                icon_size = 120
-                scaled_icon = icon.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                icon_x = (600 - scaled_icon.width()) // 2
-                icon_y = 45
+        logo_path = os.path.join(base_path, "app.png")
+        if os.path.exists(logo_path):
+            logo = QPixmap(logo_path)
+            if not logo.isNull():
+                # Logo größer skalieren - Breite 320px
+                logo_width = 320
+                scaled_logo = logo.scaledToWidth(logo_width, Qt.SmoothTransformation)
+                logo_x = (600 - scaled_logo.width()) // 2
+                logo_y = 60
 
-                # Subtiler Glow hinter dem Icon
-                glow_center = QPointF(300, icon_y + icon_size / 2)
-                glow = QRadialGradient(glow_center, icon_size * 0.8)
-                glow.setColorAt(0, QColor(80, 160, 220, 50))
-                glow.setColorAt(0.5, QColor(60, 130, 200, 20))
+                # Subtiler Glow hinter dem Logo
+                glow_center = QPointF(300, logo_y + scaled_logo.height() / 2)
+                glow = QRadialGradient(glow_center, scaled_logo.width() * 0.5)
+                glow.setColorAt(0, QColor(80, 160, 220, 40))
+                glow.setColorAt(0.5, QColor(60, 130, 200, 15))
                 glow.setColorAt(1, QColor(40, 100, 180, 0))
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(glow)
-                painter.drawEllipse(glow_center, icon_size * 0.9, icon_size * 0.9)
+                painter.drawEllipse(glow_center, scaled_logo.width() * 0.6, scaled_logo.height() * 0.8)
 
-                # Icon zeichnen
-                painter.drawPixmap(icon_x, icon_y, scaled_icon)
+                # Logo zeichnen
+                painter.drawPixmap(logo_x, logo_y, scaled_logo)
 
-        # App Name - naeher am Icon
-        font_title = QFont("Segoe UI", 38, QFont.Bold)
-        painter.setFont(font_title)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(QRect(0, 175, 600, 55), Qt.AlignCenter, "MashCAD")
-
-        # Tagline
-        font_tag = QFont("Segoe UI", 11)
+        # Tagline (unter dem Logo)
+        font_tag = QFont("Segoe UI", 12)
         painter.setFont(font_tag)
         painter.setPen(QColor(140, 150, 170))
-        painter.drawText(QRect(0, 230, 600, 25), Qt.AlignCenter, "Parametric CAD for 3D Printing")
+        painter.drawText(QRect(0, 210, 600, 30), Qt.AlignCenter, "Parametric CAD for 3D Printing")
 
         # Version
         font_ver = QFont("Segoe UI", 9)

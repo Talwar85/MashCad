@@ -652,6 +652,7 @@ class MainWindow(QMainWindow):
         self.sketch_editor.grid_snap_mode_changed.connect(self.tool_panel.set_grid_snap)
         self.sketch_editor.exit_requested.connect(self._finish_sketch)
         self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
+        self.sketch_editor.solver_finished_signal.connect(self._on_solver_dof_updated)
         # Toolbar entfernt - war nutzlos laut User
      
     def resizeEvent(self, event):
@@ -2234,12 +2235,31 @@ class MainWindow(QMainWindow):
         """Aktualisiert Sketch-Wireframes im 3D-Viewport nach Sketch-Änderungen."""
         self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
 
+    def _on_solver_dof_updated(self, success: bool, message: str, dof: float):
+        """
+        Wird aufgerufen wenn der Sketcher-Solver fertig ist.
+        Aktualisiert die DOF-Anzeige in der Statusleiste.
+        """
+        from config import is_enabled
+        if not is_enabled("use_dof_display"):
+            return
+
+        # DOF in Integer konvertieren (kommt als float vom Signal)
+        dof_int = int(dof) if dof >= 0 else -1
+
+        # StatusBar aktualisieren (nur im Sketch-Modus sichtbar)
+        is_sketch_mode = self.mode == "sketch"
+        self.mashcad_status_bar.set_dof(dof_int, visible=is_sketch_mode)
+
     def _finish_sketch(self):
         """Beendet den Sketch-Modus und räumt auf."""
         # Body-Referenzen im SketchEditor löschen (Ghost Bodies entfernen)
         if hasattr(self.sketch_editor, 'set_reference_bodies'):
             self.sketch_editor.set_reference_bodies([], (0,0,1), (0,0,0))
-            
+
+        # DOF-Anzeige ausblenden
+        self.mashcad_status_bar.set_dof(0, visible=False)
+
         self.active_sketch = None
         self._set_mode("3d")
         

@@ -2588,11 +2588,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return None, None, None
 
         # Versuche Build123d Profile-Detection
+        logger.info("Build123d V2: Versuche exakte Profile-Detection...")
         b3d_faces, error = self.get_build123d_profiles()
 
         if b3d_faces is None or not b3d_faces:
             # Fallback zur alten Methode
-            logger.debug(f"Build123d Profile-Detection nicht verfügbar ({error}), nutze Shapely-Fallback")
+            logger.warning(f"Build123d Profile-Detection nicht verfügbar ({error}), nutze Shapely-Fallback")
             return self.get_build123d_part(height, operation)
 
         plane = self.get_build123d_plane()
@@ -3356,7 +3357,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 except TypeError:
                     # Fallback: Falls andere Tools (z.B. Rect) noch nicht aktualisiert wurden
                     # und keine 3 Argumente akzeptieren, rufen wir sie klassisch auf.
-                    handler(snapped, snap_type)
+                    try:
+                        handler(snapped, snap_type)
+                    except Exception as e:
+                        logger.error(f"Handler {handler_name} failed: {e}")
+                        import traceback
+                        traceback.print_exc()
 
         # 4. Rechtsklick (Abbrechen / Kontextmenü)
         elif event.button() == Qt.RightButton:

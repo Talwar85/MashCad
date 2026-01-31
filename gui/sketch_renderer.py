@@ -398,19 +398,28 @@ class SketchRendererMixin:
             ctr = self.world_to_screen(arc.center)
             r = arc.radius * self.view_scale
             rect = QRectF(ctr.x()-r, ctr.y()-r, 2*r, 2*r)
-            
+
             start_angle = arc.start_angle
-            # Fix: Variable 'end_angle' war hier undefiniert -> arc.end_angle nutzen
             sweep = arc.end_angle - arc.start_angle
-            if sweep <= 0: sweep += 360
-            
+
+            # Wenn sweep 0 ist oder sehr klein, mache nichts
+            if abs(sweep) < 0.01:
+                continue
+
+            # Normalisiere sweep auf [-360, 360] Bereich
+            while sweep > 360: sweep -= 360
+            while sweep < -360: sweep += 360
+
             is_sel = arc in self.selected_arcs
             is_hov = self.hovered_entity == arc
             is_fixed = getattr(arc, 'fixed', False)
-            
+
             temp_path = QPainterPath()
+            # Y-Achse ist in Screen-Koordinaten umgekehrt:
+            # - Start-Winkel muss negiert werden für korrekte Position
+            # - Sweep-Richtung NICHT negieren, sonst geht Arc auf die falsche Seite
             temp_path.arcMoveTo(rect, -start_angle)
-            temp_path.arcTo(rect, -start_angle, -sweep)
+            temp_path.arcTo(rect, -start_angle, sweep)
 
             if is_sel:
                 path_selected.addPath(temp_path)
