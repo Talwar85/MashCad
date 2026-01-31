@@ -4640,26 +4640,31 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 body_dist = np.linalg.norm(pos - ray_start)
 
                 # Jetzt suchen wir im Detector, welche logische Fläche zu diesem Punkt passt.
-                # NEUER ANSATZ: Nur Distanz zur Ebene prüfen, Normal-Check ist optional
+                # WICHTIG: Normal-Match hat PRIORITÄT über Distanz!
+                # Sonst wird das falsche Face gewählt (z.B. Bottom statt Front)
                 best_face = None
-                best_dist = float('inf')
+                best_score = float('inf')
 
                 for face in self.detector.selection_faces:
                     if face.domain_type != "body_face":
                         continue
 
+                    face_normal = np.array(face.plane_normal)
+
                     # Distanz des Pick-Punkts zur Ebene der Fläche
-                    dist_plane = abs(np.dot(pos - np.array(face.plane_origin), np.array(face.plane_normal)))
+                    dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
 
-                    # Normal-Check als Bonus, nicht als Requirement
-                    dot_normal = abs(np.dot(normal, np.array(face.plane_normal)))
+                    # Normal-Übereinstimmung (ABS weil Picker-Normal Richtung variiert)
+                    dot_normal = abs(np.dot(normal, face_normal))
 
-                    # Akzeptiere die Fläche wenn der Punkt nahe der Ebene ist
-                    if dist_plane < 5.0:  # 5mm Toleranz
-                        # Scoring: Kleinere Distanz + gute Normal-Übereinstimmung = besser
-                        score = dist_plane - (dot_normal * 2.0)  # Normal-Bonus
-                        if score < best_dist:
-                            best_dist = score
+                    # Filter: Punkt muss nahe der Ebene sein UND Normal muss grob stimmen
+                    # dot_normal > 0.5 = Winkel < 60° zum Face
+                    if dist_plane < 2.0 and dot_normal > 0.5:
+                        # Scoring: Normal-Match ist 10x wichtiger als Distanz!
+                        # Hoher dot_normal (1.0) = niedriger Score = besser
+                        score = (1.0 - dot_normal) * 10.0 + dist_plane
+                        if score < best_score:
+                            best_score = score
                             best_face = face
 
                 if best_face:
