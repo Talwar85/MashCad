@@ -144,6 +144,9 @@ class ExtrudeFeature(Feature):
     plane_normal: tuple = field(default_factory=lambda: (0, 0, 1))
     plane_x_dir: tuple = None
     plane_y_dir: tuple = None
+    # Push/Pull auf nicht-planaren Flächen: OCP Face als BREP-String speichern
+    face_brep: Optional[str] = None  # Serialisierte OCP TopoDS_Face
+    face_type: Optional[str] = None  # "plane", "cylinder", "cone", etc.
 
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
@@ -4436,6 +4439,73 @@ class Body:
             logger.error(f"Transform-Feature-Fehler ({mode}): {e}")
             raise
 
+    def _extrude_from_face_brep(self, feature: ExtrudeFeature):
+        """
+        Extrudiert eine Face aus gespeicherten BREP-Daten.
+
+        Wird verwendet für Push/Pull auf nicht-planaren Flächen (Zylinder, etc.),
+        wo keine Polygon-Extraktion möglich ist.
+        """
+        try:
+            from OCP.BRepTools import BRepTools
+            from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
+            from OCP.BRep import BRep_Builder
+            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+            from OCP.gp import gp_Vec
+            from build123d import Solid
+            import tempfile
+            import os
+
+            # Face aus BREP-String deserialisieren
+            face_brep = feature.face_brep
+            if not face_brep:
+                logger.error("Extrude: face_brep ist leer!")
+                return None
+
+            # BREP in temporäre Datei schreiben und lesen
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
+                f.write(face_brep)
+                temp_path = f.name
+
+            builder = BRep_Builder()
+            face_shape = TopoDS_Shape()
+            BRepTools.Read_s(face_shape, temp_path, builder)
+            os.unlink(temp_path)
+
+            if face_shape.IsNull():
+                logger.error("Extrude: Face aus BREP konnte nicht gelesen werden!")
+                return None
+
+            # Extrusions-Richtung aus plane_normal
+            normal = feature.plane_normal
+            amount = feature.distance * feature.direction
+
+            extrude_vec = gp_Vec(
+                normal[0] * amount,
+                normal[1] * amount,
+                normal[2] * amount
+            )
+
+            # BRepPrimAPI_MakePrism für Extrusion
+            prism_maker = BRepPrimAPI_MakePrism(face_shape, extrude_vec)
+            prism_maker.Build()
+
+            if not prism_maker.IsDone():
+                logger.error("Extrude: BRepPrimAPI_MakePrism fehlgeschlagen!")
+                return None
+
+            prism_shape = prism_maker.Shape()
+            solid = Solid(prism_shape)
+
+            logger.info(f"Extrude: Face aus BREP erfolgreich extrudiert (type={feature.face_type}, vol={solid.volume:.2f})")
+            return solid
+
+        except Exception as e:
+            logger.error(f"Extrude aus Face-BREP fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _compute_extrude_part(self, feature: ExtrudeFeature):
         """
         CAD Kernel First: Profile werden IMMER aus dem Sketch abgeleitet.
@@ -4450,7 +4520,8 @@ class Body:
         # Prüfe ob wir eine Geometrie-Quelle haben
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
-        if not has_sketch and not has_polys:
+        has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
+        if not has_sketch and not has_polys and not has_face_brep:
             return None
 
         try:
@@ -4500,9 +4571,14 @@ class Body:
                     # Sketch hat keine closed_profiles
                     logger.warning(f"Extrude: Sketch hat keine closed_profiles!")
             else:
-                # Ohne Sketch (Push/Pull): precalculated_polys ist die Geometrie-Quelle
-                polys_to_extrude = list(feature.precalculated_polys)
-                logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+                # Ohne Sketch (Push/Pull): precalculated_polys oder face_brep
+                if has_polys:
+                    polys_to_extrude = list(feature.precalculated_polys)
+                    logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+                elif has_face_brep:
+                    # Face aus BREP deserialisieren und direkt extrudieren (für Zylinder etc.)
+                    logger.info(f"Extrude: Face aus BREP (Push/Pull auf {feature.face_type})")
+                    return self._extrude_from_face_brep(feature)
 
             # === Extrude-Logik ===
             if polys_to_extrude:
@@ -4597,9 +4673,24 @@ class Body:
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
                             else:
-                                # Normale Polygon-Außenkontur (Rechteck, Hexagon, etc.)
-                                outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
-                                face = make_face(Wire.make_polygon(outer_pts))
+                                # Prüfen ob Außenkontur ein Kreis ist (FIX: Circle-Detection auch bei Löchern!)
+                                outer_circle_info = self._detect_circle_from_points(outer_coords)
+
+                                if outer_circle_info:
+                                    # Echten Kreis verwenden für saubere B-Rep Topologie!
+                                    cx, cy, radius = outer_circle_info
+                                    logger.info(f"  → Außenkontur als ECHTER KREIS (mit Löchern): r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+
+                                    # Kreis-Wire auf der richtigen Ebene erstellen
+                                    center_3d = plane.from_local_coords((cx, cy))
+                                    from build123d import Plane as B3DPlane
+                                    circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                                    circle_wire = Wire.make_circle(radius, circle_plane)
+                                    face = make_face(circle_wire)
+                                else:
+                                    # Normale Polygon-Außenkontur (Rechteck, Hexagon, etc.)
+                                    outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                                    face = make_face(Wire.make_polygon(outer_pts))
                         
                         # 2. Löcher abziehen (Shapely Interiors)
                         for int_idx, interior in enumerate(poly.interiors):
@@ -5398,6 +5489,10 @@ class Body:
                         ]
                     except:
                         pass
+                # Face-BREP für Push/Pull auf nicht-planaren Flächen (Zylinder etc.)
+                if hasattr(feat, 'face_brep') and feat.face_brep:
+                    feat_dict["face_brep"] = feat.face_brep
+                    feat_dict["face_type"] = getattr(feat, 'face_type', None)
 
             elif isinstance(feat, FilletFeature):
                 feat_dict.update({
@@ -5434,6 +5529,7 @@ class Body:
                     "angle": feat.angle,
                     "angle_formula": feat.angle_formula,
                     "axis": list(feat.axis),
+                    "axis_origin": list(feat.axis_origin),
                     "operation": feat.operation,
                     # KRITISCH für parametrisches CAD: Sketch-ID speichern
                     "sketch_id": feat.sketch.id if feat.sketch else None,
@@ -5446,8 +5542,9 @@ class Body:
                     "feature_class": "LoftFeature",
                     "ruled": feat.ruled,
                     "operation": feat.operation,
-                    "start_continuity": feat.start_continuity.value if feat.start_continuity else "G0",
-                    "end_continuity": feat.end_continuity.value if feat.end_continuity else "G0",
+                    "start_continuity": feat.start_continuity if feat.start_continuity else "G0",
+                    "end_continuity": feat.end_continuity if feat.end_continuity else "G0",
+                    "profile_data": feat.profile_data,
                 })
 
             elif isinstance(feat, SweepFeature):
@@ -5458,6 +5555,9 @@ class Body:
                     "twist_angle": feat.twist_angle,
                     "scale_start": feat.scale_start,
                     "scale_end": feat.scale_end,
+                    "profile_data": feat.profile_data,
+                    "path_data": feat.path_data,
+                    "contact_mode": feat.contact_mode,
                 })
 
             elif isinstance(feat, ShellFeature):
@@ -5662,6 +5762,10 @@ class Body:
                         ]
                     except:
                         pass
+                # Face-BREP für Push/Pull auf nicht-planaren Flächen
+                if "face_brep" in feat_dict:
+                    feat.face_brep = feat_dict["face_brep"]
+                    feat.face_type = feat_dict.get("face_type")
 
             elif feat_class == "FilletFeature":
                 feat = FilletFeature(
@@ -5699,6 +5803,7 @@ class Body:
                     sketch=None,
                     angle=feat_dict.get("angle", 360.0),
                     axis=tuple(feat_dict.get("axis", (0, 1, 0))),
+                    axis_origin=tuple(feat_dict.get("axis_origin", (0, 0, 0))),
                     operation=feat_dict.get("operation", "New Body"),
                     **base_kwargs
                 )
@@ -5713,6 +5818,9 @@ class Body:
                 feat = LoftFeature(
                     ruled=feat_dict.get("ruled", False),
                     operation=feat_dict.get("operation", "New Body"),
+                    start_continuity=feat_dict.get("start_continuity", "G0"),
+                    end_continuity=feat_dict.get("end_continuity", "G0"),
+                    profile_data=feat_dict.get("profile_data", []),
                     **base_kwargs
                 )
 
@@ -5723,6 +5831,9 @@ class Body:
                     twist_angle=feat_dict.get("twist_angle", 0.0),
                     scale_start=feat_dict.get("scale_start", 1.0),
                     scale_end=feat_dict.get("scale_end", 1.0),
+                    profile_data=feat_dict.get("profile_data", {}),
+                    path_data=feat_dict.get("path_data", {}),
+                    contact_mode=feat_dict.get("contact_mode", "keep"),
                     **base_kwargs
                 )
 
@@ -6234,18 +6345,26 @@ class Document:
 
             import numpy as np
 
-            class _NumpyEncoder(json.JSONEncoder):
+            class _ProjectEncoder(json.JSONEncoder):
+                """JSON Encoder für Projekt-Daten mit Unterstützung für NumPy und Geometrie-Objekte."""
                 def default(self, obj):
+                    # NumPy-Typen
                     if isinstance(obj, (np.integer,)):
                         return int(obj)
                     if isinstance(obj, (np.floating,)):
                         return float(obj)
                     if isinstance(obj, np.ndarray):
                         return obj.tolist()
+                    # Objekte mit to_dict Methode (Geometrie-Klassen, etc.)
+                    if hasattr(obj, 'to_dict'):
+                        return obj.to_dict()
+                    # Dataclasses als Fallback
+                    if hasattr(obj, '__dataclass_fields__'):
+                        return {k: getattr(obj, k) for k in obj.__dataclass_fields__}
                     return super().default(obj)
 
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False, cls=_NumpyEncoder)
+                json.dump(data, f, indent=2, ensure_ascii=False, cls=_ProjectEncoder)
 
             return True
 

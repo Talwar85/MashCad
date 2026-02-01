@@ -29,6 +29,9 @@ from typing import Dict
 FEATURE_FLAGS: Dict[str, bool] = {
     # Debug-Modi
     "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
+
+    # UX Features
+    "sketch_orientation_indicator": True,  # Zeigt 3D-Orientierung im Sketch-Editor
 }
 
 

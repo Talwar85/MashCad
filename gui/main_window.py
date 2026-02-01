@@ -5114,6 +5114,10 @@ class MainWindow(QMainWindow):
             # Bei Fehlschlag: Extrusion läuft trotzdem, aber weniger parametrisch
             polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir = self._extract_face_as_polygon(best_face)
 
+            # Face als BREP für Rebuild speichern (für nicht-planare Flächen)
+            face_brep_str = None
+            face_type_str = None
+
             if polygon is None:
                 # Kein Problem für BRepFeat - das arbeitet direkt mit der Face
                 logger.debug("Polygon-Extraktion nicht möglich - BRepFeat nutzt Face direkt")
@@ -5122,6 +5126,37 @@ class MainWindow(QMainWindow):
                 face_normal_at_center = best_face.normal_at(face_center)
                 plane_origin = (face_center.X, face_center.Y, face_center.Z)
                 plane_normal = (face_normal_at_center.X, face_normal_at_center.Y, face_normal_at_center.Z)
+
+                # Face als BREP serialisieren für Rebuild!
+                try:
+                    from OCP.BRepTools import BRepTools
+                    from OCP.BRepAdaptor import BRepAdaptor_Surface
+                    from OCP.GeomAbs import GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere
+                    import tempfile
+                    import os
+
+                    # Face-Typ ermitteln
+                    adaptor = BRepAdaptor_Surface(best_face.wrapped)
+                    surf_type = adaptor.GetType()
+                    type_map = {
+                        GeomAbs_Plane: "plane",
+                        GeomAbs_Cylinder: "cylinder",
+                        GeomAbs_Cone: "cone",
+                        GeomAbs_Sphere: "sphere",
+                    }
+                    face_type_str = type_map.get(surf_type, "other")
+
+                    # BREP in temporäre Datei schreiben und lesen
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
+                        temp_path = f.name
+                    BRepTools.Write_s(best_face.wrapped, temp_path)
+                    with open(temp_path, 'r') as f:
+                        face_brep_str = f.read()
+                    os.unlink(temp_path)
+
+                    logger.debug(f"Face als BREP gespeichert: type={face_type_str}, size={len(face_brep_str)} bytes")
+                except Exception as brep_err:
+                    logger.warning(f"Face BREP-Serialisierung fehlgeschlagen: {brep_err}")
 
             # Extrusions-Werkzeug erstellen
             # FÜR JOIN: BRepFeat_MakePrism (lokale Op, KEINE neuen Nähte - erhält Zylinder!)
@@ -5181,9 +5216,11 @@ class MainWindow(QMainWindow):
                         new_solid = Solid(result_shape)
 
                         is_valid = new_solid.is_valid()
-                        logger.debug(f"BRepFeat result: is_valid={is_valid}, volume={new_solid.volume:.2f}")
+                        volume = new_solid.volume
+                        logger.debug(f"BRepFeat result: is_valid={is_valid}, volume={volume:.2f}")
 
-                        if is_valid:
+                        # FIX: Prüfe auch auf positive Volume (negative = inside-out shape!)
+                        if is_valid and volume > 0:
                             # ERFOLG! Direkt das Ergebnis verwenden - keine Boolean nötig!
                             logger.info(f"✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)")
 
@@ -5200,7 +5237,9 @@ class MainWindow(QMainWindow):
                                 plane_origin=plane_origin,
                                 plane_normal=plane_normal,
                                 plane_x_dir=plane_x_dir if polygon is not None else None,
-                                plane_y_dir=plane_y_dir if polygon is not None else None
+                                plane_y_dir=plane_y_dir if polygon is not None else None,
+                                face_brep=face_brep_str,
+                                face_type=face_type_str
                             )
 
                             # Body direkt aktualisieren (KEIN Boolean!)
@@ -5223,7 +5262,11 @@ class MainWindow(QMainWindow):
 
                             return True
                         else:
-                            logger.warning(f"BRepFeat_MakePrism: Ergebnis ungültig, Fallback auf Boolean")
+                            # BRepFeat produzierte ungültiges Ergebnis (z.B. negative Volume = inside-out)
+                            if volume <= 0:
+                                logger.warning(f"BRepFeat_MakePrism: Negative Volume ({volume:.2f}) - Shape ist inside-out, Fallback auf Boolean")
+                            else:
+                                logger.warning(f"BRepFeat_MakePrism: Ergebnis ungültig (is_valid=False), Fallback auf Boolean")
                     else:
                         logger.warning(f"BRepFeat_MakePrism: IsDone()=False, Fallback auf Boolean")
 
@@ -7681,8 +7724,8 @@ class MainWindow(QMainWindow):
         self._pending_shell_mode = False
 
         # WICHTIG: Face-Detection aktivieren damit Flächen wählbar sind
-        # (Analog zu Extrude-Mode, aber für Body-Flächen)
-        self.viewport_3d.set_extrude_mode(True)  # Aktiviert Face-Picking
+        # (Analog zu Extrude-Mode, aber OHNE Extrude-Preview!)
+        self.viewport_3d.set_extrude_mode(True, enable_preview=False)  # Aktiviert Face-Picking
         self._update_detector()  # Detector mit Body-Faces füllen
 
         # Panel anzeigen
@@ -8092,7 +8135,8 @@ class MainWindow(QMainWindow):
 
         # Aktiviere sowohl Sketch-Element-Selektion als auch Edge-Selection
         # 1. Für Sketch-Elemente: Nutze Face-Selection im Detector
-        self.viewport_3d.set_extrude_mode(True)  # Aktiviert allgemeine Selektion
+        # FIX: enable_preview=False damit keine Extrude-Preview während Sweep gezeigt wird
+        self.viewport_3d.set_extrude_mode(True, enable_preview=False)
         self._update_detector()
 
         # 2. Für Body-Edges: Edge-Selection-Mode aktivieren
@@ -8661,8 +8705,8 @@ class MainWindow(QMainWindow):
         self._loft_profiles = []
         logger.info(f"Loft: Modus aktiviert. _loft_mode={self._loft_mode}")
 
-        # Face-Detection aktivieren
-        self.viewport_3d.set_extrude_mode(True)
+        # Face-Detection aktivieren (OHNE Extrude-Preview!)
+        self.viewport_3d.set_extrude_mode(True, enable_preview=False)
         self._update_detector()
 
         # Debug: Zeige Detector-Status

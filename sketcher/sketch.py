@@ -924,10 +924,15 @@ class Sketch:
                 cd['formula'] = c.formula
             constraints_data.append(cd)
 
+        # Native Splines (DXF B-Splines) serialisieren
+        native_splines_data = []
+        for spline in self.native_splines:
+            native_splines_data.append(spline.to_dict())
+
         return {
             'name': self.name,
             'id': self.id,
-            'points': [(p.x, p.y, p.id, p.fixed) for p in self.points],
+            'points': [(p.x, p.y, p.id, p.fixed, p.construction, p.standalone) for p in self.points],
             'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction)
                       for l in self.lines],
             'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction)
@@ -935,6 +940,7 @@ class Sketch:
             'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle,
                       a.id, a.construction) for a in self.arcs],
             'splines': splines_data,
+            'native_splines': native_splines_data,
             'constraints': constraints_data,
         }
     
@@ -943,6 +949,19 @@ class Sketch:
         """Erstellt Sketch aus Dictionary (für Undo)"""
         sketch = cls(name=data.get('name', 'Sketch'))
         sketch.id = data.get('id', sketch.id)
+
+        # Standalone-Punkte wiederherstellen
+        for pdata in data.get('points', []):
+            x, y = pdata[0], pdata[1]
+            pid = pdata[2] if len(pdata) > 2 else None
+            fixed = pdata[3] if len(pdata) > 3 else False
+            construction = pdata[4] if len(pdata) > 4 else False
+            standalone = pdata[5] if len(pdata) > 5 else False
+            if standalone:
+                point = sketch.add_point(x, y, construction=construction)
+                point.fixed = fixed
+                if pid:
+                    point.id = pid
 
         # Linien wiederherstellen
         for ldata in data.get('lines', []):
@@ -996,6 +1015,15 @@ class Sketch:
                 spline._lines = lines
                 for line in lines:
                     sketch.lines.append(line)
+
+        # Native Splines (B-Splines aus DXF) wiederherstellen
+        for nsdata in data.get('native_splines', []):
+            try:
+                native_spline = Spline2D.from_dict(nsdata)
+                sketch.native_splines.append(native_spline)
+            except Exception as e:
+                from loguru import logger
+                logger.debug(f"Native Spline Wiederherstellung übersprungen: {e}")
 
         # Constraints wiederherstellen
         # Entity-ID → Objekt Map aufbauen

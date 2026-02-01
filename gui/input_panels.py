@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
 from PySide6.QtGui import QFont, QKeyEvent
 
+from i18n import tr
+
 # --- Hilfsklasse für Enter-Taste ---
 class ActionSpinBox(QDoubleSpinBox):
     """Eine SpinBox, die Enter-Tasten verarbeitet"""
@@ -116,7 +118,7 @@ class ExtrudeInputPanel(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(12)
         
-        self.label = QLabel("Extrude:")
+        self.label = QLabel(tr("Extrude:"))
         layout.addWidget(self.label)
         
         self.height_input = ActionSpinBox()
@@ -136,15 +138,17 @@ class ExtrudeInputPanel(QFrame):
         self.op_indicator.setFixedWidth(20)
         self.op_indicator.setStyleSheet("color: #6699ff; font-size: 16px;")
         layout.addWidget(self.op_indicator)
-        
+
         self.op_combo = QComboBox()
-        self.op_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
-        self.op_combo.currentTextChanged.connect(self._on_operation_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["New Body", "Join", "Cut", "Intersect"]:
+            self.op_combo.addItem(tr(key), key)
+        self.op_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         layout.addWidget(self.op_combo)
 
         # Flip Direction Button
         self.flip_btn = QPushButton("⇅")
-        self.flip_btn.setToolTip("Richtung umkehren (F)")
+        self.flip_btn.setToolTip(tr("Flip direction (F)"))
         self.flip_btn.setFixedSize(32, 32)
         self.flip_btn.setStyleSheet("""
             QPushButton {
@@ -167,7 +171,7 @@ class ExtrudeInputPanel(QFrame):
 
         # "To Face" Button
         self.to_face_btn = QPushButton("⬆ To")
-        self.to_face_btn.setToolTip("Extrude bis zu Fläche (T)")
+        self.to_face_btn.setToolTip(tr("Extrude to face (T)"))
         self.to_face_btn.setFixedSize(50, 32)
         self.to_face_btn.setCheckable(True)
         self.to_face_btn.setStyleSheet("""
@@ -184,7 +188,7 @@ class ExtrudeInputPanel(QFrame):
         self.btn_vis = QPushButton("👁")
         self.btn_vis.setCheckable(False)  # 3-Stufen-Toggle statt an/aus
         self.btn_vis.setFixedWidth(35)
-        self.btn_vis.setToolTip("Bodies sichtbar (Klick → X-Ray)")
+        self.btn_vis.setToolTip(tr("Bodies visible (click → X-Ray)"))
         self.btn_vis.clicked.connect(self._toggle_vis)
         layout.addWidget(self.btn_vis)
         
@@ -201,31 +205,36 @@ class ExtrudeInputPanel(QFrame):
         
         self.hide()
         
-    def _on_operation_changed(self, op_text):
+    def _on_operation_changed_idx(self, index: int):
         """Aktualisiert Farb-Indikator und emittiert Signal"""
-        self._current_operation = op_text
+        # Get internal key from itemData
+        op_key = self.op_combo.itemData(index)
+        if op_key is None:
+            op_key = self.op_combo.currentText()  # Fallback
+        self._current_operation = op_key
         colors = {
             "New Body": "#6699ff",  # Blau
             "Join": "#66ff66",      # Grün
             "Cut": "#ff6666",       # Rot
             "Intersect": "#ffaa66"  # Orange
         }
-        self.op_indicator.setStyleSheet(f"color: {colors.get(op_text, '#6699ff')}; font-size: 16px;")
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#6699ff')}; font-size: 16px;")
 
         # Tooltip-Warnung für Boolean Operations
-        if op_text in ["Join", "Cut", "Intersect"]:
+        if op_key in ["Join", "Cut", "Intersect"]:
             self.op_combo.setToolTip(
-                f"⚠️ {op_text}: Boolean Operations können bei komplexen Geometrien fehlschlagen.\n"
-                f"Tipp: 'New Body' ist sicherer - Bodies können später manuell kombiniert werden."
+                tr("⚠️ Boolean operations may fail on complex geometry.\n"
+                   "Tip: 'New Body' is safer - bodies can be combined later.")
             )
         else:
-            self.op_combo.setToolTip("Erstellt einen neuen unabhängigen Body (empfohlen)")
+            self.op_combo.setToolTip(tr("Creates a new independent body (recommended)"))
 
-        self.operation_changed.emit(op_text)
+        self.operation_changed.emit(op_key)
         
     def set_suggested_operation(self, operation: str):
         """Setzt die vorgeschlagene Operation automatisch"""
-        idx = self.op_combo.findText(operation)
+        # Use findData to search by internal key, not translated text
+        idx = self.op_combo.findData(operation)
         if idx >= 0:
             self.op_combo.setCurrentIndex(idx)
             
@@ -252,7 +261,9 @@ class ExtrudeInputPanel(QFrame):
         return self.height_input.value()
 
     def get_operation(self) -> str:
-        return self.op_combo.currentText()
+        # Return internal key, not translated text
+        data = self.op_combo.currentData()
+        return data if data else self.op_combo.currentText()
     
     def _flip_direction(self):
         """Invertiert das Vorzeichen des aktuellen Wertes"""
@@ -271,14 +282,14 @@ class ExtrudeInputPanel(QFrame):
         if self.to_face_btn.isChecked():
             self.to_face_requested.emit()
             self.height_input.setEnabled(False)
-            self.label.setText("Extrude → Face:")
+            self.label.setText(tr("Extrude → Face:"))
         else:
             self.set_to_face_mode(False)
 
     def set_to_face_mode(self, active: bool):
         self.to_face_btn.setChecked(active)
         self.height_input.setEnabled(not active)
-        self.label.setText("Extrude → Face:" if active else "Extrude:")
+        self.label.setText(tr("Extrude → Face:") if active else tr("Extrude:"))
 
     def set_to_face_height(self, h: float):
         """Setzt Höhe aus To-Face Berechnung."""
@@ -296,9 +307,9 @@ class ExtrudeInputPanel(QFrame):
         # Visibility State zurücksetzen
         self._visibility_state = 0
         self.btn_vis.setText("👁")
-        self.btn_vis.setToolTip("Bodies sichtbar (Klick → X-Ray)")
+        self.btn_vis.setToolTip(tr("Bodies visible (click → X-Ray)"))
         self.to_face_btn.setChecked(False)
-        self.label.setText("Extrude:")
+        self.label.setText(tr("Extrude:"))
 
     def _on_height_changed(self, val):
         self._height = val
@@ -320,9 +331,9 @@ class ExtrudeInputPanel(QFrame):
         # Button-Aussehen und Tooltip aktualisieren
         icons = ["👁", "👁‍🗨", "🚫"]  # Normal, X-Ray, Hidden
         tooltips = [
-            "Bodies sichtbar (Klick → X-Ray)",
-            "X-Ray Mode aktiv (Klick → Verstecken)",
-            "Bodies versteckt (Klick → Sichtbar)"
+            tr("Bodies visible (click → X-Ray)"),
+            tr("X-Ray mode active (click → Hide)"),
+            tr("Bodies hidden (click → Visible)")
         ]
         self.btn_vis.setText(icons[self._visibility_state])
         self.btn_vis.setToolTip(tooltips[self._visibility_state])
@@ -384,7 +395,7 @@ class FilletChamferPanel(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(10)
 
-        self.label = QLabel("Fillet:")
+        self.label = QLabel(tr("Fillet:"))
         layout.addWidget(self.label)
 
         self.radius_input = ActionSpinBox()
@@ -400,7 +411,7 @@ class FilletChamferPanel(QFrame):
         layout.addWidget(self.radius_input)
 
         # NEU: Kantenanzahl-Anzeige
-        self.edge_count_label = QLabel("0 Kanten")
+        self.edge_count_label = QLabel(tr("0 edges"))
         self.edge_count_label.setStyleSheet("""
             color: #888;
             font-size: 12px;
@@ -432,14 +443,14 @@ class FilletChamferPanel(QFrame):
 
     def set_mode(self, mode: str):
         self._mode = mode
-        self.label.setText("Fillet:" if mode == "fillet" else "Chamfer:")
+        self.label.setText(tr("Fillet:") if mode == "fillet" else tr("Chamfer:"))
         # Kantenanzahl zurücksetzen
         self.update_edge_count(0)
 
     def update_edge_count(self, count: int):
         """Aktualisiert die Anzeige der ausgewählten Kanten."""
         if count == 0:
-            self.edge_count_label.setText("Keine Kanten")
+            self.edge_count_label.setText(tr("No edges"))
             self.edge_count_label.setStyleSheet("""
                 color: #ff6666;
                 font-size: 12px;
@@ -448,7 +459,7 @@ class FilletChamferPanel(QFrame):
                 padding-left: 5px;
             """)
         elif count == 1:
-            self.edge_count_label.setText("1 Kante")
+            self.edge_count_label.setText(tr("1 edge"))
             self.edge_count_label.setStyleSheet("""
                 color: #66ff66;
                 font-size: 12px;
@@ -457,7 +468,7 @@ class FilletChamferPanel(QFrame):
                 padding-left: 5px;
             """)
         else:
-            self.edge_count_label.setText(f"{count} Kanten")
+            self.edge_count_label.setText(tr("{count} edges").format(count=count))
             self.edge_count_label.setStyleSheet("""
                 color: #66ff66;
                 font-size: 12px;
@@ -562,7 +573,7 @@ class ShellInputPanel(QFrame):
         layout.setSpacing(10)
 
         # Label
-        self.label = QLabel("Shell:")
+        self.label = QLabel(tr("Shell:"))
         layout.addWidget(self.label)
 
         # Thickness input
@@ -579,7 +590,7 @@ class ShellInputPanel(QFrame):
         layout.addWidget(self.thickness_input)
 
         # Face count label
-        self.face_count_label = QLabel("0 Öffnungen")
+        self.face_count_label = QLabel(tr("0 openings"))
         self.face_count_label.setStyleSheet("""
             color: #888;
             font-size: 12px;
@@ -641,7 +652,7 @@ class ShellInputPanel(QFrame):
     def update_face_count(self, count: int):
         """Aktualisiert die Anzeige der ausgewählten Öffnungen."""
         if count == 0:
-            self.face_count_label.setText("Keine Öffnung")
+            self.face_count_label.setText(tr("No opening"))
             self.face_count_label.setStyleSheet("""
                 color: #ffaa00;
                 font-size: 12px;
@@ -650,7 +661,7 @@ class ShellInputPanel(QFrame):
                 padding-left: 5px;
             """)
         elif count == 1:
-            self.face_count_label.setText("1 Öffnung")
+            self.face_count_label.setText(tr("1 opening"))
             self.face_count_label.setStyleSheet("""
                 color: #66ff66;
                 font-size: 12px;
@@ -659,7 +670,7 @@ class ShellInputPanel(QFrame):
                 padding-left: 5px;
             """)
         else:
-            self.face_count_label.setText(f"{count} Öffnungen")
+            self.face_count_label.setText(tr("{count} openings").format(count=count))
             self.face_count_label.setStyleSheet("""
                 color: #66ff66;
                 font-size: 12px;
@@ -804,7 +815,7 @@ class SweepInputPanel(QFrame):
         layout.setSpacing(12)
 
         # Label
-        self.label = QLabel("Sweep:")
+        self.label = QLabel(tr("Sweep:"))
         layout.addWidget(self.label)
 
         # Profile status with clear button
@@ -814,7 +825,7 @@ class SweepInputPanel(QFrame):
         profile_layout.setContentsMargins(0, 0, 0, 0)
         profile_layout.setSpacing(4)
 
-        self.profile_status = QLabel("⬜ Profil")
+        self.profile_status = QLabel(tr("⬜ Profile"))
         self.profile_status.setStyleSheet("""
             color: #ffaa00;
             font-size: 12px;
@@ -837,7 +848,7 @@ class SweepInputPanel(QFrame):
                 color: #ff6666;
             }
         """)
-        self.profile_clear_btn.setToolTip("Profil-Auswahl entfernen")
+        self.profile_clear_btn.setToolTip(tr("Clear profile selection"))
         self.profile_clear_btn.clicked.connect(self._on_profile_clear_clicked)
         self.profile_clear_btn.hide()  # Initially hidden
         profile_layout.addWidget(self.profile_clear_btn)
@@ -850,7 +861,7 @@ class SweepInputPanel(QFrame):
         path_layout.setContentsMargins(0, 0, 0, 0)
         path_layout.setSpacing(2)
 
-        self.path_status = QLabel("⬜ Pfad")
+        self.path_status = QLabel(tr("⬜ Path"))
         self.path_status.setStyleSheet("""
             color: #ffaa00;
             font-size: 12px;
@@ -873,28 +884,28 @@ class SweepInputPanel(QFrame):
                 color: #ff6666;
             }
         """)
-        self.path_clear_btn.setToolTip("Pfad-Auswahl entfernen")
+        self.path_clear_btn.setToolTip(tr("Clear path selection"))
         self.path_clear_btn.clicked.connect(self._on_path_clear_clicked)
         self.path_clear_btn.hide()  # Initially hidden
         path_layout.addWidget(self.path_clear_btn)
         layout.addWidget(path_container)
 
         # Sketch Path button
-        self.sketch_path_btn = QPushButton("Sketch")
-        self.sketch_path_btn.setToolTip("Pfad aus Sketch wählen (Bogen/Linie/Spline)")
+        self.sketch_path_btn = QPushButton(tr("Sketch"))
+        self.sketch_path_btn.setToolTip(tr("Select path from sketch (arc/line/spline)"))
         self.sketch_path_btn.setFixedWidth(55)
         self.sketch_path_btn.clicked.connect(lambda: self.sketch_path_requested.emit())
         layout.addWidget(self.sketch_path_btn)
 
         # Frenet checkbox
-        self.frenet_check = QCheckBox("Frenet")
-        self.frenet_check.setToolTip("Verdrehung entlang des Pfads")
+        self.frenet_check = QCheckBox(tr("Frenet"))
+        self.frenet_check.setToolTip(tr("Twist along path"))
         self.frenet_check.stateChanged.connect(self._on_frenet_changed)
         layout.addWidget(self.frenet_check)
 
         # Twist angle
         from PySide6.QtGui import QDoubleValidator
-        twist_lbl = QLabel("Twist:")
+        twist_lbl = QLabel(tr("Twist:"))
         twist_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
         layout.addWidget(twist_lbl)
         self.twist_input = QLineEdit("0")
@@ -906,11 +917,11 @@ class SweepInputPanel(QFrame):
         tv = QDoubleValidator(-3600, 3600, 1)
         tv.setNotation(QDoubleValidator.StandardNotation)
         self.twist_input.setValidator(tv)
-        self.twist_input.setToolTip("Twist angle in degrees along path")
+        self.twist_input.setToolTip(tr("Twist angle in degrees along path"))
         layout.addWidget(self.twist_input)
 
         # Scale
-        scale_lbl = QLabel("Scale:")
+        scale_lbl = QLabel(tr("Scale:"))
         scale_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
         layout.addWidget(scale_lbl)
         self.scale_start_input = QLineEdit("1.0")
@@ -922,7 +933,7 @@ class SweepInputPanel(QFrame):
         sv = QDoubleValidator(0.01, 100, 2)
         sv.setNotation(QDoubleValidator.StandardNotation)
         self.scale_start_input.setValidator(sv)
-        self.scale_start_input.setToolTip("Scale at path start")
+        self.scale_start_input.setToolTip(tr("Scale at path start"))
         layout.addWidget(self.scale_start_input)
 
         arrow_lbl = QLabel("→")
@@ -936,14 +947,16 @@ class SweepInputPanel(QFrame):
             "border-radius: 4px; padding: 5px; font-size: 12px;"
         )
         self.scale_end_input.setValidator(sv)
-        self.scale_end_input.setToolTip("Scale at path end")
+        self.scale_end_input.setToolTip(tr("Scale at path end"))
         layout.addWidget(self.scale_end_input)
 
         # Operation combo
         self.operation_combo = QComboBox()
-        self.operation_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["New Body", "Join", "Cut", "Intersect"]:
+            self.operation_combo.addItem(tr(key), key)
         self.operation_combo.setFixedWidth(110)
-        self.operation_combo.currentTextChanged.connect(self._on_operation_changed)
+        self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         layout.addWidget(self.operation_combo)
 
         # OK button
@@ -965,7 +978,7 @@ class SweepInputPanel(QFrame):
     def set_profile(self, profile_data: dict):
         """Setzt das Profil für den Sweep."""
         self._profile_data = profile_data
-        self.profile_status.setText("✅ Profil")
+        self.profile_status.setText(tr("✅ Profile"))
         self.profile_status.setStyleSheet("""
             color: #66ff66;
             font-size: 12px;
@@ -978,7 +991,7 @@ class SweepInputPanel(QFrame):
     def clear_profile(self):
         """Löscht das Profil."""
         self._profile_data = None
-        self.profile_status.setText("⬜ Profil")
+        self.profile_status.setText(tr("⬜ Profile"))
         self.profile_status.setStyleSheet("""
             color: #ffaa00;
             font-size: 12px;
@@ -991,7 +1004,7 @@ class SweepInputPanel(QFrame):
     def set_path(self, path_data: dict):
         """Setzt den Pfad für den Sweep."""
         self._path_data = path_data
-        self.path_status.setText("✅ Pfad")
+        self.path_status.setText(tr("✅ Path"))
         self.path_status.setStyleSheet("""
             color: #66ff66;
             font-size: 12px;
@@ -1004,7 +1017,7 @@ class SweepInputPanel(QFrame):
     def clear_path(self):
         """Löscht den Pfad."""
         self._path_data = None
-        self.path_status.setText("⬜ Pfad")
+        self.path_status.setText(tr("⬜ Path"))
         self.path_status.setStyleSheet("""
             color: #ffaa00;
             font-size: 12px;
@@ -1024,7 +1037,9 @@ class SweepInputPanel(QFrame):
 
     def get_operation(self) -> str:
         """Gibt die gewählte Operation zurück."""
-        return self.operation_combo.currentText()
+        # Return internal key, not translated text
+        data = self.operation_combo.currentData()
+        return data if data else self.operation_combo.currentText()
 
     def is_frenet(self) -> bool:
         """Gibt zurück ob Frenet aktiv ist."""
@@ -1072,10 +1087,14 @@ class SweepInputPanel(QFrame):
         """Callback bei Änderung der Frenet-Option."""
         self._is_frenet = state == Qt.Checked
 
-    def _on_operation_changed(self, operation: str):
+    def _on_operation_changed_idx(self, index: int):
         """Callback bei Änderung der Operation."""
-        self._operation = operation
-        self.operation_changed.emit(operation)
+        # Get internal key from itemData
+        op_key = self.operation_combo.itemData(index)
+        if op_key is None:
+            op_key = self.operation_combo.currentText()  # Fallback
+        self._operation = op_key
+        self.operation_changed.emit(op_key)
 
     def _confirm(self):
         """Bestätigt die Operation."""
@@ -1173,10 +1192,10 @@ class LoftInputPanel(QFrame):
         # Top row: Label, Profile count, Add button
         top_row = QHBoxLayout()
 
-        self.label = QLabel("Loft:")
+        self.label = QLabel(tr("Loft:"))
         top_row.addWidget(self.label)
 
-        self.profile_count_label = QLabel("0 Profile")
+        self.profile_count_label = QLabel(tr("0 profiles"))
         self.profile_count_label.setStyleSheet("""
             color: #ffaa00;
             font-size: 12px;
@@ -1186,22 +1205,24 @@ class LoftInputPanel(QFrame):
         self.profile_count_label.setMinimumWidth(80)
         top_row.addWidget(self.profile_count_label)
 
-        self.add_profile_btn = QPushButton("+ Profil")
+        self.add_profile_btn = QPushButton(tr("+ Profile"))
         self.add_profile_btn.setStyleSheet("background: #3a3a3a; font-size: 10px;")
         self.add_profile_btn.clicked.connect(self._on_add_profile)
         top_row.addWidget(self.add_profile_btn)
 
         # Ruled checkbox
-        self.ruled_check = QCheckBox("Ruled")
-        self.ruled_check.setToolTip("Gerade Linien statt glatter Übergänge")
+        self.ruled_check = QCheckBox(tr("Ruled"))
+        self.ruled_check.setToolTip(tr("Straight lines instead of smooth transitions"))
         self.ruled_check.stateChanged.connect(self._on_ruled_changed)
         top_row.addWidget(self.ruled_check)
 
         # Operation combo
         self.operation_combo = QComboBox()
-        self.operation_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["New Body", "Join", "Cut", "Intersect"]:
+            self.operation_combo.addItem(tr(key), key)
         self.operation_combo.setFixedWidth(90)
-        self.operation_combo.currentTextChanged.connect(self._on_operation_changed)
+        self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         top_row.addWidget(self.operation_combo)
 
         # OK button
@@ -1221,7 +1242,7 @@ class LoftInputPanel(QFrame):
         main_layout.addLayout(top_row)
 
         # Bottom row: Profile info
-        self.profile_info = QLabel("Wähle Flächen auf verschiedenen Z-Ebenen")
+        self.profile_info = QLabel(tr("Select faces on different Z-planes"))
         self.profile_info.setStyleSheet("""
             color: #888;
             font-size: 10px;
@@ -1254,7 +1275,9 @@ class LoftInputPanel(QFrame):
 
     def get_operation(self) -> str:
         """Gibt die gewählte Operation zurück."""
-        return self.operation_combo.currentText()
+        # Return internal key, not translated text
+        data = self.operation_combo.currentData()
+        return data if data else self.operation_combo.currentText()
 
     def is_ruled(self) -> bool:
         """Gibt zurück ob Ruled aktiv ist."""
@@ -1273,7 +1296,7 @@ class LoftInputPanel(QFrame):
 
         # Profile count label
         if count == 0:
-            self.profile_count_label.setText("0 Profile")
+            self.profile_count_label.setText(tr("0 profiles"))
             self.profile_count_label.setStyleSheet("""
                 color: #ffaa00;
                 font-size: 12px;
@@ -1282,7 +1305,7 @@ class LoftInputPanel(QFrame):
             """)
         elif count == 1:
             z_info = self._get_z_info(self._profiles[0])
-            self.profile_count_label.setText(f"1 Profil ({z_info})")
+            self.profile_count_label.setText(tr("1 profile ({z_info})").format(z_info=z_info))
             self.profile_count_label.setStyleSheet("""
                 color: #ffaa00;
                 font-size: 12px;
@@ -1292,7 +1315,7 @@ class LoftInputPanel(QFrame):
         else:
             z_min = min(self._get_z(p) for p in self._profiles)
             z_max = max(self._get_z(p) for p in self._profiles)
-            self.profile_count_label.setText(f"{count} Profile (Z: {z_min:.0f}-{z_max:.0f})")
+            self.profile_count_label.setText(tr("{count} profiles (Z: {z_min:.0f}-{z_max:.0f})").format(count=count, z_min=z_min, z_max=z_max))
             self.profile_count_label.setStyleSheet("""
                 color: #66ff66;
                 font-size: 12px;
@@ -1305,9 +1328,9 @@ class LoftInputPanel(QFrame):
 
         # Info label
         if count < 2:
-            self.profile_info.setText(f"Wähle mindestens {2 - count} weitere Fläche(n)")
+            self.profile_info.setText(tr("Select at least {n} more face(s)").format(n=2 - count))
         else:
-            self.profile_info.setText(f"Bereit zum Loft ({count} Profile)")
+            self.profile_info.setText(tr("Ready to loft ({count} profiles)").format(count=count))
 
     def _get_z(self, profile_data: dict) -> float:
         """Extrahiert Z-Koordinate aus Profil-Daten."""
@@ -1330,10 +1353,14 @@ class LoftInputPanel(QFrame):
         """Callback bei Änderung der Ruled-Option."""
         self._ruled = state == Qt.Checked
 
-    def _on_operation_changed(self, operation: str):
+    def _on_operation_changed_idx(self, index: int):
         """Callback bei Änderung der Operation."""
-        self._operation = operation
-        self.operation_changed.emit(operation)
+        # Get internal key from itemData
+        op_key = self.operation_combo.itemData(index)
+        if op_key is None:
+            op_key = self.operation_combo.currentText()  # Fallback
+        self._operation = op_key
+        self.operation_changed.emit(op_key)
 
     def _confirm(self):
         """Bestätigt die Operation."""
@@ -1414,8 +1441,10 @@ class TransformPanel(QFrame):
 
         # Mode-Auswahl
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Move", "Rotate", "Scale"])
-        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["Move", "Rotate", "Scale"]:
+            self.mode_combo.addItem(tr(key), key)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed_idx)
         layout.addWidget(self.mode_combo)
 
         # X Input
@@ -1467,7 +1496,7 @@ class TransformPanel(QFrame):
         self.grid_combo = QComboBox()
         self.grid_combo.addItems(["0.1", "0.5", "1", "5", "10"])
         self.grid_combo.setCurrentText("1")
-        self.grid_combo.setToolTip("Grid (Ctrl+Drag)")
+        self.grid_combo.setToolTip(tr("Grid (Ctrl+Drag)"))
         self.grid_combo.currentTextChanged.connect(self._on_grid_changed)
         layout.addWidget(self.grid_combo)
 
@@ -1490,9 +1519,13 @@ class TransformPanel(QFrame):
 
         self.hide()
 
-    def _on_mode_changed(self, text: str):
+    def _on_mode_changed_idx(self, index: int):
         """Mode-Wechsel"""
-        mode = text.lower()
+        # Get internal key from itemData
+        mode_key = self.mode_combo.itemData(index)
+        if mode_key is None:
+            mode_key = self.mode_combo.currentText()  # Fallback
+        mode = mode_key.lower()
         self._mode = mode
         self._update_labels()
         self.reset_values()
@@ -1653,7 +1686,7 @@ class CenterHintWidget(QWidget):
         self.icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.icon_label)
 
-        self.main_label = QLabel("Hinweis")
+        self.main_label = QLabel(tr("Hint"))
         self.main_label.setStyleSheet("font-size: 18px; font-weight: bold; color: white;")
         self.main_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.main_label)
@@ -1811,7 +1844,7 @@ class RevolveInputPanel(QFrame):
 
         # Flip direction button
         self.flip_btn = QPushButton("⇅")
-        self.flip_btn.setToolTip("Richtung umkehren (F)")
+        self.flip_btn.setToolTip(tr("Flip direction (F)"))
         self.flip_btn.setFixedSize(32, 32)
         self.flip_btn.clicked.connect(self._flip_direction)
         layout.addWidget(self.flip_btn)
@@ -1823,8 +1856,10 @@ class RevolveInputPanel(QFrame):
         layout.addWidget(self.op_indicator)
 
         self.op_combo = QComboBox()
-        self.op_combo.addItems(["New Body", "Join", "Cut", "Intersect"])
-        self.op_combo.currentTextChanged.connect(self._on_operation_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["New Body", "Join", "Cut", "Intersect"]:
+            self.op_combo.addItem(tr(key), key)
+        self.op_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         layout.addWidget(self.op_combo)
 
         # OK / Cancel
@@ -1857,14 +1892,18 @@ class RevolveInputPanel(QFrame):
         self._angle = value
         self.angle_changed.emit(value)
 
-    def _on_operation_changed(self, op_text):
-        self._current_operation = op_text
+    def _on_operation_changed_idx(self, index: int):
+        # Get internal key from itemData
+        op_key = self.op_combo.itemData(index)
+        if op_key is None:
+            op_key = self.op_combo.currentText()  # Fallback
+        self._current_operation = op_key
         colors = {
             "New Body": "#6699ff", "Join": "#66ff66",
             "Cut": "#ff6666", "Intersect": "#ffaa66"
         }
-        self.op_indicator.setStyleSheet(f"color: {colors.get(op_text, '#6699ff')}; font-size: 16px;")
-        self.operation_changed.emit(op_text)
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#6699ff')}; font-size: 16px;")
+        self.operation_changed.emit(op_key)
 
     def _confirm(self):
         self._angle = self.angle_input.value()
@@ -1887,10 +1926,13 @@ class RevolveInputPanel(QFrame):
             self._on_axis_clicked(axis_name)
 
     def get_operation(self) -> str:
-        return self.op_combo.currentText()
+        # Return internal key, not translated text
+        data = self.op_combo.currentData()
+        return data if data else self.op_combo.currentText()
 
     def set_operation(self, op: str):
-        idx = self.op_combo.findText(op)
+        # Use findData to search by internal key, not translated text
+        idx = self.op_combo.findData(op)
         if idx >= 0:
             self.op_combo.setCurrentIndex(idx)
 
@@ -2071,12 +2113,14 @@ class HoleInputPanel(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(10)
 
-        layout.addWidget(QLabel("Hole:"))
+        layout.addWidget(QLabel(tr("Hole:")))
 
         # Hole type
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["Simple", "Counterbore", "Countersink"])
-        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["Simple", "Counterbore", "Countersink"]:
+            self.type_combo.addItem(tr(key), key)
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed_idx)
         layout.addWidget(self.type_combo)
 
         # Diameter
@@ -2092,13 +2136,13 @@ class HoleInputPanel(QFrame):
         layout.addWidget(self.diameter_input)
 
         # Depth
-        layout.addWidget(QLabel("Depth:"))
+        layout.addWidget(QLabel(tr("Depth:")))
         self.depth_input = ActionSpinBox()
         self.depth_input.setRange(0.0, 10000.0)
         self.depth_input.setDecimals(2)
         self.depth_input.setSuffix(" mm")
         self.depth_input.setValue(0.0)
-        self.depth_input.setSpecialValueText("Through All")
+        self.depth_input.setSpecialValueText(tr("Through All"))
         self.depth_input.valueChanged.connect(self._on_depth_changed)
         self.depth_input.enterPressed.connect(self._confirm)
         self.depth_input.escapePressed.connect(self.cancelled.emit)
@@ -2118,8 +2162,12 @@ class HoleInputPanel(QFrame):
 
         self.hide()
 
-    def _on_type_changed(self, text):
-        self.hole_type_changed.emit(text.lower())
+    def _on_type_changed_idx(self, index: int):
+        # Get internal key from itemData
+        type_key = self.type_combo.itemData(index)
+        if type_key is None:
+            type_key = self.type_combo.currentText()
+        self.hole_type_changed.emit(type_key.lower())
 
     def _on_diameter_changed(self, value):
         self._diameter = value
@@ -2141,7 +2189,9 @@ class HoleInputPanel(QFrame):
         return self.depth_input.value()
 
     def get_hole_type(self) -> str:
-        return self.type_combo.currentText().lower()
+        # Return internal key, not translated text
+        data = self.type_combo.currentData()
+        return (data if data else self.type_combo.currentText()).lower()
 
     def reset(self):
         self._diameter = 8.0
@@ -2372,7 +2422,7 @@ class SplitInputPanel(QFrame):
         layout.addWidget(self.pos_input)
 
         # Angle
-        layout.addWidget(QLabel("Angle:"))
+        layout.addWidget(QLabel(tr("Angle:")))
         self.angle_input = ActionSpinBox()
         self.angle_input.setRange(-89.0, 89.0)
         self.angle_input.setDecimals(1)
@@ -2385,10 +2435,12 @@ class SplitInputPanel(QFrame):
         layout.addWidget(self.angle_input)
 
         # Keep side
-        layout.addWidget(QLabel("Keep:"))
+        layout.addWidget(QLabel(tr("Keep:")))
         self.keep_combo = QComboBox()
-        self.keep_combo.addItems(["Above", "Below", "Both"])
-        self.keep_combo.currentTextChanged.connect(self._on_keep_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["Above", "Below", "Both"]:
+            self.keep_combo.addItem(tr(key), key)
+        self.keep_combo.currentIndexChanged.connect(self._on_keep_changed_idx)
         self.keep_combo.setFixedWidth(80)
         layout.addWidget(self.keep_combo)
 
@@ -2420,8 +2472,12 @@ class SplitInputPanel(QFrame):
         self._angle = value
         self.angle_changed.emit(value)
 
-    def _on_keep_changed(self, text):
-        self._keep = text.lower()
+    def _on_keep_changed_idx(self, index: int):
+        # Get internal key from itemData
+        keep_key = self.keep_combo.itemData(index)
+        if keep_key is None:
+            keep_key = self.keep_combo.currentText()
+        self._keep = keep_key.lower()
         self.keep_changed.emit(self._keep)
 
     def _confirm(self):
@@ -2664,7 +2720,7 @@ class PatternInputPanel(QFrame):
         layout.addWidget(self.spacing_spin)
 
         # Circular: Angle
-        self.angle_label = QLabel("Angle:")
+        self.angle_label = QLabel(tr("Angle:"))
         self.angle_label.hide()
         layout.addWidget(self.angle_label)
         self.angle_spin = QDoubleSpinBox()
@@ -2677,12 +2733,14 @@ class PatternInputPanel(QFrame):
         layout.addWidget(self.angle_spin)
 
         # Circular: Center Selection
-        self.center_label = QLabel("Center:")
+        self.center_label = QLabel(tr("Center:"))
         self.center_label.hide()
         layout.addWidget(self.center_label)
         self.center_combo = QComboBox()
-        self.center_combo.addItems(["Body Center", "Origin (0,0,0)", "Custom..."])
-        self.center_combo.currentTextChanged.connect(self._on_center_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["Body Center", "Origin (0,0,0)", "Custom..."]:
+            self.center_combo.addItem(tr(key), key)
+        self.center_combo.currentIndexChanged.connect(self._on_center_changed_idx)
         self.center_combo.hide()
         layout.addWidget(self.center_combo)
 
@@ -2690,7 +2748,7 @@ class PatternInputPanel(QFrame):
         self._custom_center = (0.0, 0.0, 0.0)
 
         # Axis
-        layout.addWidget(QLabel("Axis:"))
+        layout.addWidget(QLabel(tr("Axis:")))
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(["X", "Y", "Z"])
         self.axis_combo.currentTextChanged.connect(self._emit_parameters)
@@ -2740,9 +2798,13 @@ class PatternInputPanel(QFrame):
 
         self._emit_parameters()
 
-    def _on_center_changed(self, text: str):
+    def _on_center_changed_idx(self, index: int):
         """Handle center selection change."""
-        if text == "Custom...":
+        # Get internal key from itemData
+        center_key = self.center_combo.itemData(index)
+        if center_key is None:
+            center_key = self.center_combo.currentText()
+        if center_key == "Custom...":
             # Emit signal to request point selection in viewport
             self.center_pick_requested.emit()
         self._emit_parameters()
@@ -2775,12 +2837,14 @@ class PatternInputPanel(QFrame):
                 "axis": self.axis_combo.currentText()
             }
         else:
-            # Determine center mode
-            center_text = self.center_combo.currentText()
-            if center_text == "Origin (0,0,0)":
+            # Determine center mode - use internal key from itemData
+            center_key = self.center_combo.currentData()
+            if center_key is None:
+                center_key = self.center_combo.currentText()
+            if center_key == "Origin (0,0,0)":
                 center_mode = "origin"
                 center = (0.0, 0.0, 0.0)
-            elif center_text == "Custom...":
+            elif center_key == "Custom...":
                 center_mode = "custom"
                 center = self._custom_center
             else:  # "Body Center"
@@ -3020,16 +3084,16 @@ class LatticeInputPanel(QFrame):
         layout.setSpacing(8)
 
         # Label
-        layout.addWidget(QLabel("Lattice:"))
+        layout.addWidget(QLabel(tr("Lattice:")))
 
         # Cell Type
-        layout.addWidget(QLabel("Type:"))
+        layout.addWidget(QLabel(tr("Type:")))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["BCC", "FCC", "Octet", "Diamond"])
+        self.type_combo.addItems(["BCC", "FCC", "Octet", "Diamond"])  # Technical terms, not translated
         layout.addWidget(self.type_combo)
 
         # Cell Size
-        layout.addWidget(QLabel("Cell:"))
+        layout.addWidget(QLabel(tr("Cell:")))
         self.cell_spin = QDoubleSpinBox()
         self.cell_spin.setRange(1.0, 100.0)
         self.cell_spin.setValue(5.0)
@@ -3038,7 +3102,7 @@ class LatticeInputPanel(QFrame):
         layout.addWidget(self.cell_spin)
 
         # Beam Radius
-        layout.addWidget(QLabel("Beam:"))
+        layout.addWidget(QLabel(tr("Beam:")))
         self.beam_spin = QDoubleSpinBox()
         self.beam_spin.setRange(0.1, 10.0)
         self.beam_spin.setValue(0.5)
@@ -3180,12 +3244,14 @@ class ThreadInputPanel(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Thread:"))
+        layout.addWidget(QLabel(tr("Thread:")))
 
         # Thread type (External/Internal)
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["External", "Internal"])
-        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["External", "Internal"]:
+            self.type_combo.addItem(tr(key), key)
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed_idx)
         layout.addWidget(self.type_combo)
 
         # Size preset
@@ -3222,7 +3288,7 @@ class ThreadInputPanel(QFrame):
         layout.addWidget(self.pitch_input)
 
         # Depth
-        layout.addWidget(QLabel("Depth:"))
+        layout.addWidget(QLabel(tr("Depth:")))
         self.depth_input = ActionSpinBox()
         self.depth_input.setRange(0.1, 10000.0)
         self.depth_input.setDecimals(2)
@@ -3259,8 +3325,12 @@ class ThreadInputPanel(QFrame):
 
         self.hide()
 
-    def _on_type_changed(self, text):
-        self._thread_type = text.lower()
+    def _on_type_changed_idx(self, index: int):
+        # Get internal key from itemData
+        type_key = self.type_combo.itemData(index)
+        if type_key is None:
+            type_key = self.type_combo.currentText()
+        self._thread_type = type_key.lower()
         self.thread_type_changed.emit(self._thread_type)
 
     def _on_preset_changed(self, text):

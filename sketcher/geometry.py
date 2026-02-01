@@ -53,7 +53,18 @@ class Point2D:
     
     def as_tuple(self) -> Tuple[float, float]:
         return (self.x, self.y)
-    
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Point2D",
+            "x": self.x,
+            "y": self.y,
+            "id": self.id,
+            "fixed": self.fixed,
+            "construction": self.construction,
+        }
+
     def __repr__(self):
         return f"P({self.x:.2f}, {self.y:.2f})"
 
@@ -120,7 +131,19 @@ class Line2D:
     def is_vertical(self, tolerance: float = 1e-6) -> bool:
         """Prüft ob Linie vertikal ist"""
         return abs(self.end.x - self.start.x) < tolerance
-    
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Line2D",
+            "start_x": self.start.x,
+            "start_y": self.start.y,
+            "end_x": self.end.x,
+            "end_y": self.end.y,
+            "id": self.id,
+            "construction": self.construction,
+        }
+
     def __repr__(self):
         return f"Line({self.start} -> {self.end})"
 
@@ -156,7 +179,18 @@ class Circle2D:
         """Prüft ob Punkt auf dem Kreis liegt"""
         dist = self.center.distance_to(p)
         return abs(dist - self.radius) < tolerance
-    
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Circle2D",
+            "center_x": self.center.x,
+            "center_y": self.center.y,
+            "radius": self.radius,
+            "id": self.id,
+            "construction": self.construction,
+        }
+
     def __repr__(self):
         return f"Circle(center={self.center}, r={self.radius:.2f})"
 
@@ -210,7 +244,20 @@ class Arc2D:
             self.center.x + self.radius * math.cos(rad),
             self.center.y + self.radius * math.sin(rad)
         )
-    
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Arc2D",
+            "center_x": self.center.x,
+            "center_y": self.center.y,
+            "radius": self.radius,
+            "start_angle": self.start_angle,
+            "end_angle": self.end_angle,
+            "id": self.id,
+            "construction": self.construction,
+        }
+
     def __repr__(self):
         return f"Arc(center={self.center}, r={self.radius:.2f}, {self.start_angle:.1f}°-{self.end_angle:.1f}°)"
 
@@ -864,6 +911,30 @@ class Spline2D:
                 line.construction = self.construction
                 lines.append(line)
         return lines
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Spline2D",
+            "control_points": list(self.control_points),
+            "knots": list(self.knots),
+            "degree": self.degree,
+            "weights": list(self.weights),
+            "id": self.id,
+            "construction": self.construction,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Spline2D':
+        """Deserialisiert von Dictionary."""
+        return cls(
+            control_points=[tuple(p) for p in data.get("control_points", [])],
+            knots=data.get("knots", []),
+            degree=data.get("degree", 3),
+            weights=data.get("weights", []),
+            id=data.get("id", ""),
+            construction=data.get("construction", False),
+        )
 
     def __repr__(self):
         return f"Spline2D({len(self.control_points)} pts, deg={self.degree})"

@@ -143,6 +143,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Modes
         self.plane_select_mode = False
         self.extrude_mode = False
+        self.extrude_preview_enabled = True  # FIX: Separate flag for extrude preview (False for Loft/Shell)
         self._to_face_picking = False  # "Extrude to Face" Ziel-Pick-Modus
         self.measure_mode = False
         self.revolve_mode = False
@@ -732,11 +733,64 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Entfernt alle Highlight-Linien"""
         # Suche alle Actors, die mit "highlight_" beginnen
         to_remove = [name for name in self.plotter.renderer.actors.keys() if name.startswith("highlight_")]
-        
+
         for name in to_remove:
             self.plotter.remove_actor(name)
-            
+
         # Zur Sicherheit Rendern
+        request_render(self.plotter)
+
+    def clear_all_highlights(self):
+        """
+        Entfernt ALLE Highlight-Typen aus dem Viewport.
+        Sollte aufgerufen werden wenn ein Modus beendet wird.
+        """
+        # 1. Standard highlight_ Actors
+        self.clear_highlight()
+
+        # 2. Face actors (Extrude/Loft Selection)
+        self._clear_face_actors()
+
+        # 3. Body Face Highlight (Hover)
+        self._clear_body_face_highlight()
+
+        # 4. Draft Face Highlights
+        self._clear_draft_face_highlights()
+
+        # 5. PushPull Face Highlight
+        self._clear_pushpull_face_highlight()
+
+        # 6. Texture Face Highlights
+        self._clear_texture_face_highlights()
+
+        # 7. Edge Highlights
+        if hasattr(self, '_clear_edge_highlights'):
+            self._clear_edge_highlights()
+
+        # 8. Plane Hover Highlight
+        self._clear_plane_hover_highlight()
+
+        # 9. Sweep Highlights
+        try:
+            self.plotter.remove_actor('sweep_profile_highlight')
+        except: pass
+        try:
+            self.plotter.remove_actor('sweep_path_highlight')
+        except: pass
+
+        # 10. Sonstige bekannte Highlight-Namen
+        highlight_patterns = [
+            'det_face_', 'draft_face_highlight_', 'texture_face_highlight_',
+            'body_face_highlight', 'body_face_arrow', 'pushpull_face_highlight',
+        ]
+        for name in list(self.plotter.renderer.actors.keys()):
+            for pattern in highlight_patterns:
+                if pattern in name:
+                    try:
+                        self.plotter.remove_actor(name)
+                    except: pass
+                    break
+
         request_render(self.plotter)
         
     # Transform-Methoden sind jetzt im TransformMixin
@@ -2405,7 +2459,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             x, y = int(pos.x()), int(pos.y())
 
             # Dragging Logik (Extrude Höhe ziehen)
-            if self.extrude_mode and getattr(self, 'is_dragging', False):
+            # FIX: Nur Preview zeigen wenn extrude_preview_enabled (nicht bei Loft/Shell!)
+            if self.extrude_mode and getattr(self, 'is_dragging', False) and getattr(self, 'extrude_preview_enabled', True):
                 delta = self._calculate_extrude_delta(pos)
                 self.show_extrude_preview(self.drag_start_height + delta, self.extrude_operation)
                 self.height_changed.emit(self.extrude_height)
@@ -3096,9 +3151,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self._clear_plane_hover_highlight() # Alte Visualisierung löschen
             request_render(self.plotter)
 
-    def set_extrude_mode(self, enabled):
-        """Aktiviert den Modus und stellt sicher, dass der Detector visualisiert wird."""
+    def set_extrude_mode(self, enabled, enable_preview=True):
+        """
+        Aktiviert Face-Picking-Modus und optional die Extrude-Preview.
+
+        Args:
+            enabled: Aktiviert Face-Picking
+            enable_preview: Zeigt Extrude-Preview während Drag (False für Loft/Shell!)
+        """
         self.extrude_mode = enabled
+        self.extrude_preview_enabled = enable_preview if enabled else True
 
         # Reset Selection beim Start
         if enabled:
@@ -3113,6 +3175,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.selected_face_ids.clear()
             self._clear_face_actors()
             self._clear_preview()
+            # FIX: Auch alle anderen Highlights aufräumen (verhindert hängende Highlights)
+            self._clear_body_face_highlight()
+            self._clear_texture_face_highlights()
             request_render(self.plotter)
 
     # ==================== SKETCH PATH SELECTION MODE ====================
@@ -3347,13 +3412,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             is_selected = face.id in self.selected_face_ids
             is_hovered = face.id == getattr(self, 'hover_face_id', -1)
 
-            # Farbe und Transparenz
+            # Farbe und Transparenz (FIX: Erhöhte Sichtbarkeit)
             if is_selected:
-                color = 'orange'
-                opacity = 0.8
+                color = '#ff8800'  # Leuchtend Orange
+                opacity = 0.85
+                edge_color = '#ff4400'  # Kontrastkanten
             elif is_hovered:
-                color = '#44aaff' # Hellblau
-                opacity = 0.6
+                color = '#55bbff'  # Hellblau (heller)
+                opacity = 0.7
+                edge_color = '#0088ff'  # Kontrastkanten
             else:
                 continue
 
@@ -3370,7 +3437,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     color=color,
                     opacity=opacity,
                     name=name,
-                    pickable=False
+                    pickable=False,
+                    show_edges=True,  # FIX: Kanten für bessere Sichtbarkeit
+                    edge_color=edge_color,
+                    line_width=2
                 )
                 self._face_actors.append(name)
 
@@ -4157,9 +4227,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     face_mesh = mesh.extract_cells(cell_ids)
 
                     # WICHTIG: Offset entlang Normalen um Z-Fighting zu vermeiden!
-                    # Das Highlight wird 0.3mm nach außen verschoben
+                    # Das Highlight wird 1.0mm nach außen verschoben (erhöht für bessere Sichtbarkeit bei Texturen)
                     face_normal = face_data.get('normal', (0, 0, 1))
-                    offset = 0.3  # mm
+                    offset = 1.0  # mm - erhöht für Texture-Mode
                     normal_arr = np.array(face_normal)
                     normal_arr = normal_arr / (np.linalg.norm(normal_arr) + 1e-10)
 
@@ -5227,11 +5297,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             self.plotter.add_mesh(
                 face_mesh_copy,
-                color='#4488ff',
-                opacity=0.5,
+                color='#55bbff',  # FIX: Helleres Blau für bessere Sichtbarkeit
+                opacity=0.65,
                 name='body_face_highlight',
                 pickable=False,
-                show_edges=False
+                show_edges=True,  # FIX: Kanten für besseren Kontrast
+                edge_color='#0088ff',
+                line_width=2
             )
             request_render(self.plotter, immediate=True)
         except Exception as e:

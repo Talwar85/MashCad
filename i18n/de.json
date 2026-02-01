@@ -619,5 +619,17 @@
     "Repairing...": "Repariere...",
     "ShrinkWrap running...": "ShrinkWrap läuft...",
     "Apply Repair": "Reparatur anwenden",
-    "No repair result to apply.": "Kein Reparaturergebnis zum Anwenden."
+    "No repair result to apply.": "Kein Reparaturergebnis zum Anwenden.",
+
+    "Through All": "Durchgehend",
+    "Body Center": "Körpermitte",
+    "Origin (0,0,0)": "Ursprung (0,0,0)",
+    "Custom...": "Benutzerdefiniert...",
+    "External": "Außen",
+    "Internal": "Innen",
+    "Cell:": "Zelle:",
+    "Beam:": "Strebe:",
+    "Thread:": "Gewinde:",
+    "Center:": "Zentrum:",
+    "Lattice:": "Gitter:"
 }
