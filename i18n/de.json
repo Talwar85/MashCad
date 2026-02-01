@@ -91,6 +91,7 @@
     "Construction": "Konstruktion",
     "Grid": "Raster",
     "Snap Radius": "Fangradius",
+    "Rotate View": "Ansicht drehen",
     "Snap Radius: {state}": "Fangradius: {state}",
     "Circle Segments": "Kreis-Segmente",
     "Rectangle Mode": "Rechteck-Modus",

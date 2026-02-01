@@ -91,6 +91,7 @@
     "Construction": "Construction",
     "Grid": "Grid",
     "Snap Radius": "Snap Radius",
+    "Rotate View": "Rotate View",
     "Snap Radius: {state}": "Snap Radius: {state}",
     "Circle Segments": "Circle Segments",
     "Rectangle Mode": "Rectangle Mode",

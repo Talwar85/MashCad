@@ -634,6 +634,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     grid_snap_mode_changed = Signal(bool)
     exit_requested = Signal()  # Escape Level 4: Sketch verlassen
     solver_finished_signal = Signal(bool, str, float) # success, message, dof
+    peek_3d_requested = Signal(bool)  # True = zeige 3D, False = zurück zu Sketch
 
     # Farben
     BG_COLOR = QColor(28, 28, 28)
@@ -802,6 +803,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.body_reference_opacity = 0.25  # Transparenz der Bodies
         self.sketch_plane_normal = (0, 0, 1)  # Normale der Sketch-Ebene
         self.sketch_plane_origin = (0, 0, 0)  # Ursprung der Sketch-Ebene
+        self.sketch_plane_x_dir = (1, 0, 0)  # X-Achse der Sketch-Ebene (3D)
+        self.sketch_plane_y_dir = (0, 1, 0)  # Y-Achse der Sketch-Ebene (3D)
+        self.projected_world_origin = (0, 0)  # Welt-Origin projiziert auf Sketch (2D)
+        self.view_rotation = 0  # Ansicht-Rotation in Grad (0, 90, 180, 270)
         
         # --- SPATIAL INDEX OPTIMIZATION ---
         self.spatial_index = None
@@ -1188,15 +1193,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         else:
             wx = self._safe_float(w.x())  # ← Explizit zu Python float
             wy = self._safe_float(w.y())
-        
+
+        # Ansicht-Rotation anwenden (vor Scale/Translate)
+        rot = self.view_rotation
+        if rot == 90:
+            wx, wy = wy, -wx
+        elif rot == 180:
+            wx, wy = -wx, -wy
+        elif rot == 270:
+            wx, wy = -wy, wx
+
         # View-Offset auslesen (auch explizit)
         ox = self._safe_float(self.view_offset.x())
         oy = self._safe_float(self.view_offset.y())
-        
+
         # DANN berechnen
         screen_x = self._safe_float(wx * self.view_scale) + ox
         screen_y = self._safe_float(-wy * self.view_scale) + oy
-        
+
         # DANN in QPointF
         return QPointF(screen_x, screen_y)
     
@@ -1208,12 +1222,30 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # s ist hier immer ein QPointF vom MouseEvent
         ox = self.view_offset.x()
         oy = self.view_offset.y()
-        
-        return QPointF((s.x() - ox) / self.view_scale,
-                      -(s.y() - oy) / self.view_scale)
+
+        wx = (s.x() - ox) / self.view_scale
+        wy = -(s.y() - oy) / self.view_scale
+
+        # Inverse Ansicht-Rotation anwenden
+        rot = self.view_rotation
+        if rot == 90:
+            wx, wy = -wy, wx
+        elif rot == 180:
+            wx, wy = -wx, -wy
+        elif rot == 270:
+            wx, wy = wy, -wx
+
+        return QPointF(wx, wy)
     
     def _center_view(self):
         self.view_offset = QPointF(self.width() / 2, self.height() / 2)
+        self.request_update()
+
+    def rotate_view(self):
+        """Rotiert die Sketch-Ansicht um 90° im Uhrzeigersinn."""
+        self.view_rotation = (self.view_rotation + 90) % 360
+        from loguru import logger
+        logger.debug(f"[Sketch] View rotation: {self.view_rotation}°")
         self.request_update()
 
     def show_message(self, text: str, duration: int = 3000, color: QColor = None):
@@ -1240,18 +1272,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.reference_bodies = []
         self.sketch_plane_normal = plane_normal
         self.sketch_plane_origin = plane_origin
-        
-        if not bodies_data:
-            self.request_update()
-            return
-        
+
         import numpy as np
-        
+
         # Alles in float64 casten für Präzision
         n = np.array(plane_normal, dtype=np.float64)
         norm = np.linalg.norm(n)
         n = n / norm if norm > 0 else np.array([0,0,1], dtype=np.float64)
-        
+
         if plane_x:
             u = np.array(plane_x, dtype=np.float64)
             u = u / np.linalg.norm(u)
@@ -1261,9 +1289,28 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             else:
                 u = np.cross(n, [1, 0, 0])
             u = u / np.linalg.norm(u)
-            
+
         v = np.cross(n, u)
         origin = np.array(plane_origin, dtype=np.float64)
+
+        # NEU: Speichere Achsen für Orientierungs-Indikator
+        self.sketch_plane_x_dir = tuple(u)
+        self.sketch_plane_y_dir = tuple(v)
+
+        # Berechne projizierten Welt-Origin auf die Sketch-Ebene
+        # Welt-Origin (0,0,0) → projiziere auf Ebene
+        world_origin = np.array([0.0, 0.0, 0.0])
+        rel = world_origin - origin
+        self.projected_world_origin = (float(np.dot(rel, u)), float(np.dot(rel, v)))
+
+        from loguru import logger
+        logger.debug(f"[Orientation] Plane origin: {plane_origin}, normal: {plane_normal}")
+        logger.debug(f"[Orientation] Plane X-dir: {self.sketch_plane_x_dir}, Y-dir: {self.sketch_plane_y_dir}")
+        logger.debug(f"[Orientation] Projected world origin: {self.projected_world_origin}")
+
+        if not bodies_data:
+            self.request_update()
+            return
         
         for body_info in bodies_data:
             mesh = body_info.get('mesh')
@@ -4345,6 +4392,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._handle_escape_logic()
             return
 
+        # Shift+R: Ansicht um 90° drehen
+        if key == Qt.Key_R and (mod & Qt.ShiftModifier):
+            self.rotate_view()
+            return
+
+        # Space: 3D-Peek (zeigt temporär 3D-Viewport)
+        if key == Qt.Key_Space and not event.isAutoRepeat():
+            self.peek_3d_requested.emit(True)
+            return
+
         # Phase 8: Direct Number Input - forward numbers to dimension input
         if not (mod & Qt.ControlModifier):
             if self._try_forward_to_dim_input(event):
@@ -4489,11 +4546,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.construction_mode = not self.construction_mode
         state = tr("ON") if self.construction_mode else tr("OFF")
         self.status_message.emit(tr("Construction: {state}").format(state=state))
-        
+
         # WICHTIG: Signal senden, damit die Checkbox im ToolPanel aktualisiert wird
         self.construction_mode_changed.emit(self.construction_mode)
         self.request_update()
-    
+
+    def keyReleaseEvent(self, event):
+        """Handle key release - z.B. für 3D-Peek (Space loslassen)."""
+        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self.peek_3d_requested.emit(False)  # Zurück zum Sketch
+            return
+        super().keyReleaseEvent(event)
+
     def _increase_tolerance(self):
         """Toleranz für Muttern erhöhen"""
         self.nut_tolerance = round(min(2.0, self.nut_tolerance + 0.1), 2)
@@ -5089,7 +5153,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_body_references(p)   # Falls vorhanden (projizierte 3D-Kanten)
         self._draw_profiles(p, update_rect)
         self._draw_axes(p)
-        
+        self._draw_orientation_indicator(p)  # 3D-Orientierung anzeigen (Feature Flag)
+
         # Hier passiert die Magie der Performance-Optimierung:
         self._draw_geometry(p, update_rect)
         self._draw_native_splines(p)  # Native B-Splines aus DXF Import

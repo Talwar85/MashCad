@@ -31,7 +31,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
 
     # UX Features
-    "sketch_orientation_indicator": True,  # Zeigt 3D-Orientierung im Sketch-Editor
+    "sketch_orientation_indicator": False,  # Zeigt 3D-Orientierung im Sketch-Editor (deaktiviert - Auto-Align löst das Problem)
 }
 
 

@@ -66,6 +66,7 @@ class ToolPanel(QFrame):
     tool_selected = Signal(str)
     option_changed = Signal(str, object)
     finish_sketch_requested = Signal()  # Signal zum Beenden des Sketches
+    rotate_view_requested = Signal()  # Signal zum Drehen der Sketch-Ansicht
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -360,6 +361,27 @@ class ToolPanel(QFrame):
         self.snap_radius_spin.valueChanged.connect(lambda v: self.option_changed.emit("snap_radius", v))
         snap_row.addWidget(self.snap_radius_spin)
         options_layout.addLayout(snap_row)
+
+        # Ansicht drehen Button
+        self.btn_rotate_view = QPushButton(f"↻ {tr('Rotate View')} (Shift+R)")
+        self.btn_rotate_view.setStyleSheet("""
+            QPushButton {
+                background: #3a3a3a;
+                color: #ccc;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: #4a4a4a;
+                border-color: #0078d4;
+            }
+        """)
+        self.btn_rotate_view.setCursor(Qt.PointingHandCursor)
+        self.btn_rotate_view.setFocusPolicy(Qt.NoFocus)  # Space soll nicht den Button aktivieren
+        self.btn_rotate_view.clicked.connect(self.rotate_view_requested.emit)
+        options_layout.addWidget(self.btn_rotate_view)
 
         layout.addWidget(options_group)
         

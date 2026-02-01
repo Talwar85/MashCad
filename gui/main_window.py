@@ -845,7 +845,9 @@ class MainWindow(QMainWindow):
         self.tool_panel.tool_selected.connect(self._on_sketch_tool_selected)
         self.tool_panel.option_changed.connect(self._on_opt_change)
         self.tool_panel.finish_sketch_requested.connect(self._finish_sketch)
-        
+        self.tool_panel.rotate_view_requested.connect(self._rotate_sketch_view)
+        self.sketch_editor.peek_3d_requested.connect(self._on_peek_3d)
+
         # 3D Tool Panel
         self.tool_panel_3d.action_triggered.connect(self._on_3d_action)
         
@@ -2250,11 +2252,14 @@ class MainWindow(QMainWindow):
         # Übergebe an SketchEditor (mit der korrekten Methode!)
         if hasattr(self.sketch_editor, 'set_reference_bodies'):
             self.sketch_editor.set_reference_bodies(
-                bodies_data, 
-                normal, 
-                origin, 
+                bodies_data,
+                normal,
+                origin,
                 plane_x=x_dir_override  # Das verhindert die Rotation!
             )
+
+            # Automatische Ansicht-Ausrichtung basierend auf 3D-Kamera
+            self._auto_align_sketch_view(normal, x_dir_override)
 
     def _on_sketch_changed_refresh_viewport(self):
         """
@@ -2365,6 +2370,127 @@ class MainWindow(QMainWindow):
         
         # WICHTIG: Explizit Update anstoßen für sauberen Statuswechsel
         self._trigger_viewport_update()
+
+    def _rotate_sketch_view(self):
+        """Rotiert die Sketch-Ansicht um 90°."""
+        if hasattr(self.sketch_editor, 'rotate_view'):
+            self.sketch_editor.rotate_view()
+
+    def _on_peek_3d(self, show_3d: bool):
+        """
+        Temporär 3D-Viewport zeigen während Space gedrückt (Peek-Modus).
+        Hilft zur Orientierung im Sketch.
+        """
+        if show_3d:
+            # Zeige 3D-Viewport
+            self._peek_3d_active = True
+            self.center_stack.setCurrentIndex(0)
+            self.statusBar().showMessage(tr("3D-Vorschau (Space loslassen für Sketch)"), 0)
+
+            # grabKeyboard() auf MainWindow - fängt ALLE Key-Events ab (plattformübergreifend)
+            self.grabKeyboard()
+        else:
+            # Zurück zum Sketch
+            self._peek_3d_active = False
+            self.releaseKeyboard()
+            self.center_stack.setCurrentIndex(1)
+            self.sketch_editor.setFocus()
+            self.statusBar().clearMessage()
+
+    def keyReleaseEvent(self, event):
+        """Key-Release Handler für 3D-Peek (grabKeyboard leitet hierher)."""
+        if getattr(self, '_peek_3d_active', False):
+            if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+                self._on_peek_3d(False)
+                return
+        super().keyReleaseEvent(event)
+
+    def eventFilter(self, obj, event):
+        """Event-Filter für globale Shortcuts."""
+        from PySide6.QtCore import QEvent
+
+        # Backup für 3D-Peek Space-Release
+        if getattr(self, '_peek_3d_active', False):
+            if event.type() == QEvent.KeyRelease and event.key() == Qt.Key_Space:
+                if not event.isAutoRepeat():
+                    self._on_peek_3d(False)
+                    return True
+
+        return super().eventFilter(obj, event)
+
+    def _auto_align_sketch_view(self, plane_normal, plane_x):
+        """
+        Richtet die Sketch-Ansicht automatisch an der 3D-Kamera aus.
+        Nutzt die Screen-Projektion der Sketch-Achsen (wie die 3D-Achsen).
+        """
+        import numpy as np
+
+        try:
+            # Sketch-Ebenen-Achsen in 3D
+            n = np.array(plane_normal, dtype=np.float64)
+            n = n / np.linalg.norm(n)
+            x_dir = np.array(plane_x, dtype=np.float64)
+            x_dir = x_dir / np.linalg.norm(x_dir)
+            y_dir = np.cross(n, x_dir)
+            y_dir = y_dir / np.linalg.norm(y_dir)
+
+            # VTK World-to-Display Projektion
+            ren = self.viewport_3d.plotter.renderer
+
+            def world_to_screen(pt):
+                """Konvertiert 3D Welt-Koordinate zu 2D Screen-Koordinate."""
+                ren.SetWorldPoint(pt[0], pt[1], pt[2], 1.0)
+                ren.WorldToDisplay()
+                d_pt = ren.GetDisplayPoint()
+                return np.array([d_pt[0], d_pt[1]])
+
+            origin_screen = world_to_screen([0, 0, 0])
+            x_end_screen = world_to_screen(x_dir * 100)
+            y_end_screen = world_to_screen(y_dir * 100)
+
+            # Screen-Vektoren (Y nach oben = positive Richtung)
+            # VTK view coords: (0,0) = unten links, Y wächst nach oben
+            sx = np.array([x_end_screen[0] - origin_screen[0], x_end_screen[1] - origin_screen[1]])
+            sy = np.array([y_end_screen[0] - origin_screen[0], y_end_screen[1] - origin_screen[1]])
+
+            # Normalisiere
+            sx_len = np.linalg.norm(sx)
+            sy_len = np.linalg.norm(sy)
+            if sx_len < 0.001 or sy_len < 0.001:
+                logger.debug("[Auto-Align] Achsen zu kurz auf Screen")
+                self.sketch_editor.view_rotation = 0
+                return
+            sx = sx / sx_len
+            sy = sy / sy_len
+
+            # Screen "oben" ist (0, 1)
+            screen_up = np.array([0, 1])
+
+            # Welche der 4 Rotationen bringt "oben im Sketch" ≈ "oben am Screen"?
+            # Bei 0°: Sketch-Y ist oben → sy sollte ≈ screen_up sein
+            # Bei 90°: -Sketch-X ist oben → -sx sollte ≈ screen_up sein
+            # Bei 180°: -Sketch-Y ist oben → -sy sollte ≈ screen_up sein
+            # Bei 270°: Sketch-X ist oben → sx sollte ≈ screen_up sein
+            candidates = [
+                (0, sy),       # 0°: Sketch-Y zeigt nach oben
+                (90, -sx),     # 90°: -Sketch-X zeigt nach oben
+                (180, -sy),    # 180°: -Sketch-Y zeigt nach oben
+                (270, sx),     # 270°: Sketch-X zeigt nach oben
+            ]
+
+            best_rot = 0
+            best_dot = -2
+            for rot, up_vec in candidates:
+                dot = np.dot(up_vec, screen_up)
+                if dot > best_dot:
+                    best_dot = dot
+                    best_rot = rot
+
+            self.sketch_editor.view_rotation = best_rot
+            logger.debug(f"[Auto-Align] {best_rot}° (screen Y-dir, dot={best_dot:.2f})")
+
+        except Exception as e:
+            logger.debug(f"[Auto-Align] Konnte Ansicht nicht ausrichten: {e}")
 
     def _hole_dialog(self):
         """Startet interaktiven Hole-Workflow (Fusion-style).

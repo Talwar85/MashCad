@@ -108,62 +108,58 @@ class SketchRendererMixin:
     def _draw_grid(self, p, update_rect=None):
         # Grid nur zeichnen, wenn es das Update-Rect berührt
         # Da das Grid den ganzen Screen füllt, prüfen wir hier nur grob
-        # Wir könnten optimieren, indem wir nur die Linien innerhalb des Rects berechnen
-        
-        tl = self.screen_to_world(QPointF(0, 0))
-        br = self.screen_to_world(QPointF(self.width(), self.height()))
-        
-        # Falls update_rect klein ist, berechne Start/Ende genauer
-        if update_rect and update_rect.width() < self.width():
-             tl_rect = self.screen_to_world(update_rect.topLeft())
-             br_rect = self.screen_to_world(update_rect.bottomRight())
-             # Wir nehmen das Maximum, um sicherzugehen, aber clampen auf Viewport
-             start_x = max(tl.x(), tl_rect.x())
-             end_x = min(br.x(), br_rect.x())
-             start_y = min(tl.y(), tl_rect.y()) # Y ist invertiert
-             end_y = max(br.y(), br_rect.y())
-        else:
-             start_x, end_x = tl.x(), br.x()
-             start_y, end_y = br.y(), tl.y() # Y invertiert
+
+        # Alle 4 Ecken in Welt-Koordinaten (wichtig bei Rotation!)
+        corners = [
+            self.screen_to_world(QPointF(0, 0)),
+            self.screen_to_world(QPointF(self.width(), 0)),
+            self.screen_to_world(QPointF(0, self.height())),
+            self.screen_to_world(QPointF(self.width(), self.height()))
+        ]
+
+        # Min/Max über alle Ecken (funktioniert bei jeder Rotation)
+        start_x = min(c.x() for c in corners)
+        end_x = max(c.x() for c in corners)
+        start_y = min(c.y() for c in corners)
+        end_y = max(c.y() for c in corners)
 
         step = self.grid_size
         while step * self.view_scale < 15: step *= 2
         while step * self.view_scale > 80: step /= 2
         
-        # Minor Grid
+        # Minor Grid - bei Rotation müssen Linien als 2 Endpunkte gezeichnet werden
         p.setPen(DesignTokens.pen_grid_minor())
-        
-        # Vertikale Linien
+
+        # Vertikale Linien (x = const, von start_y bis end_y)
         x = math.floor(start_x / step) * step
         while x < end_x + step:
-            sx = self.world_to_screen(QPointF(x, 0)).x()
-            # Nur zeichnen wenn im Update-Bereich (horizontal)
-            if update_rect is None or (sx >= update_rect.left() - 1 and sx <= update_rect.right() + 1):
-                p.drawLine(int(sx), 0, int(sx), self.height())
+            p1 = self.world_to_screen(QPointF(x, start_y))
+            p2 = self.world_to_screen(QPointF(x, end_y))
+            p.drawLine(p1.toPoint(), p2.toPoint())
             x += step
-            
-        # Horizontale Linien
+
+        # Horizontale Linien (y = const, von start_x bis end_x)
         y = math.floor(start_y / step) * step
         while y < end_y + step:
-            sy = self.world_to_screen(QPointF(0, y)).y()
-            if update_rect is None or (sy >= update_rect.top() - 1 and sy <= update_rect.bottom() + 1):
-                p.drawLine(0, int(sy), self.width(), int(sy))
+            p1 = self.world_to_screen(QPointF(start_x, y))
+            p2 = self.world_to_screen(QPointF(end_x, y))
+            p.drawLine(p1.toPoint(), p2.toPoint())
             y += step
 
-        # Major Grid (ähnliche Logik, vereinfacht: immer zeichnen, da wenige Linien)
+        # Major Grid
         p.setPen(QPen(DesignTokens.COLOR_GRID_MAJOR, 1))
         major_step = step * 5
-        x = math.floor(tl.x() / major_step) * major_step
-        while x < br.x():
-            sx = self.world_to_screen(QPointF(x, 0)).x()
-            if update_rect is None or (sx >= update_rect.left() - 5 and sx <= update_rect.right() + 5):
-                p.drawLine(int(sx), 0, int(sx), self.height())
+        x = math.floor(start_x / major_step) * major_step
+        while x < end_x + major_step:
+            p1 = self.world_to_screen(QPointF(x, start_y))
+            p2 = self.world_to_screen(QPointF(x, end_y))
+            p.drawLine(p1.toPoint(), p2.toPoint())
             x += major_step
-        y = math.floor(br.y() / major_step) * major_step
-        while y < tl.y():
-            sy = self.world_to_screen(QPointF(0, y)).y()
-            if update_rect is None or (sy >= update_rect.top() - 5 and sy <= update_rect.bottom() + 5):
-                p.drawLine(0, int(sy), self.width(), int(sy))
+        y = math.floor(start_y / major_step) * major_step
+        while y < end_y + major_step:
+            p1 = self.world_to_screen(QPointF(start_x, y))
+            p2 = self.world_to_screen(QPointF(end_x, y))
+            p.drawLine(p1.toPoint(), p2.toPoint())
             y += major_step
     
     def _draw_profiles(self, p, update_rect=None):
@@ -246,18 +242,142 @@ class SketchRendererMixin:
                 p.drawLine(p1, p2)
     
     def _draw_axes(self, p):
+        """Zeichnet Koordinatenachsen (rotieren mit der Ansicht)."""
         o = self.world_to_screen(QPointF(0, 0))
-        
+
+        # Achsenlänge in Weltkoordinaten (groß genug um Bildschirm zu füllen)
+        axis_length = 10000
+
+        # X-Achse: Von Origin nach rechts in Welt-Koordinaten
+        x_end = self.world_to_screen(QPointF(axis_length, 0))
         p.setPen(QPen(DesignTokens.COLOR_AXIS_X, 2))
-        p.drawLine(int(o.x()), int(o.y()), self.width(), int(o.y()))
+        p.drawLine(o.toPoint(), x_end.toPoint())
+
+        # Y-Achse: Von Origin nach oben in Welt-Koordinaten
+        y_end = self.world_to_screen(QPointF(0, axis_length))
         p.setPen(QPen(DesignTokens.COLOR_AXIS_Y, 2))
-        p.drawLine(int(o.x()), int(o.y()), int(o.x()), 0)
-        
+        p.drawLine(o.toPoint(), y_end.toPoint())
+
         # Origin schön modern: Weißer Punkt mit dunklem Rand
         p.setPen(QPen(DesignTokens.COLOR_BG_CANVAS, 2))
         p.setBrush(QBrush(QColor(255, 255, 255)))
         p.drawEllipse(o, 4, 4)
-    
+
+    def _draw_orientation_indicator(self, p):
+        """
+        Zeichnet Orientierungs-Hilfe für 2D↔3D Mapping (Feature Flag: sketch_orientation_indicator)
+
+        Zeigt:
+        1. Projizierter Welt-Origin (gestricheltes Kreuz) - wo ist (0,0,0) relativ zum Sketch?
+        2. 3D-Achsen-Indikator (Ecke rechts oben) - welche 3D-Richtung = welche Sketch-Richtung?
+        3. Labels für das Achsen-Mapping
+        """
+        from config.feature_flags import is_enabled
+        if not is_enabled("sketch_orientation_indicator"):
+            return
+
+        from loguru import logger
+
+        # Hole Orientierungs-Daten
+        proj_origin = getattr(self, 'projected_world_origin', (0, 0))
+        x_dir = getattr(self, 'sketch_plane_x_dir', (1, 0, 0))
+        y_dir = getattr(self, 'sketch_plane_y_dir', (0, 1, 0))
+
+        # === 1. PROJIZIERTER WELT-ORIGIN ===
+        # Zeichne gestricheltes Kreuz an der Position wo Welt-(0,0,0) auf diese Ebene projiziert wird
+        if proj_origin != (0, 0):  # Nur zeichnen wenn nicht am Sketch-Origin
+            wo_screen = self.world_to_screen(QPointF(proj_origin[0], proj_origin[1]))
+
+            # Gestrichelter Pen
+            pen = QPen(QColor(255, 200, 100, 180), 1, Qt.DashLine)
+            p.setPen(pen)
+
+            cross_size = 15
+            p.drawLine(int(wo_screen.x() - cross_size), int(wo_screen.y()),
+                       int(wo_screen.x() + cross_size), int(wo_screen.y()))
+            p.drawLine(int(wo_screen.x()), int(wo_screen.y() - cross_size),
+                       int(wo_screen.x()), int(wo_screen.y() + cross_size))
+
+            # Label "World (0,0,0)"
+            p.setFont(QFont("Segoe UI", 8))
+            p.setPen(QColor(255, 200, 100, 200))
+            p.drawText(int(wo_screen.x() + 10), int(wo_screen.y() - 5), "World Origin")
+
+        # === 2. 3D-ORIENTIERUNGS-INDIKATOR (Ecke rechts oben) ===
+        # Zeigt welche Ebene der Sketch ist und Blickrichtung relativ zur 3D-Kamera
+        indicator_x = self.width() - 115
+        indicator_y = 75
+
+        # Hole auch die Normale für Ebenen-Bestimmung
+        normal = getattr(self, 'sketch_plane_normal', (0, 0, 1))
+
+        # Bestimme welche Standard-Ebene das ist und Blickrichtung
+        def get_plane_info(normal):
+            """Bestimmt Ebenen-Name und Blickrichtung."""
+            nx, ny, nz = normal
+            anx, any, anz = abs(nx), abs(ny), abs(nz)
+
+            # Welche Achse zeigt die Normale?
+            if anz > 0.9:  # Normale zeigt in Z → XY-Ebene
+                view_dir = "von oben" if nz > 0 else "von unten"
+                return "XY-Ebene", view_dir, "Z"
+            elif any > 0.9:  # Normale zeigt in Y → XZ-Ebene
+                view_dir = "von vorne" if ny > 0 else "von hinten"
+                return "XZ-Ebene", view_dir, "Y"
+            elif anx > 0.9:  # Normale zeigt in X → YZ-Ebene
+                view_dir = "von rechts" if nx > 0 else "von links"
+                return "YZ-Ebene", view_dir, "X"
+            else:
+                return "Schräge Ebene", "", ""
+
+        plane_name, view_hint, _ = get_plane_info(normal)
+
+        # Hintergrund-Box
+        p.setPen(QPen(QColor(80, 80, 90), 1))
+        p.setBrush(QColor(30, 30, 35, 240))
+        p.drawRoundedRect(indicator_x - 65, indicator_y - 55, 155, 90, 8, 8)
+
+        # Zeile 1: Ebenen-Name groß
+        p.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        p.setPen(QColor(100, 170, 255))  # Blau
+        p.drawText(indicator_x - 60, indicator_y - 38, plane_name)
+
+        # Zeile 2: Blickrichtung
+        if view_hint:
+            p.setFont(QFont("Segoe UI", 9))
+            p.setPen(QColor(255, 200, 100))  # Orange für Blickrichtung
+            p.drawText(indicator_x - 60, indicator_y - 20, f"Blick {view_hint}")
+
+        # Trennlinie
+        p.setPen(QPen(QColor(70, 70, 80), 1))
+        p.drawLine(indicator_x - 60, indicator_y - 10, indicator_x + 85, indicator_y - 10)
+
+        # Achsen-Mapping kompakt
+        def get_axis_label(direction):
+            """Gibt Label für dominante Achsenrichtung zurück."""
+            x, y, z = direction
+            ax, ay, az = abs(x), abs(y), abs(z)
+            if ax > ay and ax > az:
+                return "X" if x > 0 else "-X"
+            elif ay > ax and ay > az:
+                return "Y" if y > 0 else "-Y"
+            else:
+                return "Z" if z > 0 else "-Z"
+
+        x_world = get_axis_label(x_dir)
+        y_world = get_axis_label(y_dir)
+
+        # Zeile 3+4: Achsen-Mapping
+        p.setFont(QFont("Segoe UI", 9))
+
+        # Rechts im Sketch = welche Welt-Achse
+        p.setPen(DesignTokens.COLOR_AXIS_X)
+        p.drawText(indicator_x - 60, indicator_y + 8, f"Sketch rechts → Welt {x_world}")
+
+        # Oben im Sketch = welche Welt-Achse
+        p.setPen(DesignTokens.COLOR_AXIS_Y)
+        p.drawText(indicator_x - 60, indicator_y + 25, f"Sketch oben  → Welt {y_world}")
+
     def _draw_open_ends(self, p):
         """
         Zeichnet rote Markierungen an Punkten, die nicht geschlossen sind.
