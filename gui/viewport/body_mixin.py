@@ -433,7 +433,14 @@ class BodyRenderingMixin:
             if norm_len < 1e-6:
                 return
             n = n / norm_len
-            
+
+            # FIX: Sicherstellen dass Normal zur Kamera zeigt (nicht ins Body hinein)
+            cam_pos = np.array(self.plotter.camera_position[0])
+            view_dir = center - cam_pos
+            view_dir = view_dir / np.linalg.norm(view_dir)
+            if np.dot(n, view_dir) > 0:
+                n = -n
+
             # Orthogonale Vektoren berechnen
             if abs(n[2]) < 0.9:
                 u = np.cross(n, [0, 0, 1])
@@ -441,25 +448,28 @@ class BodyRenderingMixin:
                 u = np.cross(n, [1, 0, 0])
             u = u / np.linalg.norm(u)
             v = np.cross(n, u)
-            
+
+            # OFFSET: Highlight leicht vom Body weg (Z-Fighting vermeiden)
+            offset_center = center + n * 0.5
+
             # Quadrat erstellen
             size = 15.0
             pts = [
-                center + size * (-u - v),
-                center + size * (u - v),
-                center + size * (u + v),
-                center + size * (-u + v),
+                offset_center + size * (-u - v),
+                offset_center + size * (u - v),
+                offset_center + size * (u + v),
+                offset_center + size * (-u + v),
             ]
-            
+
             import pyvista as pv
             quad = pv.PolyData(np.array(pts), faces=[4, 0, 1, 2, 3])
-            
+
             self.plotter.add_mesh(
                 quad, color='#00aaff', opacity=0.4,
                 name='body_face_hover', pickable=False
             )
             request_render(self.plotter)
-            
+
         except Exception as e:
             logger.debug(f"Draw highlight error: {e}")
 

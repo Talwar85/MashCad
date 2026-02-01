@@ -8,6 +8,30 @@
 >
 > **Status:** Prototyp / Frühe Entwicklung - Kernfunktionen funktionieren, aber noch nicht ausgereift.
 
+## Screenshots
+
+### 3D Viewport
+![3D Viewport](img/viewport3d.jpg)
+
+### 2D Sketch Editor / 2D-Sketcher
+![2D Sketch Editor](img/sketch2d.JPG)
+
+**Tab for precision input / Tab für Präzisionseingabe:**
+
+![Precision Input](img/sketch2d_tab.JPG)
+
+### 3D Features
+
+| Chamfer | Shell / Aushöhlen | Split Body |
+|---------|-------------------|------------|
+| ![Chamfer](img/chamfer.jpg) | ![Shell](img/aushoelen.jpg) | ![Split](img/split_body.JPG) |
+
+### Mesh to CAD Conversion / Mesh-zu-CAD Konvertierung
+
+| Import STL/OBJ | Converted to BREP |
+|----------------|-------------------|
+| ![Mesh Import](img/mesh_import.JPG) | ![Mesh Converted](img/mesh_converted.JPG) |
+
 ## Features / Funktionen
 
 ### 2D Sketch Editor / 2D-Sketcher

@@ -106,7 +106,8 @@ class PickingMixin:
                     dist_plane = abs(np.dot(pos - f_origin, f_normal))
                     dot_normal = np.dot(normal, f_normal)
 
-                    if dist_plane < 1.0 and dot_normal > 0.8:
+                    # FIX: abs(dot_normal) erlaubt invertierte Normalen (VTK gibt manchmal invertierte zurück)
+                    if dist_plane < 1.0 and abs(dot_normal) > 0.8:
                         dist_center = np.linalg.norm(pos - f_origin)
                         if dist_center < best_dist:
                             best_dist = dist_center

@@ -109,6 +109,7 @@ class FeatureType(Enum):
     LATTICE = auto()          # Gitterstruktur für Leichtbau
     PUSHPULL = auto()         # Face Extrude/Offset entlang Normale
     NSIDED_PATCH = auto()     # N-seitiger Patch (Surface Fill)
+    IMPORT = auto()           # Importierter Body (Mesh-Konvertierung, STEP Import)
 
 @dataclass
 class Feature:
@@ -514,6 +515,57 @@ class PushPullFeature(Feature):
 
 
 @dataclass
+class ImportFeature(Feature):
+    """
+    Import Feature - Speichert die Original-BREP eines importierten Bodies.
+
+    Wird verwendet für:
+    - Mesh-zu-CAD Konvertierung (STL/OBJ → BREP)
+    - STEP/IGES Import
+    - Jede externe Geometrie die als Basis für weitere Features dient
+
+    Die BREP wird als String gespeichert (via BRepTools.Write_s) um Serialisierung
+    zu ermöglichen. Beim Rebuild wird die BREP aus dem String rekonstruiert.
+    """
+    brep_string: str = ""  # BREP als String (via BRepTools.Write_s)
+    source_file: str = ""  # Original-Dateiname (für Anzeige)
+    source_type: str = ""  # "mesh_convert", "step_import", "iges_import"
+
+    def __post_init__(self):
+        self.type = FeatureType.IMPORT
+        if not self.name or self.name == "Feature":
+            if self.source_file:
+                self.name = f"Import ({self.source_file})"
+            else:
+                self.name = "Import"
+
+    def get_solid(self):
+        """Rekonstruiert das Solid aus dem BREP-String."""
+        if not self.brep_string:
+            return None
+        try:
+            from OCP.BRepTools import BRepTools
+            from OCP.TopoDS import TopoDS_Shape
+            from OCP.BRep import BRep_Builder
+            from build123d import Solid
+            import io
+
+            builder = BRep_Builder()
+            shape = TopoDS_Shape()
+
+            # BREP aus String lesen (via BytesIO Stream)
+            stream = io.BytesIO(self.brep_string.encode('utf-8'))
+            BRepTools.Read_s(shape, stream, builder)
+
+            if not shape.IsNull():
+                return Solid(shape)
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"ImportFeature.get_solid() fehlgeschlagen: {e}")
+        return None
+
+
+@dataclass
 class SurfaceTextureFeature(Feature):
     """
     Non-destruktive Flächen-Texturierung für 3D-Druck.
@@ -851,6 +903,35 @@ class Body:
             if solid and hasattr(solid, 'wrapped') and not solid.wrapped.IsNull():
                 self._build123d_solid = solid
                 self.shape = solid.wrapped
+
+                # === NEU: ImportFeature erstellen für Rebuild-Support ===
+                # BREP serialisieren (via BytesIO Stream)
+                try:
+                    from OCP.BRepTools import BRepTools
+                    import io
+
+                    # BRepTools.Write_s braucht einen BytesIO Stream
+                    stream = io.BytesIO()
+                    BRepTools.Write_s(solid.wrapped, stream)
+                    brep_string = stream.getvalue().decode('utf-8')
+
+                    if brep_string:
+                        # ImportFeature erstellen
+                        import_feature = ImportFeature(
+                            name=f"Import ({self.name})",
+                            brep_string=brep_string,
+                            source_file=getattr(self, 'source_file', self.name),
+                            source_type="mesh_convert"
+                        )
+
+                        # Alte Features löschen und ImportFeature als Basis setzen
+                        self.features.clear()
+                        self.features.append(import_feature)
+
+                        logger.info(f"  ImportFeature erstellt ({len(brep_string)} bytes BREP)")
+                except Exception as e:
+                    logger.warning(f"ImportFeature Erstellung fehlgeschlagen: {e}")
+                    # Konvertierung war trotzdem erfolgreich, nur ohne Rebuild-Support
 
                 logger.success(f"Body '{self.name}' erfolgreich konvertiert!")
 
@@ -1193,6 +1274,7 @@ class Body:
 
                 if hasattr(result, 'is_valid') and result.is_valid():
                     # DEBUG: Volumen nach Boolean loggen
+                    vol_result = None
                     try:
                         from OCP.GProp import GProp_GProps
                         from OCP.BRepGProp import BRepGProp
@@ -1201,6 +1283,12 @@ class Body:
                         BRepGProp.VolumeProperties_s(result.wrapped, props_result)
                         vol_result = props_result.Mass()
                         logger.debug(f"[BOOLEAN DEBUG] Nach {operation}: Result-Vol={vol_result:.2f}mm³")
+
+                        # FIX: Leeres Ergebnis (Volumen ~0) als Fehler behandeln
+                        if vol_result < 0.001:  # < 0.001 mm³ = praktisch leer
+                            logger.error(f"❌ {operation} erzeugte leeres Ergebnis (Vol={vol_result:.4f}mm³)")
+                            return solid1, False
+
                         if operation == "Cut" and vol_result >= vol1 - 0.01:
                             logger.warning(f"⚠️ Cut hatte keinen Effekt! Vol vorher={vol1:.2f}, nachher={vol_result:.2f}")
                     except Exception as e:
@@ -3750,9 +3838,20 @@ class Body:
             
             new_solid = None
             status = "OK"
-            
+
+            # ================= IMPORT (Base Feature) =================
+            if isinstance(feature, ImportFeature):
+                # ImportFeature enthält die Basis-Geometrie (z.B. konvertiertes Mesh)
+                base_solid = feature.get_solid()
+                if base_solid is not None:
+                    new_solid = base_solid
+                    logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
+                else:
+                    status = "ERROR"
+                    logger.error(f"ImportFeature: Konnte BREP nicht laden")
+
             # ================= EXTRUDE =================
-            if isinstance(feature, ExtrudeFeature):
+            elif isinstance(feature, ExtrudeFeature):
                 def op_extrude():
                     return self._compute_extrude_part(feature)
                 
@@ -5669,6 +5768,14 @@ class Body:
                     "data": feat.data,
                 })
 
+            elif isinstance(feat, ImportFeature):
+                feat_dict.update({
+                    "feature_class": "ImportFeature",
+                    "brep_string": feat.brep_string,
+                    "source_file": feat.source_file,
+                    "source_type": feat.source_type,
+                })
+
             features_data.append(feat_dict)
 
         # TNP-Daten exportieren
@@ -5946,6 +6053,14 @@ class Body:
                 feat = TransformFeature(
                     mode=feat_dict.get("mode", "move"),
                     data=feat_dict.get("data", {}),
+                    **base_kwargs
+                )
+
+            elif feat_class == "ImportFeature":
+                feat = ImportFeature(
+                    brep_string=feat_dict.get("brep_string", ""),
+                    source_file=feat_dict.get("source_file", ""),
+                    source_type=feat_dict.get("source_type", ""),
                     **base_kwargs
                 )
 

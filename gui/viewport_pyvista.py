@@ -2857,7 +2857,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             center = np.array(pos)
             n = np.array(normal)
             n = n / np.linalg.norm(n) if np.linalg.norm(n) > 0 else np.array([0,0,1])
-            
+
+            # FIX: Sicherstellen dass Normal zur Kamera zeigt (nicht ins Body hinein)
+            cam_pos = np.array(self.plotter.camera_position[0])
+            view_dir = center - cam_pos
+            view_dir = view_dir / np.linalg.norm(view_dir)
+            if np.dot(n, view_dir) > 0:
+                n = -n
+
             # Erstelle einen Kreis senkrecht zur Normalen
             radius = 8.0
             if abs(n[2]) < 0.9:
@@ -2866,21 +2873,24 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 u = np.cross(n, [1, 0, 0])
             u = u / np.linalg.norm(u)
             v = np.cross(n, u)
-            
+
+            # OFFSET: Highlight leicht vom Body weg (Z-Fighting vermeiden)
+            offset_center = center + n * 0.5
+
             points = []
             for i in range(33):
                 angle = i * 2 * math.pi / 32
-                p = center + radius * (math.cos(angle) * u + math.sin(angle) * v)
+                p = offset_center + radius * (math.cos(angle) * u + math.sin(angle) * v)
                 points.append(p)
-            
+
             pts = np.array(points)
             lines = pv.lines_from_points(pts)
             self.plotter.add_mesh(lines, color='lime', line_width=3, name='plane_hover')
-            
+
             # Pfeil für Normale
-            arrow = pv.Arrow(start=center, direction=n, scale=10)
+            arrow = pv.Arrow(start=offset_center, direction=n, scale=10)
             self.plotter.add_mesh(arrow, color='lime', name='plane_hover_arrow')
-            
+
             self.plotter.update()
         except: pass
     
@@ -5202,6 +5212,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Zeichnet Highlight auf gehoverter Body-Fläche.
 
         FIX: Offset vom Body weg um Z-Fighting zu vermeiden.
+        FIX: Normal richtung Kamera korrigieren falls invertiert.
         """
         self._clear_body_face_highlight()
         try:
@@ -5212,6 +5223,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 n = n / norm_len
             else:
                 n = np.array([0, 0, 1])
+
+            # FIX: Sicherstellen dass Normal zur Kamera zeigt (nicht ins Body hinein)
+            # View-Direction berechnen (von Kamera zum Punkt)
+            cam_pos = np.array(self.plotter.camera_position[0])
+            view_dir = center - cam_pos
+            view_dir = view_dir / np.linalg.norm(view_dir)
+
+            # Wenn Normal weg von Kamera zeigt (dot > 0), invertieren
+            if np.dot(n, view_dir) > 0:
+                n = -n
 
             # OFFSET: Highlight leicht vom Body weg verschieben (Z-Fighting vermeiden)
             offset_center = center + n * 0.5  # 0.5mm Offset

@@ -5296,14 +5296,23 @@ class MainWindow(QMainWindow):
 
             new_geo = None
 
-            # === METHODE 1: BRepFeat_MakePrism für Join (BEVORZUGT - keine Nähte!) ===
-            if operation == "Join":
+            # === METHODE 1: BRepFeat_MakePrism für Join UND Cut (BEVORZUGT - lokale Op!) ===
+            # BRepFeat ist robuster bei konvertierten Mesh-Bodies und erzeugt keine Nähte
+            if operation in ("Join", "Cut"):
                 try:
                     from OCP.BRepFeat import BRepFeat_MakePrism
 
-                    direction = gp_Dir(face_normal.X, face_normal.Y, face_normal.Z)
-                    fuse_mode = 1 if height > 0 else 0  # 1=Fuse, 0=Cut
-                    abs_height = abs(height)
+                    # Für Cut: Richtung umkehren (height ist bereits negativ)
+                    # fuse_mode: 1=Fuse (Join), 0=Cut
+                    if operation == "Join":
+                        direction = gp_Dir(face_normal.X, face_normal.Y, face_normal.Z)
+                        fuse_mode = 1
+                        abs_height = abs(height)
+                    else:  # Cut
+                        # Bei Cut: height ist negativ → Richtung umkehren
+                        direction = gp_Dir(-face_normal.X, -face_normal.Y, -face_normal.Z)
+                        fuse_mode = 0
+                        abs_height = abs(height)
 
                     logger.debug(f"BRepFeat_MakePrism: direction=({face_normal.X:.3f}, {face_normal.Y:.3f}, {face_normal.Z:.3f}), fuse_mode={fuse_mode}, height={abs_height}")
 
@@ -5343,10 +5352,17 @@ class MainWindow(QMainWindow):
 
                         is_valid = new_solid.is_valid()
                         volume = new_solid.volume
-                        logger.debug(f"BRepFeat result: is_valid={is_valid}, volume={volume:.2f}")
+                        original_volume = source_body._build123d_solid.volume
+                        logger.debug(f"BRepFeat result: is_valid={is_valid}, volume={volume:.2f} (original={original_volume:.2f})")
 
-                        # FIX: Prüfe auch auf positive Volume (negative = inside-out shape!)
-                        if is_valid and volume > 0:
+                        # FIX: Prüfe auf gültiges Ergebnis
+                        # - Volume muss positiv sein (negative = inside-out)
+                        # - Bei Cut: Volume muss kleiner sein als original (sonst hat Cut nicht funktioniert)
+                        volume_valid = volume > 0.001  # > 0.001 mm³
+                        if operation == "Cut":
+                            volume_valid = volume_valid and volume < original_volume - 0.01
+
+                        if is_valid and volume_valid:
                             # ERFOLG! Direkt das Ergebnis verwenden - keine Boolean nötig!
                             logger.info(f"✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)")
 
@@ -5384,13 +5400,15 @@ class MainWindow(QMainWindow):
                             while exp.More():
                                 face_count += 1
                                 exp.Next()
-                            logger.info(f"✅ Push/Pull Join: {face_count} Faces (BRepFeat - keine Nähte)")
+                            logger.info(f"✅ Push/Pull {operation}: {face_count} Faces (BRepFeat - lokale Op)")
 
                             return True
                         else:
-                            # BRepFeat produzierte ungültiges Ergebnis (z.B. negative Volume = inside-out)
-                            if volume <= 0:
-                                logger.warning(f"BRepFeat_MakePrism: Negative Volume ({volume:.2f}) - Shape ist inside-out, Fallback auf Boolean")
+                            # BRepFeat produzierte ungültiges Ergebnis
+                            if volume <= 0.001:
+                                logger.warning(f"BRepFeat_MakePrism: Volume zu klein ({volume:.4f}mm³), Fallback auf Boolean")
+                            elif operation == "Cut" and volume >= original_volume - 0.01:
+                                logger.warning(f"BRepFeat_MakePrism: Cut hatte keinen Effekt (Vol {original_volume:.2f}→{volume:.2f}), Fallback auf Boolean")
                             else:
                                 logger.warning(f"BRepFeat_MakePrism: Ergebnis ungültig (is_valid=False), Fallback auf Boolean")
                     else:
