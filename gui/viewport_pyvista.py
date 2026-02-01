@@ -4850,6 +4850,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
                 body_dist = np.linalg.norm(pos - ray_start)
+                logger.debug(f"VTK Pick: cell_id={cell_id}, pos={pos}, normal={normal}")
 
                 # SCHRITT 1: Actor → Body-ID zuordnen (actors sind NAMEN, nicht Objekte!)
                 picked_body_id = None
@@ -4871,13 +4872,23 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                             if 0 <= cell_id < len(face_ids):
                                 ocp_face_id = int(face_ids[cell_id])
                                 # Finde SelectionFace mit dieser OCP Face-ID
+                                found_match = False
                                 for face in self.detector.selection_faces:
                                     if (face.domain_type == "body_face" and
                                         face.owner_id == picked_body_id and
                                         getattr(face, 'ocp_face_id', None) == ocp_face_id):
                                         logger.debug(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id}")
                                         all_hits.append((5, body_dist, face.id))
+                                        found_match = True
                                         break
+                                if not found_match:
+                                    # DEBUG: Zeige verfügbare ocp_face_ids für diesen Body
+                                    available_ids = [
+                                        getattr(f, 'ocp_face_id', None)
+                                        for f in self.detector.selection_faces
+                                        if f.domain_type == "body_face" and f.owner_id == picked_body_id
+                                    ]
+                                    logger.warning(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
 
                     # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
                     if not all_hits:

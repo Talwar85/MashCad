@@ -4696,8 +4696,13 @@ class MainWindow(QMainWindow):
         self.viewport_3d.set_all_bodies_visible(True)
         self.viewport_3d.set_all_bodies_opacity(1.0)  # X-Ray Mode zurücksetzen
 
-        if hasattr(self.viewport_3d, 'detector'):
+        # FIX: Detector mit aktuellen Body-Meshes neu laden (nicht nur leeren!)
+        # Sonst sind nach Push/Pull keine SelectionFaces mehr verfügbar
+        if hasattr(self.viewport_3d, '_update_detector_for_picking'):
+            self.viewport_3d._update_detector_for_picking()
+        elif hasattr(self.viewport_3d, 'detector'):
             self.viewport_3d.detector.clear()
+
         self.viewport_3d.selected_face_ids.clear()
         self.viewport_3d.hover_face_id = -1
         self.viewport_3d._draw_selectable_faces_from_detector()
@@ -4711,7 +4716,7 @@ class MainWindow(QMainWindow):
 
     def _extract_face_as_polygon(self, face):
         """
-        Extrahiert die Flächen-Kontur als Shapely Polygon.
+        Extrahiert die Flächen-Kontur als Shapely Polygon MIT Löchern.
 
         Dies ermöglicht es, Push/Pull als PARAMETRISCHES Feature zu speichern,
         das beim Rebuild rekonstruiert werden kann.
@@ -4726,13 +4731,17 @@ class MainWindow(QMainWindow):
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_WIRE, TopAbs_EDGE
             from OCP.gp import gp_Pnt, gp_Vec
+            from OCP.TopoDS import TopoDS
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GeomAbs import GeomAbs_Line
+            from OCP.BRep import BRep_Tool as BRT
+            from OCP.TopAbs import TopAbs_REVERSED
             import numpy as np
 
             # 1. Hole Face-Surface für Koordinatentransformation
             surface = BRep_Tool.Surface_s(face.wrapped)
 
             # 2. Hole Face-Normale und Origin
-            # Berechne Normale am Zentrum der Fläche
             from OCP.BRepGProp import BRepGProp_Face
             prop = BRepGProp_Face(face.wrapped)
 
@@ -4756,126 +4765,125 @@ class MainWindow(QMainWindow):
             d1u.Normalize()
             plane_x_dir = (d1u.X(), d1u.Y(), d1u.Z())
 
-            # 3. Extrahiere Outer Wire Punkte
-            from OCP.TopoDS import TopoDS
-
-            wire_exp = TopExp_Explorer(face.wrapped, TopAbs_WIRE)
-            if not wire_exp.More():
-                logger.warning("Face hat keinen Wire")
-                return None, None, None, None, None
-
-            # ✅ FIX: Cast TopoDS_Shape -> TopoDS_Wire
-            outer_wire_shape = wire_exp.Current()
-            outer_wire = TopoDS.Wire_s(outer_wire_shape)
-
-            # 4. Sammle alle Punkte entlang des Wire
-            from OCP.BRepAdaptor import BRepAdaptor_Curve
-            from OCP.GCPnts import GCPnts_UniformAbscissa
-
-            points_3d = []
-            edge_exp = BRepTools_WireExplorer(outer_wire)
+            # 3. Koordinatensystem vorbereiten
+            origin = np.array(plane_origin)
+            normal = np.array(plane_normal)
+            x_dir = np.array(plane_x_dir)
+            normal = normal / np.linalg.norm(normal)
+            x_dir = x_dir / np.linalg.norm(x_dir)
+            y_dir = np.cross(normal, x_dir)
+            y_dir = y_dir / np.linalg.norm(y_dir)
 
             def _add_unique(pt_list, new_pt, tol=1e-8):
                 """Fügt Punkt hinzu, wenn er nicht fast-identisch mit dem letzten ist."""
                 if not pt_list or sum((a-b)**2 for a, b in zip(pt_list[-1], new_pt)) > tol:
                     pt_list.append(new_pt)
 
-            while edge_exp.More():
-                edge = edge_exp.Current()
-                vertex = edge_exp.CurrentVertex()
+            def _extract_wire_points_2d(wire):
+                """Extrahiert 2D-Punkte aus einem Wire."""
+                points_3d = []
+                edge_exp = BRepTools_WireExplorer(wire)
 
-                try:
-                    from OCP.GeomAbs import GeomAbs_Line
-                    from OCP.BRep import BRep_Tool as BRT
-                    adaptor = BRepAdaptor_Curve(edge)
+                while edge_exp.More():
+                    edge = edge_exp.Current()
+                    vertex = edge_exp.CurrentVertex()
 
-                    if adaptor.GetType() == GeomAbs_Line:
-                        # Lineare Kante: Vertex aus Wire-Reihenfolge (orientierungssicher)
-                        vpt = BRT.Pnt_s(vertex)
-                        _add_unique(points_3d, (vpt.X(), vpt.Y(), vpt.Z()))
-                    else:
-                        # Gekrümmte Kante: orientierungsgerecht samplen
-                        from OCP.TopAbs import TopAbs_REVERSED
-                        reversed_edge = edge.Orientation() == TopAbs_REVERSED
-                        first = adaptor.FirstParameter()
-                        last = adaptor.LastParameter()
-                        n_samples = 10
-                        for i in range(n_samples):
-                            if reversed_edge:
-                                t = last - (last - first) * i / n_samples
-                            else:
-                                t = first + (last - first) * i / n_samples
-                            pt = adaptor.Value(t)
-                            _add_unique(points_3d, (pt.X(), pt.Y(), pt.Z()))
+                    try:
+                        adaptor = BRepAdaptor_Curve(edge)
 
-                except Exception as edge_err:
-                    logger.debug(f"Edge-Sampling fehlgeschlagen: {edge_err}")
+                        if adaptor.GetType() == GeomAbs_Line:
+                            vpt = BRT.Pnt_s(vertex)
+                            _add_unique(points_3d, (vpt.X(), vpt.Y(), vpt.Z()))
+                        else:
+                            reversed_edge = edge.Orientation() == TopAbs_REVERSED
+                            first = adaptor.FirstParameter()
+                            last = adaptor.LastParameter()
+                            n_samples = 10
+                            for i in range(n_samples):
+                                if reversed_edge:
+                                    t = last - (last - first) * i / n_samples
+                                else:
+                                    t = first + (last - first) * i / n_samples
+                                pt = adaptor.Value(t)
+                                _add_unique(points_3d, (pt.X(), pt.Y(), pt.Z()))
 
-                edge_exp.Next()
+                    except Exception as edge_err:
+                        logger.debug(f"Edge-Sampling fehlgeschlagen: {edge_err}")
 
-            # Letzten Punkt entfernen falls er mit erstem identisch ist (Ringschluss)
-            if len(points_3d) > 2:
-                if sum((a-b)**2 for a, b in zip(points_3d[-1], points_3d[0])) < 1e-8:
-                    points_3d.pop()
+                    edge_exp.Next()
 
-            if len(points_3d) < 3:
-                logger.warning(f"Zu wenige Punkte extrahiert: {len(points_3d)}")
+                # Letzten Punkt entfernen falls Ringschluss
+                if len(points_3d) > 2:
+                    if sum((a-b)**2 for a, b in zip(points_3d[-1], points_3d[0])) < 1e-8:
+                        points_3d.pop()
+
+                # Transformiere 3D -> 2D
+                points_2d = []
+                for p3d in points_3d:
+                    p = np.array(p3d) - origin
+                    x = np.dot(p, x_dir)
+                    y = np.dot(p, y_dir)
+                    new_2d = (x, y)
+                    if not points_2d or (points_2d[-1][0] - new_2d[0])**2 + (points_2d[-1][1] - new_2d[1])**2 > 1e-10:
+                        points_2d.append(new_2d)
+
+                if len(points_2d) > 2 and (points_2d[-1][0] - points_2d[0][0])**2 + (points_2d[-1][1] - points_2d[0][1])**2 < 1e-10:
+                    points_2d.pop()
+
+                return points_2d
+
+            # 4. Alle Wires extrahieren (outer + inner holes)
+            wire_exp = TopExp_Explorer(face.wrapped, TopAbs_WIRE)
+            if not wire_exp.More():
+                logger.warning("Face hat keinen Wire")
                 return None, None, None, None, None
 
-            # 5. Transformiere 3D-Punkte in 2D-Koordinaten (lokale Face-Ebene)
-            origin = np.array(plane_origin)
-            normal = np.array(plane_normal)
-            x_dir = np.array(plane_x_dir)
+            all_rings_2d = []
+            while wire_exp.More():
+                wire_shape = wire_exp.Current()
+                wire = TopoDS.Wire_s(wire_shape)
+                pts_2d = _extract_wire_points_2d(wire)
+                if len(pts_2d) >= 3:
+                    all_rings_2d.append(pts_2d)
+                wire_exp.Next()
 
-            # Normalisieren
-            normal = normal / np.linalg.norm(normal)
-            x_dir = x_dir / np.linalg.norm(x_dir)
+            if not all_rings_2d:
+                logger.warning("Keine gültigen Wires extrahiert")
+                return None, None, None, None, None
 
-            # Y-Richtung als Kreuzprodukt
-            y_dir = np.cross(normal, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
+            logger.info(f"Face hat {len(all_rings_2d)} Wire(s) - {len(all_rings_2d)-1} Löcher")
 
-            # Projiziere Punkte auf 2D
-            points_2d = []
-            for p3d in points_3d:
-                p = np.array(p3d) - origin
-                x = np.dot(p, x_dir)
-                y = np.dot(p, y_dir)
-                new_2d = (x, y)
-                # Dedupliziere in 2D
-                if not points_2d or (points_2d[-1][0] - new_2d[0])**2 + (points_2d[-1][1] - new_2d[1])**2 > 1e-10:
-                    points_2d.append(new_2d)
-            # Auch letzten mit erstem Punkt prüfen
-            if len(points_2d) > 2 and (points_2d[-1][0] - points_2d[0][0])**2 + (points_2d[-1][1] - points_2d[0][1])**2 < 1e-10:
-                points_2d.pop()
-
-            # 6. Erstelle Shapely Polygon
+            # 5. Erstelle Shapely Polygon mit Holes
             try:
-                polygon = ShapelyPolygon(points_2d)
+                from shapely.geometry import LinearRing
+
+                # Erster Wire = Outer, Rest = Holes
+                exterior = all_rings_2d[0]
+                holes = all_rings_2d[1:] if len(all_rings_2d) > 1 else None
+
+                polygon = ShapelyPolygon(exterior, holes)
+
                 if not polygon.is_valid:
                     from shapely.validation import make_valid
                     repaired = make_valid(polygon)
-                    # make_valid kann GeometryCollection zurückgeben - größtes Polygon extrahieren
                     if repaired.geom_type == 'Polygon':
                         polygon = repaired
                     elif repaired.geom_type in ('MultiPolygon', 'GeometryCollection'):
-                        from shapely.geometry import MultiPolygon
                         polys = [g for g in repaired.geoms if g.geom_type == 'Polygon']
                         if polys:
                             polygon = max(polys, key=lambda p: p.area)
                         else:
-                            polygon = ShapelyPolygon(points_2d).buffer(0)
+                            polygon = ShapelyPolygon(exterior).buffer(0)
 
-                # ✅ FIX: y_dir als Tuple speichern für korrekte 2D→3D Transformation beim Rebuild
                 plane_y_dir = tuple(y_dir.tolist())
 
-                # DEBUG: Zeige Koordinatensystem bei Extraktion
                 logger.debug(f"  Koordinatensystem bei Extraktion:")
                 logger.debug(f"    x_dir={plane_x_dir}")
                 logger.debug(f"    y_dir={plane_y_dir}")
                 logger.debug(f"    normal={plane_normal}")
 
-                logger.info(f"✅ Face-Polygon extrahiert: {len(points_2d)} Punkte, Area={polygon.area:.1f}")
+                n_interiors = len(list(polygon.interiors)) if hasattr(polygon, 'interiors') else 0
+                logger.info(f"✅ Face-Polygon extrahiert: {len(exterior)} Punkte, {n_interiors} Löcher, Area={polygon.area:.1f}")
                 return polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir
 
             except Exception as poly_err:
@@ -5024,6 +5032,18 @@ class MainWindow(QMainWindow):
 
             logger.info(f"Face gefunden: dist={best_dist:.3f}")
 
+            # DEBUG: Prüfe Wire-Struktur des gefundenen Faces
+            try:
+                from OCP.TopAbs import TopAbs_WIRE
+                wire_count = 0
+                wire_exp = TopExp_Explorer(best_face.wrapped, TopAbs_WIRE)
+                while wire_exp.More():
+                    wire_count += 1
+                    wire_exp.Next()
+                logger.info(f"Face hat {wire_count} Wire(s) (1=outer only, >1=mit Löchern)")
+            except Exception as wire_err:
+                logger.debug(f"Wire-Count fehlgeschlagen: {wire_err}")
+
             # NOTE: Height-Inversion basierend auf Mesh vs B-Rep Normale wurde entfernt.
             # Das Face wird jetzt direkt via ocp_face_id gefunden, und die Preview-Logik
             # berechnet height bereits korrekt basierend auf der Drag-Richtung.
@@ -5037,7 +5057,48 @@ class MainWindow(QMainWindow):
                 return False
 
             # Extrusions-Werkzeug erstellen
-            new_geo = extrude(best_face, amount=height)
+            # NEU: Verwende OCP's BRepPrimAPI_MakePrism direkt statt build123d's extrude()
+            # Dies stellt sicher, dass innere Wires (Löcher) korrekt erhalten bleiben.
+            try:
+                from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+                from OCP.gp import gp_Vec
+                from build123d import Solid
+
+                # Normale aus dem Face für Extrusions-Richtung
+                face_center = best_face.center()
+                face_normal = best_face.normal_at(face_center)
+                extrude_vec = gp_Vec(
+                    face_normal.X * height,
+                    face_normal.Y * height,
+                    face_normal.Z * height
+                )
+
+                # OCP-basierte Extrusion (erhält alle Wires!)
+                prism_maker = BRepPrimAPI_MakePrism(best_face.wrapped, extrude_vec)
+                prism_maker.Build()
+
+                if not prism_maker.IsDone():
+                    raise ValueError("BRepPrimAPI_MakePrism fehlgeschlagen")
+
+                prism_shape = prism_maker.Shape()
+                new_geo = Solid(prism_shape)
+                logger.info(f"✅ OCP-Extrusion erfolgreich: volume={new_geo.volume:.2f}")
+
+            except Exception as ocp_extrude_err:
+                logger.warning(f"OCP-Extrusion fehlgeschlagen: {ocp_extrude_err}, Fallback auf build123d")
+                new_geo = extrude(best_face, amount=height)
+
+            # DEBUG: Prüfe extrudierte Geometrie
+            try:
+                from OCP.TopAbs import TopAbs_FACE
+                ext_face_count = 0
+                ext_exp = TopExp_Explorer(new_geo.wrapped, TopAbs_FACE)
+                while ext_exp.More():
+                    ext_face_count += 1
+                    ext_exp.Next()
+                logger.info(f"Extrudierte Geometrie: {ext_face_count} Faces, volume={new_geo.volume:.2f}")
+            except Exception as ext_err:
+                logger.debug(f"Extrude-Debug fehlgeschlagen: {ext_err}")
 
             # --- SCHRITT C: Multi-Body Operationen ---
 
@@ -5094,6 +5155,9 @@ class MainWindow(QMainWindow):
 
                     old_solid = target._build123d_solid
                     new_solid = None
+
+                    # DEBUG: Zeige Geometrie vor Boolean
+                    logger.info(f"Boolean {operation}: old_solid volume={old_solid.volume:.2f}, new_geo volume={new_geo.volume:.2f}")
 
                     if operation == "Cut":
                         new_solid = old_solid - new_geo

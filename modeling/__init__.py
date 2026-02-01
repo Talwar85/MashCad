@@ -1102,13 +1102,45 @@ class Body:
             result_shape = None
             boolean_history = None  # BRepTools_History für TNP
 
+            # DEBUG: Volumen vor Boolean loggen
+            try:
+                from OCP.GProp import GProp_GProps
+                from OCP.BRepGProp import BRepGProp
+
+                props1 = GProp_GProps()
+                props2 = GProp_GProps()
+                BRepGProp.VolumeProperties_s(shape1, props1)
+                BRepGProp.VolumeProperties_s(shape2, props2)
+                vol1 = props1.Mass()
+                vol2 = props2.Mass()
+                logger.debug(f"[BOOLEAN DEBUG] Vor {operation}: Body-Vol={vol1:.2f}mm³, Tool-Vol={vol2:.2f}mm³")
+            except Exception as e:
+                logger.debug(f"Volumen-Debug fehlgeschlagen: {e}")
+
             # Phase 5: Zentralisierte Toleranz
             FUZZY_VALUE = Tolerances.KERNEL_FUZZY
 
             if operation == "Join":
                 result_shape, boolean_history = self._ocp_fuse(shape1, shape2, FUZZY_VALUE, return_history=True)
             elif operation == "Cut":
-                result_shape, boolean_history = self._ocp_cut(shape1, shape2, FUZZY_VALUE, return_history=True)
+                # FIX: Versuche zuerst Build123d native Boolean (wie Menu Boolean)
+                # Das ist robuster für Through-Cuts
+                try:
+                    from build123d import Solid
+                    s1_b3d = Solid(shape1)
+                    s2_b3d = Solid(shape2)
+                    result_b3d = s1_b3d - s2_b3d  # Build123d native Cut
+                    if result_b3d and hasattr(result_b3d, 'wrapped') and not result_b3d.wrapped.IsNull():
+                        result_shape = result_b3d.wrapped
+                        boolean_history = None
+                        logger.debug("[CUT] Build123d native Boolean erfolgreich")
+                    else:
+                        # Fallback auf OCP Cut
+                        logger.debug("[CUT] Build123d native Boolean fehlgeschlagen, versuche OCP")
+                        result_shape, boolean_history = self._ocp_cut(shape1, shape2, FUZZY_VALUE, return_history=True)
+                except Exception as e:
+                    logger.debug(f"[CUT] Build123d Exception: {e}, Fallback auf OCP")
+                    result_shape, boolean_history = self._ocp_cut(shape1, shape2, FUZZY_VALUE, return_history=True)
             elif operation == "Intersect":
                 result_shape, boolean_history = self._ocp_common(shape1, shape2, FUZZY_VALUE, return_history=True)
             else:
@@ -1148,6 +1180,20 @@ class Body:
                     result = Shape(result_shape)
 
                 if hasattr(result, 'is_valid') and result.is_valid():
+                    # DEBUG: Volumen nach Boolean loggen
+                    try:
+                        from OCP.GProp import GProp_GProps
+                        from OCP.BRepGProp import BRepGProp
+
+                        props_result = GProp_GProps()
+                        BRepGProp.VolumeProperties_s(result.wrapped, props_result)
+                        vol_result = props_result.Mass()
+                        logger.debug(f"[BOOLEAN DEBUG] Nach {operation}: Result-Vol={vol_result:.2f}mm³")
+                        if operation == "Cut" and vol_result >= vol1 - 0.01:
+                            logger.warning(f"⚠️ Cut hatte keinen Effekt! Vol vorher={vol1:.2f}, nachher={vol_result:.2f}")
+                    except Exception as e:
+                        logger.debug(f"Volumen-Debug (result) fehlgeschlagen: {e}")
+
                     logger.success(f"✅ {operation} erfolgreich")
                     return result, True
                 else:
@@ -4488,9 +4534,32 @@ class Body:
 
                 # Extrudieren mit OCP für bessere Robustheit
                 amount = feature.distance * feature.direction
+
+                # FIX: Für Cut-Operationen Extrusion verlängern um Through-Cuts zu ermöglichen
+                # Das stellt sicher, dass das Tool-Solid über den Body hinausgeht
+                cut_extension = 0.0
+                if feature.operation == "Cut" and abs(amount) > 0.1:
+                    # 10% Verlängerung in Extrusionsrichtung + 1mm Sicherheit
+                    cut_extension = abs(amount) * 0.1 + 1.0
+                    original_amount = amount
+                    amount = amount + (cut_extension if amount > 0 else -cut_extension)
+                    logger.debug(f"[CUT] Extrusion verlängert: {original_amount:.2f} → {amount:.2f}mm (+{cut_extension:.2f}mm)")
+
+                logger.debug(f"[EXTRUDE DEBUG] distance={feature.distance}, direction={feature.direction}, amount={amount}")
+                logger.debug(f"[EXTRUDE DEBUG] plane.z_dir={plane.z_dir}, operation={feature.operation}")
+
                 for f in faces_to_extrude:
                     s = self._ocp_extrude_face(f, amount, plane.z_dir)
                     if s is not None:
+                        # DEBUG: Volumen des extrudierten Solids loggen
+                        try:
+                            from OCP.GProp import GProp_GProps
+                            from OCP.BRepGProp import BRepGProp
+                            props = GProp_GProps()
+                            BRepGProp.VolumeProperties_s(s.wrapped, props)
+                            logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mm³")
+                        except:
+                            pass
                         solids.append(s)
 
             # === PFAD B: Fallback auf "Alten Code" (Rebuild / Scripting) ===
