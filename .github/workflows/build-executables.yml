@@ -148,8 +148,70 @@ jobs:
           path: dist/MashCAD-Linux-x86_64.7z
           retention-days: 30
 
+  build-macos:
+    runs-on: macos-13  # Intel-based macOS
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          miniforge-version: latest
+          activate-environment: cad_env
+          auto-activate-base: false
+
+      - name: Install dependencies
+        run: |
+          conda install -c conda-forge -y \
+            pyside6 \
+            build123d \
+            ocp \
+            vtk \
+            pyvista \
+            pyvistaqt \
+            numpy \
+            scipy \
+            shapely \
+            ezdxf \
+            loguru \
+            trimesh \
+            matplotlib \
+            pillow \
+            lib3mf
+          pip install pyinstaller ocp-tessellate
+
+      - name: Verify imports
+        run: |
+          python -c "import PySide6; print('PySide6 OK')"
+          python -c "import pyvista; print('PyVista OK')"
+          python -c "import lib3mf; print('lib3mf OK')"
+          python -c "import build123d; print('build123d OK')"
+
+      - name: Build macOS executable
+        run: |
+          export KMP_DUPLICATE_LIB_OK=TRUE
+          pyinstaller MashCAD.spec
+        timeout-minutes: 30
+
+      - name: Create macOS archive
+        run: |
+          cd dist
+          zip -r -9 MashCAD-macOS-x64.zip MashCAD
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MashCAD-macOS-x64
+          path: dist/MashCAD-macOS-x64.zip
+          retention-days: 30
+
   create-release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')  # Only create releases on tag pushes
     permissions:
@@ -169,6 +231,7 @@ jobs:
           files: |
             artifacts/MashCAD-Windows-x64/MashCAD-Windows-x64.7z
             artifacts/MashCAD-Linux-x86_64/MashCAD-Linux-x86_64.7z
+            artifacts/MashCAD-macOS-x64/MashCAD-macOS-x64.zip
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
           generate_release_notes: true
@@ -180,11 +243,16 @@ jobs:
             |----------|----------|
             | Windows (x64) | `MashCAD-Windows-x64.7z` |
             | Linux (x86_64) | `MashCAD-Linux-x86_64.7z` |
+            | macOS (Intel x64) | `MashCAD-macOS-x64.zip` |
+
+            > **Apple Silicon (M1/M2/M3):** The macOS Intel build works via Rosetta 2.
 
             ### Installation
 
             **Windows:** Extract with 7-Zip and run `MashCAD.exe`
 
             **Linux:** Extract with `7z x MashCAD-Linux-x86_64.7z` and run `./MashCAD/MashCAD`
+
+            **macOS:** Extract and run `./MashCAD/MashCAD` (Rosetta 2 will be installed automatically on first run if needed)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

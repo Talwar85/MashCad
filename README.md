@@ -1,119 +1,88 @@
-# MashCAD - Open-Source CAD Application
+# MashCAD
 
-**MashCAD** ist eine protorypische CAD-Anwendung in Python.
-Kombiniert parametrisches 3D-Modeling mit einem intuitiven UI, gebaut auf Build123d (OpenCASCADE).
-Fokus der Entwicklung ist aktuell ein guter 2D-Sketcher und erste primitive 3D-Funktionen
+**EN:** Open-source parametric CAD application built with Python. Combines a constraint-based 2D sketcher with 3D modeling, powered by Build123d (OpenCASCADE).
 
-Es ist noch keine sinnvolle produktive Bedienbarkeit möglich.
+**DE:** Open-Source parametrische CAD-Anwendung in Python. Verbindet einen Constraint-basierten 2D-Sketcher mit 3D-Modellierung, basierend auf Build123d (OpenCASCADE).
 
-## Highlights
+> **Status:** Prototype / Early Development - Core features work, expect rough edges.
+>
+> **Status:** Prototyp / Frühe Entwicklung - Kernfunktionen funktionieren, aber noch nicht ausgereift.
 
-- ✅ **2D-Sketcher**: Gute Bedienbarkeit im 2D Sketcher.
-- ✅ **2D-Sketcher - Bearbeiten**: Fokus auf transparenz und leicht zugängliche Funktion. 
-- ✅ **Undo/Redo**: Vollständig für alle Transform/Edit-Operationen
-- ✅ **Shortcuts**: G (Move), R (Rotate), S (Scale) + Achsen-Locks (X/Y/Z)
-- ✅ **Transform-System**: Gizmo-basiert mit Live-Preview
+## Features / Funktionen
 
+### 2D Sketch Editor / 2D-Sketcher
+- **Drawing / Zeichnen:** Line, Rectangle, Circle (3 modes), Arc, Polygon, Slot, Spline
+- **Editing / Bearbeiten:** Move, Copy, Rotate, Mirror, Scale, Linear/Circular Pattern
+- **Modify / Modifizieren:** Trim, Extend, Offset, Fillet, Chamfer
+- **Constraints:** Horizontal, Vertical, Parallel, Perpendicular, Equal, Concentric, Tangent
+- **Generators:** Involute Gear, Star, Hex Nut
+- **Precision Input / Präzisionseingabe:** Tab for numeric entry, smart snapping
 
-## Features
-
-### Transform-System 
-- **Move/Rotate/Scale** mit interaktivem 3D-Gizmo
-- **Achsen-Locking** (X/Y/Z Keys während Drag)
-- **Ebenen-Constraints** (Shift+X/Y/Z für YZ/XZ/XY-Ebenen)
-- **Snap to Grid** (Ctrl-Modifier, konfigurierbar 0.1-10mm)
-- **Modale Numerische Eingabe** (G→5→Enter = Move 5mm, wie Blender)
-- **Mirror**: Planare Spiegelung (XY/XZ/YZ)
-- **Copy+Transform**: Shift+Drag für Kopien
-
-
-### Parametrisches Modeling
-- **Feature-History**: Alle Operationen im Browser sichtbar & editierbar
-- **Undo/Redo** (Ctrl+Z/Ctrl+Y) für Transforms, Extrudes, Features
-- **Doppelklick-Editing**: Feature im Browser doppelklicken → Parameter ändern
-- **Non-Destructive Workflow**: Transforms als Features gespeichert (nicht "gebacken")
-
-### 2D Sketch Editor
-- **Drawing Tools**: Line, Rectangle, Circle (3 modes), Arc, Polygon, Slot, Spline, Point
-- **Transform Tools**: Move, Copy, Rotate, Mirror, Scale, Linear/Circular Pattern
-- **Modify Tools**: Trim, Extend, Offset, Fillet, Chamfer
-- **Constraints**: Horizontal, Vertical, Parallel, Perpendicular, Equal, Concentric, Tangent
-- **Generators**: Involute Gear, Star, Hex Nut (M2-M14)
-- **Precision Input**: Tab-key für numerische Eingabe (Fusion360-style)
-- **Smart Snapping**: Endpoint, Midpoint, Center, Intersection, Grid
-
-### 3D Viewport (PyVista - Hardware Accelerated)
-- **Extrude mit Live Preview**
-- **Boolean Operations** (New Body, Join, Cut, Intersect)
-- **Face Detection** für overlapping Shapes
-- **ViewCube Navigation**
-- **Edge/Face Picking** für Fillet/Chamfer
-
+### 3D Modeling / 3D-Modellierung
+- **Extrude** with live preview / mit Live-Vorschau
+- **Boolean Operations:** New Body, Join, Cut, Intersect
+- **Push/Pull:** Direct face manipulation / Direkte Flächenmanipulation
+- **Features:** Fillet, Chamfer, Draft, Shell, Hole, Thread
+- **Transform:** Move, Rotate, Scale with 3D Gizmo (G/R/S shortcuts)
 
 ### Export
-- **STL** (3D Druck)
-- **STEP** (CAD-Austausch)
-- **DXF** (2D Sketches)
+- STL, STEP, 3MF, DXF
 
-#
+## Download
 
+**EN:** Pre-built executables: [Releases](../../releases)
+- Windows (x64)
+- Linux (x86_64)
+- macOS (Intel x64) - **also works on M1/M2 via Rosetta 2**
 
-## Tech-Stack
-- **GUI**: PySide6 (Qt6)
-- **3D-Rendering**: PyVista (VTK 9.2+)
-- **CAD-Kernel**: Build123d (OpenCASCADE-basiert)
-- **2D-Geometrie**: Shapely
-- **Mesh-Processing**: PyMeshLab, MeshLib, Gmsh (optional)
-- **ML (optional)**: PyTorch, ParSeNet
+**DE:** Fertige Builds: [Releases](../../releases)
+- Windows (x64)
+- Linux (x86_64)
+- macOS (Intel x64) - **funktioniert auch auf M1/M2 via Rosetta 2**
 
-## Development Setup
+## Development Setup / Entwicklungsumgebung
 
-**Voraussetzung:** [Miniconda](https://docs.conda.io/en/latest/miniconda.html) oder [Miniforge](https://github.com/conda-forge/miniforge)
+Requires / Benötigt [Miniforge](https://github.com/conda-forge/miniforge) or Miniconda.
 
 ```bash
-# Environment erstellen
 conda create -n cad_env -c conda-forge python=3.11 \
-    PySide6 pyvista pyvistaqt build123d ocp vtk \
+    pyside6 pyvista pyvistaqt build123d ocp vtk \
     numpy scipy shapely ezdxf loguru trimesh \
     matplotlib pillow lib3mf
 
-# Aktivieren
 conda activate cad_env
-
-# Optionale Dependencies (pip)
-pip install ocp-tessellate pyinstaller
-
-# Starten
+pip install ocp-tessellate
 python main.py
 ```
 
-> **Warum conda?** Build123d und lib3mf benötigen native Binaries (OpenCASCADE, lib3mf.dll), die nur über conda-forge korrekt installiert werden. Mit pip allein fehlen diese DLLs auf Windows.
+## Shortcuts / Tastenkürzel
 
-## Keyboard Shortcuts
+| Key / Taste | Action / Aktion |
+|-------------|-----------------|
+| G | Move / Verschieben |
+| R | Rotate / Drehen |
+| S | Scale / Skalieren |
+| M | Mirror / Spiegeln |
+| H | Hide/Show / Ausblenden/Anzeigen |
+| Tab | Numeric input (Sketch) / Numerische Eingabe |
+| Space | 3D peek (Sketch) / 3D-Vorschau |
 
+## Known Limitations / Bekannte Einschränkungen
 
+- Boolean operations can fail on complex geometry / Boolean-Operationen können bei komplexer Geometrie fehlschlagen
+- Some mesh operations are experimental / Einige Mesh-Operationen sind experimentell
 
-### Abgeschlossen
-- Proof of Concept. --> 2D Sketches
-- Proof of Concept. --> Extrude
-- Proof of Concept. --> 3D Transform
+### macOS Apple Silicon (M1/M2/M3)
 
+**EN:** Native arm64 builds are not available because the `ocp` package (OpenCASCADE Python bindings) doesn't exist for arm64 on conda-forge yet. However, the Intel build works fine on Apple Silicon via **Rosetta 2** - macOS will prompt to install it on first launch.
 
+**DE:** Native arm64 Builds sind nicht verfügbar, da das `ocp` Paket noch nicht für arm64 auf conda-forge existiert. Der Intel-Build funktioniert aber problemlos auf Apple Silicon via **Rosetta 2** - macOS fragt beim ersten Start nach der Installation.
 
-### ⚠️ Boolean Operations (Join/Cut/Intersect)
-- Boolean Operations können bei komplexen Geometrien fehlschlagen
-- Mesh-zu-BREP-Konvertierung schlagen aktuell immer fehl. Prüfe verschiedene ansätze
+## License / Lizenz
 
-## License
 MIT
 
 ## Credits
-- **CAD-Kernel**: [Build123d](https://github.com/gumyr/build123d) (OpenCASCADE)
-- **3D-Rendering**: [PyVista](https://github.com/pyvista/pyvista) (VTK)
-- **Mesh-Processing**: [PyMeshLab](https://github.com/cnr-isti-vclab/PyMeshLab), [MeshLib](https://github.com/MeshInspector/MeshLib)
-- **ML (geplant)**: [ParSeNet](https://github.com/Hippogriff/parsenet-codebase)
 
----
-
-**Version**: 2.7+ (Transform-System V3 abgeschlossen)
-**Last Updated**: 2026-01-16
+- [Build123d](https://github.com/gumyr/build123d) - CAD Kernel
+- [PyVista](https://github.com/pyvista/pyvista) - 3D Rendering
