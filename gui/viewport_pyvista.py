@@ -5074,8 +5074,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
-                        # Draft/PushPull mode: full-face blue highlight
-                        if self.draft_mode or self.pushpull_mode:
+                        # Full-face highlight für: Draft, PushPull, Texture, Thread, Hole
+                        if self.draft_mode or self.pushpull_mode or self.texture_face_mode or self.thread_mode or self.hole_mode:
                             self._draw_full_face_hover(body_id, rounded_normal, normal, cell_id)
                         else:
                             self._draw_body_face_highlight(pos, normal)
