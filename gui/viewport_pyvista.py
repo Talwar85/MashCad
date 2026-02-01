@@ -2533,16 +2533,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # Preview löschen falls vorhanden
                 if getattr(self, '_preview_actor', None):
                     self._clear_preview()
-                    logger.debug(f"Extrude-Mode: Preview cleared before pick")
 
                 # WICHTIG: State für neuen Drag vorbereiten
                 # Ohne diesen Reset kann der zweite Drag-Versuch fehlschlagen
                 self.is_dragging = False
-                logger.debug(f"Extrude-Mode: Preparing for new drag, is_dragging={self.is_dragging}")
 
             # Face-Selection (für Extrude etc.)
+            logger.debug(f"[PICK] extrude_mode={self.extrude_mode}, filter={self.active_selection_filter}")
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
-            logger.info(f"Viewport: Klick bei ({x}, {y}), hit_id={hit_id}, extrude_mode={self.extrude_mode}")
+            logger.debug(f"[PICK] Klick bei ({x}, {y}) → hit_id={hit_id}")
 
             if hit_id != -1:
                 # Multi-Select mit STRG/Shift
@@ -2565,18 +2564,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
                     if face:
                         self._cache_drag_direction_for_face_v2(face)
-                    logger.debug(f"Extrude: Face {hit_id} selected, _is_potential_drag=True")
 
                 self._draw_selectable_faces_from_detector()
 
                 # Signal für automatische Operation-Erkennung
-                logger.debug(f"Viewport: Emitting face_selected({hit_id})")
                 self.face_selected.emit(hit_id)
                 return True
             else:
                 # Kein Face getroffen - im Extrude-Mode State sauber halten
-                if self.extrude_mode:
-                    logger.debug(f"Extrude: Kein Face getroffen bei ({x}, {y})")
+                pass
 
         # --- MOUSE RELEASE ---
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
@@ -2584,7 +2580,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # NUR resetten wenn wir tatsächlich gedraggt haben
                 # Sonst bleibt _is_potential_drag True für den nächsten Drag-Versuch
                 if getattr(self, 'is_dragging', False):
-                    logger.debug("Extrude: Drag ended, resetting state")
                     self.is_dragging = False
                     self._is_potential_drag = False
                 # Bei einfachem Klick (ohne Drag) _is_potential_drag NICHT resetten
@@ -3104,11 +3099,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def set_extrude_mode(self, enabled):
         """Aktiviert den Modus und stellt sicher, dass der Detector visualisiert wird."""
         self.extrude_mode = enabled
-        
+
         # Reset Selection beim Start
         if enabled:
             self.selected_face_ids.clear()
-            self._drag_screen_vector = np.array([0.0, -1.0]) 
+            self._drag_screen_vector = np.array([0.0, -1.0])
+            # HINWEIS: Detector wird von _extrude_dialog() via _update_detector() befüllt
+            # NICHT hier _update_detector_for_picking() aufrufen - das löscht Sketch-Profile!
             # Zeichnen anstoßen (initial leer, da nichts selektiert)
             self._draw_selectable_faces_from_detector()
             request_render(self.plotter)
@@ -4015,6 +4012,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         if body_id in self.bodies:
             self.bodies[body_id]['body'] = body_obj
 
+            # FIX Phase 7: Detector aktualisieren wenn Selection-Mode aktiv
+            # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)
+            if getattr(self, 'edge_select_mode', False) or getattr(self, 'face_selection_mode', False):
+                self._update_detector_for_picking()
+
     def refresh_texture_previews(self, body_id: str = None):
         """
         Aktualisiert alle Texture-Previews für einen Body oder alle Bodies.
@@ -4907,13 +4909,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                         found_match = True
                                         break
                                 if not found_match:
-                                    # DEBUG: Zeige verfügbare ocp_face_ids für diesen Body
-                                    available_ids = [
-                                        getattr(f, 'ocp_face_id', None)
-                                        for f in self.detector.selection_faces
-                                        if f.domain_type == "body_face" and f.owner_id == picked_body_id
-                                    ]
-                                    logger.warning(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
+                                    # Throttling: Nur einmal pro Body warnen, nicht bei jedem Hover
+                                    warn_key = f"{picked_body_id}_{ocp_face_id}"
+                                    if not hasattr(self, '_selection_face_warnings'):
+                                        self._selection_face_warnings = set()
+                                    if warn_key not in self._selection_face_warnings:
+                                        self._selection_face_warnings.add(warn_key)
+                                        available_ids = [
+                                            getattr(f, 'ocp_face_id', None)
+                                            for f in self.detector.selection_faces
+                                            if f.domain_type == "body_face" and f.owner_id == picked_body_id
+                                        ]
+                                        logger.warning(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
 
                     # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
                     if not all_hits:
@@ -4943,14 +4950,21 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # --- 2. SKETCH FACES (Analytisches Picking) ---
         # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch
 
+        sketch_faces = [f for f in self.detector.selection_faces if f.domain_type.startswith("sketch")]
+        if sketch_faces:
+            logger.debug(f"[SKETCH PICK] Prüfe {len(sketch_faces)} Sketch-Faces, Filter={selection_filter}, ray_origin={ray_origin[:2]}, ray_dir={ray_dir[:2]}")
+
         for face in self.detector.selection_faces:
             if face.domain_type.startswith("sketch") and face.domain_type in selection_filter:
                 hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
                 if hit is None:
+                    logger.debug(f"[SKETCH PICK] Face {face.id}: Ray-Plane intersection returned None")
                     continue
 
                 # Prüfen ob Punkt im 2D-Polygon liegt
                 proj_x, proj_y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
+                bounds = face.shapely_poly.bounds
+                logger.debug(f"[SKETCH PICK] Face {face.id}: hit={hit[:2]}, proj=({proj_x:.1f}, {proj_y:.1f}), bounds={bounds}")
 
                 # Performance: Erst Bounding Box Check im 2D
                 minx, miny, maxx, maxy = face.shapely_poly.bounds

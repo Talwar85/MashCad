@@ -36,7 +36,7 @@ if HAS_OCP:
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_FACE
     from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepGProp import brepgprop
+    from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
 
 

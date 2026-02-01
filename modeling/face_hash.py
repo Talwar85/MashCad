@@ -26,10 +26,10 @@ from loguru import logger
 try:
     from OCP.TopoDS import TopoDS_Face, TopoDS
     from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepGProp import brepgprop
+    from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
     from OCP.Bnd import Bnd_Box
-    from OCP.BRepBndLib import brepbndlib
+    from OCP.BRepBndLib import BRepBndLib
     from OCP.GeomAbs import (
         GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone,
         GeomAbs_Sphere, GeomAbs_Torus, GeomAbs_BSplineSurface,
@@ -87,7 +87,7 @@ def get_face_center(face: 'TopoDS_Face') -> Tuple[float, float, float]:
 
     try:
         props = GProp_GProps()
-        brepgprop.SurfaceProperties(face, props)
+        BRepGProp.SurfaceProperties_s(face, props)
         center = props.CentreOfMass()
         return (center.X(), center.Y(), center.Z())
     except Exception as e:
@@ -110,7 +110,7 @@ def get_face_area(face: 'TopoDS_Face') -> float:
 
     try:
         props = GProp_GProps()
-        brepgprop.SurfaceProperties(face, props)
+        BRepGProp.SurfaceProperties_s(face, props)
         return props.Mass()
     except Exception as e:
         logger.trace(f"[FaceHash] get_face_area failed: {e}")
@@ -165,7 +165,7 @@ def get_face_bounding_box(face: 'TopoDS_Face') -> Tuple[float, float, float, flo
 
     try:
         bbox = Bnd_Box()
-        brepbndlib.Add(face, bbox)
+        BRepBndLib.Add_s(face, bbox)
         xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
         return (xmin, ymin, zmin, xmax, ymax, zmax)
     except Exception as e:
