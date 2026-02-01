@@ -2671,8 +2671,8 @@ class MainWindow(QMainWindow):
             shaft_dia = dia + tolerance_offset
             shaft = bd.Pos(0, 0, -length) * bd.extrude(bd.Circle(shaft_dia / 2), length)
 
-            # 3. Fuse head + shaft
-            bolt_solid = bd.fuse(head, shaft)
+            # 3. Fuse head + shaft (Build123d native operator)
+            bolt_solid = head + shaft
 
             body = Body(name=f"Bolt_M{dia:.0f}x{pitch}")
             body._build123d_solid = bolt_solid
@@ -2728,7 +2728,8 @@ class MainWindow(QMainWindow):
             core_dia = dia - 1.0825 * pitch + tolerance_offset
             hole = bd.extrude(bd.Circle(core_dia / 2), nut_h)
 
-            nut_solid = bd.cut(hex_body, hole)
+            # Build123d native operator für Cut
+            nut_solid = hex_body - hole
 
             body = Body(name=f"Nut_M{dia:.0f}")
             body._build123d_solid = nut_solid

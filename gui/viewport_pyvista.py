@@ -2204,6 +2204,31 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             return False
 
+        # --- THREAD MODE (Body-Face picking for thread on cylindrical faces) ---
+        if self.thread_mode:
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                buttons = event.buttons()
+                if buttons == Qt.NoButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+                return False  # Let VTK handle camera
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    if self.hovered_body_face is not None:
+                        self._click_body_face()
+                        return True
+                    return False
+                return False
+
+            if event_type == QEvent.MouseButtonRelease:
+                return False
+
+            return False
+
         # --- DRAFT MODE (Body-Face picking for draft) ---
         # --- SPLIT MODE (body already selected, drag/keyboard) ---
         if self.split_mode and self._split_body_id is not None:
