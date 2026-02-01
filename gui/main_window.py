@@ -4733,11 +4733,27 @@ class MainWindow(QMainWindow):
             from OCP.TopAbs import TopAbs_WIRE, TopAbs_EDGE
             from OCP.gp import gp_Pnt, gp_Vec
             from OCP.TopoDS import TopoDS
-            from OCP.BRepAdaptor import BRepAdaptor_Curve
-            from OCP.GeomAbs import GeomAbs_Line
+            from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+            from OCP.GeomAbs import GeomAbs_Line, GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere
             from OCP.BRep import BRep_Tool as BRT
             from OCP.TopAbs import TopAbs_REVERSED
             import numpy as np
+
+            # 0. Prüfe Flächentyp - nur planare Flächen können sauber zu 2D Polygon werden
+            surface_adaptor = BRepAdaptor_Surface(face.wrapped)
+            surface_type = surface_adaptor.GetType()
+
+            surface_type_names = {
+                GeomAbs_Plane: "Plane",
+                GeomAbs_Cylinder: "Cylinder",
+                GeomAbs_Cone: "Cone",
+                GeomAbs_Sphere: "Sphere",
+            }
+            type_name = surface_type_names.get(surface_type, f"Other({surface_type})")
+
+            if surface_type != GeomAbs_Plane:
+                logger.info(f"Face ist {type_name} - Polygon-Extraktion nicht möglich (nur für Planes)")
+                return None, None, None, None, None
 
             # 1. Hole Face-Surface für Koordinatentransformation
             surface = BRep_Tool.Surface_s(face.wrapped)
@@ -4770,10 +4786,29 @@ class MainWindow(QMainWindow):
             origin = np.array(plane_origin)
             normal = np.array(plane_normal)
             x_dir = np.array(plane_x_dir)
-            normal = normal / np.linalg.norm(normal)
-            x_dir = x_dir / np.linalg.norm(x_dir)
+
+            # WICHTIG: Normalisieren!
+            normal_len = np.linalg.norm(normal)
+            x_len = np.linalg.norm(x_dir)
+
+            if normal_len < 1e-10 or x_len < 1e-10:
+                logger.warning(f"Degeneriertes Koordinatensystem: normal_len={normal_len}, x_len={x_len}")
+                return None, None, None, None, None
+
+            normal = normal / normal_len
+            x_dir = x_dir / x_len
             y_dir = np.cross(normal, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
+            y_len = np.linalg.norm(y_dir)
+
+            if y_len < 1e-10:
+                logger.warning(f"Degenerierte Y-Achse (normal und x_dir parallel?)")
+                return None, None, None, None, None
+
+            y_dir = y_dir / y_len
+
+            # KRITISCH: plane_normal muss normalisiert zurückgegeben werden!
+            plane_normal = tuple(normal.tolist())
+            plane_x_dir = tuple(x_dir.tolist())
 
             def _add_unique(pt_list, new_pt, tol=1e-8):
                 """Fügt Punkt hinzu, wenn er nicht fast-identisch mit dem letzten ist."""
@@ -4831,6 +4866,13 @@ class MainWindow(QMainWindow):
                 if len(points_2d) > 2 and (points_2d[-1][0] - points_2d[0][0])**2 + (points_2d[-1][1] - points_2d[0][1])**2 < 1e-10:
                     points_2d.pop()
 
+                # Debug: Zeige 3D→2D Transformation
+                if len(points_3d) > 0:
+                    logger.trace(f"  Wire: {len(points_3d)} 3D pts → {len(points_2d)} 2D pts")
+                    if len(points_3d) <= 5:
+                        for i, (p3, p2) in enumerate(zip(points_3d[:5], points_2d[:5])):
+                            logger.trace(f"    [{i}] 3D={p3} → 2D={p2}")
+
                 return points_2d
 
             # 4. Alle Wires extrahieren (outer + inner holes)
@@ -4878,13 +4920,34 @@ class MainWindow(QMainWindow):
 
                 plane_y_dir = tuple(y_dir.tolist())
 
+                # Detailliertes Logging für Debugging
                 logger.debug(f"  Koordinatensystem bei Extraktion:")
+                logger.debug(f"    origin={plane_origin}")
                 logger.debug(f"    x_dir={plane_x_dir}")
                 logger.debug(f"    y_dir={plane_y_dir}")
                 logger.debug(f"    normal={plane_normal}")
 
+                # Polygon-Validierung
                 n_interiors = len(list(polygon.interiors)) if hasattr(polygon, 'interiors') else 0
-                logger.info(f"✅ Face-Polygon extrahiert: {len(exterior)} Punkte, {n_interiors} Löcher, Area={polygon.area:.1f}")
+                poly_area = polygon.area
+
+                if poly_area < 1e-6:
+                    # Analysiere warum Fläche 0 ist
+                    logger.warning(f"⚠️ Polygon hat Area≈0! Analysiere...")
+                    if len(exterior) >= 3:
+                        # Zeige erste/letzte Punkte
+                        logger.warning(f"  Erste 3 Punkte: {exterior[:3]}")
+                        logger.warning(f"  Letzte 3 Punkte: {exterior[-3:]}")
+                        # Prüfe Bounding Box
+                        xs = [p[0] for p in exterior]
+                        ys = [p[1] for p in exterior]
+                        dx = max(xs) - min(xs)
+                        dy = max(ys) - min(ys)
+                        logger.warning(f"  2D BBox: dx={dx:.4f}, dy={dy:.4f}")
+                        if dx < 1e-6 or dy < 1e-6:
+                            logger.warning(f"  → Polygon ist quasi-linear (alle Punkte auf einer Linie)!")
+
+                logger.info(f"✅ Face-Polygon extrahiert: {len(exterior)} Punkte, {n_interiors} Löcher, Area={poly_area:.1f}")
                 return polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir
 
             except Exception as poly_err:
@@ -5050,31 +5113,138 @@ class MainWindow(QMainWindow):
             # berechnet height bereits korrekt basierend auf der Drag-Richtung.
 
             # --- SCHRITT B: Face-Kontur als Polygon extrahieren ---
-            # KEIN FALLBACK! Push/Pull MUSS parametrisch sein.
+            # Versuche Polygon zu extrahieren für parametrische Speicherung
+            # Bei Fehlschlag: Extrusion läuft trotzdem, aber weniger parametrisch
             polygon, plane_origin, plane_normal, plane_x_dir, plane_y_dir = self._extract_face_as_polygon(best_face)
 
             if polygon is None:
-                logger.error("FEHLER: Konnte Face-Polygon nicht extrahieren. Push/Pull abgebrochen.")
-                return False
+                # Kein Problem für BRepFeat - das arbeitet direkt mit der Face
+                logger.debug("Polygon-Extraktion nicht möglich - BRepFeat nutzt Face direkt")
+                # Fallback: Nutze Face-Center und Normal als Referenz
+                face_center = best_face.center()
+                face_normal_at_center = best_face.normal_at(face_center)
+                plane_origin = (face_center.X, face_center.Y, face_center.Z)
+                plane_normal = (face_normal_at_center.X, face_normal_at_center.Y, face_normal_at_center.Z)
 
             # Extrusions-Werkzeug erstellen
-            # NEU: Verwende OCP's BRepPrimAPI_MakePrism direkt statt build123d's extrude()
-            # Dies stellt sicher, dass innere Wires (Löcher) korrekt erhalten bleiben.
+            # FÜR JOIN: BRepFeat_MakePrism (lokale Op, KEINE neuen Nähte - erhält Zylinder!)
+            # FÜR ANDERE: BRepPrimAPI_MakePrism + Boolean
+
+            from OCP.gp import gp_Vec, gp_Dir
+            from build123d import Solid
+
+            face_center = best_face.center()
+            face_normal = best_face.normal_at(face_center)
+
+            new_geo = None
+
+            # === METHODE 1: BRepFeat_MakePrism für Join (BEVORZUGT - keine Nähte!) ===
+            if operation == "Join":
+                try:
+                    from OCP.BRepFeat import BRepFeat_MakePrism
+
+                    direction = gp_Dir(face_normal.X, face_normal.Y, face_normal.Z)
+                    fuse_mode = 1 if height > 0 else 0  # 1=Fuse, 0=Cut
+                    abs_height = abs(height)
+
+                    logger.debug(f"BRepFeat_MakePrism: direction=({face_normal.X:.3f}, {face_normal.Y:.3f}, {face_normal.Z:.3f}), fuse_mode={fuse_mode}, height={abs_height}")
+
+                    prism = BRepFeat_MakePrism()
+                    prism.Init(
+                        source_body._build123d_solid.wrapped,  # Base shape
+                        best_face.wrapped,                      # Profile face
+                        best_face.wrapped,                      # Sketch face (same)
+                        direction,                              # Direction
+                        fuse_mode,                              # Fuse mode
+                        False                                   # Modify (False = copy)
+                    )
+                    prism.Perform(abs_height)
+
+                    is_done = prism.IsDone()
+                    logger.debug(f"BRepFeat_MakePrism.IsDone() = {is_done}")
+
+                    if is_done:
+                        result_shape = prism.Shape()
+
+                        # UnifySameDomain anwenden um koplanare Faces zu vereinen
+                        # (BRepFeat erstellt eine Kante zwischen alter und neuer Geometrie)
+                        try:
+                            from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+                            upgrader = ShapeUpgrade_UnifySameDomain(result_shape, True, True, True)
+                            upgrader.SetLinearTolerance(0.01)   # 0.01mm
+                            upgrader.SetAngularTolerance(0.01)  # ~0.5°
+                            upgrader.Build()
+                            unified_shape = upgrader.Shape()
+                            if unified_shape and not unified_shape.IsNull():
+                                result_shape = unified_shape
+                                logger.debug("BRepFeat: UnifySameDomain angewendet")
+                        except Exception as unify_err:
+                            logger.debug(f"BRepFeat UnifySameDomain: {unify_err}")
+
+                        new_solid = Solid(result_shape)
+
+                        is_valid = new_solid.is_valid()
+                        logger.debug(f"BRepFeat result: is_valid={is_valid}, volume={new_solid.volume:.2f}")
+
+                        if is_valid:
+                            # ERFOLG! Direkt das Ergebnis verwenden - keine Boolean nötig!
+                            logger.info(f"✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)")
+
+                            # Feature erstellen
+                            from modeling import ExtrudeFeature
+                            from gui.commands.feature_commands import AddFeatureCommand
+
+                            feat = ExtrudeFeature(
+                                sketch=None,
+                                distance=height,
+                                operation=operation,
+                                name=f"Push/Pull ({operation})",
+                                precalculated_polys=[polygon] if polygon is not None else None,
+                                plane_origin=plane_origin,
+                                plane_normal=plane_normal,
+                                plane_x_dir=plane_x_dir if polygon is not None else None,
+                                plane_y_dir=plane_y_dir if polygon is not None else None
+                            )
+
+                            # Body direkt aktualisieren (KEIN Boolean!)
+                            source_body._build123d_solid = new_solid
+                            source_body.invalidate_mesh()
+
+                            # skip_rebuild=True weil BRepFeat das Solid bereits aktualisiert hat
+                            cmd = AddFeatureCommand(source_body, feat, self, description=f"Push/Pull ({operation})", skip_rebuild=True)
+                            self.undo_stack.push(cmd)
+
+                            # Face-Zählung für Debug
+                            from OCP.TopExp import TopExp_Explorer
+                            from OCP.TopAbs import TopAbs_FACE
+                            face_count = 0
+                            exp = TopExp_Explorer(new_solid.wrapped, TopAbs_FACE)
+                            while exp.More():
+                                face_count += 1
+                                exp.Next()
+                            logger.info(f"✅ Push/Pull Join: {face_count} Faces (BRepFeat - keine Nähte)")
+
+                            return True
+                        else:
+                            logger.warning(f"BRepFeat_MakePrism: Ergebnis ungültig, Fallback auf Boolean")
+                    else:
+                        logger.warning(f"BRepFeat_MakePrism: IsDone()=False, Fallback auf Boolean")
+
+                except Exception as feat_err:
+                    logger.warning(f"BRepFeat_MakePrism fehlgeschlagen: {feat_err}, Fallback auf Boolean")
+                    import traceback
+                    traceback.print_exc()
+
+            # === METHODE 2: BRepPrimAPI_MakePrism + Boolean (für Cut, New Body, oder Fallback) ===
             try:
                 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-                from OCP.gp import gp_Vec
-                from build123d import Solid
 
-                # Normale aus dem Face für Extrusions-Richtung
-                face_center = best_face.center()
-                face_normal = best_face.normal_at(face_center)
                 extrude_vec = gp_Vec(
                     face_normal.X * height,
                     face_normal.Y * height,
                     face_normal.Z * height
                 )
 
-                # OCP-basierte Extrusion (erhält alle Wires!)
                 prism_maker = BRepPrimAPI_MakePrism(best_face.wrapped, extrude_vec)
                 prism_maker.Build()
 
@@ -5083,23 +5253,11 @@ class MainWindow(QMainWindow):
 
                 prism_shape = prism_maker.Shape()
                 new_geo = Solid(prism_shape)
-                logger.info(f"✅ OCP-Extrusion erfolgreich: volume={new_geo.volume:.2f}")
+                logger.info(f"✅ OCP-Extrusion (Boolean-Pfad): volume={new_geo.volume:.2f}")
 
             except Exception as ocp_extrude_err:
                 logger.warning(f"OCP-Extrusion fehlgeschlagen: {ocp_extrude_err}, Fallback auf build123d")
                 new_geo = extrude(best_face, amount=height)
-
-            # DEBUG: Prüfe extrudierte Geometrie
-            try:
-                from OCP.TopAbs import TopAbs_FACE
-                ext_face_count = 0
-                ext_exp = TopExp_Explorer(new_geo.wrapped, TopAbs_FACE)
-                while ext_exp.More():
-                    ext_face_count += 1
-                    ext_exp.Next()
-                logger.info(f"Extrudierte Geometrie: {ext_face_count} Faces, volume={new_geo.volume:.2f}")
-            except Exception as ext_err:
-                logger.debug(f"Extrude-Debug fehlgeschlagen: {ext_err}")
 
             # --- SCHRITT C: Multi-Body Operationen ---
 
@@ -5121,11 +5279,11 @@ class MainWindow(QMainWindow):
                     distance=height,
                     operation="New Body",
                     name="Push/Pull (New Body)",
-                    precalculated_polys=[polygon],
+                    precalculated_polys=[polygon] if polygon is not None else None,
                     plane_origin=plane_origin,
                     plane_normal=plane_normal,
-                    plane_x_dir=plane_x_dir,
-                    plane_y_dir=plane_y_dir
+                    plane_x_dir=plane_x_dir if polygon is not None else None,
+                    plane_y_dir=plane_y_dir if polygon is not None else None
                 )
                 new_body.features.append(feat)
                 new_body._build123d_solid = new_geo
@@ -5164,26 +5322,44 @@ class MainWindow(QMainWindow):
                         new_solid = old_solid - new_geo
                     elif operation == "Join":
                         new_solid = old_solid + new_geo
+                    elif operation == "Intersect":
+                        new_solid = old_solid & new_geo
 
-                        # FIX: UnifySameDomain sofort nach Join mit relaxierten Toleranzen
-                        # Dies verschmilzt koplanare Faces und verhindert interne Kanten
+                    # FIX: UnifySameDomain nach Boolean-Op - verschmilzt koplanare/kozylindrische Faces
+                    if new_solid is not None:
                         try:
                             from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+                            from OCP.TopExp import TopExp_Explorer
+                            from OCP.TopAbs import TopAbs_FACE
                             from build123d import Solid
+
                             ocp_shape = new_solid.wrapped
+
+                            # Zähle Faces vorher
+                            face_count_before = 0
+                            exp = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+                            while exp.More():
+                                face_count_before += 1
+                                exp.Next()
+
                             upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
-                            upgrader.SetLinearTolerance(0.01)   # 0.01mm - relaxierter als Standard
-                            upgrader.SetAngularTolerance(0.01)  # ~0.5° - relaxierter als Standard
+                            # Erhöhte Toleranzen für besseres Zylinder-Merging
+                            upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger
+                            upgrader.SetAngularTolerance(0.1)  # ~5.7° - für zylindrische Flächen
                             upgrader.Build()
                             unified = upgrader.Shape()
                             if unified and not unified.IsNull():
+                                # Zähle Faces nachher
+                                face_count_after = 0
+                                exp = TopExp_Explorer(unified, TopAbs_FACE)
+                                while exp.More():
+                                    face_count_after += 1
+                                    exp.Next()
                                 new_solid = Solid(unified)
-                                logger.debug("Post-Join UnifySameDomain angewendet")
+                                if face_count_before != face_count_after:
+                                    logger.debug(f"UnifySameDomain ({operation}): {face_count_before} → {face_count_after} Faces")
                         except Exception as unify_err:
-                            logger.debug(f"Post-Join UnifySameDomain: {unify_err}")
-
-                    elif operation == "Intersect":
-                        new_solid = old_solid & new_geo
+                            logger.trace(f"UnifySameDomain ({operation}): {unify_err}")
 
                     # ShapeList → größtes Solid nehmen
                     if hasattr(new_solid, '__iter__') and not hasattr(new_solid, 'is_null'):
@@ -5204,11 +5380,11 @@ class MainWindow(QMainWindow):
                             distance=height,
                             operation=operation,
                             name=f"Push/Pull ({operation})",
-                            precalculated_polys=[polygon],
+                            precalculated_polys=[polygon] if polygon is not None else None,
                             plane_origin=plane_origin,
                             plane_normal=plane_normal,
-                            plane_x_dir=plane_x_dir,
-                            plane_y_dir=plane_y_dir
+                            plane_x_dir=plane_x_dir if polygon is not None else None,
+                            plane_y_dir=plane_y_dir if polygon is not None else None
                         )
 
                         # KRITISCH: AddFeatureCommand für korrektes Undo/Redo!

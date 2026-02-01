@@ -777,10 +777,19 @@ class Body:
             except:
                 pass  # Solid hat kein wrapped (selten)
 
-    def add_feature(self, feature: Feature):
-        """Feature hinzufügen und Geometrie neu berechnen"""
+    def add_feature(self, feature: Feature, rebuild: bool = True):
+        """Feature hinzufügen und optional Geometrie neu berechnen.
+
+        Args:
+            feature: Das Feature das hinzugefügt werden soll
+            rebuild: Wenn False, wird das Feature nur zur Liste hinzugefügt
+                     ohne _rebuild() aufzurufen. Nützlich wenn das Solid
+                     bereits durch eine direkte Operation (z.B. BRepFeat)
+                     aktualisiert wurde.
+        """
         self.features.append(feature)
-        self._rebuild()
+        if rebuild:
+            self._rebuild()
     
     def remove_feature(self, feature: Feature):
         if feature in self.features:
@@ -2408,7 +2417,10 @@ class Body:
             prism.Perform(abs_dist)
 
             if prism.IsDone():
-                result = Solid(prism.Shape())
+                result_shape = prism.Shape()
+                result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
+
+                result = Solid(result_shape)
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.success(f"PushPull via BRepFeat_MakePrism erfolgreich")
                     return result
@@ -2446,7 +2458,10 @@ class Body:
             boolean.Build()
 
             if boolean.IsDone():
-                result = Solid(boolean.Shape())
+                result_shape = boolean.Shape()
+                result_shape = self._unify_same_domain(result_shape, "Extrude+Boolean")
+
+                result = Solid(result_shape)
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.success(f"PushPull via Extrude+Boolean erfolgreich")
                     return result
@@ -2455,6 +2470,57 @@ class Body:
         except Exception as e:
             logger.error(f"PushPull Fallback fehlgeschlagen: {e}")
             raise
+
+    def _unify_same_domain(self, shape, context: str = ""):
+        """
+        Vereinigt zusammenhängende Flächen mit gleicher Geometrie.
+
+        Besonders wichtig für:
+        - Planare Flächen die durch Boolean-Ops entstanden sind
+        - Zylindrische Flächen die durch Extrusion entstanden sind
+
+        Args:
+            shape: OCP TopoDS_Shape
+            context: Beschreibung für Logging
+
+        Returns:
+            Vereinigtes Shape (oder Original wenn Vereinigung fehlschlägt)
+        """
+        try:
+            from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+
+            # Zähle Faces vorher
+            face_count_before = 0
+            exp = TopExp_Explorer(shape, TopAbs_FACE)
+            while exp.More():
+                face_count_before += 1
+                exp.Next()
+
+            # UnifySameDomain mit erhöhten Toleranzen für Zylinder
+            upgrader = ShapeUpgrade_UnifySameDomain(shape, True, True, True)
+            upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger für Zylinder-Segmente
+            upgrader.SetAngularTolerance(0.1)  # ~5.7° - erlaubt Merge von Zylinder-Facetten
+            upgrader.Build()
+            unified = upgrader.Shape()
+
+            if unified and not unified.IsNull():
+                # Zähle Faces nachher
+                face_count_after = 0
+                exp = TopExp_Explorer(unified, TopAbs_FACE)
+                while exp.More():
+                    face_count_after += 1
+                    exp.Next()
+
+                if face_count_before != face_count_after:
+                    logger.debug(f"UnifySameDomain ({context}): {face_count_before} → {face_count_after} Faces")
+                return unified
+
+            return shape
+        except Exception as e:
+            logger.trace(f"UnifySameDomain ({context}): {e}")
+            return shape
 
     def _compute_nsided_patch(self, feature: 'NSidedPatchFeature', current_solid):
         """
@@ -3930,7 +3996,7 @@ class Body:
                 elif not heal_result.success:
                     logger.warning(f"⚠️ Auto-Healing fehlgeschlagen: {heal_result.message}")
 
-            # Phase 9: UnifySameDomain - Koplanare Faces vereinigen
+            # Phase 9: UnifySameDomain - Koplanare/kozylindrische Faces vereinigen
             # Das reduziert die Face-Anzahl nach Boolean-Operationen erheblich
             try:
                 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -3940,6 +4006,9 @@ class Body:
                 n_faces_before = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
 
                 upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
+                # Erhöhte Toleranzen für besseres Zylinder-Merging
+                upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger
+                upgrader.SetAngularTolerance(0.1)  # ~5.7° - für zylindrische Flächen
                 upgrader.Build()
                 unified_shape = upgrader.Shape()
 
@@ -3948,7 +4017,7 @@ class Body:
                     n_faces_after = len(unified_solid.faces()) if hasattr(unified_solid, 'faces') else 0
 
                     if n_faces_after < n_faces_before:
-                        logger.debug(f"UnifySameDomain: {n_faces_before} → {n_faces_after} Faces")
+                        logger.debug(f"UnifySameDomain (Rebuild): {n_faces_before} → {n_faces_after} Faces")
                         current_solid = unified_solid
             except Exception as e:
                 logger.debug(f"UnifySameDomain übersprungen: {e}")
@@ -4418,7 +4487,13 @@ class Body:
                     try:
                         # DEBUG: Polygon-Info loggen
                         n_interiors = len(list(poly.interiors)) if hasattr(poly, 'interiors') else 0
-                        logger.debug(f"  Polygon {idx}: area={poly.area:.1f}, interiors={n_interiors}")
+                        poly_area = poly.area if hasattr(poly, 'area') else 0
+                        logger.debug(f"  Polygon {idx}: area={poly_area:.1f}, interiors={n_interiors}")
+
+                        # VALIDIERUNG: Degenerierte Polygone überspringen
+                        if poly_area < 1e-6:
+                            logger.warning(f"  ⚠️ Polygon {idx} hat Area≈0 - überspringe (degeneriert)")
+                            continue
                         
                         # 1. Außenkontur
                         outer_coords = list(poly.exterior.coords)[:-1]  # Ohne Schlusspunkt

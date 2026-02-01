@@ -4877,7 +4877,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 pos = np.array(picker.GetPickPosition())
                 normal = np.array(picker.GetPickNormal())
                 body_dist = np.linalg.norm(pos - ray_start)
-                logger.debug(f"VTK Pick: cell_id={cell_id}, pos={pos}, normal={normal}")
 
                 # SCHRITT 1: Actor → Body-ID zuordnen (actors sind NAMEN, nicht Objekte!)
                 picked_body_id = None
@@ -4904,7 +4903,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     if (face.domain_type == "body_face" and
                                         face.owner_id == picked_body_id and
                                         getattr(face, 'ocp_face_id', None) == ocp_face_id):
-                                        logger.debug(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id}")
+                                        logger.trace(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id}")
                                         all_hits.append((5, body_dist, face.id))
                                         found_match = True
                                         break
@@ -4944,7 +4943,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     best_face = face
 
                         if best_face:
-                            logger.debug(f"Pick HEURISTIK: face.id={best_face.id}")
+                            logger.trace(f"Pick HEURISTIK: face.id={best_face.id}")
                             all_hits.append((5, body_dist, best_face.id))
 
         # --- 2. SKETCH FACES (Analytisches Picking) ---
@@ -4952,19 +4951,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         sketch_faces = [f for f in self.detector.selection_faces if f.domain_type.startswith("sketch")]
         if sketch_faces:
-            logger.debug(f"[SKETCH PICK] Prüfe {len(sketch_faces)} Sketch-Faces, Filter={selection_filter}, ray_origin={ray_origin[:2]}, ray_dir={ray_dir[:2]}")
+            logger.trace(f"[SKETCH PICK] Prüfe {len(sketch_faces)} Sketch-Faces, Filter={selection_filter}")
 
         for face in self.detector.selection_faces:
             if face.domain_type.startswith("sketch") and face.domain_type in selection_filter:
                 hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
                 if hit is None:
-                    logger.debug(f"[SKETCH PICK] Face {face.id}: Ray-Plane intersection returned None")
                     continue
 
                 # Prüfen ob Punkt im 2D-Polygon liegt
                 proj_x, proj_y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
-                bounds = face.shapely_poly.bounds
-                logger.debug(f"[SKETCH PICK] Face {face.id}: hit={hit[:2]}, proj=({proj_x:.1f}, {proj_y:.1f}), bounds={bounds}")
 
                 # Performance: Erst Bounding Box Check im 2D
                 minx, miny, maxx, maxy = face.shapely_poly.bounds

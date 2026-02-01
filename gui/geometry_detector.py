@@ -781,9 +781,9 @@ class GeometryDetector:
         if not (face_info and len(face_info) > 0):
             cache_key = (mesh_key, 0)
             self._body_face_cache[body_id] = (cache_key, list(new_faces))
-            logger.debug(f"Body {body_id}: {len(new_faces)} Faces gecacht")
+            logger.trace(f"Body {body_id}: {len(new_faces)} Faces gecacht")
         else:
-            logger.debug(f"Body {body_id}: {len(new_faces)} Faces (mit B-Rep Normalen, nicht gecacht)")
+            logger.trace(f"Body {body_id}: {len(new_faces)} Faces (mit B-Rep Normalen, nicht gecacht)")
 
     def _process_body_mesh_exact(self, body_id, vtk_mesh):
         """Exakte Face-Erkennung über OCP face_id in cell_data."""
@@ -793,7 +793,7 @@ class GeometryDetector:
 
         unique_face_ids = np.unique(face_ids)
         face_info = getattr(self, '_current_face_info', None)
-        logger.debug(f"Body {body_id}: {len(unique_face_ids)} Faces (EXAKT via face_id)")
+        logger.trace(f"Body {body_id}: {len(unique_face_ids)} Faces (EXAKT via face_id)")
 
         for ocp_face_id in unique_face_ids:
             cell_mask = (face_ids == ocp_face_id)
@@ -811,7 +811,7 @@ class GeometryDetector:
                 norm_len = np.linalg.norm(final_normal)
                 if norm_len > 0.001:
                     final_normal = final_normal / norm_len
-                logger.debug(f"Face {ocp_face_id}: Using B-Rep normal {tuple(final_normal)}")
+                logger.trace(f"Face {ocp_face_id}: Using B-Rep normal {tuple(final_normal)}")
             else:
                 # Fallback: Durchschnittliche Mesh-Normale
                 group_normals = cell_normals[cell_mask]
@@ -819,7 +819,7 @@ class GeometryDetector:
                 norm_len = np.linalg.norm(final_normal)
                 if norm_len > 0.001:
                     final_normal = final_normal / norm_len
-                logger.debug(f"Face {ocp_face_id}: Using MESH normal (fallback) {tuple(final_normal)}")
+                logger.trace(f"Face {ocp_face_id}: Using MESH normal (fallback) {tuple(final_normal)}")
 
             group_centers = all_cell_centers[cell_mask]
             center = np.mean(group_centers, axis=0)

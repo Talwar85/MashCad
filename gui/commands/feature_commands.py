@@ -13,13 +13,15 @@ class AddFeatureCommand(QUndoCommand):
     Works with: ExtrudeFeature, FilletFeature, ChamferFeature, etc.
     """
 
-    def __init__(self, body, feature, main_window, description=None):
+    def __init__(self, body, feature, main_window, description=None, skip_rebuild=False):
         """
         Args:
             body: Body instance to modify
             feature: Feature to add (ExtrudeFeature, FilletFeature, etc.)
             main_window: MainWindow reference for UI updates
             description: Optional description for undo menu
+            skip_rebuild: Wenn True, wird kein Rebuild gemacht (z.B. wenn BRepFeat
+                          das Solid bereits direkt aktualisiert hat)
         """
         desc = description or f"Add {feature.name}"
         super().__init__(desc)
@@ -27,6 +29,7 @@ class AddFeatureCommand(QUndoCommand):
         self.feature = feature
         self.main_window = main_window
         self._first_redo = True  # Track if this is first redo (push adds feature)
+        self._skip_rebuild = skip_rebuild
 
     def redo(self):
         """
@@ -37,8 +40,11 @@ class AddFeatureCommand(QUndoCommand):
 
         # Feature hinzufügen (nur wenn noch nicht vorhanden)
         if self.feature not in self.body.features:
-            self.body.add_feature(self.feature)
-            logger.debug(f"Redo: Added {self.feature.name} to {self.body.name}")
+            # Bei skip_rebuild: Feature nur zur Liste hinzufügen, kein Rebuild
+            # (weil das Solid bereits durch BRepFeat o.ä. aktualisiert wurde)
+            rebuild = not self._skip_rebuild
+            self.body.add_feature(self.feature, rebuild=rebuild)
+            logger.debug(f"Redo: Added {self.feature.name} to {self.body.name} (rebuild={rebuild})")
 
         # Rebuild & Update UI
         try:
