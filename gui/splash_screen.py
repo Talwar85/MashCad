@@ -8,6 +8,8 @@ from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QLinearGradient, QRa
 from PySide6.QtCore import Qt, QRect, QPointF
 import os
 
+from config.version import VERSION_FULL
+
 
 class MashCADSplash(QSplashScreen):
     """Modern splash screen with progress indicator."""
@@ -68,7 +70,7 @@ class MashCADSplash(QSplashScreen):
         font_ver = QFont("Segoe UI", 9)
         painter.setFont(font_ver)
         painter.setPen(QColor(90, 100, 120))
-        painter.drawText(QRect(0, 350, 585, 20), Qt.AlignRight | Qt.AlignVCenter, "v0.1-alpha")
+        painter.drawText(QRect(0, 350, 585, 20), Qt.AlignRight | Qt.AlignVCenter, VERSION_FULL)
 
         painter.end()
 

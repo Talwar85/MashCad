@@ -615,17 +615,11 @@ class CADTessellator:
 
                 # Phase 7: TNP - Face-Hash berechnen
                 try:
-                    from config.feature_flags import is_enabled
-                    if is_enabled("use_hash_face_selection"):
-                        from modeling.face_hash import compute_face_hash, get_face_area, get_surface_type_name
-                        face_hash = compute_face_hash(face)
-                        face_info[face_id]["hash"] = face_hash
-                        face_info[face_id]["area"] = get_face_area(face)
-                        face_info[face_id]["surface_type"] = get_surface_type_name(adaptor.GetType())
-
-                        # Comparison-Logging
-                        if is_enabled("face_selection_comparison"):
-                            logger.debug(f"[TNP] Face {face_id}: hash={face_hash[:8]}... type={face_info[face_id]['surface_type']} area={face_info[face_id]['area']:.1f}mm²")
+                    from modeling.face_hash import compute_face_hash, get_face_area, get_surface_type_name
+                    face_hash = compute_face_hash(face)
+                    face_info[face_id]["hash"] = face_hash
+                    face_info[face_id]["area"] = get_face_area(face)
+                    face_info[face_id]["surface_type"] = get_surface_type_name(adaptor.GetType())
                 except ImportError:
                     pass
 

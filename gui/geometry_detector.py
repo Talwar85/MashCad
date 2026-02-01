@@ -161,14 +161,7 @@ class GeometryDetector:
         # Circles - Mit Überlappungs-Detection (wie in sketch_editor.py)
         circles = [c for c in getattr(sketch, 'circles', []) if not c.construction]
 
-        # Feature-Flag prüfen für Kreis-Überlappungs-Erkennung
-        try:
-            from config.feature_flags import is_enabled
-            use_overlap_detection = is_enabled("use_circle_overlap_profiles")
-        except ImportError:
-            use_overlap_detection = False
-
-        if use_overlap_detection and circles:
+        if circles:
             # Kreis-Überlappungs-Erkennung (gleiche Logik wie sketch_editor.py)
             from sketcher.geometry import get_circle_circle_intersection, circle_line_intersection
 
@@ -248,20 +241,7 @@ class GeometryDetector:
                         pts.append((rnd(cx + r * math.cos(angle)), rnd(cy + r * math.sin(angle))))
                     lines.append(LineString(pts))
                     standalone_circles.append(Polygon(pts[:-1]))
-        else:
-            # Alte Logik: Alle Kreise als geschlossene LineStrings
-            for c in circles:
-                num_segments = 128
-                pts = []
-                for i in range(num_segments + 1):
-                    angle = i * 2 * math.pi / num_segments
-                    pts.append((
-                        rnd(c.center.x + c.radius * math.cos(angle)),
-                        rnd(c.center.y + c.radius * math.sin(angle))
-                    ))
-                lines.append(LineString(pts))
-                standalone_circles.append(Polygon(pts[:-1]))
-        
+
         # Arcs - mit Welding für Start/End-Punkte
         for a in getattr(sketch, 'arcs', []):
             if not a.construction:

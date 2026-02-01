@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
 
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
-from config import is_enabled
 
 # Importiere SketchTool und SnapType
 try:
@@ -1094,19 +1093,16 @@ class SketchHandlersMixin:
         2. Berechnet ALLE Schnittpunkte gegen ALLE anderen Geometrien
         3. Löscht Segment
 
-        Feature-Flags:
-        - use_extracted_trim: Nutzt neue TrimOperation Klasse
-        - trim_comparison_mode: Vergleicht beide Implementierungen (Debug)
+        Nutzt die extrahierte TrimOperation Klasse.
         """
-        # --- Feature-Flag Dispatch ---
-        # Comparison-Mode läuft IMMER zuerst (wenn aktiv)
-        if is_enabled("trim_comparison_mode"):
-            self._compare_trim_implementations(pos, snap_type, snap_entity)
+        # Direkt V2 (extrahierte TrimOperation) nutzen
+        self._handle_trim_v2(pos, snap_type, snap_entity)
+        return
 
-        if is_enabled("use_extracted_trim"):
-            self._handle_trim_v2(pos, snap_type, snap_entity)
-            return
-
+    def _handle_trim_legacy(self, pos, snap_type, snap_entity=None):
+        """
+        DEPRECATED: Alte Trim-Implementierung, nur für Fallback.
+        """
         # --- Imports Setup ---
         try:
             import sketcher.geometry as geometry
@@ -1304,9 +1300,7 @@ class SketchHandlersMixin:
 
     def _handle_trim_v2(self, pos, snap_type, snap_entity=None):
         """
-        Neue Trim-Implementierung mit extrahierter TrimOperation.
-
-        Feature-Flag: use_extracted_trim
+        Trim-Implementierung mit extrahierter TrimOperation Klasse.
         """
         from sketcher.operations import TrimOperation
 
@@ -1360,37 +1354,6 @@ class SketchHandlersMixin:
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self.mouse_buttons = Qt.NoButton
-
-    def _compare_trim_implementations(self, pos, snap_type, snap_entity=None):
-        """
-        Vergleicht alte und neue Trim-Implementierung (Debug-Modus).
-
-        Feature-Flag: trim_comparison_mode
-        """
-        from sketcher.operations import TrimOperation
-
-        target = snap_entity
-        if not target:
-            target = self._find_entity_at(pos)
-
-        if not target:
-            return
-
-        # Neue Implementierung analysieren (ohne auszuführen)
-        trim_op = TrimOperation(self.sketch)
-        click_point = Point2D(pos.x(), pos.y())
-
-        new_result = trim_op.find_segment(target, click_point)
-
-        if new_result.success and new_result.segment:
-            seg = new_result.segment
-            logger.info(
-                f"[TRIM COMPARE] New impl: idx={seg.segment_index}, "
-                f"start=({seg.start_point.x:.3f}, {seg.start_point.y:.3f}), "
-                f"end=({seg.end_point.x:.3f}, {seg.end_point.y:.3f})"
-            )
-        else:
-            logger.info(f"[TRIM COMPARE] New impl: {new_result.error}")
 
     def _handle_extend(self, pos, snap_type):
         line = self._find_line_at(pos)

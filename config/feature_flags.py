@@ -4,51 +4,31 @@ MashCad - Feature Flags
 
 Feature Flags ermöglichen inkrementelle Rollouts und einfaches Rollback.
 Neue Features werden mit Flag=False eingeführt und nach Validierung aktiviert.
+
+Nach Validierung werden Features als Standard-Code integriert und Flags entfernt.
+Diese Datei enthält nur noch aktive Debug-Flags und experimentelle Features.
 """
 
 from typing import Dict
 
 # Feature Flag Registry
+# =====================
+# HINWEIS: Die meisten Feature-Flags wurden nach erfolgreicher Validierung
+# entfernt (Januar 2026). Die entsprechenden Features sind jetzt Standard:
+#
+# - Kreis-Intersection Fixes (Phase 1)
+# - Kreis-Überlappung Profile Detection (Phase 1b)
+# - Build123d Profile-Detection (Phase 2)
+# - DOF-Anzeige (Phase 3)
+# - Extrahierte Trim/Extend/Fillet/Chamfer Operationen (Phase 4)
+# - TNP Face-Selection mit Hash (Phase 7)
+# - Smart Dimension Entry UX (Phase 8)
+#
+# Die Flags unten sind für aktives Debugging oder experimentelle Features.
+
 FEATURE_FLAGS: Dict[str, bool] = {
-    # Phase 1: Kreis-Intersection Fixes
-    "use_robust_circle_intersection": True,  # Toleranz-basierte Kreis-Kreis Intersection
-
-    # Phase 1b: Kreis-Überlappung Profile Detection
-    "use_circle_overlap_profiles": True,  # Überlappende Kreise als 3 Flächen erkennen
-
-    # Phase 2: Build123d Profile-Detection für Extrude
-    "use_build123d_profiles": True,  # AKTIVIERT - Echte Arcs für saubere Slot-Extrusion
-
-    # Phase 3: DOF-Anzeige
-    "use_dof_display": True,  # Zeigt Freiheitsgrade im Sketch-Modus
-
-    # Phase 4: Extrahierte Module
-    "use_extracted_profile_detector": False,
-
-    # Phase 4a: Extrahierte Trim-Operation
-    "use_extracted_trim": True,  # Neue TrimOperation Klasse
-    "trim_comparison_mode": False,  # Vergleicht alte und neue Implementierung (für Testing)
-
-    # Phase 4b: Extrahierte Extend-Operation
-    "use_extracted_extend": True,  # Neue ExtendOperation Klasse
-
-    # Phase 4c: Extrahierte Fillet/Chamfer 2D Operationen
-    "use_extracted_fillet_2d": True,  # Neue Fillet2DOperation Klasse
-    "use_extracted_chamfer_2d": True,  # Neue Chamfer2DOperation Klasse
-
-    # Phase 7: TNP Face-Selection Architektur
-    "use_hash_face_selection": True,       # Neue Hash-basierte Face-Selektion
-    "use_face_reference_features": True,   # Features speichern Face-Referenzen
-    "persist_face_info": True,             # face_info wird in to_dict() persistiert
-    "face_selection_comparison": False,     # Vergleicht alte vs neue Selektion (Logging)
-
-    # Phase 8: Sketch Dimension Input UX
-    "use_smart_dimension_entry": True,     # Auto-Show Panel nach erstem Punkt
-    "use_direct_number_input": True,       # Zahlen-Eingabe ohne Tab
-    "use_per_field_enter": True,           # Enter = nur aktuelles Feld bestätigen
-
     # Debug-Modi
-    "sketch_input_logging": False,          # Detailliertes Sketch-Input Logging
+    "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
 }
 
 

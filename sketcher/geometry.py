@@ -330,52 +330,7 @@ def circle_line_intersection(circle: Circle2D, line: Line2D, segment_only: bool 
     return points
 
 
-def circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Point2D']:
-    """
-    Berechnet die Schnittpunkte zweier Kreise.
-    Mathematik: Radical Axis Methode.
-    """
-    # Abstand zwischen Mittelpunkten
-    dx = c2.center.x - c1.center.x
-    dy = c2.center.y - c1.center.y
-    d = (dx**2 + dy**2)**0.5
-    
-    r1 = c1.radius
-    r2 = c2.radius
-    
-    # Filter: Keine Lösung möglich
-    if d > r1 + r2: return [] # Disjunkt außen
-    if d < abs(r1 - r2): return [] # Einer im Anderen
-    if d == 0: return [] # Konzentrisch/Identisch (Ignorieren für Snapping)
-    
-    # Abstand a vom c1-Zentrum zum Schnittpunkt der Verbindungslinie
-    a = (r1**2 - r2**2 + d**2) / (2 * d)
-    
-    # Punkt P2 auf der Verbindungslinie
-    px = c1.center.x + a * dx / d
-    py = c1.center.y + a * dy / d
-    
-    # Höhe h (Abstand von P2 zu den Schnittpunkten)
-    h_sq = r1**2 - a**2
-    if h_sq < 0: return []
-    h = h_sq**0.5
-    
-    # Schnittpunkte berechnen
-    x1 = px + h * dy / d
-    y1 = py - h * dx / d
-    x2 = px - h * dy / d
-    y2 = py + h * dx / d
-    
-    points = [Point2D(x1, y1)]
-    
-    # Wenn Kreise sich nicht nur berühren, zweiten Punkt hinzufügen
-    if d < r1 + r2 and h > 1e-10:
-        points.append(Point2D(x2, y2))
-        
-    return points
-
-
-def circle_circle_intersection_v2(c1: 'Circle2D', c2: 'Circle2D',
+def circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D',
                                    tolerance: float = 1e-6) -> List['Point2D']:
     """
     Robuste Kreis-Kreis Intersection mit Tangent-Handling.
@@ -446,15 +401,10 @@ def circle_circle_intersection_v2(c1: 'Circle2D', c2: 'Circle2D',
 
 def get_circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Point2D']:
     """
-    Dispatcher für Kreis-Kreis Intersection.
-    Nutzt V2 wenn Feature-Flag aktiviert, sonst V1.
+    Kreis-Kreis Intersection mit robustem Tangent-Handling.
+
+    Wrapper für circle_circle_intersection() für Abwärtskompatibilität.
     """
-    try:
-        from config.feature_flags import is_enabled
-        if is_enabled("use_robust_circle_intersection"):
-            return circle_circle_intersection_v2(c1, c2)
-    except ImportError:
-        pass
     return circle_circle_intersection(c1, c2)
 
 

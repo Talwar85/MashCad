@@ -15,12 +15,13 @@ def main():
     """Startet LiteCAD"""
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
+    from config.version import APP_NAME, VERSION_STRING
 
     # App erstellen (muss vor Splash sein)
     app = QApplication(sys.argv)
-    app.setApplicationName("MashCAD")
-    app.setOrganizationName("MashCAD")
-    app.setApplicationVersion("0.1-alpha")
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(APP_NAME)
+    app.setApplicationVersion(VERSION_STRING)
 
     # App-Icon setzen (für Taskleiste)
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")

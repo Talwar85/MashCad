@@ -25,7 +25,7 @@ import os
 import numpy as np
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
-from config.feature_flags import is_enabled  # Phase 8: Smart Dimension Entry
+from config.feature_flags import is_enabled  # Nur für sketch_input_logging Debug-Flag
 
 try:
     from gui.design_tokens import DesignTokens
@@ -726,9 +726,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.dim_input.field_committed.connect(self._on_dim_field_committed)
         if hasattr(self.dim_input, 'field_reset'):
             self.dim_input.field_reset.connect(self._on_dim_field_reset)
-        # Phase 8: Configure per-field enter mode based on feature flag
+        # Phase 8: Per-field enter mode (Enter bestätigt nur aktuelles Feld)
         if hasattr(self.dim_input, 'set_per_field_enter'):
-            self.dim_input.set_per_field_enter(is_enabled("use_per_field_enter"))
+            self.dim_input.set_per_field_enter(True)
         self.dim_input_active = False
         self.viewport = None
 
@@ -1571,14 +1571,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if circles:
             logger.debug(f"Verarbeite {len(circles)} Kreise für Profil-Erkennung")
 
-        # Feature-Flag prüfen für Kreis-Überlappungs-Erkennung
-        try:
-            from config.feature_flags import is_enabled
-            use_overlap_detection = is_enabled("use_circle_overlap_profiles")
-        except ImportError:
-            use_overlap_detection = False
-
-        if use_overlap_detection and circles:
+        if circles:
             # NEU: Kreis-Überlappungs-Erkennung (Kreis-Kreis UND Kreis-Linie)
             from sketcher.geometry import get_circle_circle_intersection, circle_line_intersection
             from sketcher import Circle2D
@@ -1665,18 +1658,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     circle_poly = ShapelyPolygon(pts)
                     standalone_polys.append(circle_poly)
                     logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
-        else:
-            # Alte Logik: Alle Kreise als standalone Polygone
-            for circle in circles:
-                cx, cy, r = circle.center.x, circle.center.y, circle.radius
-                pts = []
-                segments = 64  # Auflösung für Collision Detection
-                for i in range(segments):
-                    a = 2 * math.pi * i / segments
-                    pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-                circle_poly = ShapelyPolygon(pts)
-                standalone_polys.append(circle_poly)
-                logger.debug(f"  Kreis: center=({cx:.2f}, {cy:.2f}), r={r:.2f}, area={circle_poly.area:.2f}")
 
         # Geschlossene Splines hinzufügen (wie Kreise behandeln)
         if closed_spline_polys:
@@ -2678,13 +2659,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Tuple (faces, error) - faces ist Liste von Build123d Face-Objekten
         """
         try:
-            from config.feature_flags import is_enabled
-            if not is_enabled("use_build123d_profiles"):
-                return None, "Feature nicht aktiviert"
-        except ImportError:
-            return None, "Feature-Flags nicht verfügbar"
-
-        try:
             from sketcher.profile_detector_b3d import Build123dProfileDetector, is_available
 
             if not is_available():
@@ -2898,7 +2872,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._tool_step = value
 
         # Trigger auto-show check when step changes (Phase 8: Smart Entry)
-        if value != old_value and is_enabled("use_smart_dimension_entry"):
+        if value != old_value:
             self._check_auto_show_dim_input()
 
     def _should_auto_show_dim_input(self) -> bool:
@@ -2908,9 +2882,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Phase 8: Smart Entry - Panel shows automatically after first point
         for most drawing tools, eliminating the need to press Tab.
         """
-        if not is_enabled("use_smart_dimension_entry"):
-            return False
-
         # Don't show if already visible
         if self.dim_input.isVisible():
             return False
@@ -4375,7 +4346,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
 
         # Phase 8: Direct Number Input - forward numbers to dimension input
-        if is_enabled("use_direct_number_input") and not (mod & Qt.ControlModifier):
+        if not (mod & Qt.ControlModifier):
             if self._try_forward_to_dim_input(event):
                 return
 
@@ -4398,14 +4369,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Phase 8: Handle direct number input when panel is visible
             # If the active field is unlocked and user types a digit, select all first
             # so Qt will replace instead of append
-            elif is_enabled("use_direct_number_input"):
-                char = event.text()
-                if char and char in "0123456789.-":
-                    active_key = self.dim_input.get_active_field_key()
-                    if active_key and not self.dim_input.is_locked(active_key):
-                        # Select all so the next character replaces
-                        self.dim_input.select_active_field()
-                        # Let Qt handle the key normally (it will replace selection)
+            char = event.text()
+            if char and char in "0123456789.-":
+                active_key = self.dim_input.get_active_field_key()
+                if active_key and not self.dim_input.is_locked(active_key):
+                    # Select all so the next character replaces
+                    self.dim_input.select_active_field()
+                    # Let Qt handle the key normally (it will replace selection)
             return
         
         # Enter zum Bestätigen (für Offset etc.)

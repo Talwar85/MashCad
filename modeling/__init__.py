@@ -2810,8 +2810,11 @@ class Body:
 
     def _compute_hole(self, feature: 'HoleFeature', current_solid):
         """
-        Erstellt eine Bohrung via Boolean Cut mit Zylinder.
-        Typen: simple, counterbore, countersink.
+        Erstellt eine Bohrung.
+
+        Methoden (in Priorität):
+        1. BRepFeat_MakeCylindricalHole (für simple holes - saubere Topologie)
+        2. Boolean Cut mit Zylinder (für counterbore, countersink, oder Fallback)
         """
         from build123d import Solid, Cylinder, Location, Vector, Axis, Plane, Align
         import math
@@ -2824,6 +2827,29 @@ class Body:
         depth = feature.depth if feature.depth > 0 else 1000.0
 
         logger.info(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
+
+        # === METHODE 1: BRepFeat_MakeCylindricalHole (nur für simple holes) ===
+        if feature.hole_type == "simple":
+            try:
+                from modeling.brepfeat_operations import brepfeat_cylindrical_hole
+
+                result = brepfeat_cylindrical_hole(
+                    base_solid=current_solid,
+                    position=feature.position,
+                    direction=feature.direction,
+                    diameter=feature.diameter,
+                    depth=feature.depth  # 0 = through all
+                )
+
+                if result is not None:
+                    logger.success(f"Hole via BRepFeat: D={feature.diameter}mm")
+                    return result
+                else:
+                    logger.debug("BRepFeat_MakeCylindricalHole fehlgeschlagen, Fallback auf Boolean")
+            except Exception as e:
+                logger.debug(f"BRepFeat Hole: {e}, Fallback auf Boolean")
+
+        # === METHODE 2: Boolean Cut (für counterbore, countersink, oder Fallback) ===
 
         # Hauptbohrung als Zylinder erstellen
         hole_cyl = Cylinder(radius, depth,

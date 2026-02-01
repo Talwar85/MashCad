@@ -45,6 +45,7 @@ from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from gui.workers.export_worker import STLExportWorker, STEPExportWorker  # Phase 6: Async Export
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
 from gui.widgets.section_view_panel import SectionViewPanel
@@ -2340,10 +2341,6 @@ class MainWindow(QMainWindow):
         Wird aufgerufen wenn der Sketcher-Solver fertig ist.
         Aktualisiert die DOF-Anzeige in der Statusleiste.
         """
-        from config import is_enabled
-        if not is_enabled("use_dof_display"):
-            return
-
         # DOF in Integer konvertieren (kommt als float vom Signal)
         dof_int = int(dof) if dof >= 0 else -1
 
@@ -5408,19 +5405,8 @@ class MainWindow(QMainWindow):
             
     def _extrude_with_build123d(self, face_indices, height, operation="New Body"):
         try:
-            # Feature-Flag: Build123d-basierte Profile-Detection (Phase 2)
-            use_v2 = False
-            try:
-                from config.feature_flags import is_enabled
-                use_v2 = is_enabled("use_build123d_profiles")
-            except ImportError:
-                pass
-
-            # 1. Solid erstellen
-            if use_v2:
-                solid, verts, faces = self.sketch_editor.get_build123d_part_v2(height, operation)
-            else:
-                solid, verts, faces = self.sketch_editor.get_build123d_part(height, operation)
+            # 1. Solid erstellen (Build123d-basierte Profile-Detection)
+            solid, verts, faces = self.sketch_editor.get_build123d_part_v2(height, operation)
             
             if solid is None or not verts:
                 logger.error("Build123d: Keine Geometrie erzeugt.")
@@ -7378,10 +7364,10 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         """Über-Dialog"""
         QMessageBox.about(self, tr("Über MashCad"),
-            f"<h2>MashCad</h2>"
-            f"<p>Version 2.6</p>"
+            f"<h2>{APP_NAME}</h2>"
+            f"<p>Version {VERSION}</p>"
             f"<p>Schlankes parametrisches CAD für 3D-Druck</p>"
-            f"<p>© 2024-2025</p>"
+            f"<p>{COPYRIGHT}</p>"
             f"<p><b>Features:</b></p>"
             f"<ul>"
             f"<li>2D Sketch mit Constraints</li>"
@@ -7546,16 +7532,18 @@ class MainWindow(QMainWindow):
             from modeling.geometric_selector import create_geometric_selectors_from_edges
 
             # Legacy Point-Selectors (backward-compat)
+            # Bei "alle Kanten" wird selectors leer sein - das ist OK
             selectors = self.viewport_3d.get_edge_selectors()
 
             # TNP Phase 1: GeometricSelectors erstellen
-            selected_edges = self.viewport_3d.get_selected_edges()
-            geometric_selectors = create_geometric_selectors_from_edges(selected_edges)
+            # WICHTIG: Nutze die bereits ermittelten `edges` (inkl. "alle Kanten"),
+            # nicht nochmal get_selected_edges() aufrufen!
+            geometric_selectors = create_geometric_selectors_from_edges(edges)
             logger.debug(f"TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
 
             # TNP Phase 2: OCP Edge Shapes speichern
             ocp_edge_shapes = []
-            for edge in selected_edges:
+            for edge in edges:
                 if hasattr(edge, 'wrapped'):
                     ocp_edge_shapes.append(edge.wrapped)
 
