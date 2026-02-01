@@ -17,7 +17,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "use_circle_overlap_profiles": True,  # Überlappende Kreise als 3 Flächen erkennen
 
     # Phase 2: Build123d Profile-Detection für Extrude
-    "use_build123d_profiles": False,  # DEAKTIVIERT - Shapely+GeometryMapping funktioniert besser
+    "use_build123d_profiles": True,  # AKTIVIERT - Echte Arcs für saubere Slot-Extrusion
 
     # Phase 3: DOF-Anzeige
     "use_dof_display": True,  # Zeigt Freiheitsgrade im Sketch-Modus
@@ -35,6 +35,20 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # Phase 4c: Extrahierte Fillet/Chamfer 2D Operationen
     "use_extracted_fillet_2d": True,  # Neue Fillet2DOperation Klasse
     "use_extracted_chamfer_2d": True,  # Neue Chamfer2DOperation Klasse
+
+    # Phase 7: TNP Face-Selection Architektur
+    "use_hash_face_selection": False,       # Neue Hash-basierte Face-Selektion
+    "use_face_reference_features": False,   # Features speichern Face-Referenzen
+    "persist_face_info": False,             # face_info wird in to_dict() persistiert
+    "face_selection_comparison": False,     # Vergleicht alte vs neue Selektion (Logging)
+
+    # Phase 8: Sketch Dimension Input UX
+    "use_smart_dimension_entry": True,     # Auto-Show Panel nach erstem Punkt
+    "use_direct_number_input": True,       # Zahlen-Eingabe ohne Tab
+    "use_per_field_enter": True,           # Enter = nur aktuelles Feld bestätigen
+
+    # Debug-Modi
+    "sketch_input_logging": True,          # Detailliertes Sketch-Input Logging
 }
 
 

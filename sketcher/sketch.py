@@ -476,23 +476,38 @@ class Sketch:
         """
         Aktualisiert die Winkel von Bögen basierend auf ihren Marker-Punkten.
         Muss nach jedem solve() aufgerufen werden.
+
+        WICHTIG: Sweep-Richtung (CCW/CW) muss beibehalten werden!
+        atan2 liefert [-180°, 180°], was die Richtung ändern kann.
         """
         for arc in self.arcs:
             # Prüfen ob wir Marker für diesen Bogen gespeichert haben (siehe add_slot)
             p_start = getattr(arc, '_start_marker', None)
             p_end = getattr(arc, '_end_marker', None)
-            
+
             if p_start and p_end:
+                old_start = arc.start_angle
+                old_end = arc.end_angle
+                old_sweep = old_end - old_start
+
                 # Vektoren vom Zentrum zu den Markern
                 dx_s = p_start.x - arc.center.x
                 dy_s = p_start.y - arc.center.y
                 dx_e = p_end.x - arc.center.x
                 dy_e = p_end.y - arc.center.y
-                
-                # Winkel berechnen
+
+                # Winkel berechnen (atan2 liefert [-180°, 180°])
                 ang_s = math.degrees(math.atan2(dy_s, dx_s))
                 ang_e = math.degrees(math.atan2(dy_e, dx_e))
-                
+
+                # FIX: Sweep-Richtung beibehalten!
+                # Wenn ursprünglicher sweep positiv war (CCW), neuen sweep auch positiv machen
+                new_sweep = ang_e - ang_s
+                if old_sweep > 0 and new_sweep < 0:
+                    ang_e += 360
+                elif old_sweep < 0 and new_sweep > 0:
+                    ang_e -= 360
+
                 # Winkel setzen
                 arc.start_angle = ang_s
                 arc.end_angle = ang_e

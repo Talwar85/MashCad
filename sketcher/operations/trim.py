@@ -123,7 +123,10 @@ class TrimOperation(SketchOperation):
                 if isinstance(target, Line2D) and isinstance(other, Line2D):
                     pt = geometry.line_line_intersection(target, other)
                     if pt:
-                        intersects = [pt]
+                        # WICHTIG: Prüfe ob der Punkt auf BEIDEN Segmenten liegt
+                        t_other = geometry.get_param_on_entity(pt, other)
+                        if -0.001 <= t_other <= 1.001:  # Toleranz für Endpunkte
+                            intersects = [pt]
                 elif isinstance(target, Circle2D) and isinstance(other, Circle2D):
                     intersects = geometry.get_circle_circle_intersection(target, other)
                 elif isinstance(target, Line2D) and isinstance(other, Circle2D):
@@ -155,6 +158,17 @@ class TrimOperation(SketchOperation):
 
         # Sortieren nach Parameter
         cut_points.sort(key=lambda x: x[0])
+
+        # Deduplizierung: Entferne Punkte die zu nah beieinander liegen
+        if len(cut_points) > 1:
+            unique_cuts = [cut_points[0]]
+            for t, p in cut_points[1:]:
+                prev_t, prev_p = unique_cuts[-1]
+                # Punkt ist duplikat wenn Parameter oder Position sehr ähnlich
+                if abs(t - prev_t) > 0.001:  # Mindestabstand im Parameter-Raum
+                    unique_cuts.append((t, p))
+            cut_points = unique_cuts
+
         return cut_points
 
     def _find_line_segment(self, target: 'Line2D', click_point: 'Point2D',

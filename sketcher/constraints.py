@@ -261,7 +261,36 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     """Berechnet den Fehler eines Constraints (0 = erfüllt)"""
     ct = constraint.type
     entities = constraint.entities
-    
+
+    # Defensive check: Ensure entities list has required number of elements
+    required_entities = {
+        ConstraintType.COINCIDENT: 2,
+        ConstraintType.HORIZONTAL: 1,
+        ConstraintType.VERTICAL: 1,
+        ConstraintType.LENGTH: 1,
+        ConstraintType.PARALLEL: 2,
+        ConstraintType.PERPENDICULAR: 2,
+        ConstraintType.EQUAL_LENGTH: 2,
+        ConstraintType.POINT_ON_LINE: 2,
+        ConstraintType.POINT_ON_CIRCLE: 2,
+        ConstraintType.RADIUS: 1,
+        ConstraintType.DIAMETER: 1,
+        ConstraintType.ANGLE: 2,
+        ConstraintType.CONCENTRIC: 2,
+        ConstraintType.MIDPOINT: 2,
+        ConstraintType.COLLINEAR: 2,
+        ConstraintType.SYMMETRIC: 3,
+        ConstraintType.TANGENT: 2,
+        ConstraintType.DISTANCE: 2,
+        ConstraintType.EQUAL_RADIUS: 2,
+        ConstraintType.FIXED: 1,
+    }
+    required = required_entities.get(ct, 0)
+    if len(entities) < required:
+        from loguru import logger
+        logger.warning(f"[Constraint] {ct.name} has {len(entities)} entities, expected {required}")
+        return 0.0  # Return 0 error to avoid crashing
+
     if ct == ConstraintType.COINCIDENT:
         p1, p2 = entities
         return p1.distance_to(p2)
@@ -464,80 +493,90 @@ def calculate_constraint_errors_batch(constraints: List[Constraint]) -> List[flo
     # Error-Array (Output)
     errors = [0.0] * len(constraints)
 
+    # Helper to filter valid constraints with required number of entities
+    def filter_valid(constraints_list, required_entities):
+        return [(idx, c) for idx, c in constraints_list if len(c.entities) >= required_entities]
+
     # === COINCIDENT: Häufigster Typ - Vectorization ===
     if ConstraintType.COINCIDENT in by_type:
-        coincident_constraints = by_type[ConstraintType.COINCIDENT]
-        indices = [idx for idx, _ in coincident_constraints]
+        coincident_constraints = filter_valid(by_type[ConstraintType.COINCIDENT], 2)
+        if coincident_constraints:
+            indices = [idx for idx, _ in coincident_constraints]
 
-        # Extrahiere Punkt-Koordinaten
-        p1_coords = np.array([[c.entities[0].x, c.entities[0].y] for _, c in coincident_constraints])
-        p2_coords = np.array([[c.entities[1].x, c.entities[1].y] for _, c in coincident_constraints])
+            # Extrahiere Punkt-Koordinaten
+            p1_coords = np.array([[c.entities[0].x, c.entities[0].y] for _, c in coincident_constraints])
+            p2_coords = np.array([[c.entities[1].x, c.entities[1].y] for _, c in coincident_constraints])
 
-        # Vectorized Distance-Berechnung
-        dists = np.linalg.norm(p1_coords - p2_coords, axis=1)
+            # Vectorized Distance-Berechnung
+            dists = np.linalg.norm(p1_coords - p2_coords, axis=1)
 
-        # Errors zurückschreiben
-        for i, dist in enumerate(dists):
-            errors[indices[i]] = dist
+            # Errors zurückschreiben
+            for i, dist in enumerate(dists):
+                errors[indices[i]] = dist
 
     # === HORIZONTAL: Vectorization ===
     if ConstraintType.HORIZONTAL in by_type:
-        horizontal_constraints = by_type[ConstraintType.HORIZONTAL]
-        indices = [idx for idx, _ in horizontal_constraints]
+        horizontal_constraints = filter_valid(by_type[ConstraintType.HORIZONTAL], 1)
+        if horizontal_constraints:
+            indices = [idx for idx, _ in horizontal_constraints]
 
-        y_diffs = np.array([abs(c.entities[0].end.y - c.entities[0].start.y) for _, c in horizontal_constraints])
+            y_diffs = np.array([abs(c.entities[0].end.y - c.entities[0].start.y) for _, c in horizontal_constraints])
 
         for i, err in enumerate(y_diffs):
             errors[indices[i]] = err
 
     # === VERTICAL: Vectorization ===
     if ConstraintType.VERTICAL in by_type:
-        vertical_constraints = by_type[ConstraintType.VERTICAL]
-        indices = [idx for idx, _ in vertical_constraints]
+        vertical_constraints = filter_valid(by_type[ConstraintType.VERTICAL], 1)
+        if vertical_constraints:
+            indices = [idx for idx, _ in vertical_constraints]
 
-        x_diffs = np.array([abs(c.entities[0].end.x - c.entities[0].start.x) for _, c in vertical_constraints])
+            x_diffs = np.array([abs(c.entities[0].end.x - c.entities[0].start.x) for _, c in vertical_constraints])
 
-        for i, err in enumerate(x_diffs):
-            errors[indices[i]] = err
+            for i, err in enumerate(x_diffs):
+                errors[indices[i]] = err
 
     # === LENGTH: Vectorization ===
     if ConstraintType.LENGTH in by_type:
-        length_constraints = by_type[ConstraintType.LENGTH]
-        indices = [idx for idx, _ in length_constraints]
+        length_constraints = filter_valid(by_type[ConstraintType.LENGTH], 1)
+        if length_constraints:
+            indices = [idx for idx, _ in length_constraints]
 
-        lengths = np.array([c.entities[0].length for _, c in length_constraints])
-        targets = np.array([c.value for _, c in length_constraints])
+            lengths = np.array([c.entities[0].length for _, c in length_constraints])
+            targets = np.array([c.value for _, c in length_constraints])
 
-        length_errors = np.abs(lengths - targets)
+            length_errors = np.abs(lengths - targets)
 
-        for i, err in enumerate(length_errors):
-            errors[indices[i]] = err
+            for i, err in enumerate(length_errors):
+                errors[indices[i]] = err
 
     # === EQUAL_LENGTH: Vectorization ===
     if ConstraintType.EQUAL_LENGTH in by_type:
-        equal_length_constraints = by_type[ConstraintType.EQUAL_LENGTH]
-        indices = [idx for idx, _ in equal_length_constraints]
+        equal_length_constraints = filter_valid(by_type[ConstraintType.EQUAL_LENGTH], 2)
+        if equal_length_constraints:
+            indices = [idx for idx, _ in equal_length_constraints]
 
-        l1_lengths = np.array([c.entities[0].length for _, c in equal_length_constraints])
-        l2_lengths = np.array([c.entities[1].length for _, c in equal_length_constraints])
+            l1_lengths = np.array([c.entities[0].length for _, c in equal_length_constraints])
+            l2_lengths = np.array([c.entities[1].length for _, c in equal_length_constraints])
 
-        length_diffs = np.abs(l1_lengths - l2_lengths)
+            length_diffs = np.abs(l1_lengths - l2_lengths)
 
-        for i, err in enumerate(length_diffs):
-            errors[indices[i]] = err
+            for i, err in enumerate(length_diffs):
+                errors[indices[i]] = err
 
     # === RADIUS: Vectorization ===
     if ConstraintType.RADIUS in by_type:
-        radius_constraints = by_type[ConstraintType.RADIUS]
-        indices = [idx for idx, _ in radius_constraints]
+        radius_constraints = filter_valid(by_type[ConstraintType.RADIUS], 1)
+        if radius_constraints:
+            indices = [idx for idx, _ in radius_constraints]
 
-        radii = np.array([c.entities[0].radius for _, c in radius_constraints])
-        targets = np.array([c.value for _, c in radius_constraints])
+            radii = np.array([c.entities[0].radius for _, c in radius_constraints])
+            targets = np.array([c.value for _, c in radius_constraints])
 
-        radius_errors = np.abs(radii - targets)
+            radius_errors = np.abs(radii - targets)
 
-        for i, err in enumerate(radius_errors):
-            errors[indices[i]] = err
+            for i, err in enumerate(radius_errors):
+                errors[indices[i]] = err
 
     # === Alle anderen Typen: Fallback zu Einzelberechnung ===
     complex_types = [

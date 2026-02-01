@@ -208,11 +208,11 @@ class SketchHandlersMixin:
         # Erstellung und Bemaßung
         if w > 0.01 and h > 0.01:
             self._save_undo()
-            
+
             # 1. Rechteck erstellen (gibt [Unten, Rechts, Oben, Links] zurück)
             # Hinweis: add_rectangle muss in sketch.py return [l1, l2, l3, l4] haben!
             lines = self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
-            
+
             # 2. Automatische Bemaßung hinzufügen (Constraints)
             # Wir bemaßen die untere Linie (Breite) und die linke Linie (Höhe)
             if lines and len(lines) >= 4:
@@ -425,7 +425,31 @@ class SketchHandlersMixin:
         elif self.tool_step == 1:
             self.tool_points.append(pos)
             self.tool_step = 2
-            self.status_message.emit(tr("Width | Tab=Enter width"))
+            self.status_message.emit(tr("Radius | Tab=Enter radius"))
+
+            # Show dimension input for radius (Phase 8: Auto-show)
+            logger.info(f"[SLOT] Step 1→2: Showing radius input panel")
+            logger.debug(f"[SLOT] hasattr dim_input: {hasattr(self, 'dim_input')}")
+
+            # Clear any previous state and show radius input
+            if hasattr(self, 'dim_input'):
+                logger.debug(f"[SLOT] dim_input exists, setting up radius field")
+                self.dim_input.committed_values.clear()
+                self.dim_input.unlock_all()
+                radius_default = self.live_radius if self.live_radius > 0 else 5.0
+                fields = [("R", "radius", radius_default, "mm")]
+                self.dim_input.setup(fields)
+                # Position near mouse
+                pos_screen = self.world_to_screen(pos)
+                x = min(int(pos_screen.x()) + 20, self.width() - self.dim_input.width() - 10)
+                y = min(int(pos_screen.y()) - 40, self.height() - self.dim_input.height() - 10)
+                self.dim_input.move(max(10, x), max(10, y))
+                self.dim_input.show()
+                self.dim_input.focus_field(0)
+                self.dim_input_active = True
+                logger.success(f"[SLOT] Radius panel shown at ({x}, {y}), visible={self.dim_input.isVisible()}")
+            else:
+                logger.error(f"[SLOT] dim_input NOT FOUND on self!")
             
         # --- Schritt 3: Breite/Radius und Erstellung ---
         else:
@@ -2932,25 +2956,13 @@ class SketchHandlersMixin:
         """
         if self.tool_step == 0:
             self.tool_points = [pos]
-            
-            fields = [
-                ("Spitzen", "points", 5.0, ""),
-                ("R Außen", "r_outer", 50.0, "mm"),
-                ("R Innen", "r_inner", 25.0, "mm")
-            ]
-            self.dim_input.setup(fields)
-            
-            from PySide6.QtGui import QCursor
-            cursor_pos = self.mapFromGlobal(QCursor.pos())
-            self.dim_input.move(cursor_pos.x() + 20, cursor_pos.y() + 20)
-            self.dim_input.show()
-            self.dim_input.focus_field(0)
-            
-            try: self.dim_input.confirmed.disconnect() 
-            except: pass
-            
-            self.dim_input.confirmed.connect(lambda: self._create_star_geometry())
             self.tool_step = 1
+            self.status_message.emit(tr("Star") + " | Tab=" + tr("Parameters") + " | Enter=" + tr("Confirm"))
+            # Note: Dimension input is now handled by _show_dimension_input()
+            # Preview will be shown in the renderer
+        else:
+            # Click again creates the star
+            self._create_star_geometry()
 
     def _create_star_geometry(self):
         values = self.dim_input.get_values()

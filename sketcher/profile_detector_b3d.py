@@ -187,7 +187,7 @@ class Build123dProfileDetector:
                     elif sweep < -180:
                         sweep += 360
 
-                    # Mittelpunkt auf dem Arc (sweep kann jetzt negativ sein!)
+                    # Mittelpunkt auf dem Arc
                     mid_angle = math.radians(arc.start_angle + sweep / 2)
 
                     p1 = gp_Pnt(
@@ -217,18 +217,7 @@ class Build123dProfileDetector:
             if not ocp_edges:
                 return []
 
-            logger.info(f"Build123d Profile-Detection: {len(lines)} Linien, {len(arcs)} Arcs → {len(ocp_edges)} OCP Edges")
-
-            # Debug: Zeige alle Edge-Endpunkte
-            from OCP.BRep import BRep_Tool
-            from OCP.TopExp import TopExp
-            from OCP.TopoDS import TopoDS
-            for idx, edge in enumerate(ocp_edges):
-                v1 = TopExp.FirstVertex_s(TopoDS.Edge_s(edge))
-                v2 = TopExp.LastVertex_s(TopoDS.Edge_s(edge))
-                p1 = BRep_Tool.Pnt_s(v1)
-                p2 = BRep_Tool.Pnt_s(v2)
-                logger.info(f"  Edge {idx}: ({p1.X():.3f}, {p1.Y():.3f}) → ({p2.X():.3f}, {p2.Y():.3f})")
+            logger.debug(f"Build123d Profile-Detection: {len(lines)} Linien, {len(arcs)} Arcs → {len(ocp_edges)} OCP Edges")
 
             # 2. ShapeAnalysis_FreeBounds für Wire-Erkennung
             edge_sequence = TopTools_HSequenceOfShape()
@@ -245,7 +234,7 @@ class Build123dProfileDetector:
                 wire_sequence
             )
 
-            logger.info(f"Build123d: {wire_sequence.Length()} Wires gefunden (tolerance={self.tolerance})")
+            logger.debug(f"Build123d: {wire_sequence.Length()} Wires gefunden")
 
             # 3. Wires zu Faces konvertieren
             faces = []
@@ -256,18 +245,8 @@ class Build123dProfileDetector:
                 wire = TopoDS_Wire(wire_shape)
 
                 try:
-                    # Zähle Edges im Wire
-                    edge_explorer = TopExp_Explorer(wire, TopAbs_EDGE)
-                    edge_count = 0
-                    while edge_explorer.More():
-                        edge_count += 1
-                        edge_explorer.Next()
-
                     is_closed = wire.Closed()
-                    logger.info(f"  Wire {i}: {edge_count} Edges, closed={is_closed}")
-
                     if not is_closed:
-                        logger.warning(f"  → Wire {i} ist nicht geschlossen, überspringe")
                         continue
 
                     # Face aus Wire erstellen
@@ -279,11 +258,8 @@ class Build123dProfileDetector:
                         from build123d import Face as B3DFace
                         b3d_face = B3DFace(ocp_face)
                         faces.append(b3d_face)
-                        logger.info(f"  → Face erstellt: area={b3d_face.area:.2f} mm²")
-                    else:
-                        logger.warning(f"  → Face-Erstellung fehlgeschlagen")
                 except Exception as e:
-                    logger.error(f"Wire {i} zu Face fehlgeschlagen: {e}")
+                    logger.debug(f"Wire zu Face fehlgeschlagen: {e}")
 
             return faces
 

@@ -25,6 +25,7 @@ import os
 import numpy as np
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from config.feature_flags import is_enabled  # Phase 8: Smart Dimension Entry
 
 try:
     from gui.design_tokens import DesignTokens
@@ -61,6 +62,12 @@ if _project_root not in sys.path:
 
 from i18n import tr
 from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
+
+# Phase 8: Sketch Input Logger
+try:
+    from gui.sketch_input_logger import sketch_logger
+except ImportError:
+    sketch_logger = None
 
 # Build123d für parametrische CAD-Operationen
 HAS_BUILD123D = False
@@ -671,7 +678,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.snapper = None
 
         self.current_tool = SketchTool.SELECT
-        self.tool_step = 0
+        self._tool_step = 0  # Private backing field for tool_step property
+        self._last_auto_show_step = -1  # Prevent multiple auto-shows for same step
         self.tool_points = []
         self.tool_data = {}
         
@@ -709,13 +717,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input = DimensionInput(self)
         if hasattr(self.dim_input, 'choice_changed'):
             self.dim_input.choice_changed.connect(self._on_dim_choice_changed)
-        
+
         self.dim_input.value_changed.connect(self._on_dim_value_changed)
         self.dim_input.confirmed.connect(self._on_dim_confirmed)
         self.dim_input.cancelled.connect(self._cancel_tool)
+        # Phase 8: Connect new signals
+        if hasattr(self.dim_input, 'field_committed'):
+            self.dim_input.field_committed.connect(self._on_dim_field_committed)
+        if hasattr(self.dim_input, 'field_reset'):
+            self.dim_input.field_reset.connect(self._on_dim_field_reset)
+        # Phase 8: Configure per-field enter mode based on feature flag
+        if hasattr(self.dim_input, 'set_per_field_enter'):
+            self.dim_input.set_per_field_enter(is_enabled("use_per_field_enter"))
         self.dim_input_active = False
         self.viewport = None
-        self.dim_input.value_changed.connect(self._on_dim_value_changed)
 
         # Canvas / Bildreferenz (Fusion 360-Style)
         self.canvas_image = None        # QPixmap
@@ -1400,29 +1415,70 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # 1. Linien
         lines = [l for l in self.sketch.lines if not l.construction]
-        for line in lines:
+        logger.info(f"[PROFILE] Lines: {len(lines)} non-construction / {len(self.sketch.lines)} total")
+        for line_idx, line in enumerate(lines):
             p1 = get_welded_pt(line.start.x, line.start.y)
             p2 = get_welded_pt(line.end.x, line.end.y)
+            logger.debug(f"[PROFILE] Line {line_idx}: ({line.start.x:.2f},{line.start.y:.2f})→({line.end.x:.2f},{line.end.y:.2f}) welded to {p1}→{p2}")
             if p1 != p2:
                 shapely_lines.append(LineString([p1, p2]))
                 geometry_sources.append(('line', line, p1, p2))
 
         # 2. Bögen
         arcs = [a for a in self.sketch.arcs if not a.construction]
-        for arc in arcs:
-            start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
-            end_p = get_welded_pt(arc.end_point.x, arc.end_point.y)
+        all_arcs = self.sketch.arcs
+        logger.info(f"[PROFILE] Arcs: {len(arcs)} non-construction / {len(all_arcs)} total")
+        for arc_idx, arc in enumerate(arcs):
+            # FIX: Für Slots verwende die Marker-Punkte (exakt mit Linien verbunden)
+            # statt der berechneten start_point/end_point (können Floating-Point Abweichungen haben)
+            start_marker = getattr(arc, '_start_marker', None)
+            end_marker = getattr(arc, '_end_marker', None)
 
-            # Korrekte Sweep-Berechnung
-            sweep = arc.end_angle - arc.start_angle
-            # Normalisiere auf positive Werte
-            while sweep < 0:
-                sweep += 360
-            while sweep > 360:
-                sweep -= 360
-            # Sehr kleine Sweeps als Vollkreis behandeln (z.B. 359.99° -> 360°)
-            if sweep < 0.1:
-                sweep = 360
+            logger.debug(f"[PROFILE] Arc {arc_idx}: center=({arc.center.x:.2f}, {arc.center.y:.2f}), "
+                        f"r={arc.radius:.2f}, angles={arc.start_angle:.1f}°→{arc.end_angle:.1f}°, "
+                        f"construction={arc.construction}, has_markers={start_marker is not None}")
+
+            if start_marker and end_marker:
+                # Slot-Arc: Verwende die exakten Verbindungspunkte
+                start_p = get_welded_pt(start_marker.x, start_marker.y)
+                end_p = get_welded_pt(end_marker.x, end_marker.y)
+
+                # WICHTIG: Berechne Winkel aus den Marker-Punkten, nicht aus arc.start_angle/end_angle
+                # da diese nach Solver-Läufen nicht mehr stimmen könnten
+                cx, cy = arc.center.x, arc.center.y
+                actual_start_angle = math.degrees(math.atan2(start_marker.y - cy, start_marker.x - cx))
+                actual_end_angle = math.degrees(math.atan2(end_marker.y - cy, end_marker.x - cx))
+
+                # Sweep berechnen (immer CCW, also positive Richtung)
+                sweep = actual_end_angle - actual_start_angle
+                # Normalisiere auf positive Werte für CCW
+                while sweep <= 0:
+                    sweep += 360
+                while sweep > 360:
+                    sweep -= 360
+
+                use_start_angle = actual_start_angle
+                logger.debug(f"[PROFILE] Arc {arc_idx} (SLOT): marker_start=({start_marker.x:.2f}, {start_marker.y:.2f}), "
+                            f"marker_end=({end_marker.x:.2f}, {end_marker.y:.2f}), "
+                            f"actual_angles={actual_start_angle:.1f}°→{actual_end_angle:.1f}°, sweep={sweep:.1f}°")
+            else:
+                # Normaler Arc: Berechne aus Winkeln
+                start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
+                end_p = get_welded_pt(arc.end_point.x, arc.end_point.y)
+
+                # Korrekte Sweep-Berechnung
+                sweep = arc.end_angle - arc.start_angle
+                # Normalisiere auf positive Werte
+                while sweep < 0:
+                    sweep += 360
+                while sweep > 360:
+                    sweep -= 360
+                # Sehr kleine Sweeps als Vollkreis behandeln (z.B. 359.99° -> 360°)
+                if sweep < 0.1:
+                    sweep = 360
+
+                use_start_angle = arc.start_angle
+                logger.debug(f"[PROFILE] Arc {arc_idx} (NORMAL): start_p={start_p}, end_p={end_p}, sweep={sweep:.1f}°")
 
             # Segmente basierend auf Sweep (mindestens 8 für gute Kurven)
             steps = max(8, int(sweep / 5))
@@ -1430,12 +1486,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             points = [start_p]
             for i in range(1, steps):
                 t = i / steps
-                angle = math.radians(arc.start_angle + sweep * t)
+                angle = math.radians(use_start_angle + sweep * t)
                 px = arc.center.x + arc.radius * math.cos(angle)
                 py = arc.center.y + arc.radius * math.sin(angle)
                 # Zwischenpunkte auch durch Welding
                 points.append(get_welded_pt(px, py))
             points.append(end_p)
+
+            logger.debug(f"[PROFILE] Arc {arc_idx}: Generated {len(points)} points for LineString")
+            # Show first, middle, and last point to verify arc direction
+            if len(points) >= 3:
+                mid_idx = len(points) // 2
+                logger.info(f"[PROFILE] Arc {arc_idx} trace: START({points[0][0]:.1f}, {points[0][1]:.1f}) → "
+                           f"MID({points[mid_idx][0]:.1f}, {points[mid_idx][1]:.1f}) → "
+                           f"END({points[-1][0]:.1f}, {points[-1][1]:.1f})")
 
             if len(points) >= 2:
                 shapely_lines.append(LineString(points))
@@ -2528,6 +2592,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                 if not hasattr(sub_poly, 'exterior'):
                                     continue
 
+                                # FIX: Ensure polygon exterior is CCW (counter-clockwise)
+                                # Shapely's is_ccw checks if the exterior ring is CCW
+                                from shapely.geometry import polygon as shapely_polygon
+                                if not sub_poly.exterior.is_ccw:
+                                    logger.warning(f"[EXTRUDE] Polygon exterior is CW - reversing to CCW")
+                                    sub_poly = shapely_polygon.orient(sub_poly, sign=1.0)  # Force CCW
+
                                 coords = list(sub_poly.exterior.coords)
                                 # Duplikate entfernen und zu Floats konvertieren
                                 pts = [(self._safe_float(c[0]), self._safe_float(c[1])) for c in coords]
@@ -2535,7 +2606,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                     pts.pop() # Letzten Punkt weg, wenn doppelt
 
                                 if len(pts) >= 3:
-                                    logger.debug(f"Erstelle Polygon mit {len(pts)} Punkten")
+                                    logger.info(f"[EXTRUDE] Polygon: {len(pts)} pts, is_ccw={sub_poly.exterior.is_ccw}, area={sub_poly.area:.1f}")
+                                    # Log key points to see the shape
+                                    # For a slot: should see 4 corners + arc points
+                                    step = max(1, len(pts) // 20)  # Sample ~20 points
+                                    sampled = [(i, pts[i]) for i in range(0, len(pts), step)]
+                                    for idx, pt in sampled[:15]:  # Max 15 samples
+                                        logger.debug(f"  [{idx:3d}] ({pt[0]:8.2f}, {pt[1]:8.2f})")
                                     Polygon(*pts, align=None)
                                     created_any = True
 
@@ -2806,7 +2883,177 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def has_build123d(self) -> bool:
         """Prüft ob Build123d verfügbar ist"""
         return HAS_BUILD123D
-    
+
+    # ========== Phase 8: Smart Entry - tool_step Property ==========
+
+    @property
+    def tool_step(self) -> int:
+        """Current step in multi-step tool operation."""
+        return self._tool_step
+
+    @tool_step.setter
+    def tool_step(self, value: int):
+        """Sets tool_step and triggers auto-show check if enabled."""
+        old_value = self._tool_step
+        self._tool_step = value
+
+        # Trigger auto-show check when step changes (Phase 8: Smart Entry)
+        if value != old_value and is_enabled("use_smart_dimension_entry"):
+            self._check_auto_show_dim_input()
+
+    def _should_auto_show_dim_input(self) -> bool:
+        """
+        Checks if DimensionInput panel should auto-show.
+
+        Phase 8: Smart Entry - Panel shows automatically after first point
+        for most drawing tools, eliminating the need to press Tab.
+        """
+        if not is_enabled("use_smart_dimension_entry"):
+            return False
+
+        # Don't show if already visible
+        if self.dim_input.isVisible():
+            return False
+
+        # Don't trigger for same step twice
+        if self._last_auto_show_step == self._tool_step:
+            return False
+
+        # Map: tool → required step for auto-show
+        auto_show_tools = {
+            SketchTool.LINE: 1,           # After 1st point
+            SketchTool.RECTANGLE: 1,
+            SketchTool.RECTANGLE_CENTER: 1,
+            SketchTool.CIRCLE: 1,
+            SketchTool.POLYGON: 1,
+            SketchTool.SLOT: 1,
+            SketchTool.NUT: 1,            # After center point
+            SketchTool.STAR: 1,           # After center point
+            SketchTool.MOVE: 1,
+            SketchTool.COPY: 1,
+            SketchTool.ROTATE: 1,
+            SketchTool.SCALE: 1,
+            SketchTool.PATTERN_LINEAR: 1,
+            SketchTool.PATTERN_CIRCULAR: 1,
+            # OFFSET, FILLET_2D, CHAMFER_2D: Show immediately on selection (step 0)
+            SketchTool.OFFSET: 0,
+            SketchTool.FILLET_2D: 0,
+            SketchTool.CHAMFER_2D: 0,
+        }
+
+        required_step = auto_show_tools.get(self.current_tool)
+        if required_step is None:
+            return False
+
+        return self._tool_step >= required_step
+
+    def _check_auto_show_dim_input(self):
+        """
+        Called when tool_step changes. Shows DimensionInput if appropriate.
+
+        Phase 8: Smart Entry - Eliminates need for Tab key.
+        """
+        if not self._should_auto_show_dim_input():
+            return
+
+        # Mark this step as handled
+        self._last_auto_show_step = self._tool_step
+
+        # Use existing show method
+        self._show_dimension_input()
+
+        # Log the auto-show event
+        if sketch_logger and is_enabled("sketch_input_logging"):
+            tool_name = self.current_tool.name if self.current_tool else "UNKNOWN"
+            fields = list(self.dim_input.fields.keys()) if hasattr(self.dim_input, 'fields') else []
+            sketch_logger.log_show(tool_name, fields, source="auto")
+
+    def _should_forward_to_dim_input(self, char: str) -> bool:
+        """
+        Checks if a typed character should be forwarded to DimensionInput.
+
+        Phase 8: Direct Number Input - allows typing numbers without Tab.
+
+        Args:
+            char: The typed character
+
+        Returns:
+            True if character should be forwarded
+        """
+        # Only when tool is active and could show dimension input
+        if self.current_tool == SketchTool.SELECT:
+            return False
+
+        # Only digits, minus (for negative), and decimal point
+        if not char or char not in "0123456789.-":
+            return False
+
+        # If dim_input already visible and active, Qt handles input
+        if self.dim_input_active and self.dim_input.isVisible():
+            return False
+
+        # Check if this tool supports dimension input at current step
+        tools_with_dim_input = {
+            SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.NUT, SketchTool.STAR,
+            SketchTool.MOVE, SketchTool.COPY, SketchTool.ROTATE, SketchTool.SCALE,
+            SketchTool.OFFSET, SketchTool.FILLET_2D, SketchTool.CHAMFER_2D,
+            SketchTool.PATTERN_LINEAR, SketchTool.PATTERN_CIRCULAR,
+        }
+
+        if self.current_tool not in tools_with_dim_input:
+            return False
+
+        # For most tools, need at least step 1 (first point set)
+        # For OFFSET, FILLET_2D, CHAMFER_2D: can type at step 0 (after selection)
+        immediate_tools = {SketchTool.OFFSET, SketchTool.FILLET_2D, SketchTool.CHAMFER_2D}
+        if self.current_tool in immediate_tools:
+            return True
+
+        return self._tool_step >= 1
+
+    def _try_forward_to_dim_input(self, event) -> bool:
+        """
+        Tries to forward a key event to DimensionInput.
+
+        Phase 8: Direct Number Input - shows panel and forwards character.
+
+        Args:
+            event: QKeyEvent
+
+        Returns:
+            True if event was handled
+        """
+        char = event.text()
+
+        if not self._should_forward_to_dim_input(char):
+            return False
+
+        # Show dimension input if not visible
+        if not self.dim_input.isVisible():
+            self._show_dimension_input()
+
+        # If still not visible (e.g., no fields for current tool), abort
+        if not self.dim_input.isVisible():
+            return False
+
+        # Forward the character
+        if self.dim_input.forward_key(char):
+            self.dim_input_active = True
+
+            # Log the forward event
+            if sketch_logger and is_enabled("sketch_input_logging"):
+                tool_name = self.current_tool.name if self.current_tool else "UNKNOWN"
+                field_key = self.dim_input.get_active_field_key()
+                sketch_logger.log_forward(tool_name, field_key or "unknown", char)
+
+            self.request_update()
+            return True
+
+        return False
+
+    # ========== End Phase 8: Smart Entry ==========
+
     def set_tool(self, tool):
         self._cancel_tool()
         self.current_tool = tool
@@ -2898,6 +3145,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _cancel_tool(self):
         self.tool_step = 0
+        self._last_auto_show_step = -1  # Reset auto-show tracking for next operation
         self.tool_points.clear()
         self.tool_data.clear()
         self.selection_box_start = None
@@ -2991,12 +3239,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif self.tool_step == 0:
                 fields = [("R", "radius", 25.0, "mm")]
                 
-        # POLYGON: Nach Zentrum
+        # POLYGON: Nach Zentrum (mit Rotation)
         elif self.current_tool == SketchTool.POLYGON:
             if self.tool_step >= 1:
-                fields = [("R", "radius", self.live_radius, "mm"), ("N", "sides", self._safe_float(self.polygon_sides), "")]
+                fields = [("R", "radius", self.live_radius, "mm"),
+                          ("∠", "angle", self.live_angle, "°"),
+                          ("N", "sides", self._safe_float(self.polygon_sides), "")]
             elif self.tool_step == 0:
-                fields = [("R", "radius", 25.0, "mm"), ("N", "sides", self._safe_float(self.polygon_sides), "")]
+                fields = [("R", "radius", 25.0, "mm"),
+                          ("∠", "angle", 0.0, "°"),
+                          ("N", "sides", self._safe_float(self.polygon_sides), "")]
                 
         elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
             fields = [("X", "dx", 0.0, "mm"), ("Y", "dy", 0.0, "mm")]
@@ -3008,13 +3260,35 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
             fields = [("F", "factor", 1.0, "")]
             
-        # SLOT: Nach Startpunkt (Länge/Winkel), Nach Mittellinie (Breite)
+        # SLOT: Nach Startpunkt (Länge/Winkel), Nach Mittellinie (Radius)
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:
-                fields = [("L", "length", 50.0, "mm"), ("∠", "angle", 0.0, "°")]
+                fields = [("L", "length", self.live_length if self.live_length > 0 else 50.0, "mm"),
+                          ("∠", "angle", self.live_angle, "°")]
             elif self.tool_step == 2:
-                fields = [("B", "width", 10.0, "mm")]
-            
+                fields = [("R", "radius", self.live_radius if self.live_radius > 0 else 5.0, "mm")]
+
+        # NUT: Nach Position (Winkel für Rotation)
+        elif self.current_tool == SketchTool.NUT:
+            if self.tool_step >= 1:
+                fields = [("∠", "angle", self.live_angle, "°")]
+            elif self.tool_step == 0:
+                fields = [("∠", "angle", 0.0, "°")]
+
+        # STAR: Nach Zentrum (Spitzen, Radien)
+        elif self.current_tool == SketchTool.STAR:
+            if self.tool_step >= 1:
+                n = self.tool_data.get('star_points', 5)
+                ro = self.tool_data.get('star_r_outer', 50.0)
+                ri = self.tool_data.get('star_r_inner', 25.0)
+                fields = [("N", "points", self._safe_float(n), ""),
+                          ("Ro", "r_outer", ro, "mm"),
+                          ("Ri", "r_inner", ri, "mm")]
+            elif self.tool_step == 0:
+                fields = [("N", "points", 5.0, ""),
+                          ("Ro", "r_outer", 50.0, "mm"),
+                          ("Ri", "r_inner", 25.0, "mm")]
+
         # OFFSET: Immer verfügbar (auch negativ!)
         elif self.current_tool == SketchTool.OFFSET:
             fields = [("D", "distance", self.offset_distance, "mm")]
@@ -3059,7 +3333,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if key == "radius": self.live_radius = value
         elif self.current_tool == SketchTool.POLYGON:
             if key == "radius": self.live_radius = value
+            elif key == "angle": self.live_angle = value
             elif key == "sides": self.polygon_sides = max(3, min(64, int(value)))
+        elif self.current_tool == SketchTool.SLOT:
+            # Step 1: Length/Angle of centerline
+            # Step 2: Radius
+            if key == "length":
+                self.live_length = value
+                logger.debug(f"[SLOT] live_length updated to {value}")
+            elif key == "angle":
+                self.live_angle = value
+                logger.debug(f"[SLOT] live_angle updated to {value}")
+            elif key == "radius":
+                self.live_radius = value
+                logger.debug(f"[SLOT] live_radius updated to {value}")
         elif self.current_tool == SketchTool.OFFSET:
             self.offset_distance = value
             self._update_offset_preview()  # Preview sofort aktualisieren
@@ -3074,13 +3361,71 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
                 
         elif self.current_tool == SketchTool.PATTERN_CIRCULAR:
-            if key == "count": 
+            if key == "count":
                 self.tool_data['pattern_count'] = max(2, int(value))
-            elif key == "angle": 
+            elif key == "angle":
                 self.tool_data['pattern_angle'] = value
             self.request_update()
+        elif self.current_tool == SketchTool.STAR:
+            if key == "points":
+                self.tool_data['star_points'] = max(3, int(value))
+            elif key == "r_outer":
+                self.tool_data['star_r_outer'] = max(0.1, value)
+            elif key == "r_inner":
+                self.tool_data['star_r_inner'] = max(0.1, value)
+            self.request_update()
         self.request_update()
-    
+
+    def _on_dim_field_committed(self, key: str, value: float):
+        """
+        Called when a single field is committed in per-field enter mode.
+
+        Phase 8: Per-field enter - updates live values and logs.
+
+        Args:
+            key: Field key that was committed
+            value: Committed value
+        """
+        # Update live value (same as _on_dim_value_changed but for committed values)
+        self._on_dim_value_changed(key, value)
+
+        # Log the commit event
+        if sketch_logger and is_enabled("sketch_input_logging"):
+            tool_name = self.current_tool.name if self.current_tool else "UNKNOWN"
+            sketch_logger.log_commit(tool_name, key, value)
+
+    def _on_dim_field_reset(self, key: str):
+        """
+        Called when a field is reset to auto mode (double-click).
+
+        Phase 8: Reset to auto - recalculates value from mouse position.
+
+        Args:
+            key: Field key that was reset
+        """
+        # Update the field with current live value
+        if key == "length":
+            self.dim_input.set_value("length", self.live_length)
+        elif key == "angle":
+            self.dim_input.set_value("angle", self.live_angle)
+        elif key == "width":
+            self.dim_input.set_value("width", self.live_width)
+        elif key == "height":
+            self.dim_input.set_value("height", self.live_height)
+        elif key == "radius":
+            self.dim_input.set_value("radius", self.live_radius)
+        elif key == "distance":
+            self.dim_input.set_value("distance", self.offset_distance)
+        elif key == "factor":
+            self.dim_input.set_value("factor", 1.0)  # Default scale
+
+        # Log the unlock event
+        if sketch_logger and is_enabled("sketch_input_logging"):
+            tool_name = self.current_tool.name if self.current_tool else "UNKNOWN"
+            sketch_logger.log_unlock(tool_name, key)
+
+        self.request_update()
+
     def _on_dim_confirmed(self):
         from sketcher.constraints import ConstraintType
         from sketcher.geometry import Line2D, Circle2D, Arc2D
@@ -3182,37 +3527,52 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.RECTANGLE:
             w = self.live_width if self.dim_input.is_locked('width') else values.get("width", 50)
             h = self.live_height if self.dim_input.is_locked('height') else values.get("height", 30)
-            
+
             p1 = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
             self._save_undo()
-            
+
             if self.rect_mode == 1: # Center
-                self.sketch.add_rectangle(p1.x() - w/2, p1.y() - h/2, w, h, construction=self.construction_mode)
+                lines = self.sketch.add_rectangle(p1.x() - w/2, p1.y() - h/2, w, h, construction=self.construction_mode)
             else: # 2-Point
                 mouse = self.mouse_world if self.mouse_world else p1
                 x = p1.x() - w if mouse.x() < p1.x() else p1.x()
                 y = p1.y() - h if mouse.y() < p1.y() else p1.y()
-                self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
-            
+                lines = self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
+
+            # Automatische Bemaßung hinzufügen (Constraints)
+            if lines and len(lines) >= 4:
+                self.sketch.add_length(lines[0], w)  # Breite (Unten)
+                self.sketch.add_length(lines[3], h)  # Höhe (Links)
+
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
             
         elif self.current_tool == SketchTool.RECTANGLE_CENTER:
             w, h = values.get("width", 50), values.get("height", 30)
             c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
-            
+
             self._save_undo()
-            self.sketch.add_rectangle(c.x() - w/2, c.y() - h/2, w, h, construction=self.construction_mode)
+            lines = self.sketch.add_rectangle(c.x() - w/2, c.y() - h/2, w, h, construction=self.construction_mode)
+
+            # Automatische Bemaßung hinzufügen (Constraints)
+            if lines and len(lines) >= 4:
+                self.sketch.add_length(lines[0], w)  # Breite (Unten)
+                self.sketch.add_length(lines[3], h)  # Höhe (Links)
+
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
-            
+
         elif self.current_tool == SketchTool.CIRCLE:
             r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
             c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
-            
+
             self._save_undo()
-            self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
-            # Hinweis: Wenn wir hier Constraints wollen, müssten wir add_radius aufrufen
+            circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
+
+            # Automatische Bemaßung hinzufügen (Constraints)
+            if circle:
+                self.sketch.add_radius(circle, r)
+
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
             
@@ -3220,11 +3580,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
             n = int(values.get("sides", self.polygon_sides))
             c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
-            
+
+            # Phase 8: Use angle from input (degrees -> radians)
+            # If locked, use live_angle; otherwise get from values with fallback to live_angle
+            angle_deg = self.live_angle if self.dim_input.is_locked('angle') else values.get("angle", self.live_angle)
+            angle_rad = math.radians(angle_deg)
+
             self._save_undo()
-            # Berechnung der Punkte
-            pts = [(c.x() + r*math.cos(2*math.pi*i/n - math.pi/2), c.y() + r*math.sin(2*math.pi*i/n - math.pi/2)) for i in range(n)]
-            self.sketch.add_polygon(pts, closed=True, construction=self.construction_mode)
+            # Parametrisches Polygon mit Konstruktionskreis (wie in _handle_polygon)
+            lines, const_circle = self.sketch.add_regular_polygon(
+                c.x(), c.y(), r, n,
+                angle_offset=angle_rad,
+                construction=self.construction_mode
+            )
+
+            # Radius-Bemaßung für den Konstruktionskreis hinzufügen
+            if const_circle:
+                self.sketch.add_radius(const_circle, r)
+
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
             
@@ -3262,20 +3635,56 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # SLOT: Tab-Eingabe
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:
+                logger.info(f"[SLOT-TAB] Step 1→2: Confirmed length/angle via Tab")
                 p1 = self.tool_points[0]
                 length = values.get("length", 50.0)
                 angle = math.radians(values.get("angle", 0.0))
                 p2 = QPointF(p1.x() + length * math.cos(angle), p1.y() + length * math.sin(angle))
                 self.tool_points.append(p2)
                 self.tool_step = 2
-                self.status_message.emit(tr("Width | Tab=Enter width"))
+                self.status_message.emit(tr("Radius | Tab=Enter radius"))
+                logger.debug(f"[SLOT-TAB] p1={p1.x():.2f},{p1.y():.2f} p2={p2.x():.2f},{p2.y():.2f} length={length:.2f}")
+
+                # Directly reconfigure the panel with radius field
+                # Clear committed values and unlock all fields first
+                self.dim_input.committed_values.clear()
+                self.dim_input.unlock_all()
+
+                # Setup new fields for step 2 (radius)
+                radius_default = self.live_radius if self.live_radius > 0 else 5.0
+                fields = [("R", "radius", radius_default, "mm")]
+                self.dim_input.setup(fields)
+                logger.debug(f"[SLOT-TAB] Radius panel setup: default={radius_default:.2f}")
+
+                # Position near mouse and show
+                pos = self.mouse_screen
+                x = min(int(pos.x()) + 20, self.width() - self.dim_input.width() - 10)
+                y = min(int(pos.y()) - 40, self.height() - self.dim_input.height() - 10)
+                self.dim_input.move(max(10, x), max(10, y))
+                self.dim_input.show()
+                self.dim_input.focus_field(0)
+                self.dim_input_active = True
+                logger.success(f"[SLOT-TAB] Radius panel shown at ({x}, {y}), visible={self.dim_input.isVisible()}")
+
+                return  # Don't run cleanup code at end of method
             elif self.tool_step == 2:
                 p1, p2 = self.tool_points[0], self.tool_points[1]
-                width = values.get("width", 10.0)
-                if width > 0.01:
+                radius = values.get("radius", 5.0)
+                logger.info(f"[SLOT-TAB] Step 2: Creating slot with radius={radius:.2f}")
+                if radius > 0.01:
                     self._save_undo()
-                    self._create_slot(p1, p2, width)
+                    # Create slot using sketch.add_slot
+                    length = math.hypot(p2.x() - p1.x(), p2.y() - p1.y())
+                    center_line, main_arc = self.sketch.add_slot(
+                        p1.x(), p1.y(), p2.x(), p2.y(), radius,
+                        construction=self.construction_mode
+                    )
+                    # Add constraints for length and radius
+                    if length > 0.01:
+                        self.sketch.add_length(center_line, length)
+                    self.sketch.add_radius(main_arc, radius)
                     run_solver_and_update()
+                    logger.success(f"[SLOT-TAB] Slot created: length={length:.2f}, radius={radius:.2f}")
                 QTimer.singleShot(0, self._cancel_tool)
         
         # OFFSET, FILLET, CHAMFER: Nur Wert speichern
@@ -3310,21 +3719,98 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Bei Enter: Direkt anwenden
             self._apply_circular_pattern()
             return  # _apply_circular_pattern ruft _cancel_tool auf
-        
+
+        # NUT: Tab-Eingabe für Rotation
+        elif self.current_tool == SketchTool.NUT and self.tool_step >= 1:
+            center = self.tool_points[0]
+            rotation_angle = math.radians(values.get("angle", self.live_angle))
+
+            # Schlüsselweite mit Toleranz
+            size_name = self.nut_size_names[self.nut_size_index]
+            sw = self.nut_sizes[size_name] + self.nut_tolerance
+
+            # Schraubendurchmesser aus dem Namen extrahieren (M3 -> 3mm, M2.5 -> 2.5mm)
+            screw_diameter = float(size_name[1:])
+            hole_radius = (screw_diameter + self.nut_tolerance) / 2
+
+            # Sechskant: Radius zum Eckpunkt = SW / sqrt(3)
+            hex_radius = sw / math.sqrt(3)
+
+            self._save_undo()
+
+            # 6 Punkte für Sechskant mit Rotation
+            points = []
+            for i in range(6):
+                angle = rotation_angle + math.radians(30 + i * 60)
+                px = center.x() + hex_radius * math.cos(angle)
+                py = center.y() + hex_radius * math.sin(angle)
+                points.append((px, py))
+
+            self.sketch.add_polygon(points, closed=True, construction=self.construction_mode)
+
+            # Schraubenloch (Kreis in der Mitte)
+            self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
+
+            self.sketch.solve()
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+
+            # Info anzeigen
+            self.status_message.emit(f"{size_name} " + tr("Nut") + f" (SW {sw:.2f}mm, " + tr("Hole") + f" ⌀{screw_diameter + self.nut_tolerance:.2f}mm)")
+            QTimer.singleShot(0, self._cancel_tool)
+            return
+
+        # STAR: Tab-Eingabe für Stern
+        elif self.current_tool == SketchTool.STAR and self.tool_step >= 1:
+            center = self.tool_points[0]
+            n = max(3, int(values.get("points", self.tool_data.get('star_points', 5))))
+            ro = values.get("r_outer", self.tool_data.get('star_r_outer', 50.0))
+            ri = values.get("r_inner", self.tool_data.get('star_r_inner', 25.0))
+
+            self._save_undo()
+
+            # Stern-Punkte berechnen
+            points = []
+            step = math.pi / n
+            for i in range(2 * n):
+                r = ro if i % 2 == 0 else ri
+                angle = i * step - math.pi / 2  # Startet oben
+                px = center.x() + r * math.cos(angle)
+                py = center.y() + r * math.sin(angle)
+                points.append((px, py))
+
+            # Linien erstellen
+            for i in range(len(points)):
+                p1 = points[i]
+                p2 = points[(i + 1) % len(points)]
+                self.sketch.add_line(p1[0], p1[1], p2[0], p2[1], construction=self.construction_mode)
+
+            self.sketch.solve()
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            self.status_message.emit(tr("Star") + f" ({n} " + tr("points") + f", Ro={ro:.1f}, Ri={ri:.1f})")
+            QTimer.singleShot(0, self._cancel_tool)
+            return
+
+        logger.debug(f"[DIM] Fallthrough hide at end of _on_dim_confirmed (tool={self.current_tool.name}, step={self.tool_step})")
         self.dim_input.hide()
         self.dim_input.unlock_all()
         self.dim_input_active = False
         self.setFocus()
         self.request_update()
-    
+
     def mousePressEvent(self, event):
         pos = event.position()
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
-        
+
         # 1. Dimension Input Bestätigung (Klick ins Leere bestätigt Eingabe)
         if self.dim_input_active and self.dim_input.isVisible():
-            if not self.dim_input.geometry().contains(pos.toPoint()):
+            panel_geo = self.dim_input.geometry()
+            click_in_panel = panel_geo.contains(pos.toPoint())
+            logger.debug(f"[CLICK] dim_input_active=True, panel at {panel_geo}, click at {pos.toPoint()}, in_panel={click_in_panel}")
+            if not click_in_panel:
+                logger.info(f"[CLICK] Outside panel → auto-confirming dim_input (tool={self.current_tool.name}, step={self.tool_step})")
                 self._on_dim_confirmed()
                 return
         
@@ -3828,7 +4314,48 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.live_radius = math.hypot(snapped.x() - c.x(), snapped.y() - c.y())
                 if self.dim_input.isVisible():
                     self.dim_input.set_value('radius', self.live_radius)
-    
+            # Phase 8: Track angle for polygon rotation
+            if not self.dim_input.is_locked('angle'):
+                self.live_angle = math.degrees(math.atan2(snapped.y() - c.y(), snapped.x() - c.x()))
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('angle', self.live_angle)
+
+        elif self.current_tool == SketchTool.SLOT:
+            if self.tool_step == 1:
+                # Step 1: Track length and angle from mouse
+                p1 = self.tool_points[0]
+                dx, dy = snapped.x() - p1.x(), snapped.y() - p1.y()
+                if not self.dim_input.is_locked('length'):
+                    self.live_length = math.hypot(dx, dy)
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('length', self.live_length)
+                if not self.dim_input.is_locked('angle'):
+                    self.live_angle = math.degrees(math.atan2(dy, dx))
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('angle', self.live_angle)
+            elif self.tool_step == 2:
+                # Step 2: Track radius (perpendicular distance from centerline)
+                p1, p2 = self.tool_points[0], self.tool_points[1]
+                dx_line = p2.x() - p1.x()
+                dy_line = p2.y() - p1.y()
+                length = math.hypot(dx_line, dy_line)
+                if length > 0.01 and not self.dim_input.is_locked('radius'):
+                    # Perpendicular distance from mouse to centerline
+                    ux, uy = dx_line / length, dy_line / length
+                    nx, ny = -uy, ux  # Normal vector
+                    vx, vy = snapped.x() - p1.x(), snapped.y() - p1.y()
+                    self.live_radius = abs(vx * nx + vy * ny)
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('radius', self.live_radius)
+
+        elif self.current_tool == SketchTool.NUT and self.tool_step == 1:
+            # Track angle for nut rotation
+            c = self.tool_points[0]
+            if not self.dim_input.is_locked('angle'):
+                self.live_angle = math.degrees(math.atan2(snapped.y() - c.y(), snapped.x() - c.x()))
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('angle', self.live_angle)
+
     def wheelEvent(self, event):
         pos = event.position()
         world_before = self.screen_to_world(pos)
@@ -3846,7 +4373,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             print("Keypress")
             self._handle_escape_logic()
             return
-    
+
+        # Phase 8: Direct Number Input - forward numbers to dimension input
+        if is_enabled("use_direct_number_input") and not (mod & Qt.ControlModifier):
+            if self._try_forward_to_dim_input(event):
+                return
+
         if self.dim_input_active and self.dim_input.isVisible():
             if key == Qt.Key_Escape:
                 self.dim_input.hide()
@@ -3858,11 +4390,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return
             elif key in (Qt.Key_Return, Qt.Key_Enter):
                 # FIX: Enter wird bereits vom LineEdit-Signal (returnPressed) verarbeitet.
-                # Ein manueller Aufruf von _confirm() hier führt zur doppelten Erstellung 
+                # Ein manueller Aufruf von _confirm() hier führt zur doppelten Erstellung
                 # (einmal korrekt, einmal als "Geister-Objekt" an der Mausposition).
                 # Wir konsumieren das Event nur, damit es nicht weitergereicht wird.
                 # self.dim_input._confirm() <--- ENTFERNT
                 return
+            # Phase 8: Handle direct number input when panel is visible
+            # If the active field is unlocked and user types a digit, select all first
+            # so Qt will replace instead of append
+            elif is_enabled("use_direct_number_input"):
+                char = event.text()
+                if char and char in "0123456789.-":
+                    active_key = self.dim_input.get_active_field_key()
+                    if active_key and not self.dim_input.is_locked(active_key):
+                        # Select all so the next character replaces
+                        self.dim_input.select_active_field()
+                        # Let Qt handle the key normally (it will replace selection)
             return
         
         # Enter zum Bestätigen (für Offset etc.)

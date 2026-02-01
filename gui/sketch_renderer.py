@@ -5,6 +5,7 @@ Extracted from sketch_editor.py for better maintainability
 """
 
 import math
+from loguru import logger
 from PySide6.QtCore import QPointF, Qt, QRectF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPainterPath, QFont, QPolygonF, QFontMetrics
 
@@ -560,6 +561,37 @@ class SketchRendererMixin:
             p.setBrush(DesignTokens.COLOR_GEO_FIXED)
             p.drawPath(path_fixed_points)
 
+        # --- 4b. Standalone Punkte zeichnen (Point Tool) ---
+        for pt in self.sketch.points:
+            # Nur standalone Punkte (nicht Linien-Endpunkte)
+            if not getattr(pt, 'standalone', False):
+                continue
+
+            screen_pt = self.world_to_screen(QPointF(pt.x, pt.y))
+            is_sel = pt in self.selected_points
+
+            # Farbe basierend auf Zustand
+            if is_sel:
+                p.setPen(QPen(DesignTokens.COLOR_GEO_SELECTED, 2))
+                p.setBrush(DesignTokens.COLOR_GEO_SELECTED)
+                size = 5
+            elif getattr(pt, 'construction', False):
+                p.setPen(QPen(DesignTokens.COLOR_GEO_CONSTRUCTION, 2))
+                p.setBrush(DesignTokens.COLOR_GEO_CONSTRUCTION)
+                size = 4
+            else:
+                p.setPen(QPen(DesignTokens.COLOR_GEO_BODY, 2))
+                p.setBrush(DesignTokens.COLOR_GEO_BODY)
+                size = 4
+
+            # Punkt als ausgefüllter Kreis mit X-Kreuz
+            p.drawEllipse(screen_pt, size, size)
+            # Kleines X-Kreuz für bessere Sichtbarkeit
+            p.drawLine(QPointF(screen_pt.x() - size, screen_pt.y() - size),
+                       QPointF(screen_pt.x() + size, screen_pt.y() + size))
+            p.drawLine(QPointF(screen_pt.x() + size, screen_pt.y() - size),
+                       QPointF(screen_pt.x() - size, screen_pt.y() + size))
+
         # --- 5. Splines (Separat & Korrigiert) ---
         for spline in self.sketch.splines:
             if update_rect:
@@ -672,6 +704,8 @@ class SketchRendererMixin:
 
     def _draw_constraints(self, p):
         """Zeichnet Constraint-Icons an den betroffenen Elementen (Fusion360-Style)"""
+        from loguru import logger
+
         p.setFont(QFont("Segoe UI", 8, QFont.Bold))
 
         # Speichere Bounding-Boxes für Constraint-Klick-Erkennung
@@ -687,6 +721,7 @@ class SketchRendererMixin:
 
         # Pre-filter: Nur Constraints mit Entities im Viewport
         visible_constraints = []
+
         for c in self.sketch.constraints:
             if not c.entities:
                 continue
@@ -795,124 +830,132 @@ class SketchRendererMixin:
                         p.setPen(QPen(QColor(200, 100, 255)))
                         p.drawText(int(mid.x())-4, int(mid.y())-7-offset, "=")
                         
-                elif c.type == ConstraintType.LENGTH and c.value and c.entities:
-                    line = c.entities[0]
-                    
-                    # 1. Bildschirm-Koordinaten berechnen
-                    s_start = self.world_to_screen(QPointF(line.start.x, line.start.y))
-                    s_end = self.world_to_screen(QPointF(line.end.x, line.end.y))
-                    
-                    # 2. Mittelpunkt auf dem Bildschirm
-                    mid = (s_start + s_end) / 2
-                    
-                    # 3. Normalenvektor berechnen (Senkrecht zur Linie)
-                    dx = s_end.x() - s_start.x()
-                    dy = s_end.y() - s_start.y()
-                    length_screen = math.hypot(dx, dy)
-                    
-                    text_pos = mid
-                    
-                    if length_screen > 0:
-                        # Einheitsvektor der Normalen (-dy, dx) ist 90° rotiert
-                        # Wir nutzen einen Offset von 30 Pixeln
-                        offset_dist = 30 
-                        
-                        # Einfache Heuristik: Wir schieben immer in eine bestimmte relative Richtung,
-                        # damit es bei Rechtecken meistens "außen" landet (hängt von der Zeichenrichtung ab)
-                        nx = -dy / length_screen
-                        ny = dx / length_screen
-                        
-                        text_pos = QPointF(mid.x() + nx * offset_dist, mid.y() + ny * offset_dist)
-                        
-                        # Eine dünne Hilfslinie zeichnen (Dimension Line Style)
-                        p.setPen(QPen(QColor(100, 100, 100, 100), 1, Qt.DashLine))
-                        p.drawLine(mid, text_pos)
+                elif c.type == ConstraintType.LENGTH:
+                    if c.value and c.entities:
+                        line = c.entities[0]
 
-                    if c.formula:
-                        text = f"{c.formula} = {c.value:.1f}"
-                    else:
-                        text = f"{c.value:.1f}"
+                        # 1. Bildschirm-Koordinaten berechnen
+                        s_start = self.world_to_screen(QPointF(line.start.x, line.start.y))
+                        s_end = self.world_to_screen(QPointF(line.end.x, line.end.y))
 
-                    # Box zeichnen
-                    fm = QFontMetrics(p.font())
-                    rect = fm.boundingRect(text)
-                    box_w = rect.width() + 10
-                    box_h = rect.height() + 4
+                        # 2. Mittelpunkt auf dem Bildschirm
+                        mid = (s_start + s_end) / 2
 
-                    icon_rect = QRectF(int(text_pos.x() - box_w/2), int(text_pos.y() - box_h/2), box_w, box_h)
-                    self.constraint_icon_rects.append((c, icon_rect))
-                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
-                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+                        # 3. Normalenvektor berechnen (Senkrecht zur Linie)
+                        dx = s_end.x() - s_start.x()
+                        dy = s_end.y() - s_start.y()
+                        length_screen = math.hypot(dx, dy)
 
-                    p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(bg_color))
-                    # Zentrierte Box am neuen Ort
-                    p.drawRoundedRect(icon_rect, 3, 3)
+                        text_pos = mid
 
-                    p.setPen(QPen(self.DIM_COLOR))
-                    # Text zentrieren
-                    p.drawText(int(text_pos.x() - rect.width()/2),
-                               int(text_pos.y() + rect.height()/2 - 3), text)
-                    
-                elif c.type == ConstraintType.RADIUS and c.value and c.entities:
-                    circle = c.entities[0]
-                    r_screen = circle.radius * self.view_scale
-                    
-                    # Mittelpunkt im Screen-Space
-                    center = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
-                    
-                    # Wir zeichnen die Bemaßung immer in einem festen Winkel (z.B. 45° nach rechts oben)
-                    # Das sieht meistens am saubersten aus.
-                    angle_deg = -45 
-                    angle_rad = math.radians(angle_deg)
-                    
-                    # Richtung berechnen
-                    dir_x = math.cos(angle_rad)
-                    dir_y = math.sin(angle_rad)
-                    
-                    # Punkt auf dem Kreisring
-                    rim_x = center.x() + dir_x * r_screen
-                    rim_y = center.y() + dir_y * r_screen
-                    p_rim = QPointF(rim_x, rim_y)
-                    
-                    # Punkt für den Text (etwas weiter draußen)
-                    offset = 40 # Länge der Linie nach außen
-                    text_x = rim_x + dir_x * offset
-                    text_y = rim_y + dir_y * offset
-                    p_text = QPointF(text_x, text_y)
-                    
-                    # 1. Linie vom Zentrum zum Text
-                    p.setPen(QPen(self.DIM_COLOR, 1, Qt.DashLine))
-                    p.drawLine(center, p_text)
-                    
-                    # 2. Optional: Kleiner Punkt oder Pfeil am Kreisring
-                    p.setBrush(QBrush(self.DIM_COLOR))
-                    p.drawEllipse(p_rim, 2, 2)
-                    
-                    # 3. Text Box
-                    if c.formula:
-                        text = f"R {c.formula} = {c.value:.1f}"
-                    else:
-                        text = f"R{c.value:.1f}"
-                    fm = QFontMetrics(p.font())
-                    rect = fm.boundingRect(text)
+                        if length_screen > 0:
+                            # Einheitsvektor der Normalen (-dy, dx) ist 90° rotiert
+                            # Wir nutzen einen Offset von 30 Pixeln
+                            offset_dist = 30
 
-                    icon_rect = QRectF(int(p_text.x() - rect.width()/2 - 4),
-                                       int(p_text.y() - rect.height()/2 - 2),
-                                       rect.width()+8, rect.height()+4)
-                    self.constraint_icon_rects.append((c, icon_rect))
-                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
-                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+                            # Einfache Heuristik: Wir schieben immer in eine bestimmte relative Richtung,
+                            # damit es bei Rechtecken meistens "außen" landet (hängt von der Zeichenrichtung ab)
+                            nx = -dy / length_screen
+                            ny = dx / length_screen
 
-                    # Hintergrund für Text
-                    p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(bg_color))
-                    p.drawRoundedRect(icon_rect, 3, 3)
+                            text_pos = QPointF(mid.x() + nx * offset_dist, mid.y() + ny * offset_dist)
 
-                    # Text selbst
-                    p.setPen(QPen(self.DIM_COLOR))
-                    p.drawText(int(p_text.x() - rect.width()/2),
-                               int(p_text.y() + rect.height()/2 - 2), text)
+                            # Eine dünne Hilfslinie zeichnen (Dimension Line Style)
+                            p.setPen(QPen(QColor(100, 100, 100, 100), 1, Qt.DashLine))
+                            p.drawLine(mid, text_pos)
+
+                        if c.formula:
+                            text = f"{c.formula} = {c.value:.1f}"
+                        else:
+                            text = f"{c.value:.1f}"
+
+                        # Box zeichnen
+                        fm = QFontMetrics(p.font())
+                        rect = fm.boundingRect(text)
+                        box_w = rect.width() + 10
+                        box_h = rect.height() + 4
+
+                        icon_rect = QRectF(int(text_pos.x() - box_w/2), int(text_pos.y() - box_h/2), box_w, box_h)
+                        self.constraint_icon_rects.append((c, icon_rect))
+                        is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                        bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+
+                        p.setPen(Qt.NoPen)
+                        p.setBrush(QBrush(bg_color))
+                        # Zentrierte Box am neuen Ort
+                        p.drawRoundedRect(icon_rect, 3, 3)
+
+                        p.setPen(QPen(self.DIM_COLOR))
+                        # Text zentrieren
+                        p.drawText(int(text_pos.x() - rect.width()/2),
+                                   int(text_pos.y() + rect.height()/2 - 3), text)
+                    
+                elif c.type == ConstraintType.RADIUS:
+                    # Debug: Check why RADIUS constraints might not be drawn
+                    if not c.value:
+                        logger.warning(f"[Constraints] RADIUS constraint has no value: {c}")
+                    if not c.entities:
+                        logger.warning(f"[Constraints] RADIUS constraint has no entities: {c}")
+
+                    if c.value and c.entities:
+                        circle = c.entities[0]
+                        r_screen = circle.radius * self.view_scale
+
+                        # Mittelpunkt im Screen-Space
+                        center = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
+
+                        # Wir zeichnen die Bemaßung immer in einem festen Winkel (z.B. 45° nach rechts oben)
+                        # Das sieht meistens am saubersten aus.
+                        angle_deg = -45
+                        angle_rad = math.radians(angle_deg)
+
+                        # Richtung berechnen
+                        dir_x = math.cos(angle_rad)
+                        dir_y = math.sin(angle_rad)
+
+                        # Punkt auf dem Kreisring
+                        rim_x = center.x() + dir_x * r_screen
+                        rim_y = center.y() + dir_y * r_screen
+                        p_rim = QPointF(rim_x, rim_y)
+
+                        # Punkt für den Text (etwas weiter draußen)
+                        offset = 40  # Länge der Linie nach außen
+                        text_x = rim_x + dir_x * offset
+                        text_y = rim_y + dir_y * offset
+                        p_text = QPointF(text_x, text_y)
+
+                        # 1. Linie vom Zentrum zum Text
+                        p.setPen(QPen(self.DIM_COLOR, 1, Qt.DashLine))
+                        p.drawLine(center, p_text)
+
+                        # 2. Optional: Kleiner Punkt oder Pfeil am Kreisring
+                        p.setBrush(QBrush(self.DIM_COLOR))
+                        p.drawEllipse(p_rim, 2, 2)
+
+                        # 3. Text Box
+                        if c.formula:
+                            text = f"R {c.formula} = {c.value:.1f}"
+                        else:
+                            text = f"R{c.value:.1f}"
+                        fm = QFontMetrics(p.font())
+                        rect = fm.boundingRect(text)
+
+                        icon_rect = QRectF(int(p_text.x() - rect.width()/2 - 4),
+                                           int(p_text.y() - rect.height()/2 - 2),
+                                           rect.width()+8, rect.height()+4)
+                        self.constraint_icon_rects.append((c, icon_rect))
+                        is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                        bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 200)
+
+                        # Hintergrund für Text
+                        p.setPen(Qt.NoPen)
+                        p.setBrush(QBrush(bg_color))
+                        p.drawRoundedRect(icon_rect, 3, 3)
+
+                        # Text selbst
+                        p.setPen(QPen(self.DIM_COLOR))
+                        p.drawText(int(p_text.x() - rect.width()/2),
+                                   int(p_text.y() + rect.height()/2 - 2), text)
                     
                 elif c.type == ConstraintType.CONCENTRIC and len(c.entities) >= 2:
                     # Symbol am Mittelpunkt
@@ -1039,7 +1082,11 @@ class SketchRendererMixin:
                 r = self.live_radius
             else:
                 r = math.hypot(snap.x()-c.x(), snap.y()-c.y())
-            sa = math.atan2(snap.y()-c.y(), snap.x()-c.x())
+            # FIX: Use live_angle when dim_input is active, otherwise calculate from mouse
+            if use_dim_input:
+                sa = math.radians(self.live_angle)
+            else:
+                sa = math.atan2(snap.y()-c.y(), snap.x()-c.x())
             pts = [self.world_to_screen(QPointF(c.x() + r*math.cos(sa + 2*math.pi*i/self.polygon_sides), c.y() + r*math.sin(sa + 2*math.pi*i/self.polygon_sides))) for i in range(self.polygon_sides)]
             p.drawPolygon(QPolygonF(pts))
         
@@ -1068,11 +1115,54 @@ class SketchRendererMixin:
             ctr = self.world_to_screen(c)
             r_screen = hole_radius * self.view_scale
             p.drawEllipse(ctr, r_screen, r_screen)
-            
+
+        elif self.current_tool == SketchTool.STAR and self.tool_step >= 1:
+            # Star Preview mit Live-Werten aus dimension input
+            c = self.tool_points[0]
+
+            # Hole Werte aus dim_input (wenn vorhanden)
+            if hasattr(self, 'dim_input') and self.dim_input.isVisible():
+                values = self.dim_input.get_values()
+                n = int(values.get("points", 5))
+                ro = values.get("r_outer", 50.0)
+                ri = values.get("r_inner", 25.0)
+            else:
+                n = 5
+                ro = 50.0
+                ri = 25.0
+
+            # Stern-Punkte berechnen
+            pts = []
+            step = math.pi / n
+            for i in range(2 * n):
+                r = ro if i % 2 == 0 else ri
+                angle = i * step - math.pi / 2  # Startet oben
+                px = c.x() + r * math.cos(angle)
+                py = c.y() + r * math.sin(angle)
+                pts.append(self.world_to_screen(QPointF(px, py)))
+
+            # Stern zeichnen
+            p.drawPolygon(QPolygonF(pts))
+
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:
-                # Schritt 1: Linie zeigen
-                p.drawLine(self.world_to_screen(self.tool_points[0]), self.world_to_screen(snap))
+                # Schritt 1: Linie zeigen (mit dim_input-Werten wenn aktiv)
+                p1 = self.tool_points[0]
+                # Debug: Check if dim_input values should be used
+                dim_visible = self.dim_input.isVisible() if hasattr(self, 'dim_input') else False
+                dim_active = getattr(self, 'dim_input_active', False)
+                if use_dim_input and self.live_length > 0:
+                    # Use locked length/angle values
+                    length = self.live_length
+                    angle = math.radians(self.live_angle)
+                    end_x = p1.x() + length * math.cos(angle)
+                    end_y = p1.y() + length * math.sin(angle)
+                    end_pt = QPointF(end_x, end_y)
+                    logger.debug(f"[SLOT-PREVIEW] Using dim_input: L={length:.1f}, A={self.live_angle:.1f}°")
+                else:
+                    end_pt = snap
+                    logger.debug(f"[SLOT-PREVIEW] use_dim_input={use_dim_input}, live_length={self.live_length}")
+                p.drawLine(self.world_to_screen(p1), self.world_to_screen(end_pt))
             elif self.tool_step == 2:
                 # Schritt 2: Langloch mit abgerundeten Enden
                 p1, p2 = self.tool_points[0], self.tool_points[1]
@@ -1080,8 +1170,12 @@ class SketchRendererMixin:
                 length = math.hypot(dx, dy)
                 if length > 0.01:
                     nx, ny = -dy/length, dx/length
-                    width = abs((snap.x()-p1.x())*nx + (snap.y()-p1.y())*ny) * 2
-                    hw = width/2
+                    # FIX: Use live_radius when dim_input is active
+                    if use_dim_input and self.live_radius > 0:
+                        hw = self.live_radius
+                    else:
+                        width = abs((snap.x()-p1.x())*nx + (snap.y()-p1.y())*ny) * 2
+                        hw = width/2
                     
                     # Langloch-Form mit Halbkreisen an den Enden
                     from PySide6.QtGui import QPainterPath
