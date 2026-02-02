@@ -35,6 +35,23 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Assembly System (Phase 1-6)
     "assembly_system": True,  # Hierarchische Component-Struktur wie Fusion 360
+
+    # Performance Optimizations (2026 Performance Plan)
+    "optimized_actor_pooling": False,  # Phase 2: VTK Actor Pooling Optimierung
+    "reuse_hover_markers": False,  # Phase 3: Hover-Marker wiederverwenden
+    "picker_pooling": False,  # Phase 4: Picker-Pool statt neu erstellen
+    "bbox_early_rejection": False,  # Phase 5: BBox Check vor Boolean-Ops
+    "export_cache": False,  # Phase 6: Tessellation-Cache für STL Export
+    "feature_dependency_tracking": False,  # Phase 7: Feature Dependency Graph
+    "feature_solid_caching": False,  # Phase 8: Intermediate Solid Caching
+    "async_tessellation": False,  # Phase 9: Background Mesh Generation
+    "use_boolean_engine_v4": False,  # Phase 10: BooleanEngineV4 Integration
+    "ocp_advanced_flags": False,  # Phase 11: SetNonDestructive & SetUseOBB
+    "ocp_glue_mode": False,  # Phase 11: SetGlue() Testing
+    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Ops
+    "brep_extrema_analysis": False,  # Phase 13: BRepExtrema für Wandstärken
+    "auto_shape_unify": False,  # Phase 14: ShapeUpgrade_UnifySameDomain
+    "parallel_rebuild": False,  # Phase 15: Multi-Core Feature Rebuilding
 }
 
 

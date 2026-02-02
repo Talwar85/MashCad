@@ -18,6 +18,7 @@ except ImportError:
 from PySide6.QtGui import QColor
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from gui.viewport.section_view_mixin import SectionClipCache  # Phase 5: Section Cache
+from config.feature_flags import is_enabled  # Performance Plan Phase 2
 
 
 class ActorPool:
@@ -98,12 +99,19 @@ class BodyRenderingMixin:
         existing_actors = self._body_actors.get(bid, ())
 
         # Check if we can reuse existing actors (mesh changed check)
-        can_reuse_mesh = (n_mesh in existing_actors and
-                         n_mesh in self.plotter.renderer.actors and
-                         mesh_obj is not None)
-        can_reuse_edge = (n_edge in existing_actors and
-                         n_edge in self.plotter.renderer.actors and
-                         edge_mesh_obj is not None)
+        # Phase 2.1: Redundanter Renderer-Check entfernt (Feature Flag)
+        if is_enabled("optimized_actor_pooling"):
+            # OPTIMIZED: Nur existing_actors prüfen (renderer check redundant)
+            can_reuse_mesh = (n_mesh in existing_actors and mesh_obj is not None)
+            can_reuse_edge = (n_edge in existing_actors and edge_mesh_obj is not None)
+        else:
+            # LEGACY: Mit redundantem Renderer-Check
+            can_reuse_mesh = (n_mesh in existing_actors and
+                             n_mesh in self.plotter.renderer.actors and
+                             mesh_obj is not None)
+            can_reuse_edge = (n_edge in existing_actors and
+                             n_edge in self.plotter.renderer.actors and
+                             edge_mesh_obj is not None)
 
         # Only remove if we can't reuse
         if bid in self._body_actors and not (can_reuse_mesh or can_reuse_edge):
@@ -195,15 +203,26 @@ class BodyRenderingMixin:
                             lighting=False,
                         )
 
-                        if n_edge in self.plotter.renderer.actors:
-                            edge_actor = self.plotter.renderer.actors[n_edge]
-                            edge_mapper = edge_actor.GetMapper()
-                            edge_mapper.SetInputData(edge_mesh_obj)
-                        edge_mapper.Modified()
+                        # Phase 2.2: Duplicate Mapper SetInputData entfernt (Feature Flag)
+                        if is_enabled("optimized_actor_pooling"):
+                            # OPTIMIZED: add_mesh() hat bereits SetInputData gemacht
+                            if n_edge in self.plotter.renderer.actors:
+                                edge_actor = self.plotter.renderer.actors[n_edge]
+                                edge_mapper = edge_actor.GetMapper()
+                                # Polygon Offset für Z-Fighting Vermeidung
+                                edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
+                        else:
+                            # LEGACY: Mit redundantem SetInputData (und Bug!)
+                            if n_edge in self.plotter.renderer.actors:
+                                edge_actor = self.plotter.renderer.actors[n_edge]
+                                edge_mapper = edge_actor.GetMapper()
+                                edge_mapper.SetInputData(edge_mesh_obj)  # Redundant!
+                            edge_mapper.Modified()  # BUG: außerhalb if → crash wenn Actor nicht existiert!
 
-                        # Polygon Offset für Z-Fighting Vermeidung
-                        edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                        edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
+                            # Polygon Offset für Z-Fighting Vermeidung
+                            edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                            edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
 
                     actors_list.append(n_edge)
                 
