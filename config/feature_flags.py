@@ -32,6 +32,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # UX Features
     "sketch_orientation_indicator": False,  # Zeigt 3D-Orientierung im Sketch-Editor (deaktiviert - Auto-Align löst das Problem)
+
+    # Assembly System (Phase 1-6)
+    "assembly_system": True,  # Hierarchische Component-Struktur wie Fusion 360
 }
 
 

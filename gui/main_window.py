@@ -145,8 +145,9 @@ class MainWindow(QMainWindow):
         1. Fügt IMMER einen Eintrag ins Log-Panel hinzu.
         2. Zeigt NUR bei Success/Error/Warning ein Overlay an.
         """
-        # 1. Ins persistente Log schreiben
-        self.log_panel.add_message(level, message)
+        # 1. Ins persistente Log schreiben (nur wenn Panel existiert)
+        if hasattr(self, 'log_panel') and self.log_panel:
+            self.log_panel.add_message(level, message)
         
         # 2. Overlay Entscheidung
         show_overlay = False
@@ -861,10 +862,17 @@ class MainWindow(QMainWindow):
 
         # WICHTIG: Visibility changed muss ALLES neu laden (Sketches + Bodies)
         self.browser.visibility_changed.connect(self._trigger_viewport_update)
-        
+
         if hasattr(self.viewport_3d, 'set_body_visibility'):
             self.browser.body_vis_changed.connect(self.viewport_3d.set_body_visibility)
         self.browser.construction_plane_vis_changed.connect(self._on_construction_plane_vis_changed)
+
+        # Phase 3 Assembly: Component-Signale
+        self.browser.component_activated.connect(self._on_component_activated)
+        self.browser.component_created.connect(self._on_component_created)
+        self.browser.component_deleted.connect(self._on_component_deleted)
+        self.browser.component_renamed.connect(self._on_component_renamed)
+        self.browser.component_vis_changed.connect(self._on_component_vis_changed)
         
         # Viewport Signale
         self.viewport_3d.plane_clicked.connect(self._on_plane_selected)
@@ -1007,8 +1015,16 @@ class MainWindow(QMainWindow):
         colors = [(0.6, 0.6, 0.8), (0.8, 0.6, 0.6), (0.6, 0.8, 0.6)]
         
         visible_bodies = self.browser.get_visible_bodies()
-        
-        for i, (b, visible) in enumerate(visible_bodies):
+
+        # Phase 4 Assembly: Tupel hat jetzt 3 Elemente (body, visible, is_inactive_component)
+        for i, body_info in enumerate(visible_bodies):
+            # Backward-compatible: 2 oder 3 Elemente
+            if len(body_info) == 3:
+                b, visible, is_inactive = body_info
+            else:
+                b, visible = body_info
+                is_inactive = False
+
             if not visible:
                 continue
 
@@ -1017,25 +1033,27 @@ class MainWindow(QMainWindow):
                 col = getattr(b, 'color', default_color)
                 # Falls color None ist (manchmal bei Init), Default nehmen
                 if col is None: col = default_color
-                
+
                 if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
                     self.viewport_3d.add_body(
-                        bid=b.id, 
-                        name=b.name, 
-                        mesh_obj=b.vtk_mesh, 
-                        edge_mesh_obj=b.vtk_edges, 
-                        color=col
+                        bid=b.id,
+                        name=b.name,
+                        mesh_obj=b.vtk_mesh,
+                        edge_mesh_obj=b.vtk_edges,
+                        color=col,
+                        inactive_component=is_inactive
                     )
-                    
+
                 # Fall B: Fallback auf alte Listen (Legacy)
                 elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
                     # FIX: Benannte Argumente (keywords) nutzen!
                     self.viewport_3d.add_body(
-                        bid=b.id, 
-                        name=b.name, 
+                        bid=b.id,
+                        name=b.name,
                         verts=b._mesh_vertices,     # <-- Keyword wichtig!
                         faces=b._mesh_triangles,    # <-- Keyword wichtig!
-                        color=colors[i % 3]
+                        color=colors[i % 3],
+                        inactive_component=is_inactive
                     )
             except Exception as e:
                 logger.exception(f"Fehler beim Laden von Body {b.name}: {e}")
@@ -1054,15 +1072,23 @@ class MainWindow(QMainWindow):
         self.viewport_3d.clear_bodies()
         default_col = (0.7, 0.1, 0.1)
         
-        for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
+        for i, body_info in enumerate(self.browser.get_visible_bodies()):
+            # Assembly-System: 3-Tupel (body, visible, is_inactive_component)
+            if len(body_info) == 3:
+                b, visible, is_inactive = body_info
+            else:
+                b, visible = body_info
+                is_inactive = False
+
             if visible and hasattr(b, '_mesh_vertices') and b._mesh_vertices:
                 # FIX: Benannte Argumente verwenden!
                 self.viewport_3d.add_body(
-                    bid=b.id, 
-                    name=b.name, 
+                    bid=b.id,
+                    name=b.name,
                     verts=b._mesh_vertices,     # Explizit benennen
                     faces=b._mesh_triangles,    # Explizit benennen
-                    color=default_col
+                    color=default_col,
+                    inactive_component=is_inactive  # Grau/transparent für inaktive Components
                 ) 
         
     def _on_3d_action(self, action: str):
@@ -2043,9 +2069,23 @@ class MainWindow(QMainWindow):
         # Bodies - komplett neu laden um gelöschte zu entfernen
         self.viewport_3d.clear_bodies()
         colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
-        for i, (b, visible) in enumerate(self.browser.get_visible_bodies()):
+        for i, body_info in enumerate(self.browser.get_visible_bodies()):
+            # Assembly-System: 3-Tupel (body, visible, is_inactive_component)
+            if len(body_info) == 3:
+                b, visible, is_inactive = body_info
+            else:
+                b, visible = body_info
+                is_inactive = False
+
             if visible and hasattr(b, '_mesh_vertices'):
-                self.viewport_3d.add_body(b.id, b.name, b._mesh_vertices, b._mesh_triangles, colors[i%3])
+                self.viewport_3d.add_body(
+                    bid=b.id,
+                    name=b.name,
+                    verts=b._mesh_vertices,
+                    faces=b._mesh_triangles,
+                    color=colors[i % 3],
+                    inactive_component=is_inactive
+                )
 
     def _set_mode(self, mode):
         self.mode = mode
@@ -3216,7 +3256,8 @@ class MainWindow(QMainWindow):
         self._pushpull_face_normal = None
         self.viewport_3d.set_pushpull_mode(False)
         self.pushpull_panel.hide()
-        self._trigger_viewport_update()
+        # Sofortiges Update statt Timer - stellt sicher dass inactive_component korrekt gesetzt wird
+        self._update_viewport_all_impl()
 
     def _surface_analysis_dialog(self):
         """
@@ -4519,7 +4560,13 @@ class MainWindow(QMainWindow):
         # A) Sketches verarbeiten
         visible_sketches = self.browser.get_visible_sketches()
 
-        for sketch, visible in visible_sketches:
+        for sketch_info in visible_sketches:
+            # Backward-compatible: 2- oder 3-Tupel
+            if len(sketch_info) == 3:
+                sketch, visible, is_inactive = sketch_info
+            else:
+                sketch, visible = sketch_info
+
             if visible:
                 x_dir = getattr(sketch, 'plane_x_dir', None)
                 y_dir = getattr(sketch, 'plane_y_dir', None)
@@ -5875,10 +5922,35 @@ class MainWindow(QMainWindow):
             return result.clean()
         return None
 
+    def _is_body_in_inactive_component(self, body) -> bool:
+        """Prüft ob Body zu einer inaktiven Component gehört (Assembly-System)."""
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return False
+        if not hasattr(self.document, 'root_component') or not self.document.root_component:
+            return False
+
+        active_comp = self.document._active_component
+
+        def find_body_component(component):
+            """Findet die Component die den Body enthält."""
+            if body in component.bodies:
+                return component
+            for sub in component.sub_components:
+                found = find_body_component(sub)
+                if found:
+                    return found
+            return None
+
+        body_comp = find_body_component(self.document.root_component)
+        return body_comp is not None and body_comp != active_comp
+
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
         logger.debug(f"_update_body_mesh aufgerufen für '{body.name}' (id={body.id})")
-        
+
+        # Assembly: Prüfen ob Body zu inaktiver Component gehört
+        is_inactive = self._is_body_in_inactive_component(body)
+
         if hasattr(body, 'vtk_mesh') and body.vtk_mesh is not None:
             if body.vtk_mesh.n_points == 0:
                 logger.warning(f"Warnung: Body '{body.name}' ist leer (0 Punkte). Überspringe Rendering.")
@@ -5893,7 +5965,8 @@ class MainWindow(QMainWindow):
                      bid=body.id,
                      name=body.name,
                      mesh_obj=mesh_override,
-                     color=getattr(body, 'color', None)
+                     color=getattr(body, 'color', None),
+                     inactive_component=is_inactive
                  )
                  # Body-Referenz setzen und Texture-Preview aktualisieren
                  self.viewport_3d.set_body_object(body.id, body)
@@ -5908,13 +5981,14 @@ class MainWindow(QMainWindow):
                  col_idx = self.document.bodies.index(body) % 3
              except: col_idx = 0
              default_col = (0.7, 0.7, 0.7)
-             
+
              self.viewport_3d.add_body(
                  bid=body.id,
                  name=body.name,
                  mesh_obj=body.vtk_mesh,
                  edge_mesh_obj=body.vtk_edges,
-                 color=default_col
+                 color=default_col,
+                 inactive_component=is_inactive
              )
              # Body-Referenz setzen und Texture-Preview aktualisieren
              self.viewport_3d.set_body_object(body.id, body)
@@ -5928,13 +6002,14 @@ class MainWindow(QMainWindow):
                  col_idx = self.document.bodies.index(body) % 3
              except: col_idx = 0
              colors = [(0.6,0.6,0.8), (0.8,0.6,0.6), (0.6,0.8,0.6)]
-             
+
              self.viewport_3d.add_body(
                  bid=body.id,
                  name=body.name,
                  verts=body._mesh_vertices,
                  faces=body._mesh_triangles,
-                 color=colors[col_idx]
+                 color=colors[col_idx],
+                 inactive_component=is_inactive
              )
              # Body-Referenz setzen und Texture-Preview aktualisieren
              self.viewport_3d.set_body_object(body.id, body)
@@ -6324,6 +6399,95 @@ class MainWindow(QMainWindow):
 
         logger.success(f"Feature '{feature.name}' gelöscht (Undo: Ctrl+Z)")
 
+    # =========================================================================
+    # Phase 3 Assembly: Component-Handler
+    # =========================================================================
+
+    def _on_component_activated(self, component):
+        """
+        Aktiviert eine Component als aktive Bearbeitungs-Component.
+
+        In Assembly-Modus: Bodies/Sketches werden relativ zur aktiven Component bearbeitet.
+        """
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        self.document.set_active_component(component)
+        self.browser.refresh()
+
+        # Viewport aktualisieren (inaktive Components grau/transparent)
+        self._trigger_viewport_update()
+
+        self.statusBar().showMessage(f"Aktive Component: {component.name}")
+        logger.info(f"[ASSEMBLY] Component aktiviert: {component.name}")
+
+    def _on_component_created(self, parent_component, new_component):
+        """
+        Handler für neue Component-Erstellung.
+
+        Erstellt UndoCommand für Undo/Redo-Support.
+        """
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        # Direkte Zuweisung (später: UndoCommand)
+        parent_component.sub_components.append(new_component)
+        new_component.parent = parent_component
+
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+        self.statusBar().showMessage(f"Component erstellt: {new_component.name}")
+        logger.info(f"[ASSEMBLY] Component erstellt: {new_component.name} in {parent_component.name}")
+
+    def _on_component_deleted(self, component):
+        """
+        Handler für Component-Löschung.
+
+        Löscht Component inkl. aller Bodies/Sketches/Sub-Components.
+        """
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        if component.parent is None:
+            logger.warning("[ASSEMBLY] Root-Component kann nicht gelöscht werden")
+            return
+
+        # Wenn aktive Component gelöscht wird, aktiviere Parent
+        if self.document._active_component == component:
+            self.document.set_active_component(component.parent)
+
+        # Aus Parent entfernen
+        component.parent.sub_components.remove(component)
+
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+        self.statusBar().showMessage(f"Component gelöscht: {component.name}")
+        logger.info(f"[ASSEMBLY] Component gelöscht: {component.name}")
+
+    def _on_component_renamed(self, component, new_name):
+        """Handler für Component-Umbenennung."""
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        old_name = component.name
+        component.name = new_name
+
+        self.browser.refresh()
+
+        self.statusBar().showMessage(f"Component umbenannt: {old_name} → {new_name}")
+        logger.info(f"[ASSEMBLY] Component umbenannt: {old_name} → {new_name}")
+
+    def _on_component_vis_changed(self, component_id: str, visible: bool):
+        """
+        Handler für Component-Visibility-Änderung.
+
+        Blendet alle Bodies/Sketches der Component (und Sub-Components) ein/aus.
+        """
+        self._trigger_viewport_update()
+        logger.debug(f"[ASSEMBLY] Component visibility geändert: {component_id} → {visible}")
+
     def _on_rollback_changed(self, body, value):
         """Handle rollback slider change - rebuild body up to given feature index."""
         from modeling.cad_tessellator import CADTessellator
@@ -6413,11 +6577,11 @@ class MainWindow(QMainWindow):
                 self.browser.set_document(doc)
                 self.browser.refresh()
 
-                # Viewport aktualisieren
-                self.viewport_3d.clear_bodies()
-                for body in doc.bodies:
-                    if body._build123d_solid or body.vtk_mesh:
-                        self._update_body_mesh(body)
+                # Viewport aktualisieren - direkter Aufruf für sofortiges Update
+                self._update_viewport_all_impl()
+
+                # Sketches im Viewport aktualisieren
+                self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
 
                 # Aktiven Sketch setzen
                 if doc.active_sketch:

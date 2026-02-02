@@ -3704,27 +3704,39 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     def set_sketches(self, sketches):
         """
         Zeichnet 2D-Sketches im 3D-Raum (Batch-Rendering V2.1 - Fix).
+        Unterstützt 2-Tupel (sketch, visible) und 3-Tupel (sketch, visible, is_inactive).
         """
         self.sketches = list(sketches)
         if not HAS_PYVISTA: return
-        
+
         # 1. Alte Sketch-Actors entfernen
         for n in self._sketch_actors:
             try: self.plotter.remove_actor(n)
             except: pass
         self._sketch_actors.clear()
-        
+
         # 2. Sketches rendern
-        for s, visible in self.sketches:
-            if visible: 
-                self._render_sketch_batched(s)
-        
+        for sketch_info in self.sketches:
+            # Backward-compatible: 2- oder 3-Tupel
+            if len(sketch_info) == 3:
+                s, visible, is_inactive = sketch_info
+            else:
+                s, visible = sketch_info
+                is_inactive = False
+
+            if visible:
+                self._render_sketch_batched(s, inactive_component=is_inactive)
+
         request_render(self.plotter)
 
-    def _render_sketch_batched(self, s):
+    def _render_sketch_batched(self, s, inactive_component=False):
         """
         Kombiniert Geometrie zu einem Mesh (High-Performance).
         FIX: Nutzt explizit 'lines=' für PolyData.
+
+        Args:
+            s: Sketch-Objekt
+            inactive_component: True wenn Sketch zu inaktiver Component gehört (gedimmte Darstellung)
         """
         sid = getattr(s, 'id', id(s))
         norm = tuple(getattr(s, 'plane_normal', (0,0,1)))
@@ -3825,21 +3837,33 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # WICHTIG: 'lines=' Parameter verwenden, nicht positionales Argument!
             return pv.PolyData(points, lines=cells.flatten())
 
-        # Actors hinzufügen
+        # Actors hinzufügen - bei inaktiven Components gedimmte Farben
+        if inactive_component:
+            reg_color = '#666666'    # Grau statt Blau für inaktive
+            const_color = '#444444'  # Dunkelgrau
+            reg_opacity = 0.4
+            const_opacity = 0.3
+        else:
+            reg_color = '#4d94ff'    # Blau für aktive Component
+            const_color = 'gray'
+            reg_opacity = 1.0
+            const_opacity = 0.6
+
         if reg_points:
             mesh = create_lines_mesh(reg_points)
             name = f"sketch_{sid}_reg"
-            self.plotter.add_mesh(mesh, color='#4d94ff', line_width=3, name=name, pickable=False)
+            self.plotter.add_mesh(mesh, color=reg_color, line_width=3, name=name, pickable=False, opacity=reg_opacity)
             self._sketch_actors.append(name)
-            
+
         if const_points:
             mesh = create_lines_mesh(const_points)
             name = f"sketch_{sid}_const"
-            self.plotter.add_mesh(mesh, color='gray', line_width=1, name=name, pickable=False, opacity=0.6)
+            self.plotter.add_mesh(mesh, color=const_color, line_width=1, name=name, pickable=False, opacity=const_opacity)
             self._sketch_actors.append(name)
 
-    def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None, 
-                 verts=None, faces=None, normals=None, edges=None, edge_lines=None):
+    def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None,
+                 verts=None, faces=None, normals=None, edges=None, edge_lines=None,
+                 opacity=1.0, pickable=True, inactive_component=False):
         """
         Fügt einen Körper hinzu. 
         FIX: Erkennt automatisch Legacy-Listen-Aufrufe und verhindert den 'point_data' Crash.
@@ -3946,9 +3970,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 logger.debug(f"  Mesh bounds: X({bounds[0]:.1f} to {bounds[1]:.1f}), Y({bounds[2]:.1f} to {bounds[3]:.1f}), Z({bounds[4]:.1f} to {bounds[5]:.1f})")
                 logger.debug(f"  Mesh center: ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f})")
                 
-                self.plotter.add_mesh(mesh_obj, color=col_rgb, name=n_mesh, show_edges=False, 
-                                      smooth_shading=has_normals, pbr=not has_normals, 
-                                      metallic=0.1, roughness=0.6, pickable=True)
+                # Phase 4 Assembly: Inaktive Components grau/transparent
+                render_color = (0.5, 0.5, 0.5) if inactive_component else col_rgb
+                render_opacity = 0.35 if inactive_component else opacity
+
+                self.plotter.add_mesh(mesh_obj, color=render_color, name=n_mesh, show_edges=False,
+                                      smooth_shading=has_normals, pbr=not has_normals,
+                                      metallic=0.1, roughness=0.6, pickable=pickable and not inactive_component,
+                                      opacity=render_opacity)
                 
                 # Explizit sichtbar machen
                 if n_mesh in self.plotter.renderer.actors:
@@ -3981,7 +4010,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     except: pass
                 
                 n_mesh = f"body_{bid}_m"
-                self.plotter.add_mesh(mesh, color=col_rgb, name=n_mesh, show_edges=False, smooth_shading=True, pickable=True)
+                # Phase 4 Assembly: Inaktive Components grau/transparent
+                render_color = (0.5, 0.5, 0.5) if inactive_component else col_rgb
+                render_opacity = 0.35 if inactive_component else opacity
+                self.plotter.add_mesh(mesh, color=render_color, name=n_mesh, show_edges=False,
+                                      smooth_shading=True, pickable=pickable and not inactive_component,
+                                      opacity=render_opacity)
                 
                 if n_mesh in self.plotter.renderer.actors:
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)

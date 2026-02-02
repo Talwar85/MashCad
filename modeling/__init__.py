@@ -732,6 +732,286 @@ class ConstructionPlane:
         )
 
 
+# ==================== COMPONENT (Assembly System) ====================
+
+@dataclass
+class Component:
+    """
+    Container für Bodies, Sketches, Planes mit eigenem Koordinatensystem.
+
+    Ermöglicht hierarchische Strukturen wie in Fusion 360:
+    - Document → Root Component → Sub-Components
+    - Jede Component enthält Bodies, Sketches, Planes
+    - Sub-Components können eigene Objekte enthalten
+
+    Phase 1: Datenmodell für Assembly-System
+    """
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str = "Component"
+
+    # Enthaltene Objekte (forward references - werden später resolved)
+    bodies: List['Body'] = field(default_factory=list)
+    sketches: List['Sketch'] = field(default_factory=list)
+    planes: List['ConstructionPlane'] = field(default_factory=list)
+
+    # Hierarchie
+    sub_components: List['Component'] = field(default_factory=list)
+    parent: Optional['Component'] = field(default=None, repr=False)  # Avoid circular repr
+
+    # Transform relativ zum Parent (für Assembly-Positionierung)
+    position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # Euler XYZ in degrees
+
+    # State
+    visible: bool = True
+    is_active: bool = False  # Nur eine Component kann aktiv sein
+    expanded: bool = True    # UI-State für Tree-View
+
+    def __post_init__(self):
+        """Logging für neue Component."""
+        logger.debug(f"Component erstellt: {self.name} (id={self.id})")
+
+    # =========================================================================
+    # Hierarchie-Navigation
+    # =========================================================================
+
+    def get_all_bodies(self, recursive: bool = True) -> List['Body']:
+        """
+        Gibt alle Bodies dieser Component zurück.
+
+        Args:
+            recursive: Wenn True, auch Bodies aus Sub-Components
+
+        Returns:
+            Liste aller Bodies
+        """
+        result = list(self.bodies)
+        if recursive:
+            for sub in self.sub_components:
+                result.extend(sub.get_all_bodies(recursive=True))
+        return result
+
+    def get_all_sketches(self, recursive: bool = True) -> List['Sketch']:
+        """Gibt alle Sketches dieser Component zurück."""
+        result = list(self.sketches)
+        if recursive:
+            for sub in self.sub_components:
+                result.extend(sub.get_all_sketches(recursive=True))
+        return result
+
+    def get_all_components(self) -> List['Component']:
+        """Gibt alle Sub-Components rekursiv zurück (inkl. dieser)."""
+        result = [self]
+        for sub in self.sub_components:
+            result.extend(sub.get_all_components())
+        return result
+
+    def find_component_by_id(self, comp_id: str) -> Optional['Component']:
+        """Findet Component nach ID (rekursiv)."""
+        if self.id == comp_id:
+            return self
+        for sub in self.sub_components:
+            found = sub.find_component_by_id(comp_id)
+            if found:
+                return found
+        return None
+
+    def find_body_by_id(self, body_id: str) -> Optional['Body']:
+        """Findet Body nach ID (rekursiv)."""
+        for body in self.bodies:
+            if body.id == body_id:
+                return body
+        for sub in self.sub_components:
+            found = sub.find_body_by_id(body_id)
+            if found:
+                return found
+        return None
+
+    def get_root(self) -> 'Component':
+        """Gibt die Root-Component zurück."""
+        if self.parent is None:
+            return self
+        return self.parent.get_root()
+
+    def get_path(self) -> List['Component']:
+        """Gibt den Pfad von Root zu dieser Component zurück."""
+        if self.parent is None:
+            return [self]
+        return self.parent.get_path() + [self]
+
+    # =========================================================================
+    # Component Management
+    # =========================================================================
+
+    def add_sub_component(self, name: str = None) -> 'Component':
+        """
+        Erstellt neue Sub-Component.
+
+        Args:
+            name: Name der neuen Component (optional)
+
+        Returns:
+            Neue Component
+        """
+        new_comp = Component(name=name or f"Component{len(self.sub_components)+1}")
+        new_comp.parent = self
+        self.sub_components.append(new_comp)
+        logger.info(f"Sub-Component erstellt: {new_comp.name} in {self.name}")
+        return new_comp
+
+    def remove_sub_component(self, comp: 'Component') -> bool:
+        """
+        Entfernt Sub-Component.
+
+        Args:
+            comp: Zu entfernende Component
+
+        Returns:
+            True wenn erfolgreich
+        """
+        if comp in self.sub_components:
+            self.sub_components.remove(comp)
+            comp.parent = None
+            logger.info(f"Sub-Component entfernt: {comp.name} aus {self.name}")
+            return True
+        return False
+
+    def move_body_to(self, body: 'Body', target: 'Component') -> bool:
+        """
+        Verschiebt Body in andere Component.
+
+        Args:
+            body: Zu verschiebender Body
+            target: Ziel-Component
+
+        Returns:
+            True wenn erfolgreich
+        """
+        if body in self.bodies:
+            self.bodies.remove(body)
+            target.bodies.append(body)
+            logger.info(f"Body '{body.name}' verschoben: {self.name} → {target.name}")
+            return True
+        return False
+
+    # =========================================================================
+    # Serialisierung (Phase 2)
+    # =========================================================================
+
+    def to_dict(self) -> dict:
+        """
+        Serialisiert Component zu Dictionary.
+
+        Returns:
+            Dictionary für JSON-Serialisierung
+        """
+        return {
+            "id": self.id,
+            "name": self.name,
+            "position": list(self.position),
+            "rotation": list(self.rotation),
+            "visible": self.visible,
+            "is_active": self.is_active,
+            "expanded": self.expanded,
+            "bodies": [b.to_dict() for b in self.bodies],
+            "sketches": [
+                {
+                    **s.to_dict(),
+                    "plane_origin": list(s.plane_origin) if hasattr(s, 'plane_origin') else [0, 0, 0],
+                    "plane_normal": list(s.plane_normal) if hasattr(s, 'plane_normal') else [0, 0, 1],
+                    "plane_x_dir": list(s.plane_x_dir) if hasattr(s, 'plane_x_dir') and s.plane_x_dir else None,
+                    "plane_y_dir": list(s.plane_y_dir) if hasattr(s, 'plane_y_dir') and s.plane_y_dir else None,
+                }
+                for s in self.sketches
+            ],
+            "planes": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "origin": list(p.origin),
+                    "normal": list(p.normal),
+                    "x_dir": list(p.x_dir),
+                }
+                for p in self.planes
+            ],
+            "sub_components": [c.to_dict() for c in self.sub_components],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, parent: 'Component' = None) -> 'Component':
+        """
+        Deserialisiert Component aus Dictionary.
+
+        Args:
+            data: Dictionary mit Component-Daten
+            parent: Parent-Component (für Hierarchie)
+
+        Returns:
+            Neue Component
+        """
+        comp = cls(
+            id=data.get("id", str(uuid.uuid4())[:8]),
+            name=data.get("name", "Component"),
+            position=tuple(data.get("position", (0.0, 0.0, 0.0))),
+            rotation=tuple(data.get("rotation", (0.0, 0.0, 0.0))),
+            visible=data.get("visible", True),
+            is_active=data.get("is_active", False),
+            expanded=data.get("expanded", True),
+            parent=parent,
+        )
+
+        # Bodies laden
+        for body_data in data.get("bodies", []):
+            try:
+                body = Body.from_dict(body_data)
+                comp.bodies.append(body)
+            except Exception as e:
+                logger.warning(f"Body konnte nicht geladen werden: {e}")
+
+        # Sketches laden
+        for sketch_data in data.get("sketches", []):
+            try:
+                sketch = Sketch.from_dict(sketch_data)
+                # Plane-Daten wiederherstellen
+                if "plane_origin" in sketch_data:
+                    sketch.plane_origin = tuple(sketch_data["plane_origin"])
+                if "plane_normal" in sketch_data:
+                    sketch.plane_normal = tuple(sketch_data["plane_normal"])
+                if sketch_data.get("plane_x_dir"):
+                    sketch.plane_x_dir = tuple(sketch_data["plane_x_dir"])
+                if sketch_data.get("plane_y_dir"):
+                    sketch.plane_y_dir = tuple(sketch_data["plane_y_dir"])
+                comp.sketches.append(sketch)
+            except Exception as e:
+                logger.warning(f"Sketch konnte nicht geladen werden: {e}")
+
+        # Planes laden
+        for plane_data in data.get("planes", []):
+            try:
+                plane = ConstructionPlane(
+                    id=plane_data.get("id", str(uuid.uuid4())[:8]),
+                    name=plane_data.get("name", "Plane"),
+                    origin=tuple(plane_data.get("origin", (0, 0, 0))),
+                    normal=tuple(plane_data.get("normal", (0, 0, 1))),
+                    x_dir=tuple(plane_data.get("x_dir", (1, 0, 0))),
+                )
+                comp.planes.append(plane)
+            except Exception as e:
+                logger.warning(f"Plane konnte nicht geladen werden: {e}")
+
+        # Sub-Components rekursiv laden
+        for sub_data in data.get("sub_components", []):
+            try:
+                sub = cls.from_dict(sub_data, parent=comp)
+                comp.sub_components.append(sub)
+            except Exception as e:
+                logger.warning(f"Sub-Component konnte nicht geladen werden: {e}")
+
+        logger.debug(f"Component geladen: {comp.name} ({len(comp.bodies)} Bodies, {len(comp.sketches)} Sketches, {len(comp.sub_components)} Sub-Components)")
+        return comp
+
+
 # ==================== CORE LOGIC ====================
 
 class Body:
@@ -6153,13 +6433,162 @@ class Body:
 
 
 class Document:
+    """
+    Dokument mit optionalem Assembly-System.
+
+    Phase 1 Assembly: Unterstützt hierarchische Component-Struktur.
+    Backward-compatible: Alte Projekte laden weiterhin korrekt.
+    """
+
     def __init__(self, name="Doc"):
-        self.bodies: List[Body] = []
-        self.sketches: List[Sketch] = []
-        self.planes: List[ConstructionPlane] = []  # Phase 6: Konstruktionsebenen
         self.name = name
         self.active_body: Optional[Body] = None
         self.active_sketch: Optional[Sketch] = None
+
+        # =========================================================================
+        # Assembly System (Phase 1)
+        # =========================================================================
+        # Feature Flag prüfen
+        from config.feature_flags import is_enabled
+        self._assembly_enabled = is_enabled("assembly_system")
+
+        if self._assembly_enabled:
+            # NEU: Component-basierte Architektur
+            self.root_component: Component = Component(name="Root")
+            self.root_component.is_active = True
+            self._active_component: Optional[Component] = self.root_component
+            logger.info(f"[ASSEMBLY] Component-System aktiviert für '{name}'")
+        else:
+            # Legacy: Direkte Listen (für Backward-Compatibility)
+            self.root_component = None
+            self._active_component = None
+
+        # Diese Listen werden immer verwendet (delegieren zu active_component wenn assembly_enabled)
+        self._bodies: List[Body] = []
+        self._sketches: List[Sketch] = []
+        self._planes: List[ConstructionPlane] = []
+
+    # =========================================================================
+    # Properties für Backward-Compatibility
+    # =========================================================================
+    # Diese Properties delegieren zu active_component wenn Assembly aktiviert
+
+    @property
+    def bodies(self) -> List[Body]:
+        """Bodies der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
+        if self._assembly_enabled and self._active_component:
+            return self._active_component.bodies
+        return self._bodies
+
+    @bodies.setter
+    def bodies(self, value: List[Body]):
+        if self._assembly_enabled and self._active_component:
+            self._active_component.bodies = value
+        else:
+            self._bodies = value
+
+    @property
+    def sketches(self) -> List[Sketch]:
+        """Sketches der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
+        if self._assembly_enabled and self._active_component:
+            return self._active_component.sketches
+        return self._sketches
+
+    @sketches.setter
+    def sketches(self, value: List[Sketch]):
+        if self._assembly_enabled and self._active_component:
+            self._active_component.sketches = value
+        else:
+            self._sketches = value
+
+    @property
+    def planes(self) -> List[ConstructionPlane]:
+        """Planes der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
+        if self._assembly_enabled and self._active_component:
+            return self._active_component.planes
+        return self._planes
+
+    @planes.setter
+    def planes(self, value: List[ConstructionPlane]):
+        if self._assembly_enabled and self._active_component:
+            self._active_component.planes = value
+        else:
+            self._planes = value
+
+    # =========================================================================
+    # Assembly-spezifische Methoden
+    # =========================================================================
+
+    @property
+    def active_component(self) -> Optional[Component]:
+        """Gibt die aktive Component zurück (oder None wenn Assembly deaktiviert)."""
+        return self._active_component
+
+    def set_active_component(self, comp: Component) -> bool:
+        """
+        Setzt die aktive Component.
+
+        Args:
+            comp: Zu aktivierende Component
+
+        Returns:
+            True wenn erfolgreich
+        """
+        if not self._assembly_enabled:
+            logger.warning("Assembly-System nicht aktiviert")
+            return False
+
+        if self._active_component:
+            self._active_component.is_active = False
+
+        self._active_component = comp
+        comp.is_active = True
+        logger.info(f"[ASSEMBLY] Aktive Component: {comp.name}")
+        return True
+
+    def get_all_bodies(self) -> List[Body]:
+        """
+        Gibt alle Bodies im Dokument zurück (rekursiv bei Assembly).
+
+        Returns:
+            Liste aller Bodies
+        """
+        if self._assembly_enabled and self.root_component:
+            return self.root_component.get_all_bodies(recursive=True)
+        return self._bodies
+
+    def get_all_sketches(self) -> List[Sketch]:
+        """Gibt alle Sketches im Dokument zurück (rekursiv bei Assembly)."""
+        if self._assembly_enabled and self.root_component:
+            return self.root_component.get_all_sketches(recursive=True)
+        return self._sketches
+
+    def find_body_by_id(self, body_id: str) -> Optional[Body]:
+        """Findet Body nach ID (rekursiv bei Assembly)."""
+        if self._assembly_enabled and self.root_component:
+            return self.root_component.find_body_by_id(body_id)
+        for body in self._bodies:
+            if body.id == body_id:
+                return body
+        return None
+
+    def new_component(self, name: str = None, parent: Component = None) -> Optional[Component]:
+        """
+        Erstellt neue Component.
+
+        Args:
+            name: Name der neuen Component
+            parent: Parent-Component (default: active_component)
+
+        Returns:
+            Neue Component oder None wenn Assembly deaktiviert
+        """
+        if not self._assembly_enabled:
+            logger.warning("Assembly-System nicht aktiviert")
+            return None
+
+        parent = parent or self._active_component or self.root_component
+        return parent.add_sub_component(name)
 
     def new_body(self, name=None):
         b = Body(name or f"Body{len(self.bodies)+1}")
@@ -6294,11 +6723,8 @@ class Document:
         """
         Serialisiert gesamtes Dokument zu Dictionary.
 
-        Enthält:
-        - Dokument-Metadaten
-        - Alle Bodies (mit TNP-Daten)
-        - Alle Sketches
-        - Alle Konstruktionsebenen
+        Version 9.0+: Assembly-System mit Component-Hierarchie
+        Version 8.x: Legacy-Format (flat lists)
 
         Returns:
             Dictionary für JSON-Serialisierung
@@ -6311,39 +6737,60 @@ class Document:
         except ImportError:
             params_data = {}
 
-        return {
-            "version": "8.3",
-            "name": self.name,
-            "parameters": params_data,
-            "bodies": [body.to_dict() for body in self.bodies],
-            "sketches": [
-                {
-                    **sketch.to_dict(),
-                    "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
-                    "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
-                    "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
-                    "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
-                }
-                for sketch in self.sketches
-            ],
-            "planes": [
-                {
-                    "id": plane.id,
-                    "name": plane.name,
-                    "origin": list(plane.origin),
-                    "normal": list(plane.normal),
-                    "x_dir": list(plane.x_dir),
-                }
-                for plane in self.planes
-            ],
-            "active_body_id": self.active_body.id if self.active_body else None,
-            "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
-        }
+        # =========================================================================
+        # Assembly-Format (v9.0) vs Legacy-Format (v8.x)
+        # =========================================================================
+        if self._assembly_enabled and self.root_component:
+            # NEU: Component-basierte Speicherung
+            return {
+                "version": "9.0",
+                "name": self.name,
+                "parameters": params_data,
+                "assembly_enabled": True,
+                "root_component": self.root_component.to_dict(),
+                "active_component_id": self._active_component.id if self._active_component else None,
+                "active_body_id": self.active_body.id if self.active_body else None,
+                "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
+            }
+        else:
+            # Legacy-Format für Backward-Compatibility
+            return {
+                "version": "8.3",
+                "name": self.name,
+                "parameters": params_data,
+                "bodies": [body.to_dict() for body in self._bodies],
+                "sketches": [
+                    {
+                        **sketch.to_dict(),
+                        "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
+                        "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
+                        "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
+                        "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
+                    }
+                    for sketch in self._sketches
+                ],
+                "planes": [
+                    {
+                        "id": plane.id,
+                        "name": plane.name,
+                        "origin": list(plane.origin),
+                        "normal": list(plane.normal),
+                        "x_dir": list(plane.x_dir),
+                    }
+                    for plane in self._planes
+                ],
+                "active_body_id": self.active_body.id if self.active_body else None,
+                "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
+            }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Document':
         """
         Deserialisiert Dokument aus Dictionary.
+
+        Unterstützt:
+        - Version 9.0+: Assembly-Format mit Component-Hierarchie
+        - Version 8.x: Legacy-Format (flat lists) mit optionaler Migration
 
         Args:
             data: Dictionary mit Dokument-Daten
@@ -6352,6 +6799,7 @@ class Document:
             Neues Document-Objekt
         """
         doc = cls(name=data.get("name", "Imported"))
+        version = data.get("version", "8.0")
 
         # Parameter laden
         if "parameters" in data:
@@ -6365,19 +6813,77 @@ class Document:
             except Exception as e:
                 logger.warning(f"Parameter konnten nicht geladen werden: {e}")
 
+        # =========================================================================
+        # Format-Erkennung und Laden
+        # =========================================================================
+        is_assembly_format = data.get("assembly_enabled", False) and "root_component" in data
+
+        if is_assembly_format:
+            # V9.0 Assembly-Format laden
+            logger.info(f"[ASSEMBLY] Lade Assembly-Format v{version}")
+            doc._load_assembly_format(data)
+        else:
+            # Legacy-Format laden (v8.x oder älter)
+            logger.info(f"Lade Legacy-Format v{version}")
+            doc._load_legacy_format(data)
+
+        # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
+        doc._restore_sketch_references()
+
+        # Logging
+        total_bodies = len(doc.get_all_bodies())
+        total_sketches = len(doc.get_all_sketches())
+        logger.info(f"Projekt geladen: {total_bodies} Bodies, {total_sketches} Sketches")
+        return doc
+
+    def _load_assembly_format(self, data: dict):
+        """Lädt Dokument aus Assembly-Format (v9.0+)."""
+        # Root Component laden
+        root_data = data.get("root_component", {})
+        if root_data:
+            self.root_component = Component.from_dict(root_data)
+            self._active_component = self.root_component  # Default
+
+            # Aktive Component wiederherstellen
+            active_comp_id = data.get("active_component_id")
+            if active_comp_id:
+                found = self.root_component.find_component_by_id(active_comp_id)
+                if found:
+                    self._active_component = found
+                    found.is_active = True
+                    logger.debug(f"[ASSEMBLY] Aktive Component wiederhergestellt: {found.name}")
+
+        # Aktive Auswahl wiederherstellen
+        active_body_id = data.get("active_body_id")
+        if active_body_id:
+            self.active_body = self.find_body_by_id(active_body_id)
+
+        active_sketch_id = data.get("active_sketch_id")
+        if active_sketch_id:
+            all_sketches = self.get_all_sketches()
+            self.active_sketch = next((s for s in all_sketches if s.id == active_sketch_id), None)
+
+    def _load_legacy_format(self, data: dict):
+        """
+        Lädt Dokument aus Legacy-Format (v8.x).
+
+        Wenn Assembly aktiviert ist, werden die Daten in die Root-Component migriert.
+        """
         # Bodies laden
+        bodies_to_add = []
         for body_data in data.get("bodies", []):
             try:
                 body = Body.from_dict(body_data)
-                doc.bodies.append(body)
+                bodies_to_add.append(body)
             except Exception as e:
                 logger.warning(f"Body konnte nicht geladen werden: {e}")
 
-        # Sketches laden (vollständig via Sketch.from_dict)
+        # Sketches laden
+        sketches_to_add = []
         for sketch_data in data.get("sketches", []):
             try:
                 sketch = Sketch.from_dict(sketch_data)
-                # Plane-Daten wiederherstellen (nicht in Sketch.from_dict enthalten)
+                # Plane-Daten wiederherstellen
                 if "plane_origin" in sketch_data:
                     sketch.plane_origin = tuple(sketch_data["plane_origin"])
                 if "plane_normal" in sketch_data:
@@ -6386,11 +6892,12 @@ class Document:
                     sketch.plane_x_dir = tuple(sketch_data["plane_x_dir"])
                 if sketch_data.get("plane_y_dir"):
                     sketch.plane_y_dir = tuple(sketch_data["plane_y_dir"])
-                doc.sketches.append(sketch)
+                sketches_to_add.append(sketch)
             except Exception as e:
                 logger.warning(f"Sketch konnte nicht geladen werden: {e}")
 
-        # Konstruktionsebenen laden
+        # Planes laden
+        planes_to_add = []
         for plane_data in data.get("planes", []):
             try:
                 plane = ConstructionPlane(
@@ -6400,34 +6907,49 @@ class Document:
                     normal=tuple(plane_data.get("normal", (0, 0, 1))),
                     x_dir=tuple(plane_data.get("x_dir", (1, 0, 0))),
                 )
-                doc.planes.append(plane)
+                planes_to_add.append(plane)
             except Exception as e:
                 logger.warning(f"Plane konnte nicht geladen werden: {e}")
+
+        # Daten zuweisen (respektiert assembly_enabled via Properties)
+        if self._assembly_enabled and self.root_component:
+            # Migration: Legacy-Daten in Root-Component
+            self.root_component.bodies = bodies_to_add
+            self.root_component.sketches = sketches_to_add
+            self.root_component.planes = planes_to_add
+            logger.info(f"[ASSEMBLY] Legacy-Daten in Root-Component migriert")
+        else:
+            # Direkte Zuweisung (Legacy-Modus)
+            self._bodies = bodies_to_add
+            self._sketches = sketches_to_add
+            self._planes = planes_to_add
 
         # Aktive Auswahl wiederherstellen
         active_body_id = data.get("active_body_id")
         if active_body_id:
-            doc.active_body = next((b for b in doc.bodies if b.id == active_body_id), None)
+            all_bodies = bodies_to_add if not self._assembly_enabled else self.root_component.bodies
+            self.active_body = next((b for b in all_bodies if b.id == active_body_id), None)
 
         active_sketch_id = data.get("active_sketch_id")
         if active_sketch_id:
-            doc.active_sketch = next((s for s in doc.sketches if s.id == active_sketch_id), None)
-
-        # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
-        doc._restore_sketch_references()
-
-        logger.info(f"Projekt geladen: {len(doc.bodies)} Bodies, {len(doc.sketches)} Sketches")
-        return doc
+            all_sketches = sketches_to_add if not self._assembly_enabled else self.root_component.sketches
+            self.active_sketch = next((s for s in all_sketches if s.id == active_sketch_id), None)
 
     def _restore_sketch_references(self):
         """
         Stellt Sketch-Referenzen in Features wieder her (nach dem Laden).
         Ermöglicht parametrische Updates wenn Sketches geändert werden.
+
+        Funktioniert mit beiden Modi (Legacy und Assembly).
         """
-        sketch_map = {s.id: s for s in self.sketches}
+        # Alle Sketches sammeln (rekursiv bei Assembly)
+        all_sketches = self.get_all_sketches()
+        sketch_map = {s.id: s for s in all_sketches}
         restored_count = 0
 
-        for body in self.bodies:
+        # Alle Bodies durchgehen (rekursiv bei Assembly)
+        all_bodies = self.get_all_bodies()
+        for body in all_bodies:
             for feature in body.features:
                 sketch_id = getattr(feature, '_sketch_id', None)
                 if sketch_id and sketch_id in sketch_map:
