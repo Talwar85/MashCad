@@ -21,6 +21,7 @@ from gui.viewport.section_view_mixin import SectionViewMixin
 from gui.viewport.brep_cleanup_mixin import BRepCleanupMixin
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from config.feature_flags import is_enabled  # Performance Plan Phase 3
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -221,6 +222,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._texture_selected_faces = []  # Liste von selektierten Body-Faces für Texture
         self.point_to_point_start = None  # Erster ausgewählter Punkt (x, y, z)
         self.point_to_point_body_id = None  # Body, der verschoben wird
+
+        # Phase 3: Performance - Cached Hover Markers (statt 60x/sec neu erstellen)
+        self._p2p_hover_marker_mesh = None  # Cached Sphere Mesh (orange, radius 1.5)
+        self._p2p_hover_marker_actor = None  # Cached VTK Actor
+        self._p2p_start_marker_mesh = None  # Cached Sphere Mesh (yellow, radius 2.0)
+        self._p2p_start_marker_actor = None  # Cached VTK Actor
         self.extrude_height = 0.0
         self.extrude_operation = "New Body"  # NEU: Aktuelle Operation für Farbe
         self.is_dragging = False
@@ -702,6 +709,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.point_to_point_start = None
         self.point_to_point_body_id = body_id
         self.setCursor(Qt.CrossCursor)
+
+        # Phase 3: Performance - Marker einmal erstellen (statt 60x/sec)
+        if is_enabled("reuse_hover_markers") and HAS_PYVISTA:
+            import pyvista as pv
+            if self._p2p_hover_marker_mesh is None:
+                self._p2p_hover_marker_mesh = pv.Sphere(center=(0, 0, 0), radius=1.5)
+            if self._p2p_start_marker_mesh is None:
+                self._p2p_start_marker_mesh = pv.Sphere(center=(0, 0, 0), radius=2.0)
+
         logger.info("Point-to-Point Mode: Wähle Start-Punkt auf Geometrie")
 
     def cancel_point_to_point_mode(self):
@@ -710,9 +726,18 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.point_to_point_start = None
         self.point_to_point_body_id = None
         self.setCursor(Qt.ArrowCursor)
-        # Entferne ALLE Visualisierungen
-        self.plotter.remove_actor("p2p_start_marker", render=False)
-        self.plotter.remove_actor("p2p_hover_marker", render=False)
+
+        # Phase 3: Performance - Marker cleanup
+        if is_enabled("reuse_hover_markers"):
+            # OPTIMIZED: Actors bleiben cached, nur verstecken
+            if self._p2p_hover_marker_actor:
+                self._p2p_hover_marker_actor.SetVisibility(False)
+            if self._p2p_start_marker_actor:
+                self._p2p_start_marker_actor.SetVisibility(False)
+        else:
+            # LEGACY: Komplett entfernen
+            self.plotter.remove_actor("p2p_hover_marker", render=False)
+            self.plotter.remove_actor("p2p_start_marker", render=False)
         self.plotter.remove_actor("p2p_line", render=True)
         logger.info("Point-to-Point Mode abgebrochen")
 
@@ -2370,14 +2395,40 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # WICHTIG: log_pick=False für hover (kein Debug-Output bei jedem Frame)
                 body_id, point = self.pick_point_on_geometry(x, y, snap_to_vertex=True, log_pick=False)
                 if point:
-                    # Zeige Hover-Marker (Orange)
-                    import pyvista as pv
-                    sphere = pv.Sphere(center=point, radius=1.5)
-                    self.plotter.remove_actor('p2p_hover_marker', render=False)
-                    self.plotter.add_mesh(sphere, color='orange', opacity=0.8, name='p2p_hover_marker')
+                    # Phase 3: Performance - Marker-Position updaten statt neu erstellen
+                    if is_enabled("reuse_hover_markers"):
+                        # OPTIMIZED: Reuse existing marker, only update position
+                        if self._p2p_hover_marker_actor is None:
+                            # Erster Hover: Erstelle Actor einmal
+                            import pyvista as pv
+                            self.plotter.add_mesh(
+                                self._p2p_hover_marker_mesh,
+                                color='orange',
+                                opacity=0.8,
+                                name='p2p_hover_marker'
+                            )
+                            if 'p2p_hover_marker' in self.plotter.renderer.actors:
+                                self._p2p_hover_marker_actor = self.plotter.renderer.actors['p2p_hover_marker']
+
+                        # Update Position via VTK Transform (FAST!)
+                        if self._p2p_hover_marker_actor:
+                            self._p2p_hover_marker_actor.SetPosition(point)
+                            self._p2p_hover_marker_actor.SetVisibility(True)
+                    else:
+                        # LEGACY: Neu erstellen bei jedem Hover (60x/sec!)
+                        import pyvista as pv
+                        sphere = pv.Sphere(center=point, radius=1.5)
+                        self.plotter.remove_actor('p2p_hover_marker', render=False)
+                        self.plotter.add_mesh(sphere, color='orange', opacity=0.8, name='p2p_hover_marker')
                 else:
-                    # Entferne Hover-Marker wenn kein Treffer
-                    self.plotter.remove_actor('p2p_hover_marker', render=True)
+                    # Kein Treffer: Verstecke Marker
+                    if is_enabled("reuse_hover_markers") and self._p2p_hover_marker_actor:
+                        # OPTIMIZED: Nur verstecken statt entfernen
+                        self._p2p_hover_marker_actor.SetVisibility(False)
+                        request_render(self.plotter)
+                    else:
+                        # LEGACY: Entfernen
+                        self.plotter.remove_actor('p2p_hover_marker', render=True)
                 return True
 
             # Mouse Click: Wähle Punkt
@@ -2394,10 +2445,28 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         # Erster Punkt ausgewählt
                         self.point_to_point_start = point
                         self.point_to_point_body_id = body_id
-                        # Visualisiere Start-Punkt (Gelb)
-                        import pyvista as pv
-                        sphere = pv.Sphere(center=point, radius=2.0)
-                        self.plotter.add_mesh(sphere, color='yellow', name='p2p_start_marker')
+
+                        # Phase 3: Performance - Start-Marker cachen
+                        if is_enabled("reuse_hover_markers"):
+                            # OPTIMIZED: Reuse cached start marker
+                            if self._p2p_start_marker_actor is None:
+                                self.plotter.add_mesh(
+                                    self._p2p_start_marker_mesh,
+                                    color='yellow',
+                                    name='p2p_start_marker'
+                                )
+                                if 'p2p_start_marker' in self.plotter.renderer.actors:
+                                    self._p2p_start_marker_actor = self.plotter.renderer.actors['p2p_start_marker']
+
+                            if self._p2p_start_marker_actor:
+                                self._p2p_start_marker_actor.SetPosition(point)
+                                self._p2p_start_marker_actor.SetVisibility(True)
+                        else:
+                            # LEGACY: Neu erstellen
+                            import pyvista as pv
+                            sphere = pv.Sphere(center=point, radius=2.0)
+                            self.plotter.add_mesh(sphere, color='yellow', name='p2p_start_marker')
+
                         logger.success(f"✅ Start-Punkt gewählt. Jetzt Ziel-Punkt klicken.")
                     else:
                         # Zweiter Punkt ausgewählt - führe Move durch
