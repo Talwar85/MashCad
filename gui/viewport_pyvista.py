@@ -2436,8 +2436,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 x, y = int(pos.x()), int(pos.y())
 
-                # WICHTIG: Entferne Hover-Marker BEVOR wir picken (sonst blockt er den Pick!)
-                self.plotter.remove_actor('p2p_hover_marker', render=False)
+                # WICHTIG: Verstecke Hover-Marker BEVOR wir picken (sonst blockt er den Pick!)
+                if is_enabled("reuse_hover_markers") and self._p2p_hover_marker_actor:
+                    # OPTIMIZED: Nur verstecken, nicht entfernen (Actor bleibt gecacht)
+                    self._p2p_hover_marker_actor.SetVisibility(False)
+                else:
+                    # LEGACY: Komplett entfernen
+                    self.plotter.remove_actor('p2p_hover_marker', render=False)
 
                 body_id, point = self.pick_point_on_geometry(x, y)
                 if point:
