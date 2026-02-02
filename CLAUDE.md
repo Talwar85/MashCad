@@ -8,6 +8,14 @@
 
 **Kernprinzip:** Das gesamte System baut auf dem CAD-Kernel (Build123d/OpenCASCADE) auf. Es gibt **keine Fallback-Lösungen**. Wenn der Kernel fehlschlägt, schlägt die Operation fehl - klar und deutlich.
 
+Neue Features nur mit Feature Toggle in config/feature_flag.py
+Neue Features mit Logging was shcnelles Debuggen erlaubt.
+Keine Fallbacks oder stille umwege.
+Wenn  etwas unklar ist, keine Annahmen treffne, sondern nachfragen.
+to.dict from.dict und FeatureCOmmandas beachten. bei jeder neuen Implementation.
+Ein sauberes Speichern und laden und undo/redo System muss immer gewährleistet sein.
+Abhnahmetests erfolgen durch den User.
+
 ```
 ┌─────────────────────────────────────────────────────┐
 │              SINGLE SOURCE OF TRUTH                 │

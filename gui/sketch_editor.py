@@ -2963,6 +2963,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if required_step is None:
             return False
 
+        # 3-Punkt Kreis braucht kein dim_input - wird durch 3 Klicks definiert
+        if self.current_tool == SketchTool.CIRCLE and self.circle_mode == 2:
+            return False
+
         return self._tool_step >= required_step
 
     def _check_auto_show_dim_input(self):
@@ -3581,18 +3585,41 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             QTimer.singleShot(0, self._cancel_tool)
 
         elif self.current_tool == SketchTool.CIRCLE:
-            r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
-            c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
+            # Nur für Center-Radius-Modus (circle_mode == 0) via dim_input bestätigen
+            # 2-Punkt und 3-Punkt werden durch Klicks im Handler abgeschlossen
+            if self.circle_mode == 0:
+                r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
+                c = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
 
-            self._save_undo()
-            circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
+                self._save_undo()
+                circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
 
-            # Automatische Bemaßung hinzufügen (Constraints)
-            if circle:
-                self.sketch.add_radius(circle, r)
+                # Automatische Bemaßung hinzufügen (Constraints)
+                if circle:
+                    self.sketch.add_radius(circle, r)
 
-            run_solver_and_update()
-            QTimer.singleShot(0, self._cancel_tool)
+                run_solver_and_update()
+                QTimer.singleShot(0, self._cancel_tool)
+            elif self.circle_mode == 1 and self.tool_step >= 1:
+                # 2-Punkt-Modus: p1 und mouse_world definieren den Durchmesser
+                p1 = self.tool_points[0]
+                if self.mouse_world:
+                    p2 = self.mouse_world
+                    # Zentrum = Mitte zwischen p1 und p2
+                    cx = (p1.x() + p2.x()) / 2
+                    cy = (p1.y() + p2.y()) / 2
+                    # Radius = halber Abstand
+                    r = math.hypot(p2.x() - p1.x(), p2.y() - p1.y()) / 2
+
+                    if r > 0.01:
+                        self._save_undo()
+                        circle = self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
+                        if circle:
+                            self.sketch.add_radius(circle, r)
+                        run_solver_and_update()
+
+                QTimer.singleShot(0, self._cancel_tool)
+            # 3-Punkt-Modus: Keine dim_input Bestätigung - muss durch 3 Klicks erfolgen
             
         elif self.current_tool == SketchTool.POLYGON:
             r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
@@ -3822,15 +3849,27 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
 
-        # 1. Dimension Input Bestätigung (Klick ins Leere bestätigt Eingabe)
+        # 1. Dimension Input Handling (Klick außerhalb des Panels)
         if self.dim_input_active and self.dim_input.isVisible():
             panel_geo = self.dim_input.geometry()
             click_in_panel = panel_geo.contains(pos.toPoint())
             logger.debug(f"[CLICK] dim_input_active=True, panel at {panel_geo}, click at {pos.toPoint()}, in_panel={click_in_panel}")
             if not click_in_panel:
-                logger.info(f"[CLICK] Outside panel → auto-confirming dim_input (tool={self.current_tool.name}, step={self.tool_step})")
-                self._on_dim_confirmed()
-                return
+                if event.button() == Qt.LeftButton:
+                    # Links-Klick außerhalb = Bestätigen
+                    logger.info(f"[CLICK] Left-click outside panel → confirming dim_input")
+                    self._on_dim_confirmed()
+                    return
+                elif event.button() == Qt.RightButton:
+                    # Rechts-Klick außerhalb = Abbrechen
+                    logger.info(f"[CLICK] Right-click outside panel → canceling")
+                    self.dim_input.hide()
+                    self.dim_input.unlock_all()
+                    self.dim_input_active = False
+                    self._cancel_tool()
+                    self.setFocus()
+                    self.request_update()
+                    return
         
         # 2. Panning (Mittelklick)
         if event.button() == Qt.MiddleButton:

@@ -57,7 +57,8 @@
       "Bash(del test_circle_intersection.py)",
       "Bash(del c:LiteCad_test_phase2.py c:LiteCad_test_imports.py)",
       "Bash(git checkout:*)",
-      "Bash(del c:LiteCadtest_import_feature.py)"
+      "Bash(del c:LiteCadtest_import_feature.py)",
+      "Bash(gh auth:*)"
     ]
   }
 }

@@ -1089,7 +1089,27 @@ class SketchRendererMixin:
                             
             except Exception:
                 pass  # Constraint-Zeichenfehler ignorieren
-    
+
+    def _calc_circle_3points(self, p1, p2, p3):
+        """Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte."""
+        x1, y1 = p1.x(), p1.y()
+        x2, y2 = p2.x(), p2.y()
+        x3, y3 = p3.x(), p3.y()
+
+        # Determinante für Kollinearitäts-Check
+        d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+        if abs(d) < 1e-10:
+            return None, 0  # Punkte sind kollinear
+
+        # Mittelpunkt berechnen (Umkreisformel)
+        ux = ((x1*x1 + y1*y1) * (y2 - y3) + (x2*x2 + y2*y2) * (y3 - y1) + (x3*x3 + y3*y3) * (y1 - y2)) / d
+        uy = ((x1*x1 + y1*y1) * (x3 - x2) + (x2*x2 + y2*y2) * (x1 - x3) + (x3*x3 + y3*y3) * (x2 - x1)) / d
+
+        # Radius berechnen
+        r = math.hypot(x1 - ux, y1 - uy)
+
+        return QPointF(ux, uy), r
+
     def _draw_preview(self, p):
         # Für Bearbeitungstools auch ohne tool_points zeichnen wenn tool_step > 0
         edit_tools = [SketchTool.MOVE, SketchTool.COPY, SketchTool.ROTATE, SketchTool.MIRROR, SketchTool.SCALE]
@@ -1170,7 +1190,8 @@ class SketchRendererMixin:
                     r = math.hypot(snap.x()-c.x(), snap.y()-c.y()) * self.view_scale
                 p.drawEllipse(ctr, r, r)
             elif self.circle_mode == 1:
-                # 2-Punkt Modus: Center ist zwischen tool_points[0] und snap
+                # 2-Punkt Modus: p1 und Cursor (snap) definieren den Durchmesser
+                # Center = Mittelpunkt, Radius = halber Abstand
                 p1 = self.tool_points[0]
                 cx, cy = (p1.x() + snap.x()) / 2, (p1.y() + snap.y()) / 2
                 r = math.hypot(snap.x() - p1.x(), snap.y() - p1.y()) / 2 * self.view_scale
@@ -1179,22 +1200,27 @@ class SketchRendererMixin:
                 # Durchmesser-Linie anzeigen
                 p.drawLine(self.world_to_screen(p1), self.world_to_screen(snap))
             elif self.circle_mode == 2:
-                # 3-Punkt Modus
+                # 3-Punkt Modus (wie Fusion 360: nur Punkte markieren, Kreis erst ab 2 Punkten)
                 if self.tool_step == 1:
-                    # Nur erster Punkt - zeige Linie zum Cursor
-                    p.drawLine(self.world_to_screen(self.tool_points[0]), self.world_to_screen(snap))
+                    # Ein Punkt gesetzt - nur Punkt markieren (keine Linie)
+                    pt1 = self.tool_points[0]
+                    p.setBrush(QBrush(QColor(0, 120, 215)))  # Blau gefüllt
+                    p.drawEllipse(self.world_to_screen(pt1), 5, 5)
+                    p.setBrush(Qt.NoBrush)
                 elif self.tool_step == 2:
-                    # Zwei Punkte - berechne Kreis durch alle 3
-                    p1, p2 = self.tool_points[0], self.tool_points[1]
-                    p3 = snap
-                    center, radius = self._calc_circle_3points(p1, p2, p3)
+                    # Zwei Punkte gesetzt - Kreis-Preview durch alle 3 Punkte
+                    pt1, pt2 = self.tool_points[0], self.tool_points[1]
+                    pt3 = snap
+                    center, radius = self._calc_circle_3points(pt1, pt2, pt3)
                     if center and radius > 0.01:
                         ctr = self.world_to_screen(center)
                         r = radius * self.view_scale
                         p.drawEllipse(ctr, r, r)
-                    # Punkte markieren
-                    for pt in [p1, p2]:
-                        p.drawEllipse(self.world_to_screen(pt), 4, 4)
+                    # Alle 3 Punkte markieren (gefüllt)
+                    p.setBrush(QBrush(QColor(0, 120, 215)))
+                    for pt in [pt1, pt2, pt3]:
+                        p.drawEllipse(self.world_to_screen(pt), 5, 5)
+                    p.setBrush(Qt.NoBrush)
             
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             c = self.tool_points[0]
