@@ -5917,16 +5917,39 @@ class Body:
                 })
 
             elif isinstance(feat, LoftFeature):
+                # Serialize profile_data with shapely_poly conversion
+                serialized_profiles = []
+                for pd in feat.profile_data:
+                    pd_copy = pd.copy()
+                    if 'shapely_poly' in pd_copy and pd_copy['shapely_poly'] is not None:
+                        poly = pd_copy['shapely_poly']
+                        if hasattr(poly, 'exterior'):
+                            pd_copy['shapely_poly_coords'] = {
+                                'exterior': list(poly.exterior.coords),
+                                'holes': [list(interior.coords) for interior in poly.interiors]
+                            }
+                        pd_copy['shapely_poly'] = None  # Remove non-serializable object
+                    serialized_profiles.append(pd_copy)
                 feat_dict.update({
                     "feature_class": "LoftFeature",
                     "ruled": feat.ruled,
                     "operation": feat.operation,
                     "start_continuity": feat.start_continuity if feat.start_continuity else "G0",
                     "end_continuity": feat.end_continuity if feat.end_continuity else "G0",
-                    "profile_data": feat.profile_data,
+                    "profile_data": serialized_profiles,
                 })
 
             elif isinstance(feat, SweepFeature):
+                # Serialize profile_data with shapely_poly conversion
+                pd_copy = feat.profile_data.copy() if feat.profile_data else {}
+                if 'shapely_poly' in pd_copy and pd_copy['shapely_poly'] is not None:
+                    poly = pd_copy['shapely_poly']
+                    if hasattr(poly, 'exterior'):
+                        pd_copy['shapely_poly_coords'] = {
+                            'exterior': list(poly.exterior.coords),
+                            'holes': [list(interior.coords) for interior in poly.interiors]
+                        }
+                    pd_copy['shapely_poly'] = None  # Remove non-serializable object
                 feat_dict.update({
                     "feature_class": "SweepFeature",
                     "is_frenet": feat.is_frenet,
@@ -5934,7 +5957,7 @@ class Body:
                     "twist_angle": feat.twist_angle,
                     "scale_start": feat.scale_start,
                     "scale_end": feat.scale_end,
-                    "profile_data": feat.profile_data,
+                    "profile_data": pd_copy,
                     "path_data": feat.path_data,
                     "contact_mode": feat.contact_mode,
                 })
@@ -6202,23 +6225,50 @@ class Body:
                     feat.profile_selector = [tuple(p) for p in feat_dict["profile_selector"]]
 
             elif feat_class == "LoftFeature":
+                # Restore shapely_poly from coordinates
+                profile_data = feat_dict.get("profile_data", [])
+                try:
+                    from shapely.geometry import Polygon as ShapelyPolygon
+                    for pd in profile_data:
+                        if 'shapely_poly_coords' in pd:
+                            coords = pd['shapely_poly_coords']
+                            exterior = coords.get('exterior', [])
+                            holes = coords.get('holes', [])
+                            if exterior:
+                                pd['shapely_poly'] = ShapelyPolygon(exterior, holes)
+                            del pd['shapely_poly_coords']
+                except ImportError:
+                    pass
                 feat = LoftFeature(
                     ruled=feat_dict.get("ruled", False),
                     operation=feat_dict.get("operation", "New Body"),
                     start_continuity=feat_dict.get("start_continuity", "G0"),
                     end_continuity=feat_dict.get("end_continuity", "G0"),
-                    profile_data=feat_dict.get("profile_data", []),
+                    profile_data=profile_data,
                     **base_kwargs
                 )
 
             elif feat_class == "SweepFeature":
+                # Restore shapely_poly from coordinates
+                profile_data = feat_dict.get("profile_data", {})
+                try:
+                    from shapely.geometry import Polygon as ShapelyPolygon
+                    if 'shapely_poly_coords' in profile_data:
+                        coords = profile_data['shapely_poly_coords']
+                        exterior = coords.get('exterior', [])
+                        holes = coords.get('holes', [])
+                        if exterior:
+                            profile_data['shapely_poly'] = ShapelyPolygon(exterior, holes)
+                        del profile_data['shapely_poly_coords']
+                except ImportError:
+                    pass
                 feat = SweepFeature(
                     is_frenet=feat_dict.get("is_frenet", False),
                     operation=feat_dict.get("operation", "New Body"),
                     twist_angle=feat_dict.get("twist_angle", 0.0),
                     scale_start=feat_dict.get("scale_start", 1.0),
                     scale_end=feat_dict.get("scale_end", 1.0),
-                    profile_data=feat_dict.get("profile_data", {}),
+                    profile_data=profile_data,
                     path_data=feat_dict.get("path_data", {}),
                     contact_mode=feat_dict.get("contact_mode", "keep"),
                     **base_kwargs

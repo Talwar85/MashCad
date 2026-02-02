@@ -929,6 +929,22 @@ class Sketch:
         for spline in self.native_splines:
             native_splines_data.append(spline.to_dict())
 
+        # Closed Profiles serialisieren (Shapely Polygons → Koordinatenlisten)
+        closed_profiles_data = []
+        for poly in self.closed_profiles:
+            try:
+                # Shapely Polygon zu Koordinatenliste
+                if hasattr(poly, 'exterior'):
+                    coords = list(poly.exterior.coords)
+                    # Holes (Interiors) auch speichern
+                    holes = [list(interior.coords) for interior in poly.interiors]
+                    closed_profiles_data.append({
+                        'exterior': coords,
+                        'holes': holes
+                    })
+            except Exception as e:
+                logger.debug(f"Profil-Serialisierung übersprungen: {e}")
+
         return {
             'name': self.name,
             'id': self.id,
@@ -942,6 +958,7 @@ class Sketch:
             'splines': splines_data,
             'native_splines': native_splines_data,
             'constraints': constraints_data,
+            'closed_profiles': closed_profiles_data,
         }
     
     @classmethod
@@ -1056,6 +1073,25 @@ class Sketch:
             except (KeyError, Exception) as e:
                 from loguru import logger
                 logger.debug(f"Constraint-Wiederherstellung übersprungen: {e}")
+
+        # Closed Profiles wiederherstellen (Koordinatenlisten → Shapely Polygons)
+        closed_profiles_data = data.get('closed_profiles', [])
+        if closed_profiles_data:
+            try:
+                from shapely.geometry import Polygon as ShapelyPolygon
+                for profile_data in closed_profiles_data:
+                    try:
+                        exterior = profile_data.get('exterior', [])
+                        holes = profile_data.get('holes', [])
+                        if exterior:
+                            poly = ShapelyPolygon(exterior, holes)
+                            if poly.is_valid and poly.area > 0.01:
+                                sketch.closed_profiles.append(poly)
+                    except Exception as e:
+                        logger.debug(f"Profil-Wiederherstellung übersprungen: {e}")
+                logger.debug(f"[Sketch.from_dict] {len(sketch.closed_profiles)} Profile wiederhergestellt")
+            except ImportError:
+                logger.debug("Shapely nicht verfügbar für Profil-Wiederherstellung")
 
         return sketch
 

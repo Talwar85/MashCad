@@ -4179,6 +4179,7 @@ class MainWindow(QMainWindow):
         # CAD KERNEL FIRST: Finde die passenden Profile in sketch.closed_profiles
         # und speichere DEREN Centroids (nicht die aus der UI-Auswahl!)
         # Das garantiert dass die Centroids beim Rebuild übereinstimmen.
+        # Profile kommen NUR aus: 1) SketchEditor-Detection, 2) Laden aus Datei
         sketch_profiles = getattr(target_sketch, 'closed_profiles', [])
         profile_selector = []
 
@@ -4271,12 +4272,14 @@ class MainWindow(QMainWindow):
         """Revolve UI aufräumen."""
         self.revolve_panel.hide()
         self.viewport_3d.set_revolve_mode(False)
-        self.viewport_3d.set_all_bodies_visible(True)
         if hasattr(self.viewport_3d, 'detector'):
             self.viewport_3d.detector.clear()
         self.viewport_3d._draw_selectable_faces_from_detector()
         self.browser.refresh()
         self._update_tnp_stats()
+        # ASSEMBLY FIX: Viewport komplett neu rendern damit inactive Components
+        # ihre korrekte Transparenz behalten
+        self._update_viewport_all_impl()
 
     def _on_face_selected_for_revolve(self, face_id):
         """Face-Klick im Revolve-Modus → Selektion speichern + Preview."""
@@ -4513,14 +4516,14 @@ class MainWindow(QMainWindow):
         """Extrude abgebrochen"""
         self.viewport_3d.set_extrude_mode(False)
         self.extrude_panel.setVisible(False)
-        # Bodies wieder einblenden und Opacity zurücksetzen (X-Ray Mode)
-        self.viewport_3d.set_all_bodies_visible(True)
-        self.viewport_3d.set_all_bodies_opacity(1.0)
         if hasattr(self.viewport_3d, 'detector'):
             self.viewport_3d.detector.clear()
         self.viewport_3d.selected_face_ids.clear()
         self.viewport_3d.hover_face_id = -1
         self.viewport_3d._draw_selectable_faces_from_detector()
+        # ASSEMBLY FIX: Viewport komplett neu rendern damit inactive Components
+        # ihre korrekte Transparenz behalten (statt set_all_bodies_opacity(1.0))
+        self._update_viewport_all_impl()
         logger.info(tr("Extrude abgebrochen"), 2000)
     
     def _on_toggle_bodies_visibility(self, hide: bool):
@@ -4531,13 +4534,14 @@ class MainWindow(QMainWindow):
     def _on_bodies_visibility_state_changed(self, state: int):
         """
         3-Stufen Visibility Toggle:
-        0 = Normal (100% sichtbar)
+        0 = Normal (mit Component-Transparenz)
         1 = X-Ray (20% transparent)
         2 = Versteckt (komplett unsichtbar)
         """
-        if state == 0:  # Normal
-            self.viewport_3d.set_all_bodies_visible(True)
-            self.viewport_3d.set_all_bodies_opacity(1.0)
+        if state == 0:  # Normal - respektiert inactive Component Transparenz
+            # ASSEMBLY FIX: Viewport komplett neu rendern damit inactive Components
+            # ihre korrekte Transparenz bekommen (nicht alle auf 1.0 setzen!)
+            self._update_viewport_all_impl()
         elif state == 1:  # X-Ray
             self.viewport_3d.set_all_bodies_visible(True)
             self.viewport_3d.set_all_bodies_opacity(0.2)
@@ -4700,6 +4704,7 @@ class MainWindow(QMainWindow):
                     # CAD KERNEL FIRST: Finde die passenden Profile in sketch.closed_profiles
                     # und speichere DEREN Centroids (nicht die aus der UI-Auswahl!)
                     # Das garantiert dass die Centroids beim Rebuild übereinstimmen.
+                    # Profile kommen NUR aus: 1) SketchEditor-Detection, 2) Laden aus Datei
                     sketch_profiles = getattr(target_sketch, 'closed_profiles', [])
                     profile_selector = []
 
@@ -4864,8 +4869,6 @@ class MainWindow(QMainWindow):
         """Hilfsfunktion zum Aufräumen der UI"""
         self.extrude_panel.setVisible(False)
         self.viewport_3d.set_extrude_mode(False)
-        self.viewport_3d.set_all_bodies_visible(True)
-        self.viewport_3d.set_all_bodies_opacity(1.0)  # X-Ray Mode zurücksetzen
 
         # FIX: Detector mit aktuellen Body-Meshes neu laden (nicht nur leeren!)
         # Sonst sind nach Push/Pull keine SelectionFaces mehr verfügbar
@@ -4883,6 +4886,10 @@ class MainWindow(QMainWindow):
             # TNP Statistiken aktualisieren
             self._update_tnp_stats()
             if msg: logger.success(msg)
+
+        # ASSEMBLY FIX: Viewport komplett neu rendern damit inactive Components
+        # ihre korrekte Transparenz behalten (statt set_all_bodies_opacity(1.0))
+        self._update_viewport_all_impl()
 
 
     def _extract_face_as_polygon(self, face):
