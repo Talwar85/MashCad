@@ -890,19 +890,19 @@ class FullTransformController:
         
     def on_mouse_release(self, screen_pos: Tuple[int, int]) -> bool:
         """Verarbeitet Maus-Loslassen"""
-        logger.info(f"🖱️ on_mouse_release called")
-        logger.info(f"   is_dragging: {self.is_dragging}")
-        logger.info(f"   drag_state exists: {self.drag_state is not None}")
+        logger.debug(f"🖱️ on_mouse_release called")
+        logger.debug(f"   is_dragging: {self.is_dragging}")
+        logger.debug(f"   drag_state exists: {self.drag_state is not None}")
 
         if not self.is_dragging or not self.drag_state:
-            logger.info(f"   ❌ Early return - not dragging or no drag_state")
+            logger.debug(f"   ❌ Early return - not dragging or no drag_state")
             return False
 
-        logger.info(f"   ✅ Valid drag detected - will apply transform")
+        logger.debug(f"   ✅ Valid drag detected - will apply transform")
         body_id = self.drag_state.body_id
         mode = self.drag_state.mode
-        logger.info(f"   body_id: {body_id}")
-        logger.info(f"   mode: {mode.name}")
+        logger.debug(f"   body_id: {body_id}")
+        logger.debug(f"   mode: {mode.name}")
 
         # Transform zurücksetzen vor Apply
         self._reset_body_preview(body_id)
@@ -912,62 +912,62 @@ class FullTransformController:
         new_center = self.gizmo.get_current_center()
 
         # Transform anwenden
-        logger.info(f"   _apply_transform callback exists: {self._apply_transform is not None}")
+        logger.debug(f"   _apply_transform callback exists: {self._apply_transform is not None}")
         if self._apply_transform:
             if mode == TransformMode.MOVE:
                 translation_magnitude = np.linalg.norm(self._total_translation)
-                logger.info(f"   Translation magnitude: {translation_magnitude:.4f}mm")
+                logger.debug(f"   Translation magnitude: {translation_magnitude:.4f}mm")
                 if translation_magnitude > 0.001:
                     if self.copy_mode and self._copy_body:
                         # Copy + Move
-                        logger.info(f"🔥 COPY MODE ACTIVE - Calling _copy_body for MOVE")
-                        logger.info(f"   Translation: {self._total_translation.tolist()}")
+                        logger.debug(f"🔥 COPY MODE ACTIVE - Calling _copy_body for MOVE")
+                        logger.debug(f"   Translation: {self._total_translation.tolist()}")
                         self._copy_body(body_id, "move", self._total_translation.tolist())
-                        logger.info(f"   _copy_body called successfully")
+                        logger.debug(f"   _copy_body called successfully")
                     else:
-                        logger.info(f"   📞 Calling _apply_transform for MOVE")
-                        logger.info(f"   Translation: {self._total_translation.tolist()}")
+                        logger.debug(f"   📞 Calling _apply_transform for MOVE")
+                        logger.debug(f"   Translation: {self._total_translation.tolist()}")
                         self._apply_transform(body_id, "move", self._total_translation.tolist())
-                        logger.info(f"   ✅ _apply_transform returned")
+                        logger.debug(f"   ✅ _apply_transform returned")
                 else:
-                    logger.info(f"   ❌ Translation too small ({translation_magnitude:.4f}mm < 0.001mm threshold)")
+                    logger.debug(f"   ❌ Translation too small ({translation_magnitude:.4f}mm < 0.001mm threshold)")
                         
             elif mode == TransformMode.ROTATE:
                 rotation_magnitude = abs(self._total_rotation)
-                logger.info(f"   Rotation magnitude: {rotation_magnitude:.2f}°")
+                logger.debug(f"   Rotation magnitude: {rotation_magnitude:.2f}°")
                 if rotation_magnitude > 0.1:
                     axis = self.drag_state.axis
                     rotation_data = {"axis": axis.name, "angle": self._total_rotation}
                     if self.copy_mode and self._copy_body:
-                        logger.info(f"🔥 COPY MODE ACTIVE - Calling _copy_body for ROTATE")
-                        logger.info(f"   Rotation: {rotation_data}")
+                        logger.debug(f"🔥 COPY MODE ACTIVE - Calling _copy_body for ROTATE")
+                        logger.debug(f"   Rotation: {rotation_data}")
                         self._copy_body(body_id, "rotate", rotation_data)
-                        logger.info(f"   _copy_body called successfully")
+                        logger.debug(f"   _copy_body called successfully")
                     else:
-                        logger.info(f"   📞 Calling _apply_transform for ROTATE")
-                        logger.info(f"   Rotation: {rotation_data}")
+                        logger.debug(f"   📞 Calling _apply_transform for ROTATE")
+                        logger.debug(f"   Rotation: {rotation_data}")
                         self._apply_transform(body_id, "rotate", rotation_data)
-                        logger.info(f"   ✅ _apply_transform returned")
+                        logger.debug(f"   ✅ _apply_transform returned")
                 else:
-                    logger.info(f"   ❌ Rotation too small ({rotation_magnitude:.2f}° < 0.1° threshold)")
+                    logger.debug(f"   ❌ Rotation too small ({rotation_magnitude:.2f}° < 0.1° threshold)")
                         
             elif mode == TransformMode.SCALE:
                 scale_delta = abs(self._total_scale - 1.0)
-                logger.info(f"   Scale delta: {scale_delta:.4f}")
+                logger.debug(f"   Scale delta: {scale_delta:.4f}")
                 if scale_delta > 0.001:
                     scale_data = {"factor": self._total_scale}
                     if self.copy_mode and self._copy_body:
-                        logger.info(f"🔥 COPY MODE ACTIVE - Calling _copy_body for SCALE")
-                        logger.info(f"   Scale: {scale_data}")
+                        logger.debug(f"🔥 COPY MODE ACTIVE - Calling _copy_body for SCALE")
+                        logger.debug(f"   Scale: {scale_data}")
                         self._copy_body(body_id, "scale", scale_data)
-                        logger.info(f"   _copy_body called successfully")
+                        logger.debug(f"   _copy_body called successfully")
                     else:
-                        logger.info(f"   📞 Calling _apply_transform for SCALE")
-                        logger.info(f"   Scale: {scale_data}")
+                        logger.debug(f"   📞 Calling _apply_transform for SCALE")
+                        logger.debug(f"   Scale: {scale_data}")
                         self._apply_transform(body_id, "scale", scale_data)
-                        logger.info(f"   ✅ _apply_transform returned")
+                        logger.debug(f"   ✅ _apply_transform returned")
                 else:
-                    logger.info(f"   ❌ Scale too small ({scale_delta:.4f} < 0.001 threshold)")
+                    logger.debug(f"   ❌ Scale too small ({scale_delta:.4f} < 0.001 threshold)")
         
         # Cleanup
         self.is_dragging = False
