@@ -44,6 +44,10 @@ class ProjectBrowser(QFrame):
     component_renamed = Signal(object, str)        # (component, new_name)
     component_vis_changed = Signal(str, bool)      # (component_id, visible)
 
+    # Phase 6: Move Body/Sketch zwischen Components
+    body_moved_to_component = Signal(object, object, object)      # (body, source_comp, target_comp)
+    sketch_moved_to_component = Signal(object, object, object)    # (sketch, source_comp, target_comp)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._collapsed = False
@@ -469,17 +473,31 @@ class ProjectBrowser(QFrame):
         """)
         
         if data[0] == 'sketch':
+            sketch = data[1]
             menu.addAction(tr("Edit"), lambda: self.feature_double_clicked.emit(data))
-            vis = self.sketch_visibility.get(data[1].id, True)
-            menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(data[1], 'sketch'))
+            vis = self.sketch_visibility.get(sketch.id, True)
+            menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(sketch, 'sketch'))
+
+            # Phase 6: Move to Component submenu
+            move_menu = self._create_move_to_component_menu(sketch, 'sketch')
+            if move_menu:
+                menu.addMenu(move_menu)
+
             menu.addSeparator()
-            menu.addAction(tr("Delete"), lambda: self._del_sketch(data[1]))
+            menu.addAction(tr("Delete"), lambda: self._del_sketch(sketch))
             
         elif data[0] == 'body':
-            vis = self.body_visibility.get(data[1].id, True)
-            menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(data[1], 'body'))
+            body = data[1]
+            vis = self.body_visibility.get(body.id, True)
+            menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(body, 'body'))
+
+            # Phase 6: Move to Component submenu
+            move_menu = self._create_move_to_component_menu(body, 'body')
+            if move_menu:
+                menu.addMenu(move_menu)
+
             menu.addSeparator()
-            menu.addAction(tr("Delete"), lambda: self._del_body(data[1]))
+            menu.addAction(tr("Delete"), lambda: self._del_body(body))
             
         elif data[0] == 'construction_plane':
             cp = data[1]
@@ -731,6 +749,96 @@ class ProjectBrowser(QFrame):
         # Signal emittieren - MainWindow erstellt UndoCommand
         self.component_deleted.emit(component)
         logger.info(f"[BROWSER] Component löschen: {component.name}")
+
+    def _create_move_to_component_menu(self, item, item_type: str) -> 'QMenu':
+        """
+        Erstellt ein Submenu mit allen verfügbaren Components zum Verschieben.
+
+        Args:
+            item: Body oder Sketch
+            item_type: 'body' oder 'sketch'
+
+        Returns:
+            QMenu oder None wenn keine anderen Components verfügbar
+        """
+        if not self._assembly_enabled or not self.document:
+            return None
+
+        # Source-Component finden
+        source_comp = self._find_component_containing(item, item_type)
+        if not source_comp:
+            return None
+
+        # Alle Components sammeln (rekursiv)
+        all_components = self._collect_all_components(self.document.root_component)
+
+        # Nur Components zeigen, die nicht die Source sind
+        available_components = [c for c in all_components if c != source_comp]
+
+        if not available_components:
+            return None
+
+        move_menu = QMenu(tr("Move to Component"), self)
+        move_menu.setStyleSheet("""
+            QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background: #0078d4; }
+        """)
+
+        for target_comp in available_components:
+            # Hierarchie-Indikator (→ zeigt Tiefe)
+            depth = self._get_component_depth(target_comp)
+            prefix = "  " * depth
+            action = move_menu.addAction(f"{prefix}⊕ {target_comp.name}")
+            action.triggered.connect(
+                lambda checked, t=target_comp, s=source_comp, i=item, tp=item_type:
+                    self._move_item_to_component(i, s, t, tp)
+            )
+
+        return move_menu
+
+    def _find_component_containing(self, item, item_type: str):
+        """Findet die Component, die ein Body oder Sketch enthält."""
+        if not self.document:
+            return None
+
+        def search_in_component(comp, item, item_type):
+            if item_type == 'body' and item in comp.bodies:
+                return comp
+            if item_type == 'sketch' and item in comp.sketches:
+                return comp
+            for sub in comp.sub_components:
+                result = search_in_component(sub, item, item_type)
+                if result:
+                    return result
+            return None
+
+        return search_in_component(self.document.root_component, item, item_type)
+
+    def _collect_all_components(self, comp) -> list:
+        """Sammelt alle Components rekursiv."""
+        result = [comp]
+        for sub in comp.sub_components:
+            result.extend(self._collect_all_components(sub))
+        return result
+
+    def _get_component_depth(self, comp) -> int:
+        """Gibt die Tiefe einer Component in der Hierarchie zurück."""
+        depth = 0
+        current = comp
+        while current.parent:
+            depth += 1
+            current = current.parent
+        return depth
+
+    def _move_item_to_component(self, item, source_comp, target_comp, item_type: str):
+        """Emitiert Signal zum Verschieben eines Items."""
+        if item_type == 'body':
+            self.body_moved_to_component.emit(item, source_comp, target_comp)
+            logger.info(f"[BROWSER] Body '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
+        elif item_type == 'sketch':
+            self.sketch_moved_to_component.emit(item, source_comp, target_comp)
+            logger.info(f"[BROWSER] Sketch '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
 
     def get_selected_body_ids(self):
         """

@@ -1039,7 +1039,6 @@ class Sketch:
                 native_spline = Spline2D.from_dict(nsdata)
                 sketch.native_splines.append(native_spline)
             except Exception as e:
-                from loguru import logger
                 logger.debug(f"Native Spline Wiederherstellung übersprungen: {e}")
 
         # Constraints wiederherstellen
@@ -1071,7 +1070,6 @@ class Sketch:
                 )
                 sketch.constraints.append(constraint)
             except (KeyError, Exception) as e:
-                from loguru import logger
                 logger.debug(f"Constraint-Wiederherstellung übersprungen: {e}")
 
         # Closed Profiles wiederherstellen (Koordinatenlisten → Shapely Polygons)

@@ -873,6 +873,10 @@ class MainWindow(QMainWindow):
         self.browser.component_deleted.connect(self._on_component_deleted)
         self.browser.component_renamed.connect(self._on_component_renamed)
         self.browser.component_vis_changed.connect(self._on_component_vis_changed)
+
+        # Phase 6: Body/Sketch verschieben zwischen Components
+        self.browser.body_moved_to_component.connect(self._on_body_moved_to_component)
+        self.browser.sketch_moved_to_component.connect(self._on_sketch_moved_to_component)
         
         # Viewport Signale
         self.viewport_3d.plane_clicked.connect(self._on_plane_selected)
@@ -6415,43 +6419,46 @@ class MainWindow(QMainWindow):
         Aktiviert eine Component als aktive Bearbeitungs-Component.
 
         In Assembly-Modus: Bodies/Sketches werden relativ zur aktiven Component bearbeitet.
+        UNDO/REDO: Verwendet ActivateComponentCommand.
         """
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
 
-        self.document.set_active_component(component)
-        self.browser.refresh()
+        from gui.commands.component_commands import ActivateComponentCommand
 
-        # Viewport aktualisieren (inaktive Components grau/transparent)
-        self._trigger_viewport_update()
+        # Aktuelle Component merken für Undo
+        previous_active = self.document._active_component
 
-        self.statusBar().showMessage(f"Aktive Component: {component.name}")
-        logger.info(f"[ASSEMBLY] Component aktiviert: {component.name}")
+        # Nur Command pushen wenn es eine echte Änderung ist
+        if previous_active != component:
+            cmd = ActivateComponentCommand(component, previous_active, self)
+            self.undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Aktive Component: {component.name}")
 
     def _on_component_created(self, parent_component, new_component):
         """
         Handler für neue Component-Erstellung.
 
-        Erstellt UndoCommand für Undo/Redo-Support.
+        UNDO/REDO: Verwendet CreateComponentCommand.
+        HINWEIS: Browser erstellt die Component, Command verwaltet nur add/remove.
         """
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
 
-        # Direkte Zuweisung (später: UndoCommand)
-        parent_component.sub_components.append(new_component)
-        new_component.parent = parent_component
+        from gui.commands.component_commands import CreateComponentCommand
 
-        self.browser.refresh()
-        self._trigger_viewport_update()
-
+        # Command mit der bereits erstellten Component
+        cmd = CreateComponentCommand(parent_component, new_component.name, self)
+        cmd.created_component = new_component  # Vorhandene Component verwenden
+        self.undo_stack.push(cmd)
         self.statusBar().showMessage(f"Component erstellt: {new_component.name}")
-        logger.info(f"[ASSEMBLY] Component erstellt: {new_component.name} in {parent_component.name}")
 
     def _on_component_deleted(self, component):
         """
         Handler für Component-Löschung.
 
         Löscht Component inkl. aller Bodies/Sketches/Sub-Components.
+        UNDO/REDO: Verwendet DeleteComponentCommand.
         """
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
@@ -6460,31 +6467,27 @@ class MainWindow(QMainWindow):
             logger.warning("[ASSEMBLY] Root-Component kann nicht gelöscht werden")
             return
 
-        # Wenn aktive Component gelöscht wird, aktiviere Parent
-        if self.document._active_component == component:
-            self.document.set_active_component(component.parent)
+        from gui.commands.component_commands import DeleteComponentCommand
 
-        # Aus Parent entfernen
-        component.parent.sub_components.remove(component)
-
-        self.browser.refresh()
-        self._trigger_viewport_update()
-
+        cmd = DeleteComponentCommand(component, self)
+        self.undo_stack.push(cmd)
         self.statusBar().showMessage(f"Component gelöscht: {component.name}")
-        logger.info(f"[ASSEMBLY] Component gelöscht: {component.name}")
 
     def _on_component_renamed(self, component, new_name):
-        """Handler für Component-Umbenennung."""
+        """
+        Handler für Component-Umbenennung.
+
+        UNDO/REDO: Verwendet RenameComponentCommand.
+        """
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
 
+        from gui.commands.component_commands import RenameComponentCommand
+
         old_name = component.name
-        component.name = new_name
-
-        self.browser.refresh()
-
+        cmd = RenameComponentCommand(component, old_name, new_name, self)
+        self.undo_stack.push(cmd)
         self.statusBar().showMessage(f"Component umbenannt: {old_name} → {new_name}")
-        logger.info(f"[ASSEMBLY] Component umbenannt: {old_name} → {new_name}")
 
     def _on_component_vis_changed(self, component_id: str, visible: bool):
         """
@@ -6494,6 +6497,36 @@ class MainWindow(QMainWindow):
         """
         self._trigger_viewport_update()
         logger.debug(f"[ASSEMBLY] Component visibility geändert: {component_id} → {visible}")
+
+    def _on_body_moved_to_component(self, body, source_comp, target_comp):
+        """
+        Handler für Body-Verschiebung zwischen Components.
+
+        UNDO/REDO: Verwendet MoveBodyToComponentCommand.
+        """
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        from gui.commands.component_commands import MoveBodyToComponentCommand
+
+        cmd = MoveBodyToComponentCommand(body, source_comp, target_comp, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Body '{body.name}' verschoben: {source_comp.name} → {target_comp.name}")
+
+    def _on_sketch_moved_to_component(self, sketch, source_comp, target_comp):
+        """
+        Handler für Sketch-Verschiebung zwischen Components.
+
+        UNDO/REDO: Verwendet MoveSketchToComponentCommand.
+        """
+        if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
+            return
+
+        from gui.commands.component_commands import MoveSketchToComponentCommand
+
+        cmd = MoveSketchToComponentCommand(sketch, source_comp, target_comp, self)
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Sketch '{sketch.name}' verschoben: {source_comp.name} → {target_comp.name}")
 
     def _on_rollback_changed(self, body, value):
         """Handle rollback slider change - rebuild body up to given feature index."""
