@@ -8,14 +8,169 @@ Phase 3 Assembly: Unterstützt hierarchische Component-Struktur
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTreeWidget, QTreeWidgetItem, QMenu, QSizePolicy,
-    QToolButton, QScrollArea, QSlider, QInputDialog
+    QToolButton, QScrollArea, QSlider, QInputDialog, QAbstractItemView
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFont, QIcon, QColor
+from PySide6.QtCore import Qt, Signal, QSize, QMimeData
+from PySide6.QtGui import QFont, QIcon, QColor, QDrag
 from loguru import logger
 
 from i18n import tr
 from config.feature_flags import is_enabled
+
+
+class DraggableTreeWidget(QTreeWidget):
+    """
+    QTreeWidget mit Drag & Drop Support für Bodies/Sketches zwischen Components.
+
+    Phase 6 Assembly: Ermöglicht Drag & Drop von Bodies/Sketches zu anderen Components.
+    Keyboard Shortcuts:
+    - Enter: Component aktivieren
+    - Esc: Zur Root-Component zurück
+    - F2: Umbenennen
+    """
+
+    # Signal wenn Item gedroppt wird: (item_type, item, source_comp, target_comp)
+    item_dropped = Signal(str, object, object, object)
+
+    # Keyboard Shortcuts
+    activate_component = Signal(object)      # Enter gedrückt auf Component
+    go_to_root = Signal()                    # Esc gedrückt
+    rename_requested = Signal(object)        # F2 gedrückt auf Component
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)  # Nicht InternalMove!
+        self.setDefaultDropAction(Qt.MoveAction)
+        self._drag_item_data = None
+
+    def keyPressEvent(self, event):
+        """Keyboard Shortcuts für Component-Operationen."""
+        item = self.currentItem()
+        data = item.data(0, Qt.UserRole) if item else None
+
+        # Enter: Component aktivieren
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            if data and data[0] == 'component' and data[1]:
+                self.activate_component.emit(data[1])
+                return
+
+        # Esc: Zur Root-Component
+        if event.key() == Qt.Key_Escape:
+            self.go_to_root.emit()
+            return
+
+        # F2: Umbenennen
+        if event.key() == Qt.Key_F2:
+            if data and data[0] == 'component' and data[1]:
+                self.rename_requested.emit(data[1])
+                return
+
+        # Default handling
+        super().keyPressEvent(event)
+
+    def startDrag(self, supportedActions):
+        """Startet Drag-Operation für Body oder Sketch."""
+        item = self.currentItem()
+        if not item:
+            return
+
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return
+
+        item_type = data[0]
+
+        # Nur Bodies und Sketches können gedragged werden
+        if item_type not in ('body', 'sketch'):
+            return
+
+        self._drag_item_data = data
+
+        # Drag starten
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setText(f"{item_type}:{data[1].id}")
+        drag.setMimeData(mime_data)
+
+        # Drag ausführen
+        drag.exec(Qt.MoveAction)
+
+    def dragEnterEvent(self, event):
+        """Akzeptiert Drag wenn es ein Body/Sketch ist."""
+        if event.mimeData().hasText():
+            text = event.mimeData().text()
+            if text.startswith('body:') or text.startswith('sketch:'):
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Highlight Drop-Target wenn über Component."""
+        item = self.itemAt(event.position().toPoint())
+        if item:
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'component':
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Führt Drop-Operation aus."""
+        if not self._drag_item_data:
+            event.ignore()
+            return
+
+        target_item = self.itemAt(event.position().toPoint())
+        if not target_item:
+            event.ignore()
+            return
+
+        target_data = target_item.data(0, Qt.UserRole)
+        if not target_data or target_data[0] != 'component':
+            event.ignore()
+            return
+
+        target_component = target_data[1]
+        source_data = self._drag_item_data
+        item_type = source_data[0]
+        item = source_data[1]
+
+        # Source-Component finden
+        source_component = self._find_source_component(item, item_type)
+
+        if source_component and source_component != target_component:
+            # Signal emittieren
+            self.item_dropped.emit(item_type, item, source_component, target_component)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+        self._drag_item_data = None
+
+    def _find_source_component(self, item, item_type):
+        """Findet die Component die das Item enthält."""
+        # Wird von parent (ProjectBrowser) gesetzt
+        browser = self.parent()
+        while browser and not isinstance(browser, ProjectBrowser):
+            browser = browser.parent()
+
+        if not browser or not browser.document:
+            return None
+
+        def search(comp):
+            if item_type == 'body' and item in comp.bodies:
+                return comp
+            if item_type == 'sketch' and item in comp.sketches:
+                return comp
+            for sub in comp.sub_components:
+                result = search(sub)
+                if result:
+                    return result
+            return None
+
+        return search(browser.document.root_component)
 
 
 class ProjectBrowser(QFrame):
@@ -99,34 +254,42 @@ class ProjectBrowser(QFrame):
         
         content_layout.addWidget(header)
         
-        # Tree Widget
-        self.tree = QTreeWidget()
+        # Tree Widget - Phase 6: Mit Drag & Drop Support
+        self.tree = DraggableTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)  # Multi-Select aktivieren
         self.tree.setStyleSheet("""
-            QTreeWidget { 
-                background: #1e1e1e; 
-                border: none; 
+            QTreeWidget {
+                background: #1e1e1e;
+                border: none;
                 color: #ccc;
                 font-size: 11px;
                 outline: none;
             }
-            QTreeWidget::item { 
+            QTreeWidget::item {
                 padding: 2px 4px;
                 border: none;
             }
-            QTreeWidget::item:hover { 
-                background: #2a2d2e; 
+            QTreeWidget::item:hover {
+                background: #2a2d2e;
             }
-            QTreeWidget::item:selected { 
-                background: #0e4f7d; 
+            QTreeWidget::item:selected {
+                background: transparent;
             }
         """)
         self.tree.itemClicked.connect(self._on_click)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
+
+        # Phase 6: Drag & Drop Signal verbinden
+        self.tree.item_dropped.connect(self._on_item_dropped)
+
+        # Phase 6: Keyboard Shortcuts
+        self.tree.activate_component.connect(self._on_keyboard_activate)
+        self.tree.go_to_root.connect(self._on_keyboard_go_to_root)
+        self.tree.rename_requested.connect(self._rename_component)
         
         content_layout.addWidget(self.tree)
 
@@ -203,10 +366,12 @@ class ProjectBrowser(QFrame):
     def set_document(self, doc):
         self.document = doc
         if doc:
-            for s in doc.sketches:
+            # WICHTIG: get_all_sketches/get_all_bodies statt .sketches/.bodies
+            # .sketches/.bodies geben nur die aktive Component zurück!
+            for s in doc.get_all_sketches():
                 if s.id not in self.sketch_visibility:
                     self.sketch_visibility[s.id] = True
-            for b in doc.bodies:
+            for b in doc.get_all_bodies():
                 if b.id not in self.body_visibility:
                     self.body_visibility[b.id] = True
         self.refresh()
@@ -839,6 +1004,45 @@ class ProjectBrowser(QFrame):
         elif item_type == 'sketch':
             self.sketch_moved_to_component.emit(item, source_comp, target_comp)
             logger.info(f"[BROWSER] Sketch '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
+
+    def _on_item_dropped(self, item_type: str, item, source_comp, target_comp):
+        """
+        Handler für Drag & Drop von Bodies/Sketches.
+
+        Phase 6 Assembly: Wird von DraggableTreeWidget aufgerufen.
+        """
+        if not self._assembly_enabled:
+            return
+
+        logger.info(f"[BROWSER] Drag&Drop: {item_type} '{item.name}' von {source_comp.name} nach {target_comp.name}")
+        self._move_item_to_component(item, source_comp, target_comp, item_type)
+
+    def _on_keyboard_activate(self, component):
+        """
+        Handler für Enter-Taste: Component aktivieren.
+
+        Phase 6 Assembly: Keyboard Shortcut.
+        """
+        if not self._assembly_enabled or not component:
+            return
+
+        if not component.is_active:
+            self._activate_component(component)
+            logger.info(f"[BROWSER] Keyboard: Component aktiviert: {component.name}")
+
+    def _on_keyboard_go_to_root(self):
+        """
+        Handler für Esc-Taste: Zur Root-Component zurück.
+
+        Phase 6 Assembly: Keyboard Shortcut.
+        """
+        if not self._assembly_enabled or not self.document:
+            return
+
+        root = self.document.root_component
+        if root and not root.is_active:
+            self._activate_component(root)
+            logger.info(f"[BROWSER] Keyboard: Zur Root-Component gewechselt")
 
     def get_selected_body_ids(self):
         """

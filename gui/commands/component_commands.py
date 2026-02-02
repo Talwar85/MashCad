@@ -139,6 +139,19 @@ class MoveBodyToComponentCommand(QUndoCommand):
         except ValueError:
             self.source_index = 0
 
+    def _is_component_active(self, comp) -> bool:
+        """Prüft ob eine Component (oder ein Parent) aktiv ist."""
+        active_comp = self.main_window.document._active_component
+        if comp == active_comp:
+            return True
+        # Prüfe ob comp ein Sub-Component der aktiven ist
+        current = comp
+        while current:
+            if current == active_comp:
+                return True
+            current = current.parent
+        return False
+
     def redo(self):
         """Body verschieben."""
         # Aus Quell-Component entfernen
@@ -153,7 +166,12 @@ class MoveBodyToComponentCommand(QUndoCommand):
 
         # UI aktualisieren
         self.main_window.browser.refresh()
-        self.main_window._update_viewport_all_impl()
+
+        # Performance: Nur Opacity dieses einen Bodies ändern
+        target_is_active = self._is_component_active(self.target_component)
+        viewport = self.main_window.viewport_3d
+        if hasattr(viewport, 'set_body_appearance'):
+            viewport.set_body_appearance(self.body.id, inactive=not target_is_active)
 
     def undo(self):
         """Body zurück verschieben."""
@@ -170,7 +188,12 @@ class MoveBodyToComponentCommand(QUndoCommand):
 
         # UI aktualisieren
         self.main_window.browser.refresh()
-        self.main_window._update_viewport_all_impl()
+
+        # Performance: Nur Opacity dieses einen Bodies ändern
+        source_is_active = self._is_component_active(self.source_component)
+        viewport = self.main_window.viewport_3d
+        if hasattr(viewport, 'set_body_appearance'):
+            viewport.set_body_appearance(self.body.id, inactive=not source_is_active)
 
 
 class MoveSketchToComponentCommand(QUndoCommand):
@@ -274,6 +297,50 @@ class ActivateComponentCommand(QUndoCommand):
         self.previous_active = previous_active
         self.main_window = main_window
 
+    def _get_all_body_ids_in_component(self, comp) -> list:
+        """Sammelt alle Body-IDs einer Component (inkl. Sub-Components)."""
+        body_ids = [b.id for b in comp.bodies]
+        for sub in comp.sub_components:
+            body_ids.extend(self._get_all_body_ids_in_component(sub))
+        return body_ids
+
+    def _update_component_appearance(self, old_active, new_active):
+        """
+        Aktualisiert die Opacity ALLER Bodies basierend auf der neuen aktiven Component.
+
+        Logik: Alle Bodies in der neuen aktiven Component (inkl. Sub-Components) = aktiv
+               Alle anderen Bodies = inaktiv
+        """
+        viewport = self.main_window.viewport_3d
+        doc = self.main_window.document
+
+        # Sammle ALLE Body-IDs im Dokument
+        all_body_ids = [b.id for b in doc.get_all_bodies()]
+
+        # Bodies die in der neuen aktiven Component sind (inkl. Sub-Components)
+        new_active_body_ids = set()
+        if new_active:
+            new_active_body_ids = set(self._get_all_body_ids_in_component(new_active))
+
+        # Jetzt alle Bodies durchgehen und Appearance setzen
+        to_activate = []
+        to_deactivate = []
+
+        for bid in all_body_ids:
+            if bid in new_active_body_ids:
+                to_activate.append(bid)
+            else:
+                to_deactivate.append(bid)
+
+        # Batch-Update für Performance
+        if to_deactivate and hasattr(viewport, 'set_component_bodies_inactive'):
+            viewport.set_component_bodies_inactive(to_deactivate, inactive=True)
+            logger.debug(f"[ASSEMBLY] {len(to_deactivate)} Bodies deaktiviert (grau)")
+
+        if to_activate and hasattr(viewport, 'set_component_bodies_inactive'):
+            viewport.set_component_bodies_inactive(to_activate, inactive=False)
+            logger.debug(f"[ASSEMBLY] {len(to_activate)} Bodies aktiviert (voll)")
+
     def redo(self):
         """Component aktivieren."""
         # Alte deaktivieren
@@ -286,9 +353,11 @@ class ActivateComponentCommand(QUndoCommand):
 
         logger.info(f"[ASSEMBLY] Component aktiviert: {self.component.name}")
 
-        # UI aktualisieren
+        # UI aktualisieren - Browser refresh für Tree-Darstellung
         self.main_window.browser.refresh()
-        self.main_window._update_viewport_all_impl()
+
+        # Performance: Nur Opacity ändern, kein Full Refresh!
+        self._update_component_appearance(self.previous_active, self.component)
 
     def undo(self):
         """Zur vorherigen Component zurückkehren."""
@@ -296,17 +365,22 @@ class ActivateComponentCommand(QUndoCommand):
         self.component.is_active = False
 
         # Vorherige aktivieren
+        new_active = None
         if self.previous_active:
             self.previous_active.is_active = True
             self.main_window.document._active_component = self.previous_active
+            new_active = self.previous_active
             logger.info(f"[ASSEMBLY] Component aktiviert (Undo): {self.previous_active.name}")
         else:
             # Fallback: Root-Component
             root = self.main_window.document.root_component
             root.is_active = True
             self.main_window.document._active_component = root
+            new_active = root
             logger.info(f"[ASSEMBLY] Root-Component aktiviert (Undo)")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
-        self.main_window._update_viewport_all_impl()
+
+        # Performance: Nur Opacity ändern, kein Full Refresh!
+        self._update_component_appearance(self.component, new_active)

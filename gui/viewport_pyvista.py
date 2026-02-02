@@ -4105,17 +4105,75 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         except: pass
         request_render(self.plotter)
 
-    def clear_bodies(self):
-        for names in self._body_actors.values():
-            for n in names:
-                try: self.plotter.remove_actor(n)
-                except: pass
-        self._body_actors.clear()
-        self.bodies.clear()
-        # Cache invalidieren
-        if hasattr(self, '_actor_to_body_cache'):
-            self._actor_to_body_cache.clear()
+    def clear_bodies(self, only_body_id: str = None):
+        """
+        Entfernt Body-Actors aus dem Viewport.
+
+        Args:
+            only_body_id: Wenn angegeben, nur diesen Body entfernen (kein Flicker bei anderen).
+        """
+        if only_body_id:
+            # Nur einen Body entfernen - KEIN FLICKER für andere!
+            if only_body_id in self._body_actors:
+                for n in self._body_actors[only_body_id]:
+                    try:
+                        self.plotter.remove_actor(n)
+                    except:
+                        pass
+                del self._body_actors[only_body_id]
+            if only_body_id in self.bodies:
+                del self.bodies[only_body_id]
+            if hasattr(self, '_actor_to_body_cache'):
+                self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
+                                              if v != only_body_id}
+        else:
+            # Alle Bodies entfernen
+            for names in self._body_actors.values():
+                for n in names:
+                    try:
+                        self.plotter.remove_actor(n)
+                    except:
+                        pass
+            self._body_actors.clear()
+            self.bodies.clear()
+            if hasattr(self, '_actor_to_body_cache'):
+                self._actor_to_body_cache.clear()
+
         request_render(self.plotter)
+
+    def update_single_body(self, body, color=None, inactive_component=False):
+        """
+        Aktualisiert NUR EINEN Body - ohne andere Bodies zu berühren.
+
+        Performance-Optimierung: Kein Flicker für unveränderte Bodies.
+
+        Args:
+            body: Body-Objekt mit vtk_mesh
+            color: Optional - Farbe
+            inactive_component: True wenn in inaktiver Component
+        """
+        if not hasattr(body, 'vtk_mesh') or body.vtk_mesh is None:
+            return False
+
+        # Alten Actor entfernen (nur für diesen Body!)
+        self.clear_bodies(only_body_id=body.id)
+
+        # Neuen Actor hinzufügen
+        default_color = (0.7, 0.7, 0.7)
+        col = color if color else getattr(body, 'color', default_color)
+        if col is None:
+            col = default_color
+
+        self.add_body(
+            bid=body.id,
+            name=body.name,
+            mesh_obj=body.vtk_mesh,
+            edge_mesh_obj=body.vtk_edges,
+            color=col,
+            inactive_component=inactive_component
+        )
+
+        return True
 
     def get_body_mesh(self, body_id):
         if body_id in self.bodies: return self.bodies[body_id]['mesh']
@@ -4130,6 +4188,83 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)
             if getattr(self, 'edge_select_mode', False) or getattr(self, 'face_selection_mode', False):
                 self._update_detector_for_picking()
+
+    def set_body_appearance(self, body_id: str, opacity: float = None, color: tuple = None, inactive: bool = None):
+        """
+        Ändert Opacity/Farbe eines Body-Actors OHNE ihn zu entfernen/neu hinzuzufügen.
+
+        Performance-Optimierung: Vermeidet Flackern bei Component-Aktivierung.
+
+        Args:
+            body_id: ID des Bodies
+            opacity: Neue Opacity (0.0-1.0), None = nicht ändern
+            color: Neue Farbe (r,g,b), None = nicht ändern
+            inactive: Wenn True, wird grau + 35% opacity gesetzt
+        """
+        if body_id not in self._body_actors:
+            return False
+
+        actor_names = self._body_actors.get(body_id, [])
+        mesh_actor_name = f"body_{body_id}_m"
+
+        # Actor aus PyVista holen
+        if mesh_actor_name not in self.plotter.renderer.actors:
+            return False
+
+        actor = self.plotter.renderer.actors[mesh_actor_name]
+
+        # Inactive-Modus: Grau + Transparent + nicht pickable
+        if inactive is not None:
+            if inactive:
+                opacity = 0.35
+                color = (0.5, 0.5, 0.5)  # Grau
+                actor.SetPickable(False)  # Inaktive Bodies nicht anklickbar
+            else:
+                opacity = 1.0
+                # Farbe aus bodies-Dict wiederherstellen
+                if body_id in self.bodies and 'color' in self.bodies[body_id]:
+                    color = self.bodies[body_id]['color']
+                actor.SetPickable(True)  # Aktive Bodies anklickbar
+
+        # Opacity setzen
+        if opacity is not None:
+            prop = actor.GetProperty()
+            prop.SetOpacity(opacity)
+            # Auch in bodies-Dict speichern
+            if body_id in self.bodies:
+                self.bodies[body_id]['opacity'] = opacity
+
+        # Farbe setzen
+        if color is not None:
+            prop = actor.GetProperty()
+            prop.SetColor(color[0], color[1], color[2])
+            # Auch in bodies-Dict speichern
+            if body_id in self.bodies:
+                self.bodies[body_id]['color'] = color
+
+        # Render anfordern (kein full refresh!)
+        request_render(self.plotter)
+        return True
+
+    def set_component_bodies_inactive(self, body_ids: list, inactive: bool):
+        """
+        Setzt mehrere Bodies auf aktiv/inaktiv Aussehen.
+
+        Performance-Optimierung für Component-Aktivierung.
+
+        Args:
+            body_ids: Liste von Body-IDs
+            inactive: True = grau/transparent, False = normal
+        """
+        changed = False
+        for bid in body_ids:
+            if self.set_body_appearance(bid, inactive=inactive):
+                changed = True
+
+        if changed:
+            request_render(self.plotter, immediate=True)
+
+        return changed
 
     def refresh_texture_previews(self, body_id: str = None):
         """

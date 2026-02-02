@@ -1004,23 +1004,28 @@ class MainWindow(QMainWindow):
             logger.error(f"Import fehlgeschlagen: {e}")
     
     def _update_viewport_all_impl(self):
-        """Das eigentliche Update, wird vom Timer aufgerufen"""
-        if not HAS_PYVISTA: return
+        """
+        Das eigentliche Update, wird vom Timer aufgerufen.
+
+        SMART UPDATE: Entfernt/fügt nur Bodies hinzu die sich wirklich geändert haben.
+        Verhindert Flicker bei unveränderten Bodies.
+        """
+        if not HAS_PYVISTA:
+            return
 
         # 1. Sketches updaten
         visible_sketches = self.browser.get_visible_sketches()
         self.viewport_3d.set_sketches(visible_sketches)
-        
-        # 2. Bodies updaten
-        self.viewport_3d.clear_bodies()
-        
-        # FIX: Variablen definieren, die vorher fehlten!
+
+        # 2. Bodies SMART updaten - kein clear_bodies() mehr!
         default_color = (0.7, 0.7, 0.7)
         colors = [(0.6, 0.6, 0.8), (0.8, 0.6, 0.6), (0.6, 0.8, 0.6)]
-        
+
         visible_bodies = self.browser.get_visible_bodies()
 
-        # Phase 4 Assembly: Tupel hat jetzt 3 Elemente (body, visible, is_inactive_component)
+        # Sammle alle Body-IDs die sichtbar sein sollen
+        should_be_visible = set()
+
         for i, body_info in enumerate(visible_bodies):
             # Backward-compatible: 2 oder 3 Elemente
             if len(body_info) == 3:
@@ -1032,11 +1037,25 @@ class MainWindow(QMainWindow):
             if not visible:
                 continue
 
+            should_be_visible.add(b.id)
+
+            # Prüfe ob Body bereits im Viewport ist mit korrektem State
+            existing = self.viewport_3d.bodies.get(b.id)
+            if existing:
+                # Body existiert - prüfe ob Opacity-Update nötig
+                current_opacity = existing.get('opacity', 1.0)
+                target_opacity = 0.35 if is_inactive else 1.0
+
+                if abs(current_opacity - target_opacity) > 0.01:
+                    # Nur Opacity updaten, kein Mesh-Refresh
+                    self.viewport_3d.set_body_appearance(b.id, inactive=is_inactive)
+                continue  # Body existiert bereits, nichts weiter tun
+
+            # Body ist NEU - hinzufügen
             try:
-                # Fall A: Vtk Cache vorhanden (Schnell & Modern)
                 col = getattr(b, 'color', default_color)
-                # Falls color None ist (manchmal bei Init), Default nehmen
-                if col is None: col = default_color
+                if col is None:
+                    col = default_color
 
                 if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
                     self.viewport_3d.add_body(
@@ -1047,25 +1066,30 @@ class MainWindow(QMainWindow):
                         color=col,
                         inactive_component=is_inactive
                     )
-
-                # Fall B: Fallback auf alte Listen (Legacy)
                 elif hasattr(b, '_mesh_vertices') and b._mesh_vertices:
-                    # FIX: Benannte Argumente (keywords) nutzen!
                     self.viewport_3d.add_body(
                         bid=b.id,
                         name=b.name,
-                        verts=b._mesh_vertices,     # <-- Keyword wichtig!
-                        faces=b._mesh_triangles,    # <-- Keyword wichtig!
+                        verts=b._mesh_vertices,
+                        faces=b._mesh_triangles,
                         color=colors[i % 3],
                         inactive_component=is_inactive
                     )
             except Exception as e:
                 logger.exception(f"Fehler beim Laden von Body {b.name}: {e}")
 
-        # Finales Rendering erzwingen
-        if hasattr(self.viewport_3d, 'plotter'):
-            request_render(self.viewport_3d.plotter, immediate=True)
-        self.viewport_3d.update()
+        # 3. Bodies entfernen die nicht mehr sichtbar sein sollen
+        current_body_ids = set(self.viewport_3d.bodies.keys())
+        to_remove = current_body_ids - should_be_visible
+
+        for body_id in to_remove:
+            self.viewport_3d.clear_bodies(only_body_id=body_id)
+
+        # Finales Rendering nur wenn nötig
+        if to_remove or (should_be_visible - current_body_ids):
+            if hasattr(self.viewport_3d, 'plotter'):
+                request_render(self.viewport_3d.plotter, immediate=True)
+            self.viewport_3d.update()
 
     def _update_viewport_all(self):
         """Aktualisiert ALLES im Viewport (Legacy Wrapper)"""
@@ -1093,8 +1117,64 @@ class MainWindow(QMainWindow):
                     faces=b._mesh_triangles,    # Explizit benennen
                     color=default_col,
                     inactive_component=is_inactive  # Grau/transparent für inaktive Components
-                ) 
-        
+                )
+
+    def _update_single_body(self, body):
+        """
+        Aktualisiert NUR EINEN Body im Viewport - ohne Flicker bei anderen Bodies.
+
+        Performance-Optimierung: Verwendet update_single_body() statt clear_bodies().
+
+        Args:
+            body: Body-Objekt das aktualisiert werden soll
+        """
+        if not HAS_PYVISTA:
+            return
+
+        # Prüfe ob Body in inaktiver Component ist
+        is_inactive = False
+        if hasattr(self.document, '_assembly_enabled') and self.document._assembly_enabled:
+            active_comp = self.document._active_component
+            # Finde Component die diesen Body enthält
+            comp = self._find_component_for_body(body)
+            if comp and comp != active_comp:
+                # Prüfe ob comp ein Sub-Component der aktiven ist
+                is_sub = False
+                current = comp
+                while current:
+                    if current == active_comp:
+                        is_sub = True
+                        break
+                    current = current.parent
+                is_inactive = not is_sub
+
+        # Body aktualisieren
+        col = getattr(body, 'color', (0.7, 0.7, 0.7))
+        if col is None:
+            col = (0.7, 0.7, 0.7)
+
+        if hasattr(self.viewport_3d, 'update_single_body'):
+            self.viewport_3d.update_single_body(body, color=col, inactive_component=is_inactive)
+        else:
+            # Fallback: Full refresh (alt)
+            self._update_viewport_all_impl()
+
+    def _find_component_for_body(self, body):
+        """Findet die Component die einen Body enthält."""
+        if not hasattr(self.document, 'root_component'):
+            return None
+
+        def search(comp):
+            if body in comp.bodies:
+                return comp
+            for sub in comp.sub_components:
+                result = search(sub)
+                if result:
+                    return result
+            return None
+
+        return search(self.document.root_component)
+
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
         actions = {
@@ -4172,7 +4252,8 @@ class MainWindow(QMainWindow):
             return
 
         source_id = first_face.owner_id
-        target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
+        # WICHTIG: get_all_sketches() statt .sketches - letzteres nur für aktive Component!
+        target_sketch = next((s for s in self.document.get_all_sketches() if s.id == source_id), None)
         polys = [f.shapely_poly for f in selection_data]
 
         if not target_sketch:
@@ -4593,8 +4674,9 @@ class MainWindow(QMainWindow):
         
         # B) Body-Flächen verarbeiten (NUR sichtbare!)
         # Performance Optimization Phase 2.2: Übergebe extrude_mode für Dynamic Priority
+        # WICHTIG: get_all_bodies() statt .bodies - letzteres nur für aktive Component!
         extrude_mode = getattr(self.viewport_3d, 'extrude_mode', False)
-        for body in self.document.bodies:
+        for body in self.document.get_all_bodies():
             if self.viewport_3d.is_body_visible(body.id):
                 mesh = self.viewport_3d.get_body_mesh(body.id)
                 if mesh:
@@ -4649,7 +4731,8 @@ class MainWindow(QMainWindow):
             if first_face.domain_type.startswith('sketch'):
                 try:
                     source_id = first_face.owner_id
-                    target_sketch = next((s for s in self.document.sketches if s.id == source_id), None)
+                    # WICHTIG: get_all_sketches() statt .sketches - letzteres nur für aktive Component!
+                    target_sketch = next((s for s in self.document.get_all_sketches() if s.id == source_id), None)
                     polys = [f.shapely_poly for f in selection_data]
 
                     # --- TARGETING LOGIK (STRIKT) ---
@@ -4677,7 +4760,8 @@ class MainWindow(QMainWindow):
                         if operation == "Join":
                             # Join sollte den Parent-Body nutzen (Material hinzufügen)
                             if hasattr(target_sketch, 'parent_body_id') and target_sketch.parent_body_id:
-                                parent_body = next((b for b in self.document.bodies if b.id == target_sketch.parent_body_id), None)
+                                # WICHTIG: find_body_by_id durchsucht alle Components!
+                                parent_body = self.document.find_body_by_id(target_sketch.parent_body_id)
                                 if parent_body:
                                     target_bodies = [parent_body]
                                     logger.info(f"🎯 Join: Nutze Parent-Body '{parent_body.name}'")
@@ -4689,12 +4773,14 @@ class MainWindow(QMainWindow):
                             if priority_body:
                                 target_bodies = [priority_body]
                                 logger.info(f"🎯 Auto-Target: Nutze nächsten Body '{priority_body.name}' (Proximity)")
-                            elif self.document.bodies and operation != "New Body":
+                            else:
                                 # Fallback: Wenn wir wirklich nichts finden (z.B. Skizze weit im Raum),
                                 # nehmen wir bei Join/Cut lieber den letzten Körper als gar keinen oder alle.
-                                # Das ist sicherer als "Alle schneiden".
-                                target_bodies = [self.document.bodies[-1]]
-                                logger.info(f"⚠️ Targeting Fallback: Nutze '{target_bodies[0].name}'")
+                                # WICHTIG: get_all_bodies() statt .bodies - letzteres nur für aktive Component!
+                                all_bodies = self.document.get_all_bodies()
+                                if all_bodies and operation != "New Body":
+                                    target_bodies = [all_bodies[-1]]
+                                    logger.info(f"⚠️ Targeting Fallback: Nutze '{target_bodies[0].name}'")
 
                     if not target_bodies and operation == "Cut":
                          logger.warning("Kein Ziel-Körper gefunden. Bitte Körper im Browser auswählen.")
@@ -8823,9 +8909,11 @@ class MainWindow(QMainWindow):
         logger.info(f"Sketch-Pfad Handler aufgerufen: sketch_id={sketch_id}, geom_type={geom_type}, index={index}")
 
         # Finde den Sketch (robuster Vergleich: String-Konvertierung)
-        sketch = next((s for s in self.document.sketches if str(s.id) == str(sketch_id)), None)
+        # WICHTIG: get_all_sketches() statt .sketches - letzteres nur für aktive Component!
+        all_sketches = self.document.get_all_sketches()
+        sketch = next((s for s in all_sketches if str(s.id) == str(sketch_id)), None)
         if not sketch:
-            logger.warning(f"Sketch {sketch_id} nicht gefunden. Verfügbare IDs: {[s.id for s in self.document.sketches]}")
+            logger.warning(f"Sketch {sketch_id} nicht gefunden. Verfügbare IDs: {[s.id for s in all_sketches]}")
             return
 
         # Finde das Geometrie-Element
@@ -8898,9 +8986,10 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QInputDialog
 
         # Sammle verfügbare Pfad-Geometrien aus Sketches
+        # WICHTIG: get_all_sketches() statt .sketches - letzteres nur für aktive Component!
         path_options = []
 
-        for sketch in self.document.sketches:
+        for sketch in self.document.get_all_sketches():
             # Bögen - perfekt für Sweep
             for arc in getattr(sketch, 'arcs', []):
                 path_options.append({

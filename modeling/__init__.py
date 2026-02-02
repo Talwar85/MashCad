@@ -6888,6 +6888,9 @@ class Document:
 
     def _load_assembly_format(self, data: dict):
         """Lädt Dokument aus Assembly-Format (v9.0+)."""
+        # KRITISCH: Assembly-Flag setzen, damit Properties korrekt delegieren
+        self._assembly_enabled = True
+
         # Root Component laden
         root_data = data.get("root_component", {})
         if root_data:
