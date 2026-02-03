@@ -45,6 +45,7 @@ from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from gui.workers.export_worker import STLExportWorker, STEPExportWorker  # Phase 6: Async Export
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from config.feature_flags import is_enabled  # Performance Plan Phase 5+
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
@@ -9878,8 +9879,32 @@ class MainWindow(QMainWindow):
                 try:
                     s1 = getattr(target, '_build123d_solid', None)
                     s2 = getattr(tool, '_build123d_solid', None)
-                    
+
                     if s1 and s2:
+                        # Phase 5: BBox Early-Rejection (nur für Cut/Intersect sinnvoll)
+                        if is_enabled("bbox_early_rejection") and op_type in ["Cut", "Intersect"]:
+                            try:
+                                bbox1 = s1.bounding_box()
+                                bbox2 = s2.bounding_box()
+
+                                # Prüfe ob BBoxes sich überschneiden
+                                # BBox format: min(x,y,z), max(x,y,z)
+                                overlap_x = not (bbox1.max.X < bbox2.min.X or bbox2.max.X < bbox1.min.X)
+                                overlap_y = not (bbox1.max.Y < bbox2.min.Y or bbox2.max.Y < bbox1.min.Y)
+                                overlap_z = not (bbox1.max.Z < bbox2.min.Z or bbox2.max.Z < bbox1.min.Z)
+
+                                if not (overlap_x and overlap_y and overlap_z):
+                                    # Keine Überschneidung → Operation würde fehlschlagen
+                                    logger.info(f"BBox Early-Rejection: Geometrien überschneiden sich nicht")
+                                    QMessageBox.information(
+                                        self,
+                                        "Info",
+                                        f"Die Geometrien überschneiden sich nicht.\n{op_type}-Operation nicht möglich."
+                                    )
+                                    return  # Early-Return spart 50-100ms
+                            except Exception as e:
+                                logger.debug(f"BBox check failed, continuing anyway: {e}")
+
                         new_solid = None
                         if op_type == "Union": new_solid = s1 + s2
                         elif op_type == "Cut": new_solid = s1 - s2
