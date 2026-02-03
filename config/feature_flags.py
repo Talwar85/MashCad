@@ -42,7 +42,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "picker_pooling": True,  # Phase 4: Picker-Pool statt neu erstellen
     "bbox_early_rejection": True,  # Phase 5: BBox Check vor Boolean-Ops (PERMANENT - verhindert Boolean-Bugs!)
     "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export (TEST)
-    "feature_dependency_tracking": False,  # Phase 7: Feature Dependency Graph
+    "feature_dependency_tracking": True,  # Phase 7: Feature Dependency Graph (AKTIV)
     "feature_solid_caching": False,  # Phase 8: Intermediate Solid Caching
     "async_tessellation": False,  # Phase 9: Background Mesh Generation
     "use_boolean_engine_v4": False,  # Phase 10: BooleanEngineV4 Integration

@@ -31,6 +31,7 @@ from modeling.geometry_healer import GeometryHealer, HealingResult, HealingStrat
 from modeling.nurbs import NURBSCurve, NURBSSurface, ContinuityMode, CurveType  # Phase 8
 from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as step_export  # Phase 8.3
 from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker  # Phase 8.2
+from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
 
 
 # ==================== IMPORTS ====================
@@ -1034,6 +1035,10 @@ class Body:
         # === PHASE 2 TNP: Topological Naming Tracker ===
         self._tnp_tracker = TNPTracker()
 
+        # === PHASE 7: Feature Dependency Graph ===
+        self._dependency_graph = FeatureDependencyGraph()
+        self._solid_checkpoints: dict = {}  # {feature_index: solid} - In-Memory Checkpoints
+
         # === PHASE 2: Single Source of Truth ===
         # PyVista/VTK Objekte - LAZY LOADED aus _build123d_solid
         self._mesh_cache = None       # pv.PolyData (Faces) - privat!
@@ -1123,12 +1128,58 @@ class Body:
                      aktualisiert wurde.
         """
         self.features.append(feature)
+
+        # Phase 7: Feature im Dependency Graph registrieren
+        from config.feature_flags import is_enabled
+        if is_enabled("feature_dependency_tracking"):
+            self._dependency_graph.add_feature(feature.id, len(self.features) - 1)
+
         if rebuild:
-            self._rebuild()
-    
+            self._rebuild(changed_feature_id=feature.id)
+
     def remove_feature(self, feature: Feature):
         if feature in self.features:
+            feature_index = self.features.index(feature)
+
+            # Phase 7: Checkpoints nach diesem Feature invalidieren
+            from config.feature_flags import is_enabled
+            if is_enabled("feature_dependency_tracking"):
+                self._dependency_graph.remove_feature(feature.id)
+                # Lösche Checkpoints ab diesem Index
+                for idx in list(self._solid_checkpoints.keys()):
+                    if idx >= feature_index:
+                        del self._solid_checkpoints[idx]
+
             self.features.remove(feature)
+            self._rebuild()
+
+    def update_feature(self, feature: Feature):
+        """
+        Phase 7: Aktualisiert ein Feature und triggert inkrementellen Rebuild.
+
+        Nutzt den Dependency Graph um nur die betroffenen Features neu zu berechnen.
+
+        Args:
+            feature: Das geänderte Feature (muss bereits in self.features sein)
+        """
+        if feature not in self.features:
+            logger.error(f"Feature '{feature.id}' nicht in Body '{self.name}' gefunden")
+            return
+
+        from config.feature_flags import is_enabled
+
+        if is_enabled("feature_dependency_tracking"):
+            feature_index = self.features.index(feature)
+
+            # Checkpoints ab diesem Feature invalidieren
+            for idx in list(self._solid_checkpoints.keys()):
+                if idx >= feature_index:
+                    del self._solid_checkpoints[idx]
+
+            # Inkrementeller Rebuild
+            self._rebuild(changed_feature_id=feature.id)
+        else:
+            # Fallback: Voller Rebuild
             self._rebuild()
             
     def convert_to_brep(self, mode: str = "auto"):
@@ -4090,23 +4141,50 @@ class Body:
             traceback.print_exc()
             return None
 
-    def _rebuild(self, rebuild_up_to=None):
+    def _rebuild(self, rebuild_up_to=None, changed_feature_id: str = None):
         """
         Robuster Rebuild-Prozess (History-basiert).
 
         Args:
             rebuild_up_to: Optional int - nur Features bis zu diesem Index (exklusiv) anwenden.
                            None = alle Features. Wird fuer Rollback-Bar verwendet.
+            changed_feature_id: Optional str - ID des geänderten Features für inkrementellen Rebuild.
+                                Phase 7: Nutzt Checkpoints für schnelleren Restart.
         """
+        from config.feature_flags import is_enabled
+
         max_index = rebuild_up_to if rebuild_up_to is not None else len(self.features)
-        logger.info(f"Rebuilding Body '{self.name}' ({max_index}/{len(self.features)} Features)...")
+
+        # === PHASE 7: Inkrementeller Rebuild mit Checkpoints ===
+        start_index = 0
+        current_solid = None
+        use_incremental = is_enabled("feature_dependency_tracking") and changed_feature_id is not None
+
+        if use_incremental:
+            # Dependency Graph aktualisieren
+            self._dependency_graph.rebuild_feature_index(self.features)
+
+            # Finde optimalen Start-Punkt
+            start_index = self._dependency_graph.get_rebuild_start_index(changed_feature_id)
+
+            # Lade Checkpoint-Solid falls vorhanden
+            if start_index > 0 and (start_index - 1) in self._solid_checkpoints:
+                current_solid = self._solid_checkpoints[start_index - 1]
+                logger.info(f"Phase 7: Inkrementeller Rebuild ab Feature {start_index} (Checkpoint genutzt)")
+            else:
+                start_index = 0  # Kein Checkpoint, starte von 0
+
+        logger.info(f"Rebuilding Body '{self.name}' (Features {start_index}-{max_index-1}/{len(self.features)})...")
 
         # Reset Cache (Phase 2: Lazy-Loading)
         self.invalidate_mesh()
         self._mesh_vertices.clear()
         self._mesh_triangles.clear()
 
-        current_solid = None
+        # Setze Status für Features VOR start_index (bereits computed)
+        for i in range(start_index):
+            if i < len(self.features) and not self.features[i].suppressed:
+                self.features[i].status = "OK"  # Aus Checkpoint
 
         for i, feature in enumerate(self.features):
             if i >= max_index:
@@ -4115,7 +4193,11 @@ class Body:
             if feature.suppressed:
                 feature.status = "SUPPRESSED"
                 continue
-            
+
+            # === PHASE 7: Überspringe Features vor start_index (aus Checkpoint) ===
+            if use_incremental and i < start_index:
+                continue  # Status bereits gesetzt
+
             new_solid = None
             status = "OK"
 
@@ -4386,10 +4468,20 @@ class Body:
                 logger.debug(f"SurfaceTexture '{feature.name}' — Metadaten-only, kein BREP-Update")
 
             feature.status = status
-            
+
             if new_solid is not None:
                 current_solid = new_solid
-                
+
+                # === PHASE 7: Checkpoint erstellen (alle N Features) ===
+                if use_incremental and self._dependency_graph.should_create_checkpoint(i):
+                    self._solid_checkpoints[i] = current_solid
+                    self._dependency_graph.create_checkpoint(i, feature.id, current_solid)
+                    logger.debug(f"Phase 7: Checkpoint nach Feature {i} ('{feature.name}')")
+
+        # === PHASE 7: Dependency Graph aufräumen ===
+        if use_incremental:
+            self._dependency_graph.clear_dirty()
+
         if current_solid:
             # Phase 7: Validierung nach Rebuild
             validation = GeometryValidator.validate_solid(current_solid, ValidationLevel.NORMAL)
