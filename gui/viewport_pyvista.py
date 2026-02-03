@@ -265,9 +265,54 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # PERFORMANCE: Reusable cell picker (avoid creating new picker per hover)
         self._body_cell_picker = None  # Lazy init on first use
 
+        # Phase 4: Performance - Picker Pool (verschiedene Toleranzen für verschiedene Use-Cases)
+        self._picker_standard = None  # Standard tolerance (PICKER_TOLERANCE)
+        self._picker_coarse = None    # Coarse tolerance (PICKER_TOLERANCE_COARSE)
+        self._picker_measure = None   # Measure mode (0.005)
+
         # PERFORMANCE: Hover pick cache (avoid redundant picks within same frame)
         self._hover_pick_cache = None  # (timestamp, x, y, body_id, cell_id, normal, position)
         self._hover_pick_cache_ttl = 0.008  # 8ms cache validity (~120 FPS worth)
+
+    def _get_picker(self, tolerance_type: str = "standard"):
+        """
+        Phase 4: Performance - Wiederverwendbarer Picker Pool
+
+        Args:
+            tolerance_type: "standard", "coarse", oder "measure"
+
+        Returns:
+            Gecachter VTK CellPicker mit entsprechender Toleranz
+        """
+        if not is_enabled("picker_pooling"):
+            # LEGACY: Immer neuen Picker erstellen
+            import vtk
+            picker = vtk.vtkCellPicker()
+            if tolerance_type == "coarse":
+                picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
+            elif tolerance_type == "measure":
+                picker.SetTolerance(0.005)
+            else:
+                picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
+            return picker
+
+        # OPTIMIZED: Picker wiederverwenden
+        import vtk
+        if tolerance_type == "coarse":
+            if self._picker_coarse is None:
+                self._picker_coarse = vtk.vtkCellPicker()
+                self._picker_coarse.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
+            return self._picker_coarse
+        elif tolerance_type == "measure":
+            if self._picker_measure is None:
+                self._picker_measure = vtk.vtkCellPicker()
+                self._picker_measure.SetTolerance(0.005)
+            return self._picker_measure
+        else:  # standard
+            if self._picker_standard is None:
+                self._picker_standard = vtk.vtkCellPicker()
+                self._picker_standard.SetTolerance(Tolerances.PICKER_TOLERANCE)
+            return self._picker_standard
 
     def set_selection_mode(self, mode: str):
         """Übersetzt den String-Modus aus dem MainWindow in Detector-Filter."""
@@ -572,8 +617,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
     def select_body_at(self, x, y):
         """Picking Logik für Bodies"""
-        import vtk
-        picker = vtk.vtkCellPicker()
+        picker = self._get_picker("standard")  # Phase 4: Reuse picker
         picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
         actor = picker.GetActor()
         
@@ -640,11 +684,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         Returns:
             (body_id, point) oder (None, None)
         """
-        import vtk
         import numpy as np
 
-        picker = vtk.vtkCellPicker()
-        picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
+        picker = self._get_picker("standard")  # Phase 4: Reuse picker
 
         # Pick durchführen
         picker.Pick(screen_x, self.plotter.interactor.height() - screen_y, 0, self.plotter.renderer)
@@ -2633,11 +2675,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             # Measure-Modus: Punkt auf Modell picken mit Vertex/Edge-Snapping
             if self.measure_mode:
-                import vtk
                 import numpy as np
 
-                picker = vtk.vtkCellPicker()
-                picker.SetTolerance(0.005)
+                picker = self._get_picker("measure")  # Phase 4: Reuse picker
                 height = self.plotter.interactor.height()
                 picker.Pick(x, height - y, 0, self.plotter.renderer)
                 if picker.GetCellId() != -1:
@@ -2806,9 +2846,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Erkennt Klick auf 3D Körper und sendet Signal"""
         if not self.bodies: return
         try:
-            import vtk
-            picker = vtk.vtkCellPicker()
-            picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
+            picker = self._get_picker("standard")  # Phase 4: Reuse picker
             picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
             
             actor = picker.GetActor()
@@ -5186,9 +5224,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # --- 1. BODY FACES (Hardware Picking) ---
         # Wir fragen VTK: Was sieht die Kamera an Pixel x,y?
         if "body_face" in selection_filter:
-            import vtk
-            picker = vtk.vtkCellPicker()
-            picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
+            picker = self._get_picker("coarse")  # Phase 4: Reuse picker
 
             height = self.plotter.interactor.height()
             picker.Pick(x, height - y, 0, self.plotter.renderer)
@@ -5316,8 +5352,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
     def _pick_body_face(self, x, y):
         """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""
-        cell_picker = vtk.vtkCellPicker()
-        cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
+        cell_picker = self._get_picker("standard")  # Phase 4: Reuse picker
         cell_picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
         
         if cell_picker.GetCellId() != -1:
