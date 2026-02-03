@@ -6813,11 +6813,17 @@ class MainWindow(QMainWindow):
                 # Standard tessellation (no textures or texture failed)
                 if mesh_to_add is None and HAS_BUILD123D and hasattr(body, '_build123d_solid') and body._build123d_solid:
                     try:
-                        b3d_mesh = body._build123d_solid.tessellate(tolerance=linear_defl, angular_tolerance=angular_tol)
-                        verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
-                        faces = []
-                        for t in b3d_mesh[1]: faces.extend([3] + list(t))
-                        mesh_to_add = pv.PolyData(np.array(verts), np.array(faces))
+                        # Phase 6: Use export cache
+                        from modeling.cad_tessellator import CADTessellator
+                        verts, faces_tris = CADTessellator.tessellate_for_export(
+                            body._build123d_solid,
+                            linear_deflection=linear_defl,
+                            angular_tolerance=angular_tol
+                        )
+                        if verts and faces_tris:
+                            faces = []
+                            for t in faces_tris: faces.extend([3] + list(t))
+                            mesh_to_add = pv.PolyData(np.array(verts), np.array(faces))
                     except Exception as e:
                         logger.warning(f"Build123d Tessellierung fehlgeschlagen: {e}")
 

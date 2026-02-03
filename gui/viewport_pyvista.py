@@ -3773,37 +3773,61 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     rounded_normals, axis=0, return_inverse=True
                 )
 
-                # Für jede eindeutige Normale eine Face-Gruppe erstellen
+                # Für jede eindeutige Normale Face-Gruppen erstellen
+                # WICHTIG: Faces mit gleicher Normale aber unterschiedlicher Position TRENNEN!
                 for group_idx, normal in enumerate(unique_normals):
                     # Finde alle Zellen mit dieser Normale
                     cell_mask = (inverse_indices == group_idx)
-                    cell_ids = np.where(cell_mask)[0].tolist()
+                    cell_ids = np.where(cell_mask)[0]
 
-                    if not cell_ids:
+                    if len(cell_ids) == 0:
                         continue
 
-                    # OPTIMIERUNG: Zentrum aus vorberechneten Cell-Centers (vektorisiert)
+                    # OPTIMIERUNG: Zentren aus vorberechneten Cell-Centers
                     group_centers = all_cell_centers[cell_mask]
-                    center_3d = np.mean(group_centers, axis=0)
 
-                    # WICHTIG: sample_point = ein TATSÄCHLICHER Punkt auf der Fläche
-                    # (nicht der Mittelwert, der bei Ring-Flächen im Loch liegt!)
-                    sample_point = group_centers[0]  # Erstes Dreieckszentrum
+                    # SUB-GRUPPIERUNG: Faces mit gleicher Normale aber weit auseinander trennen
+                    # z.B. obere/untere Z-Fläche haben beide Normal=(0,0,±1) aber unterschiedliche Z-Position
+                    SPATIAL_THRESHOLD = 5.0  # mm - Faces weiter auseinander = separate Faces
 
-                    normal_key = tuple(normal)
+                    # Starte mit erster Zelle als Seed
+                    remaining_indices = list(range(len(cell_ids)))
+                    while remaining_indices:
+                        # Neue Sub-Gruppe starten
+                        seed_idx = remaining_indices[0]
+                        seed_center = group_centers[seed_idx]
+                        sub_group_indices = [seed_idx]
+                        remaining_indices.remove(seed_idx)
 
-                    # Fläche registrieren
-                    self.detected_faces.append({
-                        'type': 'body_face',
-                        'body_id': bid,
-                        'cell_ids': cell_ids,
-                        'normal': normal_key,
-                        'center_3d': tuple(center_3d),
-                        'sample_point': tuple(sample_point),  # Punkt auf der Fläche für B-Rep Matching
-                        'center_2d': (center_3d[0], center_3d[1]),
-                        'origin': tuple(center_3d),
-                        'mesh': mesh
-                    })
+                        # Finde alle Zellen nahe am Seed
+                        indices_to_remove = []
+                        for idx in remaining_indices:
+                            dist = np.linalg.norm(group_centers[idx] - seed_center)
+                            if dist < SPATIAL_THRESHOLD:
+                                sub_group_indices.append(idx)
+                                indices_to_remove.append(idx)
+
+                        for idx in indices_to_remove:
+                            remaining_indices.remove(idx)
+
+                        # Face für diese Sub-Gruppe registrieren
+                        sub_cell_ids = cell_ids[sub_group_indices].tolist()
+                        sub_centers = group_centers[sub_group_indices]
+                        center_3d = np.mean(sub_centers, axis=0)
+                        sample_point = sub_centers[0]  # Erstes Dreieckszentrum
+                        normal_key = tuple(normal)
+
+                        self.detected_faces.append({
+                            'type': 'body_face',
+                            'body_id': bid,
+                            'cell_ids': sub_cell_ids,
+                            'normal': normal_key,
+                            'center_3d': tuple(center_3d),
+                            'sample_point': tuple(sample_point),
+                            'center_2d': (center_3d[0], center_3d[1]),
+                            'origin': tuple(center_3d),
+                            'mesh': mesh
+                        })
 
             except Exception as e:
                 logger.debug(f"Body face detection error for body {bid}: {e}")

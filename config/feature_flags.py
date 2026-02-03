@@ -37,11 +37,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "assembly_system": True,  # Hierarchische Component-Struktur wie Fusion 360
 
     # Performance Optimizations (2026 Performance Plan)
-    "optimized_actor_pooling": False,  # Phase 2: VTK Actor Pooling Optimierung
-    "reuse_hover_markers": False,  # Phase 3: Hover-Marker wiederverwenden
-    "picker_pooling": False,  # Phase 4: Picker-Pool statt neu erstellen
-    "bbox_early_rejection": False,  # Phase 5: BBox Check vor Boolean-Ops
-    "export_cache": False,  # Phase 6: Tessellation-Cache für STL Export
+    "optimized_actor_pooling": True,  # Phase 2: VTK Actor Pooling Optimierung
+    "reuse_hover_markers": True,  # Phase 3: Hover-Marker wiederverwenden
+    "picker_pooling": True,  # Phase 4: Picker-Pool statt neu erstellen
+    "bbox_early_rejection": True,  # Phase 5: BBox Check vor Boolean-Ops (PERMANENT - verhindert Boolean-Bugs!)
+    "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export (TEST)
     "feature_dependency_tracking": False,  # Phase 7: Feature Dependency Graph
     "feature_solid_caching": False,  # Phase 8: Intermediate Solid Caching
     "async_tessellation": False,  # Phase 9: Background Mesh Generation
