@@ -811,14 +811,13 @@ class MainWindow(QMainWindow):
         
         # Bearbeiten-Menü
         edit_menu = mb.addMenu(tr("Edit"))
-        # NEU: Verbinde mit UndoStack
-        undo_action = self.undo_stack.createUndoAction(self, tr("Undo"))
-        undo_action.setShortcut(QKeySequence.Undo)
-        edit_menu.addAction(undo_action)
 
-        redo_action = self.undo_stack.createRedoAction(self, tr("Redo"))
+        # Custom Undo/Redo Actions die Sketch-Editor priorisieren
+        undo_action = edit_menu.addAction(tr("Undo"), self._smart_undo)
+        undo_action.setShortcut(QKeySequence.Undo)
+
+        redo_action = edit_menu.addAction(tr("Redo"), self._smart_redo)
         redo_action.setShortcut(QKeySequence.Redo)
-        edit_menu.addAction(redo_action)
 
         edit_menu.addSeparator()
         edit_menu.addAction(tr("Parameters..."), self._show_parameters_dialog, "Ctrl+Shift+P")
@@ -7776,6 +7775,38 @@ class MainWindow(QMainWindow):
         logger.info("Measure cancelled")
 
     # ── End Measure Tool ──────────────────────────────────────
+
+    # ── Smart Undo/Redo (Sketch-Editor priorisiert) ──────────────────────────────────────
+
+    def _smart_undo(self):
+        """
+        Smart Undo: Priorisiert Sketch-Editor Undo wenn aktiv.
+
+        Wenn im Sketch-Modus: Ruft sketch_editor.undo() auf
+        Sonst: Ruft 3D undo_stack.undo() auf
+        """
+        if self.mode == "2d" and hasattr(self, 'sketch_editor') and self.sketch_editor:
+            self.sketch_editor.undo()
+            logger.debug("Smart Undo: Sketch-Editor")
+        else:
+            if self.undo_stack.canUndo():
+                self.undo_stack.undo()
+                logger.debug("Smart Undo: 3D UndoStack")
+
+    def _smart_redo(self):
+        """
+        Smart Redo: Priorisiert Sketch-Editor Redo wenn aktiv.
+
+        Wenn im Sketch-Modus: Ruft sketch_editor.redo() auf
+        Sonst: Ruft 3D undo_stack.redo() auf
+        """
+        if self.mode == "2d" and hasattr(self, 'sketch_editor') and self.sketch_editor:
+            self.sketch_editor.redo()
+            logger.debug("Smart Redo: Sketch-Editor")
+        else:
+            if self.undo_stack.canRedo():
+                self.undo_stack.redo()
+                logger.debug("Smart Redo: 3D UndoStack")
 
     def _show_parameters_dialog(self):
         """Öffnet den Parameter-Dialog (Fusion 360-Style)."""

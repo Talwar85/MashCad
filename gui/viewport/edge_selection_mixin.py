@@ -239,7 +239,7 @@ class EdgeSelectionMixin:
             from OCP.BRepAdaptor import BRepAdaptor_Surface
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
-            from OCP.TopoDS import topods
+            from OCP.TopoDS import TopoDS
 
             ocp_shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
 
@@ -249,13 +249,13 @@ class EdgeSelectionMixin:
 
             edge_explorer = TopExp_Explorer(ocp_shape, TopAbs_EDGE)
             while edge_explorer.More():
-                edge = topods.Edge(edge_explorer.Current())
+                edge = TopoDS.Edge_s(edge_explorer.Current())
                 edge_faces[edge_index] = []
 
                 # Finde Faces die diese Kante teilen
                 face_explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
                 while face_explorer.More():
-                    face = topods.Face(face_explorer.Current())
+                    face = TopoDS.Face_s(face_explorer.Current())
                     face_edge_exp = TopExp_Explorer(face, TopAbs_EDGE)
                     while face_edge_exp.More():
                         if face_edge_exp.Current().IsSame(edge):
