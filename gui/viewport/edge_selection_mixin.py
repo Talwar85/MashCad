@@ -337,9 +337,16 @@ class EdgeSelectionMixin:
 
             points_arr = np.array(points)
 
-            # Check for degenerate polyline
-            if np.allclose(points_arr[0], points_arr[-1], atol=1e-6):
-                return None
+            # Check for degenerate polyline (alle Punkte gleich)
+            # WICHTIG: Geschlossene Kurven (Kreise) sind OK - nur prüfen ob ALLE Punkte gleich sind
+            if len(points_arr) > 2:
+                # Prüfe ob alle Punkte nahezu identisch sind (degeneriert)
+                diffs = np.diff(points_arr, axis=0)
+                max_diff = np.max(np.abs(diffs))
+                if max_diff < 1e-6:
+                    return None  # Alle Punkte gleich = degeneriert
+            elif np.allclose(points_arr[0], points_arr[-1], atol=1e-6):
+                return None  # Nur 2 Punkte und gleich = degeneriert
 
             return points_arr
         except:
