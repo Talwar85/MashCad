@@ -20,6 +20,54 @@ from gui.design_tokens import DesignTokens
 from i18n import tr
 
 
+# ==================== Operation Mapping ====================
+# WICHTIG: Operations müssen IMMER als englische Keys gespeichert werden!
+# Die UI zeigt übersetzte Strings, aber intern werden englische Keys verwendet.
+
+OPERATION_KEYS = ["New Body", "Join", "Cut", "Intersect"]
+
+
+def _get_operation_key(translated_text: str) -> str:
+    """
+    Konvertiert übersetzten Operationstext zurück zum englischen Key.
+
+    Args:
+        translated_text: Der übersetzte String (z.B. "Neuer Körper")
+
+    Returns:
+        Englischer Key (z.B. "New Body")
+    """
+    # Erstelle Reverse-Mapping: übersetzt -> englisch
+    for key in OPERATION_KEYS:
+        if tr(key) == translated_text:
+            return key
+
+    # Fallback: Wenn der Text bereits ein englischer Key ist
+    if translated_text in OPERATION_KEYS:
+        return translated_text
+
+    # Default
+    logger.warning(f"Unbekannte Operation '{translated_text}', verwende 'Join'")
+    return "Join"
+
+
+def _get_translated_operations() -> list:
+    """Gibt die übersetzten Operationsnamen zurück."""
+    return [tr(key) for key in OPERATION_KEYS]
+
+
+def _set_operation_combo(combo: QComboBox, operation_key: str):
+    """
+    Setzt die ComboBox auf die richtige übersetzte Operation.
+
+    Args:
+        combo: Die QComboBox
+        operation_key: Englischer Key (z.B. "New Body")
+    """
+    translated = tr(operation_key) if operation_key in OPERATION_KEYS else tr("Join")
+    combo.setCurrentText(translated)
+
+
 def _create_number_input(label_text, parent_layout, suffix=""):
     """Helper: Label + QLineEdit fuer Zahlen"""
     row = QHBoxLayout()
@@ -101,8 +149,8 @@ class ExtrudeEditDialog(QDialog):
         op_layout = QHBoxLayout()
         op_layout.addWidget(QLabel(tr("Operation:")))
         self.op_combo = QComboBox()
-        self.op_combo.addItems([tr("New Body"), tr("Join"), tr("Cut"), tr("Intersect")])
-        self.op_combo.setCurrentText(feature.operation)
+        self.op_combo.addItems(_get_translated_operations())
+        _set_operation_combo(self.op_combo, feature.operation)
         op_layout.addWidget(self.op_combo)
         op_layout.addStretch()
         group_layout.addLayout(op_layout)
@@ -121,7 +169,7 @@ class ExtrudeEditDialog(QDialog):
                 return
             self.feature.distance = distance
             self.feature.direction = 1 if self.dir_combo.currentIndex() == 0 else -1
-            self.feature.operation = self.op_combo.currentText()
+            self.feature.operation = _get_operation_key(self.op_combo.currentText())
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe: {e}")
@@ -319,8 +367,8 @@ class RevolveEditDialog(QDialog):
         op_layout = QHBoxLayout()
         op_layout.addWidget(QLabel(tr("Operation:")))
         self.op_combo = QComboBox()
-        self.op_combo.addItems([tr("New Body"), tr("Join"), tr("Cut"), tr("Intersect")])
-        self.op_combo.setCurrentText(feature.operation)
+        self.op_combo.addItems(_get_translated_operations())
+        _set_operation_combo(self.op_combo, feature.operation)
         op_layout.addWidget(self.op_combo)
         op_layout.addStretch()
         group_layout.addLayout(op_layout)
@@ -341,7 +389,7 @@ class RevolveEditDialog(QDialog):
             axis_map = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
             self.feature.angle = angle
             self.feature.axis = axis_map[self.axis_combo.currentText()]
-            self.feature.operation = self.op_combo.currentText()
+            self.feature.operation = _get_operation_key(self.op_combo.currentText())
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe (Revolve): {e}")

@@ -12,6 +12,7 @@ from PySide6.QtGui import QDoubleValidator
 from loguru import logger
 from gui.design_tokens import DesignTokens
 from i18n import tr
+from gui.dialogs.feature_edit_dialogs import _get_operation_key, _get_translated_operations
 
 
 class RevolveDialog(QDialog):
@@ -78,7 +79,7 @@ class RevolveDialog(QDialog):
         op_row = QHBoxLayout()
         op_row.addWidget(QLabel(tr("Operation:")))
         self.op_combo = QComboBox()
-        self.op_combo.addItems([tr("New Body"), tr("Join"), tr("Cut"), tr("Intersect")])
+        self.op_combo.addItems(_get_translated_operations())
         op_row.addWidget(self.op_combo)
         op_row.addStretch()
         param_layout.addLayout(op_row)
@@ -115,7 +116,7 @@ class RevolveDialog(QDialog):
             axis_map = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
             self.axis = axis_map[self.axis_combo.currentText()]
             self.sketch = self.sketch_combo.currentData()
-            self.operation = self.op_combo.currentText()
+            self.operation = _get_operation_key(self.op_combo.currentText())
 
             if not self.sketch:
                 logger.warning("No sketch selected")
