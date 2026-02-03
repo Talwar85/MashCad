@@ -68,6 +68,11 @@ class CADTessellator:
     MAX_CACHE_ENTRIES = 200
     MAX_EDGE_CACHE_ENTRIES = 100  # Phase 4: Separate limit for edges
 
+    # Phase 6: Export-Cache (separate cache für STL/OBJ Export)
+    _export_cache = {}  # { "hash_linear_angular": (verts, faces) }
+    _export_cache_access_order = OrderedDict()
+    MAX_EXPORT_CACHE_ENTRIES = 50  # Kleinerer Cache da Export-Meshes meist größer sind
+
     @staticmethod
     def clear_cache():
         """
@@ -78,9 +83,11 @@ class CADTessellator:
         _CACHE_INVALIDATION_COUNTER += 1
         CADTessellator._mesh_cache.clear()
         CADTessellator._edge_cache.clear()  # PERFORMANCE: Phase 4
+        CADTessellator._export_cache.clear()  # PERFORMANCE: Phase 6
         CADTessellator._shape_versions.clear()
         CADTessellator._cache_access_order.clear()
         CADTessellator._edge_cache_access_order.clear()  # PERFORMANCE: Phase 4
+        CADTessellator._export_cache_access_order.clear()  # PERFORMANCE: Phase 6
         CADTessellator._cache_cleared = True
         logger.info(f"CADTessellator Cache komplett geleert (Version {_TESSELLATOR_VERSION})")
 
@@ -683,3 +690,75 @@ class CADTessellator:
             import traceback
             traceback.print_exc()
             return None, None, {}
+
+    @staticmethod
+    def tessellate_for_export(solid, linear_deflection=0.1, angular_tolerance=0.5):
+        """
+        Phase 6: Performance - Tessellation mit Export-Cache
+
+        Separater Cache für STL/OBJ Export. Erlaubt wiederholte Exports
+        mit gleichen Parametern ohne Re-Tessellierung.
+
+        Args:
+            solid: Build123d Solid
+            linear_deflection: Lineare Toleranz für Tessellierung
+            angular_tolerance: Winkel-Toleranz in Grad
+
+        Returns:
+            Tuple von (vertices, faces) oder (None, None) bei Fehler
+            - vertices: List von (x, y, z) Tuples
+            - faces: List von Triangle-Indices (0-based)
+        """
+        from config.feature_flags import is_enabled
+
+        if not is_enabled("export_cache"):
+            # LEGACY: Keine Caching, direkt tessellieren
+            try:
+                b3d_mesh = solid.tessellate(
+                    tolerance=linear_deflection,
+                    angular_tolerance=angular_tolerance
+                )
+                verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
+                faces = list(b3d_mesh[1])
+                return verts, faces
+            except Exception as e:
+                logger.error(f"Export tessellation failed: {e}")
+                return None, None
+
+        # OPTIMIZED: Mit Caching
+        try:
+            # Cache-Key aus Geometrie + Export-Parametern
+            geom_hash = CADTessellator._get_geometry_hash(solid)
+            cache_key = f"{geom_hash}_{linear_deflection:.4f}_{angular_tolerance:.2f}"
+
+            # Cache-Hit?
+            if cache_key in CADTessellator._export_cache:
+                CADTessellator._export_cache_access_order.move_to_end(cache_key)
+                logger.debug(f"Export cache HIT: {cache_key}")
+                return CADTessellator._export_cache[cache_key]
+
+            # Cache-Miss: Tessellieren
+            logger.debug(f"Export cache MISS: {cache_key}")
+            b3d_mesh = solid.tessellate(
+                tolerance=linear_deflection,
+                angular_tolerance=angular_tolerance
+            )
+            verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
+            faces = list(b3d_mesh[1])
+
+            # Im Cache speichern
+            CADTessellator._export_cache[cache_key] = (verts, faces)
+            CADTessellator._export_cache_access_order[cache_key] = True
+
+            # LRU-Eviction wenn zu groß
+            while len(CADTessellator._export_cache) > CADTessellator.MAX_EXPORT_CACHE_ENTRIES:
+                oldest_key = next(iter(CADTessellator._export_cache_access_order))
+                del CADTessellator._export_cache[oldest_key]
+                del CADTessellator._export_cache_access_order[oldest_key]
+                logger.debug(f"Export cache evicted: {oldest_key}")
+
+            return verts, faces
+
+        except Exception as e:
+            logger.error(f"Export tessellation failed: {e}")
+            return None, None

@@ -124,21 +124,25 @@ class STLExportWorker(QThread):
     def _tessellate_body(self, body) -> Optional['pv.PolyData']:
         """Tessellate a single body (may include texture application)."""
         import pyvista as pv
+        from modeling.cad_tessellator import CADTessellator
 
         mesh_to_add = None
 
         try:
-            # Try build123d tessellation first
+            # Phase 6: Performance - Use export cache
             if hasattr(body, '_build123d_solid') and body._build123d_solid:
-                b3d_mesh = body._build123d_solid.tessellate(
-                    tolerance=self.linear_deflection,
+                verts, faces = CADTessellator.tessellate_for_export(
+                    body._build123d_solid,
+                    linear_deflection=self.linear_deflection,
                     angular_tolerance=self.angular_tolerance
                 )
-                verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
-                faces = []
-                for t in b3d_mesh[1]:
-                    faces.extend([3] + list(t))
-                mesh_to_add = pv.PolyData(np.array(verts), np.array(faces))
+
+                if verts and faces:
+                    # Convert to PyVista format
+                    faces_pv = []
+                    for t in faces:
+                        faces_pv.extend([3] + list(t))
+                    mesh_to_add = pv.PolyData(np.array(verts), np.array(faces_pv))
 
         except Exception as e:
             logger.warning(f"Build123d tessellation failed for {body.name}: {e}")
