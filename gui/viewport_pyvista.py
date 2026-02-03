@@ -3728,6 +3728,132 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 pass
         request_render(self.plotter)
     
+    def _get_cells_for_detector_face(self, detector_face, mesh):
+        """
+        Findet alle cell_ids (Dreiecke) die zu einer Detector-Face gehören.
+
+        KONSISTENZ: Verwendet die gleiche Logik wie bei Body-Face Detection.
+
+        Args:
+            detector_face: Face vom GeometryDetector
+            mesh: PyVista Mesh des Bodies
+
+        Returns:
+            List von cell_ids (Dreiecke) die zu dieser Face gehören
+        """
+        import numpy as np
+
+        if mesh is None or mesh.n_cells == 0:
+            return []
+
+        # Berechne Normalen falls nötig
+        if 'Normals' not in mesh.cell_data:
+            mesh.compute_normals(cell_normals=True, inplace=True)
+
+        cell_normals = mesh.cell_data.get('Normals')
+        if cell_normals is None:
+            return []
+
+        # Face-Normal und Origin
+        face_normal = np.array(detector_face.plane_normal)
+        face_origin = np.array(detector_face.plane_origin)
+
+        # Finde alle Zellen mit ähnlicher Normale und naher Position
+        NORMAL_THRESHOLD = 0.1  # Winkeltoleranz
+        DISTANCE_THRESHOLD = 5.0  # mm - räumliche Toleranz
+
+        cell_centers = mesh.cell_centers().points
+        cell_ids = []
+
+        for i, (cell_normal, cell_center) in enumerate(zip(cell_normals, cell_centers)):
+            # Prüfe Normale (Dot-Product nahe 1 oder -1)
+            dot = np.dot(face_normal, cell_normal)
+            if abs(abs(dot) - 1.0) > NORMAL_THRESHOLD:
+                continue
+
+            # Prüfe räumliche Nähe (Projektion auf Ebene)
+            # Distanz des Zellzentrums zur Face-Ebene
+            dist_to_plane = abs(np.dot(cell_center - face_origin, face_normal))
+            if dist_to_plane > DISTANCE_THRESHOLD:
+                continue
+
+            cell_ids.append(i)
+
+        logger.debug(f"Detector-Face → {len(cell_ids)} Dreiecke gefunden (Normal={face_normal}, Origin={face_origin})")
+        return cell_ids
+
+    def _detect_brep_faces_for_texture(self, body_id: str):
+        """
+        Lädt B-Rep Faces aus face_info für Texture Face Selection.
+
+        PERFORMANCE: Verwendet vorberechnete face_info aus tessellate_with_face_ids()
+        statt Mesh-Triangle Clustering. Dadurch werden echte B-Rep Faces erkannt,
+        nicht einzelne Tessellations-Dreiecke!
+
+        Args:
+            body_id: ID des Bodies dessen Faces geladen werden sollen
+        """
+        body_data = self.bodies.get(body_id)
+        if not body_data:
+            logger.warning(f"Body {body_id} nicht in self.bodies gefunden")
+            return
+
+        mesh = body_data.get('mesh')
+        if mesh is None or not hasattr(mesh, 'cell_data'):
+            logger.warning(f"Body {body_id} hat kein gültiges Mesh")
+            return
+
+        # Prüfe ob Mesh face_id cell_data hat (von tessellate_with_face_ids)
+        if 'face_id' not in mesh.cell_data:
+            logger.warning(f"Body {body_id} Mesh hat keine face_id cell_data - fallback zu Clustering")
+            self._detect_body_faces()  # Fallback
+            return
+
+        # Hole face_info vom Body-Objekt (falls verfügbar)
+        body_obj = self._body_objects.get(body_id)
+        face_info = getattr(body_obj, '_face_info_cache', None) if body_obj else None
+
+        if not face_info:
+            logger.warning(f"Body {body_id} hat keine _face_info_cache - fallback zu Clustering")
+            self._detect_body_faces()  # Fallback
+            return
+
+        # Erstelle detected_faces aus face_info
+        import numpy as np
+        face_ids_array = mesh.cell_data['face_id']
+
+        logger.debug(f"B-Rep Face Detection: {len(face_info)} Faces, {mesh.n_cells} cells")
+
+        for face_id, info in face_info.items():
+            # Finde alle Zellen (Dreiecke) die zu dieser B-Rep Face gehören
+            cell_ids = np.where(face_ids_array == face_id)[0].tolist()
+
+            if not cell_ids:
+                continue
+
+            # Berechne Zentrum der Face aus allen Dreiecken
+            cell_centers = mesh.cell_centers().points
+            face_cell_centers = cell_centers[cell_ids]
+            center_3d = np.mean(face_cell_centers, axis=0)
+
+            # detected_face erstellen
+            detected_face = {
+                'type': 'body_face',
+                'body_id': body_id,
+                'cell_ids': cell_ids,  # ALLE Dreiecke dieser Face!
+                'normal': info.get('normal', (0, 0, 1)),
+                'center_3d': tuple(center_3d),
+                'center_2d': (center_3d[0], center_3d[1]),
+                'origin': info.get('center', tuple(center_3d)),
+                'mesh': mesh,
+                'face_id': face_id  # B-Rep Face-ID
+            }
+
+            self.detected_faces.append(detected_face)
+            logger.debug(f"  Face {face_id}: {len(cell_ids)} Dreiecke, Normal={info.get('normal')}")
+
+        logger.success(f"✓ B-Rep Faces geladen: {len(self.detected_faces)} Faces mit korrekten cell_ids")
+
     def _detect_body_faces(self):
         """Erkennt planare Flächen von 3D-Bodies und fügt sie zu detected_faces hinzu.
 
@@ -4460,30 +4586,20 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     # ==================== Texture Face Selection Mode ====================
 
     def start_texture_face_mode(self, body_id: str):
-        """Startet Face-Selektionsmodus für Surface Texture."""
+        """Startet Face-Selektionsmodus für Surface Texture - GENAU WIE EXTRUDE."""
         self.texture_face_mode = True
         self._texture_body_id = body_id
         self._texture_selected_faces = []
 
-        # WICHTIG: Body-Faces erkennen und in detected_faces laden
-        self.detected_faces = []  # Reset
+        # KONSISTENZ: Nutze das gleiche System wie Extrude (Detector)
+        logger.debug("🔄 Texture Mode: Lade Detector wie bei Extrude")
+        self._update_detector_for_picking()
 
-        # Debug: Zeige verfügbare Bodies
-        logger.debug(f"Texture Mode: Verfügbare Bodies: {list(self.bodies.keys())}")
-        logger.debug(f"Texture Mode: Body Actors: {list(self._body_actors.keys())}")
-
-        self._detect_body_faces()
-
-        # WICHTIG: Actor-Cache für Hover-Lookup neu aufbauen
-        self._rebuild_actor_body_cache()
-        logger.debug(f"Texture Mode: Actor-Cache mit {len(getattr(self, '_actor_to_body_cache', {}))} Einträgen")
-
-        # Debug: Zeige erkannte Faces pro Body
-        face_count_per_body = {}
-        for face in self.detected_faces:
-            bid = face.get('body_id', 'unknown')
-            face_count_per_body[bid] = face_count_per_body.get(bid, 0) + 1
-        logger.info(f"Texture Mode: {len(self.detected_faces)} Faces erkannt: {face_count_per_body}")
+        # Debug: Zeige erkannte Faces vom Detector
+        n_faces = len(self.detector.selection_faces) if hasattr(self, 'detector') else 0
+        body_faces = [f for f in (self.detector.selection_faces if hasattr(self, 'detector') else [])
+                     if f.domain_type == 'body_face' and f.owner_id == body_id]
+        logger.info(f"Texture Mode: Detector hat {n_faces} Faces total, {len(body_faces)} vom Body '{body_id}'")
 
         self.setCursor(Qt.PointingHandCursor)
         logger.info(f"Texture Mode: Klicke auf Faces von Body '{body_id}'")
@@ -5591,22 +5707,54 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Zeichnet full-face blaues Highlight auf gehoverter Body-Fläche (Draft/Texture Mode)."""
         self._clear_body_face_highlight()
         try:
-            # Finde detected_face anhand cell_id (robust nach Draft/Hole)
-            face_data = None
-            for face in self.detected_faces:
-                if face.get('type') != 'body_face':
-                    continue
-                if face.get('body_id') != body_id:
-                    continue
-                if cell_id is not None and cell_id in face.get('cell_ids', []):
-                    face_data = face
-                    break
+            mesh = None
+            cell_ids = []
 
-            if face_data is None:
-                return
+            # KONSISTENZ: Für Texture Mode, hole Face vom Detector (wie beim Click)
+            if self.texture_face_mode and hasattr(self, 'detector'):
+                # Hole Position vom hovered_body_face
+                if self.hovered_body_face:
+                    _, _, _, pos = self.hovered_body_face
+                    import numpy as np
+                    clicked_pos = np.array(pos)
 
-            mesh = face_data.get('mesh')
-            cell_ids = face_data.get('cell_ids', [])
+                    matching_detector_face = None
+                    min_dist = float('inf')
+
+                    for face in self.detector.selection_faces:
+                        if face.domain_type != 'body_face':
+                            continue
+                        if face.owner_id != body_id:
+                            continue
+
+                        # Berechne Distanz zur Face-Origin
+                        face_origin = np.array(face.plane_origin)
+                        dist = np.linalg.norm(clicked_pos - face_origin)
+
+                        if dist < min_dist:
+                            min_dist = dist
+                            matching_detector_face = face
+
+                    if matching_detector_face:
+                        mesh = self.bodies.get(body_id, {}).get('mesh')
+                        cell_ids = self._get_cells_for_detector_face(matching_detector_face, mesh)
+            else:
+                # FALLBACK: Für Draft/PushPull/Hole/Thread Mode (verwenden detected_faces)
+                face_data = None
+                for face in self.detected_faces:
+                    if face.get('type') != 'body_face':
+                        continue
+                    if face.get('body_id') != body_id:
+                        continue
+                    if cell_id is not None and cell_id in face.get('cell_ids', []):
+                        face_data = face
+                        break
+
+                if face_data:
+                    mesh = face_data.get('mesh')
+                    cell_ids = face_data.get('cell_ids', [])
+
+            # Zeichne Face-Highlight
             if mesh is None or not cell_ids:
                 return
 
@@ -5620,11 +5768,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             self.plotter.add_mesh(
                 face_mesh_copy,
-                color='#55bbff',  # FIX: Helleres Blau für bessere Sichtbarkeit
+                color='#55bbff',
                 opacity=0.65,
                 name='body_face_highlight',
                 pickable=False,
-                show_edges=True,  # FIX: Kanten für besseren Kontrast
+                show_edges=True,
                 edge_color='#0088ff',
                 line_width=2
             )
@@ -5686,54 +5834,62 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.pushpull_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
             return
 
-        # Texture Face Mode: Sammle Faces für Texturierung
+        # Texture Face Mode: Sammle Faces für Texturierung (GENAU WIE EXTRUDE)
         if self.texture_face_mode:
-            # Debug: Zeige Klick-Infos
-            logger.debug(f"Texture Klick: body_id='{body_id}', normal={normal}")
-            logger.debug(f"  detected_faces: {len(self.detected_faces)}, Ziel-Body: '{self._texture_body_id}'")
-
             # Nur Faces vom richtigen Body akzeptieren
             if self._texture_body_id and body_id != self._texture_body_id:
                 logger.warning(f"Face von anderem Body ignoriert (erwartet: '{self._texture_body_id}', geklickt: '{body_id}')")
                 return
 
-            # Finde passendes detected_face anhand cell_id Zugehörigkeit (robust)
-            matching_face = None
-            for face in self.detected_faces:
-                if face.get('type') != 'body_face':
-                    continue
-                if face.get('body_id') != body_id:
-                    continue
-                if cell_id in face.get('cell_ids', []):
-                    matching_face = face
-                    break
+            # KONSISTENZ: Hole Face vom Detector (wie Extrude)
+            if not hasattr(self, 'detector'):
+                logger.error("❌ Kein Detector verfügbar für Texture Face Selection!")
+                return
 
-            if matching_face:
-                # Vollständige Face-Daten mit cell_ids für Highlighting
-                face_data = {
-                    'body_id': body_id,
-                    'cell_ids': matching_face.get('cell_ids', []),
-                    'normal': matching_face.get('normal', normal),
-                    'center': matching_face.get('center_3d', pos),
-                    'mesh': matching_face.get('mesh'),
-                    'area': len(matching_face.get('cell_ids', [])),  # Approximation
-                    'surface_type': 'plane'
-                }
-            else:
-                # Fallback: Nur den geklickten Punkt
-                logger.debug(f"Kein detected_face gefunden für Normal {rounded_normal}")
-                face_data = {
-                    'body_id': body_id,
-                    'cell_ids': [cell_id],
-                    'normal': normal,
-                    'center': pos,
-                    'mesh': self.bodies.get(body_id, {}).get('mesh'),
-                    'area': 1.0,
-                    'surface_type': 'plane'
-                }
+            # Finde die geklickte Face vom Detector basierend auf Position
+            import numpy as np
+            clicked_pos = np.array(pos)
+            matching_detector_face = None
+            min_dist = float('inf')
+
+            for face in self.detector.selection_faces:
+                if face.domain_type != 'body_face':
+                    continue
+                if face.owner_id != body_id:
+                    continue
+
+                # Berechne Distanz zur Face-Origin
+                face_origin = np.array(face.plane_origin)
+                dist = np.linalg.norm(clicked_pos - face_origin)
+
+                if dist < min_dist:
+                    min_dist = dist
+                    matching_detector_face = face
+
+            if matching_detector_face is None:
+                logger.error(f"❌ Keine Face vom Detector gefunden für Klick-Position {pos}")
+                return
+
+            # Konvertiere Detector-Face zu face_data Format
+            mesh = self.bodies.get(body_id, {}).get('mesh')
+            face_normal = matching_detector_face.plane_normal
+
+            # WICHTIG: Hole ALLE cell_ids dieser Face aus dem Mesh
+            # (Die Detector-Face hat kein display_mesh für Bodies, daher müssen wir die cell_ids aus dem Mesh holen)
+            cell_ids = self._get_cells_for_detector_face(matching_detector_face, mesh)
+
+            face_data = {
+                'body_id': body_id,
+                'cell_ids': cell_ids,
+                'normal': face_normal,
+                'center': matching_detector_face.plane_origin,
+                'mesh': mesh,
+                'area': len(cell_ids),  # Approximation
+                'surface_type': 'plane'
+            }
 
             self._add_texture_face(face_data)
-            logger.debug(f"Texture Face hinzugefügt: {len(self._texture_selected_faces)} Faces")
+            logger.success(f"✓ Texture Face hinzugefügt: {len(cell_ids)} Dreiecke, Total: {len(self._texture_selected_faces)} Faces")
             return
 
         # Standard Extrusion-Modus
