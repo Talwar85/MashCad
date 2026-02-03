@@ -7785,7 +7785,7 @@ class MainWindow(QMainWindow):
         Wenn im Sketch-Modus: Ruft sketch_editor.undo() auf
         Sonst: Ruft 3D undo_stack.undo() auf
         """
-        if self.mode == "2d" and hasattr(self, 'sketch_editor') and self.sketch_editor:
+        if self.mode == "sketch" and hasattr(self, 'sketch_editor') and self.sketch_editor:
             self.sketch_editor.undo()
             logger.debug("Smart Undo: Sketch-Editor")
         else:
@@ -7800,7 +7800,7 @@ class MainWindow(QMainWindow):
         Wenn im Sketch-Modus: Ruft sketch_editor.redo() auf
         Sonst: Ruft 3D undo_stack.redo() auf
         """
-        if self.mode == "2d" and hasattr(self, 'sketch_editor') and self.sketch_editor:
+        if self.mode == "sketch" and hasattr(self, 'sketch_editor') and self.sketch_editor:
             self.sketch_editor.redo()
             logger.debug("Smart Redo: Sketch-Editor")
         else:
