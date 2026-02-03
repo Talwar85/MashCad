@@ -174,7 +174,10 @@ class EditFeatureCommand(QUndoCommand):
                 setattr(self.feature, key, value)
 
         CADTessellator.notify_body_changed()
-        self.body._rebuild()
+
+        # Phase 7: Inkrementeller Rebuild mit changed_feature_id
+        self.body._rebuild(changed_feature_id=self.feature.id)
+
         self.main_window._update_body_from_build123d(
             self.body, self.body._build123d_solid
         )
