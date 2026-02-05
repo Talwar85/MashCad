@@ -2021,31 +2021,29 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._offset_plane_preview_actor = None
         self._offset_plane_edge_actor = None
         self._offset_plane_arrow_center = None
+    
+    def _update_offset_plane_transform(self, offset):
+        """
+        Aktualisiert die Position durch komplettes Neuerstellen (korrigiert Pfeil-Position).
+        PERFORMANCE: Wir verwenden Request Render Queue statt direktem Render.
+        """
+        try:
+            self._draw_offset_plane_preview(offset)
+        except Exception:
+            pass
 
     def handle_offset_plane_mouse_press(self, x, y):
-        """Startet Drag für Offset mit Raycast auf Normalen-Achse."""
-        logger.debug(f"OffsetPlane: Mouse press at ({x}, {y}) mode={self.offset_plane_mode}")
-        
+        """Startet Drag für Offset."""
         if not self.offset_plane_mode or self._offset_plane_base_origin is None:
-            logger.debug(f"OffsetPlane: Ignored (mode={self.offset_plane_mode}, origin={self._offset_plane_base_origin is not None})")
             return False
         from PySide6.QtCore import QPoint
         
         # WICHTIG: Prüfe ob der Benutzer auf den Pfeil/Handle geklickt hat
         if not self._is_point_on_offsetplane_handle(x, y):
-            logger.debug("OffsetPlane: Click not on handle - ignoring")
             return False  # Nicht auf das Gizmo geklickt - Event nicht behandeln
         
-        # Raycast auf Normalen-Linie für präzisen Startpunkt
-        pick_point = self._raycast_to_offsetplane_line(x, y)
-        if pick_point is not None:
-            # Berechne Offset basierend auf Raycast-Punkt
-            vec = pick_point - self._offset_plane_base_origin
-            start_offset = np.dot(vec, self._offset_plane_base_normal)
-            self._offset_plane_drag_start_offset = start_offset
-            self._offset_plane_offset = start_offset
-        else:
-            self._offset_plane_drag_start_offset = self._offset_plane_offset
+        # Speichere Start-Position für Screen-Space Dragging
+        self._drag_last_screen = (x, y)
         
         self._offset_plane_dragging = True
         self._offset_plane_drag_start = QPoint(x, y)
@@ -2104,85 +2102,151 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             return line_origin + t * line_dir
             
         except Exception as e:
-            from loguru import logger
-            logger.debug(f"Raycast OffsetPlane Fehler: {e}")
             return None
 
     def handle_offset_plane_mouse_move(self, x, y):
-        """Aktualisiert Offset durch Raycast auf Normalen-Achse."""
+        """Aktualisiert Offset durch Screen-Space Projektion (wie Transform-Gizmo)."""
         if not self._offset_plane_dragging:
             # Hover-Modus: Prüfe ob über Pfeil
             return self._update_offsetplane_hover_cursor(x, y)
         
-        # Raycast für präzisen Drag
-        pick_point = self._raycast_to_offsetplane_line(x, y)
-        if pick_point is not None:
-            vec = pick_point - self._offset_plane_base_origin
-            new_offset = np.dot(vec, self._offset_plane_base_normal)
+        # Screen-Space Projektion wie Transform-Gizmo (nicht Raycast!)
+        dx_screen = x - self._drag_last_screen[0]
+        dy_screen = y - self._drag_last_screen[1]
+        self._drag_last_screen = (x, y)
+        
+        try:
+            renderer = self.plotter.renderer
+            center = self._offset_plane_base_origin + self._offset_plane_base_normal * self._offset_plane_offset
             
-            # Sanfte Begrenzung
-            new_offset = max(-1000, min(1000, new_offset))
+            # Projiziere Center auf Screen
+            renderer.SetWorldPoint(*center, 1.0)
+            renderer.WorldToDisplay()
+            center_screen = np.array(renderer.GetDisplayPoint()[:2])
+            
+            # Projiziere Punkt entlang Normalen auf Screen
+            axis_point = center + self._offset_plane_base_normal * 100
+            renderer.SetWorldPoint(*axis_point, 1.0)
+            renderer.WorldToDisplay()
+            axis_screen = np.array(renderer.GetDisplayPoint()[:2])
+            
+            # Screen-Achsen-Richtung
+            screen_axis_dir = axis_screen - center_screen
+            screen_axis_len = np.linalg.norm(screen_axis_dir)
+            
+            if screen_axis_len > 1:
+                screen_axis_dir = screen_axis_dir / screen_axis_len
+                # Maus-Bewegung auf Achse projizieren
+                screen_movement = np.array([dx_screen, -dy_screen])
+                movement_along_axis = np.dot(screen_movement, screen_axis_dir)
+                # Sensitivity: wie viel 3D-Bewegung pro Screen-Pixel
+                sensitivity = 100.0 / screen_axis_len
+                delta_offset = movement_along_axis * sensitivity
+            else:
+                delta_offset = 0
+            
+            new_offset = self._offset_plane_offset + delta_offset
+            new_offset = max(-1000, min(1000, new_offset))  # Begrenzung
             
             self._offset_plane_offset = new_offset
-            self._draw_offset_plane_preview(new_offset)
+            self._update_offset_plane_transform(new_offset)
             return True
-        return False
+            
+        except Exception:
+            return False
     
     def _update_offsetplane_hover_cursor(self, x, y):
-        """Ändert Cursor wenn über Gizmo-Pfeil."""
+        """Ändert Cursor wenn über Gizmo-Pfeil (Raycasting wie Transform-Gizmo)."""
         if not hasattr(self, '_offset_plane_arrow_center') or self._offset_plane_arrow_center is None:
             return False
         
         try:
-            # Projiziere Pfeil-Center auf Screen
-            renderer = self.plotter.renderer
-            world_pos = list(self._offset_plane_arrow_center) + [1.0]
-            renderer.SetWorldPoint(world_pos)
-            renderer.WorldToDisplay()
-            display = renderer.GetDisplayPoint()
+            # Raycasting wie Transform-Gizmo
+            is_hit = self._is_point_on_offsetplane_handle(x, y)
             
-            arrow_x, arrow_y = display[0], display[1]
-            distance = np.sqrt((x - arrow_x)**2 + (y - arrow_y)**2)
-            
-            # Ändere Cursor wenn nah genug
-            if distance < self._offset_plane_arrow_radius:
-                from PySide6.QtCore import Qt
+            from PySide6.QtCore import Qt
+            if is_hit:
                 self.plotter.setCursor(Qt.SizeVerCursor)
                 return True
             else:
-                from PySide6.QtCore import Qt
                 self.plotter.setCursor(Qt.ArrowCursor)
                 return False
         except:
             return False
 
     def _is_point_on_offsetplane_handle(self, x, y):
-        """Prüft ob Punkt (x,y) auf dem Offset-Plane Handle/Pfeil liegt."""
+        """Prüft ob Punkt (x,y) auf dem Offset-Plane Handle/Pfeil liegt (Raycasting wie Transform-Gizmo)."""
         if not hasattr(self, '_offset_plane_arrow_center') or self._offset_plane_arrow_center is None:
             logger.debug(f"OffsetPlane: Kein Arrow Center (x={x}, y={y})")
             return False
         
         try:
-            # Projiziere Pfeil-Center auf Screen
-            renderer = self.plotter.renderer
-            world_pos = list(self._offset_plane_arrow_center) + [1.0]
-            renderer.SetWorldPoint(world_pos)
-            renderer.WorldToDisplay()
-            display = renderer.GetDisplayPoint()
+            # Raycasting wie Transform-Gizmo
+            ray_origin, ray_dir = self._get_ray_for_offsetplane((x, y))
+            if ray_origin is None:
+                return False
             
-            arrow_x, arrow_y = display[0], display[1]
-            distance = np.sqrt((x - arrow_x)**2 + (y - arrow_y)**2)
+            # Prüfe Kollision mit Pfeil-Spitze (Kegel)
+            arrow_tip_center = self._offset_plane_arrow_center
+            arrow_tip_radius = 5.0  # Radius der Cone-Spitze
             
-            logger.debug(f"OffsetPlane: Click({x},{y}) vs Arrow({arrow_x:.1f},{arrow_y:.1f}) dist={distance:.1f} radius={self._offset_plane_arrow_radius}")
+            # Ray-Sphere Test (vereinfacht für Cone)
+            hit, distance = self._ray_intersects_sphere(
+                ray_origin, ray_dir, 
+                arrow_tip_center, arrow_tip_radius
+            )
             
-            # Klick muss innerhalb des Radius sein
-            is_hit = distance < self._offset_plane_arrow_radius
-            if is_hit:
-                logger.debug("OffsetPlane: HIT!")
-            return is_hit
+            return hit
+            
         except Exception as e:
-            logger.debug(f"OffsetPlane: Error in hit test: {e}")
             return False
+            return False
+    
+    def _get_ray_for_offsetplane(self, screen_pos):
+        """Berechnet Ray aus Screen-Position (wie Transform-Gizmo)."""
+        try:
+            x, y = screen_pos
+            renderer = self.plotter.renderer
+            height = self.plotter.interactor.height()
+            y_flipped = height - y
+            
+            renderer.SetDisplayPoint(x, y_flipped, 0)
+            renderer.DisplayToWorld()
+            near = np.array(renderer.GetWorldPoint()[:3])
+            
+            renderer.SetDisplayPoint(x, y_flipped, 1)
+            renderer.DisplayToWorld()
+            far = np.array(renderer.GetWorldPoint()[:3])
+            
+            direction = far - near
+            direction = direction / np.linalg.norm(direction)
+            
+            return near, direction
+        except:
+            return None, None
+    
+    def _ray_intersects_sphere(self, ray_origin, ray_dir, sphere_center, sphere_radius):
+        """Ray-Sphere Intersection Test."""
+        oc = ray_origin - sphere_center
+        a = np.dot(ray_dir, ray_dir)
+        b = 2.0 * np.dot(oc, ray_dir)
+        c = np.dot(oc, oc) - sphere_radius * sphere_radius
+        discriminant = b * b - 4 * a * c
+        
+        if discriminant < 0:
+            return False, float('inf')
+        
+        # Nahstes Intersection finden
+        sqrt_disc = np.sqrt(discriminant)
+        t1 = (-b - sqrt_disc) / (2.0 * a)
+        t2 = (-b + sqrt_disc) / (2.0 * a)
+        
+        t = min(t for t in [t1, t2] if t > 0) if any(t > 0 for t in [t1, t2]) else None
+        
+        if t is None:
+            return False, float('inf')
+        
+        return True, t
 
     def handle_offset_plane_mouse_release(self):
         """Beendet Drag und setzt Cursor zurück."""
@@ -2211,16 +2275,13 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # --- OFFSET PLANE MODE (Muss VOR Transform Mode geprüft werden) ---
         if self.offset_plane_mode:
             event_type = event.type()
-            logger.debug(f"OffsetPlane Event: type={event_type}, offset_mode={self.offset_plane_mode}")
             
             if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 screen_pos = (int(pos.x()), int(pos.y()))
-                logger.debug(f"OffsetPlane: pos={screen_pos}")
                 
                 # Offset Plane Drag
                 if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                    logger.debug("OffsetPlane: LeftButton press detected")
                     if self.handle_offset_plane_mouse_press(screen_pos[0], screen_pos[1]):
                         return True
                 elif event_type == QEvent.MouseMove and self._offset_plane_dragging:
