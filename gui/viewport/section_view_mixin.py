@@ -1,7 +1,7 @@
 """
 Section View Mixin für PyVista Viewport
 
-Implementiert Fusion 360-ähnliche Schnittansicht zur Inspektion von Boolean Cuts
+Implementiert CAD-ähnliche Schnittansicht zur Inspektion von Boolean Cuts
 und innerer Geometrie.
 
 Features:
@@ -122,7 +122,7 @@ class SectionViewMixin:
     Mixin für Section View / Schnittansicht.
 
     User-Problem: "ich brauchte für körper noch schnittansicht um besser zu prüfen ob cuts gingen"
-    Lösung: Fusion 360-ähnliche Section Analysis mit Schnittebenen-Kontrolle
+    Lösung: CAD-ähnliche Section Analysis mit Schnittebenen-Kontrolle
     """
 
     def _init_section_view(self):
@@ -337,7 +337,7 @@ class SectionViewMixin:
         import pyvista as pv
         import numpy as np
 
-        # Erstelle eine sichtbare Schnittebene (wie in Fusion 360)
+        # Erstelle eine sichtbare Schnittebene (wie in CAD)
         # Berechne Bounds aller Bodies
         all_bounds = []
         for body_id in self._body_actors.keys():

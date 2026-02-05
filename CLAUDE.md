@@ -1,6 +1,6 @@
 # MashCad - Architektur-Referenz
 
-> **Version:** 13 | **Stand:** Januar 2026 | **Autor:** Claude (Lead Developer)
+> **Version:** 14 | **Stand:** Februar 2026 | **Autor:** Claude (Lead Developer)
 
 ---
 
@@ -40,8 +40,8 @@ conda run -n cad_env python -c "
 
 ## UX-Philosophie: Fusion-Plus
 
-### Benchmark: Fusion 360
-- Mindeststandard = Fusion 360 Feature-Implementierung
+### Benchmark: CAD
+- Mindeststandard = CAD Feature-Implementierung
 - Ziel: **Besser** → flüssiger UX, weniger Klicks
 - Abbruchkriterium: Nicht "fertig" wenn es funktioniert, sondern wenn es sich **gut anfühlt**
 
@@ -104,7 +104,7 @@ Keine Multi-Strategy-Fallbacks. Eine Operation funktioniert oder sie schlägt fe
 # modeling/boolean_engine_v4.py
 
 class BooleanEngineV4:
-    PRODUCTION_FUZZY_TOLERANCE = 1e-4  # 0.1mm (Fusion 360-Level)
+    PRODUCTION_FUZZY_TOLERANCE = 1e-4  # 0.1mm (CAD-Level)
 
     def execute_boolean(body, tool_solid, operation):
         # Eine Strategie, klares Ergebnis
@@ -167,6 +167,59 @@ elif result.status == ResultStatus.ERROR:
     show_error_dialog(result.message)
 ```
 
+### 5. TNP v3.0 - Topological Naming Problem (Phase 5)
+
+Professionelles System zur persistenten Shape-Identifikation über Boolean-Operationen hinweg.
+
+**Das Problem:** OpenCASCADE zerstört und erstellt Edges/Faces bei Boolean-Operationen neu. Frühere Referenzen werden ungültig.
+
+**Die Lösung:** Mehrstufiges Resolution-System:
+
+```python
+# modeling/tnp_shape_reference.py
+
+@dataclass(frozen=True)
+class ShapeID:
+    """Immutable identifier for shape tracking"""
+    feature_id: str      # Feature that created this reference
+    local_id: int        # Index within feature
+    shape_type: ShapeType
+
+@dataclass
+class ShapeReference:
+    """Persistent reference with multi-strategy resolution"""
+    ref_id: ShapeID
+    original_shape: TopoDS_Shape      # OCP shape for history lookup
+    geometric_selector: Any            # Fallback: geometric matching
+    
+    def resolve(self, solid, history=None):
+        # Strategy 1: BRepTools_History (if available)
+        if history:
+            return self._resolve_via_history(history)
+        
+        # Strategy 2: Geometric matching (center, direction, length)
+        return self._resolve_via_geometry(solid)
+
+class ShapeReferenceRegistry:
+    """Central registry for all shape references in a body"""
+    def resolve_all(self, solid) -> Dict[ShapeID, TopoDS_Shape]:
+        # Resolves all registered references against new solid
+```
+
+**Feature-Integration (Fillet/Chamfer):**
+```python
+@dataclass
+class FilletFeature(Feature):
+    edge_shape_ids: List[ShapeID] = None        # TNP v3.0 Primary
+    geometric_selectors: List = None             # Geometric Fallback
+    edge_selectors: List = None                  # Legacy Fallback
+```
+
+**Resolution-Strategien (in Reihenfolge):**
+1. **History-based** (BRepTools_History) - Primär wenn verfügbar
+2. **Geometric matching** - Fallback mit 40/30/20/10 Gewichtung
+3. **Legacy point selectors** - Letzter Fallback
+
 ---
 
 ## Directory-Struktur
@@ -181,7 +234,8 @@ MashCad/
 │   ├── body_transaction.py           # Transaction/Rollback System
 │   ├── result_types.py               # OperationResult, BooleanResult
 │   ├── cad_tessellator.py            # Kernel → Mesh Konvertierung
-│   └── geometric_selector.py         # Face/Edge Selection
+│   ├── geometric_selector.py         # Face/Edge Selection (TNP Fallback)
+│   └── tnp_shape_reference.py        # TNP v3.0: Persistent Shape IDs
 │
 ├── gui/
 │   ├── main_window.py                # Zentrale App-Logik
@@ -399,7 +453,25 @@ body._build123d_solid = new_solid
 body.invalidate_mesh()
 ```
 
-### 4. Silent Failures
+### 4. No Quick Fixes - Build Solid Software
+
+**Regel:** Nie Thresholds senken, Toleranzen erhöhen oder Workarounds einbauen um Bugs zu verbergen. Immer die Ursache beheben.
+
+```python
+# VERBOTEN (Quick Fix)
+if best_score > 0.3:  # Von 0.6 auf 0.3 gesenkt "damit es klappt"
+    return best_edge
+
+# RICHTIG (Proper Solution)
+# Das Referenz-Tracking fixen damit Edges korrekt gefunden werden
+if best_score > 0.6:  # Strikten Threshold beibehalten
+    return best_edge
+else:
+    # Referenzen mittels History oder geometrischem Matching aktualisieren
+    self._update_references_after_operation()
+```
+
+### 5. Silent Failures
 
 ```python
 # VERBOTEN

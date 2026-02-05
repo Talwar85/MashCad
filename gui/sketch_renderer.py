@@ -65,7 +65,7 @@ class SketchRendererMixin:
     
 
     def _draw_canvas(self, p, update_rect=None):
-        """Zeichnet Canvas-Bildreferenz als Hintergrund (Fusion 360-Style)."""
+        """Zeichnet Canvas-Bildreferenz als Hintergrund (CAD-Style)."""
         if not self.canvas_image or not self.canvas_visible or not self.canvas_world_rect:
             return
 
@@ -489,14 +489,18 @@ class SketchRendererMixin:
         """
         
         # --- 0. Vorbereitung ---
-        path_normal = QPainterPath()       
-        path_construction = QPainterPath() 
-        path_fixed = QPainterPath()        
-        path_selected = QPainterPath()     
-        path_hover = QPainterPath()        
+        path_normal = QPainterPath()
+        path_construction = QPainterPath()
+        path_fixed = QPainterPath()
+        path_selected = QPainterPath()
+        path_hover = QPainterPath()
         path_glow = QPainterPath()
         path_endpoints = QPainterPath()
         path_fixed_points = QPainterPath()
+        path_constraint_highlight = QPainterPath()  # Für 2-Entity Constraint Auswahl
+
+        # Constraint Highlight Entity (falls aktiv)
+        highlight_entity = getattr(self, '_constraint_highlighted_entity', None)
 
         def is_visible(bounds):
             if update_rect is None: return True
@@ -523,8 +527,12 @@ class SketchRendererMixin:
             is_sel = line in self.selected_lines
             is_hov = self.hovered_entity == line
             is_fixed = getattr(line, 'fixed', False)
-            
-            if is_sel:
+            is_constraint_highlight = (highlight_entity is not None and line is highlight_entity)
+
+            if is_constraint_highlight:
+                path_constraint_highlight.moveTo(p1)
+                path_constraint_highlight.lineTo(p2)
+            elif is_sel:
                 path_selected.moveTo(p1)
                 path_selected.lineTo(p2)
                 path_glow.moveTo(p1)
@@ -559,8 +567,11 @@ class SketchRendererMixin:
             is_sel = c in self.selected_circles
             is_hov = self.hovered_entity == c
             is_fixed = getattr(c, 'fixed', False)
+            is_constraint_highlight = (highlight_entity is not None and c is highlight_entity)
 
-            if is_sel:
+            if is_constraint_highlight:
+                path_constraint_highlight.addEllipse(ctr, r, r)
+            elif is_sel:
                 path_selected.addEllipse(ctr, r, r)
                 path_glow.addEllipse(ctr, r, r)
             elif is_hov:
@@ -615,8 +626,11 @@ class SketchRendererMixin:
             is_sel = arc in self.selected_arcs
             is_hov = self.hovered_entity == arc
             is_fixed = getattr(arc, 'fixed', False)
+            is_constraint_highlight = (highlight_entity is not None and arc is highlight_entity)
 
-            if is_sel:
+            if is_constraint_highlight:
+                path_constraint_highlight.addPath(temp_path)
+            elif is_sel:
                 path_selected.addPath(temp_path)
                 path_glow.addPath(temp_path)
             elif is_hov:
@@ -665,6 +679,19 @@ class SketchRendererMixin:
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(path_hover)
+
+        # Constraint Highlight (Cyan, dick, für 2-Entity Constraint Auswahl)
+        if not path_constraint_highlight.isEmpty():
+            highlight_color = getattr(self, '_constraint_highlight_color', QColor(0, 255, 255))
+            pen = QPen(highlight_color, 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path_constraint_highlight)
+            # Glow-Effekt für bessere Sichtbarkeit
+            glow_color = QColor(highlight_color)
+            glow_color.setAlpha(80)
+            p.setPen(QPen(glow_color, 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(path_constraint_highlight)
 
         if not path_selected.isEmpty():
             p.setPen(DesignTokens.pen_geo_selected())
@@ -949,7 +976,50 @@ class SketchRendererMixin:
                         p.drawRoundedRect(icon_rect, 3, 3)
                         p.setPen(QPen(QColor(200, 100, 255)))
                         p.drawText(int(mid.x())-4, int(mid.y())-7-offset, "=")
-                        
+
+                elif c.type == ConstraintType.TANGENT and len(c.entities) >= 2:
+                    # TANGENT: Symbol am Berührpunkt zwischen Line und Circle/Arc
+                    e1, e2 = c.entities[0], c.entities[1]
+
+                    # Finde die Linie und den Kreis/Arc
+                    line_entity = None
+                    circle_entity = None
+                    for e in [e1, e2]:
+                        if hasattr(e, 'start') and hasattr(e, 'end'):  # Line
+                            line_entity = e
+                        elif hasattr(e, 'center') and hasattr(e, 'radius'):  # Circle/Arc
+                            circle_entity = e
+
+                    if line_entity and circle_entity:
+                        # Berechne Tangent-Punkt (nächster Punkt auf Linie zum Kreismittelpunkt)
+                        cx, cy = circle_entity.center.x, circle_entity.center.y
+                        x1, y1 = line_entity.start.x, line_entity.start.y
+                        x2, y2 = line_entity.end.x, line_entity.end.y
+                        dx, dy = x2 - x1, y2 - y1
+                        line_len_sq = dx*dx + dy*dy
+                        if line_len_sq > 1e-10:
+                            t = max(0, min(1, ((cx - x1)*dx + (cy - y1)*dy) / line_len_sq))
+                            tangent_x = x1 + t * dx
+                            tangent_y = y1 + t * dy
+                        else:
+                            tangent_x, tangent_y = x1, y1
+                        mid = self.world_to_screen(QPointF(tangent_x, tangent_y))
+                    elif circle_entity:
+                        # Zwei Kreise: Symbol am Berührpunkt
+                        mid = self.world_to_screen(circle_entity.center)
+                    else:
+                        continue
+
+                    icon_rect = QRectF(int(mid.x())-10, int(mid.y())-18, 20, 14)
+                    self.constraint_icon_rects.append((c, icon_rect))
+                    is_selected = hasattr(self, 'selected_constraints') and c in self.selected_constraints
+                    bg_color = QColor(0, 120, 212, 200) if is_selected else QColor(30, 30, 30, 180)
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(QBrush(bg_color))
+                    p.drawRoundedRect(icon_rect, 3, 3)
+                    p.setPen(QPen(QColor(255, 200, 50)))  # Gold/Orange für Tangent
+                    p.drawText(int(mid.x())-4, int(mid.y())-7, "T")
+
                 elif c.type == ConstraintType.LENGTH:
                     if c.value and c.entities:
                         line = c.entities[0]
@@ -1200,7 +1270,7 @@ class SketchRendererMixin:
                 # Durchmesser-Linie anzeigen
                 p.drawLine(self.world_to_screen(p1), self.world_to_screen(snap))
             elif self.circle_mode == 2:
-                # 3-Punkt Modus (wie Fusion 360: nur Punkte markieren, Kreis erst ab 2 Punkten)
+                # 3-Punkt Modus (wie CAD: nur Punkte markieren, Kreis erst ab 2 Punkten)
                 if self.tool_step == 1:
                     # Ein Punkt gesetzt - nur Punkt markieren (keine Linie)
                     pt1 = self.tool_points[0]
@@ -1365,7 +1435,7 @@ class SketchRendererMixin:
             p1 = self.world_to_screen(QPointF(x1, y1))
             p2 = self.world_to_screen(QPointF(x2, y2))
             
-            # Fusion 360 Style: Magenta/Lila Highlight für Projektion
+            # CAD Style: Magenta/Lila Highlight für Projektion
             pen = QPen(QColor(255, 0, 255), 3) # Magenta, Dicke 3
             p.setPen(pen)
             p.drawLine(p1, p2)

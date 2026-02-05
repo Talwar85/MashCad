@@ -1,6 +1,6 @@
 """
 MashCad - Parameter Dialog
-Fusion 360-Style Parameterverwaltung
+CAD-Style Parameterverwaltung
 
 Ermöglicht:
 - Variablen definieren (width = 100)
@@ -22,7 +22,7 @@ from core.parameters import Parameters, get_parameters
 
 class ParameterDialog(QDialog):
     """
-    Fusion 360-Style Parameter-Dialog.
+    CAD-Style Parameter-Dialog.
 
     Zeigt alle Parameter in einer Tabelle:
     | Name | Wert | Formel | Einheit | Kommentar |

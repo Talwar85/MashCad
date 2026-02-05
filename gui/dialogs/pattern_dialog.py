@@ -1,6 +1,6 @@
 """
 MashCad - Pattern/Array Dialog
-Erzeugt Linear oder Circular Patterns (Fusion 360-Style)
+Erzeugt Linear oder Circular Patterns (CAD-Style)
 """
 
 from PySide6.QtWidgets import (

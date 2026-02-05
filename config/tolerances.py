@@ -5,7 +5,7 @@ MashCad - Zentralisierte Toleranz-Konfiguration
 Phase 5: Alle Toleranzen an einem Ort.
 
 Toleranz-Philosophie:
-- CAD-Kernel (OCP): 1e-4 (0.1mm) - Fusion 360 Standard
+- CAD-Kernel (OCP): 1e-4 (0.1mm) - CAD Standard
 - Tessellation: 0.01 (10µm) - Visuelle Qualität
 - Mesh-Cleaning: 1e-4 (0.1mm) - Nicht zu streng für 3D-Druck!
 - Sketch: 1e-5 (1µm) - Präzision für Constraints
@@ -39,7 +39,7 @@ class Tolerances:
     # =========================================================================
 
     # Fuzzy-Toleranz für Boolean-Operationen
-    # Fusion 360 nutzt ähnliche Werte (~0.1mm)
+    # CAD nutzt ähnliche Werte (~0.1mm)
     # Zu klein (1e-7) = Operationen schlagen fehl
     # Zu groß (1e-2) = Ungenauigkeiten
     KERNEL_FUZZY = 1e-4  # 0.1mm - Produktions-Standard

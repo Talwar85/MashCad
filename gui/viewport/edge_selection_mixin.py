@@ -320,8 +320,9 @@ class EdgeSelectionMixin:
             except:
                 is_line = False
 
-            # V8: Weniger Punkte bei vielen Kanten
-            resolution = 2 if is_line else 16  # Reduziert von 32
+            # V8: Auflösung für glatte Kurven (wichtig für Fillet/Chamfer)
+            # Linien: 2 Punkte (Start/Ende), Kurven: 32 Punkte für glatte Darstellung
+            resolution = 2 if is_line else 32  # Erhöht für bessere Qualität
 
             points = []
             for t in np.linspace(0, 1, resolution):
@@ -416,7 +417,7 @@ class EdgeSelectionMixin:
                 color=EDGE_COLORS["hover"],
                 opacity=1.0,
                 line_width=self._line_width_hover,
-                render_lines_as_tubes=False,
+                render_lines_as_tubes=True,  # AKTIVIERT für schöne durchgezogene Linien
                 lighting=False,
                 name="edge_hover",
                 pickable=False
@@ -448,12 +449,15 @@ class EdgeSelectionMixin:
                 for m in meshes[1:]:
                     batch_mesh = batch_mesh.merge(m)
 
+            # RENDERING: Tubes für durchgezogene, schöne Kanten
+            # Achtung: render_lines_as_tubes=True erzeugt 3D-Geometrie pro Kante
+            # Bei sehr vielen Kanten (>1000) kann das langsam werden, aber für Fillet/Chamfer ist es OK
             self.plotter.add_mesh(
                 batch_mesh,
                 color=color,
                 opacity=1.0,
                 line_width=width,
-                render_lines_as_tubes=False,  # Deaktiviert für Performance
+                render_lines_as_tubes=True,  # AKTIVIERT für schöne durchgezogene Linien
                 lighting=False,
                 name=name,
                 pickable=False  # Picking via BBox, nicht via VTK
@@ -707,4 +711,160 @@ class EdgeSelectionMixin:
         self._draw_edges_modern()
         if hasattr(self, 'edge_selection_changed'):
             self.edge_selection_changed.emit(len(self._selected_edge_ids))
+        request_render(self.plotter)
+
+    # ==================== TNP Debug Visualization ====================
+
+    def debug_visualize_edge_resolution(self, resolved_edges: list, unresolved_edges: list, body_id: str = None):
+        """
+        TNP v4.0 Debug: Visualisiert gefundene (grün) und nicht gefundene (rot) Kanten.
+        
+        Args:
+            resolved_edges: Liste der erfolgreich aufgelösten OCP/build123d Edges
+            unresolved_edges: Liste der nicht aufgelösten Edges (ShapeIDs oder Edges)
+            body_id: Optional - Body ID für Kontext
+        """
+        if not HAS_PYVISTA or not hasattr(self, 'plotter'):
+            return
+        
+        try:
+            # Alte Debug-Actors entfernen
+            for name in ["tnp_debug_resolved", "tnp_debug_unresolved"]:
+                try:
+                    self.plotter.remove_actor(name)
+                except:
+                    pass
+            
+            # Grün für gefundene Kanten
+            resolved_meshes = []
+            for edge in resolved_edges:
+                try:
+                    points = self._extract_edge_points_from_ocp(edge)
+                    if points is not None and len(points) >= 2:
+                        mesh = pv.lines_from_points(points)
+                        resolved_meshes.append(mesh)
+                except:
+                    pass
+            
+            if resolved_meshes:
+                if len(resolved_meshes) == 1:
+                    batch_resolved = resolved_meshes[0]
+                else:
+                    batch_resolved = resolved_meshes[0].copy()
+                    for m in resolved_meshes[1:]:
+                        batch_resolved = batch_resolved.merge(m)
+                
+                self.plotter.add_mesh(
+                    batch_resolved,
+                    color="#00FF00",  # GRÜN für gefunden
+                    opacity=1.0,
+                    line_width=8.0,   # Dicker für Sichtbarkeit
+                    render_lines_as_tubes=True,
+                    lighting=False,
+                    name="tnp_debug_resolved",
+                    pickable=False
+                )
+                logger.info(f"TNP Debug: {len(resolved_meshes)} Kanten in GRÜN (aufgelöst)")
+            
+            # Rot für nicht gefundene Kanten
+            # Diese werden als kleine Kugeln an den Centers gezeichnet
+            unresolved_centers = []
+            for item in unresolved_edges:
+                try:
+                    # Versuche Center zu extrahieren
+                    center = None
+                    if hasattr(item, 'center'):
+                        center = item.center
+                        if callable(center):
+                            center = center()
+                    elif hasattr(item, 'geometric_signature'):
+                        sig = item.geometric_signature
+                        if 'center' in sig:
+                            center = tuple(sig['center'])
+                    
+                    if center:
+                        unresolved_centers.append(center)
+                except:
+                    pass
+            
+            if unresolved_centers:
+                # Zeichne kleine rote Kugeln an den nicht gefundenen Positionen
+                points = np.array(unresolved_centers)
+                spheres = pv.PolyData(points)
+                
+                # Glyphen (Kugeln) an den Punkten
+                spheres["radius"] = [0.5] * len(points)  # 0.5mm Radius
+                
+                self.plotter.add_mesh(
+                    spheres,
+                    color="#FF0000",  # ROT für nicht gefunden
+                    opacity=1.0,
+                    point_size=15,
+                    render_points_as_spheres=True,
+                    name="tnp_debug_unresolved",
+                    pickable=False
+                )
+                logger.warning(f"TNP Debug: {len(unresolved_centers)} Positionen in ROT (nicht aufgelöst)")
+            
+            request_render(self.plotter)
+            
+        except Exception as e:
+            logger.error(f"TNP Debug Visualisierung fehlgeschlagen: {e}")
+
+    def _extract_edge_points_from_ocp(self, edge) -> Optional[np.ndarray]:
+        """Extrahiert Punkte von OCP oder build123d Edge."""
+        try:
+            # Build123d Edge
+            if hasattr(edge, 'position_at'):
+                edge_length = getattr(edge, 'length', 0.0)
+                resolution = 32 if edge_length > 0.1 else 2
+                
+                points = []
+                for t in np.linspace(0, 1, resolution):
+                    try:
+                        pt = edge.position_at(t)
+                        if pt is not None:
+                            points.append([pt.X, pt.Y, pt.Z])
+                    except:
+                        continue
+                
+                if len(points) >= 2:
+                    return np.array(points)
+            
+            # OCP TopoDS_Edge
+            if hasattr(edge, 'Wrapped') or 'TopoDS' in str(type(edge)):
+                from OCP.BRepAdaptor import BRepAdaptor_Curve
+                from OCP.GCPnts import GCPnts_QuasiUniformDeflection
+                
+                adaptor = BRepAdaptor_Curve(edge)
+                deflection = 0.01  # 10µm Genauigkeit
+                
+                try:
+                    discretizer = GCPnts_QuasiUniformDeflection()
+                    discretizer.Perform(adaptor, deflection)
+                    
+                    if discretizer.IsDone() and discretizer.NbPoints() > 1:
+                        points = []
+                        for i in range(1, discretizer.NbPoints() + 1):
+                            p = discretizer.Value(i)
+                            points.append([p.X(), p.Y(), p.Z()])
+                        return np.array(points)
+                except:
+                    pass
+            
+            return None
+        except:
+            return None
+
+    def clear_debug_visualization(self):
+        """Entfernt die TNP Debug-Visualisierung."""
+        if not hasattr(self, 'plotter'):
+            return
+        
+        for name in ["tnp_debug_resolved", "tnp_debug_unresolved"]:
+            try:
+                self.plotter.remove_actor(name)
+            except:
+                pass
+        
         request_render(self.plotter)

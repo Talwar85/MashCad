@@ -2633,7 +2633,7 @@ class PushPullInputPanel(QFrame):
 
 class PatternInputPanel(QFrame):
     """
-    Input panel for Pattern/Array operations (Fusion 360-Style).
+    Input panel for Pattern/Array operations (CAD-Style).
 
     Features:
     - Linear Pattern: N copies along an axis with spacing

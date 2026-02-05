@@ -215,7 +215,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._box_select_rect = None  # QRubberBand
 
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
-        self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie Fusion 360)
+        self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie CAD)
         self.sketch_path_mode = False  # NEU: Sketch-Element-Selektion für Sweep-Pfad
         self.texture_face_mode = False  # NEU: Face-Selektion für Surface Texture
         self._texture_body_id = None  # Body für Texture-Selektion
@@ -673,7 +673,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
     def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True, log_pick: bool = True):
         """
-        Picked einen 3D-Punkt auf der Geometrie (Fusion 360-Style).
+        Picked einen 3D-Punkt auf der Geometrie (CAD-Style).
         Gibt (body_id, point) zurück oder (None, None) wenn nichts getroffen.
 
         Args:
@@ -713,7 +713,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         picked_point = picker.GetPickPosition()
         point = np.array([picked_point[0], picked_point[1], picked_point[2]])
 
-        # SNAP TO VERTEX (Fusion 360-Style)
+        # SNAP TO VERTEX (CAD-Style)
         if snap_to_vertex:
             mesh_name = f"body_{body_id}_m"
             mesh_actor = self.plotter.renderer.actors.get(mesh_name)
@@ -1938,7 +1938,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._draw_offset_plane_preview(offset)
 
     def _draw_offset_plane_preview(self, offset):
-        """Rendert die halbtransparente Preview-Ebene."""
+        """Rendert die halbtransparente Preview-Ebene mit Gizmo-Pfeil."""
         if self._offset_plane_base_origin is None:
             return
         import numpy as np
@@ -1947,6 +1947,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         center = self._offset_plane_base_origin + self._offset_plane_base_normal * offset
         try:
+            # Preview-Ebene
             plane_mesh = pv.Plane(
                 center=center,
                 direction=self._offset_plane_base_normal,
@@ -1974,61 +1975,186 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 line_width=2, name='offset_plane_preview_edge',
                 pickable=False,
             )
+            
+            # === GIZMO-PFEIL entlang der Normalen ===
+            arrow_start = center
+            arrow_end = center + self._offset_plane_base_normal * 50  # 50mm Pfeil
+            arrow_line = pv.Line(arrow_start, arrow_end)
+            
+            # Pfeil-Spitze (Kegel)
+            arrow_tip = pv.Cone(
+                center=arrow_end + self._offset_plane_base_normal * 5,
+                direction=self._offset_plane_base_normal,
+                height=10,
+                radius=3,
+                resolution=16
+            )
+            
+            self.plotter.add_mesh(
+                arrow_line, color='#ffcc00', line_width=4,
+                name='offset_plane_arrow_line', pickable=False
+            )
+            self.plotter.add_mesh(
+                arrow_tip, color='#ffcc00', opacity=0.9,
+                name='offset_plane_arrow_tip', pickable=True  # Pickable für Hover!
+            )
+            
+            # Speichere Pfeil-Daten für Hover-Detection
+            self._offset_plane_arrow_center = (arrow_start + arrow_end) / 2
+            self._offset_plane_arrow_radius = 15  # Hover-Bereich in Pixeln
+            
             self.plotter.update()
         except Exception as e:
             from loguru import logger
             logger.warning(f"Offset Plane Preview Fehler: {e}")
 
     def clear_offset_plane_preview(self):
-        """Entfernt die Preview-Ebene."""
-        for name in ['offset_plane_preview', 'offset_plane_preview_edge']:
+        """Entfernt die Preview-Ebene und den Gizmo-Pfeil."""
+        for name in ['offset_plane_preview', 'offset_plane_preview_edge',
+                     'offset_plane_arrow_line', 'offset_plane_arrow_tip']:
             try:
                 self.plotter.remove_actor(name)
             except Exception:
                 pass
         self._offset_plane_preview_actor = None
         self._offset_plane_edge_actor = None
+        self._offset_plane_arrow_center = None
 
     def handle_offset_plane_mouse_press(self, x, y):
-        """Startet Drag für Offset."""
+        """Startet Drag für Offset mit Raycast auf Normalen-Achse."""
         if not self.offset_plane_mode or self._offset_plane_base_origin is None:
             return False
         from PySide6.QtCore import QPoint
+        
+        # Raycast auf Normalen-Linie für präzisen Startpunkt
+        pick_point = self._raycast_to_offsetplane_line(x, y)
+        if pick_point is not None:
+            # Berechne Offset basierend auf Raycast-Punkt
+            vec = pick_point - self._offset_plane_base_origin
+            start_offset = np.dot(vec, self._offset_plane_base_normal)
+            self._offset_plane_drag_start_offset = start_offset
+            self._offset_plane_offset = start_offset
+        else:
+            self._offset_plane_drag_start_offset = self._offset_plane_offset
+        
         self._offset_plane_dragging = True
         self._offset_plane_drag_start = QPoint(x, y)
-        self._offset_plane_drag_start_offset = self._offset_plane_offset
         return True
+
+    def _raycast_to_offsetplane_line(self, screen_x, screen_y):
+        """Raycast von Screen-Koordinaten auf die Normalen-Linie des OffsetPlanes."""
+        try:
+            # Hole Camera-Position und Ray-Richtung
+            camera = self.plotter.camera
+            if camera is None:
+                return None
+            
+            # Ray durch Maus-Position
+            ray_origin = np.array(camera.GetPosition())
+            
+            # Berechne Ray-Richtung durch Unproject
+            renderer = self.plotter.renderer
+            display_point = [screen_x, screen_y, 0.0]
+            world_point = [0.0, 0.0, 0.0]
+            renderer.SetDisplayPoint(display_point)
+            renderer.DisplayToWorld()
+            world_at_display = renderer.GetWorldPoint()
+            
+            # Ray-Richtung
+            near_point = np.array([world_at_display[0], world_at_display[1], world_at_display[2]])
+            ray_dir = near_point - ray_origin
+            ray_dir = ray_dir / np.linalg.norm(ray_dir)
+            
+            # Linie: base_origin + t * normal
+            # Ray: ray_origin + s * ray_dir
+            # Schnittpunkt wenn beide gleich sind
+            
+            # Berechne kürzeste Distanz zwischen Ray und Normalen-Linie
+            line_origin = self._offset_plane_base_origin
+            line_dir = self._offset_plane_base_normal
+            
+            # Cross product für kürzeste Verbindung
+            w0 = ray_origin - line_origin
+            a = np.dot(line_dir, line_dir)  # = 1 (normalisiert)
+            b = np.dot(line_dir, ray_dir)
+            c = np.dot(ray_dir, ray_dir)    # = 1 (normalisiert)
+            d = np.dot(line_dir, w0)
+            e = np.dot(ray_dir, w0)
+            
+            denom = a * c - b * b
+            if abs(denom) < 1e-6:
+                return None  # Parallel
+            
+            # Parameter für kürzeste Verbindung
+            t = (b * e - c * d) / denom  # Auf Normalen-Linie
+            
+            # Begrenze t auf sinnvollen Bereich (z.B. -500 bis +500mm)
+            t = max(-500, min(500, t))
+            
+            return line_origin + t * line_dir
+            
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"Raycast OffsetPlane Fehler: {e}")
+            return None
 
     def handle_offset_plane_mouse_move(self, x, y):
-        """Aktualisiert Offset durch Mausdrag."""
-        if not self._offset_plane_dragging or self._offset_plane_drag_start is None:
+        """Aktualisiert Offset durch Raycast auf Normalen-Achse."""
+        if not self._offset_plane_dragging:
+            # Hover-Modus: Prüfe ob über Pfeil
+            return self._update_offsetplane_hover_cursor(x, y)
+        
+        # Raycast für präzisen Drag
+        pick_point = self._raycast_to_offsetplane_line(x, y)
+        if pick_point is not None:
+            vec = pick_point - self._offset_plane_base_origin
+            new_offset = np.dot(vec, self._offset_plane_base_normal)
+            
+            # Sanfte Begrenzung
+            new_offset = max(-1000, min(1000, new_offset))
+            
+            self._offset_plane_offset = new_offset
+            self._draw_offset_plane_preview(new_offset)
+            return True
+        return False
+    
+    def _update_offsetplane_hover_cursor(self, x, y):
+        """Ändert Cursor wenn über Gizmo-Pfeil."""
+        if not hasattr(self, '_offset_plane_arrow_center') or self._offset_plane_arrow_center is None:
             return False
-        import numpy as np
-
-        # Berechne Screen-Vektor der Normalen
-        cam = self.plotter.camera
-        if cam is None:
+        
+        try:
+            # Projiziere Pfeil-Center auf Screen
+            renderer = self.plotter.renderer
+            world_pos = list(self._offset_plane_arrow_center) + [1.0]
+            renderer.SetWorldPoint(world_pos)
+            renderer.WorldToDisplay()
+            display = renderer.GetDisplayPoint()
+            
+            arrow_x, arrow_y = display[0], display[1]
+            distance = np.sqrt((x - arrow_x)**2 + (y - arrow_y)**2)
+            
+            # Ändere Cursor wenn nah genug
+            if distance < self._offset_plane_arrow_radius:
+                from PySide6.QtCore import Qt
+                self.plotter.setCursor(Qt.SizeVerCursor)
+                return True
+            else:
+                from PySide6.QtCore import Qt
+                self.plotter.setCursor(Qt.ArrowCursor)
+                return False
+        except:
             return False
-
-        # Pixel-Delta
-        dy = -(y - self._offset_plane_drag_start.y())  # Hoch = positiver Offset
-
-        # Skalierung: Pixel zu Weltkoordinaten
-        anchor = self._offset_plane_base_origin
-        scale = self._get_pixel_to_world_scale(anchor) if hasattr(self, '_get_pixel_to_world_scale') else 0.5
-        delta = dy * scale
-
-        new_offset = self._offset_plane_drag_start_offset + delta
-        self._offset_plane_offset = new_offset
-        self._draw_offset_plane_preview(new_offset)
-        return True
 
     def handle_offset_plane_mouse_release(self):
-        """Beendet Drag."""
+        """Beendet Drag und setzt Cursor zurück."""
         if not self._offset_plane_dragging:
             return False
         self._offset_plane_dragging = False
         self._offset_plane_drag_start = None
+        # Cursor zurücksetzen
+        from PySide6.QtCore import Qt
+        self.plotter.setCursor(Qt.ArrowCursor)
         return True
 
     # ==================== EVENT FILTER ====================
@@ -2427,7 +2553,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             return False
 
-        # --- POINT-TO-POINT MOVE MODE (Fusion 360-Style) ---
+        # --- POINT-TO-POINT MOVE MODE (CAD-Style) ---
         if self.point_to_point_mode:
             # Mouse Move: Zeige Hover-Vertex (KEIN LOGGING für Performance)
             if event.type() == QEvent.MouseMove:
@@ -5705,6 +5831,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
     def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal, cell_id=None):
         """Zeichnet full-face blaues Highlight auf gehoverter Body-Fläche (Draft/Texture Mode)."""
+        import numpy as np
         self._clear_body_face_highlight()
         try:
             mesh = None
@@ -5715,7 +5842,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # Hole Position vom hovered_body_face
                 if self.hovered_body_face:
                     _, _, _, pos = self.hovered_body_face
-                    import numpy as np
                     clicked_pos = np.array(pos)
 
                     matching_detector_face = None

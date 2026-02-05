@@ -7,6 +7,7 @@ import sys
 import os
 import json
 import math
+import uuid
 import numpy as np
 from loguru import logger
 
@@ -101,6 +102,9 @@ class MainWindow(QMainWindow):
         self._setup_logging()
         self.document = Document("Projekt1")
         self._current_project_path = None  # Phase 8.2: Aktueller Projekt-Pfad
+        
+        # TNP v4.0: Debug Callback für Edge-Auflösungs-Visualisierung
+        self._setup_tnp_debug_callback()
 
         # NEU: Undo/Redo System
         from PySide6.QtGui import QUndoStack
@@ -201,6 +205,29 @@ class MainWindow(QMainWindow):
         notif.deleteLater()
         # Nach dem Löschen die anderen aufrücken lassen
         # (Optional, hier vereinfacht lassen wir sie stehen bis sie verschwinden)
+
+    def _setup_tnp_debug_callback(self):
+        """
+        TNP v4.0: Registriert Callback für Edge-Auflösungs-Visualisierung.
+        Zeigt gefundene Kanten in GRÜN, nicht gefundene in ROT.
+        """
+        def tnp_debug_callback(resolved_edges, unresolved_shape_ids, body_id):
+            if hasattr(self, 'viewport_3d') and self.viewport_3d:
+                try:
+                    logger.info(f"TNP Debug: {len(resolved_edges)} resolved, {len(unresolved_shape_ids)} unresolved")
+                    # Debug-Visualisierung deaktiviert (grüne/rote Linien)
+                    # self.viewport_3d.debug_visualize_edge_resolution(
+                    #     resolved_edges, unresolved_shape_ids, body_id
+                    # )
+                except Exception as e:
+                    logger.warning(f"TNP Debug Callback fehlgeschlagen: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        # Callback im Document registrieren (immer setzen)
+        if self.document:
+            self.document._tnp_debug_callback = tnp_debug_callback
+            logger.debug("TNP Debug Callback registriert")
 
     def _reposition_notifications(self):
         """Berechnet Positionen und startet Animationen"""
@@ -631,7 +658,7 @@ class MainWindow(QMainWindow):
         self._lattice_target_body = None
         self._pending_lattice_mode = False
 
-        # Section View Panel (Schnittansicht wie Fusion 360)
+        # Section View Panel (Schnittansicht wie CAD)
         self.section_panel = SectionViewPanel(self)
         self.section_panel.section_enabled.connect(self._on_section_enabled)
         self.section_panel.section_disabled.connect(self._on_section_disabled)
@@ -915,7 +942,7 @@ class MainWindow(QMainWindow):
         # Measure-Tool Signal
         self.viewport_3d.measure_point_picked.connect(self._on_measure_point_picked)
 
-        # NEU: Point-to-Point Move (Fusion 360-Style)
+        # NEU: Point-to-Point Move (CAD-Style)
         if hasattr(self.viewport_3d, 'point_to_point_move'):
             self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
 
@@ -1576,7 +1603,7 @@ class MainWindow(QMainWindow):
                 self._on_body_transform_requested(body_ids, "scale", {"factor": factor})
 
     def _start_point_to_point_move(self):
-        """Startet Point-to-Point Move Modus (Fusion 360-Style) - OHNE Body-Selektion möglich"""
+        """Startet Point-to-Point Move Modus (CAD-Style) - OHNE Body-Selektion möglich"""
         body = self._get_active_body()
 
         if not body:
@@ -1717,7 +1744,7 @@ class MainWindow(QMainWindow):
 
     def _on_point_to_point_move(self, body_id: str, start_point: tuple, end_point: tuple):
         """
-        Handler für Point-to-Point Move (Fusion 360-Style)
+        Handler für Point-to-Point Move (CAD-Style)
 
         WICHTIG: Nutzt das normale Transform-Command-System für Undo/Redo Support
         und korrekte Mesh-Updates!
@@ -2416,10 +2443,94 @@ class MainWindow(QMainWindow):
         if self.mode == "sketch" and hasattr(self.sketch_editor, 'sketch'):
             self._update_bodies_depending_on_sketch(self.sketch_editor.sketch)
 
+    def _compute_profile_hash(self, feature, sketch) -> str:
+        """
+        Berechnet einen Hash der für ein Feature relevanten Profile.
+        
+        Dieser Hash basiert auf:
+        - Den Centroids der vom feature.profile_selector referenzierten Profile
+        - Den Geometrie-Daten (exterior coords) dieser Profile
+        
+        WICHTIG: Die Profile werden nach Centroid sortiert, damit die Reihenfolge
+        stabil ist und nicht von der internen Sortierung des Sketch-Solvers abhängt.
+        
+        Args:
+            feature: Das Feature (ExtrudeFeature oder RevolveFeature)
+            sketch: Der Sketch mit den closed_profiles
+            
+        Returns:
+            Ein Hash-String der relevanten Profile. Leerer String wenn keine Profile gefunden.
+        """
+        import hashlib
+        
+        profile_selector = getattr(feature, 'profile_selector', [])
+        sketch_profiles = getattr(sketch, 'closed_profiles', [])
+        
+        if not profile_selector or not sketch_profiles:
+            return ""
+        
+        # Finde die Profile, die zum Selektor passen (ähnlich wie _filter_profiles_by_selector)
+        matched_profiles = []
+        used_indices = set()
+        tolerance = 5.0
+        
+        for sel_cx, sel_cy in profile_selector:
+            best_match_idx = None
+            best_match_dist = float('inf')
+            
+            for i, poly in enumerate(sketch_profiles):
+                if i in used_indices:
+                    continue
+                try:
+                    centroid = poly.centroid
+                    dist = ((centroid.x - sel_cx) ** 2 + (centroid.y - sel_cy) ** 2) ** 0.5
+                    if dist < tolerance and dist < best_match_dist:
+                        best_match_dist = dist
+                        best_match_idx = i
+                except:
+                    continue
+            
+            if best_match_idx is not None:
+                used_indices.add(best_match_idx)
+                matched_profiles.append(sketch_profiles[best_match_idx])
+        
+        if not matched_profiles:
+            return ""
+        
+        # WICHTIG: Sortiere Profile nach Centroid für stabile Reihenfolge
+        # Die interne Sortierung des Sketch-Solvers kann sich ändern!
+        def profile_sort_key(poly):
+            try:
+                c = poly.centroid
+                return (round(c.x, 6), round(c.y, 6))
+            except:
+                return (0.0, 0.0)
+        
+        matched_profiles = sorted(matched_profiles, key=profile_sort_key)
+        
+        # Erstelle einen Hash basierend auf den Geometrie-Daten der gematchten Profile
+        hasher = hashlib.md5()
+        for poly in matched_profiles:
+            # Centroid
+            c = poly.centroid
+            hasher.update(f"centroid:{c.x:.6f},{c.y:.6f};".encode())
+            # Area
+            hasher.update(f"area:{poly.area:.6f};".encode())
+            # Exterior coords (vereinfacht)
+            coords = list(poly.exterior.coords)
+            for coord in coords[:10]:  # Max 10 Punkte pro Profil (Performance)
+                hasher.update(f"{coord[0]:.4f},{coord[1]:.4f};".encode())
+        
+        return hasher.hexdigest()
+    
     def _update_bodies_depending_on_sketch(self, sketch):
         """
         CAD Kernel First: Findet alle Bodies mit Features die von diesem Sketch
         abhängen und triggert Rebuild.
+        
+        OPTIMIERT: Prüft ob sich die tatsächlich verwendeten Profile geändert haben.
+        Wenn nur neue Profile hinzugefügt wurden (ohne die verwendeten zu ändern),
+        wird kein Rebuild durchgeführt.
 
         WICHTIG: Keine precalculated_polys Updates mehr!
         Profile werden beim Rebuild direkt aus dem Sketch abgeleitet.
@@ -2434,8 +2545,12 @@ class MainWindow(QMainWindow):
 
         sketch_id = getattr(sketch, 'id', None)
         bodies_to_rebuild = []
+        skipped_bodies = []
 
         for body in self.document.bodies:
+            needs_rebuild = False
+            body_uses_sketch = False
+            
             for feature in body.features:
                 # ExtrudeFeature oder RevolveFeature mit diesem Sketch?
                 if isinstance(feature, (ExtrudeFeature, RevolveFeature)):
@@ -2446,14 +2561,30 @@ class MainWindow(QMainWindow):
                         (feature_sketch and sketch_id and getattr(feature_sketch, 'id', None) == sketch_id)
                     )
 
-                    if is_same_sketch and body not in bodies_to_rebuild:
-                        bodies_to_rebuild.append(body)
-                        logger.debug(f"[PARAMETRIC] Body '{body.name}' depends on modified sketch")
+                    if is_same_sketch:
+                        body_uses_sketch = True
+                        # OPTIMIERUNG: Prüfe ob sich die verwendeten Profile wirklich geändert haben
+                        current_hash = self._compute_profile_hash(feature, sketch)
+                        stored_hash = getattr(feature, '_profile_hash', None)
+                        
+                        if current_hash != stored_hash:
+                            # Profile haben sich geändert oder Hash wurde noch nie gesetzt
+                            feature._profile_hash = current_hash
+                            needs_rebuild = True
+                            # Nur loggen wenn sich wirklich etwas geändert hat (nicht beim ersten Mal)
+                            if stored_hash is not None:
+                                logger.debug(f"[PARAMETRIC] Profile changed for '{body.name}'/{feature.name}")
+                        # else: Profile unverändert - kein Logging (zu chatty)
+            
+            if needs_rebuild and body not in bodies_to_rebuild:
+                bodies_to_rebuild.append(body)
+            elif body_uses_sketch and not needs_rebuild:
+                skipped_bodies.append(body.name)
 
         # Rebuild alle betroffenen Bodies
         # CAD KERNEL FIRST: Profile werden beim Rebuild aus dem Sketch abgeleitet!
         if bodies_to_rebuild:
-            logger.info(f"[PARAMETRIC] Rebuilding {len(bodies_to_rebuild)} bodies (Kernel First)...")
+            logger.info(f"[PARAMETRIC] Rebuilding {len(bodies_to_rebuild)} body/bodies, skipped {len(skipped_bodies)} (profiles unchanged)")
 
         for body in bodies_to_rebuild:
             try:
@@ -2662,6 +2793,7 @@ class MainWindow(QMainWindow):
 
         pos = self.viewport_3d._hole_position
         normal = self.viewport_3d._hole_normal
+        face_selector = getattr(self, '_hole_face_selector', None)
         if not pos or not normal:
             self.statusBar().showMessage("Keine Fläche ausgewählt!")
             return
@@ -2675,13 +2807,27 @@ class MainWindow(QMainWindow):
         depth = self.hole_panel.get_depth()
         hole_type = self.hole_panel.get_hole_type()
 
+        from modeling.tnp_system import ShapeID, ShapeType
+        
         feature = HoleFeature(
             hole_type=hole_type,
             diameter=diameter,
             depth=depth,
             position=pos,
             direction=tuple(-n for n in normal),  # drill INTO face
+            face_selectors=[face_selector] if face_selector else [],
         )
+        
+        # TNP v4.0: ShapeID für Face erstellen
+        if face_selector:
+            shape_id = ShapeID.create(
+                shape_type=ShapeType.FACE,
+                feature_id=feature.id,
+                local_index=0,
+                geometry_data=(0, 0, 0, 0)  # Placeholder
+            )
+            feature.face_shape_ids = [shape_id]
+            logger.debug(f"TNP v4.0: Face-ShapeID für Hole erstellt")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -2698,11 +2844,14 @@ class MainWindow(QMainWindow):
         """Hole-UI aufräumen."""
         self._hole_mode = False
         self._hole_target_body = None
+        self._hole_face_selector = None
         self.viewport_3d.set_hole_mode(False)
         self.hole_panel.hide()
 
     def _on_body_face_clicked_for_hole(self, body_id, cell_id, normal, position):
-        """Body-Face wurde im Hole-Modus geklickt."""
+        """Body-Face wurde im Hole-Modus geklickt.
+        TNP-robust: Erstellt GeometricFaceSelector für stabile Face-Referenzierung.
+        """
         if not self._hole_mode:
             return
 
@@ -2715,6 +2864,45 @@ class MainWindow(QMainWindow):
         self._hole_target_body = body
         self.viewport_3d._hole_position = tuple(position)
         self.viewport_3d._hole_normal = tuple(normal)
+        
+        # TNP-ROBUST: Erstelle GeometricFaceSelector vom Solid-Face
+        try:
+            from modeling.geometric_selector import GeometricFaceSelector
+            import numpy as np
+            
+            # Finde das echte Face im Solid
+            position_arr = np.array(position)
+            best_face = None
+            best_dist = float('inf')
+            
+            for solid_face in body._build123d_solid.faces():
+                try:
+                    fc = solid_face.center()
+                    solid_center = np.array([fc.X, fc.Y, fc.Z])
+                    dist = np.linalg.norm(solid_center - position_arr)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_face = solid_face
+                except:
+                    continue
+            
+            if best_face and best_dist < 5.0:
+                geo_selector = GeometricFaceSelector.from_face(best_face)
+                self._hole_face_selector = geo_selector.to_dict()
+                logger.debug(f"Hole: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
+            else:
+                # Fallback
+                self._hole_face_selector = {
+                    "center": list(position),
+                    "normal": list(normal),
+                    "area": 0.0,
+                    "surface_type": "unknown",
+                    "tolerance": 10.0
+                }
+                logger.warning(f"Hole: Konnte Face nicht finden, verwende Fallback")
+        except Exception as e:
+            logger.warning(f"Hole: Konnte GeometricFaceSelector nicht erstellen: {e}")
+            self._hole_face_selector = None
 
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
@@ -3246,6 +3434,46 @@ class MainWindow(QMainWindow):
         self._pushpull_face_normal = normal
         self._pushpull_face_center = position
 
+        # TNP-ROBUST: Finde Face im Solid und erstelle GeometricFaceSelector
+        try:
+            from modeling.geometric_selector import GeometricFaceSelector
+            import numpy as np
+            
+            # Finde das Face im Solid (anhand Position und Normal)
+            best_face = None
+            best_dist = float('inf')
+            position_arr = np.array(position)
+            
+            for face in body._build123d_solid.faces():
+                try:
+                    fc = face.center()
+                    face_center = np.array([fc.X, fc.Y, fc.Z])
+                    dist = np.linalg.norm(face_center - position_arr)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_face = face
+                except:
+                    continue
+            
+            if best_face and best_dist < 5.0:
+                # Erstelle GeometricFaceSelector für TNP-robuste Speicherung
+                geo_selector = GeometricFaceSelector.from_face(best_face)
+                self._pushpull_face_selector = geo_selector.to_dict()
+                logger.debug(f"PushPull: GeometricFaceSelector erstellt (area={geo_selector.area:.1f}, type={geo_selector.surface_type})")
+            else:
+                # Fallback: Einfachen Selector erstellen (nur center + normal)
+                self._pushpull_face_selector = {
+                    "center": list(position),
+                    "normal": list(normal),
+                    "area": 0.0,
+                    "surface_type": "unknown",
+                    "tolerance": 10.0
+                }
+                logger.warning(f"PushPull: Konnte Face nicht finden, verwende Fallback-Selector")
+        except Exception as e:
+            logger.warning(f"PushPull: Konnte GeometricFaceSelector nicht erstellen: {e}")
+            self._pushpull_face_selector = None
+
         # Find matching detected face for full-face highlight
         import numpy as np
         rounded = tuple(np.round(normal, 2))
@@ -3270,9 +3498,8 @@ class MainWindow(QMainWindow):
     def _update_pushpull_preview(self):
         """Live-Preview des PushPull-Ergebnisses."""
         body = getattr(self, '_pushpull_target_body', None)
-        center = getattr(self, '_pushpull_face_center', None)
-        normal = getattr(self, '_pushpull_face_normal', None)
-        if not body or not body._build123d_solid or center is None or normal is None:
+        face_selector = getattr(self, '_pushpull_face_selector', None)
+        if not body or not body._build123d_solid or face_selector is None:
             self.viewport_3d.clear_pushpull_preview()
             return
 
@@ -3286,10 +3513,15 @@ class MainWindow(QMainWindow):
                 return
 
             feature = PushPullFeature(
-                face_selector=(tuple(center), tuple(normal)),
+                face_selector=face_selector,
                 distance=distance,
             )
-            result_solid = body._compute_pushpull(feature, body._build123d_solid)
+            result = body._compute_pushpull(feature, body._build123d_solid)
+            # TNP v3.0: Handle tuple return (solid, history) oder nur solid
+            if isinstance(result, tuple):
+                result_solid, _ = result
+            else:
+                result_solid = result
             if result_solid is not None:
                 mesh, _ = CADTessellator.tessellate(result_solid)
                 self.viewport_3d.show_pushpull_preview(mesh)
@@ -3303,11 +3535,11 @@ class MainWindow(QMainWindow):
         """PushPull bestätigt — Feature erstellen."""
         from modeling import PushPullFeature
         from gui.commands.feature_commands import AddFeatureCommand
+        from modeling.tnp_system import ShapeID, ShapeType
 
         body = getattr(self, '_pushpull_target_body', None)
-        center = getattr(self, '_pushpull_face_center', None)
-        normal = getattr(self, '_pushpull_face_normal', None)
-        if not body or center is None or normal is None:
+        face_selector = getattr(self, '_pushpull_face_selector', None)
+        if not body or face_selector is None:
             self.statusBar().showMessage("Keine Face ausgewählt!")
             self._finish_pushpull_ui()
             return
@@ -3318,9 +3550,19 @@ class MainWindow(QMainWindow):
             return
 
         feature = PushPullFeature(
-            face_selector=(tuple(center), tuple(normal)),
+            face_selector=face_selector,
             distance=distance,
         )
+        
+        # TNP v4.0: ShapeID für Face erstellen
+        feature.face_shape_id = ShapeID.create(
+            shape_type=ShapeType.FACE,
+            feature_id=feature.id,
+            local_index=0,
+            geometry_data=(0, 0, 0, 0)  # Placeholder
+        )
+        logger.debug(f"TNP v4.0: Face-ShapeID für PushPull erstellt")
+
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
         self.statusBar().showMessage(f"PushPull {distance:+.1f}mm erstellt")
@@ -3338,6 +3580,7 @@ class MainWindow(QMainWindow):
         self._pushpull_target_body = None
         self._pushpull_face_center = None
         self._pushpull_face_normal = None
+        self._pushpull_face_selector = None
         self.viewport_3d.set_pushpull_mode(False)
         self.pushpull_panel.hide()
         # Sofortiges Update statt Timer - stellt sicher dass inactive_component korrekt gesetzt wird
@@ -3886,8 +4129,11 @@ class MainWindow(QMainWindow):
             self.viewport_3d.clear_draft_preview()
 
     def _on_draft_confirmed(self):
-        """Draft bestätigt — Feature erstellen."""
+        """Draft bestätigt — Feature erstellen.
+        TNP-robust: Erstellt GeometricFaceSelectors für stabile Face-Referenzierung.
+        """
         from modeling import DraftFeature
+        from modeling.geometric_selector import GeometricFaceSelector
         from gui.commands.feature_commands import AddFeatureCommand
 
         body = getattr(self, '_draft_target_body', None)
@@ -3904,14 +4150,71 @@ class MainWindow(QMainWindow):
         angle = self.draft_panel.get_angle()
         pull_dir = self.draft_panel.get_pull_direction()
 
-        # Sammle Face-Normalen für selektive Draft-Anwendung
-        face_normals = [tuple(f.get('normal', (0, 0, 0))) for f in faces]
+        # TNP-ROBUST: Erstelle GeometricFaceSelectors für jedes Face
+        face_selectors = []
+        for face_data in faces:
+            try:
+                # Berechne Face-Center aus den Daten
+                mesh = face_data.get('mesh')
+                cell_ids = face_data.get('cell_ids', [])
+                normal = face_data.get('normal', (0, 0, 1))
+                
+                if mesh and cell_ids and body._build123d_solid:
+                    # Berechne Center aus Mesh-Zellen
+                    cell_centers = mesh.cell_centers().points
+                    face_centers = cell_centers[cell_ids]
+                    center = np.mean(face_centers, axis=0)
+                    
+                    # Finde das echte Face im Solid
+                    best_face = None
+                    best_dist = float('inf')
+                    for solid_face in body._build123d_solid.faces():
+                        try:
+                            fc = solid_face.center()
+                            solid_center = np.array([fc.X, fc.Y, fc.Z])
+                            dist = np.linalg.norm(solid_center - center)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_face = solid_face
+                        except:
+                            continue
+                    
+                    if best_face and best_dist < 5.0:
+                        geo_selector = GeometricFaceSelector.from_face(best_face)
+                        face_selectors.append(geo_selector.to_dict())
+                    else:
+                        # Fallback
+                        face_selectors.append({
+                            "center": list(center),
+                            "normal": list(normal),
+                            "area": 0.0,
+                            "surface_type": "unknown",
+                            "tolerance": 10.0
+                        })
+            except Exception as e:
+                logger.warning(f"Draft: Konnte Face-Selector nicht erstellen: {e}")
+                continue
 
+        from modeling.tnp_system import ShapeID, ShapeType
+        
         feature = DraftFeature(
             draft_angle=angle,
             pull_direction=pull_dir,
-            face_selectors=[{'normal': n} for n in face_normals],
+            face_selectors=face_selectors,
         )
+        
+        # TNP v4.0: ShapeIDs für Faces erstellen
+        face_shape_ids = []
+        for i, _ in enumerate(face_selectors):
+            shape_id = ShapeID.create(
+                shape_type=ShapeType.FACE,
+                feature_id=feature.id,
+                local_index=i,
+                geometry_data=(0, 0, 0, 0)  # Placeholder
+            )
+            face_shape_ids.append(shape_id)
+        feature.face_shape_ids = face_shape_ids
+        logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Draft erstellt")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -4852,6 +5155,10 @@ class MainWindow(QMainWindow):
                             plane_x_dir=getattr(target_sketch, 'plane_x_dir', None),
                             plane_y_dir=getattr(target_sketch, 'plane_y_dir', None),
                         )
+                        
+                        # Initialen Profile-Hash setzen für Performance-Optimierung
+                        # (verhindert unnötige Rebuilds wenn sich der Sketch ändert)
+                        feature._profile_hash = self._compute_profile_hash(feature, target_sketch)
 
                         try:
                             cmd = AddFeatureCommand(
@@ -5252,6 +5559,7 @@ class MainWindow(QMainWindow):
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_FACE
             from OCP.TopoDS import TopoDS
+            from modeling.geometric_selector import GeometricFaceSelector
 
             # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
             b3d_obj = source_body._build123d_solid
@@ -5362,6 +5670,15 @@ class MainWindow(QMainWindow):
                 return False
 
             logger.info(f"Face gefunden: dist={best_dist:.3f}")
+
+            # TNP v3.0: Face-Selector für BRepFeat-Operationen erstellen
+            try:
+                face_selector = GeometricFaceSelector.from_face(best_face)
+                face_selector_dict = face_selector.to_dict()
+                logger.debug(f"TNP: GeometricFaceSelector erstellt: center={face_selector.center}")
+            except Exception as sel_e:
+                logger.warning(f"TNP: Konnte GeometricFaceSelector nicht erstellen: {sel_e}")
+                face_selector_dict = None
 
             # DEBUG: Prüfe Wire-Struktur des gefundenen Faces
             try:
@@ -5509,6 +5826,21 @@ class MainWindow(QMainWindow):
                         if is_valid and volume_valid:
                             # ERFOLG! Direkt das Ergebnis verwenden - keine Boolean nötig!
                             logger.info(f"✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)")
+                            
+                            # === TNP v4.0: BRepFeat Operation tracken ===
+                            try:
+                                if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
+                                    service = self.document._shape_naming_service
+                                    service.track_brepfeat_operation(
+                                        feature_id=str(uuid.uuid4())[:8],  # Wird später durch echte Feature-ID ersetzt
+                                        source_solid=source_body._build123d_solid,
+                                        result_solid=new_solid,
+                                        modified_face=best_face,
+                                        direction=(float(face_normal.X), float(face_normal.Y), float(face_normal.Z)),
+                                        distance=abs(height)
+                                    )
+                            except Exception as tnp_e:
+                                logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
 
                             # Feature erstellen
                             from modeling import ExtrudeFeature
@@ -5525,7 +5857,8 @@ class MainWindow(QMainWindow):
                                 plane_x_dir=plane_x_dir if polygon is not None else None,
                                 plane_y_dir=plane_y_dir if polygon is not None else None,
                                 face_brep=face_brep_str,
-                                face_type=face_type_str
+                                face_type=face_type_str,
+                                face_selector=face_selector_dict  # TNP v3.0: Für BRepFeat-Operationen
                             )
 
                             # Body direkt aktualisieren (KEIN Boolean!)
@@ -5712,7 +6045,8 @@ class MainWindow(QMainWindow):
                             plane_origin=plane_origin,
                             plane_normal=plane_normal,
                             plane_x_dir=plane_x_dir if polygon is not None else None,
-                            plane_y_dir=plane_y_dir if polygon is not None else None
+                            plane_y_dir=plane_y_dir if polygon is not None else None,
+                            face_selector=face_selector_dict  # TNP v3.0: Für BRepFeat-Operationen
                         )
 
                         # KRITISCH: AddFeatureCommand für korrektes Undo/Redo!
@@ -6630,6 +6964,7 @@ class MainWindow(QMainWindow):
 
     def _new_project(self):
         self.document = Document("Projekt1")
+        self._setup_tnp_debug_callback()  # TNP v4.0: Callback neu registrieren
         self.browser.set_document(self.document)
         self._set_mode("3d")
     
@@ -6697,6 +7032,7 @@ class MainWindow(QMainWindow):
             if doc:
                 # Altes Dokument ersetzen
                 self.document = doc
+                self._setup_tnp_debug_callback()  # TNP v4.0: Callback neu registrieren
                 self._current_project_path = path
 
                 # UI aktualisieren
@@ -7227,7 +7563,7 @@ class MainWindow(QMainWindow):
 
     def _create_pattern(self):
         """
-        Erstellt Linear oder Circular Pattern (Fusion 360-Style).
+        Erstellt Linear oder Circular Pattern (CAD-Style).
         Erzeugt N Kopien des selektierten Bodies mit Transform-Features.
         """
         # Body-Selektion prüfen
@@ -7809,7 +8145,7 @@ class MainWindow(QMainWindow):
                 logger.debug("Smart Redo: 3D UndoStack")
 
     def _show_parameters_dialog(self):
-        """Öffnet den Parameter-Dialog (Fusion 360-Style)."""
+        """Öffnet den Parameter-Dialog (Style)."""
         from core.parameters import get_parameters
 
         params = get_parameters()
@@ -8045,6 +8381,7 @@ class MainWindow(QMainWindow):
         try:
             from gui.commands.feature_commands import AddFeatureCommand
             from modeling.geometric_selector import create_geometric_selectors_from_edges
+            from modeling.tnp_system import ShapeID, ShapeType
 
             # Legacy Point-Selectors (backward-compat)
             # Bei "alle Kanten" wird selectors leer sein - das ist OK
@@ -8071,7 +8408,7 @@ class MainWindow(QMainWindow):
                     logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
                     break
 
-            # Feature erstellen
+            # Feature erstellen (ZUERST - damit es eine ID bekommt)
             if mode == "chamfer":
                 feature = ChamferFeature(
                     distance=radius,
@@ -8088,6 +8425,27 @@ class MainWindow(QMainWindow):
                     ocp_edge_shapes=ocp_edge_shapes,
                     depends_on_feature_id=depends_on_feature_id
                 )
+            
+            # TNP v4.0: ShapeIDs für ausgewählte Edges finden (nicht neu erstellen!)
+            edge_shape_ids = []
+            if body._document and hasattr(body._document, '_shape_naming_service'):
+                service = body._document._shape_naming_service
+                for edge in edges:
+                    # Finde existierende ShapeID für diese Edge
+                    shape_id = service.find_shape_id_by_edge(edge)
+                    if shape_id:
+                        edge_shape_ids.append(shape_id)
+                        logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
+                    else:
+                        logger.warning("TNP v4.0: Keine ShapeID für Edge gefunden!")
+            else:
+                logger.warning("TNP v4.0: Kein NamingService verfügbar")
+            
+            feature.edge_shape_ids = edge_shape_ids
+            logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
+
+            # TNP v4.0: Keine zusätzliche Registrierung nötig
+            # ShapeIDs wurden bereits vom Extrude/PushPull registriert
 
             # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             # Das ruft body.add_feature() auf, was _rebuild() triggert.
@@ -8209,6 +8567,7 @@ class MainWindow(QMainWindow):
     def _on_face_selected_for_shell(self, face_id):
         """
         Callback wenn eine Fläche für Shell ausgewählt wird.
+        TNP-robust: Erstellt GeometricFaceSelector für stabile Referenzierung.
         """
         logger.debug(f"Shell: _on_face_selected_for_shell aufgerufen mit face_id={face_id}")
 
@@ -8229,31 +8588,69 @@ class MainWindow(QMainWindow):
             logger.warning(f"Shell: Nur Body-Flächen erlaubt, aber domain_type={face.domain_type}")
             return
 
-        # Face-Center als Selektor speichern (für TNP)
-        # Für Body-Faces nutzen wir plane_origin als Fallback wenn kein Shapely-Polygon
-        face_center = None
-
-        if face.shapely_poly:
-            centroid = face.shapely_poly.centroid
-            # Transformiere 2D zu 3D
-            plane_x = np.array(face.plane_x)
-            plane_y = np.array(face.plane_y)
-            origin = np.array(face.plane_origin)
-            face_center = origin + centroid.x * plane_x + centroid.y * plane_y
-        elif hasattr(face, 'plane_origin') and face.plane_origin is not None:
-            # Fallback: Nutze plane_origin direkt (für Body-Faces)
-            face_center = np.array(face.plane_origin)
-            logger.debug(f"Shell: Nutze plane_origin als Face-Center: {face_center}")
-        else:
-            logger.warning(f"Shell: Face hat weder shapely_poly noch plane_origin - kann nicht verwendet werden")
+        # TNP-ROBUST: Erstelle GeometricFaceSelector vom Solid-Face
+        try:
+            from modeling.geometric_selector import GeometricFaceSelector
+            
+            # Finde das echte Face im Solid
+            body = self._shell_target_body
+            if not body or not body._build123d_solid:
+                return
+                
+            # Berechne Face-Center für Matching
+            face_center = None
+            if face.shapely_poly:
+                centroid = face.shapely_poly.centroid
+                plane_x = np.array(face.plane_x)
+                plane_y = np.array(face.plane_y)
+                origin = np.array(face.plane_origin)
+                face_center = origin + centroid.x * plane_x + centroid.y * plane_y
+            elif hasattr(face, 'plane_origin') and face.plane_origin is not None:
+                face_center = np.array(face.plane_origin)
+            else:
+                logger.warning(f"Shell: Kann Face-Center nicht bestimmen")
+                return
+            
+            # Finde das Face im Solid
+            best_face = None
+            best_dist = float('inf')
+            for solid_face in body._build123d_solid.faces():
+                try:
+                    fc = solid_face.center()
+                    solid_center = np.array([fc.X, fc.Y, fc.Z])
+                    dist = np.linalg.norm(solid_center - face_center)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_face = solid_face
+                except:
+                    continue
+            
+            if best_face and best_dist < 5.0:
+                # Erstelle GeometricFaceSelector
+                geo_selector = GeometricFaceSelector.from_face(best_face)
+                face_selector = geo_selector.to_dict()
+                logger.debug(f"Shell: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
+            else:
+                # Fallback: Einfacher Dict
+                face_selector = {
+                    "center": list(face_center),
+                    "normal": list(face.plane_normal),
+                    "area": 0.0,
+                    "surface_type": "unknown",
+                    "tolerance": 10.0
+                }
+                logger.warning(f"Shell: Konnte Face nicht finden, verwende Fallback")
+                
+        except Exception as e:
+            logger.warning(f"Shell: Konnte GeometricFaceSelector nicht erstellen: {e}")
             return
 
-        face_selector = (tuple(face_center), tuple(face.plane_normal))
-
-        # Prüfen ob schon ausgewählt (Toggle-Verhalten)
+        # Prüfen ob schon ausgewählt (Toggle-Verhalten) - Vergleiche mit center
         already_selected = False
-        for i, (fc, fn) in enumerate(self._shell_opening_faces):
-            if np.linalg.norm(np.array(fc) - face_center) < 0.1:
+        center_arr = np.array(face_selector["center"])
+        for i, existing_sel in enumerate(self._shell_opening_faces):
+            existing_center = np.array(existing_sel.get("center", [0,0,0]))
+            if np.linalg.norm(existing_center - center_arr) < 0.1:
                 # Bereits ausgewählt → entfernen
                 self._shell_opening_faces.pop(i)
                 already_selected = True
@@ -8286,12 +8683,27 @@ class MainWindow(QMainWindow):
 
         try:
             from gui.commands.feature_commands import AddFeatureCommand
+            from modeling.tnp_system import ShapeID, ShapeType
 
             # Shell Feature erstellen
             shell_feature = ShellFeature(
                 thickness=thickness,
                 opening_face_selectors=self._shell_opening_faces.copy()
             )
+            
+            # TNP v4.0: ShapeIDs für Faces erstellen
+            face_shape_ids = []
+            for i, _ in enumerate(self._shell_opening_faces):
+                # Dummy geometry_data für Faces
+                shape_id = ShapeID.create(
+                    shape_type=ShapeType.FACE,
+                    feature_id=shell_feature.id,
+                    local_index=i,
+                    geometry_data=(0, 0, 0, 0)  # Placeholder
+                )
+                face_shape_ids.append(shape_id)
+            shell_feature.face_shape_ids = face_shape_ids
+            logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Shell erstellt")
 
             # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             cmd = AddFeatureCommand(body, shell_feature, self, description=f"Shell ({thickness}mm)")
@@ -9559,7 +9971,7 @@ class MainWindow(QMainWindow):
         Öffnet/Schließt Section View Panel.
 
         User-Story: "ich brauchte für körper noch schnittansicht um besser zu prüfen ob cuts gingen"
-        Implementierung: Fusion 360-ähnliche Section Analysis mit Clipping Planes
+        Implementierung: Cad-ähnliche Section Analysis mit Clipping Planes
         """
         if self.section_panel.isVisible():
             # Deaktiviere Section View

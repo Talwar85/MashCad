@@ -692,6 +692,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.hovered_entity = None
         self._last_hovered_entity = None
 
+        # Constraint Selection Highlighting (für 2-Entity Constraints)
+        self._constraint_highlighted_entity = None
+        self._constraint_highlight_color = QColor(0, 255, 255)  # Cyan
+
         # Editing State für Dimension-Input statt QInputDialog
         self.editing_entity = None  # Objekt das gerade bearbeitet wird (Line, Circle, Constraint)
         self.editing_mode = None    # "length", "radius", "angle", "dimension" etc.
@@ -733,7 +737,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input_active = False
         self.viewport = None
 
-        # Canvas / Bildreferenz (Fusion 360-Style)
+        # Canvas / Bildreferenz (CAD-Style)
         self.canvas_image = None        # QPixmap
         self.canvas_world_rect = None   # QRectF in Weltkoordinaten
         self.canvas_opacity = 0.4
@@ -3176,14 +3180,31 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input.unlock_all()  # Locks zurücksetzen!
         self.dim_input_active = False
         # NICHT tool_options.hide() - Palette bleibt sichtbar solange Tool aktiv!
-        
+
         # Offset-Tool Reset
         self.offset_dragging = False
         self.offset_profile = None
         self.offset_start_pos = None
         self.offset_preview_lines = []
-        
+
+        # Constraint Highlight zurücksetzen
+        self._clear_constraint_highlight()
+
         self.request_update()
+
+    def _highlight_constraint_entity(self, entity):
+        """
+        Hebt eine Entity für 2-Entity Constraint Auswahl hervor.
+        Zeigt dem User visuell welches Element bereits ausgewählt ist.
+        """
+        self._constraint_highlighted_entity = entity
+        self.request_update()
+
+    def _clear_constraint_highlight(self):
+        """Entfernt das Constraint-Selection Highlight."""
+        if self._constraint_highlighted_entity is not None:
+            self._constraint_highlighted_entity = None
+            self.request_update()
     
     def _update_cursor(self):
         if self.current_tool == SketchTool.SELECT: self.setCursor(Qt.ArrowCursor)
@@ -4529,7 +4550,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _handle_escape_logic(self):
         """
-        Hierarchisches Beenden von Aktionen (Fusion 360-Style).
+        Hierarchisches Beenden von Aktionen (CAD-Style).
         Jeder Escape bricht nur EINE Ebene ab:
         0. Canvas-Kalibrierung abbrechen
         1. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)

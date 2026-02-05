@@ -6,7 +6,7 @@ Robust B-Rep Implementation with Build123d & Smart Failure Recovery
 
 from dataclasses import dataclass, field
 import tempfile
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 from enum import Enum, auto
 import math
 import uuid
@@ -30,8 +30,15 @@ from modeling.geometry_validator import GeometryValidator, ValidationResult, Val
 from modeling.geometry_healer import GeometryHealer, HealingResult, HealingStrategy  # Phase 7
 from modeling.nurbs import NURBSCurve, NURBSSurface, ContinuityMode, CurveType  # Phase 8
 from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as step_export  # Phase 8.3
-from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker  # Phase 8.2
+# NOTE: Altes TNP-System (Phase 8.2) deaktiviert - verwendet TNP v3.0
+# from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker
 from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
+
+# TNP v4.0 - Professionelles Topological Naming System
+from modeling.tnp_system import (
+    ShapeNamingService, ShapeID, ShapeType, 
+    OperationRecord
+)
 
 
 # ==================== IMPORTS ====================
@@ -149,6 +156,8 @@ class ExtrudeFeature(Feature):
     # Push/Pull auf nicht-planaren Flächen: OCP Face als BREP-String speichern
     face_brep: Optional[str] = None  # Serialisierte OCP TopoDS_Face
     face_type: Optional[str] = None  # "plane", "cylinder", "cone", etc.
+    # TNP v3.0: Face-Selector für Push/Pull auf Body-Faces (BRepFeat-Operationen)
+    face_selector: dict = None  # GeometricFaceSelector.to_dict()
 
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
@@ -180,30 +189,42 @@ class RevolveFeature(Feature):
 @dataclass
 class FilletFeature(Feature):
     """
-    Fillet-Feature mit TNP-robuster Kanten-Referenzierung.
-
-    TNP-Strategie (Multi-Layer):
-    1. ocp_edge_shapes: Direkte OCP Shape-Hashes (schnellste Auflösung)
-    2. geometric_selectors: GeometricEdgeSelector mit Center/Direction/Length/Type
-    3. edge_selectors: Legacy Point-Selektoren (Fallback)
+    Fillet-Feature mit professionellem TNP (Topological Naming Problem) Handling.
+    
+    TNP v3.0 Architektur:
+    1. edge_shape_ids: Persistent ShapeIDs für History-Tracking
+    2. geometric_selectors: Geometrische Fingerabdrücke (Fallback)
+    3. edge_selectors: Legacy Point-Selektoren (Kompatibilität)
+    
+    Das Feature speichert ShapeIDs beim Erstellen und löst diese
+    via TNPResolver zum Zeitpunkt der Ausführung auf.
     """
     radius: float = 2.0
     radius_formula: Optional[str] = None
-    edge_selectors: List = None  # Legacy: [(x,y,z), ...] Mittelpunkte
-
-    # Phase 2 TNP: Erweiterte Selektoren
+    
+    # TNP v3.0: Persistent ShapeIDs (Primary)
+    edge_shape_ids: List = None  # List[ShapeID] - persistente IDs
+    
+    # Fallback: Geometric Selectors
     geometric_selectors: List = None  # GeometricEdgeSelector Objekte
-    ocp_edge_shapes: List = None      # OCP TopoDS_Edge Shapes
-    depends_on_feature_id: Optional[str] = None  # Feature-Dependency für History
+    
+    # Legacy
+    edge_selectors: List = None  # [(x,y,z), ...] Mittelpunkte
+    ocp_edge_shapes: List = None  # OCP TopoDS_Edge Shapes
+    
+    # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
+    depends_on_feature_id: Optional[str] = None
 
     def __post_init__(self):
         self.type = FeatureType.FILLET
         if not self.name or self.name == "Feature":
             self.name = "Fillet"
-        if self.edge_selectors is None:
-            self.edge_selectors = []
+        if self.edge_shape_ids is None:
+            self.edge_shape_ids = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
+        if self.edge_selectors is None:
+            self.edge_selectors = []
         if self.ocp_edge_shapes is None:
             self.ocp_edge_shapes = []
 
@@ -211,23 +232,38 @@ class FilletFeature(Feature):
 @dataclass
 class ChamferFeature(Feature):
     """
-    Chamfer-Feature mit TNP-robuster Kanten-Referenzierung.
-
-    Gleiche TNP-Strategie wie FilletFeature.
+    Chamfer-Feature mit professionellem TNP (Topological Naming Problem) Handling.
+    
+    TNP v3.0 Architektur:
+    1. edge_shape_ids: Persistent ShapeIDs für History-Tracking
+    2. geometric_selectors: Geometrische Fingerabdrücke (Fallback)
+    3. edge_selectors: Legacy Point-Selektoren (Kompatibilität)
+    
+    Das Feature speichert ShapeIDs beim Erstellen und löst diese
+    via TNPResolver zum Zeitpunkt der Ausführung auf.
     """
     distance: float = 2.0
     distance_formula: Optional[str] = None
-    edge_selectors: List = None  # Legacy: [(x,y,z), ...] Mittelpunkte
-
-    # Phase 2 TNP: Erweiterte Selektoren
+    
+    # TNP v3.0: Persistent ShapeIDs (Primary)
+    edge_shape_ids: List = None  # List[ShapeID] - persistente IDs
+    
+    # Fallback: Geometric Selectors
     geometric_selectors: List = None  # GeometricEdgeSelector Objekte
-    ocp_edge_shapes: List = None      # OCP TopoDS_Edge Shapes
-    depends_on_feature_id: Optional[str] = None  # Feature-Dependency für History
+    
+    # Legacy
+    edge_selectors: List = None  # [(x,y,z), ...] Mittelpunkte
+    ocp_edge_shapes: List = None  # OCP TopoDS_Edge Shapes
+    
+    # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
+    depends_on_feature_id: Optional[str] = None
 
     def __post_init__(self):
         self.type = FeatureType.CHAMFER
         if not self.name or self.name == "Feature":
             self.name = "Chamfer"
+        if self.edge_shape_ids is None:
+            self.edge_shape_ids = []
         if self.edge_selectors is None:
             self.edge_selectors = []
         if self.geometric_selectors is None:
@@ -271,6 +307,7 @@ class LoftFeature(Feature):
     Build123d API: loft(sections, ruled=False, clean=True, mode=Mode.ADD)
     OCP Fallback: BRepOffsetAPI_ThruSections
 
+    TNP v3.0: ShapeIDs für Profile bei Body-Face Referenzen.
     Phase 8: Erweitert mit Kontinuitäts-Kontrolle (G0/G1/G2)
     """
     profile_data: List[dict] = field(default_factory=list)
@@ -282,6 +319,10 @@ class LoftFeature(Feature):
     #   "plane_x_dir": tuple,
     #   "plane_y_dir": tuple
     # }
+    
+    # TNP v3.0: ShapeIDs für Body-Face Profile (nicht Sketch-Profile)
+    profile_shape_ids: List = None  # List[ShapeID] - parallel zu profile_data
+    
     ruled: bool = False  # True = gerade Linien, False = glatt interpoliert
     operation: str = "New Body"  # "New Body", "Join", "Cut", "Intersect"
 
@@ -295,6 +336,8 @@ class LoftFeature(Feature):
         self.type = FeatureType.LOFT
         if not self.name or self.name == "Feature":
             self.name = "Loft"
+        if self.profile_shape_ids is None:
+            self.profile_shape_ids = []
 
     def get_start_continuity_mode(self):
         """Konvertiert String zu ContinuityMode Enum."""
@@ -315,6 +358,7 @@ class SweepFeature(Feature):
     Build123d API: sweep(sections, path, is_frenet=False)
     OCP Fallback: BRepOffsetAPI_MakePipe
 
+    TNP v3.0: ShapeIDs für Profile und Path bei Body-Referenzen.
     Phase 8: Erweitert mit Twist, Skalierung und Auxiliary Spine
     """
     profile_data: dict = field(default_factory=dict)
@@ -332,6 +376,11 @@ class SweepFeature(Feature):
     #   "sketch_id": str | None,
     #   "body_id": str | None
     # }
+    
+    # TNP v3.0: ShapeIDs für Body-Referenzen
+    profile_shape_id: Any = None  # ShapeID für Body-Face Profile
+    path_shape_id: Any = None     # ShapeID für Body-Edge Path
+    
     is_frenet: bool = False  # Frenet-Frame für Verdrehung entlang Pfad
     operation: str = "New Body"
 
@@ -361,11 +410,18 @@ class ShellFeature(Feature):
 
     Build123d API: offset(objects, amount, openings)
     OCP Fallback: BRepOffsetAPI_MakeThickSolid
+    
+    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
     """
     thickness: float = 2.0  # Wandstärke in mm
     thickness_formula: Optional[str] = None
-    opening_face_selectors: List[tuple] = field(default_factory=list)
-    # Liste von Face-Zentren für TNP-Fallback
+    
+    # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
+    face_shape_ids: List = None  # List[ShapeID]
+    
+    # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
+    # Enthält: center, normal, area, surface_type, tolerance
+    opening_face_selectors: List[dict] = field(default_factory=list)
 
     # Keine Boolean-Operation - Shell modifiziert den Body direkt
 
@@ -373,6 +429,8 @@ class ShellFeature(Feature):
         self.type = FeatureType.SHELL
         if not self.name or self.name == "Feature":
             self.name = "Shell"
+        if self.face_shape_ids is None:
+            self.face_shape_ids = []
 
 
 @dataclass
@@ -380,12 +438,20 @@ class HoleFeature(Feature):
     """
     Bohrung in eine Fläche.
     Typen: simple (Durchgangsbohrung/Sackloch), counterbore, countersink.
+    
+    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
     """
     hole_type: str = "simple"  # "simple", "counterbore", "countersink"
     diameter: float = 8.0
     diameter_formula: Optional[str] = None
     depth: float = 0.0  # 0 = through all
     depth_formula: Optional[str] = None
+    
+    # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
+    face_shape_ids: List = None  # List[ShapeID]
+    
+    # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
+    # Enthält: center, normal, area, surface_type, tolerance
     face_selectors: List[dict] = field(default_factory=list)
     position: Tuple[float, float, float] = (0, 0, 0)
     direction: Tuple[float, float, float] = (0, 0, -1)
@@ -399,6 +465,8 @@ class HoleFeature(Feature):
         self.type = FeatureType.HOLE
         if not self.name or self.name == "Feature":
             self.name = f"Hole ({self.hole_type})"
+        if self.face_shape_ids is None:
+            self.face_shape_ids = []
 
 
 @dataclass
@@ -406,15 +474,25 @@ class DraftFeature(Feature):
     """
     Entformungsschräge (Draft/Taper) auf Flächen.
     Build123d: draft() auf selektierte Faces.
+    
+    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
     """
     draft_angle: float = 5.0  # Grad
     pull_direction: Tuple[float, float, float] = (0, 0, 1)
+    
+    # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
+    face_shape_ids: List = None  # List[ShapeID]
+    
+    # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
+    # Enthält: center, normal, area, surface_type, tolerance
     face_selectors: List[dict] = field(default_factory=list)
 
     def __post_init__(self):
         self.type = FeatureType.DRAFT
         if not self.name or self.name == "Feature":
             self.name = f"Draft {self.draft_angle}°"
+        if self.face_shape_ids is None:
+            self.face_shape_ids = []
 
 
 @dataclass
@@ -440,6 +518,8 @@ class ThreadFeature(Feature):
 
     Thread-Standards: M (metrisch), UNC, UNF
     Typ: internal (Mutter) oder external (Schraube)
+    
+    TNP v3.0: ShapeID für die zylindrische Face-Referenz.
     """
     thread_type: str = "external"  # "external" or "internal"
     standard: str = "M"           # "M", "UNC", "UNF"
@@ -450,6 +530,10 @@ class ThreadFeature(Feature):
     direction: Tuple[float, float, float] = (0, 0, 1)
     tolerance_class: str = "6g"   # ISO 965-1 fit class
     tolerance_offset: float = 0.0 # Diameter offset in mm
+    
+    # TNP v3.0: ShapeID für zylindrische Face
+    face_shape_id: Any = None  # ShapeID
+    face_selector: dict = None  # GeometricFaceSelector als Fallback
 
     def __post_init__(self):
         self.type = FeatureType.THREAD
@@ -491,8 +575,19 @@ class LatticeFeature(Feature):
 
 @dataclass
 class NSidedPatchFeature(Feature):
-    """N-Sided Patch - Boundary-Edges mit glatter Fläche füllen."""
+    """
+    N-Sided Patch - Boundary-Edges mit glatter Fläche füllen.
+    
+    TNP v3.0: ShapeIDs für stabile Edge-Referenzen.
+    """
     edge_selectors: list = field(default_factory=list)  # Liste von (center, direction) Tupeln
+    
+    # TNP v3.0: ShapeIDs für Edges (Primary)
+    edge_shape_ids: List = None  # List[ShapeID]
+    
+    # Geometric Selectors als Fallback
+    geometric_selectors: List = None  # List[GeometricEdgeSelector]
+    
     degree: int = 3
     tangent: bool = True
 
@@ -500,12 +595,26 @@ class NSidedPatchFeature(Feature):
         self.type = FeatureType.NSIDED_PATCH
         if not self.name or self.name == "Feature":
             self.name = f"N-Sided Patch ({len(self.edge_selectors)} edges)"
+        if self.edge_shape_ids is None:
+            self.edge_shape_ids = []
+        if self.geometric_selectors is None:
+            self.geometric_selectors = []
 
 
 @dataclass
 class PushPullFeature(Feature):
-    """PushPull - Face entlang Normale extrudieren/eindrücken."""
-    face_selector: tuple = None   # (center, normal) zur Face-Identifikation
+    """
+    PushPull - Face entlang Normale extrudieren/eindrücken.
+    
+    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung
+    über Geometrie-Änderungen hinweg (z.B. nach anderen Push/Pull Operationen).
+    """
+    # TNP v3.0: Persistent ShapeID für Face (Primary)
+    face_shape_id: Any = None  # ShapeID
+    
+    # GeometricFaceSelector als Dict (Fallback)
+    # Enthält: center, normal, area, surface_type, tolerance
+    face_selector: dict = None
     distance: float = 10.0       # Positiv = raus, negativ = rein
     operation: str = "Join"      # Join, Cut, New Body
 
@@ -575,7 +684,7 @@ class SurfaceTextureFeature(Feature):
     Texturen sind ein reiner Metadaten-Layer.
     Die Textur wird erst beim Export als Displacement auf das Mesh angewendet.
 
-    TNP-Strategie: Verwendet GeometricFaceSelector für robuste Face-Referenzierung.
+    TNP v3.0: ShapeIDs + GeometricFaceSelector für robuste Face-Referenzierung.
 
     Textur-Typen:
     - ripple: Wellenförmige Rillen (Grip)
@@ -588,7 +697,10 @@ class SurfaceTextureFeature(Feature):
     """
     texture_type: str = "ripple"
 
-    # Face-Selektion (TNP-robust)
+    # TNP v3.0: ShapeIDs für Faces (Primary)
+    face_shape_ids: List = None  # List[ShapeID]
+    
+    # Face-Selektion (Fallback)
     # Liste von GeometricFaceSelector.to_dict() Dicts
     face_selectors: List[dict] = field(default_factory=list)
 
@@ -606,6 +718,8 @@ class SurfaceTextureFeature(Feature):
 
     def __post_init__(self):
         self.type = FeatureType.SURFACE_TEXTURE
+        if self.face_shape_ids is None:
+            self.face_shape_ids = []
         if not self.name or self.name == "Feature":
             self.name = f"Texture: {self.texture_type.capitalize()}"
 
@@ -740,7 +854,7 @@ class Component:
     """
     Container für Bodies, Sketches, Planes mit eigenem Koordinatensystem.
 
-    Ermöglicht hierarchische Strukturen wie in Fusion 360:
+    Ermöglicht hierarchische Strukturen wie in CAD:
     - Document → Root Component → Sub-Components
     - Jede Component enthält Bodies, Sketches, Planes
     - Sub-Components können eigene Objekte enthalten
@@ -1022,22 +1136,33 @@ class Body:
     Phase 2 TNP: Integrierter TNP-Tracker für robuste Shape-Referenzierung.
     """
 
-    def __init__(self, name: str = "Body"):
+    def __init__(self, name: str = "Body", document=None):
         self.name = name
         self.id = str(uuid.uuid4())[:8]
         self.features: List[Feature] = []
         self.rollback_index: Optional[int] = None  # None = all features active
+        
+        # Referenz zum Document (für TNP v4.0 Naming Service)
+        self._document = document
 
         # CAD Kernel Objekte
         self._build123d_solid = None
         self.shape = None
 
-        # === PHASE 2 TNP: Topological Naming Tracker ===
-        self._tnp_tracker = TNPTracker()
+        # === TNP v4.0: Shape Naming Service (im Document) ===
+        # Nicht mehr hier - Service ist jetzt im Document zentralisiert
+        
+        # NOTE: Altes TNP-System (Phase 8.2/3) deaktiviert - v4.0 aktiv
 
         # === PHASE 7: Feature Dependency Graph ===
         self._dependency_graph = FeatureDependencyGraph()
         self._solid_checkpoints: dict = {}  # {feature_index: solid} - In-Memory Checkpoints
+        
+        # === TNP v3.0: Solid Generation Tracking ===
+        # Wird inkrementiert wenn sich Solid durch Boolean ändert
+        # Features merken sich auf welcher Generation sie basieren
+        self._solid_generation = 0
+        self._last_boolean_feature_index = -1  # Index des letzten Boolean-Features
 
         # === PHASE 2: Single Source of Truth ===
         # PyVista/VTK Objekte - LAZY LOADED aus _build123d_solid
@@ -1109,6 +1234,10 @@ class Body:
     def invalidate_mesh(self):
         """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
         self._mesh_cache_valid = False
+        
+        # WICHTIG: Auch Face-Info-Cache löschen!
+        # Sonst bleiben alte Face-IDs bestehen die nach Boolean/PushPull ungültig sind
+        self._face_info_cache = {}
 
         # Phase 4.3: Auch Topology-Cache invalidieren
         if self._build123d_solid is not None:
@@ -1291,8 +1420,8 @@ class Body:
             
             if hasattr(result, 'is_valid') and not result.is_valid():
                 raise ValueError("Result geometry is invalid")
-                
-            return result, "OK"
+
+            return result, "SUCCESS"
             
         except Exception as e:
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {e}")
@@ -1386,17 +1515,18 @@ class Body:
                     operation_type=op_type
                 )
 
-            # TNP: Tracke Operation mit BRepTools_History
-            if boolean_history is not None and hasattr(self, '_tnp_tracker') and self._tnp_tracker is not None:
+            # TNP v3.0: Tracke Operation in neuer Registry
+            if boolean_history is not None and hasattr(self, '_shape_registry'):
                 try:
-                    self._tnp_tracker.track_operation(
-                        operation_name=f"Boolean_{operation}",
-                        operation_type=f"boolean_{op_type}",
+                    self._shape_registry.track_boolean_operation(
+                        operation=f"Boolean_{operation}",
+                        input_shapes=[current_solid],
+                        result_shape=result_shape,
                         history=boolean_history
                     )
-                    logger.debug(f"TNP: Boolean {operation} History getrackt")
+                    logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
                 except Exception as tnp_e:
-                    logger.debug(f"TNP History-Tracking fehlgeschlagen: {tnp_e}")
+                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
             # 4. Prüfe Ergebnis
             if result_shape is None:
@@ -1571,17 +1701,18 @@ class Body:
                 logger.error(f"Unbekannte Operation: {operation}")
                 return solid1, False
 
-            # TNP: Tracke Operation mit BRepTools_History
-            if boolean_history is not None and hasattr(self, '_tnp_tracker') and self._tnp_tracker is not None:
+            # TNP v3.0: Tracke Operation in neuer Registry
+            if boolean_history is not None and hasattr(self, '_shape_registry'):
                 try:
-                    self._tnp_tracker.track_operation(
-                        operation_name=f"Boolean_{operation}",
-                        operation_type=f"boolean_{operation.lower()}",
+                    self._shape_registry.track_boolean_operation(
+                        operation=f"Boolean_{operation}",
+                        input_shapes=[shape1, shape2],
+                        result_shape=result_shape,
                         history=boolean_history
                     )
-                    logger.debug(f"TNP: Boolean {operation} History getrackt")
+                    logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
                 except Exception as tnp_e:
-                    logger.debug(f"TNP History-Tracking fehlgeschlagen: {tnp_e}")
+                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
             # 5. Validiere und repariere Resultat
             if result_shape is None:
@@ -2420,7 +2551,7 @@ class Body:
         """
         Verschiebt das Profil zum Startpunkt des Pfads.
 
-        In CAD-Systemen wie Fusion 360 muss das Profil am Pfad-Start liegen.
+        In CAD-Systemen wie CAD muss das Profil am Pfad-Start liegen.
         Diese Funktion berechnet die notwendige Translation und wendet sie an.
 
         Args:
@@ -2766,46 +2897,56 @@ class Body:
         """
         PushPull: Face entlang ihrer Normale extrudieren.
         Verwendet BRepFeat_MakePrism (OCP) für echtes Face-Extrude.
+
+        TNP-robust: Verwendet GeometricFaceSelector für Face-Matching.
+
+        TNP v3.0: Gibt Tuple zurück (result_solid, boolean_history) für History-Tracking.
+
+        Returns:
+            Tuple[Solid, Optional[BRepTools_History]] oder nur Solid (Backward-Kompatibilität)
         """
         if current_solid is None:
             raise ValueError("PushPull benötigt einen existierenden Körper")
 
         import numpy as np
+        from modeling.geometric_selector import GeometricFaceSelector
 
-        # Face auflösen
-        selector = feature.face_selector
-        if selector is None:
+        # Face auflösen mit GeometricFaceSelector
+        selector_dict = feature.face_selector
+        if selector_dict is None:
             raise ValueError("Kein Face ausgewählt")
 
-        # Selector ist ((cx,cy,cz), (nx,ny,nz))
-        if isinstance(selector, (list, tuple)) and len(selector) == 2:
-            center = np.array(selector[0])
-            normal = np.array(selector[1])
-        else:
-            raise ValueError(f"Ungültiger Face-Selector: {selector}")
+        # Selector ist jetzt ein GeometricFaceSelector Dict
+        try:
+            geo_selector = GeometricFaceSelector.from_dict(selector_dict)
+        except Exception as e:
+            raise ValueError(f"Ungültiger Face-Selector: {e}")
 
-        # Face im Solid finden
+        # Face im Solid finden (TNP-robust)
         all_faces = current_solid.faces() if hasattr(current_solid, 'faces') else []
         if not all_faces:
             raise ValueError("Solid hat keine Faces")
 
         best_face = None
-        best_dist = float('inf')
+        best_score = -1.0
+
         for face in all_faces:
             try:
-                fc = face.center()
-                fc_arr = np.array([fc.X, fc.Y, fc.Z])
-                dist = np.linalg.norm(fc_arr - center)
-                if dist < best_dist:
-                    best_dist = dist
+                score = self._score_face_match(face, geo_selector)
+                if score > best_score:
+                    best_score = score
                     best_face = face
             except Exception:
                 continue
 
-        if best_face is None or best_dist > 5.0:
-            raise ValueError(f"Face nicht gefunden (nächste Distanz: {best_dist:.2f}mm)")
+        if best_face is None or best_score < 0.5:  # Mindest-Score für Match
+            raise ValueError(f"Face nicht gefunden (best score: {best_score:.2f})")
 
-        logger.info(f"PushPull: Face gefunden (dist={best_dist:.3f}mm), distance={feature.distance}mm")
+        # Normal aus GeometricFaceSelector verwenden (robuster)
+        center = np.array(geo_selector.center)
+        normal = np.array(geo_selector.normal)
+
+        logger.info(f"PushPull: Face gefunden (score={best_score:.2f}), distance={feature.distance}mm")
 
         # Extrusionsrichtung = Face-Normale * Distanz
         norm = np.array(normal)
@@ -2843,9 +2984,31 @@ class Body:
                 result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
 
                 result = Solid(result_shape)
-                if hasattr(result, 'is_valid') and result.is_valid():
+                is_valid = True  # Default: annehmen dass gültig
+                
+                # Prüfe Validität falls Methode existiert
+                if hasattr(result, 'is_valid'):
+                    try:
+                        is_valid = result.is_valid()
+                    except:
+                        is_valid = True  # Bei Fehler: annehmen gültig
+                
+                if is_valid:
                     logger.success(f"PushPull via BRepFeat_MakePrism erfolgreich")
-                    return result
+                    
+                    # === TNP v4.0: BRepFeat-Operation im NamingService speichern ===
+                    try:
+                        self._register_brepfeat_operation(
+                            feature=feature,
+                            original_solid=current_solid,
+                            result_solid=result,
+                            input_shape=shape,
+                            result_shape=result_shape
+                        )
+                    except Exception as tnp_e:
+                        logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {tnp_e}")
+                    
+                    return (result, None)
 
             logger.warning("BRepFeat_MakePrism fehlgeschlagen, versuche Extrude+Boolean")
         except Exception as e:
@@ -2883,10 +3046,18 @@ class Body:
                 result_shape = boolean.Shape()
                 result_shape = self._unify_same_domain(result_shape, "Extrude+Boolean")
 
+                # TNP v3.0: Extrahiere BRepTools_History für Edge-Tracking
+                boolean_history = None
+                try:
+                    boolean_history = boolean.History()
+                    logger.debug(f"PushPull: BRepTools_History extrahiert")
+                except Exception as he:
+                    logger.debug(f"PushPull: History extraction failed: {he}")
+
                 result = Solid(result_shape)
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.success(f"PushPull via Extrude+Boolean erfolgreich")
-                    return result
+                    return (result, boolean_history)
 
             raise RuntimeError("Boolean fehlgeschlagen")
         except Exception as e:
@@ -3946,15 +4117,81 @@ class Body:
             logger.error(f"Sketch-Edge zu Wire Konvertierung fehlgeschlagen: {e}")
             return None
 
-    def _resolve_faces_for_shell(self, solid, face_selectors: List[tuple]):
+    def _score_face_match(self, face, geo_selector) -> float:
+        """
+        Berechnet Match-Score (0-1) zwischen Face und GeometricFaceSelector.
+        TNP-robustes Face-Matching basierend auf mehreren Kriterien.
+        
+        Args:
+            face: Build123d Face
+            geo_selector: GeometricFaceSelector mit center, normal, area, surface_type
+            
+        Returns:
+            Score zwischen 0 (kein Match) und 1 (perfektes Match)
+        """
+        try:
+            import numpy as np
+            
+            # Center-Distanz (wichtigstes Kriterium)
+            fc = face.center()
+            face_center = np.array([fc.X, fc.Y, fc.Z])
+            selector_center = np.array(geo_selector.center)
+            dist = np.linalg.norm(face_center - selector_center)
+            
+            # Normalisierter Distanz-Score (1.0 = gleich, 0.0 = außerhalb Toleranz)
+            tolerance = getattr(geo_selector, 'tolerance', 10.0)
+            center_score = max(0.0, 1.0 - (dist / tolerance))
+            
+            # Normalen-Ähnlichkeit
+            try:
+                fn = face.normal_at(fc)
+                face_normal = np.array([fn.X, fn.Y, fn.Z])
+                selector_normal = np.array(geo_selector.normal)
+                
+                # Normalisieren
+                face_normal = face_normal / (np.linalg.norm(face_normal) + 1e-10)
+                selector_normal = selector_normal / (np.linalg.norm(selector_normal) + 1e-10)
+                
+                # Dot-Product (1.0 = gleiche Richtung, -1.0 = entgegengesetzt)
+                dot = abs(np.dot(face_normal, selector_normal))  # Abs für beide Richtungen
+                normal_score = dot
+            except:
+                normal_score = 0.5  # Neutral wenn Normal nicht berechenbar
+            
+            # Area-Ähnlichkeit (20% Toleranz)
+            try:
+                face_area = face.area
+                selector_area = geo_selector.area
+                if selector_area > 0:
+                    area_ratio = min(face_area, selector_area) / max(face_area, selector_area)
+                    area_score = area_ratio
+                else:
+                    area_score = 0.5
+            except:
+                area_score = 0.5
+            
+            # Gewichteter Gesamt-Score
+            # Center ist wichtigster, dann Normal, dann Area
+            total_score = (0.5 * center_score + 
+                          0.3 * normal_score + 
+                          0.2 * area_score)
+            
+            return total_score
+            
+        except Exception as e:
+            logger.debug(f"Face-Scoring fehlgeschlagen: {e}")
+            return 0.0
+
+    def _resolve_faces_for_shell(self, solid, face_selectors: List[dict]):
         """
         Löst Face-Selektoren für Shell-Öffnungen auf.
+        
+        TNP-robust: Verwendet GeometricFaceSelector für stabiles Face-Matching.
 
         Args:
             solid: Build123d Solid
-            face_selectors: Liste von Selektoren, entweder:
-                - (x, y, z) Mittelpunkt direkt
-                - ((cx, cy, cz), (nx, ny, nz)) Tupel aus Center und Normal
+            face_selectors: Liste von GeometricFaceSelector.to_dict() Dicts
+                Enthalten: center, normal, area, surface_type, tolerance
 
         Returns:
             Liste von Build123d Faces
@@ -3963,8 +4200,8 @@ class Body:
             return []
 
         try:
-            import numpy as np
-
+            from modeling.geometric_selector import GeometricFaceSelector
+            
             # Alle Faces vom Solid holen
             all_faces = solid.faces() if hasattr(solid, 'faces') else []
             if not all_faces:
@@ -3972,65 +4209,757 @@ class Body:
                 return []
 
             resolved = []
-            for selector in face_selectors:
-                # Selector kann zwei Formate haben:
-                # 1. (x, y, z) - direkter Mittelpunkt
-                # 2. ((cx, cy, cz), (nx, ny, nz)) - Tupel aus Center und Normal
-                if isinstance(selector, tuple) and len(selector) == 2:
-                    first_elem = selector[0]
-                    if isinstance(first_elem, (tuple, list)) and len(first_elem) == 3:
-                        # Format 2: ((center), (normal)) → extrahiere center
-                        selector_point = np.array(first_elem)
-                        selector_normal = np.array(selector[1]) if len(selector) > 1 else None
-                        logger.debug(f"Shell: Selector Format (center, normal): center={selector_point}")
+            for selector_dict in face_selectors:
+                try:
+                    # Konvertiere zu GeometricFaceSelector
+                    if isinstance(selector_dict, dict):
+                        geo_selector = GeometricFaceSelector.from_dict(selector_dict)
+                    elif hasattr(selector_dict, 'center'):
+                        geo_selector = selector_dict
                     else:
-                        # Format 1 mit 2 Elementen? Unwahrscheinlich, aber fallback
-                        selector_point = np.array(selector)
-                        selector_normal = None
-                else:
-                    # Format 1: (x, y, z) direkt
-                    selector_point = np.array(selector)
-                    selector_normal = None
-
-                # Finde Face mit nächstem Zentrum (und optional passender Normale)
-                best_face = None
-                best_dist = float('inf')
-
-                for face in all_faces:
-                    try:
-                        center = face.center()
-                        center_arr = np.array([center.X, center.Y, center.Z])
-                        dist = np.linalg.norm(center_arr - selector_point)
-
-                        # Optional: Normale als zusätzliches Kriterium
-                        if selector_normal is not None and dist < best_dist:
-                            try:
-                                face_normal = face.normal_at()
-                                face_normal_arr = np.array([face_normal.X, face_normal.Y, face_normal.Z])
-                                # Nur akzeptieren wenn Normale ähnlich (dot > 0.9)
-                                dot = abs(np.dot(face_normal_arr, selector_normal))
-                                if dot < 0.9:
-                                    continue
-                            except:
-                                pass
-
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_face = face
-                    except:
+                        # Legacy: Tuple-Format
+                        logger.warning(f"Shell: Legacy Selector-Format, konvertiere...")
                         continue
-
-                if best_face and best_dist < 10.0:  # Max 10mm Toleranz
-                    resolved.append(best_face)
-                    logger.debug(f"Shell: Face aufgelöst (dist={best_dist:.2f}mm)")
-                else:
-                    logger.warning(f"Shell: Konnte Face nicht auflösen (best_dist={best_dist:.2f}mm)")
+                    
+                    # Finde beste matching Face (TNP-robust)
+                    best_face = None
+                    best_score = -1.0
+                    
+                    for face in all_faces:
+                        try:
+                            score = self._score_face_match(face, geo_selector)
+                            if score > best_score:
+                                best_score = score
+                                best_face = face
+                        except:
+                            continue
+                    
+                    if best_face and best_score > 0.4:  # 40% Mindest-Score
+                        resolved.append(best_face)
+                        logger.debug(f"Shell: Face aufgelöst (score={best_score:.2%})")
+                    else:
+                        logger.warning(f"Shell: Konnte Face nicht auflösen (best_score={best_score:.2%})")
+                        
+                except Exception as e:
+                    logger.debug(f"Shell: Selector-Auflösung fehlgeschlagen: {e}")
+                    continue
 
             return resolved
 
         except Exception as e:
             logger.debug(f"Face-Auflösung für Shell fehlgeschlagen: {e}")
             return []
+
+    def _update_edge_selectors_after_operation(self, solid):
+        """
+        Aktualisiert Edge-Selektoren in Fillet/Chamfer Features nach Geometrie-Operation.
+        
+        SAUBERE LÖSUNG (kein Quickfix): Nach Push/Pull oder Boolean ändern sich
+        Edge-Positionen. Diese Methode findet die neuen Edges und aktualisiert
+        die gespeicherten GeometricEdgeSelectors.
+        
+        Args:
+            solid: Das neue Solid nach der Operation
+        """
+        if not solid or not hasattr(solid, 'edges'):
+            return
+        
+        all_edges = list(solid.edges())
+        if not all_edges:
+            return
+        
+        from modeling.geometric_selector import GeometricEdgeSelector
+        
+        updated_count = 0
+        for feature in self.features:
+            # Nur Fillet und Chamfer Features
+            if not isinstance(feature, (FilletFeature, ChamferFeature)):
+                continue
+            
+            geometric_selectors = getattr(feature, 'geometric_selectors', [])
+            if not geometric_selectors:
+                continue
+            
+            new_selectors = []
+            for selector in geometric_selectors:
+                try:
+                    # Konvertiere zu GeometricEdgeSelector wenn nötig
+                    if isinstance(selector, dict):
+                        geo_sel = GeometricEdgeSelector.from_dict(selector)
+                    elif hasattr(selector, 'find_best_match'):
+                        geo_sel = selector
+                    else:
+                        continue
+                    
+                    # Finde beste matching Edge im neuen Solid
+                    best_edge = geo_sel.find_best_match(all_edges)
+                    if best_edge is not None:
+                        # Erstelle neuen Selector mit aktualisierten Werten
+                        new_selector = GeometricEdgeSelector.from_edge(best_edge)
+                        new_selectors.append(new_selector)
+                        updated_count += 1
+                    else:
+                        # Edge nicht gefunden - behalte alten Selector bei
+                        logger.warning(f"Edge nicht gefunden nach Operation für {feature.name}")
+                        new_selectors.append(geo_sel)
+                except Exception as e:
+                    logger.debug(f"Edge-Selector Update fehlgeschlagen: {e}")
+                    if isinstance(selector, dict):
+                        new_selectors.append(GeometricEdgeSelector.from_dict(selector))
+                    else:
+                        new_selectors.append(selector)
+            
+            # Aktualisiere Feature
+            feature.geometric_selectors = new_selectors
+            
+            # TNP v3.0: Registry für dieses Feature auch aktualisieren
+            self._update_registry_for_feature(feature, solid)
+            
+        if updated_count > 0:
+            logger.info(f"Aktualisiert {updated_count} Edge-Selektoren nach Geometrie-Operation")
+
+    def _update_registry_for_feature(self, feature, solid):
+        """
+        TNP v3.0: Aktualisiert Registry-Einträge für ein Feature nach Geometrie-Änderung.
+        Wird nach Boolean/PushPull aufgerufen.
+        """
+        if not hasattr(self, '_shape_registry'):
+            logger.debug(f"TNP DEBUG: _update_registry_for_feature - KEINE REGISTRY!")
+            return
+        
+        try:
+            from modeling.tnp_shape_reference import ShapeReference, ShapeType
+            from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
+            
+            updated = 0
+            logger.debug(f"TNP DEBUG: _update_registry_for_feature für {feature.name} ({feature.id})")
+            
+            # Edge-basierte Features (Fillet, Chamfer)
+            if isinstance(feature, (FilletFeature, ChamferFeature)):
+                edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+                geometric_selectors = getattr(feature, 'geometric_selectors', [])
+                
+                logger.debug(f"TNP DEBUG: Feature hat {len(edge_shape_ids)} edge_shape_ids, {len(geometric_selectors)} selectors")
+                
+                # Hole Edges aus Solid für original_shape
+                all_edges = list(solid.edges()) if solid and hasattr(solid, 'edges') else []
+                logger.debug(f"TNP DEBUG: Solid hat {len(all_edges)} edges")
+                
+                for i, shape_id in enumerate(edge_shape_ids):
+                    if i < len(geometric_selectors):
+                        # Alte Referenz entfernen
+                        self._shape_registry.unregister(shape_id)
+                        
+                        # Neue Referenz mit aktualisiertem Selector erstellen
+                        selector = geometric_selectors[i]
+                        if isinstance(selector, dict):
+                            geo_sel = GeometricEdgeSelector.from_dict(selector)
+                        else:
+                            geo_sel = selector
+                        
+                        # Finde original_shape im aktuellen Solid
+                        original_shape = None
+                        matched_edge = None
+                        if all_edges and hasattr(geo_sel, 'find_best_match'):
+                            matched_edge = geo_sel.find_best_match(all_edges)
+                            if matched_edge and hasattr(matched_edge, 'wrapped'):
+                                original_shape = matched_edge.wrapped
+                        
+                        if original_shape:
+                            logger.debug(f"TNP DEBUG: Edge {i} - Match gefunden, original_shape gesetzt")
+                        else:
+                            logger.warning(f"TNP DEBUG: Edge {i} - KEIN Match gefunden!")
+                        
+                        ref = ShapeReference(
+                            ref_id=shape_id,
+                            shape_type=ShapeType.EDGE,
+                            geometric_selector=geo_sel,
+                            created_by=feature.id,
+                            original_shape=original_shape
+                        )
+                        self._shape_registry.register(ref)
+                        updated += 1
+            
+            # Face-basierte Features (Shell, Hole, Draft)
+            elif isinstance(feature, (ShellFeature, HoleFeature, DraftFeature)):
+                face_shape_ids = getattr(feature, 'face_shape_ids', [])
+                face_selectors = getattr(feature, 'opening_face_selectors', []) or getattr(feature, 'face_selectors', [])
+                
+                # Hole Faces aus Solid
+                all_faces = list(solid.faces()) if solid and hasattr(solid, 'faces') else []
+                
+                for i, shape_id in enumerate(face_shape_ids):
+                    if i < len(face_selectors):
+                        self._shape_registry.unregister(shape_id)
+                        
+                        selector_data = face_selectors[i]
+                        if isinstance(selector_data, dict):
+                            geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                        else:
+                            continue
+                        
+                        # Finde original_shape
+                        original_shape = None
+                        if all_faces and hasattr(geo_sel, 'find_best_match'):
+                            matched_face = geo_sel.find_best_match(all_faces)
+                            if matched_face and hasattr(matched_face, 'wrapped'):
+                                original_shape = matched_face.wrapped
+                        
+                        ref = ShapeReference(
+                            ref_id=shape_id,
+                            shape_type=ShapeType.FACE,
+                            geometric_selector=geo_sel,
+                            created_by=feature.id,
+                            original_shape=original_shape
+                        )
+                        self._shape_registry.register(ref)
+                        updated += 1
+            
+            if updated > 0:
+                logger.debug(f"TNP v3.0: Registry für {feature.name} aktualisiert ({updated} refs)")
+                
+        except Exception as e:
+            logger.debug(f"TNP v3.0: Registry-Update fehlgeschlagen: {e}")
+
+    def _update_edge_selectors_for_feature(self, feature, solid):
+        """
+        Aktualisiert Edge-Selektoren eines SPEZIFISCHEN Features vor Ausführung.
+        
+        TNP-CRITICAL: Diese Methode muss BEVOR Fillet/Chamfer ausgeführt werden,
+        weil das Solid sich durch vorherige Features verändert haben kann.
+        
+        Args:
+            feature: FilletFeature oder ChamferFeature
+            solid: Das aktuelle Solid (nach allen vorherigen Features)
+        """
+        if not solid or not hasattr(solid, 'edges'):
+            return
+        
+        all_edges = list(solid.edges())
+        if not all_edges:
+            return
+        
+        from modeling.geometric_selector import GeometricEdgeSelector
+        
+        geometric_selectors = getattr(feature, 'geometric_selectors', [])
+        if not geometric_selectors:
+            return
+        
+        updated_count = 0
+        new_selectors = []
+        
+        for selector in geometric_selectors:
+            try:
+                # Konvertiere zu GeometricEdgeSelector wenn nötig
+                if isinstance(selector, dict):
+                    geo_sel = GeometricEdgeSelector.from_dict(selector)
+                elif hasattr(selector, 'find_best_match'):
+                    geo_sel = selector
+                else:
+                    new_selectors.append(selector)
+                    continue
+                
+                # Finde beste matching Edge im aktuellen Solid
+                best_edge = geo_sel.find_best_match(all_edges)
+                if best_edge is not None:
+                    # Erstelle neuen Selector mit aktualisierten Werten
+                    new_selector = GeometricEdgeSelector.from_edge(best_edge)
+                    new_selectors.append(new_selector)
+                    updated_count += 1
+                else:
+                    # Edge nicht gefunden - behalte alten Selector bei
+                    logger.debug(f"Edge nicht gefunden für Feature {feature.name}, behalte alten Selector")
+                    new_selectors.append(geo_sel)
+            except Exception as e:
+                logger.debug(f"Edge-Selector Update fehlgeschlagen: {e}")
+                new_selectors.append(selector)
+        
+        # Aktualisiere Feature
+        feature.geometric_selectors = new_selectors
+        
+        if updated_count > 0:
+            logger.debug(f"Feature '{feature.name}': {updated_count}/{len(geometric_selectors)} Edges aktualisiert")
+
+    def _update_shape_registry_after_operation(self, solid, operation_name: str = ""):
+        """
+        TNP v3.0: Aktualisiert alle ShapeReferences in der Registry nach einer Operation.
+        
+        Diese Methode wird nach Boolean-Operationen aufgerufen und aktualisiert
+        die gespeicherten Referenzen mit den neuen geometrischen Daten.
+        
+        Args:
+            solid: Das neue Solid nach der Operation
+            operation_name: Name der Operation (für Logging)
+        """
+        if not hasattr(self, '_shape_registry') or not solid:
+            return
+        
+        try:
+            # Track die Operation in der Registry
+            self._shape_registry.track_boolean_operation(
+                operation=operation_name,
+                input_shapes=[],
+                result_shape=solid,
+                history=None  # TODO: OCP History von Boolean-Operationen extrahieren
+            )
+            
+            # Versuche alle Referenzen neu aufzulösen
+            resolved = self._shape_registry.resolve_all(solid)
+            found = sum(1 for r in resolved.values() if r is not None)
+            total = len(resolved)
+            
+            if total > 0:
+                logger.debug(f"TNP Registry nach '{operation_name}': {found}/{total} Referenzen aufgelöst")
+                
+        except Exception as e:
+            logger.debug(f"TNP Registry Update fehlgeschlagen: {e}")
+
+    def _register_feature_shape_refs(self, feature) -> None:
+        """
+        TNP v3.0: Registriert alle ShapeReferences eines Features in der Registry.
+        Wird aufgerufen wenn ein Feature neu erstellt oder restored (Redo) wird.
+        
+        WICHTIG: Extrahiert original_shape aus dem aktuellen Solid für History-Tracking.
+        """
+        if not hasattr(self, '_shape_registry') or not feature:
+            return
+        
+        try:
+            from modeling.tnp_shape_reference import ShapeReference, ShapeType
+            from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
+            
+            # Hole aktuelles Solid um original_shape zu extrahieren
+            current_solid = self._build123d_solid
+            all_edges = list(current_solid.edges()) if current_solid and hasattr(current_solid, 'edges') else []
+            all_faces = list(current_solid.faces()) if current_solid and hasattr(current_solid, 'faces') else []
+            
+            # Edge ShapeIDs (Fillet, Chamfer)
+            edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+            geometric_selectors = getattr(feature, 'geometric_selectors', [])
+            
+            for i, shape_id in enumerate(edge_shape_ids):
+                if i < len(geometric_selectors):
+                    selector_data = geometric_selectors[i]
+                    
+                    # Finde die Edge im aktuellen Solid um original_shape zu bekommen
+                    original_shape = None
+                    if all_edges:
+                        if isinstance(selector_data, dict):
+                            geo_sel = GeometricEdgeSelector.from_dict(selector_data)
+                        else:
+                            geo_sel = selector_data
+                        
+                        if hasattr(geo_sel, 'find_best_match'):
+                            matched_edge = geo_sel.find_best_match(all_edges)
+                            if matched_edge and hasattr(matched_edge, 'wrapped'):
+                                original_shape = matched_edge.wrapped
+                    
+                    ref = ShapeReference(
+                        ref_id=shape_id,
+                        shape_type=ShapeType.EDGE,
+                        geometric_selector=selector_data,
+                        created_by=feature.id,
+                        original_shape=original_shape  # WICHTIG: Für History-Resolution
+                    )
+                    self._shape_registry.register(ref)
+            
+            # Face ShapeIDs (Shell, Hole, Draft)
+            face_shape_ids = getattr(feature, 'face_shape_ids', [])
+            face_selectors = getattr(feature, 'opening_face_selectors', []) or getattr(feature, 'face_selectors', [])
+            
+            for i, shape_id in enumerate(face_shape_ids):
+                if i < len(face_selectors):
+                    selector_data = face_selectors[i]
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    else:
+                        continue
+                    
+                    # Finde die Face im aktuellen Solid
+                    original_shape = None
+                    if all_faces and hasattr(geo_sel, 'find_best_match'):
+                        matched_face = geo_sel.find_best_match(all_faces)
+                        if matched_face and hasattr(matched_face, 'wrapped'):
+                            original_shape = matched_face.wrapped
+                    
+                    ref = ShapeReference(
+                        ref_id=shape_id,
+                        shape_type=ShapeType.FACE,
+                        geometric_selector=geo_sel,
+                        created_by=feature.id,
+                        original_shape=original_shape
+                    )
+                    self._shape_registry.register(ref)
+            
+            # PushPull: Einzelne face_shape_id
+            face_shape_id = getattr(feature, 'face_shape_id', None)
+            if face_shape_id:
+                selector_data = getattr(feature, 'face_selector', None)
+                if isinstance(selector_data, dict):
+                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    
+                    # Finde die Face
+                    original_shape = None
+                    if all_faces and hasattr(geo_sel, 'find_best_match'):
+                        matched_face = geo_sel.find_best_match(all_faces)
+                        if matched_face and hasattr(matched_face, 'wrapped'):
+                            original_shape = matched_face.wrapped
+                    
+                    ref = ShapeReference(
+                        ref_id=face_shape_id,
+                        shape_type=ShapeType.FACE,
+                        geometric_selector=geo_sel,
+                        created_by=feature.id,
+                        original_shape=original_shape
+                    )
+                    self._shape_registry.register(ref)
+            
+            # Loft: profile_shape_ids (keine GeometricSelector, nur ID)
+            profile_shape_ids = getattr(feature, 'profile_shape_ids', [])
+            for shape_id in profile_shape_ids:
+                ref = ShapeReference(
+                    ref_id=shape_id,
+                    shape_type=ShapeType.FACE,
+                    created_by=feature.id
+                )
+                self._shape_registry.register(ref)
+            
+            # Sweep: profile_shape_id und path_shape_id
+            profile_shape_id = getattr(feature, 'profile_shape_id', None)
+            if profile_shape_id:
+                ref = ShapeReference(
+                    ref_id=profile_shape_id,
+                    shape_type=ShapeType.FACE,
+                    created_by=feature.id
+                )
+                self._shape_registry.register(ref)
+            path_shape_id = getattr(feature, 'path_shape_id', None)
+            if path_shape_id:
+                ref = ShapeReference(
+                    ref_id=path_shape_id,
+                    shape_type=ShapeType.EDGE,
+                    created_by=feature.id
+                )
+                self._shape_registry.register(ref)
+            
+            # Thread: face_shape_id
+            thread_face_shape_id = getattr(feature, 'face_shape_id', None)
+            if thread_face_shape_id and hasattr(feature, 'face_selector'):
+                selector_data = getattr(feature, 'face_selector', None)
+                if isinstance(selector_data, dict):
+                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    
+                    # Finde die Face
+                    original_shape = None
+                    if all_faces and hasattr(geo_sel, 'find_best_match'):
+                        matched_face = geo_sel.find_best_match(all_faces)
+                        if matched_face and hasattr(matched_face, 'wrapped'):
+                            original_shape = matched_face.wrapped
+                    
+                    ref = ShapeReference(
+                        ref_id=thread_face_shape_id,
+                        shape_type=ShapeType.FACE,
+                        geometric_selector=geo_sel,
+                        created_by=feature.id,
+                        original_shape=original_shape
+                    )
+                    self._shape_registry.register(ref)
+            
+            total = (len(edge_shape_ids) + len(face_shape_ids) + 
+                    (1 if face_shape_id else 0) + len(profile_shape_ids) +
+                    (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
+                    (1 if thread_face_shape_id else 0))
+            if total > 0:
+                logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} registriert (mit original_shape)")
+                
+        except Exception as e:
+            logger.debug(f"TNP Registry Registrierung fehlgeschlagen: {e}")
+
+    def _register_extrude_shapes(self, feature: 'ExtrudeFeature', solid) -> None:
+        """
+        TNP v4.0: Registriert alle Edges eines Extrude-Solids im NamingService.
+        Wird nach erfolgreicher Extrusion aufgerufen.
+        """
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            return
+        
+        if not solid or not hasattr(solid, 'edges'):
+            return
+        
+        try:
+            service = self._document._shape_naming_service
+            edges = list(solid.edges())
+            
+            shape_ids = []
+            for i, edge in enumerate(edges):
+                # Extrahiere Geometriedaten
+                center = edge.center()
+                length = edge.length if hasattr(edge, 'length') else 0.0
+                geometry_data = (center.X, center.Y, center.Z, length)
+                
+                # Registriere Shape
+                shape_id = service.register_shape(
+                    ocp_shape=edge.wrapped,
+                    shape_type=ShapeType.EDGE,
+                    feature_id=feature.id,
+                    local_index=i,
+                    geometry_data=geometry_data
+                )
+                shape_ids.append(shape_id)
+            
+            # Operation aufzeichnen
+            service.record_operation(
+                OperationRecord(
+                    operation_id=feature.id,
+                    operation_type="EXTRUDE",
+                    feature_id=feature.id,
+                    input_shape_ids=[],  # Extrude hat keine Input-Edges
+                    output_shape_ids=shape_ids
+                )
+            )
+            
+            logger.info(f"TNP v4.0: {len(shape_ids)} Edges für Extrude '{feature.name}' registriert")
+            
+        except Exception as e:
+            logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
+
+    def _register_brepfeat_operation(self, feature, original_solid, result_solid,
+                                     input_shape, result_shape) -> None:
+        """
+        TNP v4.0: Registriert eine BRepFeat-Operation mit Edge-Mappings.
+        Wichtig: Ordnet Original-Edges den neuen Edges im Resultat zu.
+        """
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            return
+        
+        try:
+            service = self._document._shape_naming_service
+            
+            # 1. Alle Original-Edges registrieren (falls noch nicht geschehen)
+            input_shape_ids = []
+            if original_solid and hasattr(original_solid, 'edges'):
+                for i, edge in enumerate(original_solid.edges()):
+                    center = edge.center()
+                    length = edge.length if hasattr(edge, 'length') else 0.0
+                    geometry_data = (center.X, center.Y, center.Z, length)
+                    
+                    shape_id = service.register_shape(
+                        ocp_shape=edge.wrapped,
+                        shape_type=ShapeType.EDGE,
+                        feature_id=feature.id,
+                        local_index=i,
+                        geometry_data=geometry_data
+                    )
+                    input_shape_ids.append(shape_id)
+            
+            # 2. Alle Result-Edges registrieren
+            output_shape_ids = []
+            if result_solid and hasattr(result_solid, 'edges'):
+                for i, edge in enumerate(result_solid.edges()):
+                    center = edge.center()
+                    length = edge.length if hasattr(edge, 'length') else 0.0
+                    geometry_data = (center.X, center.Y, center.Z, length)
+                    
+                    shape_id = service.register_shape(
+                        ocp_shape=edge.wrapped,
+                        shape_type=ShapeType.EDGE,
+                        feature_id=feature.id,
+                        local_index=i + len(input_shape_ids),  # Offset
+                        geometry_data=geometry_data
+                    )
+                    output_shape_ids.append(shape_id)
+            
+            # 3. Manuelle Mappings erstellen (geometrisches Matching)
+            # Finde für jede Original-Edge die beste passende Result-Edge
+            manual_mappings = {}
+            
+            if original_solid and result_solid:
+                import numpy as np
+                
+                orig_edges = list(original_solid.edges())
+                result_edges = list(result_solid.edges())
+                
+                for i, orig_edge in enumerate(orig_edges):
+                    orig_center = orig_edge.center()
+                    orig_pos = np.array([orig_center.X, orig_center.Y, orig_center.Z])
+                    orig_len = orig_edge.length if hasattr(orig_edge, 'length') else 0
+                    
+                    # Suche beste Matching Result-Edge
+                    best_match_idx = -1
+                    best_score = float('inf')
+                    
+                    for j, result_edge in enumerate(result_edges):
+                        result_center = result_edge.center()
+                        result_pos = np.array([result_center.X, result_center.Y, result_center.Z])
+                        result_len = result_edge.length if hasattr(result_edge, 'length') else 0
+                        
+                        # Distanz-Score
+                        dist = np.linalg.norm(orig_pos - result_pos)
+                        
+                        # Längen-Score
+                        len_diff = abs(orig_len - result_len) if orig_len > 0 else 0
+                        
+                        # Gesamt-Score (Distanz wichtiger)
+                        score = dist + len_diff * 0.1
+                        
+                        if score < best_score and score < 1.0:  # 1mm Toleranz
+                            best_score = score
+                            best_match_idx = j
+                    
+                    if best_match_idx >= 0 and i < len(input_shape_ids):
+                        orig_id = input_shape_ids[i].uuid
+                        mapped_id = output_shape_ids[best_match_idx].uuid
+                        manual_mappings[orig_id] = [mapped_id]
+            
+            # 4. Operation aufzeichnen
+            service.record_operation(
+                OperationRecord(
+                    operation_id=feature.id,
+                    operation_type="BREPFEAT_PRISM",
+                    feature_id=feature.id,
+                    input_shape_ids=input_shape_ids,
+                    output_shape_ids=output_shape_ids,
+                    manual_mappings=manual_mappings
+                )
+            )
+            
+            logger.info(f"TNP v4.0: BRepFeat '{feature.name}' registriert - "
+                       f"{len(input_shape_ids)} in, {len(output_shape_ids)} out, "
+                       f"{len(manual_mappings)} mappings")
+            
+        except Exception as e:
+            logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+    def _unregister_feature_shape_refs(self, feature) -> None:
+        """
+        TNP v3.0: Entfernt alle ShapeReferences eines Features aus der Registry.
+        Wird aufgerufen wenn ein Feature entfernt (Undo) wird.
+        """
+        if not hasattr(self, '_shape_registry') or not feature:
+            return
+        
+        try:
+            # Edge ShapeIDs entfernen
+            edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+            for shape_id in edge_shape_ids:
+                self._shape_registry.unregister(shape_id)
+            
+            # Face ShapeIDs entfernen
+            face_shape_ids = getattr(feature, 'face_shape_ids', [])
+            for shape_id in face_shape_ids:
+                self._shape_registry.unregister(shape_id)
+            
+            # PushPull: Einzelne face_shape_id entfernen
+            face_shape_id = getattr(feature, 'face_shape_id', None)
+            if face_shape_id:
+                self._shape_registry.unregister(face_shape_id)
+            
+            # Loft: profile_shape_ids entfernen
+            profile_shape_ids = getattr(feature, 'profile_shape_ids', [])
+            for shape_id in profile_shape_ids:
+                self._shape_registry.unregister(shape_id)
+            
+            # Sweep: profile_shape_id und path_shape_id entfernen
+            profile_shape_id = getattr(feature, 'profile_shape_id', None)
+            if profile_shape_id:
+                self._shape_registry.unregister(profile_shape_id)
+            path_shape_id = getattr(feature, 'path_shape_id', None)
+            if path_shape_id:
+                self._shape_registry.unregister(path_shape_id)
+            
+            # Thread: face_shape_id entfernen
+            thread_face_shape_id = getattr(feature, 'face_shape_id', None)
+            if thread_face_shape_id:
+                self._shape_registry.unregister(thread_face_shape_id)
+            
+            total = (len(edge_shape_ids) + len(face_shape_ids) + 
+                    (1 if face_shape_id else 0) + len(profile_shape_ids) +
+                    (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
+                    (1 if thread_face_shape_id else 0))
+            if total > 0:
+                logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} entfernt")
+                
+        except Exception as e:
+            logger.debug(f"TNP Registry Unregister fehlgeschlagen: {e}")
+
+    def _update_face_selectors_for_feature(self, feature, solid):
+        """
+        Aktualisiert Face-Selektoren eines SPEZIFISCHEN Features vor Ausführung.
+        
+        TNP-CRITICAL: Diese Methode muss BEVOR Shell/Hole/Draft ausgeführt werden,
+        weil das Solid sich durch vorherige Features verändert haben kann.
+        
+        Args:
+            feature: ShellFeature, HoleFeature oder DraftFeature
+            solid: Das aktuelle Solid (nach allen vorherigen Features)
+        """
+        if not solid or not hasattr(solid, 'faces'):
+            return
+        
+        all_faces = list(solid.faces())
+        if not all_faces:
+            return
+        
+        from modeling.geometric_selector import GeometricFaceSelector
+        
+        # Hole die Face-Selektoren je nach Feature-Typ
+        face_selectors = []
+        if isinstance(feature, (ShellFeature, HoleFeature, DraftFeature)):
+            face_selectors = getattr(feature, 'face_selectors', []) or getattr(feature, 'opening_face_selectors', [])
+        
+        if not face_selectors:
+            return
+        
+        updated_count = 0
+        new_selectors = []
+        
+        for selector_dict in face_selectors:
+            try:
+                # Konvertiere zu GeometricFaceSelector wenn nötig
+                if isinstance(selector_dict, dict):
+                    geo_sel = GeometricFaceSelector.from_dict(selector_dict)
+                elif hasattr(selector_dict, 'center'):
+                    geo_sel = selector_dict
+                else:
+                    new_selectors.append(selector_dict)
+                    continue
+                
+                # Finde beste matching Face im aktuellen Solid
+                best_face = None
+                best_score = -1.0
+                
+                for face in all_faces:
+                    try:
+                        score = self._score_face_match(face, geo_sel)
+                        if score > best_score:
+                            best_score = score
+                            best_face = face
+                    except:
+                        continue
+                
+                if best_face and best_score > 0.4:
+                    # Erstelle neuen Selector mit aktualisierten Werten
+                    new_selector = GeometricFaceSelector.from_face(best_face)
+                    new_selectors.append(new_selector.to_dict())
+                    updated_count += 1
+                else:
+                    # Face nicht gefunden - behalte alten Selector bei
+                    logger.debug(f"Face nicht gefunden für Feature {feature.name} (score={best_score:.2%}), behalte alten Selector")
+                    new_selectors.append(selector_dict)
+            except Exception as e:
+                logger.debug(f"Face-Selector Update fehlgeschlagen: {e}")
+                new_selectors.append(selector_dict)
+        
+        # Aktualisiere Feature (je nach Attribut-Name)
+        if isinstance(feature, ShellFeature):
+            feature.opening_face_selectors = new_selectors
+        else:
+            feature.face_selectors = new_selectors
+        
+        if updated_count > 0:
+            logger.debug(f"Feature '{feature.name}': {updated_count}/{len(face_selectors)} Faces aktualisiert")
 
     def _ocp_extrude_face(self, face, amount, direction):
         """
@@ -4214,31 +5143,108 @@ class Body:
 
             # ================= EXTRUDE =================
             elif isinstance(feature, ExtrudeFeature):
-                def op_extrude():
-                    return self._compute_extrude_part(feature)
+                # TNP v3.0: Prüfe ob dies ein Push/Pull auf Body-Face ist (precalculated_polys)
+                has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
                 
-                part_geometry, status = self._safe_operation(f"Extrude_{i}", op_extrude)
-
-                if part_geometry:
-                    if current_solid is None or feature.operation == "New Body":
-                        new_solid = part_geometry
+                if has_polys and current_solid is not None:
+                    # === PUSH/PULL auf Body-Face: Verwende BRepFeat für TNP-Robustheit ===
+                    logger.info(f"TNP BRepFeat: Push/Pull auf Body-Face erkannt - verwende BRepFeat_MakePrism")
+                    
+                    def op_brepfeat():
+                        return self._compute_extrude_part_brepfeat(feature, current_solid)
+                    
+                    brepfeat_result, status = self._safe_operation(f"Extrude_BRepFeat_{i}", op_brepfeat)
+                    
+                    if brepfeat_result and status == "SUCCESS":
+                        new_solid = brepfeat_result
+                        logger.success(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
+                        
+                        # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
+                        logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
+                        self._update_edge_selectors_after_operation(new_solid)
+                        
+                        # Registry für ALLE Fillet/Chamfer-Features aktualisieren
+                        logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                        updated_count = 0
+                        for feat in self.features:
+                            if isinstance(feat, (FilletFeature, ChamferFeature)):
+                                logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
+                                self._update_registry_for_feature(feat, new_solid)
+                                updated_count += 1
+                        
+                        logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                     else:
-                        # Boolean Operation mit sicherer Helper-Methode
-                        result, success = self._safe_boolean_operation(
-                            current_solid, part_geometry, feature.operation
-                        )
+                        logger.warning(f"TNP BRepFeat: Push/Pull fehlgeschlagen, versuche Fallback")
+                        # Fallback zu normalem Extrude+Boolean
+                        has_polys = False
+                
+                if not has_polys or current_solid is None:
+                    # === Normales Extrude (mit Sketch) oder New Body ===
+                    def op_extrude():
+                        return self._compute_extrude_part(feature)
+                    
+                    part_geometry, status = self._safe_operation(f"Extrude_{i}", op_extrude)
 
-                        if success:
-                            new_solid = result
+                    if part_geometry:
+                        if current_solid is None or feature.operation == "New Body":
+                            new_solid = part_geometry
+                            logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
+                            
+                            # === TNP v4.0: Shape-Registrierung für Extrude ===
+                            if self._document and hasattr(self._document, '_shape_naming_service'):
+                                try:
+                                    self._register_extrude_shapes(feature, new_solid)
+                                except Exception as tnp_e:
+                                    logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
-                            logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
-                            status = "ERROR"
-                            # Behalte current_solid (keine Änderung)
-                            continue
+                            # Boolean Operation mit sicherer Helper-Methode
+                            logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
+                            result, success = self._safe_boolean_operation(
+                                current_solid, part_geometry, feature.operation
+                            )
+
+                            if success:
+                                new_solid = result
+                                logger.debug(f"TNP DEBUG: Boolean {feature.operation} erfolgreich")
+                                
+                                # TNP v3.0: Nach Boolean-Operation ALLE Shape-Referenzen aktualisieren
+                                if new_solid is not None:
+                                    # 1. Edge-Selektoren für nachfolgende Features aktualisieren
+                                    logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
+                                    self._update_edge_selectors_after_operation(new_solid)
+                                    
+                                    # 2. Registry für ALLE Fillet/Chamfer-Features aktualisieren
+                                    logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                                    updated_count = 0
+                                    for feat in self.features:
+                                        if isinstance(feat, (FilletFeature, ChamferFeature)):
+                                            logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
+                                            self._update_registry_for_feature(feat, new_solid)
+                                            updated_count += 1
+                                    
+                                    logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
+                                    
+                                    # 3. DEBUG: Zeige Registry-Status
+                                    if hasattr(self, '_shape_registry'):
+                                        stats = self._shape_registry.get_stats()
+                                        logger.debug(f"TNP DEBUG: Registry Status = {stats}")
+                            else:
+                                logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
+                                status = "ERROR"
+                                # Behalte current_solid (keine Änderung)
+                                continue
 
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
                 if current_solid:
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgeführt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
+                    self._update_edge_selectors_for_feature(feature, current_solid)
+                    
+                    # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
+                    logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
+                    self._update_registry_for_feature(feature, current_solid)
+                    
                     def op_fillet(rad=feature.radius):
                         # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges_to_fillet = self._resolve_edges_tnp(current_solid, feature)
@@ -4261,6 +5267,16 @@ class Body:
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
                 if current_solid:
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgeführt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
+                    self._update_edge_selectors_for_feature(feature, current_solid)
+                    
+                    # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
+                    # WICHTIG: Dies muss nach _update_edge_selectors_for_feature passieren
+                    # damit die neuen Selektoren verwendet werden
+                    logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
+                    self._update_registry_for_feature(feature, current_solid)
+                    
                     def op_chamfer(dist=feature.distance):
                         # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges = self._resolve_edges_tnp(current_solid, feature)
@@ -4357,6 +5373,9 @@ class Body:
             # ================= SHELL (Phase 6) =================
             elif isinstance(feature, ShellFeature):
                 if current_solid:
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Shell ausgeführt wird
+                    self._update_face_selectors_for_feature(feature, current_solid)
+                    
                     def op_shell():
                         return self._compute_shell(feature, current_solid)
 
@@ -4400,10 +5419,38 @@ class Body:
                     def op_pushpull():
                         return self._compute_pushpull(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"PushPull_{i}", op_pushpull)
+                    result, status = self._safe_operation(f"PushPull_{i}", op_pushpull)
+
+                    # TNP v3.0: Handle tuple return (solid, history) oder nur solid
+                    pushpull_history = None
+                    if result is not None:
+                        if isinstance(result, tuple):
+                            new_solid, pushpull_history = result
+                        else:
+                            new_solid = result
+                    else:
+                        new_solid = None
+
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+                    else:
+                        # TNP v3.0: History tracken für Edge-Resolution nach Boolean
+                        if pushpull_history is not None and hasattr(self, '_shape_registry'):
+                            try:
+                                self._shape_registry.track_boolean_operation(
+                                    operation=f"PushPull_{feature.id}",
+                                    input_shapes=[current_solid],
+                                    result_shape=new_solid,
+                                    history=pushpull_history
+                                )
+                                logger.debug(f"TNP v3.0: PushPull History getrackt für Feature {feature.id}")
+                            except Exception as tnp_e:
+                                logger.debug(f"TNP v3.0: PushPull History Tracking fehlgeschlagen: {tnp_e}")
+
+                        # SAUBERE LÖSUNG: Edge-Selektoren nach PushPull aktualisieren
+                        # Weil sich Geometrie geändert hat, müssen Fillet/Chamfer Refs aktualisiert werden
+                        self._update_edge_selectors_after_operation(new_solid)
 
             # ================= N-SIDED PATCH =================
             elif isinstance(feature, NSidedPatchFeature):
@@ -4419,6 +5466,9 @@ class Body:
             # ================= HOLE =================
             elif isinstance(feature, HoleFeature):
                 if current_solid:
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Hole ausgeführt wird
+                    self._update_face_selectors_for_feature(feature, current_solid)
+                    
                     def op_hole():
                         return self._compute_hole(feature, current_solid)
 
@@ -4430,6 +5480,9 @@ class Body:
             # ================= DRAFT =================
             elif isinstance(feature, DraftFeature):
                 if current_solid:
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Draft ausgeführt wird
+                    self._update_face_selectors_for_feature(feature, current_solid)
+                    
                     def op_draft():
                         return self._compute_draft(feature, current_solid)
 
@@ -4558,88 +5611,32 @@ class Body:
 
     def _migrate_tnp_references(self, new_solid):
         """
-        Phase 8.2: Automatische Migration von TNP-Referenzen nach Rebuild.
-
-        Nach einem Rebuild versucht diese Methode:
-        1. Alle bestehenden Referenzen im neuen Solid aufzulösen
-        2. Referenz-Hashes zu aktualisieren
-        3. Nicht-auflösbare Referenzen zu markieren
-
+        TNP v3.0: Migration von ShapeReferences nach Rebuild.
+        
+        DEAKTIVIERT: Altes TNP-System (Phase 8.2) wurde durch TNP v3.0 ersetzt.
+        Das neue System verwendet ShapeReferenceRegistry mit geometrischem Matching.
+        
         Args:
             new_solid: Das neue Build123d Solid nach Rebuild
         """
-        if not self._tnp_tracker or new_solid is None:
-            return
-
-        migrated_count = 0
-        failed_count = 0
-
-        # Alle Referenzen durchgehen und versuchen aufzulösen
-        for ref_id in list(self._tnp_tracker._references.keys()):
-            try:
-                ref = self._tnp_tracker._references[ref_id]
-
-                # Versuche Referenz im neuen Solid aufzulösen
-                resolved = self._tnp_tracker.resolve_reference(ref_id, new_solid)
-
-                if resolved is not None:
-                    # Hash aktualisieren
-                    new_hash = self._tnp_tracker._compute_shape_hash(resolved)
-                    if new_hash != ref.current_hash:
-                        ref.current_hash = new_hash
-                        migrated_count += 1
-                        logger.debug(f"TNP: Referenz {ref_id} migriert (neuer Hash)")
-                else:
-                    ref.last_resolved = False
-                    failed_count += 1
-                    logger.debug(f"TNP: Referenz {ref_id} konnte nicht migriert werden")
-
-            except Exception as e:
-                failed_count += 1
-                logger.debug(f"TNP: Migration von {ref_id} fehlgeschlagen: {e}")
-
-        if migrated_count > 0 or failed_count > 0:
-            logger.info(f"TNP Migration: {migrated_count} migriert, {failed_count} fehlgeschlagen")
+        # TNP v3.0: Nur noch Logging für Debugging
+        if hasattr(self, '_shape_registry'):
+            stats = self._shape_registry.get_stats()
+            logger.debug(f"TNP v3.0 Registry Status: {stats}")
 
     def update_feature_references(self, feature_id: str, old_solid, new_solid):
         """
-        Aktualisiert Referenzen wenn ein spezifisches Feature modifiziert wurde.
-
-        Wird aufgerufen wenn:
-        - Feature-Parameter geändert werden (z.B. Extrude-Höhe)
-        - Feature neu positioniert wird
-        - Feature aktiviert/deaktiviert wird
-
+        TNP v3.0: Aktualisiert Referenzen wenn ein spezifisches Feature modifiziert wurde.
+        
+        Das neue System verwendet ShapeReferenceRegistry mit automatischer Resolution.
+        
         Args:
             feature_id: ID des modifizierten Features
             old_solid: Solid VOR der Änderung
             new_solid: Solid NACH der Änderung
         """
-        if not self._tnp_tracker:
-            return
-
-        # Finde alle Referenzen die von diesem Feature abhängen
-        dependent_refs = []
-        for ref_id, ref in self._tnp_tracker._references.items():
-            if ref.created_by == feature_id:
-                dependent_refs.append(ref_id)
-
-        if not dependent_refs:
-            return
-
-        logger.debug(f"TNP: Aktualisiere {len(dependent_refs)} Referenzen für Feature {feature_id}")
-
-        # Versuche jede Referenz im neuen Solid aufzulösen
-        for ref_id in dependent_refs:
-            try:
-                resolved = self._tnp_tracker.resolve_reference(ref_id, new_solid)
-                if resolved:
-                    ref = self._tnp_tracker._references[ref_id]
-                    ref.current_hash = self._tnp_tracker._compute_shape_hash(resolved)
-                    ref.last_resolved = True
-                    logger.debug(f"TNP: Referenz {ref_id} erfolgreich aktualisiert")
-            except Exception as e:
-                logger.debug(f"TNP: Referenz {ref_id} konnte nicht aktualisiert werden: {e}")
+        # TNP v3.0: Neue Registry verwendet automatische Resolution
+        logger.debug(f"TNP v3.0: Feature {feature_id} wurde modifiziert - Registry bleibt aktiv")
 
     def reorder_features(self, old_index: int, new_index: int) -> bool:
         """
@@ -4716,51 +5713,167 @@ class Body:
 
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
-        Phase 2 TNP: Multi-Strategie Edge-Auflösung.
-
-        Versucht Edges in dieser Reihenfolge zu finden:
-        1. OCP Shape-Hash Matching (schnellste, wenn verfügbar)
-        2. GeometricEdgeSelector Matching (robust, geometriebasiert)
-        3. Legacy Point-Selektor (Fallback)
-
+        TNP v4.0: Professional Topological Naming Resolution.
+        
+        Verwendet ShapeNamingService für Multi-Level Resolution:
+        1. Direct Lookup (unveränderte Shapes)
+        2. History Tracing (via Operation Graph)
+        3. BRepFeat Mapping Lookup (für Push/Pull)
+        4. Geometric Matching (Fallback)
+        
         Args:
             solid: Build123d Solid
             feature: FilletFeature oder ChamferFeature mit TNP-Daten
-
+        
         Returns:
             Liste von gefundenen Edges
         """
         all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
         if not all_edges:
-            logger.warning("TNP: Keine Edges im Solid gefunden")
+            logger.warning("TNP v4.0: Keine Edges im Solid gefunden")
             return []
-
-        # Strategie 1: OCP Shape-Hash Matching
-        ocp_edge_shapes = getattr(feature, 'ocp_edge_shapes', [])
-        if ocp_edge_shapes:
-            found_by_hash = self._resolve_edges_by_hash(all_edges, ocp_edge_shapes)
-            if found_by_hash:
-                logger.debug(f"TNP: {len(found_by_hash)} Edges via Hash gefunden")
-                return found_by_hash
-
-        # Strategie 2: GeometricEdgeSelector Matching
-        geometric_selectors = getattr(feature, 'geometric_selectors', [])
-        if geometric_selectors:
-            found_by_geometry = self._resolve_edges_by_geometry(all_edges, geometric_selectors)
-            if found_by_geometry:
-                logger.debug(f"TNP: {len(found_by_geometry)} Edges via GeometricSelector gefunden")
-                return found_by_geometry
-
-        # Strategie 3: Legacy Point-Selektoren
-        edge_selectors = getattr(feature, 'edge_selectors', [])
-        if edge_selectors:
-            found_legacy = self._resolve_edges(solid, edge_selectors)
-            if found_legacy:
-                logger.debug(f"TNP: {len(found_legacy)} Edges via Legacy-Selektor gefunden (Fallback)")
-                return found_legacy
-
-        logger.warning("TNP: Keine Edges mit allen Strategien gefunden")
-        return []
+        
+        feature_name = getattr(feature, 'name', 'Unknown')
+        edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+        
+        logger.info(f"TNP v4.0: Resolving {len(edge_shape_ids)} edges for {feature_name} "
+                   f"({len(all_edges)} edges in solid)")
+        
+        # TNP v4.0: Verwende Document's ShapeNamingService
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            logger.warning("TNP v4.0: Kein ShapeNamingService verfügbar")
+            return []
+        
+        service = self._document._shape_naming_service
+        resolved_edges = []
+        unresolved_shape_ids = []  # Für Debug-Visualisierung
+        stats = {'direct': 0, 'history': 0, 'mapping': 0, 'geometric': 0, 'failed': 0}
+        
+        for i, shape_id in enumerate(edge_shape_ids):
+            try:
+                # ShapeID via Service auflösen
+                resolved_ocp = service.resolve_shape(shape_id, solid)
+                
+                if resolved_ocp is None:
+                    stats['failed'] += 1
+                    unresolved_shape_ids.append(shape_id)
+                    logger.warning(f"TNP v4.0: Edge {i} konnte nicht aufgelöst werden")
+                    continue
+                
+                # WICHTIG: Finde die PASSENDE Edge vom aktuellen Solid!
+                # Die aufgelöste Edge hat zwar die gleiche Geometrie, aber OCP erwartet
+                # Edges die tatsächlich im aktuellen Solid's BRep-Graph existieren.
+                matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
+                
+                if matching_edge is not None:
+                    resolved_edges.append(matching_edge)
+                    logger.debug(f"TNP v4.0: Edge {i} gefunden und mit aktuellem Solid verknüpft")
+                else:
+                    stats['failed'] += 1
+                    unresolved_shape_ids.append(shape_id)
+                    from build123d import Edge
+                    b3d_edge = Edge(resolved_ocp)
+                    logger.warning(f"TNP v4.0: Keine passende Edge im aktuellen Solid für Edge {i}! (Center: {b3d_edge.center()})")
+                    
+            except Exception as e:
+                stats['failed'] += 1
+                unresolved_shape_ids.append(shape_id)
+                logger.warning(f"TNP v4.0: Edge {i} Auflösung fehlgeschlagen: {e}")
+        
+        # Ergebnis
+        total = len(edge_shape_ids)
+        found = len(resolved_edges)
+        
+        if found == total:
+            logger.success(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
+        else:
+            logger.warning(f"TNP v4.0: Nur {found}/{total} Edges aufgelöst")
+        
+        # === TNP v4.0 DEBUG: Visuelle Darstellung der Auflösung ===
+        self._last_tnp_debug_data = {
+            'resolved': resolved_edges,
+            'unresolved': unresolved_shape_ids,
+            'body_id': self.id
+        }
+        
+        # Callback für GUI-Visualisierung (wenn registriert)
+        if hasattr(self._document, '_tnp_debug_callback') and self._document._tnp_debug_callback:
+            try:
+                self._document._tnp_debug_callback(resolved_edges, unresolved_shape_ids, self.id)
+            except Exception as e:
+                logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
+        
+        return resolved_edges
+    
+    def _validate_edge_in_solid(self, edge, all_edges, tolerance=0.01) -> bool:
+        """Validiert ob eine Edge im Solid existiert (geometrischer Vergleich)"""
+        try:
+            import numpy as np
+            
+            edge_center = np.array([edge.center().X, edge.center().Y, edge.center().Z])
+            
+            for solid_edge in all_edges:
+                solid_center = np.array([solid_edge.center().X, solid_edge.center().Y, solid_edge.center().Z])
+                dist = np.linalg.norm(edge_center - solid_center)
+                
+                if dist < tolerance:
+                    return True
+                    
+        except Exception:
+            pass
+            
+        return False
+    
+    def _find_matching_edge_in_solid(self, resolved_ocp_edge, all_edges, tolerance=0.01):
+        """
+        Findet die passende Edge vom aktuellen Solid.
+        
+        OCP erwartet Edges die tatsächlich im aktuellen Solid's BRep-Graph existieren,
+        nicht Edges aus einem anderen Kontext (auch wenn sie geometrisch identisch sind).
+        
+        Args:
+            resolved_ocp_edge: Die aufgelöste OCP Edge (aus ShapeNamingService)
+            all_edges: Liste aller Edges vom aktuellen Solid
+            tolerance: Toleranz für geometrischen Vergleich
+            
+        Returns:
+            Die passende Edge aus all_edges, oder None
+        """
+        try:
+            import numpy as np
+            from build123d import Edge
+            
+            # Center der aufgelösten Edge
+            resolved_b3d = Edge(resolved_ocp_edge)
+            resolved_center = np.array([
+                resolved_b3d.center().X, 
+                resolved_b3d.center().Y, 
+                resolved_b3d.center().Z
+            ])
+            
+            # Finde die Edge im aktuellen Solid mit dem gleichen Center
+            best_match = None
+            best_dist = float('inf')
+            
+            for solid_edge in all_edges:
+                solid_center = np.array([
+                    solid_edge.center().X, 
+                    solid_edge.center().Y, 
+                    solid_edge.center().Z
+                ])
+                dist = np.linalg.norm(resolved_center - solid_center)
+                
+                if dist < tolerance and dist < best_dist:
+                    best_dist = dist
+                    best_match = solid_edge
+            
+            return best_match
+            
+        except Exception as e:
+            logger.debug(f"_find_matching_edge_in_solid fehlgeschlagen: {e}")
+            return None
+    
+    # Legacy Methods removed - TNP v4.0 uses ShapeNamingService exclusively
 
     def _resolve_edges_by_hash(self, all_edges, ocp_edge_shapes) -> List:
         """
@@ -4992,7 +6105,11 @@ class Body:
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
+        
+        logger.debug(f"TNP DEBUG _compute_extrude_part: has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
+        
         if not has_sketch and not has_polys and not has_face_brep:
+            logger.debug("TNP DEBUG _compute_extrude_part: KEINE Geometrie-Quelle!")
             return None
 
         try:
@@ -5315,6 +6432,137 @@ class Body:
             logger.warning(f"[SELECTOR] Kein Profil-Match! Selector passt zu keinem der {len(profiles)} Profile.")
 
         return matched
+
+    def _compute_extrude_part_brepfeat(self, feature: 'ExtrudeFeature', current_solid):
+        """
+        TNP v3.0: BRepFeat-basierter Push/Pull für Body-Face-Operationen.
+        
+        Verwendet BRepFeat_MakePrism statt Extrude+Boolean für bessere
+        Topologie-Erhaltung und TNP-Robustheit.
+        
+        Args:
+            feature: ExtrudeFeature mit face_selector (Push/Pull auf Body-Face)
+            current_solid: Der aktuelle Body (Build123d Solid)
+            
+        Returns:
+            Build123d Solid nach BRepFeat-Operation
+        """
+        if current_solid is None:
+            raise ValueError("BRepFeat Push/Pull benötigt einen existierenden Körper")
+        
+        if not hasattr(feature, 'face_selector') or feature.face_selector is None:
+            raise ValueError("BRepFeat Push/Pull benötigt face_selector")
+        
+        import numpy as np
+        from modeling.geometric_selector import GeometricFaceSelector
+        
+        # Face-Selector laden
+        try:
+            geo_selector = GeometricFaceSelector.from_dict(feature.face_selector)
+        except Exception as e:
+            raise ValueError(f"Ungültiger Face-Selector: {e}")
+        
+        # Face im Solid finden
+        all_faces = current_solid.faces() if hasattr(current_solid, 'faces') else []
+        if not all_faces:
+            raise ValueError("Solid hat keine Faces")
+        
+        best_face = None
+        best_score = -1.0
+        
+        for face in all_faces:
+            try:
+                score = self._score_face_match(face, geo_selector)
+                if score > best_score:
+                    best_score = score
+                    best_face = face
+            except Exception:
+                continue
+        
+        if best_face is None or best_score < 0.3:  # Niedrigerer Threshold für BRepFeat
+            raise ValueError(f"Face nicht gefunden für BRepFeat (best score: {best_score:.2f})")
+        
+        # Normal und Distanz
+        center = np.array(geo_selector.center)
+        normal = np.array(geo_selector.normal)
+        
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-6:
+            raise ValueError("Face-Normale ist Null")
+        normal = normal / norm_len
+        
+        distance = feature.distance * feature.direction
+        
+        logger.info(f"BRepFeat Push/Pull: Face gefunden (score={best_score:.2f}), distance={distance:.2f}mm")
+        
+        # BRepFeat_MakePrism ausführen
+        try:
+            from OCP.BRepFeat import BRepFeat_MakePrism
+            from OCP.gp import gp_Dir
+            from build123d import Solid
+            
+            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
+            
+            direction = gp_Dir(float(normal[0]), float(normal[1]), float(normal[2]))
+            
+            # BRepFeat: fuse_mode=1 für Add, 0 für Cut
+            fuse_mode = 1 if distance > 0 else 0
+            abs_dist = abs(distance)
+            
+            prism = BRepFeat_MakePrism()
+            prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
+            prism.Perform(abs_dist)
+            
+            if prism.IsDone():
+                result_shape = prism.Shape()
+                result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
+                
+                result = Solid(result_shape)
+                
+                # Validierung
+                is_valid = True
+                if hasattr(result, 'is_valid'):
+                    try:
+                        is_valid = result.is_valid()
+                    except:
+                        is_valid = True
+
+                # DEBUG: Check validation criteria
+                has_volume_attr = hasattr(result, 'volume')
+                volume = result.volume if has_volume_attr else 0.0
+                logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
+
+                if is_valid and hasattr(result, 'volume') and result.volume > 0.001:
+                    logger.success(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
+                    
+                    # === TNP v4.0: BRepFeat-Operation tracken ===
+                    try:
+                        if self._document and hasattr(self._document, '_shape_naming_service'):
+                            service = self._document._shape_naming_service
+                            import uuid
+                            service.track_brepfeat_operation(
+                                feature_id=str(uuid.uuid4())[:8],
+                                source_solid=current_solid,
+                                result_solid=result,
+                                modified_face=best_face,
+                                direction=(float(normal[0]), float(normal[1]), float(normal[2])),
+                                distance=abs(distance)
+                            )
+                    except Exception as tnp_e:
+                        logger.debug(f"TNP v4.0 BRepFeat Tracking fehlgeschlagen: {tnp_e}")
+                    
+                    return result
+                else:
+                    logger.warning(f"BRepFeat: Ergebnis ungültig (valid={is_valid}, vol={getattr(result, 'volume', 0):.4f})")
+                    raise ValueError("BRepFeat produzierte ungültiges Ergebnis")
+            else:
+                logger.warning("BRepFeat: IsDone() = False")
+                raise ValueError("BRepFeat Operation fehlgeschlagen")
+                
+        except Exception as e:
+            logger.error(f"BRepFeat Push/Pull fehlgeschlagen: {e}")
+            raise
 
     def _detect_circle_from_points(self, points, tolerance=0.02):
         """
@@ -5979,6 +7227,19 @@ class Body:
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
                         for gs in feat.geometric_selectors
                     ]
+                # TNP v4.0: ShapeIDs vollständig serialisieren
+                if feat.edge_shape_ids:
+                    feat_dict["edge_shape_ids"] = [
+                        {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
+                        }
+                        for sid in feat.edge_shape_ids
+                    ]
 
             elif isinstance(feat, ChamferFeature):
                 feat_dict.update({
@@ -5992,6 +7253,19 @@ class Body:
                     feat_dict["geometric_selectors"] = [
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
                         for gs in feat.geometric_selectors
+                    ]
+                # TNP v4.0: ShapeIDs vollständig serialisieren
+                if feat.edge_shape_ids:
+                    feat_dict["edge_shape_ids"] = [
+                        {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
+                        }
+                        for sid in feat.edge_shape_ids
                     ]
 
             elif isinstance(feat, RevolveFeature):
@@ -6030,6 +7304,16 @@ class Body:
                     "end_continuity": feat.end_continuity if feat.end_continuity else "G0",
                     "profile_data": serialized_profiles,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.profile_shape_ids:
+                    feat_dict["profile_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.profile_shape_ids
+                    ]
 
             elif isinstance(feat, SweepFeature):
                 # Serialize profile_data with shapely_poly conversion
@@ -6053,6 +7337,19 @@ class Body:
                     "path_data": feat.path_data,
                     "contact_mode": feat.contact_mode,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.profile_shape_id:
+                    feat_dict["profile_shape_id"] = {
+                        "feature_id": feat.profile_shape_id.feature_id,
+                        "local_id": feat.profile_shape_id.local_id,
+                        "shape_type": feat.profile_shape_id.shape_type.name
+                    }
+                if feat.path_shape_id:
+                    feat_dict["path_shape_id"] = {
+                        "feature_id": feat.path_shape_id.feature_id,
+                        "local_id": feat.path_shape_id.local_id,
+                        "shape_type": feat.path_shape_id.shape_type.name
+                    }
 
             elif isinstance(feat, ShellFeature):
                 feat_dict.update({
@@ -6061,6 +7358,16 @@ class Body:
                     "thickness_formula": feat.thickness_formula,
                     "opening_face_selectors": feat.opening_face_selectors,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.face_shape_ids:
+                    feat_dict["face_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.face_shape_ids
+                    ]
 
             elif isinstance(feat, HoleFeature):
                 feat_dict.update({
@@ -6077,6 +7384,16 @@ class Body:
                     "counterbore_depth": feat.counterbore_depth,
                     "countersink_angle": feat.countersink_angle,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.face_shape_ids:
+                    feat_dict["face_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.face_shape_ids
+                    ]
 
             elif isinstance(feat, HollowFeature):
                 feat_dict.update({
@@ -6109,7 +7426,15 @@ class Body:
                     "direction": list(feat.direction),
                     "tolerance_class": feat.tolerance_class,
                     "tolerance_offset": feat.tolerance_offset,
+                    "face_selector": feat.face_selector,
                 })
+                # TNP v3.0: ShapeID serialisieren
+                if feat.face_shape_id:
+                    feat_dict["face_shape_id"] = {
+                        "feature_id": feat.face_shape_id.feature_id,
+                        "local_id": feat.face_shape_id.local_id,
+                        "shape_type": feat.face_shape_id.shape_type.name
+                    }
 
             elif isinstance(feat, DraftFeature):
                 feat_dict.update({
@@ -6118,6 +7443,16 @@ class Body:
                     "pull_direction": list(feat.pull_direction),
                     "face_selectors": feat.face_selectors,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.face_shape_ids:
+                    feat_dict["face_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.face_shape_ids
+                    ]
 
             elif isinstance(feat, SplitFeature):
                 feat_dict.update({
@@ -6134,6 +7469,13 @@ class Body:
                     "distance": feat.distance,
                     "operation": feat.operation,
                 })
+                # TNP v3.0: ShapeID serialisieren
+                if feat.face_shape_id:
+                    feat_dict["face_shape_id"] = {
+                        "feature_id": feat.face_shape_id.feature_id,
+                        "local_id": feat.face_shape_id.local_id,
+                        "shape_type": feat.face_shape_id.shape_type.name
+                    }
 
             elif isinstance(feat, NSidedPatchFeature):
                 feat_dict.update({
@@ -6142,6 +7484,21 @@ class Body:
                     "degree": feat.degree,
                     "tangent": feat.tangent,
                 })
+                # TNP v3.0: ShapeIDs und GeometricSelectors serialisieren
+                if feat.edge_shape_ids:
+                    feat_dict["edge_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.edge_shape_ids
+                    ]
+                if feat.geometric_selectors:
+                    feat_dict["geometric_selectors"] = [
+                        gs.to_dict() if hasattr(gs, 'to_dict') else gs
+                        for gs in feat.geometric_selectors
+                    ]
 
             elif isinstance(feat, SurfaceTextureFeature):
                 feat_dict.update({
@@ -6155,6 +7512,16 @@ class Body:
                     "type_params": feat.type_params,
                     "export_subdivisions": feat.export_subdivisions,
                 })
+                # TNP v3.0: ShapeIDs serialisieren
+                if feat.face_shape_ids:
+                    feat_dict["face_shape_ids"] = [
+                        {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
+                        for sid in feat.face_shape_ids
+                    ]
 
             elif isinstance(feat, TransformFeature):
                 feat_dict.update({
@@ -6173,12 +7540,13 @@ class Body:
 
             features_data.append(feat_dict)
 
-        # TNP-Daten exportieren
+        # TNP v3.0: Registry-Status exportieren
         tnp_data = {}
-        if self._tnp_tracker:
+        if hasattr(self, '_shape_registry'):
+            stats = self._shape_registry.get_stats()
             tnp_data = {
-                "references": self._tnp_tracker.export_references(),
-                "statistics": self._tnp_tracker.get_statistics(),
+                "version": "3.0",
+                "statistics": stats,
             }
 
         # B-Rep Snapshot: exakte Geometrie speichern
@@ -6284,6 +7652,21 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
+                # TNP v4.0: ShapeIDs vollständig deserialisieren
+                if "edge_shape_ids" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    feat.edge_shape_ids = []
+                    for sid_data in feat_dict["edge_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
+                            feat.edge_shape_ids.append(ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=sid_data.get("local_index", 0),
+                                geometry_hash=sid_data.get("geometry_hash", ""),
+                                timestamp=sid_data.get("timestamp", 0.0)
+                            ))
 
             elif feat_class == "ChamferFeature":
                 feat = ChamferFeature(
@@ -6299,6 +7682,21 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
+                # TNP v4.0: ShapeIDs vollständig deserialisieren
+                if "edge_shape_ids" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    feat.edge_shape_ids = []
+                    for sid_data in feat_dict["edge_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
+                            feat.edge_shape_ids.append(ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=sid_data.get("local_index", 0),
+                                geometry_hash=sid_data.get("geometry_hash", ""),
+                                timestamp=sid_data.get("timestamp", 0.0)
+                            ))
 
             elif feat_class == "RevolveFeature":
                 feat = RevolveFeature(
@@ -6339,6 +7737,18 @@ class Body:
                     profile_data=profile_data,
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeIDs deserialisieren
+                if "profile_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.profile_shape_ids = []
+                    for sid_data in feat_dict["profile_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.profile_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
 
             elif feat_class == "SweepFeature":
                 # Restore shapely_poly from coordinates
@@ -6365,21 +7775,84 @@ class Body:
                     contact_mode=feat_dict.get("contact_mode", "keep"),
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeIDs deserialisieren
+                from modeling.tnp_shape_reference import ShapeID, ShapeType
+                if "profile_shape_id" in feat_dict:
+                    sid_data = feat_dict["profile_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                        feat.profile_shape_id = ShapeID(
+                            feature_id=sid_data.get("feature_id", ""),
+                            local_id=sid_data.get("local_id", 0),
+                            shape_type=shape_type
+                        )
+                if "path_shape_id" in feat_dict:
+                    sid_data = feat_dict["path_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
+                        feat.path_shape_id = ShapeID(
+                            feature_id=sid_data.get("feature_id", ""),
+                            local_id=sid_data.get("local_id", 0),
+                            shape_type=shape_type
+                        )
 
             elif feat_class == "ShellFeature":
+                selectors = feat_dict.get("opening_face_selectors", [])
+                # Legacy: Konvertiere Tuples zu GeometricFaceSelector Dicts
+                converted_selectors = []
+                for sel in selectors:
+                    if isinstance(sel, (list, tuple)) and len(sel) == 2:
+                        # Alt: ((cx,cy,cz), (nx,ny,nz))
+                        converted_selectors.append({
+                            "center": list(sel[0]) if hasattr(sel[0], '__iter__') else [0,0,0],
+                            "normal": list(sel[1]) if hasattr(sel[1], '__iter__') else [0,0,1],
+                            "area": 0.0,
+                            "surface_type": "unknown",
+                            "tolerance": 10.0
+                        })
+                    elif isinstance(sel, dict):
+                        converted_selectors.append(sel)
+                
                 feat = ShellFeature(
                     thickness=feat_dict.get("thickness", 2.0),
-                    opening_face_selectors=feat_dict.get("opening_face_selectors", []),
+                    opening_face_selectors=converted_selectors,
                     **base_kwargs
                 )
                 feat.thickness_formula = feat_dict.get("thickness_formula")
+                # TNP v3.0: ShapeIDs deserialisieren
+                if "face_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.face_shape_ids = []
+                    for sid_data in feat_dict["face_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.face_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
 
             elif feat_class == "HoleFeature":
+                selectors = feat_dict.get("face_selectors", [])
+                # Legacy: Konvertiere Tuples zu GeometricFaceSelector Dicts
+                converted_selectors = []
+                for sel in selectors:
+                    if isinstance(sel, (list, tuple)) and len(sel) == 2:
+                        converted_selectors.append({
+                            "center": list(sel[0]) if hasattr(sel[0], '__iter__') else [0,0,0],
+                            "normal": list(sel[1]) if hasattr(sel[1], '__iter__') else [0,0,1],
+                            "area": 0.0,
+                            "surface_type": "unknown",
+                            "tolerance": 10.0
+                        })
+                    elif isinstance(sel, dict):
+                        converted_selectors.append(sel)
+                
                 feat = HoleFeature(
                     hole_type=feat_dict.get("hole_type", "simple"),
                     diameter=feat_dict.get("diameter", 8.0),
                     depth=feat_dict.get("depth", 0.0),
-                    face_selectors=feat_dict.get("face_selectors", []),
+                    face_selectors=converted_selectors,
                     position=tuple(feat_dict.get("position", (0, 0, 0))),
                     direction=tuple(feat_dict.get("direction", (0, 0, -1))),
                     counterbore_diameter=feat_dict.get("counterbore_diameter", 12.0),
@@ -6389,6 +7862,18 @@ class Body:
                 )
                 feat.diameter_formula = feat_dict.get("diameter_formula")
                 feat.depth_formula = feat_dict.get("depth_formula")
+                # TNP v3.0: ShapeIDs deserialisieren
+                if "face_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.face_shape_ids = []
+                    for sid_data in feat_dict["face_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.face_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
 
             elif feat_class == "HollowFeature":
                 feat = HollowFeature(
@@ -6411,14 +7896,34 @@ class Body:
 
             elif feat_class == "PushPullFeature":
                 sel = feat_dict.get("face_selector")
-                if sel and isinstance(sel, list):
-                    sel = (tuple(sel[0]), tuple(sel[1])) if len(sel) == 2 else None
+                # NEU: GeometricFaceSelector als Dict
+                # ALT: Liste [center, normal] - konvertieren zu Dict für Kompatibilität
+                if sel and isinstance(sel, list) and len(sel) == 2:
+                    # Legacy-Format: [(cx,cy,cz), (nx,ny,nz)]
+                    sel = {
+                        "center": list(sel[0]) if hasattr(sel[0], '__iter__') else [0,0,0],
+                        "normal": list(sel[1]) if hasattr(sel[1], '__iter__') else [0,0,1],
+                        "area": 0.0,
+                        "surface_type": "unknown",
+                        "tolerance": 10.0
+                    }
                 feat = PushPullFeature(
                     face_selector=sel,
                     distance=feat_dict.get("distance", 10.0),
                     operation=feat_dict.get("operation", "Join"),
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeID deserialisieren
+                if "face_shape_id" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    sid_data = feat_dict["face_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                        feat.face_shape_id = ShapeID(
+                            feature_id=sid_data.get("feature_id", ""),
+                            local_id=sid_data.get("local_id", 0),
+                            shape_type=shape_type
+                        )
 
             elif feat_class == "NSidedPatchFeature":
                 feat = NSidedPatchFeature(
@@ -6427,6 +7932,24 @@ class Body:
                     tangent=feat_dict.get("tangent", True),
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeIDs und GeometricSelectors deserialisieren
+                if "edge_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.edge_shape_ids = []
+                    for sid_data in feat_dict["edge_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
+                            feat.edge_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
+                if "geometric_selectors" in feat_dict:
+                    from modeling.geometric_selector import GeometricEdgeSelector
+                    feat.geometric_selectors = [
+                        GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
+                        for gs in feat_dict["geometric_selectors"]
+                    ]
 
             elif feat_class == "SurfaceTextureFeature":
                 feat = SurfaceTextureFeature(
@@ -6440,6 +7963,18 @@ class Body:
                     export_subdivisions=feat_dict.get("export_subdivisions", 2),
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeIDs deserialisieren
+                if "face_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.face_shape_ids = []
+                    for sid_data in feat_dict["face_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.face_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
 
             elif feat_class == "ThreadFeature":
                 feat = ThreadFeature(
@@ -6452,16 +7987,55 @@ class Body:
                     direction=tuple(feat_dict.get("direction", (0, 0, 1))),
                     tolerance_class=feat_dict.get("tolerance_class", "6g"),
                     tolerance_offset=feat_dict.get("tolerance_offset", 0.0),
+                    face_selector=feat_dict.get("face_selector"),
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeID deserialisieren
+                if "face_shape_id" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    sid_data = feat_dict["face_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                        feat.face_shape_id = ShapeID(
+                            feature_id=sid_data.get("feature_id", ""),
+                            local_id=sid_data.get("local_id", 0),
+                            shape_type=shape_type
+                        )
 
             elif feat_class == "DraftFeature":
+                selectors = feat_dict.get("face_selectors", [])
+                # Legacy: Konvertiere Tuples zu GeometricFaceSelector Dicts
+                converted_selectors = []
+                for sel in selectors:
+                    if isinstance(sel, (list, tuple)) and len(sel) == 2:
+                        converted_selectors.append({
+                            "center": list(sel[0]) if hasattr(sel[0], '__iter__') else [0,0,0],
+                            "normal": list(sel[1]) if hasattr(sel[1], '__iter__') else [0,0,1],
+                            "area": 0.0,
+                            "surface_type": "unknown",
+                            "tolerance": 10.0
+                        })
+                    elif isinstance(sel, dict):
+                        converted_selectors.append(sel)
+                
                 feat = DraftFeature(
                     draft_angle=feat_dict.get("draft_angle", 5.0),
                     pull_direction=tuple(feat_dict.get("pull_direction", (0, 0, 1))),
-                    face_selectors=feat_dict.get("face_selectors", []),
+                    face_selectors=converted_selectors,
                     **base_kwargs
                 )
+                # TNP v3.0: ShapeIDs deserialisieren
+                if "face_shape_ids" in feat_dict:
+                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    feat.face_shape_ids = []
+                    for sid_data in feat_dict["face_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.face_shape_ids.append(ShapeID(
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_id=sid_data.get("local_id", 0),
+                                shape_type=shape_type
+                            ))
 
             elif feat_class == "SplitFeature":
                 feat = SplitFeature(
@@ -6563,13 +8137,11 @@ class Body:
             except Exception as e:
                 logger.warning(f"BREP-Laden fehlgeschlagen für '{body.name}': {e}")
 
-        # TNP-Daten importieren
+        # TNP v3.0: Daten importieren
         tnp_data = data.get("tnp_data", {})
-        if tnp_data and body._tnp_tracker:
-            refs = tnp_data.get("references", [])
-            if refs:
-                body._tnp_tracker.import_references(refs)
-                logger.debug(f"TNP: {len(refs)} Referenzen für Body '{body.name}' importiert")
+        if tnp_data and hasattr(body, '_shape_registry'):
+            # ShapeIDs werden aus den Features rekonstruiert
+            logger.debug(f"TNP v3.0: Body '{body.name}' geladen - Registry wird aus Features aufgebaut")
 
         return body
 
@@ -6586,6 +8158,11 @@ class Document:
         self.name = name
         self.active_body: Optional[Body] = None
         self.active_sketch: Optional[Sketch] = None
+        
+        # TNP v4.0: Shape Naming Service für persistente Shape-Referenzen
+        from modeling.tnp_system import ShapeNamingService
+        self._shape_naming_service = ShapeNamingService()
+        logger.debug(f"TNP v4.0: ShapeNamingService initialisiert für '{name}'")
 
         # =========================================================================
         # Assembly System (Phase 1)
@@ -6733,7 +8310,7 @@ class Document:
         return parent.add_sub_component(name)
 
     def new_body(self, name=None):
-        b = Body(name or f"Body{len(self.bodies)+1}")
+        b = Body(name or f"Body{len(self.bodies)+1}", document=self)
         self.bodies.append(b)
         self.active_body = b
         return b

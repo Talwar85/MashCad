@@ -14,6 +14,10 @@ Verwendung:
         op.execute_trim(result.data)
 
 Feature-Flag: "use_extracted_trim"
+
+Phase 13 Enhancement:
+- Fuzzy Intersection Fallback für Tangent-Constraint-Fälle
+- Behandelt numerische Instabilität bei Near-Miss Intersections
 """
 
 import math
@@ -25,6 +29,11 @@ from .base import SketchOperation, OperationResult, ResultStatus
 
 if TYPE_CHECKING:
     from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D
+
+
+# === Fuzzy Intersection Toleranz ===
+# Für Tangent-Constraints und andere numerische Near-Miss-Fälle
+FUZZY_INTERSECTION_TOLERANCE = 1e-4  # 0.1mm - CAD-übliche Toleranz
 
 
 @dataclass
@@ -96,6 +105,174 @@ class TrimOperation(SketchOperation):
             entities.extend(self.sketch.arcs)
         return entities
 
+    # === Fuzzy Intersection Fallback (Phase 13) ===
+
+    def _get_min_distance_to_line(self, entity, line: 'Line2D') -> Tuple[float, Optional['Point2D'], Optional['Point2D']]:
+        """
+        Berechnet minimalen Abstand zwischen Entity und Line.
+
+        Returns:
+            (distance, point_on_entity, point_on_line)
+        """
+        from sketcher import Point2D, Arc2D, Circle2D
+
+        best_dist = float('inf')
+        best_entity_point = None
+        best_line_point = None
+
+        if isinstance(entity, Arc2D):
+            # Sample mehrere Punkte auf dem Arc
+            for t in [0.0, 0.25, 0.5, 0.75, 1.0]:
+                arc_pt = entity.point_at_parameter(t)
+                dist = line.distance_to_point(arc_pt)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_entity_point = arc_pt
+                    # Projiziere auf Linie für line_point
+                    dx = line.end.x - line.start.x
+                    dy = line.end.y - line.start.y
+                    length_sq = dx*dx + dy*dy
+                    if length_sq > 1e-10:
+                        t_line = max(0, min(1, ((arc_pt.x - line.start.x)*dx + (arc_pt.y - line.start.y)*dy) / length_sq))
+                        best_line_point = line.point_at_parameter(t_line)
+
+            # Auch Arc Start/End prüfen
+            for arc_pt in [entity.start_point, entity.end_point]:
+                dist = line.distance_to_point(arc_pt)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_entity_point = arc_pt
+                    dx = line.end.x - line.start.x
+                    dy = line.end.y - line.start.y
+                    length_sq = dx*dx + dy*dy
+                    if length_sq > 1e-10:
+                        t_line = max(0, min(1, ((arc_pt.x - line.start.x)*dx + (arc_pt.y - line.start.y)*dy) / length_sq))
+                        best_line_point = line.point_at_parameter(t_line)
+
+        elif isinstance(entity, Circle2D):
+            # Nächster Punkt: Projektion des Zentrums auf die Linie
+            dx = line.end.x - line.start.x
+            dy = line.end.y - line.start.y
+            length_sq = dx*dx + dy*dy
+            if length_sq > 1e-10:
+                t_line = max(0, min(1, ((entity.center.x - line.start.x)*dx + (entity.center.y - line.start.y)*dy) / length_sq))
+                proj_point = line.point_at_parameter(t_line)
+
+                # Punkt auf Kreis in Richtung der Projektion
+                dir_x = proj_point.x - entity.center.x
+                dir_y = proj_point.y - entity.center.y
+                dir_len = math.hypot(dir_x, dir_y)
+
+                if dir_len > 1e-10:
+                    circle_pt = Point2D(
+                        entity.center.x + dir_x / dir_len * entity.radius,
+                        entity.center.y + dir_y / dir_len * entity.radius
+                    )
+                    best_dist = circle_pt.distance_to(proj_point)
+                    best_entity_point = circle_pt
+                    best_line_point = proj_point
+
+        return best_dist, best_entity_point, best_line_point
+
+    def _try_fuzzy_intersection(self, target, other) -> List['Point2D']:
+        """
+        Fuzzy-Fallback wenn Standard-Intersection 0 Punkte liefert.
+
+        Prüft ob Entities sich "fast" berühren (Abstand < FUZZY_TOLERANCE).
+        Wenn ja, wird der nächste Punkt als virtueller Schnittpunkt verwendet.
+
+        Returns:
+            Liste von Fuzzy-Schnittpunkten (leer wenn kein Near-Miss)
+        """
+        from sketcher import Point2D, Line2D, Arc2D, Circle2D
+
+        fuzzy_points = []
+
+        # Arc + Line Kombination (häufigster Tangent-Fall)
+        if isinstance(target, Arc2D) and isinstance(other, Line2D):
+            dist, arc_pt, line_pt = self._get_min_distance_to_line(target, other)
+
+            if dist < FUZZY_INTERSECTION_TOLERANCE and arc_pt is not None:
+                # Prüfe ob der Punkt wirklich auf dem sichtbaren Arc liegt
+                if self._point_on_arc(arc_pt, target):
+                    logger.warning(
+                        f"[TRIM V2] Fuzzy intersection injected: Arc-Line distance={dist:.6f}mm "
+                        f"at ({arc_pt.x:.2f}, {arc_pt.y:.2f})"
+                    )
+                    fuzzy_points.append(arc_pt)
+
+        elif isinstance(target, Line2D) and isinstance(other, Arc2D):
+            dist, arc_pt, line_pt = self._get_min_distance_to_line(other, target)
+
+            if dist < FUZZY_INTERSECTION_TOLERANCE and line_pt is not None:
+                # Für Line als Target: Prüfe ob Punkt auf Linie liegt
+                t = self._get_geometry().get_param_on_entity(line_pt, target)
+                if 0.0 <= t <= 1.0:
+                    logger.warning(
+                        f"[TRIM V2] Fuzzy intersection injected: Line-Arc distance={dist:.6f}mm "
+                        f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
+                    )
+                    fuzzy_points.append(line_pt)
+
+        # Circle + Line
+        elif isinstance(target, Circle2D) and isinstance(other, Line2D):
+            dist, circle_pt, line_pt = self._get_min_distance_to_line(target, other)
+
+            if dist < FUZZY_INTERSECTION_TOLERANCE and circle_pt is not None:
+                logger.warning(
+                    f"[TRIM V2] Fuzzy intersection injected: Circle-Line distance={dist:.6f}mm "
+                    f"at ({circle_pt.x:.2f}, {circle_pt.y:.2f})"
+                )
+                fuzzy_points.append(circle_pt)
+
+        elif isinstance(target, Line2D) and isinstance(other, Circle2D):
+            dist, circle_pt, line_pt = self._get_min_distance_to_line(other, target)
+
+            if dist < FUZZY_INTERSECTION_TOLERANCE and line_pt is not None:
+                t = self._get_geometry().get_param_on_entity(line_pt, target)
+                if 0.0 <= t <= 1.0:
+                    logger.warning(
+                        f"[TRIM V2] Fuzzy intersection injected: Line-Circle distance={dist:.6f}mm "
+                        f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
+                    )
+                    fuzzy_points.append(line_pt)
+
+        return fuzzy_points
+
+    def _point_on_arc(self, point: 'Point2D', arc: 'Arc2D') -> bool:
+        """
+        Prüft ob ein Punkt auf dem sichtbaren Arc-Segment liegt.
+
+        Wichtig: Der Arc ist nur ein Teil des vollen Kreises.
+        """
+        # Berechne Winkel des Punktes relativ zum Zentrum
+        dx = point.x - arc.center.x
+        dy = point.y - arc.center.y
+        angle_rad = math.atan2(dy, dx)
+        angle_deg = math.degrees(angle_rad)
+
+        # Normalisiere auf [0, 360)
+        while angle_deg < 0:
+            angle_deg += 360
+        while angle_deg >= 360:
+            angle_deg -= 360
+
+        # Normalisiere Arc-Winkel
+        start = arc.start_angle % 360
+        end = arc.end_angle % 360
+
+        if start < 0:
+            start += 360
+        if end < 0:
+            end += 360
+
+        # Prüfe ob Winkel im Arc-Bereich liegt
+        if start <= end:
+            return start - 1.0 <= angle_deg <= end + 1.0  # 1° Toleranz
+        else:
+            # Wrap-around (z.B. 350° bis 10°)
+            return angle_deg >= start - 1.0 or angle_deg <= end + 1.0
+
     def _calculate_intersections(self, target, other_entities) -> List[Tuple[float, 'Point2D']]:
         """
         Berechnet alle Schnittpunkte des Targets mit anderen Entities.
@@ -141,6 +318,15 @@ class TrimOperation(SketchOperation):
                     intersects = geometry.arc_circle_intersection(target, other)
                 elif isinstance(target, Circle2D) and isinstance(other, Arc2D):
                     intersects = geometry.arc_circle_intersection(other, target)
+
+                # === FUZZY FALLBACK (Phase 13) ===
+                # Wenn keine exakten Schnittpunkte gefunden wurden,
+                # prüfe auf Near-Miss (für Tangent-Constraints etc.)
+                if not intersects:
+                    fuzzy_pts = self._try_fuzzy_intersection(target, other)
+                    if fuzzy_pts:
+                        intersects = fuzzy_pts
+
             except Exception as e:
                 logger.debug(f"Intersection error: {e}")
                 continue
@@ -277,8 +463,14 @@ class TrimOperation(SketchOperation):
         # Alle Entities sammeln
         other_entities = self._get_all_entities()
 
-        # Schnittpunkte berechnen
+        # Schnittpunkte berechnen (inkl. Fuzzy-Fallback)
         cut_points = self._calculate_intersections(target, other_entities)
+
+        # Debug-Logging für Diagnose
+        entity_type = type(target).__name__
+        # Für Lines: 2 cut_points sind Start/Ende, echte Schnitte sind > 2
+        real_cuts = len(cut_points) - 2 if isinstance(target, Line2D) else len(cut_points)
+        logger.debug(f"[TRIM V2] {entity_type}: {len(cut_points)} cut_points ({real_cuts} intersections)")
 
         # Segment finden je nach Entity-Typ
         segment = None
@@ -286,9 +478,12 @@ class TrimOperation(SketchOperation):
             segment = self._find_line_segment(target, click_point, cut_points)
         elif isinstance(target, Circle2D):
             segment = self._find_circle_segment(target, click_point, cut_points)
-        # TODO: Arc2D Support
+        elif isinstance(target, Arc2D):
+            # Arc2D wird wie Circle behandelt (gleiche Segment-Logik)
+            segment = self._find_circle_segment(target, click_point, cut_points)
 
         if segment is None:
+            logger.debug(f"[TRIM V2] Failed: Kein Segment gefunden (cut_points: {len(cut_points)})")
             return TrimResult.no_segment()
 
         self._last_trim_result = TrimResult.ok(segment, cut_points)

@@ -303,12 +303,12 @@ class GeometricEdgeSelector:
                 logger.debug(f"Edge-Matching fehlgeschlagen: {e}")
                 continue
 
-        # Nur returnen wenn Match gut genug (>60%)
+        # TNP v3.0: Threshold bleibt bei 60% - History-basiertes Tracking ist die Lösung
         if best_score > 0.6:
             logger.debug(f"✅ Edge Match gefunden (Score: {best_score:.2%})")
             return best_edge
         else:
-            logger.warning(f"⚠️ Keine passende Edge gefunden (bester Score: {best_score:.2%})")
+            logger.warning(f"⚠️ Keine passende Edge gefunden (bester Score: {best_score:.2%}) - BRepTools_History sollte verwendet werden")
             return None
 
     def _match_score(self, edge: 'Edge') -> float:

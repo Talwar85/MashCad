@@ -2409,54 +2409,112 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _handle_tangent(self, pos, snap_type):
-        """Tangent Constraint: Linie tangential an Kreis oder Kreis tangential an Kreis"""
-        line = self._find_line_at(pos)
-        circle = self._find_circle_at(pos)
-        
+        """Tangent Constraint: Linie tangential an Kreis/Arc oder Kreis/Arc tangential aneinander"""
+        from loguru import logger
+        from PySide6.QtGui import QColor
+
+        # WICHTIG: Für Constraint-Tools brauchen wir die originale Mausposition,
+        # nicht die gesnappte Position. Grid-Snap würde sonst die Entity-Suche verhindern.
+        original_pos = self.mouse_world
+
+        line = self._find_line_at(original_pos)
+        circle = self._find_circle_at(original_pos)
+        arc = self._find_arc_at(original_pos)  # Phase: Arc-Support für Tangent
+
+        logger.debug(f"[TANGENT] Step={self.tool_step}, pos={pos.x():.1f},{pos.y():.1f}, orig={original_pos.x():.1f},{original_pos.y():.1f}")
+        logger.debug(f"[TANGENT] Found: line={line is not None}, circle={circle is not None}, arc={arc is not None}")
+
         if self.tool_step == 0:
             if line:
                 self.tool_data['elem1'] = ('line', line)
+                self._highlight_constraint_entity(line)  # Visual Feedback
                 self.tool_step = 1
-                self.status_message.emit(tr("Line selected - now select circle"))
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Line selected - click circle or arc"), 3000, QColor(100, 200, 255))
+                self.status_message.emit(tr("Line selected - now select circle or arc"))
             elif circle:
                 self.tool_data['elem1'] = ('circle', circle)
+                self._highlight_constraint_entity(circle)  # Visual Feedback
                 self.tool_step = 1
-                self.status_message.emit(tr("Circle selected - now select line or circle"))
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Circle selected - click line, circle or arc"), 3000, QColor(100, 200, 255))
+                self.status_message.emit(tr("Circle selected - now select line, circle or arc"))
+            elif arc:
+                self.tool_data['elem1'] = ('arc', arc)
+                self._highlight_constraint_entity(arc)  # Visual Feedback
+                self.tool_step = 1
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Arc selected - click line, circle or arc"), 3000, QColor(100, 200, 255))
+                self.status_message.emit(tr("Arc selected - now select line, circle or arc"))
             else:
-                self.status_message.emit(tr("Select line or circle"))
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Click on line, circle or arc"), 2000, QColor(255, 200, 100))
+                self.status_message.emit(tr("Select line, circle or arc"))
         else:
             elem1_type, elem1 = self.tool_data.get('elem1', (None, None))
-            
-            if elem1_type == 'line' and circle:
-                # Linie tangential an Kreis machen
-                self._save_undo()
-                self._make_line_tangent_to_circle(elem1, circle)
+            elem2 = None  # Die zweite Entity
+            elem2_type = None
+
+            logger.debug(f"[TANGENT] Step 1: elem1_type={elem1_type}, line={line}, circle={circle}, arc={arc}")
+
+            # Bestimme elem2 basierend auf was gefunden wurde
+            if circle:
+                elem2, elem2_type = circle, 'circle'
+            elif arc:
+                elem2, elem2_type = arc, 'arc'
+            elif line:
+                elem2, elem2_type = line, 'line'
+
+            # Validierung: elem2 muss existieren und darf nicht elem1 sein
+            if elem2 is None or elem2 is elem1:
+                logger.warning(f"[TANGENT] Invalid: elem2={elem2}, elem1={elem1}")
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Invalid combination!"), 2000, QColor(255, 100, 100))
+                self.status_message.emit(tr("Invalid combination - select different elements"))
+                self._clear_constraint_highlight()
+                self._cancel_tool()
+                return
+
+            # Validierung: Line-Line ist nicht tangent-fähig
+            if elem1_type == 'line' and elem2_type == 'line':
+                logger.warning(f"[TANGENT] Line-Line not supported")
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Tangent needs circle or arc!"), 2000, QColor(255, 100, 100))
+                self.status_message.emit(tr("Tangent requires at least one circle or arc"))
+                self._clear_constraint_highlight()
+                self._cancel_tool()
+                return
+
+            self._save_undo()
+
+            # Pre-Positionierung für bessere Solver-Konvergenz
+            # (Geometrie wird UNGEFÄHR tangent positioniert, dann übernimmt der Constraint)
+            if elem1_type == 'line' and elem2_type in ('circle', 'arc'):
+                self._make_line_tangent_to_circle(elem1, elem2)
+            elif elem2_type == 'line' and elem1_type in ('circle', 'arc'):
+                self._make_line_tangent_to_circle(elem2, elem1)
+            elif elem1_type in ('circle', 'arc') and elem2_type in ('circle', 'arc'):
+                self._make_circles_tangent(elem1, elem2)
+
+            # === ECHTER CONSTRAINT HINZUFÜGEN ===
+            constraint = self.sketch.add_tangent(elem1, elem2)
+
+            if constraint:
+                logger.info(f"[TANGENT] Constraint created: {elem1_type} ↔ {elem2_type}")
                 result = self.sketch.solve()
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 self.update()
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Tangent applied!"), 2000, QColor(100, 255, 100))
                 self.status_message.emit(tr("Tangent constraint applied"))
-            elif elem1_type == 'circle' and line:
-                # Linie tangential an Kreis machen
-                self._save_undo()
-                self._make_line_tangent_to_circle(line, elem1)
-                result = self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-                self.update()
-                self.status_message.emit(tr("Tangent constraint applied"))
-            elif elem1_type == 'circle' and circle and circle != elem1:
-                # Zwei Kreise tangential machen
-                self._save_undo()
-                self._make_circles_tangent(elem1, circle)
-                result = self.sketch.solve()
-                self.sketched_changed.emit()
-                self._find_closed_profiles()
-                self.update()
-                self.status_message.emit(tr("Circles tangent"))
             else:
-                self.status_message.emit(tr("Invalid combination"))
-            
+                logger.warning(f"[TANGENT] Invalid combination: elem1_type={elem1_type}, line={line is not None}, circle={circle is not None}, arc={arc is not None}")
+                if hasattr(self, 'show_message'):
+                    self.show_message(tr("Invalid combination!"), 2000, QColor(255, 100, 100))
+                self.status_message.emit(tr("Invalid combination - select different elements"))
+
+            self._clear_constraint_highlight()  # Visual Feedback zurücksetzen
             self._cancel_tool()
     
     def _make_line_tangent_to_circle(self, line, circle):
@@ -2560,7 +2618,7 @@ class SketchHandlersMixin:
     
     def _handle_gear(self, pos, snap_type):
         """
-        Erweitertes Zahnrad-Tool (Fusion 360 Kompatibel).
+        Erweitertes Zahnrad-Tool (CAD Kompatibel).
         Unterstützt Backlash, Profilverschiebung und Bohrung.
         """
         # --- 1. Dialog Setup ---
@@ -3257,7 +3315,7 @@ class SketchHandlersMixin:
         )
         self.request_update()
 
-    # --- Kalibrierung (Fusion 360-Style) ---
+    # --- Kalibrierung (CAD-Style) ---
 
     def canvas_start_calibration(self):
         """Startet Kalibrierungsmodus: 2 Punkte auf dem Bild klicken, dann reale Distanz eingeben."""

@@ -34,24 +34,24 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "sketch_orientation_indicator": False,  # Zeigt 3D-Orientierung im Sketch-Editor (deaktiviert - Auto-Align löst das Problem)
 
     # Assembly System (Phase 1-6)
-    "assembly_system": True,  # Hierarchische Component-Struktur wie Fusion 360
+    "assembly_system": True,  # Hierarchische Component-Struktur wie CAD
 
     # Performance Optimizations (2026 Performance Plan)
     "optimized_actor_pooling": True,  # Phase 2: VTK Actor Pooling Optimierung
     "reuse_hover_markers": True,  # Phase 3: Hover-Marker wiederverwenden
     "picker_pooling": True,  # Phase 4: Picker-Pool statt neu erstellen
-    "bbox_early_rejection": True,  # Phase 5: BBox Check vor Boolean-Ops (PERMANENT - verhindert Boolean-Bugs!)
-    "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export (TEST)
-    "feature_dependency_tracking": True,  # Phase 7: Feature Dependency Graph (AKTIV)
-    "feature_solid_caching": False,  # Phase 8: Intermediate Solid Caching
-    "async_tessellation": False,  # Phase 9: Background Mesh Generation
-    "use_boolean_engine_v4": False,  # Phase 10: BooleanEngineV4 Integration
-    "ocp_advanced_flags": False,  # Phase 11: SetNonDestructive & SetUseOBB
-    "ocp_glue_mode": False,  # Phase 11: SetGlue() Testing
-    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Ops
-    "brep_extrema_analysis": False,  # Phase 13: BRepExtrema für Wandstärken
-    "auto_shape_unify": False,  # Phase 14: ShapeUpgrade_UnifySameDomain
-    "parallel_rebuild": False,  # Phase 15: Multi-Core Feature Rebuilding
+    "bbox_early_rejection": True,  # Phase 5: BBox Check vor Boolean-Ops (PERMANENT)
+    "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export
+    "feature_dependency_tracking": True,  # Phase 7: Feature Dependency Graph
+    "feature_solid_caching": True,  # Phase 8: In Phase 7 integriert (_solid_checkpoints)
+    "async_tessellation": False,  # Phase 9: Background Mesh Generation (TODO)
+    # Phase 10: BooleanEngineV4 ist jetzt STANDARD - kein Flag mehr nötig
+    "ocp_advanced_flags": True,  # Phase 11: SetFuzzyValue + SetRunParallel (AKTIV)
+    "ocp_glue_mode": False,  # Phase 11: SetGlue() - VERBOTEN (20% kaputte Bodies)
+    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Ops (TODO)
+    "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
+    "auto_shape_unify": False,  # Phase 14: ShapeUpgrade_UnifySameDomain (TODO)
+    "parallel_rebuild": False,  # Phase 15: Multi-Core Feature Rebuilding (TODO)
 }
 
 

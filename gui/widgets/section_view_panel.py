@@ -1,7 +1,7 @@
 """
 Section View Control Panel
 
-UI-Panel zur Steuerung der Schnittansicht (wie Fusion 360 Section Analysis).
+UI-Panel zur Steuerung der Schnittansicht (wie CAD Section Analysis).
 
 Autor: Claude (Section View Feature)
 Datum: 2026-01-22

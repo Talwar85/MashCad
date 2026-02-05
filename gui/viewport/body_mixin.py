@@ -123,7 +123,7 @@ class BodyRenderingMixin:
                     pass
         
         actors_list = []
-        # Verbesserte Standardfarbe: Warmes Silber-Grau (wie Fusion 360)
+        # Verbesserte Standardfarbe: Warmes Silber-Grau (wie CAD)
         if color is None:
             col_rgb = (0.72, 0.72, 0.75)  # Silber-Grau statt neutralgrau
         elif isinstance(color, str):
@@ -231,6 +231,30 @@ class BodyRenderingMixin:
                 # PERFORMANCE Phase 5: Invalidate section cache for this body
                 # (mesh changed, so cached clipped versions are stale)
                 SectionClipCache.invalidate_body(bid)
+                
+                # FIX: Invalidate detected_faces for this body
+                # (mesh changed, so face_ids are stale - fixes Push/Pull + Features)
+                if hasattr(self, 'detected_faces'):
+                    original_count = len(self.detected_faces)
+                    self.detected_faces = [
+                        f for f in self.detected_faces 
+                        if f.get('body_id') != bid
+                    ]
+                    removed = original_count - len(self.detected_faces)
+                    if removed > 0:
+                        logger.debug(f"Invalidated {removed} detected_faces for body {bid}")
+                
+                # FIX: Also invalidate GeometryDetector cache if it has body faces
+                # This ensures fresh face detection on next feature operation
+                if hasattr(self, 'detector') and hasattr(self.detector, 'selection_faces'):
+                    detector_faces_before = len(self.detector.selection_faces)
+                    self.detector.selection_faces = [
+                        f for f in self.detector.selection_faces
+                        if getattr(f, 'owner_id', None) != bid
+                    ]
+                    removed_detector = detector_faces_before - len(self.detector.selection_faces)
+                    if removed_detector > 0:
+                        logger.debug(f"Invalidated {removed_detector} detector faces for body {bid}")
 
                 # ✅ FIX: Re-apply Section View if active
                 if hasattr(self, '_section_view_enabled') and self._section_view_enabled:

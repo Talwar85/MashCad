@@ -4,7 +4,7 @@ MashCAD - Professional Boolean Engine V4
 
 Production-ready Boolean operations with:
 - Transaction-based rollback safety
-- Fusion 360-grade default tolerances
+- CAD-grade default tolerances
 - Fail-fast error signaling
 - Geometry-change verification
 - No multi-strategy fallbacks (keeps it simple)
@@ -122,7 +122,7 @@ class BooleanEngineV4:
     Professional Boolean engine with production-grade defaults.
 
     Philosophy:
-    - Use Fusion 360-grade tolerances as DEFAULT
+    - Use CAD-grade tolerances as DEFAULT
     - Fail fast with clear error messages
     - No magic fallbacks - user should fix geometry
     - Transaction-based rollback for safety
@@ -378,7 +378,7 @@ class BooleanEngineV4:
         """
         Execute OpenCASCADE Boolean operation with robust settings.
 
-        Phase 3: Robuste Boolean-Defaults (Fusion 360-ähnlich)
+        Phase 3: Robuste Boolean-Defaults (CAD-ähnlich)
         - SetFuzzyValue: Toleranz für numerische Ungenauigkeiten
         - SetRunParallel: Multi-Threading für Performance
         - SetGlue: Robustes Gluing für überlappende Geometrien
@@ -419,7 +419,7 @@ class BooleanEngineV4:
             op.SetArguments(args_list)
             op.SetTools(tools_list)
 
-            # Phase 3: Robuste Boolean-Defaults (wie Fusion 360)
+            # Phase 3: Robuste Boolean-Defaults (wie CAD)
             op.SetFuzzyValue(fuzzy_tolerance)  # Toleranz für numerische Ungenauigkeiten
             op.SetRunParallel(True)            # Multi-Threading für Performance
             # HINWEIS: SetGlue(GlueShift) entfernt - verursachte kaputte Körper bei ~20% der Joins
