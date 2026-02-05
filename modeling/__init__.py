@@ -8529,6 +8529,89 @@ class Document:
         self.active_sketch = s
         return s
 
+    def split_body(self, body: Body, plane_origin: tuple, plane_normal: tuple) -> Tuple[Body, Body]:
+        """
+        Teilt einen Body in 2 Hälften und fügt beide zum Document hinzu.
+
+        Multi-Body Split Architecture (AGENTS.md Phase 3):
+        - Erstellt SplitFeature mit keep_side="both"
+        - Beide Bodies erhalten shared Feature-Historie
+        - Original-Body wird aus Document entfernt
+        - Beide neue Bodies werden registriert
+
+        Args:
+            body: Zu teilender Body
+            plane_origin: Ursprung der Split-Ebene (x, y, z)
+            plane_normal: Normale der Split-Ebene (x, y, z)
+
+        Returns:
+            (body_above, body_below) - beide Bodies im Document registriert
+
+        Raises:
+            ValueError: Wenn Split fehlschlägt
+        """
+        from build123d import Solid
+
+        # 1. Split-Feature erstellen
+        split_feat = SplitFeature(
+            plane_origin=plane_origin,
+            plane_normal=plane_normal,
+            keep_side="both"  # Explizit beide behalten
+        )
+
+        # 2. Feature zu Original-Body hinzufügen (ohne Rebuild - wir wollen SplitResult)
+        body.features.append(split_feat)
+        split_index = len(body.features) - 1
+
+        # 3. _compute_split aufrufen → SplitResult
+        try:
+            split_result = body._compute_split(split_feat, body._build123d_solid)
+        except Exception as e:
+            # Rollback: Feature wieder entfernen
+            body.features.pop()
+            raise ValueError(f"Split-Operation fehlgeschlagen: {e}")
+
+        # Validierung: Muss SplitResult sein
+        if not isinstance(split_result, SplitResult):
+            body.features.pop()
+            raise ValueError("Split mit keep_side='both' muss SplitResult zurückgeben")
+
+        # 4. Beide Bodies erstellen mit shared history
+        body_above = Body(name=f"{body.name}_above", document=self)
+        body_above.features = body.features.copy()  # Shared history
+        body_above._build123d_solid = split_result.body_above
+        body_above.source_body_id = body.id
+        body_above.split_index = split_index
+        body_above.split_side = "above"
+
+        body_below = Body(name=f"{body.name}_below", document=self)
+        body_below.features = body.features.copy()  # Shared history
+        body_below._build123d_solid = split_result.body_below
+        body_below.source_body_id = body.id
+        body_below.split_index = split_index
+        body_below.split_side = "below"
+
+        # 5. Original-Body aus Document entfernen
+        if body in self.bodies:
+            self.bodies.remove(body)
+            logger.debug(f"Split: Original-Body '{body.name}' entfernt")
+
+        # 6. Beide neue Bodies hinzufügen
+        self.bodies.append(body_above)
+        self.bodies.append(body_below)
+
+        # Invalidate meshes für beide Bodies
+        body_above.invalidate_mesh()
+        body_below.invalidate_mesh()
+
+        logger.success(f"Split: '{body.name}' → '{body_above.name}' + '{body_below.name}'")
+
+        # 7. Setze einen der Bodies als aktiv (optional - user kann das auch manuell machen)
+        if self.active_body == body:
+            self.active_body = body_above
+
+        return body_above, body_below
+
     def new_plane(self, base: str = "XY", offset: float = 0.0, name: str = None):
         """
         Erstellt neue Konstruktionsebene.
