@@ -214,20 +214,20 @@ class MainWindow(QMainWindow):
         def tnp_debug_callback(resolved_edges, unresolved_shape_ids, body_id):
             if hasattr(self, 'viewport_3d') and self.viewport_3d:
                 try:
-                    logger.info(f"TNP Debug: {len(resolved_edges)} resolved, {len(unresolved_shape_ids)} unresolved")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.info(f"TNP Debug: {len(resolved_edges)} resolved, {len(unresolved_shape_ids)} unresolved")
                     # Debug-Visualisierung deaktiviert (grüne/rote Linien)
                     # self.viewport_3d.debug_visualize_edge_resolution(
                     #     resolved_edges, unresolved_shape_ids, body_id
                     # )
                 except Exception as e:
-                    logger.warning(f"TNP Debug Callback fehlgeschlagen: {e}")
                     import traceback
                     traceback.print_exc()
         
         # Callback im Document registrieren (immer setzen)
         if self.document:
             self.document._tnp_debug_callback = tnp_debug_callback
-            logger.debug("TNP Debug Callback registriert")
+        pass
 
     def _reposition_notifications(self):
         """Berechnet Positionen und startet Animationen"""
@@ -756,21 +756,21 @@ class MainWindow(QMainWindow):
         """Handler wenn Transform-Modus geändert wird"""
         if hasattr(self.viewport_3d, 'set_transform_mode'):
             self.viewport_3d.set_transform_mode(mode)
-        logger.info(f"Transform Mode: {mode.capitalize()}")
+        pass
 
     def _on_grid_size_changed(self, grid_size: float):
         """Handler wenn Grid-Size geändert wird"""
         # Update TransformState
         if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
             self.viewport_3d.transform_state.snap_grid_size = grid_size
-            logger.info(f"Grid-Size aktualisiert: {grid_size}mm (Ctrl+Drag für Snap)")
+        pass
 
     def _on_pivot_mode_changed(self, mode: str):
         """Handler wenn Pivot-Mode geändert wird"""
         # Update TransformState
         if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
             self.viewport_3d.transform_state.pivot_mode = mode
-            logger.info(f"Pivot-Mode aktualisiert: {mode}")
+        pass
 
             # Info: Bei 'origin' oder 'cursor' müsste Gizmo neu positioniert werden
             # Für jetzt: Nur bei Rotate/Scale relevant
@@ -1873,10 +1873,10 @@ class MainWindow(QMainWindow):
             mode: "move", "rotate", "scale", "mirror"
             data: Transform-Daten (Liste oder Dict)
         """
-        logger.info(f"📥 _on_body_transform_requested HANDLER CALLED")
-        logger.info(f"   body_ids: {body_ids}")
-        logger.info(f"   mode: {mode}")
-        logger.info(f"   data: {data}")
+        pass
+        pass
+        pass
+        pass
 
         # Normalisiere zu Liste
         if isinstance(body_ids, str):
@@ -2009,8 +2009,8 @@ class MainWindow(QMainWindow):
         Handler für Copy+Transform (Shift+Drag).
         Kopiert den Body und wendet dann den Transform an.
         """
-        logger.info(f"📥 _on_body_copy_requested HANDLER CALLED")
-        logger.info(f"   body_id: {body_id}")
+        pass
+        pass
         logger.info(f"   mode: {mode}")
         logger.info(f"   data: {data}")
         
@@ -2827,7 +2827,8 @@ class MainWindow(QMainWindow):
                 geometry_data=(0, 0, 0, 0)  # Placeholder
             )
             feature.face_shape_ids = [shape_id]
-            logger.debug(f"TNP v4.0: Face-ShapeID für Hole erstellt")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v4.0: Face-ShapeID für Hole erstellt")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -3561,7 +3562,8 @@ class MainWindow(QMainWindow):
             local_index=0,
             geometry_data=(0, 0, 0, 0)  # Placeholder
         )
-        logger.debug(f"TNP v4.0: Face-ShapeID für PushPull erstellt")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP v4.0: Face-ShapeID für PushPull erstellt")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -4214,7 +4216,8 @@ class MainWindow(QMainWindow):
             )
             face_shape_ids.append(shape_id)
         feature.face_shape_ids = face_shape_ids
-        logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Draft erstellt")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Draft erstellt")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -5661,9 +5664,11 @@ class MainWindow(QMainWindow):
             try:
                 face_selector = GeometricFaceSelector.from_face(best_face)
                 face_selector_dict = face_selector.to_dict()
-                logger.debug(f"TNP: GeometricFaceSelector erstellt: center={face_selector.center}")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP: GeometricFaceSelector erstellt: center={face_selector.center}")
             except Exception as sel_e:
-                logger.warning(f"TNP: Konnte GeometricFaceSelector nicht erstellen: {sel_e}")
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(f"TNP: Konnte GeometricFaceSelector nicht erstellen: {sel_e}")
                 face_selector_dict = None
 
             # DEBUG: Prüfe Wire-Struktur des gefundenen Faces
@@ -5826,7 +5831,8 @@ class MainWindow(QMainWindow):
                                         distance=abs(height)
                                     )
                             except Exception as tnp_e:
-                                logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
 
                             # Feature erstellen
                             from modeling import ExtrudeFeature
@@ -8377,7 +8383,8 @@ class MainWindow(QMainWindow):
             # WICHTIG: Nutze die bereits ermittelten `edges` (inkl. "alle Kanten"),
             # nicht nochmal get_selected_edges() aufrufen!
             geometric_selectors = create_geometric_selectors_from_edges(edges)
-            logger.debug(f"TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
 
             # TNP Phase 2: OCP Edge Shapes speichern
             ocp_edge_shapes = []
@@ -8391,7 +8398,8 @@ class MainWindow(QMainWindow):
             for feat in reversed(body.features):
                 if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
                     depends_on_feature_id = feat.id
-                    logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
                     break
 
             # Feature erstellen (ZUERST - damit es eine ID bekommt)
@@ -8421,14 +8429,18 @@ class MainWindow(QMainWindow):
                     shape_id = service.find_shape_id_by_edge(edge)
                     if shape_id:
                         edge_shape_ids.append(shape_id)
-                        logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
                     else:
-                        logger.warning("TNP v4.0: Keine ShapeID für Edge gefunden!")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning("TNP v4.0: Keine ShapeID für Edge gefunden!")
             else:
-                logger.warning("TNP v4.0: Kein NamingService verfügbar")
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning("TNP v4.0: Kein NamingService verfügbar")
             
             feature.edge_shape_ids = edge_shape_ids
-            logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
 
             # TNP v4.0: Keine zusätzliche Registrierung nötig
             # ShapeIDs wurden bereits vom Extrude/PushPull registriert
@@ -8689,7 +8701,8 @@ class MainWindow(QMainWindow):
                 )
                 face_shape_ids.append(shape_id)
             shell_feature.face_shape_ids = face_shape_ids
-            logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Shell erstellt")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Shell erstellt")
 
             # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             cmd = AddFeatureCommand(body, shell_feature, self, description=f"Shell ({thickness}mm)")
@@ -10152,7 +10165,8 @@ class MainWindow(QMainWindow):
         try:
             self.tnp_stats_panel.update_stats(body)
         except Exception as e:
-            logger.debug(f"TNP Stats Update fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Stats Update fehlgeschlagen: {e}")
 
     def _move_body(self):
         body = self._get_active_body()

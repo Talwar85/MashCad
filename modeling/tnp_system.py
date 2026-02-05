@@ -20,6 +20,7 @@ from uuid import uuid4
 import hashlib
 import numpy as np
 from loguru import logger
+from config.feature_flags import is_enabled
 
 # OCP Imports
 try:
@@ -158,7 +159,8 @@ class ShapeNamingService:
             ShapeType.VERTEX: []
         }
         
-        logger.info("TNP v4.0 ShapeNamingService initialisiert")
+        if is_enabled("tnp_debug_logging"):
+            logger.info("TNP v4.0 ShapeNamingService initialisiert")
     
     def register_shape(self, ocp_shape: TopoDS_Shape, shape_type: ShapeType,
                        feature_id: str, local_index: int,
@@ -196,15 +198,17 @@ class ShapeNamingService:
         # Räumlichen Index aktualisieren
         self._update_spatial_index(shape_id, record)
         
-        logger.debug(f"Shape registriert: {shape_id}")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"Shape registriert: {shape_id}")
         return shape_id
     
     def record_operation(self, operation: OperationRecord) -> None:
         """Speichert eine Operation im Graph"""
         self._operations.append(operation)
-        logger.debug(f"Operation aufgezeichnet: {operation.operation_type} "
-                    f"({len(operation.input_shape_ids)} in -> "
-                    f"{len(operation.output_shape_ids)} out)")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"Operation aufgezeichnet: {operation.operation_type} "
+                        f"({len(operation.input_shape_ids)} in -> "
+                        f"{len(operation.output_shape_ids)} out)")
     
     def find_shape_id_by_edge(self, edge: Any, tolerance: float = 0.1) -> Optional[ShapeID]:
         """
@@ -240,7 +244,7 @@ class ShapeNamingService:
                     best_score = score
                     best_match = shape_id
             
-            if best_match:
+            if best_match and is_enabled("tnp_debug_logging"):
                 logger.debug(f"ShapeID gefunden für Edge: {best_match.uuid[:8]}... (score={best_score:.4f})")
             
             return best_match
@@ -539,7 +543,8 @@ class ShapeNamingService:
             from OCP.TopAbs import TopAbs_EDGE
             from OCP.TopoDS import TopoDS
             
-            logger.info(f"TNP v4.0: Tracke BRepFeat Operation '{feature_id}'")
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Tracke BRepFeat Operation '{feature_id}'")
             
             # 1. Finde alle Edges der modified_face vor der Operation
             old_face_edges = set()
@@ -600,7 +605,8 @@ class ShapeNamingService:
                         affected_shape_ids.append(record.shape_id)
                         break
             
-            logger.debug(f"TNP BRepFeat: {len(affected_shape_ids)}/{len(modified_face_centers)} betroffene Edges gefunden")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP BRepFeat: {len(affected_shape_ids)}/{len(modified_face_centers)} betroffene Edges gefunden")
             
             # 3. Extrahiere alle Edges vom neuen Solid
             new_edges = list(result_solid.edges())
@@ -677,7 +683,8 @@ class ShapeNamingService:
                         manual_mappings[old_shape_id.uuid] = []
                     manual_mappings[old_shape_id.uuid].append(new_shape_id.uuid)
 
-                    logger.debug(f"TNP BRepFeat: Mapped {old_shape_id.uuid[:8]} → {new_shape_id.uuid[:8]} (score={best_score:.3f})")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP BRepFeat: Mapped {old_shape_id.uuid[:8]} → {new_shape_id.uuid[:8]} (score={best_score:.3f})")
 
             # === Phase 3: Registriere alle neuen Edges (z.B. Side-Edges von Extrusion) ===
             mappings_for_unmapped = [
@@ -691,7 +698,8 @@ class ShapeNamingService:
                 existing_mappings=mappings_for_unmapped
             )
 
-            logger.info(f"TNP BRepFeat: {len(manual_mappings)} mappings + {new_edge_count} neue Edges registriert")
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP BRepFeat: {len(manual_mappings)} mappings + {new_edge_count} neue Edges registriert")
 
             # 5. Erstelle OperationRecord
             if manual_mappings:
@@ -711,14 +719,17 @@ class ShapeNamingService:
                 self.record_operation(op_record)
                 
                 total_edges = len(manual_mappings) + new_edge_count
-                logger.success(f"TNP v4.0: BRepFeat Operation getrackt - {len(manual_mappings)} mappings + {new_edge_count} neue Edges = {total_edges} total")
+                if is_enabled("tnp_debug_logging"):
+                    logger.success(f"TNP v4.0: BRepFeat Operation getrackt - {len(manual_mappings)} mappings + {new_edge_count} neue Edges = {total_edges} total")
                 return op_record
             else:
-                logger.warning("TNP v4.0: Keine BRepFeat Mappings erstellt")
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning("TNP v4.0: Keine BRepFeat Mappings erstellt")
                 return None
                 
         except Exception as e:
-            logger.error(f"TNP v4.0: BRepFeat Tracking fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.error(f"TNP v4.0: BRepFeat Tracking fehlgeschlagen: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -753,8 +764,9 @@ class ShapeNamingService:
                 total_edges_in_result += 1
                 temp_explorer.Next()
 
-            logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {total_edges_in_result} Edges in result_solid")
-            logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {len(existing_mappings)} existing mappings")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {total_edges_in_result} Edges in result_solid")
+                logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {len(existing_mappings)} existing mappings")
 
             # Sammle alle gemappten OCP Shapes
             mapped_shapes = set()
@@ -765,9 +777,11 @@ class ShapeNamingService:
                         # Use Python id() for shape comparison
                         shape_hash = id(record.ocp_shape)
                         mapped_shapes.add(shape_hash)
-                        logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
 
-            logger.debug(f"[TNP DEBUG] Total mapped_shapes: {len(mapped_shapes)}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"[TNP DEBUG] Total mapped_shapes: {len(mapped_shapes)}")
 
             # Iteriere über alle Edges im Result
             explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
@@ -784,7 +798,8 @@ class ShapeNamingService:
                     edge_hash = id(edge)
                     is_mapped = edge_hash in mapped_shapes
 
-                    logger.debug(f"[TNP DEBUG] Edge {edge_index}: hash={edge_hash}, is_mapped={is_mapped}")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"[TNP DEBUG] Edge {edge_index}: hash={edge_hash}, is_mapped={is_mapped}")
 
                     if not is_mapped:
                         # Neue Edge → Registrieren
@@ -807,7 +822,8 @@ class ShapeNamingService:
                             geometry_data=(center, length)
                         )
 
-                        logger.debug(f"[TNP DEBUG] Neue Edge registriert: {shape_id.uuid[:8]}")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"[TNP DEBUG] Neue Edge registriert: {shape_id.uuid[:8]}")
                         new_count += 1
                         local_index += 1
 

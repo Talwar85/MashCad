@@ -584,7 +584,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     prop.SetRepresentationToSurface()
 
         request_render(self.plotter)  # PERFORMANCE: Use debounced render queue
-        logger.debug(f"Wireframe Toggle: {style}")
+        pass
 
     def _setup_scene(self):
         self._draw_grid(200)
@@ -643,7 +643,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 actor.GetProperty().SetOpacity(0.8)
                 request_render(self.plotter)
         except Exception as e:
-            logger.debug(f"Konnte Body {body_id} nicht highlighten: {e}")
+            pass
 
     def unhighlight_body(self, body_id: str):
         """Entfernt das Highlighting von einem Body"""
@@ -660,7 +660,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 actor.GetProperty().SetOpacity(1.0)
                 request_render(self.plotter)
         except Exception as e:
-            logger.debug(f"Konnte Body {body_id} nicht unhighlighten: {e}")
+            pass
 
     def set_pending_transform_mode(self, active: bool):
         """Aktiviert/deaktiviert den pending transform mode für Body-Highlighting"""
@@ -669,7 +669,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # Highlighting zurücksetzen wenn mode endet
             self.unhighlight_body(self.hover_body_id)
             self.hover_body_id = None
-        logger.debug(f"Pending transform mode: {active}")
+        pass
 
     def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True, log_pick: bool = True):
         """
@@ -737,12 +737,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
                     if nearest_vertex is not None:
                         point = nearest_vertex
-                        if log_pick:  # Nur loggen wenn explizit gewünscht
-                            logger.debug(f"Snapped to vertex (dist={min_dist:.2f})")
+                        # Vertex snapping erfolgreich
 
         point_tuple = (float(point[0]), float(point[1]), float(point[2]))
-        if log_pick:  # Nur loggen wenn explizit gewünscht
-            logger.debug(f"Picked point: {point_tuple} on body {body_id}")
         return body_id, point_tuple
 
     def start_point_to_point_mode(self, body_id: str):
@@ -2350,7 +2347,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_plane_constraint_indicator("YZ")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info("Ebenen-Lock: YZ (bewege auf Y und Z)")
                         else:
                             # X = X-Achse
                             self.transform_state.toggle_axis_lock("X")
@@ -2360,7 +2356,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_axis_constraint_indicator("X")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info(f"Achsen-Lock: {'X' if self.transform_state.axis_lock == 'X' else 'Aus'}")
                         return True
 
                     elif event.key() == Qt.Key_Y:
@@ -2373,7 +2368,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_plane_constraint_indicator("XZ")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info("Ebenen-Lock: XZ (bewege auf X und Z)")
                         else:
                             self.transform_state.toggle_axis_lock("Y")
                             # Visueller Indikator
@@ -2382,7 +2376,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_axis_constraint_indicator("Y")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info(f"Achsen-Lock: {'Y' if self.transform_state.axis_lock == 'Y' else 'Aus'}")
                         return True
 
                     elif event.key() == Qt.Key_Z:
@@ -2395,7 +2388,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_plane_constraint_indicator("XY")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info("Ebenen-Lock: XY (bewege auf X und Y)")
                         else:
                             self.transform_state.toggle_axis_lock("Z")
                             # Visueller Indikator
@@ -2404,7 +2396,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                     self._transform_ctrl.gizmo.show_axis_constraint_indicator("Z")
                                 else:
                                     self._transform_ctrl.gizmo.hide_constraint_indicators()
-                            logger.info(f"Achsen-Lock: {'Z' if self.transform_state.axis_lock == 'Z' else 'Aus'}")
                         return True
 
                     # NEU: MODALE NUMERISCHE EINGABE (Blender-Style)
@@ -2415,7 +2406,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if text and (text.isdigit() or text in ['.', '-']):
                         self.transform_state.numeric_input += text
                         self._show_numeric_input_overlay(self.transform_state.numeric_input)
-                        logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
                         return True
 
                     # Enter: Wert anwenden
@@ -2441,7 +2431,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                 self._show_numeric_input_overlay(self.transform_state.numeric_input)
                             else:
                                 self._hide_numeric_input_overlay()
-                            logger.debug(f"Numerische Eingabe: {self.transform_state.numeric_input}")
                         return True
 
         # --- TEXTURE FACE SELECTION MODE ---
@@ -2757,7 +2746,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     else:
                         # Zweiter Punkt ausgewählt - führe Move durch
                         end_point = point
-                        logger.info(f"🎯 Point-to-Point Move: Start {self.point_to_point_start} → Ziel {end_point}")
                         # Emittiere Signal für MainWindow
                         self.point_to_point_move.emit(self.point_to_point_body_id, self.point_to_point_start, end_point)
                         # Reset
@@ -2793,7 +2781,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             # Rechtsklick zum ABBRECHEN (nicht Bestätigen!)
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
-                logger.debug("Extrude: Rechtsklick → Abbruch")
                 self._clear_preview()
                 self.extrude_height = 0.0
                 self.selected_face_ids.clear()
@@ -2901,16 +2888,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     return True
 
             # NEU: Sketch-Pfad-Selektion für Sweep (direkter Viewport-Klick)
-            logger.debug(f"sketch_path_mode={self.sketch_path_mode}, sketch_actors={len(self._sketch_actors)}")
             if self.sketch_path_mode:
                 sketch_id, geom_type, index = self._pick_sketch_element_at(x, y)
                 logger.debug(f"Sketch-Pfad Pick Ergebnis: sketch_id={sketch_id}, geom_type={geom_type}, index={index}")
                 if sketch_id and geom_type in ('line', 'arc', 'spline'):
-                    logger.info(f"Sketch-Pfad geklickt: {sketch_id}/{geom_type}/{index}")
                     self.sketch_path_clicked.emit(sketch_id, geom_type, index)
                     return True
-                else:
-                    logger.debug(f"Sketch-Pfad nicht erkannt oder ungültiger Typ")
 
             # Measure-Modus: Punkt auf Modell picken mit Vertex/Edge-Snapping
             if self.measure_mode:
@@ -2947,9 +2930,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.is_dragging = False
 
             # Face-Selection (für Extrude etc.)
-            logger.debug(f"[PICK] extrude_mode={self.extrude_mode}, filter={self.active_selection_filter}")
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
-            logger.debug(f"[PICK] Klick bei ({x}, {y}) → hit_id={hit_id}")
 
             if hit_id != -1:
                 # Multi-Select mit STRG/Shift
@@ -3003,7 +2984,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """
         if self.extrude_mode:
             if getattr(self, 'is_dragging', False) or getattr(self, '_is_potential_drag', False):
-                logger.debug("🔄 leaveEvent: Reset drag state (Maus hat Viewport verlassen)")
                 self.is_dragging = False
                 self._is_potential_drag = False
 

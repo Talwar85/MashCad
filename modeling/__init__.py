@@ -33,6 +33,7 @@ from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as 
 # NOTE: Altes TNP-System (Phase 8.2) deaktiviert - verwendet TNP v3.0
 # from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker
 from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
+from config.feature_flags import is_enabled  # Für TNP Debug Logging
 
 # TNP v4.0 - Professionelles Topological Naming System
 from modeling.tnp_system import (
@@ -1565,9 +1566,11 @@ class Body:
                         result_shape=result_shape,
                         history=boolean_history
                     )
-                    logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
                 except Exception as tnp_e:
-                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
             # 4. Prüfe Ergebnis
             if result_shape is None:
@@ -1751,9 +1754,11 @@ class Body:
                         result_shape=result_shape,
                         history=boolean_history
                     )
-                    logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
                 except Exception as tnp_e:
-                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
             # 5. Validiere und repariere Resultat
             if result_shape is None:
@@ -3047,7 +3052,8 @@ class Body:
                             result_shape=result_shape
                         )
                     except Exception as tnp_e:
-                        logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {tnp_e}")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {tnp_e}")
                     
                     return (result, None)
 
@@ -4397,7 +4403,8 @@ class Body:
         Wird nach Boolean/PushPull aufgerufen.
         """
         if not hasattr(self, '_shape_registry'):
-            logger.debug(f"TNP DEBUG: _update_registry_for_feature - KEINE REGISTRY!")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP DEBUG: _update_registry_for_feature - KEINE REGISTRY!")
             return
         
         try:
@@ -4405,18 +4412,22 @@ class Body:
             from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
             
             updated = 0
-            logger.debug(f"TNP DEBUG: _update_registry_for_feature für {feature.name} ({feature.id})")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP DEBUG: _update_registry_for_feature für {feature.name} ({feature.id})")
             
             # Edge-basierte Features (Fillet, Chamfer)
             if isinstance(feature, (FilletFeature, ChamferFeature)):
                 edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
                 geometric_selectors = getattr(feature, 'geometric_selectors', [])
                 
-                logger.debug(f"TNP DEBUG: Feature hat {len(edge_shape_ids)} edge_shape_ids, {len(geometric_selectors)} selectors")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP DEBUG: Feature hat {len(edge_shape_ids)} edge_shape_ids, "
+                               f"{len(geometric_selectors)} selectors")
                 
                 # Hole Edges aus Solid für original_shape
                 all_edges = list(solid.edges()) if solid and hasattr(solid, 'edges') else []
-                logger.debug(f"TNP DEBUG: Solid hat {len(all_edges)} edges")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP DEBUG: Solid hat {len(all_edges)} edges")
                 
                 for i, shape_id in enumerate(edge_shape_ids):
                     if i < len(geometric_selectors):
@@ -4439,9 +4450,11 @@ class Body:
                                 original_shape = matched_edge.wrapped
                         
                         if original_shape:
-                            logger.debug(f"TNP DEBUG: Edge {i} - Match gefunden, original_shape gesetzt")
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP DEBUG: Edge {i} - Match gefunden, original_shape gesetzt")
                         else:
-                            logger.warning(f"TNP DEBUG: Edge {i} - KEIN Match gefunden!")
+                            if is_enabled("tnp_debug_logging"):
+                                logger.warning(f"TNP DEBUG: Edge {i} - KEIN Match gefunden!")
                         
                         ref = ShapeReference(
                             ref_id=shape_id,
@@ -4489,10 +4502,12 @@ class Body:
                         updated += 1
             
             if updated > 0:
-                logger.debug(f"TNP v3.0: Registry für {feature.name} aktualisiert ({updated} refs)")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v3.0: Registry für {feature.name} aktualisiert ({updated} refs)")
                 
         except Exception as e:
-            logger.debug(f"TNP v3.0: Registry-Update fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v3.0: Registry-Update fehlgeschlagen: {e}")
 
     def _update_edge_selectors_for_feature(self, feature, solid):
         """
@@ -4582,10 +4597,12 @@ class Body:
             total = len(resolved)
             
             if total > 0:
-                logger.debug(f"TNP Registry nach '{operation_name}': {found}/{total} Referenzen aufgelöst")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP Registry nach '{operation_name}': {found}/{total} Referenzen aufgelöst")
                 
         except Exception as e:
-            logger.debug(f"TNP Registry Update fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Registry Update fehlgeschlagen: {e}")
 
     def _register_feature_shape_refs(self, feature) -> None:
         """
@@ -4743,10 +4760,12 @@ class Body:
                     (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
                     (1 if thread_face_shape_id else 0))
             if total > 0:
-                logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} registriert (mit original_shape)")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} registriert (mit original_shape)")
                 
         except Exception as e:
-            logger.debug(f"TNP Registry Registrierung fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Registry Registrierung fehlgeschlagen: {e}")
 
     def _register_extrude_shapes(self, feature: 'ExtrudeFeature', solid) -> None:
         """
@@ -4791,10 +4810,12 @@ class Body:
                 )
             )
             
-            logger.info(f"TNP v4.0: {len(shape_ids)} Edges für Extrude '{feature.name}' registriert")
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: {len(shape_ids)} Edges für Extrude '{feature.name}' registriert")
             
         except Exception as e:
-            logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
 
     def _register_brepfeat_operation(self, feature, original_solid, result_solid,
                                      input_shape, result_shape) -> None:
@@ -4896,14 +4917,16 @@ class Body:
                 )
             )
             
-            logger.info(f"TNP v4.0: BRepFeat '{feature.name}' registriert - "
-                       f"{len(input_shape_ids)} in, {len(output_shape_ids)} out, "
-                       f"{len(manual_mappings)} mappings")
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: BRepFeat '{feature.name}' registriert - "
+                           f"{len(input_shape_ids)} in, {len(output_shape_ids)} out, "
+                           f"{len(manual_mappings)} mappings")
             
         except Exception as e:
-            logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
 
     def _unregister_feature_shape_refs(self, feature) -> None:
         """
@@ -4952,10 +4975,12 @@ class Body:
                     (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
                     (1 if thread_face_shape_id else 0))
             if total > 0:
-                logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} entfernt")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} entfernt")
                 
         except Exception as e:
-            logger.debug(f"TNP Registry Unregister fehlgeschlagen: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Registry Unregister fehlgeschlagen: {e}")
 
     def _update_face_selectors_for_feature(self, feature, solid):
         """
@@ -5221,7 +5246,6 @@ class Body:
                 
                 if has_polys and current_solid is not None:
                     # === PUSH/PULL auf Body-Face: Verwende BRepFeat für TNP-Robustheit ===
-                    logger.info(f"TNP BRepFeat: Push/Pull auf Body-Face erkannt - verwende BRepFeat_MakePrism")
                     
                     def op_brepfeat():
                         return self._compute_extrude_part_brepfeat(feature, current_solid)
@@ -5230,24 +5254,28 @@ class Body:
                     
                     if brepfeat_result and status == "SUCCESS":
                         new_solid = brepfeat_result
-                        logger.success(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.success(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
                         
                         # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
-                        logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                         self._update_edge_selectors_after_operation(new_solid)
                         
                         # Registry für ALLE Fillet/Chamfer-Features aktualisieren
-                        logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
                         updated_count = 0
                         for feat in self.features:
                             if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                 self._update_registry_for_feature(feat, new_solid)
                                 updated_count += 1
                         
-                        logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                     else:
-                        logger.warning(f"TNP BRepFeat: Push/Pull fehlgeschlagen, versuche Fallback")
                         # Fallback zu normalem Extrude+Boolean
                         has_polys = False
                 
@@ -5261,46 +5289,55 @@ class Body:
                     if part_geometry:
                         if current_solid is None or feature.operation == "New Body":
                             new_solid = part_geometry
-                            logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
                             
                             # === TNP v4.0: Shape-Registrierung für Extrude ===
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 try:
                                     self._register_extrude_shapes(feature, new_solid)
                                 except Exception as tnp_e:
-                                    logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
                             # Boolean Operation mit sicherer Helper-Methode
-                            logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
                             result, success = self._safe_boolean_operation(
                                 current_solid, part_geometry, feature.operation
                             )
 
                             if success:
                                 new_solid = result
-                                logger.debug(f"TNP DEBUG: Boolean {feature.operation} erfolgreich")
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP DEBUG: Boolean {feature.operation} erfolgreich")
                                 
                                 # TNP v3.0: Nach Boolean-Operation ALLE Shape-Referenzen aktualisieren
                                 if new_solid is not None:
                                     # 1. Edge-Selektoren für nachfolgende Features aktualisieren
-                                    logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                                     self._update_edge_selectors_after_operation(new_solid)
                                     
                                     # 2. Registry für ALLE Fillet/Chamfer-Features aktualisieren
-                                    logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
                                     updated_count = 0
                                     for feat in self.features:
                                         if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                            logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
+                                            if is_enabled("tnp_debug_logging"):
+                                                logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                             self._update_registry_for_feature(feat, new_solid)
                                             updated_count += 1
                                     
-                                    logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                                     
                                     # 3. DEBUG: Zeige Registry-Status
                                     if hasattr(self, '_shape_registry'):
                                         stats = self._shape_registry.get_stats()
-                                        logger.debug(f"TNP DEBUG: Registry Status = {stats}")
+                                        if is_enabled("tnp_debug_logging"):
+                                            logger.debug(f"TNP DEBUG: Registry Status = {stats}")
                             else:
                                 logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
                                 status = "ERROR"
@@ -5315,7 +5352,8 @@ class Body:
                     self._update_edge_selectors_for_feature(feature, current_solid)
                     
                     # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
-                    logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
                     def op_fillet(rad=feature.radius):
@@ -5347,7 +5385,8 @@ class Body:
                     # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
                     # WICHTIG: Dies muss nach _update_edge_selectors_for_feature passieren
                     # damit die neuen Selektoren verwendet werden
-                    logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
                     def op_chamfer(dist=feature.distance):
@@ -5517,9 +5556,11 @@ class Body:
                                     result_shape=new_solid,
                                     history=pushpull_history
                                 )
-                                logger.debug(f"TNP v3.0: PushPull History getrackt für Feature {feature.id}")
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP v3.0: PushPull History getrackt für Feature {feature.id}")
                             except Exception as tnp_e:
-                                logger.debug(f"TNP v3.0: PushPull History Tracking fehlgeschlagen: {tnp_e}")
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP v3.0: PushPull History Tracking fehlgeschlagen: {tnp_e}")
 
                         # SAUBERE LÖSUNG: Edge-Selektoren nach PushPull aktualisieren
                         # Weil sich Geometrie geändert hat, müssen Fillet/Chamfer Refs aktualisiert werden
@@ -5714,7 +5755,8 @@ class Body:
         # TNP v3.0: Nur noch Logging für Debugging
         if hasattr(self, '_shape_registry'):
             stats = self._shape_registry.get_stats()
-            logger.debug(f"TNP v3.0 Registry Status: {stats}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v3.0 Registry Status: {stats}")
 
     def update_feature_references(self, feature_id: str, old_solid, new_solid):
         """
@@ -5728,7 +5770,8 @@ class Body:
             new_solid: Solid NACH der Änderung
         """
         # TNP v3.0: Neue Registry verwendet automatische Resolution
-        logger.debug(f"TNP v3.0: Feature {feature_id} wurde modifiziert - Registry bleibt aktiv")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP v3.0: Feature {feature_id} wurde modifiziert - Registry bleibt aktiv")
 
     def reorder_features(self, old_index: int, new_index: int) -> bool:
         """
@@ -5822,18 +5865,21 @@ class Body:
         """
         all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
         if not all_edges:
-            logger.warning("TNP v4.0: Keine Edges im Solid gefunden")
+            if is_enabled("tnp_debug_logging"):
+                logger.warning("TNP v4.0: Keine Edges im Solid gefunden")
             return []
         
         feature_name = getattr(feature, 'name', 'Unknown')
         edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
         
-        logger.info(f"TNP v4.0: Resolving {len(edge_shape_ids)} edges for {feature_name} "
+        if is_enabled("tnp_debug_logging"):
+            logger.info(f"TNP v4.0: Resolving {len(edge_shape_ids)} edges for {feature_name} "
                    f"({len(all_edges)} edges in solid)")
         
         # TNP v4.0: Verwende Document's ShapeNamingService
         if not self._document or not hasattr(self._document, '_shape_naming_service'):
-            logger.warning("TNP v4.0: Kein ShapeNamingService verfügbar")
+            if is_enabled("tnp_debug_logging"):
+                logger.warning("TNP v4.0: Kein ShapeNamingService verfügbar")
             return []
         
         service = self._document._shape_naming_service
@@ -5849,7 +5895,8 @@ class Body:
                 if resolved_ocp is None:
                     stats['failed'] += 1
                     unresolved_shape_ids.append(shape_id)
-                    logger.warning(f"TNP v4.0: Edge {i} konnte nicht aufgelöst werden")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(f"TNP v4.0: Edge {i} konnte nicht aufgelöst werden")
                     continue
                 
                 # WICHTIG: Finde die PASSENDE Edge vom aktuellen Solid!
@@ -5859,27 +5906,32 @@ class Body:
                 
                 if matching_edge is not None:
                     resolved_edges.append(matching_edge)
-                    logger.debug(f"TNP v4.0: Edge {i} gefunden und mit aktuellem Solid verknüpft")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v4.0: Edge {i} gefunden und mit aktuellem Solid verknüpft")
                 else:
                     stats['failed'] += 1
                     unresolved_shape_ids.append(shape_id)
                     from build123d import Edge
                     b3d_edge = Edge(resolved_ocp)
-                    logger.warning(f"TNP v4.0: Keine passende Edge im aktuellen Solid für Edge {i}! (Center: {b3d_edge.center()})")
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(f"TNP v4.0: Keine passende Edge im aktuellen Solid für Edge {i}! (Center: {b3d_edge.center()})")
                     
             except Exception as e:
                 stats['failed'] += 1
                 unresolved_shape_ids.append(shape_id)
-                logger.warning(f"TNP v4.0: Edge {i} Auflösung fehlgeschlagen: {e}")
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(f"TNP v4.0: Edge {i} Auflösung fehlgeschlagen: {e}")
         
         # Ergebnis
         total = len(edge_shape_ids)
         found = len(resolved_edges)
         
         if found == total:
-            logger.success(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
+            if is_enabled("tnp_debug_logging"):
+                logger.success(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
         else:
-            logger.warning(f"TNP v4.0: Nur {found}/{total} Edges aufgelöst")
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(f"TNP v4.0: Nur {found}/{total} Edges aufgelöst")
         
         # === TNP v4.0 DEBUG: Visuelle Darstellung der Auflösung ===
         self._last_tnp_debug_data = {
@@ -5893,7 +5945,8 @@ class Body:
             try:
                 self._document._tnp_debug_callback(resolved_edges, unresolved_shape_ids, self.id)
             except Exception as e:
-                logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
         
         return resolved_edges
     
@@ -6001,7 +6054,8 @@ class Body:
             return found
 
         except Exception as e:
-            logger.debug(f"TNP Hash-Matching Fehler: {e}")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Hash-Matching Fehler: {e}")
             return []
 
     def _resolve_edges_by_geometry(self, all_edges, geometric_selectors) -> List:
@@ -6198,10 +6252,12 @@ class Body:
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
         
-        logger.debug(f"TNP DEBUG _compute_extrude_part: has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP DEBUG _compute_extrude_part: has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
         
         if not has_sketch and not has_polys and not has_face_brep:
-            logger.debug("TNP DEBUG _compute_extrude_part: KEINE Geometrie-Quelle!")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug("TNP DEBUG _compute_extrude_part: KEINE Geometrie-Quelle!")
             return None
 
         try:
@@ -6623,7 +6679,8 @@ class Body:
                 # DEBUG: Check validation criteria
                 has_volume_attr = hasattr(result, 'volume')
                 volume = result.volume if has_volume_attr else 0.0
-                logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
 
                 if is_valid and hasattr(result, 'volume') and result.volume > 0.001:
                     logger.success(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
@@ -6642,7 +6699,8 @@ class Body:
                                 distance=abs(distance)
                             )
                     except Exception as tnp_e:
-                        logger.debug(f"TNP v4.0 BRepFeat Tracking fehlgeschlagen: {tnp_e}")
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP v4.0 BRepFeat Tracking fehlgeschlagen: {tnp_e}")
                     
                     return result
                 else:
@@ -8344,7 +8402,8 @@ class Body:
         tnp_data = data.get("tnp_data", {})
         if tnp_data and hasattr(body, '_shape_registry'):
             # ShapeIDs werden aus den Features rekonstruiert
-            logger.debug(f"TNP v3.0: Body '{body.name}' geladen - Registry wird aus Features aufgebaut")
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v3.0: Body '{body.name}' geladen - Registry wird aus Features aufgebaut")
 
         # Multi-Body Split-Tracking (AGENTS.md Phase 2)
         body.source_body_id = data.get("source_body_id")
@@ -8370,13 +8429,13 @@ class Document:
         # TNP v4.0: Shape Naming Service für persistente Shape-Referenzen
         from modeling.tnp_system import ShapeNamingService
         self._shape_naming_service = ShapeNamingService()
-        logger.debug(f"TNP v4.0: ShapeNamingService initialisiert für '{name}'")
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP v4.0: ShapeNamingService initialisiert für '{name}'")
 
         # =========================================================================
         # Assembly System (Phase 1)
         # =========================================================================
         # Feature Flag prüfen
-        from config.feature_flags import is_enabled
         self._assembly_enabled = is_enabled("assembly_system")
 
         if self._assembly_enabled:
