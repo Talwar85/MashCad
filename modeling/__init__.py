@@ -320,9 +320,12 @@ class LoftFeature(Feature):
     #   "plane_y_dir": tuple
     # }
     
-    # TNP v3.0: ShapeIDs für Body-Face Profile (nicht Sketch-Profile)
+    # TNP v4.0: ShapeIDs für Body-Face Profile (nicht Sketch-Profile)
     profile_shape_ids: List = None  # List[ShapeID] - parallel zu profile_data
-    
+
+    # TNP v4.0: GeometricFaceSelectors als Fallback (parallel zu profile_data)
+    profile_geometric_selectors: List = None  # List[GeometricFaceSelector]
+
     ruled: bool = False  # True = gerade Linien, False = glatt interpoliert
     operation: str = "New Body"  # "New Body", "Join", "Cut", "Intersect"
 
@@ -338,6 +341,8 @@ class LoftFeature(Feature):
             self.name = "Loft"
         if self.profile_shape_ids is None:
             self.profile_shape_ids = []
+        if self.profile_geometric_selectors is None:
+            self.profile_geometric_selectors = []
 
     def get_start_continuity_mode(self):
         """Konvertiert String zu ContinuityMode Enum."""
@@ -377,10 +382,14 @@ class SweepFeature(Feature):
     #   "body_id": str | None
     # }
     
-    # TNP v3.0: ShapeIDs für Body-Referenzen
+    # TNP v4.0: ShapeIDs für Body-Referenzen
     profile_shape_id: Any = None  # ShapeID für Body-Face Profile
     path_shape_id: Any = None     # ShapeID für Body-Edge Path
-    
+
+    # TNP v4.0: GeometricSelectors als Fallback
+    profile_geometric_selector: Any = None  # GeometricFaceSelector
+    path_geometric_selector: Any = None     # GeometricEdgeSelector
+
     is_frenet: bool = False  # Frenet-Frame für Verdrehung entlang Pfad
     operation: str = "New Body"
 
@@ -496,6 +505,22 @@ class DraftFeature(Feature):
 
 
 @dataclass
+class SplitResult:
+    """
+    Result of a split operation that creates 2 bodies.
+
+    TNP v4.0: Enthält beide Bodies + optional Split-Face ShapeIDs
+    """
+    body_above: Any      # Solid auf der +normal Seite
+    body_below: Any      # Solid auf der -normal Seite
+    split_plane: dict    # Plane-Info für Visualisierung (origin, normal)
+
+    # TNP v4.0: Optional Face-ShapeIDs für Split-Faces
+    above_split_face_ids: List = None
+    below_split_face_ids: List = None
+
+
+@dataclass
 class SplitFeature(Feature):
     """
     Körper teilen entlang einer Ebene.
@@ -546,6 +571,8 @@ class HollowFeature(Feature):
     """
     Aushöhlen eines Körpers mit optionalem Drain Hole (für SLA/SLS Druck).
     Intern: Shell (geschlossen) + Boolean Cut Zylinder.
+
+    TNP v4.0: Face-Referenzen für Opening-Faces (wie Shell)
     """
     wall_thickness: float = 2.0          # Wandstärke in mm
     drain_hole: bool = False             # Drain Hole aktiviert?
@@ -553,10 +580,18 @@ class HollowFeature(Feature):
     drain_position: Tuple[float, float, float] = (0, 0, 0)  # Startpunkt
     drain_direction: Tuple[float, float, float] = (0, 0, -1) # Richtung (default: nach unten)
 
+    # TNP v4.0: Optional Opening-Faces für partielles Shell
+    opening_face_shape_ids: List = None  # List[ShapeID]
+    opening_face_selectors: List = None  # List[GeometricFaceSelector]
+
     def __post_init__(self):
         self.type = FeatureType.HOLLOW
         if not self.name or self.name == "Feature":
             self.name = "Hollow"
+        if self.opening_face_shape_ids is None:
+            self.opening_face_shape_ids = []
+        if self.opening_face_selectors is None:
+            self.opening_face_selectors = []
 
 
 @dataclass
@@ -1144,6 +1179,12 @@ class Body:
         
         # Referenz zum Document (für TNP v4.0 Naming Service)
         self._document = document
+
+        # === Multi-Body Split-Tracking (AGENTS.md Phase 2) ===
+        # Wenn dieser Body via Split entstanden ist:
+        self.source_body_id: Optional[str] = None  # ID des Original-Bodies vor Split
+        self.split_index: Optional[int] = None      # Index des Split-Features in der Historie
+        self.split_side: Optional[str] = None       # "above" oder "below"
 
         # CAD Kernel Objekte
         self._build123d_solid = None
@@ -3319,10 +3360,15 @@ class Body:
             raise ValueError("Hollow benötigt einen existierenden Körper")
 
         # Step 1: Create closed shell (reuse shell logic)
+        # TNP v4.0: Leite opening_face_shape_ids und selectors durch
         shell_feat = ShellFeature(
             thickness=feature.wall_thickness,
-            opening_face_selectors=[]
+            opening_face_selectors=feature.opening_face_selectors if feature.opening_face_selectors else []
         )
+        # Übertrage auch ShapeIDs an Shell-Feature
+        if feature.opening_face_shape_ids:
+            shell_feat.opening_face_shape_ids = feature.opening_face_shape_ids
+
         hollowed = self._compute_shell(shell_feat, current_solid)
         if hollowed is None:
             raise ValueError("Shell-Erzeugung fehlgeschlagen")
@@ -3640,12 +3686,22 @@ class Body:
     def _compute_split(self, feature: 'SplitFeature', current_solid):
         """
         Teilt einen Koerper entlang einer Ebene.
-        Gibt die gewaehlte Haelfte zurueck.
+
+        TNP v4.0 / Multi-Body Architecture:
+        - Berechnet BEIDE Hälften (above + below)
+        - Gibt SplitResult zurück mit beiden Bodies
+        - Für legacy keep_side != "both": Gibt nur eine Hälfte als Solid zurück
+
+        Returns:
+            - SplitResult (wenn keep_side == "both")
+            - Solid (wenn keep_side == "above" oder "below" - legacy)
         """
         from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
         from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeHalfSpace
         from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        import numpy as np
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
@@ -3655,11 +3711,7 @@ class Body:
 
         logger.info(f"Split: origin={feature.plane_origin}, normal={feature.plane_normal}, keep={feature.keep_side}")
 
-        # HalfSpace erzeugen (unendlicher Halbraum)
-        from OCP.BRepPrimAPI import BRepPrimAPI_MakeHalfSpace
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-
-        # Grosse Ebene als Face
+        # === Phase 1: Grosse Ebene als Face erstellen ===
         face_builder = BRepBuilderAPI_MakeFace(plane, -1000, 1000, -1000, 1000)
         face_builder.Build()
         if not face_builder.IsDone():
@@ -3667,38 +3719,59 @@ class Body:
 
         split_face = face_builder.Face()
 
-        # Punkt auf der "above" Seite
-        import numpy as np
+        # === Phase 2: Beide HalfSpaces erstellen ===
         n = np.array(feature.plane_normal, dtype=float)
         n = n / (np.linalg.norm(n) + 1e-12)
-        ref_pt = np.array(feature.plane_origin) + n * 100.0
 
-        half_space = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(ref_pt[0], ref_pt[1], ref_pt[2]))
-        half_solid = half_space.Solid()
+        # HalfSpace ABOVE (+normal Seite)
+        ref_pt_above = np.array(feature.plane_origin) + n * 100.0
+        half_space_above = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(*ref_pt_above))
+        half_solid_above = half_space_above.Solid()
 
-        # Cut: Body mit HalfSpace schneiden
-        if feature.keep_side == "above":
-            # Behalte die Seite in Normalenrichtung
-            cut_op = BRepAlgoAPI_Cut(shape, half_solid)
-        else:
-            # Behalte die andere Seite
-            cut_op = BRepAlgoAPI_Cut(shape, half_solid)
-            # Invertiere: schneide mit dem ANDEREN HalfSpace
-            ref_pt_below = np.array(feature.plane_origin) - n * 100.0
-            half_space_below = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(ref_pt_below[0], ref_pt_below[1], ref_pt_below[2]))
-            half_solid_below = half_space_below.Solid()
-            cut_op = BRepAlgoAPI_Cut(shape, half_solid_below)
+        # HalfSpace BELOW (-normal Seite)
+        ref_pt_below = np.array(feature.plane_origin) - n * 100.0
+        half_space_below = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(*ref_pt_below))
+        half_solid_below = half_space_below.Solid()
 
-        cut_op.Build()
-        if cut_op.IsDone():
-            result_shape = cut_op.Shape()
-            result_shape = self._fix_shape_ocp(result_shape)
-            from build123d import Solid
-            result = Solid(result_shape)
-            logger.success(f"Split ({feature.keep_side}) erfolgreich")
+        # === Phase 3: Beide Cuts durchführen ===
+        cut_above = BRepAlgoAPI_Cut(shape, half_solid_below)  # Cut away below → keep above
+        cut_below = BRepAlgoAPI_Cut(shape, half_solid_above)  # Cut away above → keep below
+
+        cut_above.Build()
+        cut_below.Build()
+
+        if not (cut_above.IsDone() and cut_below.IsDone()):
+            raise ValueError("Split-Operation fehlgeschlagen - einer der Cuts konnte nicht durchgeführt werden")
+
+        # === Phase 4: Beide Solids erstellen ===
+        result_above_shape = self._fix_shape_ocp(cut_above.Shape())
+        result_below_shape = self._fix_shape_ocp(cut_below.Shape())
+
+        from build123d import Solid
+        body_above = Solid(result_above_shape)
+        body_below = Solid(result_below_shape)
+
+        # === Phase 5: Legacy vs Multi-Body Mode ===
+        if feature.keep_side == "both":
+            # TNP v4.0 Multi-Body Mode
+            result = SplitResult(
+                body_above=body_above,
+                body_below=body_below,
+                split_plane={
+                    "origin": feature.plane_origin,
+                    "normal": feature.plane_normal
+                }
+            )
+            logger.success(f"Split (both) erfolgreich → 2 Bodies erstellt")
             return result
-
-        raise ValueError("Split-Operation fehlgeschlagen")
+        elif feature.keep_side == "above":
+            # Legacy: Nur above zurückgeben
+            logger.success(f"Split (above) erfolgreich")
+            return body_above
+        else:
+            # Legacy: Nur below zurückgeben
+            logger.success(f"Split (below) erfolgreich")
+            return body_below
 
     def _compute_thread(self, feature: 'ThreadFeature', current_solid):
         """
@@ -5495,7 +5568,26 @@ class Body:
             elif isinstance(feature, SplitFeature):
                 if current_solid:
                     def op_split():
-                        return self._compute_split(feature, current_solid)
+                        # Multi-Body Architecture (AGENTS.md Phase 2):
+                        # Während Rebuild: Wenn dieser Body ein split_side hat, berechne nur diese Seite
+                        if self.split_side and i == self.split_index:
+                            # Rebuild-Modus: Nur unsere Seite berechnen
+                            # Temporär keep_side überschreiben für diesen Rebuild
+                            original_keep_side = feature.keep_side
+                            feature.keep_side = self.split_side
+                            result = self._compute_split(feature, current_solid)
+                            feature.keep_side = original_keep_side  # Restore
+                            return result  # Solid (legacy mode)
+                        else:
+                            # Normaler Split oder keep_side != "both"
+                            result = self._compute_split(feature, current_solid)
+                            # Falls SplitResult zurückkommt (keep_side == "both"):
+                            # Das sollte nur beim ersten Split passieren, nicht während Rebuild
+                            if isinstance(result, SplitResult):
+                                # Während Rebuild sollte das nicht passieren - Warnung!
+                                logger.warning("Split returned SplitResult during rebuild - using body_above as fallback")
+                                return result.body_above
+                            return result
 
                     new_solid, status = self._safe_operation(f"Split_{i}", op_split)
                     if new_solid is None:
@@ -7304,15 +7396,25 @@ class Body:
                     "end_continuity": feat.end_continuity if feat.end_continuity else "G0",
                     "profile_data": serialized_profiles,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
                 if feat.profile_shape_ids:
                     feat_dict["profile_shape_ids"] = [
                         {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
                             "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
                         }
                         for sid in feat.profile_shape_ids
+                    ]
+
+                # TNP v4.0: GeometricSelectors als Fallback serialisieren
+                if feat.profile_geometric_selectors:
+                    feat_dict["profile_geometric_selectors"] = [
+                        asdict(sel) if hasattr(sel, '__dataclass_fields__') else sel
+                        for sel in feat.profile_geometric_selectors
                     ]
 
             elif isinstance(feat, SweepFeature):
@@ -7337,19 +7439,39 @@ class Body:
                     "path_data": feat.path_data,
                     "contact_mode": feat.contact_mode,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
                 if feat.profile_shape_id:
                     feat_dict["profile_shape_id"] = {
+                        "uuid": feat.profile_shape_id.uuid,
+                        "shape_type": feat.profile_shape_id.shape_type.name,
                         "feature_id": feat.profile_shape_id.feature_id,
-                        "local_id": feat.profile_shape_id.local_id,
-                        "shape_type": feat.profile_shape_id.shape_type.name
+                        "local_index": feat.profile_shape_id.local_index,
+                        "geometry_hash": feat.profile_shape_id.geometry_hash,
+                        "timestamp": feat.profile_shape_id.timestamp
                     }
                 if feat.path_shape_id:
                     feat_dict["path_shape_id"] = {
+                        "uuid": feat.path_shape_id.uuid,
+                        "shape_type": feat.path_shape_id.shape_type.name,
                         "feature_id": feat.path_shape_id.feature_id,
-                        "local_id": feat.path_shape_id.local_id,
-                        "shape_type": feat.path_shape_id.shape_type.name
+                        "local_index": feat.path_shape_id.local_index,
+                        "geometry_hash": feat.path_shape_id.geometry_hash,
+                        "timestamp": feat.path_shape_id.timestamp
                     }
+
+                # TNP v4.0: GeometricSelectors als Fallback serialisieren
+                if feat.profile_geometric_selector:
+                    feat_dict["profile_geometric_selector"] = (
+                        asdict(feat.profile_geometric_selector)
+                        if hasattr(feat.profile_geometric_selector, '__dataclass_fields__')
+                        else feat.profile_geometric_selector
+                    )
+                if feat.path_geometric_selector:
+                    feat_dict["path_geometric_selector"] = (
+                        asdict(feat.path_geometric_selector)
+                        if hasattr(feat.path_geometric_selector, '__dataclass_fields__')
+                        else feat.path_geometric_selector
+                    )
 
             elif isinstance(feat, ShellFeature):
                 feat_dict.update({
@@ -7404,6 +7526,27 @@ class Body:
                     "drain_position": list(feat.drain_position),
                     "drain_direction": list(feat.drain_direction),
                 })
+
+                # TNP v4.0: Opening-Face ShapeIDs vollständig serialisieren
+                if feat.opening_face_shape_ids:
+                    feat_dict["opening_face_shape_ids"] = [
+                        {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
+                        }
+                        for sid in feat.opening_face_shape_ids
+                    ]
+
+                # TNP v4.0: GeometricSelectors als Fallback serialisieren
+                if feat.opening_face_selectors:
+                    feat_dict["opening_face_selectors"] = [
+                        asdict(sel) if hasattr(sel, '__dataclass_fields__') else sel
+                        for sel in feat.opening_face_selectors
+                    ]
 
             elif isinstance(feat, LatticeFeature):
                 feat_dict.update({
@@ -7577,6 +7720,10 @@ class Body:
             "tnp_data": tnp_data,
             "brep": brep_string,
             "version": "8.3",
+            # Multi-Body Split-Tracking (AGENTS.md Phase 2)
+            "source_body_id": self.source_body_id,
+            "split_index": self.split_index,
+            "split_side": self.split_side,
         }
 
     @classmethod
@@ -7737,18 +7884,31 @@ class Body:
                     profile_data=profile_data,
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeIDs deserialisieren
+                # TNP v4.0: ShapeIDs vollständig deserialisieren (alle 6 Felder)
                 if "profile_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.profile_shape_ids = []
                     for sid_data in feat_dict["profile_shape_ids"]:
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
                             feat.profile_shape_ids.append(ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
                                 feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
+                                local_index=sid_data.get("local_index", 0),
+                                geometry_hash=sid_data.get("geometry_hash", ""),
+                                timestamp=sid_data.get("timestamp", 0.0)
                             ))
+
+                # TNP v4.0: GeometricSelectors deserialisieren
+                if "profile_geometric_selectors" in feat_dict:
+                    from modeling.geometric_selector import GeometricFaceSelector
+                    feat.profile_geometric_selectors = []
+                    for sel_data in feat_dict["profile_geometric_selectors"]:
+                        if isinstance(sel_data, dict):
+                            feat.profile_geometric_selectors.append(
+                                GeometricFaceSelector(**sel_data)
+                            )
 
             elif feat_class == "SweepFeature":
                 # Restore shapely_poly from coordinates
@@ -7775,26 +7935,43 @@ class Body:
                     contact_mode=feat_dict.get("contact_mode", "keep"),
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeIDs deserialisieren
-                from modeling.tnp_shape_reference import ShapeID, ShapeType
+                # TNP v4.0: ShapeIDs vollständig deserialisieren (alle 6 Felder)
+                from modeling.tnp_system import ShapeID, ShapeType
                 if "profile_shape_id" in feat_dict:
                     sid_data = feat_dict["profile_shape_id"]
                     if isinstance(sid_data, dict):
                         shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
                         feat.profile_shape_id = ShapeID(
+                            uuid=sid_data.get("uuid", ""),
+                            shape_type=shape_type,
                             feature_id=sid_data.get("feature_id", ""),
-                            local_id=sid_data.get("local_id", 0),
-                            shape_type=shape_type
+                            local_index=sid_data.get("local_index", 0),
+                            geometry_hash=sid_data.get("geometry_hash", ""),
+                            timestamp=sid_data.get("timestamp", 0.0)
                         )
                 if "path_shape_id" in feat_dict:
                     sid_data = feat_dict["path_shape_id"]
                     if isinstance(sid_data, dict):
                         shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
                         feat.path_shape_id = ShapeID(
+                            uuid=sid_data.get("uuid", ""),
+                            shape_type=shape_type,
                             feature_id=sid_data.get("feature_id", ""),
-                            local_id=sid_data.get("local_id", 0),
-                            shape_type=shape_type
+                            local_index=sid_data.get("local_index", 0),
+                            geometry_hash=sid_data.get("geometry_hash", ""),
+                            timestamp=sid_data.get("timestamp", 0.0)
                         )
+
+                # TNP v4.0: GeometricSelectors deserialisieren
+                from modeling.geometric_selector import GeometricFaceSelector, GeometricEdgeSelector
+                if "profile_geometric_selector" in feat_dict:
+                    sel_data = feat_dict["profile_geometric_selector"]
+                    if isinstance(sel_data, dict):
+                        feat.profile_geometric_selector = GeometricFaceSelector(**sel_data)
+                if "path_geometric_selector" in feat_dict:
+                    sel_data = feat_dict["path_geometric_selector"]
+                    if isinstance(sel_data, dict):
+                        feat.path_geometric_selector = GeometricEdgeSelector(**sel_data)
 
             elif feat_class == "ShellFeature":
                 selectors = feat_dict.get("opening_face_selectors", [])
@@ -7884,6 +8061,32 @@ class Body:
                     drain_direction=tuple(feat_dict.get("drain_direction", [0, 0, -1])),
                     **base_kwargs
                 )
+
+                # TNP v4.0: Opening-Face ShapeIDs vollständig deserialisieren
+                if "opening_face_shape_ids" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    feat.opening_face_shape_ids = []
+                    for sid_data in feat_dict["opening_face_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.opening_face_shape_ids.append(ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=sid_data.get("local_index", 0),
+                                geometry_hash=sid_data.get("geometry_hash", ""),
+                                timestamp=sid_data.get("timestamp", 0.0)
+                            ))
+
+                # TNP v4.0: GeometricSelectors deserialisieren
+                if "opening_face_selectors" in feat_dict:
+                    from modeling.geometric_selector import GeometricFaceSelector
+                    feat.opening_face_selectors = []
+                    for sel_data in feat_dict["opening_face_selectors"]:
+                        if isinstance(sel_data, dict):
+                            feat.opening_face_selectors.append(
+                                GeometricFaceSelector(**sel_data)
+                            )
 
             elif feat_class == "LatticeFeature":
                 feat = LatticeFeature(
@@ -8142,6 +8345,11 @@ class Body:
         if tnp_data and hasattr(body, '_shape_registry'):
             # ShapeIDs werden aus den Features rekonstruiert
             logger.debug(f"TNP v3.0: Body '{body.name}' geladen - Registry wird aus Features aufgebaut")
+
+        # Multi-Body Split-Tracking (AGENTS.md Phase 2)
+        body.source_body_id = data.get("source_body_id")
+        body.split_index = data.get("split_index")
+        body.split_side = data.get("split_side")
 
         return body
 
