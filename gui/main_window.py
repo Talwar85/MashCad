@@ -4402,7 +4402,7 @@ class MainWindow(QMainWindow):
     def _on_split_confirmed(self):
         """Split bestätigt — Feature erstellen."""
         from modeling import SplitFeature
-        from gui.commands.feature_commands import AddFeatureCommand
+        from gui.commands.feature_commands import AddFeatureCommand, SplitBodyCommand
 
         body = getattr(self, '_split_target_body', None)
         if not body:
@@ -4414,35 +4414,21 @@ class MainWindow(QMainWindow):
         origin, normal = self._split_origin_normal()
 
         if keep == "both":
-            # Compute below half BEFORE modifying the body
-            from modeling import Body
-            below_solid = None
-            try:
-                below_solid = body._compute_split(
-                    SplitFeature(plane_origin=origin, plane_normal=normal, keep_side="below"),
-                    body._build123d_solid
-                )
-            except Exception as e:
-                logger.error(f"Split Both - below half failed: {e}")
-
-            # Apply above to original body
-            feature_above = SplitFeature(
-                plane_origin=origin, plane_normal=normal, keep_side="above",
+            # Multi-Body Split Architecture (AGENTS.md Phase 5)
+            # Verwende SplitBodyCommand für korrektes Undo/Redo
+            cmd = SplitBodyCommand(
+                self.document,
+                body,
+                origin,
+                normal,
+                self
             )
-            cmd = AddFeatureCommand(body, feature_above, self)
             self.undo_stack.push(cmd)
 
-            # Create new body with below half
-            if below_solid:
-                new_body = Body(name=f"{body.name}_B")
-                new_body._build123d_solid = below_solid
-                new_body.invalidate_mesh()
-                self.document.bodies.append(new_body)
-                self.browser.refresh()
-
             self.statusBar().showMessage("Split (both) — 2 Bodies erstellt")
-            logger.success("Split Body (both) erstellt")
+            logger.success("Split Body (both) erstellt — mit shared Historie und Undo/Redo")
         else:
+            # Legacy: Nur eine Seite behalten
             feature = SplitFeature(
                 plane_origin=origin, plane_normal=normal, keep_side=keep,
             )
