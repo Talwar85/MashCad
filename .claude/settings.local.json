@@ -60,7 +60,8 @@
       "Bash(del c:LiteCadtest_import_feature.py)",
       "Bash(gh auth:*)",
       "Bash(git commit:*)",
-      "Bash(del /f \"c:\\\\LiteCad\\\\modeling\\\\wall_thickness.py\")"
+      "Bash(del /f \"c:\\\\LiteCad\\\\modeling\\\\wall_thickness.py\")",
+      "Bash(git rebase:*)"
     ]
   }
 }

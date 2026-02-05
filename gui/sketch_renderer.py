@@ -1822,6 +1822,11 @@ class SketchRendererMixin:
         elif st == SnapType.INTERSECTION:
             p.drawLine(int(pos.x())-5, int(pos.y())-5, int(pos.x())+5, int(pos.y())+5)
             p.drawLine(int(pos.x())+5, int(pos.y())-5, int(pos.x())-5, int(pos.y())+5)
+        elif st == SnapType.ORIGIN:
+            # Origin: Kreis mit Kreuz (ähnlich wie Center aber größer/hervorgehoben)
+            p.drawEllipse(pos, 6, 6)
+            p.drawLine(int(pos.x())-8, int(pos.y()), int(pos.x())+8, int(pos.y()))
+            p.drawLine(int(pos.x()), int(pos.y())-8, int(pos.x()), int(pos.y())+8)
     
     def _draw_snap_guides(self, p: QPainter):
         """

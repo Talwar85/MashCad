@@ -2000,8 +2000,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             )
             
             # Speichere Pfeil-Daten für Hover-Detection
-            self._offset_plane_arrow_center = (arrow_start + arrow_end) / 2
-            self._offset_plane_arrow_radius = 15  # Hover-Bereich in Pixeln
+            # WICHTIG: Die Spitze (Cone) ist bei arrow_end + normal*5
+            arrow_tip_center = arrow_end + self._offset_plane_base_normal * 5
+            self._offset_plane_arrow_center = arrow_tip_center
+            self._offset_plane_arrow_radius = 20  # Größerer Radius für bessere Trefferquote
             
             self.plotter.update()
         except Exception as e:
@@ -2022,9 +2024,17 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
     def handle_offset_plane_mouse_press(self, x, y):
         """Startet Drag für Offset mit Raycast auf Normalen-Achse."""
+        logger.debug(f"OffsetPlane: Mouse press at ({x}, {y}) mode={self.offset_plane_mode}")
+        
         if not self.offset_plane_mode or self._offset_plane_base_origin is None:
+            logger.debug(f"OffsetPlane: Ignored (mode={self.offset_plane_mode}, origin={self._offset_plane_base_origin is not None})")
             return False
         from PySide6.QtCore import QPoint
+        
+        # WICHTIG: Prüfe ob der Benutzer auf den Pfeil/Handle geklickt hat
+        if not self._is_point_on_offsetplane_handle(x, y):
+            logger.debug("OffsetPlane: Click not on handle - ignoring")
+            return False  # Nicht auf das Gizmo geklickt - Event nicht behandeln
         
         # Raycast auf Normalen-Linie für präzisen Startpunkt
         pick_point = self._raycast_to_offsetplane_line(x, y)
@@ -2146,6 +2156,34 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         except:
             return False
 
+    def _is_point_on_offsetplane_handle(self, x, y):
+        """Prüft ob Punkt (x,y) auf dem Offset-Plane Handle/Pfeil liegt."""
+        if not hasattr(self, '_offset_plane_arrow_center') or self._offset_plane_arrow_center is None:
+            logger.debug(f"OffsetPlane: Kein Arrow Center (x={x}, y={y})")
+            return False
+        
+        try:
+            # Projiziere Pfeil-Center auf Screen
+            renderer = self.plotter.renderer
+            world_pos = list(self._offset_plane_arrow_center) + [1.0]
+            renderer.SetWorldPoint(world_pos)
+            renderer.WorldToDisplay()
+            display = renderer.GetDisplayPoint()
+            
+            arrow_x, arrow_y = display[0], display[1]
+            distance = np.sqrt((x - arrow_x)**2 + (y - arrow_y)**2)
+            
+            logger.debug(f"OffsetPlane: Click({x},{y}) vs Arrow({arrow_x:.1f},{arrow_y:.1f}) dist={distance:.1f} radius={self._offset_plane_arrow_radius}")
+            
+            # Klick muss innerhalb des Radius sein
+            is_hit = distance < self._offset_plane_arrow_radius
+            if is_hit:
+                logger.debug("OffsetPlane: HIT!")
+            return is_hit
+        except Exception as e:
+            logger.debug(f"OffsetPlane: Error in hit test: {e}")
+            return False
+
     def handle_offset_plane_mouse_release(self):
         """Beendet Drag und setzt Cursor zurück."""
         if not self._offset_plane_dragging:
@@ -2170,6 +2208,35 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 return False  # Event ignorieren, zu schnell
             self._last_mouse_move_time = current_time
 
+        # --- OFFSET PLANE MODE (Muss VOR Transform Mode geprüft werden) ---
+        if self.offset_plane_mode:
+            event_type = event.type()
+            logger.debug(f"OffsetPlane Event: type={event_type}, offset_mode={self.offset_plane_mode}")
+            
+            if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                screen_pos = (int(pos.x()), int(pos.y()))
+                logger.debug(f"OffsetPlane: pos={screen_pos}")
+                
+                # Offset Plane Drag
+                if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                    logger.debug("OffsetPlane: LeftButton press detected")
+                    if self.handle_offset_plane_mouse_press(screen_pos[0], screen_pos[1]):
+                        return True
+                elif event_type == QEvent.MouseMove and self._offset_plane_dragging:
+                    if self.handle_offset_plane_mouse_move(screen_pos[0], screen_pos[1]):
+                        # Signal an MainWindow für Panel-Sync
+                        if hasattr(self, 'offset_plane_drag_changed'):
+                            self.offset_plane_drag_changed.emit(self._offset_plane_offset)
+                        return True
+                elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                    if self.handle_offset_plane_mouse_release():
+                        return True
+                elif event_type == QEvent.MouseMove:
+                    # Hover-Effekt für Cursor
+                    if self._update_offsetplane_hover_cursor(screen_pos[0], screen_pos[1]):
+                        return True
+
         # --- TRANSFORM MODE (Onshape-Style Gizmo V2) ---
         if self.is_transform_active():
             event_type = event.type()
@@ -2189,21 +2256,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                             return True
                     elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
                         if self.handle_split_mouse_release():
-                            return True
-
-                # Offset Plane Drag
-                if self.offset_plane_mode:
-                    if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                        if self.handle_offset_plane_mouse_press(screen_pos[0], screen_pos[1]):
-                            return True
-                    elif event_type == QEvent.MouseMove and self._offset_plane_dragging:
-                        if self.handle_offset_plane_mouse_move(screen_pos[0], screen_pos[1]):
-                            # Signal an MainWindow für Panel-Sync
-                            if hasattr(self, 'offset_plane_drag_changed'):
-                                self.offset_plane_drag_changed.emit(self._offset_plane_offset)
-                            return True
-                    elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-                        if self.handle_offset_plane_mouse_release():
                             return True
 
                 if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:

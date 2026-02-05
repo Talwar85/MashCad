@@ -58,6 +58,7 @@ class SmartSnapper:
         SnapType.CENTER: 15,
         SnapType.QUADRANT: 15,
         SnapType.INTERSECTION: 18, # Schnittpunkte sind wichtig!
+        SnapType.ORIGIN: 19,       # Origin hat hohe Priorität (fast wie Endpoint)
         SnapType.EDGE: 5,          # Irgendwo auf der Kante (niedrigste Prio der Geo-Snaps)
         SnapType.GRID: 1,
         SnapType.NONE: 0
@@ -145,7 +146,11 @@ class SmartSnapper:
                     # Schnittpunkt nur gültig, wenn beide Objekte getroffen
                     self._check_point(p, mouse_world, snap_radius, SnapType.INTERSECTION, None, candidates)
 
-        # 3. Grid
+        # 3. ORIGIN (Achsenursprung 0,0)
+        origin = Point2D(0, 0)
+        self._check_point(origin, mouse_world, snap_radius, SnapType.ORIGIN, None, candidates)
+
+        # 4. Grid
         if self.editor.grid_snap:
             grid_pt = self._calculate_grid_snap(mouse_world)
             dist = math.hypot(grid_pt.x() - mouse_world.x(), grid_pt.y() - mouse_world.y())

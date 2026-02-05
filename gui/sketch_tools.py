@@ -61,3 +61,4 @@ class SnapType(Enum):
     PERPENDICULAR = auto()
     TANGENT = auto()
     EDGE = auto()
+    ORIGIN = auto()  # Sketch-Origin (0,0)

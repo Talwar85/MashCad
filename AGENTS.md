@@ -1,579 +1,485 @@
-# MashCad - AI Agent Reference
+# Split Body Multi-Body Architecture Plan
 
-> **Version:** 0.3.0-beta | **Last Updated:** February 2026
->
-> This file contains essential information for AI coding agents working on the MashCad project.
-
----
-
-## Project Overview
-
-**MashCad** is an open-source parametric CAD application built with Python. It combines a constraint-based 2D sketcher with 3D modeling capabilities, powered by Build123d (OpenCASCADE kernel).
-
-### Key Characteristics
-
-| Aspect | Details |
-|--------|---------|
-| **Primary Language** | German (comments, docs), English (code) |
-| **GUI Framework** | PySide6 (Qt6) |
-| **CAD Kernel** | Build123d + OCP (OpenCASCADE Python bindings) |
-| **3D Visualization** | PyVista (VTK-based) |
-| **2D Geometry** | Shapely |
-| **Status** | Prototype / Early Development |
+> **Status:** Design Phase
+> **Aufwand:** 6-8 Stunden
+> **Risiko:** MEDIUM (größeres Refactoring)
+> **Ziel:** Korrektes Split mit Historie-Sharing und Undo/Redo
 
 ---
 
-## Technology Stack
+## Problem Statement
 
-### Core Dependencies
-```
-Python >= 3.11
-PySide6 >= 6.5.0          # GUI Framework
-build123d >= 0.5.0        # CAD Kernel (OpenCASCADE wrapper)
-pyvista >= 0.42.0         # 3D Visualization
-pyvistaqt >= 0.11.0       # Qt integration for PyVista
-vtk >= 9.2.0              # Visualization Toolkit
-ocp-tessellate >= 3.0.0   # CAD kernel → mesh conversion
-```
+**Aktuell:**
+- Split gibt nur EIN Solid zurück (above/below)
+- `keep_side == "both"` nicht implementiert
+- Beim Split entsteht ein zweiter Body, aber:
+  - ❌ Hat keine shared Historie
+  - ❌ Bleibt beim Undo bestehen (Bug)
+  - ❌ Wird nicht korrekt im Document registriert
 
-### Scientific & Geometry
-```
-numpy >= 1.24.0           # Numerical operations
-scipy >= 1.10.0           # Constraint solver, optimization
-shapely >= 2.0.0          # 2D geometry operations
-```
-
-### Export & Import
-```
-ezdxf >= 1.0.0            # DXF export
-lib3mf                    # 3MF export (3D printing)
-trimesh >= 4.0.0          # Mesh operations
-gmsh >= 4.15.0            # Mesh generation (optional)
-```
-
-### Logging
-```
-loguru >= 0.7.0           # Structured logging
-```
+**Soll:**
+- Split erzeugt 2 Bodies mit shared Historie
+- Beide Bodies haben Features[0..n-1] identisch
+- Split-Feature ist das n-te Feature in beiden Bodies
+- Undo löscht beide Bodies und restored Original
 
 ---
 
-## Project Structure
+## Architektur Design
 
-```
-MashCad/
-├── main.py                    # Application entry point
-├── MashCAD.spec              # PyInstaller build specification
-├── config/                   # Configuration modules
-│   ├── version.py            # Centralized version management
-│   ├── feature_flags.py      # Feature toggle system
-│   └── tolerances.py         # Centralized tolerance constants
-├── core/                     # Core utilities
-│   └── parameters.py         # Parametric variable system
-├── modeling/                 # 3D modeling & CAD operations
-│   ├── __init__.py           # Body, Feature, Component classes
-│   ├── boolean_engine_v4.py  # Boolean operations (Join/Cut/Intersect)
-│   ├── body_transaction.py   # Transaction/rollback system
-│   ├── result_types.py       # OperationResult, BooleanResult
-│   ├── cad_tessellator.py    # Kernel → mesh conversion
-│   ├── feature_dependency.py # Feature dependency graph
-│   ├── tnp_tracker.py        # TNP mitigation (legacy)
-│   ├── tnp_shape_reference.py # TNP v3.0: Persistent shape references
-│   ├── step_io.py            # STEP import/export
-│   └── ...                   # Additional modeling modules
-├── sketcher/                 # 2D sketcher with constraints
-│   ├── geometry.py           # 2D primitives (Point2D, Line2D, etc.)
-│   ├── constraints.py        # Constraint definitions
-│   ├── solver.py             # Lagrange multiplier constraint solver
-│   └── sketch.py             # Sketch class
-├── gui/                      # Qt GUI components
-│   ├── main_window.py        # Main application window
-│   ├── viewport_pyvista.py   # 3D viewport (PyVista-based)
-│   ├── sketch_editor.py      # 2D sketch editor
-│   ├── browser.py            # Feature tree browser
-│   ├── tool_panel_3d.py      # 3D tools panel
-│   └── ...                   # Additional GUI modules
-├── meshconverter/            # Mesh to CAD conversion (STL/OBJ → BREP)
-├── i18n/                     # Internationalization
-│   ├── __init__.py           # tr() translation function
-│   ├── de.json               # German translations
-│   └── en.json               # English translations
-├── hooks/                    # PyInstaller hooks
-├── docs/                     # Documentation
-└── test/                     # Test directory (currently empty)
-```
+### 1. SplitFeature Result Type
 
----
+**Problem:** Features geben EIN Solid zurück.
 
-## Development Environment Setup
-
-### Prerequisites
-- [Miniforge](https://github.com/conda-forge/miniforge) or Miniconda
-- Python 3.11+
-
-### Installation
-
-```bash
-# Create conda environment
-conda create -n cad_env -c conda-forge python=3.11 \
-    pyside6 pyvista pyvistaqt build123d ocp vtk \
-    numpy scipy shapely ezdxf loguru trimesh \
-    matplotlib pillow lib3mf
-
-# Activate environment
-conda activate cad_env
-
-# Install additional pip dependencies
-pip install ocp-tessellate
-
-# Verify installation
-python check_dependencies.py
-```
-
-### Running the Application
-
-```bash
-conda activate cad_env
-python main.py
-```
-
-### Running Tests
-
-```bash
-# Test sketcher without GUI
-python main.py --test
-
-# Run pytest (if tests exist)
-pytest
-```
-
----
-
-## Build Process
-
-### Local Build (Development)
-
-**Windows:**
-```bash
-build_local.bat
-```
-
-**macOS/Linux:**
-```bash
-./build_local.sh
-```
-
-### Manual Build
-
-```bash
-pip install pyinstaller
-pyinstaller MashCAD.spec
-```
-
-### Build Outputs
-
-| Platform | Output |
-|----------|--------|
-| Windows | `dist/MashCAD/MashCAD.exe` |
-| macOS | `dist/MashCAD.app` |
-| Linux | `dist/MashCAD/MashCAD` |
-
-### CI/CD
-
-GitHub Actions workflow at `.github/workflows/` automatically builds for all platforms on tag push:
-
-```bash
-git tag v0.2.1
-git push origin v0.2.1
-```
-
----
-
-## Architecture Principles
-
-### 1. CAD Kernel First (Single Source of Truth)
+**Lösung:** Spezieller Result-Type für Multi-Body Operations:
 
 ```python
-# The CAD kernel (_build123d_solid) is the ONLY truth
+@dataclass
+class SplitResult:
+    """Result of a split operation that creates 2 bodies."""
+    body_above: Solid      # Body auf der +normal Seite
+    body_below: Solid      # Body auf der -normal Seite
+    split_plane: dict      # Plane-Info für Visualisierung
+
+    # TNP v4.0: Optional Face-ShapeIDs für Split-Faces
+    above_split_face_ids: List = None
+    below_split_face_ids: List = None
+```
+
+### 2. Body Historie-Sharing
+
+**Problem:** Beide Bodies müssen Historie teilen.
+
+**Lösung:** `source_body_id` und `split_index` in Body:
+
+```python
 class Body:
     def __init__(self):
-        self._build123d_solid = None      # ← MASTER
-        self._mesh_cache = None           # ← Private, lazy
-        self._mesh_cache_valid = False
+        # ... existing fields ...
 
-    @property
-    def vtk_mesh(self):
-        """Lazy-loaded - regenerates automatically on access"""
-        if not self._mesh_cache_valid:
-            self._regenerate_mesh()
-        return self._mesh_cache
+        # Split-Tracking
+        self.source_body_id: Optional[str] = None  # ID des Original-Bodies
+        self.split_index: Optional[int] = None      # Index des Split-Features
+        self.split_side: Optional[str] = None       # "above" oder "below"
 ```
 
-**Rules:**
-- NEVER manipulate meshes directly - always go through the kernel
-- After EVERY kernel change, call `invalidate_mesh()`
-- Meshes are regenerated lazily (only when needed for rendering)
-
-### 2. Transaction-Based Safety
-
-Every destructive operation is wrapped in a transaction:
-
+**Feature-Sharing:**
 ```python
-from modeling.body_transaction import BodyTransaction, BooleanOperationError
+# Original Body
+original_body.features = [Extrude, Fillet, SplitFeature]
 
-with BodyTransaction(body, "Boolean Cut") as txn:
-    # Operation here
-    body._build123d_solid = result
-    body.invalidate_mesh()
-    txn.commit()  # Must commit to prevent rollback
+# Body 1 (above) - geteilt bei Index 2
+body_above = Body()
+body_above.features = original_body.features.copy()  # [Extrude, Fillet, SplitFeature]
+body_above.source_body_id = original_body.id
+body_above.split_index = 2
+body_above.split_side = "above"
+
+# Body 2 (below)
+body_below = Body()
+body_below.features = original_body.features.copy()  # [Extrude, Fillet, SplitFeature]
+body_below.source_body_id = original_body.id
+body_below.split_index = 2
+body_below.split_side = "below"
 ```
 
-### 3. No Quick Fixes - Build Solid Software
+### 3. _compute_split() Refactoring
 
-**NEVER implement quick fixes or workarounds.** Always solve the root cause:
-
-```python
-# ❌ WRONG: Lower threshold to make failing test pass
-if best_score > 0.4:  # Was 0.6, lowered because tests fail
-    return match
-
-# ✅ CORRECT: Fix the underlying issue
-# Update selectors after geometry changes
-self._update_selectors_after_operation(body)
-if best_score > 0.6:  # Keep strict threshold
-    return match
-```
-
-**Rules:**
-- Never adjust thresholds, tolerances, or parameters to hide bugs
-- Never add special-case handling for symptoms instead of causes  
-- If a test fails, fix the underlying architecture, not the test
-- Document architectural decisions and their rationale
-
-### 4. Structured Result Types
-
-All operations return structured results:
+**Aktuell:** Gibt 1 Solid zurück
+**Neu:** Gibt SplitResult zurück
 
 ```python
-from modeling.result_types import OperationResult, ResultStatus
-
-result = some_operation()
-
-match result.status:
-    case ResultStatus.SUCCESS:
-        logger.success(result.message)
-    case ResultStatus.ERROR:
-        show_error_dialog(result.message)
-    case ResultStatus.EMPTY:
-        show_info("No results")
-    case ResultStatus.WARNING:
-        show_warning(result.message)
-```
-
-### 4. Feature Flags
-
-New features are implemented behind feature flags:
-
-```python
-from config.feature_flags import is_enabled
-
-if is_enabled("my_new_feature"):
-    # New feature code
-    pass
-```
-
-Set flags in `config/feature_flags.py` or at runtime:
-```python
-from config.feature_flags import set_flag
-set_flag("my_new_feature", True)
-```
-
-### 5. Centralized Tolerances
-
-All tolerances are defined in `config/tolerances.py`:
-
-```python
-from config.tolerances import Tolerances
-
-fuzzy_tolerance = Tolerances.KERNEL_FUZZY  # 1e-4 (0.1mm)
-tessellation_quality = Tolerances.TESSELLATION_QUALITY  # 0.01 (10µm)
-```
-
-### 6. TNP v3.0 (Topological Naming Problem)
-
-Professional system for persistent shape identification across boolean operations:
-
-```python
-# modeling/tnp_shape_reference.py
-
-@dataclass(frozen=True)
-class ShapeID:
-    """Immutable identifier for shape tracking"""
-    feature_id: str      # Feature that created this reference
-    local_id: int        # Index within feature
-    shape_type: ShapeType
-
-@dataclass
-class ShapeReference:
-    """Persistent reference with multi-strategy resolution"""
-    ref_id: ShapeID
-    original_shape: TopoDS_Shape      # OCP shape for history lookup
-    geometric_selector: Any            # Fallback: geometric matching
-    
-    def resolve(self, solid, history=None):
-        # Strategy 1: BRepTools_History (if available)
-        if history:
-            return self._resolve_via_history(history)
-        # Strategy 2: Geometric matching (fallback)
-        return self._resolve_via_geometry(solid)
-```
-
-**Usage in Features:**
-```python
-@dataclass
-class FilletFeature(Feature):
-    edge_shape_ids: List[ShapeID] = None        # TNP v3.0 Primary
-    geometric_selectors: List = None             # Geometric Fallback
-    edge_selectors: List = None                  # Legacy Fallback
-```
-
-**Resolution Order:**
-1. History-based (BRepTools_History) - most accurate
-2. Geometric matching (center, direction, length) - robust fallback
-3. Legacy point selectors - last resort
-
----
-
-## Code Style Guidelines
-
-### Language
-- **Code**: English (variable names, functions, classes)
-- **Comments**: German
-- **Docstrings**: German
-- **User-facing strings**: Use `tr()` for i18n
-
-### Example
-
-```python
-def calculate_extrusion_volume(sketch: Sketch, height: float) -> float:
+def _compute_split(self, feature: 'SplitFeature', current_solid) -> SplitResult:
     """
-    Berechnet das Volumen einer Extrusion.
-    
-    Args:
-        sketch: Der zu extrudierende Sketch
-        height: Extrusionshöhe in mm
-        
+    Teilt einen Körper in 2 Hälften.
+
     Returns:
-        Volumen in mm³
+        SplitResult mit beiden Bodies
     """
-    # Fläche berechnen
-    area = sketch.calculate_area()
-    
-    # Volumen = Fläche × Höhe
-    return area * height
+    # ... OCP Split-Logik ...
+
+    # Beide HalfSpaces erstellen
+    ref_pt_above = np.array(feature.plane_origin) + n * 100.0
+    half_space_above = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(*ref_pt_above))
+
+    ref_pt_below = np.array(feature.plane_origin) - n * 100.0
+    half_space_below = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(*ref_pt_below))
+
+    # Cut für beide Seiten
+    cut_above = BRepAlgoAPI_Cut(shape, half_space_above.Solid())
+    cut_below = BRepAlgoAPI_Cut(shape, half_space_below.Solid())
+
+    cut_above.Build()
+    cut_below.Build()
+
+    if not (cut_above.IsDone() and cut_below.IsDone()):
+        raise ValueError("Split fehlgeschlagen")
+
+    # Beide Solids erstellen
+    from build123d import Solid
+    body_above = Solid(self._fix_shape_ocp(cut_above.Shape()))
+    body_below = Solid(self._fix_shape_ocp(cut_below.Shape()))
+
+    return SplitResult(
+        body_above=body_above,
+        body_below=body_below,
+        split_plane={
+            "origin": feature.plane_origin,
+            "normal": feature.plane_normal
+        }
+    )
 ```
 
-### Logging
+### 4. Document.split_body()
 
-Use `loguru` with appropriate levels:
+**Neue Methode** im Document für Multi-Body-Handling:
 
 ```python
-from loguru import logger
+class Document:
+    def split_body(self, body: Body, plane_origin: tuple, plane_normal: tuple) -> Tuple[Body, Body]:
+        """
+        Teilt einen Body in 2 Hälften und fügt beide zum Document hinzu.
 
-logger.debug("Detail für Entwickler")
-logger.info("Normale Information")
-logger.success("Erfolg (grün)")
-logger.warning("Warnung")
-logger.error("Fehler")
+        Returns:
+            (body_above, body_below) - beide im Document registriert
+        """
+        # 1. Split-Feature erstellen
+        split_feat = SplitFeature(
+            plane_origin=plane_origin,
+            plane_normal=plane_normal,
+            keep_side="both"  # Explizit beide behalten
+        )
+
+        # 2. Feature zu Original-Body hinzufügen
+        body.add_feature(split_feat, rebuild=False)
+
+        # 3. _compute_split aufrufen → SplitResult
+        split_result = body._compute_split(split_feat, body._build123d_solid)
+
+        # 4. Beide Bodies erstellen mit shared history
+        split_index = len(body.features) - 1
+
+        body_above = Body(name=f"{body.name}_above")
+        body_above.features = body.features.copy()
+        body_above._build123d_solid = split_result.body_above
+        body_above.source_body_id = body.id
+        body_above.split_index = split_index
+        body_above.split_side = "above"
+
+        body_below = Body(name=f"{body.name}_below")
+        body_below.features = body.features.copy()
+        body_below._build123d_solid = split_result.body_below
+        body_below.source_body_id = body.id
+        body_below.split_index = split_index
+        body_below.split_side = "below"
+
+        # 5. Original-Body aus Document entfernen
+        self.remove_body(body.id)
+
+        # 6. Beide neue Bodies hinzufügen
+        self.add_body(body_above)
+        self.add_body(body_below)
+
+        return body_above, body_below
 ```
 
-### String Translation
+### 5. SplitBodyCommand für Undo/Redo
+
+**Spezielles Command** das beide Bodies trackt:
 
 ```python
-from i18n import tr
+class SplitBodyCommand(QUndoCommand):
+    """
+    Undo/Redo Command für Body-Split-Operationen.
 
-# In code
-label = tr("File")  # → "Datei" in German
+    Tracked:
+    - Original Body (vor Split)
+    - Body Above (nach Split)
+    - Body Below (nach Split)
+    """
 
-# With formatting
-msg = tr("Saved: {path}").format(path="/file.txt")
+    def __init__(self, document, original_body, body_above, body_below, split_feature):
+        super().__init__("Split Body")
+        self.document = document
+
+        # Snapshots
+        self.original_body_snapshot = original_body.to_dict()
+        self.original_body_id = original_body.id
+
+        self.body_above_id = body_above.id
+        self.body_below_id = body_below.id
+
+        self.split_feature = split_feature
+
+    def redo(self):
+        """
+        Split durchführen: Original löschen, 2 neue Bodies hinzufügen.
+        """
+        if self.document.get_body(self.original_body_id):
+            # Original Body existiert → Split ausführen
+            original = self.document.get_body(self.original_body_id)
+
+            body_above, body_below = self.document.split_body(
+                original,
+                self.split_feature.plane_origin,
+                self.split_feature.plane_normal
+            )
+
+            # IDs aktualisieren (falls neu erstellt)
+            self.body_above_id = body_above.id
+            self.body_below_id = body_below.id
+        else:
+            # Wiederhole Split (z.B. nach Undo → Redo)
+            # Bodies könnten bereits existieren
+            pass
+
+    def undo(self):
+        """
+        Split rückgängig: Beide Bodies löschen, Original wiederherstellen.
+        """
+        # 1. Beide Split-Bodies aus Document entfernen
+        if self.document.get_body(self.body_above_id):
+            self.document.remove_body(self.body_above_id)
+
+        if self.document.get_body(self.body_below_id):
+            self.document.remove_body(self.body_below_id)
+
+        # 2. Original Body wiederherstellen
+        original_body = Body.from_dict(self.original_body_snapshot)
+
+        # WICHTIG: Split-Feature entfernen
+        if original_body.features and isinstance(original_body.features[-1], SplitFeature):
+            original_body.features.pop()
+
+        # Rebuild ohne Split-Feature
+        original_body._rebuild()
+
+        # 3. Original Body zum Document hinzufügen
+        self.document.add_body(original_body)
+
+        logger.info(f"Split Undo: Restored original body {original_body.id}")
+```
+
+### 6. GUI Integration
+
+**Split Dialog** muss beide Bodies anzeigen:
+
+```python
+# In gui/tool_panel_3d.py oder gui/dialogs/split_dialog.py
+
+def apply_split(self):
+    """User klickt Apply im Split-Dialog."""
+    body = self.selected_body
+    plane_origin = self.get_plane_origin()
+    plane_normal = self.get_plane_normal()
+
+    # SplitBodyCommand erstellen
+    original_body_snapshot = body.to_dict()
+
+    # Split durchführen (ohne Command zunächst, für Vorschau)
+    body_above, body_below = self.document.split_body(body, plane_origin, plane_normal)
+
+    # Command für Undo/Redo erstellen
+    split_cmd = SplitBodyCommand(
+        self.document,
+        body,  # Original (bereits gelöscht)
+        body_above,
+        body_below,
+        split_feature=SplitFeature(
+            plane_origin=plane_origin,
+            plane_normal=plane_normal,
+            keep_side="both"
+        )
+    )
+
+    # Command zu Undo-Stack hinzufügen
+    self.undo_stack.push(split_cmd)
+
+    # UI Update
+    self.refresh_browser()
+    self.viewport.update_all_bodies()
+
+    logger.success(f"Split: Created {body_above.name} and {body_below.name}")
 ```
 
 ---
 
-## Key Patterns
+## Implementation Plan
 
-### Boolean Operations
+### Phase 1: SplitResult & _compute_split Refactoring
 
-```python
-from modeling.boolean_engine_v4 import BooleanEngineV4
+**Dateien:**
+- `modeling/__init__.py` (Lines 3664-3725)
 
-result = BooleanEngineV4.execute_boolean(
-    body=target_body,
-    tool_solid=tool_body._build123d_solid,
-    operation="Cut"  # "Join", "Cut", "Intersect"
-)
+**Änderungen:**
+1. SplitResult dataclass hinzufügen
+2. _compute_split() refactoren um beide Bodies zu berechnen
+3. Beide HalfSpace-Cuts durchführen
 
-if result.is_error:
-    show_error(result.message)
-```
-
-### Feature Creation
-
-```python
-from modeling import ExtrudeFeature
-
-feature = ExtrudeFeature(
-    sketch=my_sketch,
-    distance=10.0,
-    operation="New Body",  # or "Join", "Cut", "Intersect"
-    profile_selector=[(cx, cy)]  # Centroids of selected profiles
-)
-body.features.append(feature)
-```
-
-### Serialization (Save/Load)
-
-All major classes implement `to_dict()` and `from_dict()`:
-
-```python
-# Save
-body_data = body.to_dict()
-
-# Load
-body = Body.from_dict(body_data)
-```
+**Aufwand:** 1 Stunde
 
 ---
 
-## Forbidden Patterns (ANTI-PATTERNS)
+### Phase 2: Body Split-Tracking
 
-### ❌ NEVER: Mesh Fallbacks
+**Dateien:**
+- `modeling/__init__.py` (Body Klasse, Lines ~100-200)
+
+**Änderungen:**
+1. Neue Felder: `source_body_id`, `split_index`, `split_side`
+2. to_dict/from_dict für diese Felder
+3. _rebuild() respektiert split_side beim SplitFeature
+
+**Aufwand:** 1 Stunde
+
+---
+
+### Phase 3: Document.split_body()
+
+**Dateien:**
+- `modeling/__init__.py` (Document Klasse)
+
+**Änderungen:**
+1. Neue Methode split_body()
+2. Shared history setup für beide Bodies
+3. Original Body entfernen, neue Bodies hinzufügen
+
+**Aufwand:** 2 Stunden
+
+---
+
+### Phase 4: SplitBodyCommand
+
+**Dateien:**
+- `gui/commands/feature_commands.py` (neue Klasse)
+
+**Änderungen:**
+1. SplitBodyCommand implementieren
+2. redo(): Split durchführen
+3. undo(): Beide Bodies löschen, Original restore
+
+**Aufwand:** 2 Stunden
+
+---
+
+### Phase 5: GUI Integration
+
+**Dateien:**
+- `gui/tool_panel_3d.py` oder `gui/dialogs/split_dialog.py`
+
+**Änderungen:**
+1. Split Dialog nutzt SplitBodyCommand
+2. Zeigt beide resultierenden Bodies an
+3. Browser-Update nach Split
+
+**Aufwand:** 1 Stunde
+
+---
+
+## Test Plan
+
+### Test 1: Einfacher Split
+1. Box erstellen
+2. Split horizontal (beide behalten)
+3. **Erwartung:** 2 Bodies im Browser, Original weg
+
+### Test 2: Split mit Historie
+1. Sketch → Extrude → Fillet
+2. Split
+3. **Erwartung:** Beide Bodies haben [Extrude, Fillet, Split] in Features
+
+### Test 3: Undo/Redo
+1. Box → Split
+2. Undo
+3. **Erwartung:** Beide Bodies weg, Original wieder da
+4. Redo
+5. **Erwartung:** Split wieder, 2 Bodies
+
+### Test 4: Split → Weitere Features
+1. Box → Split
+2. Body_above → Fillet hinzufügen
+3. **Erwartung:** Nur Body_above hat Fillet, Body_below nicht
+
+### Test 5: Speichern/Laden
+1. Box → Split
+2. Speichern
+3. Laden
+4. **Erwartung:** 2 Bodies geladen mit korrekter Historie
+
+---
+
+## Risiken & Mitigation
+
+### Risiko 1: _rebuild() Endlosschleife
+
+**Problem:** Wenn Body_above rebuilt, führt es Split aus → erzeugt wieder 2 Bodies?
+
+**Mitigation:**
+- SplitFeature prüft `body.split_side`
+- Wenn gesetzt: Gibt nur die entsprechende Hälfte zurück
+- Kein neuer Body wird erstellt
+
 ```python
-# FORBIDDEN
-try:
-    return kernel_boolean(body, tool)
-except:
-    return mesh_boolean(body, tool)  # NEVER!
+def _compute_feature(self, feature, current_solid):
+    if isinstance(feature, SplitFeature):
+        if self.split_side:
+            # Rebuild-Modus: Nur unsere Seite berechnen
+            split_result = self._compute_split(feature, current_solid)
+            return split_result.body_above if self.split_side == "above" else split_result.body_below
+        else:
+            # Erster Split: Beide Bodies werden von Document.split_body() gehandhabt
+            raise ValueError("Split during rebuild should have split_side set")
 ```
 
-### ❌ NEVER: Direct Mesh Assignment
-```python
-# FORBIDDEN
-body.vtk_mesh = some_mesh  # vtk_mesh is @property!
+### Risiko 2: TNP Resolution nach Split
 
-# CORRECT
-body._build123d_solid = new_solid
-body.invalidate_mesh()
-```
+**Problem:** Split-Faces haben neue ShapeIDs, Referenzen könnten brechen.
 
-### ❌ NEVER: Silent Failures
-```python
-# FORBIDDEN
-try:
-    do_operation()
-except:
-    pass  # User learns nothing!
+**Mitigation:**
+- SplitResult enthält `above_split_face_ids` und `below_split_face_ids`
+- Diese werden in Body registriert
+- Features nach Split können Split-Faces via TNP referenzieren
 
-# CORRECT
-try:
-    do_operation()
-except Exception as e:
-    return OperationResult.error(f"Operation failed: {e}")
-```
+### Risiko 3: Performance bei vielen Splits
 
-### ❌ NEVER: Forget Cache Invalidation
-```python
-# FORBIDDEN
-body._build123d_solid = new_solid
-# Mesh is now out of sync!
+**Problem:** Jeder Split dupliziert Feature-Liste.
 
-# CORRECT
-body._build123d_solid = new_solid
-body.invalidate_mesh()
-```
+**Mitigation:**
+- Feature-Listen sind Python-Listen (cheap copy)
+- Bei Bedarf: Shared Feature-History via Pointer (Phase 2 Optimierung)
 
 ---
 
-## Keyboard Shortcuts Reference
+## Backwards Compatibility
 
-| Key | Action |
-|-----|--------|
-| `G` | Move gizmo |
-| `R` | Rotate gizmo |
-| `S` | Scale gizmo |
-| `M` | Mirror dialog |
-| `H` | Hide/Show toggle |
-| `Esc` | Cancel / Deselect |
-| `Delete` | Delete selection |
-| `Tab` | Numeric input (sketcher) |
-| `Space` | 3D peek (sketcher) |
+**Legacy Split (keep_side="above"/"below"):**
+- Funktioniert weiterhin über _compute_split()
+- Gibt nur eine Hälfte zurück
+- Kein Multi-Body-Handling nötig
+
+**Migration:**
+- Alte .mcad Files mit Split: Laden funktioniert
+- Split-Feature bleibt parametrisch
+- Keine Breaking Changes
 
 ---
 
-## Testing Strategy
+## Zusammenfassung
 
-### Current State
-- Test directory exists but is empty
-- `pytest.ini` configured but no test files
-- Manual testing via `python main.py --test` (sketcher tests)
+**Vorher:**
+- ❌ Split gibt nur 1 Body zurück
+- ❌ Undo/Redo fehlerhaft (Body 2 bleibt)
+- ❌ Keine Historie-Sharing
 
-### Adding Tests
+**Nachher:**
+- ✅ Split erstellt 2 Bodies mit shared Historie
+- ✅ Undo löscht beide Bodies, restored Original
+- ✅ Rebuild funktioniert korrekt für beide Bodies
+- ✅ TNP v4.0 kompatibel
 
-When adding tests, follow pytest markers:
-```ini
-[pytest]
-markers =
-    unit: Unit tests (no GUI, headless)
-    integration: Integration tests (requires Qt/display)
-    slow: Slow tests (>10s)
-```
-
-### Running Tests
-```bash
-pytest -v                    # All tests
-pytest -m unit              # Unit tests only
-pytest -m "not slow"        # Exclude slow tests
-pytest --tb=short           # Short traceback
-```
+**Aufwand:** 6-8 Stunden
+**Risiko:** MEDIUM (aber machbar mit diesem Plan)
 
 ---
 
-## Common Issues & Solutions
-
-### OpenMP Conflict
-Set environment variable before running:
-```bash
-set KMP_DUPLICATE_LIB_OK=TRUE  # Windows
-export KMP_DUPLICATE_LIB_OK=TRUE  # Linux/macOS
-```
-
-### lib3mf Not Found
-The `hooks/hook-lib3mf.py` patches library discovery for bundled apps.
-
-### VTK/PyVista Rendering Issues
-- Update graphics drivers
-- Linux: `sudo apt-get install libgl1-mesa-glx libegl1-mesa`
-
----
-
-## Version History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 0.2.0-beta | Feb 2026 | Current version |
-| 0.1.0-alpha | 2025 | Initial prototype |
-
----
-
-## License
-
-MIT License - See `LICENSE` file
-
----
-
-## Credits
-
-- [Build123d](https://github.com/gumyr/build123d) - CAD Kernel
-- [PyVista](https://github.com/pyvista/pyvista) - 3D Rendering
-- [OpenCASCADE](https://www.opencascade.com/) - Geometry kernel
+**Ready to implement?**
