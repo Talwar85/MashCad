@@ -670,6 +670,126 @@ class Sketch:
             'status': status
         }
     
+    def diagnose_constraints(self, top_n: int = 5) -> List[Tuple[Constraint, float, str]]:
+        """
+        Diagnostiziert die Constraints und gibt die problematischsten zurück.
+        
+        Args:
+            top_n: Anzahl der zurückgegebenen Constraints (sortiert nach Fehler)
+            
+        Returns:
+            Liste von Tupeln (constraint, error, diagnosis)
+            - constraint: Der Constraint
+            - error: Der Fehlerwert
+            - diagnosis: Menschenlesbare Diagnose
+        """
+        from .constraints import calculate_constraint_error, ConstraintType
+        
+        results = []
+        
+        for c in self.constraints:
+            # Prüfe Validität
+            if not c.is_valid():
+                error_msg = c.validation_error()
+                results.append((c, float('inf'), f"Ungültig: {error_msg}"))
+                continue
+            
+            # Berechne Fehler
+            try:
+                error = calculate_constraint_error(c)
+                
+                # Erstelle Diagnose
+                if error < 1e-6:
+                    diagnosis = "✓ Erfüllt"
+                elif error < 0.01:
+                    diagnosis = f"⚠ Leichte Abweichung ({error:.4f})"
+                elif error < 0.1:
+                    diagnosis = f"⚠ Mittlere Abweichung ({error:.4f})"
+                else:
+                    diagnosis = f"✗ Große Abweichung ({error:.4f})"
+                
+                # Zusätzliche Typ-spezifische Info
+                if c.type == ConstraintType.FIXED:
+                    diagnosis += " - Punkt sollte nicht bewegt werden"
+                elif c.type == ConstraintType.COINCIDENT and error > 0.1:
+                    diagnosis += " - Punkte zu weit auseinander"
+                elif c.type == ConstraintType.TANGENT and error > 0.1:
+                    diagnosis += " - Keine Tangentialität erreicht"
+                
+                results.append((c, error, diagnosis))
+                
+            except Exception as e:
+                results.append((c, float('inf'), f"Fehler bei Berechnung: {e}"))
+        
+        # Sortiere nach Fehler (absteigend)
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        return results[:top_n]
+    
+    def diagnose_to_string(self) -> str:
+        """Gibt eine formatierte Diagnose als String zurück."""
+        lines = ["=== Constraint Diagnose ===", ""]
+        
+        # Zusammenfassung
+        summary = self.get_constraint_summary()
+        lines.append(f"Gesamt: {summary['total_constraints']} Constraints")
+        lines.append(f"Gültig: {summary['valid_constraints']}")
+        lines.append(f"Variablen: {summary['variables']}")
+        lines.append(f"DOF: {summary['dof']}")
+        lines.append(f"Status: {summary['status'].name}")
+        lines.append("")
+        
+        # Ungültige Constraints
+        if summary['invalid_constraints']:
+            lines.append("Ungültige Constraints:")
+            for c in summary['invalid_constraints']:
+                lines.append(f"  ✗ {c.type.name}: {c.validation_error()}")
+            lines.append("")
+        
+        # Top Probleme
+        problems = self.diagnose_constraints(top_n=5)
+        if problems:
+            lines.append("Top Probleme:")
+            for c, error, diagnosis in problems:
+                if error > 1e-6:  # Nur anzeigen wenn es ein Problem gibt
+                    lines.append(f"  {diagnosis}: {c.type.name}")
+        else:
+            lines.append("✓ Alle Constraints erfüllt!")
+        
+        return "\n".join(lines)
+    
+    # === Constraint-Gruppen Verwaltung ===
+    
+    def get_constraints_by_group(self, group: str) -> List[Constraint]:
+        """Gibt alle Constraints einer Gruppe zurück."""
+        return [c for c in self.constraints if c.group == group]
+    
+    def get_constraint_groups(self) -> Dict[str, List[Constraint]]:
+        """Gibt alle Constraints nach Gruppen gruppiert zurück."""
+        groups: Dict[str, List[Constraint]] = {}
+        for c in self.constraints:
+            g = c.group or "default"
+            if g not in groups:
+                groups[g] = []
+            groups[g].append(c)
+        return groups
+    
+    def set_constraint_group(self, constraint: Constraint, group: str):
+        """Setzt die Gruppe eines Constraints."""
+        if constraint in self.constraints:
+            constraint.group = group
+    
+    def enable_constraint_group(self, group: str, enabled: bool = True):
+        """Aktiviert/Deaktiviert alle Constraints einer Gruppe."""
+        for c in self.constraints:
+            if c.group == group:
+                c.enabled = enabled
+    
+    def get_constraints_by_priority(self, priority) -> List[Constraint]:
+        """Gibt alle Constraints mit einer bestimmten Priorität zurück."""
+        from .constraints import ConstraintPriority
+        return [c for c in self.constraints if c.get_priority() == priority]
+    
     def remove_constraint(self, constraint: Constraint):
         """Entfernt einen Constraint"""
         if constraint in self.constraints:

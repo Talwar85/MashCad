@@ -18,6 +18,15 @@ except ImportError:
 from .geometry import Point2D, Line2D, Circle2D, Arc2D
 
 
+class ConstraintPriority(Enum):
+    """Prioritätsstufen für Constraints"""
+    CRITICAL = 100      # Muss erfüllt werden (z.B. FIXED, COINCIDENT)
+    HIGH = 50           # Sehr wichtig (z.B. TANGENT, PARALLEL)
+    MEDIUM = 25         # Wichtig (z.B. HORIZONTAL, EQUAL_LENGTH)
+    LOW = 15            # Kann etwas flexibler sein (z.B. DIMENSIONS)
+    REFERENCE = 0       # Nur referenz, nicht erzwingend
+
+
 class ConstraintType(Enum):
     """Verfügbare Constraint-Typen"""
     # Punkt-Constraints
@@ -49,6 +58,41 @@ class ConstraintType(Enum):
     # Symmetrie
     SYMMETRIC = auto()          # Symmetrisch zu Linie
     MIDPOINT = auto()           # Punkt auf Mittelpunkt
+    
+    # Prioritäts-Mapping
+    _PRIORITIES = {
+        # CRITICAL: Topologisch wichtig
+        FIXED: ConstraintPriority.CRITICAL,
+        COINCIDENT: ConstraintPriority.CRITICAL,
+        POINT_ON_LINE: ConstraintPriority.HIGH,
+        POINT_ON_CIRCLE: ConstraintPriority.HIGH,
+        MIDPOINT: ConstraintPriority.HIGH,
+        
+        # HIGH: Geometrische Beziehungen
+        TANGENT: ConstraintPriority.HIGH,
+        PARALLEL: ConstraintPriority.HIGH,
+        PERPENDICULAR: ConstraintPriority.HIGH,
+        CONCENTRIC: ConstraintPriority.HIGH,
+        COLLINEAR: ConstraintPriority.HIGH,
+        SYMMETRIC: ConstraintPriority.HIGH,
+        
+        # MEDIUM: Orientierung & Gleichheit
+        HORIZONTAL: ConstraintPriority.MEDIUM,
+        VERTICAL: ConstraintPriority.MEDIUM,
+        EQUAL_LENGTH: ConstraintPriority.MEDIUM,
+        EQUAL_RADIUS: ConstraintPriority.MEDIUM,
+        
+        # LOW: Dimensionen (können flexibler sein)
+        LENGTH: ConstraintPriority.LOW,
+        DISTANCE: ConstraintPriority.LOW,
+        RADIUS: ConstraintPriority.LOW,
+        DIAMETER: ConstraintPriority.LOW,
+        ANGLE: ConstraintPriority.LOW,
+    }
+    
+    def get_priority(self) -> ConstraintPriority:
+        """Gibt die Standard-Priorität für diesen Constraint-Typ zurück."""
+        return self._PRIORITIES.get(self, ConstraintPriority.MEDIUM)
 
 
 @dataclass
@@ -62,6 +106,9 @@ class Constraint:
     driving: bool = True  # True = treibend, False = referenz
     satisfied: bool = False
     error: float = 0.0  # Abweichung vom Sollwert
+    priority: Optional[ConstraintPriority] = None  # Überschreibt Standard-Priorität
+    group: Optional[str] = None  # Gruppen-Name für Organisation
+    enabled: bool = True  # Kann temporär deaktiviert werden
     
     # Anzahl der erforderlichen Entities pro Constraint-Typ
     _REQUIRED_ENTITIES = {
@@ -109,6 +156,16 @@ class Constraint:
         if actual < required:
             return f"{self.type.name} benötigt {required} Entities, hat aber nur {actual}"
         return None
+    
+    def get_priority(self) -> ConstraintPriority:
+        """Gibt die Priorität dieses Constraints zurück."""
+        if self.priority is not None:
+            return self.priority
+        return self.type.get_priority()
+    
+    def get_weight(self) -> float:
+        """Gibt das Solver-Gewicht basierend auf Priorität zurück."""
+        return float(self.get_priority().value)
 
 
 # === Constraint-Factories ===

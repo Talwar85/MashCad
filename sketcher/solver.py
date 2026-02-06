@@ -42,8 +42,11 @@ class ConstraintSolver:
     def __init__(self):
         self.tolerance = 1e-6
         self.regularization = 0.01  # Dämpfungsfaktor für Regularisierung
+        self.progress_callback = None  # Callback für Live-Updates
+        self.callback_interval = 10    # Alle N Iterationen
 
-    def solve(self, points, lines, circles, arcs, constraints) -> SolverResult:
+    def solve(self, points, lines, circles, arcs, constraints, 
+              progress_callback=None, callback_interval=10) -> SolverResult:
         """
         Löst das Constraint-System.
 
@@ -149,40 +152,13 @@ class ConstraintSolver:
             # Topologische Constraints (Müssen zuerst gelten - höchste Priorität)
             # Geometrische Constraints (Wichtig für Form)
             # Dimensions-Constraints (Können etwas flexibler sein)
-            WEIGHTS = {
-                # Topologisch - höchste Priorität
-                ConstraintType.FIXED: 100.0,           # Fixierte Punkte dürfen sich nicht bewegen
-                ConstraintType.COINCIDENT: 50.0,       # Punkte müssen zusammenfallen
-                ConstraintType.POINT_ON_LINE: 40.0,    # Punkt muss auf Linie bleiben
-                ConstraintType.POINT_ON_CIRCLE: 40.0,  # Punkt muss auf Kreis bleiben
-                ConstraintType.MIDPOINT: 40.0,         # Punkt muss Mittelpunkt sein
-                
-                # Geometrisch - mittlere Priorität
-                ConstraintType.TANGENT: 30.0,          # Tangential ist wichtig für Übergänge
-                ConstraintType.PARALLEL: 25.0,         # Parallelität
-                ConstraintType.PERPENDICULAR: 25.0,    # Rechtwinkligkeit
-                ConstraintType.CONCENTRIC: 25.0,       # Konzentrisch
-                ConstraintType.COLLINEAR: 25.0,        # Kollinear
-                ConstraintType.HORIZONTAL: 20.0,       # Horizontal
-                ConstraintType.VERTICAL: 20.0,         # Vertikal
-                
-                # Dimensions-Constraints - können etwas flexibler sein
-                ConstraintType.LENGTH: 15.0,           # Länge
-                ConstraintType.DISTANCE: 15.0,         # Abstand
-                ConstraintType.RADIUS: 15.0,           # Radius
-                ConstraintType.DIAMETER: 15.0,         # Durchmesser
-                ConstraintType.ANGLE: 15.0,            # Winkel
-                
-                # Gleichheits-Constraints
-                ConstraintType.EQUAL_LENGTH: 20.0,     # Gleiche Länge
-                ConstraintType.EQUAL_RADIUS: 20.0,     # Gleicher Radius
-                
-                # Symmetrie
-                ConstraintType.SYMMETRIC: 25.0,        # Symmetrisch
-            }
-            
+            # Gewichtung basierend auf Constraint-Priorität
             for c, error in zip(constraints, errors):
-                weight = WEIGHTS.get(c.type, 10.0)  # Default: 10.0
+                # Überspringe deaktivierte Constraints
+                if not getattr(c, 'enabled', True):
+                    continue
+                # Verwende Constraint's eigene Gewichtung
+                weight = c.get_weight()
                 residuals.append(error * weight)
 
             # C. Regularisierung: Verhindere zu starke Abweichung von Startwerten
@@ -194,7 +170,24 @@ class ConstraintSolver:
             return residuals
 
         # 3. Lösen mit Levenberg-Marquardt
+        self.progress_callback = progress_callback
+        self.callback_interval = callback_interval
+        self._iteration_count = 0
+        
         try:
+            # Callback für least_squares (wird pro Iteration aufgerufen)
+            def iteration_callback(x):
+                self._iteration_count += 1
+                if self.progress_callback and self._iteration_count % self.callback_interval == 0:
+                    # Werte temporär zurückschreiben für Callback
+                    for i, (obj, attr) in enumerate(refs):
+                        setattr(obj, attr, x[i])
+                    # Fehler berechnen
+                    errors = calculate_constraint_errors_batch(constraints)
+                    total_error = sum(errors)
+                    # Callback aufrufen
+                    self.progress_callback(self._iteration_count, total_error)
+            
             result = least_squares(
                 error_function,
                 x0,
@@ -202,7 +195,8 @@ class ConstraintSolver:
                 ftol=1e-8,
                 xtol=1e-8,
                 gtol=1e-8,
-                max_nfev=1000
+                max_nfev=1000,
+                callback=iteration_callback if progress_callback else None
             )
 
             # Finale Werte übernehmen
