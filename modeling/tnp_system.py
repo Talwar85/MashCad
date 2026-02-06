@@ -29,6 +29,7 @@ try:
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopoDS import TopoDS
+    from OCP.TopTools import TopTools_ShapeMapHasher
     HAS_OCP = True
 except ImportError as e:
     HAS_OCP = False
@@ -780,15 +781,10 @@ class ShapeNamingService:
                 logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {total_edges_in_result} Edges in result_solid")
                 logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {len(existing_mappings)} existing mappings")
 
+            # Korrektur: Verwende TopoDS_Shape.HashCode() Methode statt TopTools_ShapeMapHasher
+            # Die HashCode Methode ist direkt auf TopoDS_Shape verfügbar
+            
             # Sammle alle gemappten OCP Shapes
-            # FIX: Verwende OCP HashCode + ALLE Edges aus Registry (nicht nur existing_mappings!)
-            try:
-                from OCP.TopTools import TopTools_ShapeMapHasher
-                use_ocp_hash = True
-            except ImportError:
-                use_ocp_hash = False
-                logger.debug("[TNP] OCP TopTools nicht verfügbar, verwende Python id()")
-
             mapped_shapes = set()
 
             # 1. Aktuelle Mappings (existing logic)
@@ -797,31 +793,35 @@ class ShapeNamingService:
                     record = self._shapes.get(mapping.new_shape_uuid)
                     if record and record.ocp_shape:
                         try:
-                            if use_ocp_hash:
-                                shape_hash = TopTools_ShapeMapHasher.HashCode_s(record.ocp_shape, 2**31 - 1)
-                            else:
-                                shape_hash = id(record.ocp_shape)
+                            # Korrektur: Verwende die HashCode Methode der Shape selbst
+                            shape_hash = TopTools_ShapeMapHasher.HashCode(record.ocp_shape, 2**31 - 1)
                             mapped_shapes.add(shape_hash)
                             if is_enabled("tnp_debug_logging"):
                                 logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
-                        except Exception:
-                            pass  # HashCode fehlgeschlagen, skip
+                        except Exception as e:
+                            logger.debug(f"[TNP] HashCode fehlgeschlagen für Mapping {i}: {e}")
+                            # Fallback auf Python id
+                            shape_hash = id(record.ocp_shape)
+                            mapped_shapes.add(shape_hash)
 
             # 2. ALLE bereits registrierten Edges aus Registry (BUG FIX!)
             registry_edges_added = 0
             for shape_uuid, record in self._shapes.items():
                 if record.shape_id.shape_type == ShapeType.EDGE and record.ocp_shape:
                     try:
-                        if use_ocp_hash:
-                            shape_hash = TopTools_ShapeMapHasher.HashCode_s(record.ocp_shape, 2**31 - 1)
-                        else:
-                            shape_hash = id(record.ocp_shape)
+                        # Verwende TopTools_ShapeMapHasher.HashCode() statt direktem .HashCode()
+                        shape_hash = TopTools_ShapeMapHasher.HashCode(record.ocp_shape, 2**31 - 1)
 
                         if shape_hash not in mapped_shapes:
                             mapped_shapes.add(shape_hash)
                             registry_edges_added += 1
-                    except Exception:
-                        pass  # HashCode fehlgeschlagen, skip
+                    except Exception as e:
+                        logger.debug(f"[TNP] HashCode fehlgeschlagen für Registry Edge {shape_uuid[:8]}: {e}")
+                        # Fallback auf Python id
+                        shape_hash = id(record.ocp_shape)
+                        if shape_hash not in mapped_shapes:
+                            mapped_shapes.add(shape_hash)
+                            registry_edges_added += 1
 
             if is_enabled("tnp_debug_logging"):
                 logger.debug(
@@ -840,12 +840,9 @@ class ShapeNamingService:
 
                 # Prüfe ob bereits gemappt
                 try:
-                    # FIX: Verwende OCP HashCode (geometrisch stabil)
-                    if use_ocp_hash:
-                        edge_hash = TopTools_ShapeMapHasher.HashCode_s(edge, 2**31 - 1)
-                    else:
-                        edge_hash = id(edge)
-
+                    # Korrektur: Verwende TopTools_ShapeMapHasher.HashCode() statt direktem .HashCode()
+                    edge_hash = TopTools_ShapeMapHasher.HashCode(edge, 2**31 - 1)
+                    
                     is_mapped = edge_hash in mapped_shapes
 
                     if is_enabled("tnp_debug_logging"):
@@ -882,6 +879,33 @@ class ShapeNamingService:
 
                 except Exception as e:
                     logger.debug(f"Edge registrierung fehlgeschlagen: {e}")
+                    # Fallback: Versuche es mit Python id
+                    try:
+                        edge_hash = id(edge)
+                        if edge_hash not in mapped_shapes:
+                            # Versuche trotzdem zu registrieren
+                            adaptor = BRepAdaptor_Curve(edge)
+                            u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
+                            pnt = adaptor.Value(u_mid)
+                            center = (pnt.X(), pnt.Y(), pnt.Z())
+
+                            props = GProp_GProps()
+                            BRepGProp.LinearProperties_s(edge, props)
+                            length = props.Mass()
+
+                            shape_id = self.register_shape(
+                                ocp_shape=edge,
+                                shape_type=ShapeType.EDGE,
+                                feature_id=feature_id,
+                                local_index=local_index,
+                                geometry_data=(center, length)
+                            )
+                            
+                            new_count += 1
+                            local_index += 1
+                            mapped_shapes.add(edge_hash)
+                    except Exception as e2:
+                        logger.debug(f"Fallback Edge registrierung auch fehlgeschlagen: {e2}")
 
                 edge_index += 1
                 explorer.Next()
