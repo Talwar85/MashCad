@@ -256,7 +256,10 @@ class BooleanEngineV4:
                 # 4a. Post-Boolean Validation + Auto-Healing (Feature #4)
                 result_shape = BooleanEngineV4._validate_and_heal_result(result_shape, operation)
 
-                # 4b. Validate result shape
+                # 4b. Toleranz-Monitoring (Feature #5)
+                BooleanEngineV4._check_tolerances(result_shape, operation)
+
+                # 4c. Validate result shape
                 is_valid = BooleanEngineV4._is_valid_shape(result_shape)
                 logger.debug(f"Shape validation: is_valid={is_valid}")
 
@@ -758,3 +761,46 @@ class BooleanEngineV4:
         except Exception as e:
             logger.debug(f"Post-Boolean Validation fehlgeschlagen: {e}")
             return result_shape
+
+    @staticmethod
+    def _check_tolerances(result_shape: Any, operation: str) -> None:
+        """
+        Feature #5: Toleranz-Monitoring nach Boolean-Operationen.
+
+        Shapes können nach Booleans lokal überhöhte Toleranzen haben,
+        was zu Fehlern bei nachfolgenden Operationen führt (Fillet, Chamfer).
+        Diese Methode warnt frühzeitig.
+
+        Args:
+            result_shape: OCP TopoDS_Shape nach Boolean
+            operation: Operation-Name für Logging
+        """
+        if not is_enabled("boolean_tolerance_monitoring"):
+            return
+
+        try:
+            from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
+
+            tol_analyzer = ShapeAnalysis_ShapeTolerance()
+            tol_analyzer.AddTolerance(result_shape)
+
+            # GlobalTolerance(1) = Maximum, GlobalTolerance(0) = Durchschnitt
+            max_tol = tol_analyzer.GlobalTolerance(1)
+            avg_tol = tol_analyzer.GlobalTolerance(0)
+
+            # Schwellwert: 10× die Kernel-Fuzzy-Toleranz ist verdächtig
+            threshold = Tolerances.KERNEL_FUZZY * 10  # 1e-3 = 1µm
+
+            if max_tol > threshold:
+                logger.warning(
+                    f"⚠️ Boolean {operation}: Erhöhte Toleranz erkannt! "
+                    f"Max={max_tol:.6f}mm (Schwellwert={threshold:.6f}mm), "
+                    f"Avg={avg_tol:.6f}mm. Nachfolgende Fillet/Chamfer könnten fehlschlagen."
+                )
+            else:
+                logger.debug(
+                    f"  Toleranz-Check OK: Max={max_tol:.6f}mm, Avg={avg_tol:.6f}mm"
+                )
+
+        except Exception as e:
+            logger.debug(f"Toleranz-Monitoring fehlgeschlagen: {e}")

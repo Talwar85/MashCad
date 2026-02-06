@@ -65,6 +65,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "boolean_argument_analyzer": True,  # Pre-Check: BOPAlgo_ArgumentAnalyzer Input-Validierung
     "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
     "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export
+    "boolean_tolerance_monitoring": True,  # Post-Check: ShapeAnalysis_ShapeTolerance nach Booleans
 }
 
 

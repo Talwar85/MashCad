@@ -1577,6 +1577,24 @@ class Body:
                     if is_enabled("tnp_debug_logging"):
                         logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
+            # TNP v4.0: History an ShapeNamingService durchreichen (Feature #7)
+            if boolean_history is not None and self._document and hasattr(self._document, '_shape_naming_service'):
+                try:
+                    service = self._document._shape_naming_service
+                    service.record_operation(
+                        OperationRecord(
+                            operation_id=str(uuid.uuid4())[:8],
+                            operation_type=f"BOOLEAN_{operation.upper()}",
+                            feature_id=getattr(self, '_current_feature_id', 'unknown'),
+                            occt_history=boolean_history,
+                        )
+                    )
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v4.0: Boolean {operation} History registriert")
+                except Exception as tnp_e:
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP v4.0 History-Registrierung fehlgeschlagen: {tnp_e}")
+
             # 4. Prüfe Ergebnis
             if result_shape is None:
                 # Bei Intersect kann leeres Ergebnis gültig sein
