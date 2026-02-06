@@ -681,8 +681,90 @@ class BRepFaceAnalyzer:
                 processed.update(feature.face_indices)
             logger.info(f"  {len(cluster_features)} zylindrische Cluster erkannt")
 
-        # 8. Gewinde (BSplines mit helikalem Verlauf) - komplex, optional
-        # TODO: Helix-Fitting implementieren
+        # 8. Gewinde/Helix (BSplines mit helikalem Verlauf)
+        helix_features = self._detect_helix_features(processed)
+        for feature in helix_features:
+            self._features.append(feature)
+            processed.update(feature.face_indices)
+        if helix_features:
+            logger.info(f"  {len(helix_features)} Helix/Thread-Features erkannt")
+
+    def _detect_helix_features(self, processed: set) -> List[DetectedFeature]:
+        """
+        Erkennt Gewinde/Helix-Features anhand von BSpline/Bezier-Flächen.
+
+        Tier 3 OCP Feature Audit: Helix-Erkennung via Edge-Sampling.
+        Prüft ob Edges auf BSpline-Flächen einen helikalischen Verlauf haben
+        (konstanter Radius zur Achse + monotone Z-Komponente).
+
+        Returns:
+            Liste erkannter THREAD-Features
+        """
+        import math
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+        features = []
+
+        for face in self._faces:
+            if face.idx in processed:
+                continue
+            if face.surface_type not in (SurfaceType.BSPLINE, SurfaceType.BEZIER):
+                continue
+
+            # Edges der Face extrahieren
+            explorer = TopExp_Explorer(face.wrapped, TopAbs_EDGE)
+            found_helix = False
+
+            while explorer.More() and not found_helix:
+                edge = explorer.Current()
+                try:
+                    curve = BRepAdaptor_Curve(edge)
+                    n_samples = 20
+                    first = curve.FirstParameter()
+                    last = curve.LastParameter()
+                    if abs(last - first) < 1e-10:
+                        explorer.Next()
+                        continue
+
+                    step = (last - first) / (n_samples - 1)
+                    points = [curve.Value(first + i * step) for i in range(n_samples)]
+
+                    # Berechne Radius zur Z-Achse und Z-Werte
+                    radii = [math.sqrt(p.X()**2 + p.Y()**2) for p in points]
+                    z_values = [p.Z() for p in points]
+
+                    mean_radius = np.mean(radii)
+                    if mean_radius < 1e-6:
+                        explorer.Next()
+                        continue
+
+                    radius_std = np.std(radii)
+
+                    # Prüfe: Radius ~ konstant UND Z monoton steigend/fallend
+                    z_diffs = [z_values[i+1] - z_values[i] for i in range(len(z_values)-1)]
+                    z_monotonic = all(d >= -1e-6 for d in z_diffs) or all(d <= 1e-6 for d in z_diffs)
+                    z_range = abs(z_values[-1] - z_values[0])
+
+                    # Helix-Kriterien: Radius-Variation < 10%, Z steigt monoton, Z-Range > 0
+                    if radius_std < 0.1 * mean_radius and z_monotonic and z_range > 0.1:
+                        features.append(DetectedFeature(
+                            feature_type=FeatureType.THREAD,
+                            face_indices={face.idx},
+                            confidence=0.8,
+                            parameters={
+                                "radius": float(mean_radius),
+                                "pitch": float(z_range),
+                                "direction": "up" if z_values[-1] > z_values[0] else "down"
+                            }
+                        ))
+                        found_helix = True
+                        logger.debug(f"  Helix erkannt: Face {face.idx}, R={mean_radius:.2f}mm, Pitch={z_range:.2f}mm")
+                except Exception as e:
+                    logger.debug(f"  Helix-Check fehlgeschlagen für Face {face.idx}: {e}")
+
+                explorer.Next()
+
+        return features
 
     def _detect_fillet(self, face: AnalyzedFace) -> Optional[DetectedFeature]:
         """Erkennt Fillets (kleine Zylinder zwischen 2 tangenten Flaechen)."""

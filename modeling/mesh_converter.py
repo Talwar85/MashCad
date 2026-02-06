@@ -4,6 +4,8 @@ import pyvista as pv
 from loguru import logger
 import traceback
 
+from config.feature_flags import is_enabled
+
 # --- OPTIONAL DEPENDENCIES ---
 try:
     import pymeshlab as ml
@@ -28,6 +30,8 @@ except ImportError:
 
 from OCP.gp import gp_Pnt
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeSolid
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.ShapeFix import ShapeFix_Shape
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from build123d import Solid, Shape
 
@@ -37,7 +41,7 @@ class MeshToBREPConverter:
     1. 'Mechanical': Low Poly -> Direct Sewing -> Planar Simplify (Scharfe Kanten)
     2. 'Organic/SDF': Voxelization -> Marching Cubes -> Smooth BREP (Robust/Watertight)
     """
-    
+
     def __init__(self):
         pass
 
@@ -45,7 +49,7 @@ class MeshToBREPConverter:
         """Verschmilzt coplanare Flächen (Planar Simplification)."""
         try:
             upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
-            upgrader.SetLinearTolerance(1e-4) 
+            upgrader.SetLinearTolerance(1e-4)
             upgrader.SetAngularTolerance(1e-4)
             upgrader.Build()
             return upgrader.Shape()
@@ -56,9 +60,19 @@ class MeshToBREPConverter:
     def _sew_mesh_to_brep(self, verts, faces, tolerance=0.1) -> Shape:
         """Kern-Logik: Erzeugt OCP Shell aus Vertices/Faces via Sewing."""
         try:
+            # Tier 3: Adaptive Sewing-Toleranz basierend auf Modellgröße
+            if is_enabled("mesh_converter_adaptive_tolerance"):
+                verts_array = np.asarray(verts)
+                bbox_diag = np.linalg.norm(verts_array.max(axis=0) - verts_array.min(axis=0))
+                tolerance = max(1e-4, min(0.5, bbox_diag * 0.001))
+                logger.debug(f"Sewing: Adaptive Toleranz = {tolerance:.4f}mm (BBox-Diag = {bbox_diag:.1f}mm)")
+
             sewing = BRepBuilderAPI_Sewing(tolerance)
-            
+            sewing.SetMinTolerance(tolerance / 10)
+            sewing.SetMaxTolerance(tolerance * 10)
+
             # Batch processing wäre schneller, aber hier elementweise für Stabilität
+            skipped_count = 0
             for face_idx in faces:
                 try:
                     # Punkte holen
@@ -74,14 +88,40 @@ class MeshToBREPConverter:
                         face_builder = BRepBuilderAPI_MakeFace(poly.Wire())
                         if face_builder.IsDone():
                             sewing.Add(face_builder.Face())
-                except: continue
+                except Exception as e:
+                    skipped_count += 1
+                    if skipped_count <= 5:
+                        logger.debug(f"Sewing: Face übersprungen: {e}")
+                    continue
+
+            if skipped_count > 0:
+                logger.info(f"Sewing: {skipped_count} Faces übersprungen")
 
             sewing.Perform()
             sewed_shape = sewing.SewedShape()
 
             if sewed_shape.IsNull():
                 return None
-            
+
+            # Tier 3: Post-Sewing Validation + Auto-Healing
+            if is_enabled("mesh_converter_adaptive_tolerance"):
+                analyzer = BRepCheck_Analyzer(sewed_shape)
+                if not analyzer.IsValid():
+                    logger.warning("Sewing: Shape ungültig, versuche Reparatur...")
+                    try:
+                        fixer = ShapeFix_Shape(sewed_shape)
+                        fixer.SetPrecision(tolerance)
+                        fixer.SetMaxTolerance(tolerance * 10)
+                        fixer.Perform()
+                        sewed_shape = fixer.Shape()
+                        analyzer2 = BRepCheck_Analyzer(sewed_shape)
+                        if analyzer2.IsValid():
+                            logger.info("Sewing: Shape nach Reparatur valide")
+                        else:
+                            logger.warning("Sewing: Shape nach Reparatur weiterhin ungültig")
+                    except Exception as fix_e:
+                        logger.debug(f"Sewing: Reparatur fehlgeschlagen: {fix_e}")
+
             return sewed_shape
         except Exception as e:
             logger.error(f"Sewing Error: {e}")
@@ -95,51 +135,51 @@ class MeshToBREPConverter:
         if not HAS_MESHLIB:
             logger.error("SDF Modus nicht verfügbar (Bibliothek fehlt)")
             return None
-            
+
         logger.info(f"Starte SDF-Konvertierung (Voxel: {voxel_size}mm)...")
-        
+
         try:
             # 1. PyVista -> MeshLib
             v_np = mesh.points.astype(np.float32)
             f_np = mesh.faces.reshape(-1, 4)[:, 1:4].astype(np.uint32)
             mmesh = mm.Mesh(mm.Vector3f(v_np), mm.Vector3ui(f_np)) # Effizienter Transfer
-            
+
             # 2. Mesh -> SDF (Signed Distance Field)
             params = mm.MeshToVolumeParams()
             params.voxelSize = voxel_size
             params.surfaceOffset = 3
-            
+
             # Auto-Detect ob geschlossen (Signed) oder offen (Unsigned)
             # Bei offenen Meshes schließt SDF die Löcher quasi "automatisch"
             if mmesh.topology.isClosed():
                 params.type = mm.MeshToVolumeParams.Type.Signed
             else:
                 params.type = mm.MeshToVolumeParams.Type.Unsigned
-            
+
             volume = mm.meshToDistanceVdbVolume(mmesh, params)
-            
+
             # 3. SDF -> Mesh (Marching Cubes)
             # isoValue=0.0 ist die exakte Oberfläche
             grid_settings = mm.GridToMeshSettings()
             grid_settings.voxelSize = voxel_size
-            grid_settings.isoValue = 0.0 
-            
+            grid_settings.isoValue = 0.0
+
             remeshed = mm.gridToMesh(volume.data, grid_settings)
-            
+
             # 4. MeshLib -> Numpy -> Sewing
             # Wir nutzen keine Simplifizierung im SDF Modus, da die Topologie organisch ist
             out_verts = remeshed.points.toNumpyArray().astype(np.float64)
             out_faces = remeshed.topology.getAllFaces().toNumpyArray().reshape(-1, 3)
-            
+
             logger.info(f"SDF Remeshing fertig: {len(out_faces)} Faces. Erzeuge BREP...")
-            
+
             # Sewing mit etwas höherer Toleranz für die Marching Cubes
             sewed_shape = self._sew_mesh_to_brep(out_verts, out_faces, tolerance=1e-3)
-            
+
             if sewed_shape:
                 return Shape(sewed_shape)
             return None
-            
+
         except Exception as e:
             logger.error(f"SDF Pipeline fehlgeschlagen: {e}")
             traceback.print_exc()
@@ -158,7 +198,7 @@ class MeshToBREPConverter:
 
         # --- AUTO-DETECTION ---
         if method == "auto":
-            # Heuristik: 
+            # Heuristik:
             # - Wenig Faces + Geschlossen -> Mechanical (scharfe Kanten behalten)
             # - Viele Faces oder Offen -> Organic (SDF zum Reparieren/Glätten)
             is_closed = mesh.n_open_edges == 0
@@ -188,7 +228,7 @@ class MeshToBREPConverter:
         # Vorbereitung der Daten (Simplification falls nötig)
         out_verts = []
         out_faces = []
-        
+
         use_meshlab = (mesh.n_cells > target_faces) and HAS_MESHLAB
 
         if use_meshlab:
@@ -217,7 +257,7 @@ class MeshToBREPConverter:
         # Post-Processing: Planar Simplification (Wichtig für Mechanical!)
         logger.info("Optimiere planare Flächen...")
         simplified_shape = self._simplify_brep(sewed_shape)
-        
+
         b3d_shape = Shape(simplified_shape)
 
         # Solid Check

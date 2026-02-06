@@ -2125,6 +2125,14 @@ class Body:
                 else:
                     loft_builder.SetParType(Approx_ParametrizationType.Approx_ChordLength)
 
+            # Tier 3: Loft Hardening - Grad und Gewichtung begrenzen
+            if is_enabled("loft_sweep_hardening"):
+                loft_builder.SetMaxDegree(8)
+                try:
+                    loft_builder.SetCriteriumWeight(0.4, 0.2, 0.4)
+                except Exception:
+                    pass  # Nicht alle OCP-Versionen unterstützen SetCriteriumWeight
+
             # Profile hinzufügen
             for face in faces:
                 face_shape = face.wrapped if hasattr(face, 'wrapped') else face
@@ -2232,8 +2240,16 @@ class Body:
         except Exception as e:
             logger.warning(f"Build123d sweep fehlgeschlagen: {e}")
 
-        # FALLBACK: OCP MakePipe
-        return self._ocp_sweep(profile_face, path_wire)
+        # FALLBACK 1: OCP MakePipe
+        result = self._ocp_sweep(profile_face, path_wire)
+        if result is not None:
+            return result
+
+        # FALLBACK 2 (Tier 3): MakePipeShell mit CorrectedFrenet
+        if is_enabled("loft_sweep_hardening"):
+            return self._ocp_sweep_robust(profile_face, path_wire)
+
+        return None
 
     def _move_profile_to_path_start(self, profile_face, path_wire, feature):
         """
@@ -2343,6 +2359,84 @@ class Body:
 
         except Exception as e:
             logger.error(f"OCP Sweep Fehler: {e}")
+            return None
+
+    def _ocp_sweep_robust(self, face, path):
+        """
+        Tier 3: Robuster Sweep-Fallback mit BRepOffsetAPI_MakePipeShell.
+
+        Verwendet CorrectedFrenet-Modus für bessere Stabilität bei
+        komplexen Pfaden (Kurven mit hoher Krümmung, S-Formen).
+
+        Args:
+            face: Profil-Face (Build123d oder OCP)
+            path: Pfad-Wire (Build123d oder OCP)
+
+        Returns:
+            Build123d Solid oder None
+        """
+        try:
+            from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+            from OCP.GeomFill import GeomFill_IsCorrectedFrenet
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_EDGE
+
+            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
+            path_shape = path.wrapped if hasattr(path, 'wrapped') else path
+
+            # Profil-Wire extrahieren
+            explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
+            profile_wire_builder = BRepBuilderAPI_MakeWire()
+            while explorer.More():
+                try:
+                    profile_wire_builder.Add(explorer.Current())
+                except Exception:
+                    pass
+                explorer.Next()
+
+            if not profile_wire_builder.IsDone():
+                logger.debug("Sweep robust: Profil-Wire Extraktion fehlgeschlagen")
+                return None
+
+            profile_wire = profile_wire_builder.Wire()
+
+            # PipeShell mit CorrectedFrenet
+            pipe = BRepOffsetAPI_MakePipeShell(path_shape)
+            pipe.SetMode(GeomFill_IsCorrectedFrenet)
+            pipe.SetMaxDegree(8)
+            pipe.SetForceApproxC1(True)
+            pipe.Add(profile_wire, False, False)
+            pipe.Build()
+
+            if not pipe.IsDone():
+                logger.debug("Sweep robust: Build fehlgeschlagen")
+                return None
+
+            try:
+                pipe.MakeSolid()
+            except Exception:
+                pass
+
+            result_shape = pipe.Shape()
+            result_shape = self._fix_shape_ocp(result_shape)
+
+            from build123d import Solid, Shape
+            try:
+                result = Solid(result_shape)
+                if hasattr(result, 'is_valid') and result.is_valid():
+                    logger.info("Sweep robust (CorrectedFrenet) erfolgreich")
+                    return result
+            except Exception:
+                try:
+                    return Shape(result_shape)
+                except Exception:
+                    pass
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Sweep robust Fehler: {e}")
             return None
 
     def _ocp_sweep_with_twist_scale(self, face, path, feature: 'SweepFeature'):
@@ -4226,42 +4320,6 @@ class Body:
         
         if updated_count > 0:
             logger.debug(f"Feature '{feature.name}': {updated_count}/{len(geometric_selectors)} Edges aktualisiert")
-
-    def _update_shape_registry_after_operation(self, solid, operation_name: str = ""):
-        """
-        TNP v3.0: Aktualisiert alle ShapeReferences in der Registry nach einer Operation.
-        
-        Diese Methode wird nach Boolean-Operationen aufgerufen und aktualisiert
-        die gespeicherten Referenzen mit den neuen geometrischen Daten.
-        
-        Args:
-            solid: Das neue Solid nach der Operation
-            operation_name: Name der Operation (für Logging)
-        """
-        if not hasattr(self, '_shape_registry') or not solid:
-            return
-        
-        try:
-            # Track die Operation in der Registry
-            self._shape_registry.track_boolean_operation(
-                operation=operation_name,
-                input_shapes=[],
-                result_shape=solid,
-                history=None  # TODO: OCP History von Boolean-Operationen extrahieren
-            )
-            
-            # Versuche alle Referenzen neu aufzulösen
-            resolved = self._shape_registry.resolve_all(solid)
-            found = sum(1 for r in resolved.values() if r is not None)
-            total = len(resolved)
-            
-            if total > 0:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP Registry nach '{operation_name}': {found}/{total} Referenzen aufgelöst")
-                
-        except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Registry Update fehlgeschlagen: {e}")
 
     def _register_feature_shape_refs(self, feature) -> None:
         """

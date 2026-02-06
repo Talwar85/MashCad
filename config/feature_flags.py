@@ -66,6 +66,10 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
     "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export
     "boolean_tolerance_monitoring": True,  # Post-Check: ShapeAnalysis_ShapeTolerance nach Booleans
+
+    # OCP Feature Audit Tier 3
+    "mesh_converter_adaptive_tolerance": True,  # Adaptive Sewing-Toleranz + Post-Sewing Validation
+    "loft_sweep_hardening": True,  # SetMaxDegree + MakePipeShell Fallback für Loft/Sweep
 }
 
 
