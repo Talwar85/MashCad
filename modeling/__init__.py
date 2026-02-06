@@ -116,7 +116,6 @@ class FeatureType(Enum):
     THREAD = auto()           # Gewinde (kosmetisch + geometrisch)
     HOLLOW = auto()           # Aushöhlen mit optionalem Drain Hole
     LATTICE = auto()          # Gitterstruktur für Leichtbau
-    PUSHPULL = auto()         # Face Extrude/Offset entlang Normale
     NSIDED_PATCH = auto()     # N-seitiger Patch (Surface Fill)
     IMPORT = auto()           # Importierter Body (Mesh-Konvertierung, STEP Import)
 
@@ -635,29 +634,6 @@ class NSidedPatchFeature(Feature):
             self.edge_shape_ids = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
-
-
-@dataclass
-class PushPullFeature(Feature):
-    """
-    PushPull - Face entlang Normale extrudieren/eindrücken.
-    
-    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung
-    über Geometrie-Änderungen hinweg (z.B. nach anderen Push/Pull Operationen).
-    """
-    # TNP v3.0: Persistent ShapeID für Face (Primary)
-    face_shape_id: Any = None  # ShapeID
-    
-    # GeometricFaceSelector als Dict (Fallback)
-    # Enthält: center, normal, area, surface_type, tolerance
-    face_selector: dict = None
-    distance: float = 10.0       # Positiv = raus, negativ = rein
-    operation: str = "Join"      # Join, Cut, New Body
-
-    def __post_init__(self):
-        self.type = FeatureType.PUSHPULL
-        if not self.name or self.name == "Feature":
-            self.name = f"PushPull ({self.distance:+.1f}mm)"
 
 
 @dataclass
@@ -1283,7 +1259,7 @@ class Body:
         self._mesh_cache_valid = False
 
         # WICHTIG: Auch Face-Info-Cache löschen!
-        # Sonst bleiben alte Face-IDs bestehen die nach Boolean/PushPull ungültig sind
+        # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungültig sind
         self._face_info_cache = {}
 
         # Phase 4.3: Auch Topology-Cache invalidieren
@@ -2679,179 +2655,6 @@ class Body:
             logger.error(f"OCP Shell Fehler: {e}")
             return None
 
-    def _compute_pushpull(self, feature: 'PushPullFeature', current_solid):
-        """
-        PushPull: Face entlang ihrer Normale extrudieren.
-        Verwendet BRepFeat_MakePrism (OCP) für echtes Face-Extrude.
-
-        TNP-robust: Verwendet GeometricFaceSelector für Face-Matching.
-
-        TNP v3.0: Gibt Tuple zurück (result_solid, boolean_history) für History-Tracking.
-
-        Returns:
-            Tuple[Solid, Optional[BRepTools_History]] oder nur Solid (Backward-Kompatibilität)
-        """
-        if current_solid is None:
-            raise ValueError("PushPull benötigt einen existierenden Körper")
-
-        import numpy as np
-        from modeling.geometric_selector import GeometricFaceSelector
-
-        # Face auflösen mit GeometricFaceSelector
-        selector_dict = feature.face_selector
-        if selector_dict is None:
-            raise ValueError("Kein Face ausgewählt")
-
-        # Selector ist jetzt ein GeometricFaceSelector Dict
-        try:
-            geo_selector = GeometricFaceSelector.from_dict(selector_dict)
-        except Exception as e:
-            raise ValueError(f"Ungültiger Face-Selector: {e}")
-
-        # Face im Solid finden (TNP-robust)
-        all_faces = current_solid.faces() if hasattr(current_solid, 'faces') else []
-        if not all_faces:
-            raise ValueError("Solid hat keine Faces")
-
-        best_face = None
-        best_score = -1.0
-
-        for face in all_faces:
-            try:
-                score = self._score_face_match(face, geo_selector)
-                if score > best_score:
-                    best_score = score
-                    best_face = face
-            except Exception:
-                continue
-
-        if best_face is None or best_score < 0.5:  # Mindest-Score für Match
-            raise ValueError(f"Face nicht gefunden (best score: {best_score:.2f})")
-
-        # Normal aus GeometricFaceSelector verwenden (robuster)
-        center = np.array(geo_selector.center)
-        normal = np.array(geo_selector.normal)
-
-        logger.debug(f"PushPull: Face gefunden (score={best_score:.2f}), distance={feature.distance}mm")
-
-        # Extrusionsrichtung = Face-Normale * Distanz
-        norm = np.array(normal)
-        norm_len = np.linalg.norm(norm)
-        if norm_len < 1e-6:
-            raise ValueError("Face-Normale ist Null")
-        norm = norm / norm_len
-
-        distance = feature.distance
-
-        try:
-            from OCP.BRepFeat import BRepFeat_MakePrism
-            from OCP.gp import gp_Dir, gp_Vec
-            from OCP.TopAbs import TopAbs_FACE
-            from OCP.TopoDS import TopoDS
-            from build123d import Solid
-
-            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
-            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
-
-            direction = gp_Dir(float(norm[0]), float(norm[1]), float(norm[2]))
-
-            # BRepFeat_MakePrism: Extrude face from solid
-            # Args: (base_shape, profile_face, sketch_face, direction, fuse_mode, modify)
-            # fuse_mode: 1=Fuse, 0=Cut
-            fuse_mode = 1 if distance > 0 else 0
-            abs_dist = abs(distance)
-
-            prism = BRepFeat_MakePrism()
-            prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
-            prism.Perform(abs_dist)
-
-            if prism.IsDone():
-                result_shape = prism.Shape()
-                result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
-
-                result = Solid(result_shape)
-                is_valid = True  # Default: annehmen dass gültig
-                
-                # Prüfe Validität falls Methode existiert
-                if hasattr(result, 'is_valid'):
-                    try:
-                        is_valid = result.is_valid()
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        is_valid = True  # Bei Fehler: annehmen gültig
-                
-                if is_valid:
-                    logger.debug(f"PushPull via BRepFeat_MakePrism erfolgreich")
-                    
-                    # === TNP v4.0: BRepFeat-Operation im NamingService speichern ===
-                    try:
-                        self._register_brepfeat_operation(
-                            feature=feature,
-                            original_solid=current_solid,
-                            result_solid=result,
-                            input_shape=shape,
-                            result_shape=result_shape
-                        )
-                    except Exception as tnp_e:
-                        if is_enabled("tnp_debug_logging"):
-                            logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {tnp_e}")
-                    
-                    return (result, None)
-
-            logger.warning("BRepFeat_MakePrism fehlgeschlagen, versuche Extrude+Boolean")
-        except Exception as e:
-            logger.debug(f"BRepFeat_MakePrism Fehler: {e}")
-
-        # Fallback: Extrude face as wire → solid → Boolean
-        try:
-            from build123d import Solid, extrude
-            from OCP.gp import gp_Vec
-            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut
-
-            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
-            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
-
-            vec = gp_Vec(float(norm[0] * distance), float(norm[1] * distance), float(norm[2] * distance))
-            prism = BRepPrimAPI_MakePrism(face_shape, vec)
-            prism.Build()
-
-            if not prism.IsDone():
-                raise RuntimeError("BRepPrimAPI_MakePrism fehlgeschlagen")
-
-            extruded = prism.Shape()
-
-            # Boolean: Fuse (positiv) oder Cut (negativ)
-            if distance > 0:
-                boolean = BRepAlgoAPI_Fuse(shape, extruded)
-            else:
-                boolean = BRepAlgoAPI_Cut(shape, extruded)
-
-            boolean.SetFuzzyValue(1e-4)
-            boolean.Build()
-
-            if boolean.IsDone():
-                result_shape = boolean.Shape()
-                result_shape = self._unify_same_domain(result_shape, "Extrude+Boolean")
-
-                # TNP v3.0: Extrahiere BRepTools_History für Edge-Tracking
-                boolean_history = None
-                try:
-                    boolean_history = boolean.History()
-                    logger.debug(f"PushPull: BRepTools_History extrahiert")
-                except Exception as he:
-                    logger.debug(f"PushPull: History extraction failed: {he}")
-
-                result = Solid(result_shape)
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug(f"PushPull via Extrude+Boolean erfolgreich")
-                    return (result, boolean_history)
-
-            raise RuntimeError("Boolean fehlgeschlagen")
-        except Exception as e:
-            logger.error(f"PushPull Fallback fehlgeschlagen: {e}")
-            raise
-
     def _unify_same_domain(self, shape, context: str = ""):
         """
         Vereinigt zusammenhängende Flächen mit gleicher Geometrie.
@@ -4153,7 +3956,7 @@ class Body:
     def _update_registry_for_feature(self, feature, solid):
         """
         TNP v3.0: Aktualisiert Registry-Einträge für ein Feature nach Geometrie-Änderung.
-        Wird nach Boolean/PushPull aufgerufen.
+        Wird nach Boolean aufgerufen.
         """
         if not hasattr(self, '_shape_registry'):
             if is_enabled("extrude_debug"):
@@ -4398,7 +4201,7 @@ class Body:
                     )
                     self._shape_registry.register(ref)
             
-            # PushPull: Einzelne face_shape_id
+            # Draft/etc: Einzelne face_shape_id
             face_shape_id = getattr(feature, 'face_shape_id', None)
             if face_shape_id:
                 selector_data = getattr(feature, 'face_selector', None)
@@ -4664,7 +4467,7 @@ class Body:
             for shape_id in face_shape_ids:
                 self._shape_registry.unregister(shape_id)
             
-            # PushPull: Einzelne face_shape_id entfernen
+            # Draft/etc: Einzelne face_shape_id entfernen
             face_shape_id = getattr(feature, 'face_shape_id', None)
             if face_shape_id:
                 self._shape_registry.unregister(face_shape_id)
@@ -5279,47 +5082,6 @@ class Body:
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
-
-            # ================= PUSHPULL =================
-            elif isinstance(feature, PushPullFeature):
-                if current_solid:
-                    def op_pushpull():
-                        return self._compute_pushpull(feature, current_solid)
-
-                    result, status = self._safe_operation(f"PushPull_{i}", op_pushpull)
-
-                    # TNP v3.0: Handle tuple return (solid, history) oder nur solid
-                    pushpull_history = None
-                    if result is not None:
-                        if isinstance(result, tuple):
-                            new_solid, pushpull_history = result
-                        else:
-                            new_solid = result
-                    else:
-                        new_solid = None
-
-                    if new_solid is None:
-                        new_solid = current_solid
-                        status = "ERROR"
-                    else:
-                        # TNP v3.0: History tracken für Edge-Resolution nach Boolean
-                        if pushpull_history is not None and hasattr(self, '_shape_registry'):
-                            try:
-                                self._shape_registry.track_boolean_operation(
-                                    operation=f"PushPull_{feature.id}",
-                                    input_shapes=[current_solid],
-                                    result_shape=new_solid,
-                                    history=pushpull_history
-                                )
-                                if is_enabled("tnp_debug_logging"):
-                                    logger.debug(f"TNP v3.0: PushPull History getrackt für Feature {feature.id}")
-                            except Exception as tnp_e:
-                                if is_enabled("tnp_debug_logging"):
-                                    logger.debug(f"TNP v3.0: PushPull History Tracking fehlgeschlagen: {tnp_e}")
-
-                        # SAUBERE LÖSUNG: Edge-Selektoren nach PushPull aktualisieren
-                        # Weil sich Geometrie geändert hat, müssen Fillet/Chamfer Refs aktualisiert werden
-                        self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
 
             # ================= N-SIDED PATCH =================
             elif isinstance(feature, NSidedPatchFeature):
@@ -7489,21 +7251,6 @@ class Body:
                     "keep_side": feat.keep_side,
                 })
 
-            elif isinstance(feat, PushPullFeature):
-                feat_dict.update({
-                    "feature_class": "PushPullFeature",
-                    "face_selector": feat.face_selector,
-                    "distance": feat.distance,
-                    "operation": feat.operation,
-                })
-                # TNP v3.0: ShapeID serialisieren
-                if feat.face_shape_id:
-                    feat_dict["face_shape_id"] = {
-                        "feature_id": feat.face_shape_id.feature_id,
-                        "local_id": feat.face_shape_id.local_id,
-                        "shape_type": feat.face_shape_id.shape_type.name
-                    }
-
             elif isinstance(feat, NSidedPatchFeature):
                 feat_dict.update({
                     "feature_class": "NSidedPatchFeature",
@@ -7983,35 +7730,10 @@ class Body:
                 )
 
             elif feat_class == "PushPullFeature":
-                sel = feat_dict.get("face_selector")
-                # NEU: GeometricFaceSelector als Dict
-                # ALT: Liste [center, normal] - konvertieren zu Dict für Kompatibilität
-                if sel and isinstance(sel, list) and len(sel) == 2:
-                    # Legacy-Format: [(cx,cy,cz), (nx,ny,nz)]
-                    sel = {
-                        "center": list(sel[0]) if hasattr(sel[0], '__iter__') else [0,0,0],
-                        "normal": list(sel[1]) if hasattr(sel[1], '__iter__') else [0,0,1],
-                        "area": 0.0,
-                        "surface_type": "unknown",
-                        "tolerance": 10.0
-                    }
-                feat = PushPullFeature(
-                    face_selector=sel,
-                    distance=feat_dict.get("distance", 10.0),
-                    operation=feat_dict.get("operation", "Join"),
-                    **base_kwargs
-                )
-                # TNP v3.0: ShapeID deserialisieren
-                if "face_shape_id" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
-                    sid_data = feat_dict["face_shape_id"]
-                    if isinstance(sid_data, dict):
-                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                        feat.face_shape_id = ShapeID(
-                            feature_id=sid_data.get("feature_id", ""),
-                            local_id=sid_data.get("local_id", 0),
-                            shape_type=shape_type
-                        )
+                # PushPullFeature wurde entfernt (redundant mit Extrude Push/Pull).
+                # Alte Dateien die PushPullFeature enthalten werden übersprungen.
+                logger.warning(f"PushPullFeature '{base_kwargs.get('name', '')}' übersprungen (Feature entfernt, Extrude Push/Pull verwenden)")
+                continue
 
             elif feat_class == "NSidedPatchFeature":
                 feat = NSidedPatchFeature(

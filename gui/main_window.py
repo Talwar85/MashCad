@@ -512,14 +512,6 @@ class MainWindow(QMainWindow):
         self.split_panel.cancelled.connect(self._on_split_cancelled)
         self._split_mode = False
 
-        # PushPull Input Panel
-        from gui.input_panels import PushPullInputPanel
-        self.pushpull_panel = PushPullInputPanel(self)
-        self.pushpull_panel.distance_changed.connect(self._on_pushpull_distance_changed)
-        self.pushpull_panel.confirmed.connect(self._on_pushpull_confirmed)
-        self.pushpull_panel.cancelled.connect(self._on_pushpull_cancelled)
-        self._pushpull_mode = False
-
         # Center Hint Widget (große zentrale Hinweise)
         self.center_hint = CenterHintWidget(self)
         self.center_hint.hide()
@@ -758,9 +750,6 @@ class MainWindow(QMainWindow):
         self.transform_panel.hide()
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
-        # Clean up pushpull mode if active
-        if getattr(self, '_pushpull_mode', False):
-            self._finish_pushpull_ui()
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
@@ -912,8 +901,6 @@ class MainWindow(QMainWindow):
             self.viewport_3d.thread_face_clicked.connect(self._on_cylindrical_face_clicked_for_thread)
         if hasattr(self.viewport_3d, 'draft_face_clicked'):
             self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
-        if hasattr(self.viewport_3d, 'pushpull_face_clicked'):
-            self.viewport_3d.pushpull_face_clicked.connect(self._on_body_face_clicked_for_pushpull)
         if hasattr(self.viewport_3d, 'split_body_clicked'):
             self.viewport_3d.split_body_clicked.connect(self._on_split_body_clicked)
         if hasattr(self.viewport_3d, 'split_drag_changed'):
@@ -1225,7 +1212,6 @@ class MainWindow(QMainWindow):
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
             'geometry_check': self._geometry_check_dialog,
             'surface_analysis': self._surface_analysis_dialog,
-            'pushpull': self._pushpull_dialog,
             'nsided_patch': self._nsided_patch_dialog,
             'mesh_repair': self._mesh_repair_dialog,
             'hollow': self._hollow_dialog,
@@ -3392,195 +3378,6 @@ class MainWindow(QMainWindow):
             self.viewport_3d.stop_edge_selection_mode()
 
         self.nsided_patch_panel.hide()
-
-    def _pushpull_dialog(self):
-        """Startet interaktiven PushPull-Workflow (Draft-style Face-Select + Live-Preview)."""
-        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
-        if not has_bodies:
-            self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
-            return
-
-        self._hide_transform_ui()
-        self._pushpull_mode = True
-        self._pushpull_target_body = None
-        self._pushpull_face_center = None
-        self._pushpull_face_normal = None
-        # Detect body faces for full-face hover/click
-        self.viewport_3d.detected_faces = []
-        self.viewport_3d._detect_body_faces()
-        logger.info(f"PushPull: {len(self.viewport_3d.detected_faces)} Body-Faces erkannt")
-        self.viewport_3d.set_pushpull_mode(True)
-        self.pushpull_panel.reset()
-        self.pushpull_panel.show_at(self.viewport_3d)
-        self.statusBar().showMessage("PushPull: Klicke auf eine Fläche des Bodys")
-        logger.info("PushPull-Modus gestartet — Fläche auf Body klicken")
-
-    def _on_body_face_clicked_for_pushpull(self, body_id, cell_id, normal, position):
-        """Body-Face wurde im PushPull-Modus geklickt."""
-        if not self._pushpull_mode:
-            return
-
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if not body or not body._build123d_solid:
-            return
-
-        self._pushpull_target_body = body
-        self._pushpull_face_normal = normal
-        self._pushpull_face_center = position
-
-        # TNP-ROBUST: Finde Face im Solid und erstelle GeometricFaceSelector
-        try:
-            from modeling.geometric_selector import GeometricFaceSelector
-            import numpy as np
-            
-            # Finde das Face im Solid (anhand Position und Normal)
-            best_face = None
-            best_dist = float('inf')
-            position_arr = np.array(position)
-            
-            for face in body._build123d_solid.faces():
-                try:
-                    fc = face.center()
-                    face_center = np.array([fc.X, fc.Y, fc.Z])
-                    dist = np.linalg.norm(face_center - position_arr)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_face = face
-                except Exception as e:
-                    logger.debug(f"[main_window] PushPull Face-Selektor Fehler: {e}")
-                    continue
-            
-            if best_face and best_dist < 5.0:
-                # Erstelle GeometricFaceSelector für TNP-robuste Speicherung
-                geo_selector = GeometricFaceSelector.from_face(best_face)
-                self._pushpull_face_selector = geo_selector.to_dict()
-                logger.debug(f"PushPull: GeometricFaceSelector erstellt (area={geo_selector.area:.1f}, type={geo_selector.surface_type})")
-            else:
-                # Fallback: Einfachen Selector erstellen (nur center + normal)
-                self._pushpull_face_selector = {
-                    "center": list(position),
-                    "normal": list(normal),
-                    "area": 0.0,
-                    "surface_type": "unknown",
-                    "tolerance": 10.0
-                }
-                logger.warning(f"PushPull: Konnte Face nicht finden, verwende Fallback-Selector")
-        except Exception as e:
-            logger.warning(f"PushPull: Konnte GeometricFaceSelector nicht erstellen: {e}")
-            self._pushpull_face_selector = None
-
-        # Find matching detected face for full-face highlight
-        import numpy as np
-        rounded = tuple(np.round(normal, 2))
-        for df in self.viewport_3d.detected_faces:
-            if df.get('body_id') != body_id:
-                continue
-            df_normal = tuple(np.round(df.get('normal', (0, 0, 0)), 2))
-            if df_normal == rounded:
-                self.viewport_3d.set_pushpull_face(df)
-                break
-
-        self.pushpull_panel.set_face_count(1)
-        self.statusBar().showMessage("PushPull: Distanz einstellen, Enter bestätigen")
-        self._update_pushpull_preview()
-
-    def _on_pushpull_distance_changed(self, value):
-        """Distanz per Panel geändert."""
-        if not self._pushpull_mode or not self._pushpull_target_body:
-            return
-        self._update_pushpull_preview()
-
-    def _update_pushpull_preview(self):
-        """Live-Preview des PushPull-Ergebnisses."""
-        body = getattr(self, '_pushpull_target_body', None)
-        face_selector = getattr(self, '_pushpull_face_selector', None)
-        if not body or not body._build123d_solid or face_selector is None:
-            self.viewport_3d.clear_pushpull_preview()
-            return
-
-        try:
-            from modeling import PushPullFeature
-            from modeling.cad_tessellator import CADTessellator
-
-            distance = self.pushpull_panel.get_distance()
-            if abs(distance) < 0.01:
-                self.viewport_3d.show_pushpull_preview(None)
-                return
-
-            feature = PushPullFeature(
-                face_selector=face_selector,
-                distance=distance,
-            )
-            result = body._compute_pushpull(feature, body._build123d_solid)
-            # TNP v3.0: Handle tuple return (solid, history) oder nur solid
-            if isinstance(result, tuple):
-                result_solid, _ = result
-            else:
-                result_solid = result
-            if result_solid is not None:
-                mesh, _ = CADTessellator.tessellate(result_solid)
-                self.viewport_3d.show_pushpull_preview(mesh)
-            else:
-                self.viewport_3d.show_pushpull_preview(None)
-        except Exception as e:
-            logger.debug(f"PushPull preview error: {e}")
-            self.viewport_3d.show_pushpull_preview(None)
-
-    def _on_pushpull_confirmed(self):
-        """PushPull bestätigt — Feature erstellen."""
-        from modeling import PushPullFeature
-        from gui.commands.feature_commands import AddFeatureCommand
-        from modeling.tnp_system import ShapeID, ShapeType
-
-        body = getattr(self, '_pushpull_target_body', None)
-        face_selector = getattr(self, '_pushpull_face_selector', None)
-        if not body or face_selector is None:
-            self.statusBar().showMessage("Keine Face ausgewählt!")
-            self._finish_pushpull_ui()
-            return
-
-        distance = self.pushpull_panel.get_distance()
-        if abs(distance) < 0.01:
-            self.statusBar().showMessage("Distanz zu klein!")
-            return
-
-        feature = PushPullFeature(
-            face_selector=face_selector,
-            distance=distance,
-        )
-        
-        # TNP v4.0: ShapeID für Face erstellen
-        feature.face_shape_id = ShapeID.create(
-            shape_type=ShapeType.FACE,
-            feature_id=feature.id,
-            local_index=0,
-            geometry_data=(0, 0, 0, 0)  # Placeholder
-        )
-        if is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.0: Face-ShapeID für PushPull erstellt")
-
-        cmd = AddFeatureCommand(body, feature, self)
-        self.undo_stack.push(cmd)
-        self.statusBar().showMessage(f"PushPull {distance:+.1f}mm erstellt")
-        logger.success(f"PushPull {distance:+.1f}mm erstellt")
-        self._finish_pushpull_ui()
-
-    def _on_pushpull_cancelled(self):
-        """PushPull abgebrochen."""
-        self._finish_pushpull_ui()
-        self.statusBar().showMessage("PushPull abgebrochen")
-
-    def _finish_pushpull_ui(self):
-        """PushPull-UI aufräumen."""
-        self._pushpull_mode = False
-        self._pushpull_target_body = None
-        self._pushpull_face_center = None
-        self._pushpull_face_normal = None
-        self._pushpull_face_selector = None
-        self.viewport_3d.set_pushpull_mode(False)
-        self.pushpull_panel.hide()
-        # Sofortiges Update statt Timer - stellt sicher dass inactive_component korrekt gesetzt wird
-        self._update_viewport_all_impl()
 
     def _surface_analysis_dialog(self):
         """
@@ -8439,7 +8236,7 @@ class MainWindow(QMainWindow):
                 logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
 
             # TNP v4.0: Keine zusätzliche Registrierung nötig
-            # ShapeIDs wurden bereits vom Extrude/PushPull registriert
+            # ShapeIDs wurden bereits vom Extrude registriert
 
             # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             # Das ruft body.add_feature() auf, was _rebuild() triggert.

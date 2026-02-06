@@ -165,7 +165,6 @@ class ToolPanel3D(QWidget):
 
         # --- Advanced ---
         self._add_group("Advanced", [
-            (tr("PushPull"), tr("Extrude face along its normal"), "pushpull"),
             (tr("Thread..."), tr("Create thread (metric/UNC)"), "thread"),
         ])
         
