@@ -177,9 +177,24 @@ class TextureExporter:
             # === SCHRITT 5: Height-Map generieren ===
             from modeling.surface_texture import TextureGenerator, sample_heightmap_at_uvs
 
+            # Prüfe ob wave_width angegeben ist (für konsistente Ripples)
+            type_params = texture_feature.type_params.copy()
+            wave_width = type_params.get("wave_width")
+            
+            if wave_width and wave_width > 0:
+                # Berechne Face-Größe aus UV-Bounds
+                u_min, u_max = uvs[:, 0].min(), uvs[:, 0].max()
+                v_min, v_max = uvs[:, 1].min(), uvs[:, 1].max()
+                face_size = max(u_max - u_min, v_max - v_min)
+                
+                # Berechne wave_count basierend auf Face-Größe und gewünschter Wellenbreite
+                wave_count = face_size / wave_width
+                type_params["wave_count"] = wave_count
+                logger.debug(f"Ripple: face_size={face_size:.2f}mm, wave_width={wave_width}mm, wave_count={wave_count:.2f}")
+
             heightmap = TextureGenerator.generate(
                 texture_feature.texture_type,
-                texture_feature.type_params,
+                type_params,
                 size=256
             )
 
@@ -199,12 +214,21 @@ class TextureExporter:
             if texture_feature.invert:
                 heights = 1.0 - heights
 
-            # WICHTIG: Heights zentrieren für bidirektionales Displacement
-            # Statt nur 0->1 (nur Erhöhungen) machen wir -0.5->+0.5 (Täler UND Erhöhungen)
-            # Das macht die Textur deutlicher sichtbar im 3D-Druck!
-            heights_centered = heights - 0.5  # Jetzt von -0.5 bis +0.5
+            # === SCHRITT 6: Displacement-Modus bestimmen ===
+            # solid_base=True: Keine Löcher, nur positive Erhöhungen (für Top-Faces/3D-Druck)
+            # solid_base=False: Bidirektional -0.5 bis +0.5 (für Seiten/Innenflächen)
+            solid_base = getattr(texture_feature, 'solid_base', True)
+            
+            if solid_base:
+                # Verschiebe so dass Minimum bei 0 ist (alles positiv, keine Löcher)
+                # Das bedeutet: Original-Oberfläche wird zum tiefsten Punkt
+                heights_shifted = heights - heights.min()  # Jetzt von 0 bis max
+                logger.debug(f"Solid-Base Modus: heights {heights.min():.3f}-{heights.max():.3f} -> 0-{heights_shifted.max():.3f}")
+            else:
+                # Bidirektional: -0.5 bis +0.5 (Täler UND Erhöhungen)
+                heights_shifted = heights - 0.5
+                logger.debug(f"Bidirektionaler Modus: heights {heights.min():.3f}-{heights.max():.3f} -> {heights_shifted.min():.3f}-{heights_shifted.max():.3f}")
 
-            # === SCHRITT 6: Displacement NUR auf Face-Mesh anwenden ===
             depth = texture_feature.depth
             normals = face_mesh.point_data.get('Normals')
 
@@ -213,8 +237,8 @@ class TextureExporter:
                 normal_arr = np.array(face_mapping.normal)
                 normals = np.tile(normal_arr, (face_mesh.n_points, 1))
 
-            # Displacement: depth ist jetzt die GESAMTE Amplitude (von Tal bis Spitze)
-            displacement = heights_centered * depth
+            # Displacement anwenden
+            displacement = heights_shifted * depth
             logger.debug(f"Displacement: min={displacement.min():.3f}mm, max={displacement.max():.3f}mm")
 
             face_mesh.points = face_mesh.points + normals * displacement[:, np.newaxis]

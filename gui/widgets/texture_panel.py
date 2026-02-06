@@ -41,11 +41,14 @@ class SurfaceTexturePanel(QFrame):
         super().__init__(parent)
         self._face_count = 0
 
-        self.setMinimumWidth(400)
-        self.setMinimumHeight(250)
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(400)
 
         self._setup_style()
         self._setup_ui()
+        
+        # Sicherstellen, dass das richtige Typ-Panel angezeigt wird
+        self._on_type_changed(self.type_combo.currentText())
 
         # WICHTIG: Panel beim Start verstecken
         self.hide()
@@ -123,8 +126,8 @@ class SurfaceTexturePanel(QFrame):
     def _setup_ui(self):
         """Erstellt die UI-Elemente."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 10, 15, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(12)
 
         # Header
         header = QLabel(tr("Surface Texture"))
@@ -192,12 +195,21 @@ class SurfaceTexturePanel(QFrame):
         self.invert_check.stateChanged.connect(self._emit_preview)
         params_layout.addRow("", self.invert_check)
 
+        # Solid Base (3D-Druck Sicherheit)
+        self.solid_base_check = QCheckBox(tr("Solid Base (No Holes)"))
+        self.solid_base_check.setChecked(True)
+        self.solid_base_check.setToolTip(tr("Ensures texture only adds material (no holes). Required for top surfaces in 3D printing."))
+        self.solid_base_check.stateChanged.connect(self._emit_preview)
+        params_layout.addRow("", self.solid_base_check)
+
         main_layout.addWidget(params_group)
 
         # === Type-Specific Parameters (Stacked Widget) ===
         self.type_params_stack = QStackedWidget()
+        self.type_params_stack.setMinimumHeight(120)  # Mindesthöhe für Type-Parameter
         self._setup_type_params()
         main_layout.addWidget(self.type_params_stack)
+        main_layout.addStretch()  # Stretch damit Buttons unten bleiben
 
         # === Preview Checkbox (TODO: Nicht implementiert - ausgeblendet) ===
         self.preview_check = QCheckBox(tr("Live Preview"))
@@ -243,6 +255,19 @@ class SurfaceTexturePanel(QFrame):
         self.ripple_print_safe.stateChanged.connect(self._emit_preview)
         ripple_layout.addRow("", self.ripple_print_safe)
 
+        # Wellenbreite (Pitch) für konsistente Ripples unabhängig von Flächengröße
+        self.ripple_wave_width = QDoubleSpinBox()
+        self.ripple_wave_width.setRange(0.0, 10.0)  # 0.0 erlaubt für "auto"
+        self.ripple_wave_width.setValue(0.0)  # 0 = automatisch (wave_count verwenden)
+        self.ripple_wave_width.setSuffix(" mm")
+        self.ripple_wave_width.setDecimals(2)
+        self.ripple_wave_width.setToolTip(tr("Width of each ripple wave. 0 = auto (uses wave count)."))
+        self.ripple_wave_width.valueChanged.connect(self._emit_preview)
+        ripple_layout.addRow(tr("Wave Width:"), self.ripple_wave_width)
+        
+        # Mindestgröße für Ripple-Widget setzen
+        ripple_widget.setMinimumHeight(150)
+
         self.type_params_stack.addWidget(ripple_widget)
 
         # Honeycomb
@@ -254,6 +279,7 @@ class SurfaceTexturePanel(QFrame):
         self.honeycomb_cell_size.setSuffix(" mm")
         self.honeycomb_cell_size.valueChanged.connect(self._emit_preview)
         honeycomb_layout.addRow(tr("Cell Size:"), self.honeycomb_cell_size)
+        honeycomb_widget.setMinimumHeight(80)
         self.type_params_stack.addWidget(honeycomb_widget)
 
         # Diamond
@@ -264,6 +290,7 @@ class SurfaceTexturePanel(QFrame):
         self.diamond_aspect.setValue(1.0)
         self.diamond_aspect.valueChanged.connect(self._emit_preview)
         diamond_layout.addRow(tr("Aspect Ratio:"), self.diamond_aspect)
+        diamond_widget.setMinimumHeight(80)
         self.type_params_stack.addWidget(diamond_widget)
 
         # Knurl
@@ -281,6 +308,7 @@ class SurfaceTexturePanel(QFrame):
         self.knurl_angle.setSuffix(" deg")
         self.knurl_angle.valueChanged.connect(self._emit_preview)
         knurl_layout.addRow(tr("Angle:"), self.knurl_angle)
+        knurl_widget.setMinimumHeight(120)
         self.type_params_stack.addWidget(knurl_widget)
 
         # Crosshatch
@@ -292,6 +320,7 @@ class SurfaceTexturePanel(QFrame):
         self.crosshatch_spacing.setSuffix(" mm")
         self.crosshatch_spacing.valueChanged.connect(self._emit_preview)
         crosshatch_layout.addRow(tr("Line Spacing:"), self.crosshatch_spacing)
+        crosshatch_widget.setMinimumHeight(80)
         self.type_params_stack.addWidget(crosshatch_widget)
 
         # Voronoi
@@ -309,6 +338,7 @@ class SurfaceTexturePanel(QFrame):
         self.voronoi_randomness.setDecimals(2)
         self.voronoi_randomness.valueChanged.connect(self._emit_preview)
         voronoi_layout.addRow(tr("Randomness:"), self.voronoi_randomness)
+        voronoi_widget.setMinimumHeight(120)
         self.type_params_stack.addWidget(voronoi_widget)
 
         # Custom (Heightmap)
@@ -321,6 +351,7 @@ class SurfaceTexturePanel(QFrame):
         self.custom_browse_btn.clicked.connect(self._browse_heightmap)
         custom_layout.addRow("", self.custom_browse_btn)
         self._custom_path = ""
+        custom_widget.setMinimumHeight(100)
         self.type_params_stack.addWidget(custom_widget)
 
     def _on_type_changed(self, text: str):
@@ -383,6 +414,7 @@ class SurfaceTexturePanel(QFrame):
             "depth": self.depth_spin.value(),
             "rotation": self.rotation_spin.value(),
             "invert": self.invert_check.isChecked(),
+            "solid_base": self.solid_base_check.isChecked(),
             "type_params": self._get_type_params(texture_type),
         }
 
@@ -391,10 +423,12 @@ class SurfaceTexturePanel(QFrame):
     def _get_type_params(self, texture_type: str) -> dict:
         """Gibt typ-spezifische Parameter zurück."""
         if texture_type == "ripple":
+            wave_width = self.ripple_wave_width.value()
             return {
                 "wave_count": int(self.ripple_wave_count.value()),
                 "wave_shape": self.ripple_wave_shape.currentText(),
                 "print_safe": self.ripple_print_safe.isChecked(),
+                "wave_width": wave_width if wave_width > 0 else None,  # None = automatisch
             }
         elif texture_type == "honeycomb":
             return {

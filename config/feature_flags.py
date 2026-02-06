@@ -23,6 +23,10 @@ from typing import Dict
 # - Extrahierte Trim/Extend/Fillet/Chamfer Operationen (Phase 4)
 # - TNP Face-Selection mit Hash (Phase 7)
 # - Smart Dimension Entry UX (Phase 8)
+# - ShapeUpgrade_UnifySameDomain (Phase 14) - aktiv in Rebuild-Pipeline
+#
+# Nicht umsetzbar (entfernt):
+# - parallel_rebuild (Phase 15) - OCP/OpenCASCADE ist nicht thread-safe
 #
 # Die Flags unten sind für aktives Debugging oder experimentelle Features.
 
@@ -51,11 +55,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "async_tessellation": False,  # Phase 9: Background Mesh Generation (TODO)
     # Phase 10: BooleanEngineV4 ist jetzt STANDARD - kein Flag mehr nötig
     "ocp_advanced_flags": True,  # Phase 11: SetFuzzyValue + SetRunParallel (AKTIV)
-    "ocp_glue_mode": False,  # Phase 11: SetGlue() - VERBOTEN (20% kaputte Bodies)
-    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Ops (TODO)
+    "ocp_glue_mode": False,  # Phase 11: SetGlue() - VERBOTEN (erzeugt kaputte Topologie, TNP kann nicht reparieren)
+    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Fillets (TODO - bei vielen Fillets)
     "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
-    "auto_shape_unify": False,  # Phase 14: ShapeUpgrade_UnifySameDomain (TODO)
-    "parallel_rebuild": False,  # Phase 15: Multi-Core Feature Rebuilding (TODO)
 }
 
 

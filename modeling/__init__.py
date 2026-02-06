@@ -54,7 +54,6 @@ try:
         BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
     )
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common
-    from OCP.BOPAlgo import BOPAlgo_GlueEnum
     from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe
     from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
     from OCP.StlAPI import StlAPI_Writer
@@ -749,6 +748,9 @@ class SurfaceTextureFeature(Feature):
     # Typ-spezifische Parameter
     type_params: dict = field(default_factory=dict)
 
+    # 3D-Druck-Optimierung
+    solid_base: bool = True  # True = keine Löcher (nur positive Displacement), False = bidirektional
+
     # Export-Einstellungen
     export_subdivisions: int = 4  # Mesh-Unterteilung für Export (4 = gute Textur-Auflösung)
 
@@ -775,6 +777,7 @@ class SurfaceTextureFeature(Feature):
             "rotation": self.rotation,
             "invert": self.invert,
             "type_params": self.type_params,
+            "solid_base": self.solid_base,
             "export_subdivisions": self.export_subdivisions,
         }
 
@@ -794,6 +797,7 @@ class SurfaceTextureFeature(Feature):
             rotation=data.get("rotation", 0.0),
             invert=data.get("invert", False),
             type_params=data.get("type_params", {}),
+            solid_base=data.get("solid_base", True),  # Default True für 3D-Druck-Sicherheit
             export_subdivisions=data.get("export_subdivisions", 2),
         )
 
@@ -1888,7 +1892,6 @@ class Body:
         """
         try:
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from OCP.BOPAlgo import BOPAlgo_GlueEnum
             from OCP.TopTools import TopTools_ListOfShape
 
             # Methode 1: Standard Fuse mit Fuzzy
@@ -1907,7 +1910,8 @@ class Body:
             fuse_op.SetFuzzyValue(fuzzy_value)
             fuse_op.SetRunParallel(True)
             fuse_op.SetNonDestructive(True)  # Behält Original-Shapes
-            fuse_op.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueFull)  # Besseres Gluing
+            # SetGlue NICHT verwenden - verursacht kaputte Bodies bei ~20% der Joins
+            # (siehe boolean_engine_v4.py, ocp_glue_mode Flag)
 
             # Build
             fuse_op.Build()
@@ -1959,7 +1963,6 @@ class Body:
         """
         try:
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-            from OCP.BOPAlgo import BOPAlgo_GlueEnum
             from OCP.TopTools import TopTools_ListOfShape
 
             # Methode 1: Erweiterte Cut-API
@@ -1979,8 +1982,8 @@ class Body:
             cut_op.SetRunParallel(True)
             cut_op.SetNonDestructive(True)
 
-            # GlueShift ist wichtig für koplanare Flächen!
-            cut_op.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueShift)
+            # SetGlue NICHT verwenden - verursacht kaputte Bodies bei ~20% der Joins
+            # (siehe boolean_engine_v4.py, ocp_glue_mode Flag)
 
             # Build
             cut_op.Build()

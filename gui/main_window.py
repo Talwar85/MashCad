@@ -8909,6 +8909,7 @@ class MainWindow(QMainWindow):
             depth=config.get('depth', 0.5),
             rotation=config.get('rotation', 0.0),
             invert=config.get('invert', False),
+            solid_base=config.get('solid_base', True),  # Default True für 3D-Druck-Sicherheit
             type_params=config.get('type_params', {}),
             export_subdivisions=config.get('export_subdivisions', 4)
         )

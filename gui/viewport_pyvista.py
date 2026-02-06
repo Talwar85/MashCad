@@ -5051,10 +5051,24 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             face_normal = face_data.get('normal', (0, 0, 1))
             uvs = TextureExporter._compute_uvs(face_mesh, face_center, face_normal)
 
-            # Heightmap generieren
+            # Heightmap generieren (mit wave_width Unterstützung)
+            type_params = texture_feature.type_params.copy()
+            wave_width = type_params.get("wave_width")
+            
+            if wave_width and wave_width > 0:
+                # Berechne Face-Größe aus UV-Bounds
+                u_min, u_max = uvs[:, 0].min(), uvs[:, 0].max()
+                v_min, v_max = uvs[:, 1].min(), uvs[:, 1].max()
+                face_size = max(u_max - u_min, v_max - v_min)
+                
+                # Berechne wave_count basierend auf Face-Größe und gewünschter Wellenbreite
+                wave_count = face_size / wave_width
+                type_params["wave_count"] = wave_count
+                logger.debug(f"Preview Ripple: face_size={face_size:.2f}mm, wave_width={wave_width}mm, wave_count={wave_count:.2f}")
+
             heightmap = TextureGenerator.generate(
                 texture_feature.texture_type,
-                texture_feature.type_params,
+                type_params,
                 size=128  # Kleiner für Preview
             )
 
@@ -5074,10 +5088,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if texture_feature.invert:
                 heights = 1.0 - heights
 
-            # WICHTIG: Heights zentrieren für bidirektionales Displacement
-            # Statt nur 0->1 (nur Erhöhungen) machen wir -0.5->+0.5 (Täler UND Erhöhungen)
-            # Das macht die Textur viel sichtbarer!
-            heights_centered = heights - 0.5  # Jetzt von -0.5 bis +0.5
+            # Displacement-Modus: solid_base=True = keine Löcher (nur positiv)
+            solid_base = getattr(texture_feature, 'solid_base', True)
+            if solid_base:
+                # Verschiebe so dass Minimum bei 0 ist (keine Löcher)
+                heights_shifted = heights - heights.min()
+            else:
+                # Bidirektional: -0.5 bis +0.5
+                heights_shifted = heights - 0.5
 
             # Displacement anwenden
             depth = texture_feature.depth
@@ -5089,9 +5107,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 normals = np.tile(normal_arr, (face_mesh.n_points, 1))
                 logger.debug(f"Fallback-Normalen verwendet: {normal_arr}")
 
-            # Displacement: depth ist jetzt die GESAMTE Amplitude (von Tal bis Spitze)
-            displacement = heights_centered * depth
-            logger.info(f"Preview Displacement: min={displacement.min():.3f}mm, max={displacement.max():.3f}mm, "
+            # Displacement anwenden
+            displacement = heights_shifted * depth
+            mode_str = "solid" if solid_base else "bidirectional"
+            logger.info(f"Preview Displacement ({mode_str}): min={displacement.min():.3f}mm, max={displacement.max():.3f}mm, "
                        f"depth={depth}mm, type={texture_feature.texture_type}")
 
             # Displacement anwenden
