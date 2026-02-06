@@ -3880,9 +3880,11 @@ class Body:
         """
         Aktualisiert Edge-Selektoren in Fillet/Chamfer Features nach Geometrie-Operation.
 
-        SAUBERE LÖSUNG (kein Quickfix): Nach Push/Pull oder Boolean ändern sich
-        Edge-Positionen. Diese Methode findet die neuen Edges und aktualisiert
-        die gespeicherten GeometricEdgeSelectors.
+        Nach Push/Pull oder Boolean ändern sich Edge-Positionen. Diese Methode
+        findet die neuen Edges und aktualisiert die gespeicherten GeometricEdgeSelectors.
+
+        Bei großen Parameter-Änderungen (z.B. Extrude 200→100mm) wird automatisch
+        adaptive Toleranz verwendet wenn Standard-Matching (10mm) fehlschlägt.
 
         Args:
             solid: Das neue Solid nach der Operation
@@ -3900,6 +3902,8 @@ class Body:
 
         from modeling.geometric_selector import GeometricEdgeSelector
 
+        adaptive_tolerance = None  # Lazy-computed bei Bedarf
+
         updated_count = 0
         for feat_idx, feature in enumerate(self.features):
             # Beim Rebuild: Nur Features aktualisieren die VOR dem aktuellen
@@ -3910,13 +3914,15 @@ class Body:
             # Nur Fillet und Chamfer Features
             if not isinstance(feature, (FilletFeature, ChamferFeature)):
                 continue
-            
+
             geometric_selectors = getattr(feature, 'geometric_selectors', [])
             if not geometric_selectors:
                 continue
-            
+
+            edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+
             new_selectors = []
-            for selector in geometric_selectors:
+            for idx, selector in enumerate(geometric_selectors):
                 try:
                     # Konvertiere zu GeometricEdgeSelector wenn nötig
                     if isinstance(selector, dict):
@@ -3925,14 +3931,36 @@ class Body:
                         geo_sel = selector
                     else:
                         continue
-                    
+
                     # Finde beste matching Edge im neuen Solid
                     best_edge = geo_sel.find_best_match(all_edges)
+
+                    # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Änderungen
+                    if best_edge is None:
+                        if adaptive_tolerance is None:
+                            adaptive_tolerance = self._compute_adaptive_edge_tolerance(solid)
+
+                        if adaptive_tolerance > geo_sel.tolerance:
+                            adaptive_sel = GeometricEdgeSelector(
+                                center=geo_sel.center,
+                                direction=geo_sel.direction,
+                                length=geo_sel.length,
+                                curve_type=geo_sel.curve_type,
+                                tolerance=adaptive_tolerance
+                            )
+                            best_edge = adaptive_sel.find_best_match(all_edges)
+                            if best_edge is not None:
+                                logger.debug(f"Edge via adaptive Toleranz ({adaptive_tolerance:.1f}mm) gefunden")
+
                     if best_edge is not None:
                         # Erstelle neuen Selector mit aktualisierten Werten
                         new_selector = GeometricEdgeSelector.from_edge(best_edge)
                         new_selectors.append(new_selector)
                         updated_count += 1
+
+                        # TNP v4.0: ShapeNamingService Record aktualisieren
+                        if idx < len(edge_shape_ids):
+                            self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
                     else:
                         # Edge nicht gefunden - behalte alten Selector bei
                         logger.warning(f"Edge nicht gefunden nach Operation für {feature.name}")
@@ -3943,13 +3971,13 @@ class Body:
                         new_selectors.append(GeometricEdgeSelector.from_dict(selector))
                     else:
                         new_selectors.append(selector)
-            
+
             # Aktualisiere Feature
             feature.geometric_selectors = new_selectors
-            
+
             # TNP v3.0: Registry für dieses Feature auch aktualisieren
             self._update_registry_for_feature(feature, solid)
-            
+
         if updated_count > 0:
             logger.info(f"Aktualisiert {updated_count} Edge-Selektoren nach Geometrie-Operation")
 
@@ -4068,31 +4096,38 @@ class Body:
     def _update_edge_selectors_for_feature(self, feature, solid):
         """
         Aktualisiert Edge-Selektoren eines SPEZIFISCHEN Features vor Ausführung.
-        
+
         TNP-CRITICAL: Diese Methode muss BEVOR Fillet/Chamfer ausgeführt werden,
         weil das Solid sich durch vorherige Features verändert haben kann.
-        
+
+        Bei Parameter-Änderungen (z.B. Extrude 200→100mm) können Edge-Center um
+        mehr als die Standard-Toleranz (10mm) wandern. In diesem Fall wird ein
+        adaptiver Fallback verwendet, der die Toleranz an die Solid-Größe anpasst.
+
         Args:
             feature: FilletFeature oder ChamferFeature
             solid: Das aktuelle Solid (nach allen vorherigen Features)
         """
         if not solid or not hasattr(solid, 'edges'):
             return
-        
+
         all_edges = list(solid.edges())
         if not all_edges:
             return
-        
+
         from modeling.geometric_selector import GeometricEdgeSelector
-        
+
         geometric_selectors = getattr(feature, 'geometric_selectors', [])
         if not geometric_selectors:
             return
-        
+
+        edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
+        adaptive_tolerance = None  # Lazy-computed bei Bedarf
+
         updated_count = 0
         new_selectors = []
-        
-        for selector in geometric_selectors:
+
+        for idx, selector in enumerate(geometric_selectors):
             try:
                 # Konvertiere zu GeometricEdgeSelector wenn nötig
                 if isinstance(selector, dict):
@@ -4102,14 +4137,37 @@ class Body:
                 else:
                     new_selectors.append(selector)
                     continue
-                
+
                 # Finde beste matching Edge im aktuellen Solid
                 best_edge = geo_sel.find_best_match(all_edges)
+
+                # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Änderungen
+                # Wenn Standard-Matching (10mm) fehlschlägt, Toleranz an Solid-Größe anpassen
+                if best_edge is None:
+                    if adaptive_tolerance is None:
+                        adaptive_tolerance = self._compute_adaptive_edge_tolerance(solid)
+
+                    if adaptive_tolerance > geo_sel.tolerance:
+                        adaptive_sel = GeometricEdgeSelector(
+                            center=geo_sel.center,
+                            direction=geo_sel.direction,
+                            length=geo_sel.length,
+                            curve_type=geo_sel.curve_type,
+                            tolerance=adaptive_tolerance
+                        )
+                        best_edge = adaptive_sel.find_best_match(all_edges)
+                        if best_edge is not None:
+                            logger.debug(f"Edge via adaptive Toleranz ({adaptive_tolerance:.1f}mm) gefunden")
+
                 if best_edge is not None:
                     # Erstelle neuen Selector mit aktualisierten Werten
                     new_selector = GeometricEdgeSelector.from_edge(best_edge)
                     new_selectors.append(new_selector)
                     updated_count += 1
+
+                    # TNP v4.0: ShapeNamingService Record aktualisieren
+                    if idx < len(edge_shape_ids):
+                        self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
                 else:
                     # Edge nicht gefunden - behalte alten Selector bei
                     logger.debug(f"Edge nicht gefunden für Feature {feature.name}, behalte alten Selector")
@@ -4117,12 +4175,76 @@ class Body:
             except Exception as e:
                 logger.debug(f"Edge-Selector Update fehlgeschlagen: {e}")
                 new_selectors.append(selector)
-        
+
         # Aktualisiere Feature
         feature.geometric_selectors = new_selectors
-        
+
         if updated_count > 0:
             logger.debug(f"Feature '{feature.name}': {updated_count}/{len(geometric_selectors)} Edges aktualisiert")
+
+    def _compute_adaptive_edge_tolerance(self, solid) -> float:
+        """
+        Berechnet adaptive Toleranz für Edge-Matching basierend auf Solid-Größe.
+
+        Bei Parameter-Änderungen (z.B. Extrude-Höhe) können Edge-Center um die
+        gesamte Modell-Dimension wandern. Die Toleranz wird auf die BBox-Diagonale
+        gesetzt, damit die Direction/Type-Gewichtung den richtigen Match bestimmt.
+        """
+        try:
+            bbox = solid.bounding_box()
+            diag = ((bbox.max.X - bbox.min.X)**2 +
+                    (bbox.max.Y - bbox.min.Y)**2 +
+                    (bbox.max.Z - bbox.min.Z)**2)**0.5
+            return max(diag, 10.0)
+        except Exception:
+            return 50.0
+
+    def _update_shape_naming_record(self, shape_id, edge) -> None:
+        """
+        Aktualisiert einen ShapeNamingService Record mit neuer Edge-Geometrie.
+
+        Wird aufgerufen wenn ein Edge-Selector nach Parameter-Änderung eine neue
+        passende Edge gefunden hat. Aktualisiert ocp_shape, geometric_signature
+        und spatial_index, damit _resolve_edges_tnp die Edge ebenfalls findet.
+        """
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            return
+
+        try:
+            service = self._document._shape_naming_service
+
+            if not hasattr(shape_id, 'uuid') or shape_id.uuid not in service._shapes:
+                return
+
+            record = service._shapes[shape_id.uuid]
+
+            # OCP Shape aktualisieren
+            record.ocp_shape = edge.wrapped
+            record.is_valid = True
+
+            # Geometric Signature neu berechnen
+            old_sig = record.geometric_signature.copy() if record.geometric_signature else {}
+            record.geometric_signature = record.compute_signature()
+
+            # Spatial Index aktualisieren
+            shape_type = record.shape_id.shape_type
+            if 'center' in record.geometric_signature:
+                import numpy as np
+                new_center = np.array(record.geometric_signature['center'])
+
+                # Alten Eintrag entfernen
+                service._spatial_index[shape_type] = [
+                    (pos, sid) for pos, sid in service._spatial_index[shape_type]
+                    if sid.uuid != shape_id.uuid
+                ]
+                # Neuen Eintrag hinzufügen
+                service._spatial_index[shape_type].append((new_center, record.shape_id))
+
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Record {shape_id.uuid[:8]} aktualisiert nach Parameter-Änderung")
+
+        except Exception as e:
+            logger.debug(f"Shape Naming Record Update fehlgeschlagen: {e}")
 
     def _register_feature_shape_refs(self, feature) -> None:
         """
