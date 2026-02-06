@@ -136,6 +136,230 @@ class BooleanEngineV4:
     MIN_VOLUME_CHANGE = Tolerances.KERNEL_MIN_VOLUME_CHANGE
 
     @staticmethod
+    def _fix_shape(shape: Any) -> Any:
+        """
+        Repariert einen TopoDS_Shape mit ShapeFix vor/nach Boolean.
+
+        Args:
+            shape: OCP TopoDS_Shape
+
+        Returns:
+            Reparierter Shape (oder Original wenn bereits valid)
+        """
+        try:
+            analyzer = BRepCheck_Analyzer(shape)
+            if analyzer.IsValid():
+                return shape
+
+            logger.debug("Shape invalid, starte Reparatur...")
+            fixer = ShapeFix_Shape(shape)
+            fixer.SetPrecision(Tolerances.KERNEL_PRECISION)
+            fixer.SetMaxTolerance(Tolerances.MESH_EXPORT)
+            fixer.SetMinTolerance(Tolerances.KERNEL_PRECISION / 10)
+
+            if fixer.Perform():
+                fixed = fixer.Shape()
+                analyzer2 = BRepCheck_Analyzer(fixed)
+                if analyzer2.IsValid():
+                    logger.debug("✓ Shape repariert")
+                    return fixed
+                else:
+                    logger.warning("Shape nach Reparatur immer noch invalid")
+                    return fixed
+            else:
+                logger.warning("ShapeFix Perform() fehlgeschlagen")
+                return shape
+
+        except Exception as e:
+            logger.warning(f"Shape-Reparatur Fehler: {e}")
+            return shape
+
+    @staticmethod
+    def execute_boolean_on_shapes(
+        solid1: Any,
+        solid2: Any,
+        operation: str,
+        fuzzy_tolerance: Optional[float] = None
+    ) -> BooleanResult:
+        """
+        Execute Boolean operation on two solids (shape-level API).
+
+        Keine Body-Dependency, keine Transaction, kein invalidate_mesh().
+        Ideal für den Rebuild-Loop der mit Zwischen-Solids arbeitet.
+
+        Führt alle Pre-/Post-Checks durch:
+        - Self-Intersection Check
+        - Argument Analysis
+        - Post-Boolean Validation + Auto-Healing
+        - Tolerance Monitoring
+
+        Args:
+            solid1: Erstes Solid (Build123d Solid oder OCP TopoDS_Shape)
+            solid2: Zweites Solid (Build123d Solid oder OCP TopoDS_Shape)
+            operation: "Join", "Cut", or "Intersect"
+            fuzzy_tolerance: Override default tolerance
+
+        Returns:
+            BooleanResult mit Build123d Solid als value und History
+        """
+        if not HAS_OCP:
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message="OpenCASCADE not available",
+                operation_type=operation.lower()
+            )
+
+        VolumeCache.clear()
+
+        if fuzzy_tolerance is None:
+            fuzzy_tolerance = BooleanEngineV4.PRODUCTION_FUZZY_TOLERANCE
+
+        op_type = operation.lower()
+
+        try:
+            # 1. Validate inputs
+            if solid1 is None or solid2 is None:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Boolean {operation}: Eines der Solids ist None",
+                    operation_type=op_type
+                )
+
+            if operation not in ["Join", "Cut", "Intersect"]:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Unknown operation: {operation}",
+                    operation_type=op_type
+                )
+
+            # 2. Extract OCP shapes
+            shape1 = solid1.wrapped if hasattr(solid1, 'wrapped') else solid1
+            shape2 = solid2.wrapped if hasattr(solid2, 'wrapped') else solid2
+
+            # 3. Fix shapes before boolean
+            shape1 = BooleanEngineV4._fix_shape(shape1)
+            shape2 = BooleanEngineV4._fix_shape(shape2)
+
+            if shape1 is None or shape2 is None:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message="Shape-Reparatur fehlgeschlagen",
+                    operation_type=op_type
+                )
+
+            # 4. Pre-Boolean Checks
+            si_error = BooleanEngineV4._check_self_intersection(shape1, "Body")
+            if si_error:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=si_error,
+                    operation_type=op_type
+                )
+            si_error = BooleanEngineV4._check_self_intersection(shape2, "Tool")
+            if si_error:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=si_error,
+                    operation_type=op_type
+                )
+
+            arg_warning = BooleanEngineV4._analyze_boolean_arguments(shape1, shape2, fuzzy_tolerance)
+            if arg_warning:
+                logger.warning(f"Boolean Argument Analyse: {arg_warning}")
+
+            # 5. Execute OCP Boolean
+            logger.debug(f"Executing OCP Boolean {operation}...")
+            result_shape, history = BooleanEngineV4._execute_ocp_boolean(
+                shape1, shape2, operation, fuzzy_tolerance
+            )
+
+            if result_shape is None:
+                if operation == "Intersect":
+                    return BooleanResult(
+                        status=ResultStatus.EMPTY,
+                        message="Intersect produzierte kein Ergebnis (keine Überlappung)",
+                        operation_type=op_type
+                    )
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Boolean {operation} failed: OpenCASCADE returned None",
+                    operation_type=op_type
+                )
+
+            # 6. Post-Boolean Validation + Healing
+            result_shape = BooleanEngineV4._validate_and_heal_result(result_shape, operation)
+            BooleanEngineV4._check_tolerances(result_shape, operation)
+
+            # 7. Validate result shape
+            if not BooleanEngineV4._is_valid_shape(result_shape):
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Boolean {operation} produced invalid geometry",
+                    operation_type=op_type
+                )
+
+            # 8. Verify geometry actually changed
+            if not BooleanEngineV4._verify_geometry_changed(shape1, result_shape, operation):
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message=f"Boolean {operation} produced no change",
+                    operation_type=op_type
+                )
+
+            # 9. Wrap to Build123d Solid
+            from build123d import Solid, Shape
+            try:
+                result_solid = Solid(result_shape)
+            except Exception:
+                try:
+                    result_solid = Shape(result_shape)
+                except Exception as wrap_err:
+                    return BooleanResult(
+                        status=ResultStatus.ERROR,
+                        message=f"Wrap zu Build123d fehlgeschlagen: {wrap_err}",
+                        operation_type=op_type
+                    )
+
+            # 10. Validate wrapped result
+            if hasattr(result_solid, 'is_valid') and not result_solid.is_valid():
+                try:
+                    result_solid = result_solid.fix()
+                except Exception:
+                    pass
+
+            # Check volume
+            try:
+                wrapped_vol = result_solid.volume
+                if wrapped_vol < 0.001:
+                    return BooleanResult(
+                        status=ResultStatus.ERROR,
+                        message=f"{operation} erzeugte leeres Ergebnis (Vol={wrapped_vol:.4f}mm³)",
+                        operation_type=op_type
+                    )
+            except Exception:
+                pass
+
+            logger.success(f"✅ Boolean {operation} successful")
+
+            return BooleanResult(
+                status=ResultStatus.SUCCESS,
+                value=result_solid,
+                message=f"Boolean {operation} completed successfully",
+                operation_type=op_type,
+                history=history
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Boolean {operation} unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+            return BooleanResult(
+                status=ResultStatus.ERROR,
+                message=f"Unexpected error: {type(e).__name__}: {e}",
+                operation_type=op_type
+            )
+
+    @staticmethod
     def execute_boolean(
         body: 'Body',
         tool_solid: Any,
@@ -143,240 +367,42 @@ class BooleanEngineV4:
         fuzzy_tolerance: Optional[float] = None
     ) -> BooleanResult:
         """
-        Execute Boolean operation with transaction safety.
+        Execute Boolean operation with transaction safety on a Body object.
+
+        Wrapper um execute_boolean_on_shapes() mit:
+        - BodyTransaction (Rollback bei Fehler)
+        - Body-Update (solid + mesh invalidation)
 
         Args:
             body: Target body (will be modified in transaction)
             tool_solid: Tool solid for Boolean operation
             operation: "Join", "Cut", or "Intersect"
-            fuzzy_tolerance: Override default tolerance (for advanced users)
+            fuzzy_tolerance: Override default tolerance
 
         Returns:
             BooleanResult with SUCCESS, ERROR, or EMPTY status
-
-        Raises:
-            BooleanOperationError: Triggers automatic rollback
         """
-        if not HAS_OCP:
+        if body._build123d_solid is None:
             return BooleanResult(
                 status=ResultStatus.ERROR,
-                message="OpenCASCADE not available",
-                operation_type=operation
+                message="Target body has no solid",
+                operation_type=operation.lower()
             )
 
-        # PERFORMANCE: Clear VolumeCache at start of each operation (Phase 3)
-        # Prevents stale cache entries from previous operations
-        VolumeCache.clear()
-
-        # Use production defaults unless overridden
-        if fuzzy_tolerance is None:
-            fuzzy_tolerance = BooleanEngineV4.PRODUCTION_FUZZY_TOLERANCE
-
-        # Execute within transaction for safety
         with BodyTransaction(body, f"Boolean {operation}") as txn:
-            try:
-                # 1. Validate inputs
-                logger.debug(f"Validating Boolean {operation} inputs...")
-                validation_error = BooleanEngineV4._validate_inputs(
-                    body._build123d_solid, tool_solid, operation
-                )
-                if validation_error:
-                    raise BooleanOperationError(validation_error)
-                logger.debug("  Inputs valid")
+            result = BooleanEngineV4.execute_boolean_on_shapes(
+                body._build123d_solid, tool_solid, operation, fuzzy_tolerance
+            )
 
-                # 2. Pre-Boolean Validation (OCP Feature Audit)
-                body_shape_pre = body._build123d_solid.wrapped
-                tool_shape_pre = tool_solid.wrapped if hasattr(tool_solid, 'wrapped') else tool_solid
-
-                # 2a. Self-Intersection Check (Feature #1)
-                si_error = BooleanEngineV4._check_self_intersection(body_shape_pre, "Body")
-                if si_error:
-                    raise BooleanOperationError(si_error)
-                si_error = BooleanEngineV4._check_self_intersection(tool_shape_pre, "Tool")
-                if si_error:
-                    raise BooleanOperationError(si_error)
-
-                # 2b. Argument Analyzer (Feature #3)
-                arg_error = BooleanEngineV4._analyze_boolean_arguments(
-                    body_shape_pre, tool_shape_pre, fuzzy_tolerance
-                )
-                if arg_error:
-                    # Warnung statt harter Fehler - manche "problematischen" Inputs funktionieren trotzdem
-                    logger.warning(f"Boolean Argument Analyse: {arg_error}")
-
-                # 3. Execute OpenCASCADE Boolean
-                logger.debug(f"Executing OCP Boolean {operation}...")
-
-                # Get OCP shapes WITH their transformations applied!
-                # CRITICAL: build123d stores Location separately from wrapped shape
-                # We must use shape.wrapped.Moved(location) to get positioned geometry
-
-                # Get OCP shapes directly - build123d's .wrapped ALREADY includes transformations!
-                # The .location attribute records what was applied, but .wrapped has it baked in.
-                # DO NOT apply .location again or you'll double-transform!
-                body_shape = body._build123d_solid.wrapped
-                tool_shape = tool_solid.wrapped if hasattr(tool_solid, 'wrapped') else tool_solid
-
-                # PERFORMANCE: Use VolumeCache for bbox logging (Phase 3)
-                def log_bbox_cached(shape, name):
-                    try:
-                        xmin, ymin, zmin, xmax, ymax, zmax = VolumeCache.get_bbox(shape)
-                        logger.info(f"{name} BBox: ({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
-                    except Exception as e:
-                        logger.debug(f"{name} bbox error: {e}")
-
-                log_bbox_cached(body_shape, "Body")
-                log_bbox_cached(tool_shape, "Tool")
-
-                # Debug: Log shape info
-                from OCP.TopAbs import TopAbs_SOLID, TopAbs_COMPOUND
-                logger.debug(f"Shape types - Body: {body_shape.ShapeType()}, Tool: {tool_shape.ShapeType()}")
-
-                # PERFORMANCE: Use VolumeCache for tool volume (Phase 3)
-                tool_volume = VolumeCache.get_volume(tool_shape)
-                xmin, ymin, zmin, xmax, ymax, zmax = VolumeCache.get_bbox(tool_shape)
-                logger.debug(f"Tool: Vol={tool_volume:.1f}, BBox=({xmin:.1f},{ymin:.1f},{zmin:.1f})-({xmax:.1f},{ymax:.1f},{zmax:.1f})")
-
-                result_shape, history = BooleanEngineV4._execute_ocp_boolean(
-                    body_shape,
-                    tool_shape,
-                    operation,
-                    fuzzy_tolerance
-                )
-
-                if result_shape is None:
-                    raise BooleanOperationError(
-                        f"Boolean {operation} failed: OpenCASCADE returned None.\n"
-                        f"Possible causes:\n"
-                        f"  - Geometries don't overlap (for Cut/Intersect)\n"
-                        f"  - Invalid input geometry\n"
-                        f"→ Check tool position and try again."
-                    )
-
-                # 4a. Post-Boolean Validation + Auto-Healing (Feature #4)
-                result_shape = BooleanEngineV4._validate_and_heal_result(result_shape, operation)
-
-                # 4b. Toleranz-Monitoring (Feature #5)
-                BooleanEngineV4._check_tolerances(result_shape, operation)
-
-                # 4c. Validate result shape
-                is_valid = BooleanEngineV4._is_valid_shape(result_shape)
-                logger.debug(f"Shape validation: is_valid={is_valid}")
-
-                if not is_valid:
-                    raise BooleanOperationError(
-                        f"Boolean {operation} produced invalid geometry.\n"
-                        f"→ Try simplifying input geometries."
-                    )
-
-                # 4. Verify geometry actually changed
-                if not BooleanEngineV4._verify_geometry_changed(
-                    body._build123d_solid.wrapped,
-                    result_shape,
-                    operation
-                ):
-                    raise BooleanOperationError(
-                        f"Boolean {operation} produced no change.\n"
-                        f"Possible causes:\n"
-                        f"  - Tool too small to affect body\n"
-                        f"  - Tool outside body bounds (for Cut)\n"
-                        f"  - No overlap (for Intersect)\n"
-                        f"→ Check tool size and position."
-                    )
-
-                # 5. PERFORMANCE: Use VolumeCache for volume comparison (Phase 3)
-                ocp_result_volume = VolumeCache.get_volume(result_shape)
-                ocp_original_volume = VolumeCache.get_volume(body._build123d_solid.wrapped)
-
-                logger.info(f"OCP Volumes: Original={ocp_original_volume:.1f}, Result={ocp_result_volume:.1f}")
-
-                # 6. Wrap result in build123d Solid
-                from build123d import Solid, Shape
-
-                try:
-                    result_solid = Solid(result_shape)
-                    logger.debug(f"Wrapped as Solid successfully")
-                except Exception as wrap_err:
-                    logger.debug(f"Solid wrap failed: {wrap_err}, trying Shape")
-                    result_solid = Shape(result_shape)
-
-                # 6b. Validate wrapped result has volume
-                if not hasattr(result_solid, 'volume'):
-                    raise BooleanOperationError(
-                        f"Boolean {operation} result cannot be converted to Solid.\n"
-                        f"→ The operation may have produced invalid geometry."
-                    )
-
-                # 6c. Compare wrapped volume with OCP volume
-                wrapped_volume = result_solid.volume
-                logger.info(f"Wrapped volume: {wrapped_volume:.1f} (OCP was {ocp_result_volume:.1f})")
-
-                if abs(wrapped_volume - ocp_result_volume) > 100:
-                    logger.warning(f"VOLUME MISMATCH! OCP={ocp_result_volume:.1f}, Wrapped={wrapped_volume:.1f}")
-
-                # 6d. Try fix() if result is invalid
-                if hasattr(result_solid, 'is_valid') and not result_solid.is_valid():
-                    logger.debug("Result invalid, trying fix()")
-                    try:
-                        result_solid = result_solid.fix()
-                    except Exception as fix_err:
-                        logger.debug(f"fix() failed: {fix_err}")
-
-                # 6. Verify wrapped result has correct volume
-                try:
-                    wrapped_volume = result_solid.volume
-                    original_volume = body._build123d_solid.volume
-                    logger.debug(f"Volume change: {original_volume:.1f} → {wrapped_volume:.1f}")
-
-                    # Additional check: Ensure volume actually changed for Cut
-                    if operation.lower() == "cut" and abs(wrapped_volume - original_volume) < 1.0:
-                        logger.warning(f"Cut produced no volume change! Original={original_volume:.1f}, Result={wrapped_volume:.1f}")
-                except Exception as vol_err:
-                    logger.debug(f"Could not get volumes: {vol_err}")
-
-                # 7. Update body (transaction will commit if we return success)
-                body._build123d_solid = result_solid
-
-                # 8. Invalidate mesh cache (lazy regeneration)
+            if result.is_success and result.value is not None:
+                body._build123d_solid = result.value
                 if hasattr(body, 'invalidate_mesh'):
                     body.invalidate_mesh()
                 else:
-                    # Legacy: force regeneration
                     body._mesh_cache_valid = False
-
-                logger.success(f"✅ Boolean {operation} successful")
-
-                # ✅ CRITICAL: Commit transaction to prevent rollback!
                 txn.commit()
 
-                return BooleanResult(
-                    status=ResultStatus.SUCCESS,
-                    value=result_solid,
-                    message=f"Boolean {operation} completed successfully",
-                    operation_type=operation.lower(),
-                    history=history
-                )
-
-            except BooleanOperationError as e:
-                # Expected failure - will trigger rollback
-                logger.warning(f"⚠️ Boolean {operation} failed: {e}")
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=str(e),
-                    operation_type=operation.lower()
-                )
-
-            except Exception as e:
-                # Unexpected error - log and fail
-                logger.error(f"❌ Boolean {operation} unexpected error: {e}")
-                import traceback
-                traceback.print_exc()
-
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=f"Unexpected error: {type(e).__name__}: {e}",
-                    operation_type=operation.lower()
-                )
+            return result
 
     @staticmethod
     def _validate_inputs(solid1: Any, solid2: Any, operation: str) -> Optional[str]:
