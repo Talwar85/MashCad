@@ -5635,17 +5635,19 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                         break
                                 if not found_match:
                                     # Throttling: Nur einmal pro Body warnen, nicht bei jedem Hover
-                                    warn_key = f"{picked_body_id}_{ocp_face_id}"
-                                    if not hasattr(self, '_selection_face_warnings'):
-                                        self._selection_face_warnings = set()
-                                    if warn_key not in self._selection_face_warnings:
-                                        self._selection_face_warnings.add(warn_key)
-                                        available_ids = [
-                                            getattr(f, 'ocp_face_id', None)
-                                            for f in self.detector.selection_faces
-                                            if f.domain_type == "body_face" and f.owner_id == picked_body_id
-                                        ]
-                                        logger.warning(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
+                                    # Nur warnen wenn es überhaupt SelectionFaces gibt (d.h. wir sind in einem Feature-Modus)
+                                    if self.detector.selection_faces:
+                                        warn_key = f"{picked_body_id}_{ocp_face_id}"
+                                        if not hasattr(self, '_selection_face_warnings'):
+                                            self._selection_face_warnings = set()
+                                        if warn_key not in self._selection_face_warnings:
+                                            self._selection_face_warnings.add(warn_key)
+                                            available_ids = [
+                                                getattr(f, 'ocp_face_id', None)
+                                                for f in self.detector.selection_faces
+                                                if f.domain_type == "body_face" and f.owner_id == picked_body_id
+                                            ]
+                                            logger.debug(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
 
                     # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
                     if not all_hits:
