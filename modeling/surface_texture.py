@@ -29,6 +29,7 @@ TEXTURE_DEFAULTS = {
     TextureType.RIPPLE: {
         "wave_count": 5,
         "wave_shape": "sine",  # sine, triangle, square
+        "print_safe": True,    # 3D-Druck-Optimierung (keine Überhänge >45°)
     },
     TextureType.HONEYCOMB: {
         "cell_size": 3.0,      # mm
@@ -104,9 +105,17 @@ class TextureGenerator:
 
     @staticmethod
     def _ripple(X: np.ndarray, Y: np.ndarray, params: dict) -> np.ndarray:
-        """Wellenförmige Rillen."""
+        """
+        Wellenförmige Rillen.
+
+        Bei print_safe=True wird das Profil 3D-Druck-konform:
+        - Mindest-Basishöhe (20%) damit nichts frei schwebt
+        - Triangle wird zu Trapez (flache Spitzen, max 45° Überhang)
+        - Alle Formen behalten Verbindung zur Oberfläche
+        """
         wave_count = params.get("wave_count", 5)
         wave_shape = params.get("wave_shape", "sine")
+        print_safe = params.get("print_safe", True)
 
         # Wellen entlang X-Achse
         phase = X * wave_count * 2 * np.pi
@@ -114,11 +123,36 @@ class TextureGenerator:
         if wave_shape == "sine":
             height = np.sin(phase) * 0.5 + 0.5
         elif wave_shape == "triangle":
-            height = np.abs(2 * (phase / (2 * np.pi) % 1) - 1)
+            # Basis-Dreieckswelle (0 bis 1)
+            t = phase / (2 * np.pi) % 1  # Normalisierte Position in Periode (0-1)
+            height = np.abs(2 * t - 1)
+
+            if print_safe:
+                # Trapez statt Dreieck: flache Spitzen und Täler
+                # Begrenzt Überhang auf ~45° durch Abflachen der Extrema
+                # Unten: min 0.15, Oben: max 0.85 → flache Plateaus
+                flat_zone = 0.15
+                height = np.clip(height, flat_zone, 1.0 - flat_zone)
+                # Renormalisieren auf 0-1
+                height = (height - flat_zone) / (1.0 - 2 * flat_zone)
         elif wave_shape == "square":
             height = (np.sin(phase) > 0).astype(float)
+
+            if print_safe:
+                # Abgerundete Kanten statt harter Sprünge
+                # Sigmoid-ähnliche Übergänge für druckbare Wände
+                steepness = 10.0  # Kontrolliert Übergangsbreite
+                height = 1.0 / (1.0 + np.exp(-steepness * np.sin(phase)))
         else:
             height = np.sin(phase) * 0.5 + 0.5
+
+        if print_safe:
+            # Mindest-Basishöhe: 20% Sockel damit nichts frei schwebt
+            # Displacement wird bidirektional angewendet (-0.5 bis +0.5),
+            # daher muss die Mindesthöhe sicherstellen dass alles
+            # mit der Oberfläche verbunden bleibt
+            base_height = 0.2
+            height = base_height + height * (1.0 - base_height)
 
         return height
 

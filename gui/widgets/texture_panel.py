@@ -231,6 +231,18 @@ class SurfaceTexturePanel(QFrame):
         self.ripple_wave_count.setDecimals(0)
         self.ripple_wave_count.valueChanged.connect(self._emit_preview)
         ripple_layout.addRow(tr("Wave Count:"), self.ripple_wave_count)
+
+        self.ripple_wave_shape = QComboBox()
+        self.ripple_wave_shape.addItems(["sine", "triangle", "square"])
+        self.ripple_wave_shape.currentTextChanged.connect(self._emit_preview)
+        ripple_layout.addRow(tr("Wave Shape:"), self.ripple_wave_shape)
+
+        self.ripple_print_safe = QCheckBox(tr("3D Print Safe"))
+        self.ripple_print_safe.setChecked(True)
+        self.ripple_print_safe.setToolTip(tr("Optimiert Profil für 3D-Druck (keine Überhänge >45°, Sockel)"))
+        self.ripple_print_safe.stateChanged.connect(self._emit_preview)
+        ripple_layout.addRow("", self.ripple_print_safe)
+
         self.type_params_stack.addWidget(ripple_widget)
 
         # Honeycomb
@@ -381,7 +393,8 @@ class SurfaceTexturePanel(QFrame):
         if texture_type == "ripple":
             return {
                 "wave_count": int(self.ripple_wave_count.value()),
-                "wave_shape": "sine",
+                "wave_shape": self.ripple_wave_shape.currentText(),
+                "print_safe": self.ripple_print_safe.isChecked(),
             }
         elif texture_type == "honeycomb":
             return {

@@ -63,7 +63,8 @@
       "Bash(del /f \"c:\\\\LiteCad\\\\modeling\\\\wall_thickness.py\")",
       "Bash(git rebase:*)",
       "Bash(GIT_SEQUENCE_EDITOR=\"sed -i ''s/^pick 633604f/reword 633604f/''\" git rebase -i 633604f^)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(git -C c:LiteCad status)"
     ]
   }
 }
