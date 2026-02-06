@@ -6047,42 +6047,37 @@ class Body:
 
     def _resolve_edges_by_hash(self, all_edges, ocp_edge_shapes) -> List:
         """
-        Findet Edges durch OCP Shape-Hash Vergleich.
+        Findet Edges durch OCCT-native Shape-Identität (IndexedMapOfShape).
         """
         if not HAS_OCP:
             return []
 
         try:
-            from OCP.TopTools import TopTools_ShapeMapHasher
+            from OCP.TopTools import TopTools_IndexedMapOfShape
 
-            found = []
-            target_hashes = set()
-
-            # Ziel-Hashes berechnen
+            # Build map of target shapes
+            target_map = TopTools_IndexedMapOfShape()
             for ocp_shape in ocp_edge_shapes:
                 try:
-                    h = TopTools_ShapeMapHasher.HashCode(ocp_shape, 2**31 - 1)
-                    target_hashes.add(h)
+                    target_map.Add(ocp_shape)
                 except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    pass
+                    logger.debug(f"[__init__.py] target_map.Add fehlgeschlagen: {e}")
 
-            # Edges mit passenden Hashes finden
+            # Find edges that match
+            found = []
             for edge in all_edges:
                 try:
                     ocp_edge = edge.wrapped if hasattr(edge, 'wrapped') else edge
-                    h = TopTools_ShapeMapHasher.HashCode(ocp_edge, 2**31 - 1)
-                    if h in target_hashes:
+                    if target_map.Contains(ocp_edge):
                         found.append(edge)
                 except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    pass
+                    logger.debug(f"[__init__.py] Contains fehlgeschlagen: {e}")
 
             return found
 
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Hash-Matching Fehler: {e}")
+                logger.debug(f"TNP IndexedMap-Matching Fehler: {e}")
             return []
 
     def _resolve_edges_by_geometry(self, all_edges, geometric_selectors) -> List:

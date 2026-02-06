@@ -319,7 +319,7 @@ class EdgeSelectionMixin:
 
             from build123d import GeomType
             try:
-                is_line = edge.geom_type() == GeomType.LINE
+                is_line = edge.geom_type == GeomType.LINE
             except Exception as e:
                 logger.debug(f"[edge_selection_mixin] Fehler beim Prüfen des Geometrietyps: {e}")
                 is_line = False

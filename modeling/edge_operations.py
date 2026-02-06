@@ -927,7 +927,7 @@ def get_edge_info(edge) -> dict:
         end = edge.position_at(1)
         info["end"] = (end.X, end.Y, end.Z)
 
-        geom_type = edge.geom_type()
+        geom_type = edge.geom_type
         if geom_type == GeomType.LINE:
             info["type"] = "linear"
         elif geom_type == GeomType.CIRCLE:

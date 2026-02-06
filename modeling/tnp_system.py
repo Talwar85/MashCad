@@ -317,9 +317,82 @@ class ShapeNamingService:
             'faces': len(self._spatial_index[ShapeType.FACE])
         }
     
+    def invalidate_feature(self, feature_id: str) -> None:
+        """Remove all shapes from a feature (for undo/rebuild)."""
+        if feature_id in self._by_feature:
+            for shape_id in self._by_feature[feature_id]:
+                if shape_id.uuid in self._shapes:
+                    del self._shapes[shape_id.uuid]
+            del self._by_feature[feature_id]
+
+            # Rebuild spatial index (remove stale entries)
+            for shape_type_key in self._spatial_index:
+                self._spatial_index[shape_type_key] = [
+                    (pos, sid) for pos, sid in self._spatial_index[shape_type_key]
+                    if sid.feature_id != feature_id
+                ]
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP: Feature '{feature_id}' invalidiert")
+
+    def compact(self, current_solid: Any) -> int:
+        """Remove all shapes that no longer exist in the current solid."""
+        to_remove = []
+        for uuid, record in self._shapes.items():
+            if record.ocp_shape and not self._shape_exists_in_solid(record.ocp_shape, current_solid):
+                to_remove.append(uuid)
+
+        for uuid in to_remove:
+            feat_id = self._shapes[uuid].shape_id.feature_id
+            del self._shapes[uuid]
+            if feat_id in self._by_feature:
+                self._by_feature[feat_id] = [
+                    sid for sid in self._by_feature[feat_id] if sid.uuid != uuid
+                ]
+
+        # Rebuild spatial index
+        if to_remove:
+            removed_set = set(to_remove)
+            for shape_type_key in self._spatial_index:
+                self._spatial_index[shape_type_key] = [
+                    (pos, sid) for pos, sid in self._spatial_index[shape_type_key]
+                    if sid.uuid not in removed_set
+                ]
+
+        if is_enabled("tnp_debug_logging"):
+            logger.info(f"TNP compact: {len(to_remove)} stale Shapes entfernt")
+        return len(to_remove)
+
+    def register_solid_edges(self, solid: Any, feature_id: str) -> int:
+        """Register ALL edges from a solid. Uses IndexedMap for dedup."""
+        if not HAS_OCP:
+            return 0
+
+        try:
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+            from OCP.TopoDS import TopoDS
+
+            solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+            edge_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(solid_wrapped, TopAbs_EDGE, edge_map)
+
+            count = 0
+            for i in range(1, edge_map.Extent() + 1):
+                edge = TopoDS.Edge_s(edge_map.FindKey(i))
+                self.register_shape(edge, ShapeType.EDGE, feature_id, i - 1)
+                count += 1
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP: {count} Edges für Feature '{feature_id}' registriert")
+            return count
+        except Exception as e:
+            logger.warning(f"register_solid_edges fehlgeschlagen: {e}")
+            return 0
+
     # === Private Helper ===
-    
-    def _extract_geometry_data(self, ocp_shape: TopoDS_Shape, 
+
+    def _extract_geometry_data(self, ocp_shape: TopoDS_Shape,
                                shape_type: ShapeType) -> Tuple:
         """Extrahiert Geometriedaten für Hashing"""
         if not HAS_OCP:
@@ -361,11 +434,28 @@ class ShapeNamingService:
             center = np.array(record.geometric_signature['center'])
             self._spatial_index[shape_id.shape_type].append((center, shape_id))
     
-    def _shape_exists_in_solid(self, ocp_shape: TopoDS_Shape, 
+    def _shape_exists_in_solid(self, ocp_shape: TopoDS_Shape,
                                current_solid: Any) -> bool:
-        """Prüft ob ein Shape noch im aktuellen Solid existiert"""
-        # Simplifizierte Prüfung - in Produktion komplexer
-        return True  # Annahme: gültig bis Gegenteil bewiesen
+        """Prüft ob ein Shape noch im aktuellen Solid existiert.
+
+        Verwendet OCCT IndexedMap für korrekte TShape-basierte Identität.
+        """
+        if current_solid is None:
+            return False
+
+        try:
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+
+            shape_type = ocp_shape.ShapeType()
+            solid_wrapped = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+            shape_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(solid_wrapped, shape_type, shape_map)
+
+            return shape_map.Contains(ocp_shape)
+        except Exception:
+            return False
     
     def _trace_via_history(self, shape_id: ShapeID, 
                           current_solid: Any) -> Optional[Any]:
@@ -494,7 +584,7 @@ class ShapeNamingService:
                     # Kurven-Typ Score (Bonus für gleichen Typ)
                     type_score = 0
                     if target_type and hasattr(edge, 'geom_type'):
-                        if str(edge.geom_type()) != target_type:
+                        if str(edge.geom_type) != target_type:
                             type_score = 2  # Penalty für unterschiedlichen Typ
                     
                     score = dist + length_score + type_score
@@ -751,8 +841,8 @@ class ShapeNamingService:
         """
         Registriert alle Edges im Result-Solid die noch kein Mapping haben.
 
-        Phase 3 Fix: Nach BRepFeat Operation werden neue Side-Edges erstellt
-        die nicht in den Mappings enthalten sind. Diese müssen registriert werden.
+        Verwendet OCCT-native TopTools_IndexedMapOfShape für korrekte
+        Shape-Identität (TShape pointer equality) statt fragiler Hash-Vergleiche.
 
         Returns:
             Anzahl neu registrierter Edges
@@ -761,156 +851,53 @@ class ShapeNamingService:
             return 0
 
         try:
-            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp, TopExp_Explorer
             from OCP.TopAbs import TopAbs_EDGE
             from OCP.TopoDS import TopoDS
-            from OCP.BRepAdaptor import BRepAdaptor_Curve
-            from OCP.GProp import GProp_GProps
-            from OCP.BRepGProp import BRepGProp
 
             result_shape = result_solid.wrapped if hasattr(result_solid, 'wrapped') else result_solid
 
-            # DEBUG: Zähle alle Edges im Result
-            temp_explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
-            total_edges_in_result = 0
-            while temp_explorer.More():
-                total_edges_in_result += 1
-                temp_explorer.Next()
-
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {total_edges_in_result} Edges in result_solid")
-                logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {len(existing_mappings)} existing mappings")
-
-            # Korrektur: Verwende TopoDS_Shape.HashCode() Methode statt TopTools_ShapeMapHasher
-            # Die HashCode Methode ist direkt auf TopoDS_Shape verfügbar
-            
-            # Sammle alle gemappten OCP Shapes
-            mapped_shapes = set()
-
-            # 1. Aktuelle Mappings (existing logic)
-            for i, mapping in enumerate(existing_mappings):
-                if mapping.new_shape_uuid:
-                    record = self._shapes.get(mapping.new_shape_uuid)
-                    if record and record.ocp_shape:
-                        try:
-                            # Korrektur: Verwende die HashCode Methode der Shape selbst
-                            shape_hash = TopTools_ShapeMapHasher.HashCode(record.ocp_shape, 2**31 - 1)
-                            mapped_shapes.add(shape_hash)
-                            if is_enabled("tnp_debug_logging"):
-                                logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
-                        except Exception as e:
-                            logger.debug(f"[TNP] HashCode fehlgeschlagen für Mapping {i}: {e}")
-                            # Fallback auf Python id
-                            shape_hash = id(record.ocp_shape)
-                            mapped_shapes.add(shape_hash)
-
-            # 2. ALLE bereits registrierten Edges aus Registry (BUG FIX!)
-            registry_edges_added = 0
-            for shape_uuid, record in self._shapes.items():
+            # 1. Build map of ALL already-known edges (from registry)
+            known_edges_map = TopTools_IndexedMapOfShape()
+            for record in self._shapes.values():
                 if record.shape_id.shape_type == ShapeType.EDGE and record.ocp_shape:
-                    try:
-                        # Verwende TopTools_ShapeMapHasher.HashCode() statt direktem .HashCode()
-                        shape_hash = TopTools_ShapeMapHasher.HashCode(record.ocp_shape, 2**31 - 1)
-
-                        if shape_hash not in mapped_shapes:
-                            mapped_shapes.add(shape_hash)
-                            registry_edges_added += 1
-                    except Exception as e:
-                        logger.debug(f"[TNP] HashCode fehlgeschlagen für Registry Edge {shape_uuid[:8]}: {e}")
-                        # Fallback auf Python id
-                        shape_hash = id(record.ocp_shape)
-                        if shape_hash not in mapped_shapes:
-                            mapped_shapes.add(shape_hash)
-                            registry_edges_added += 1
+                    known_edges_map.Add(record.ocp_shape)
 
             if is_enabled("tnp_debug_logging"):
-                logger.debug(
-                    f"[TNP DEBUG] mapped_shapes: {len(mapped_shapes)} total "
-                    f"({len(existing_mappings)} current + {registry_edges_added} registry)"
-                )
+                # Count edges in result
+                result_edge_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(result_shape, TopAbs_EDGE, result_edge_map)
+                logger.debug(f"[TNP] _register_unmapped_edges: {result_edge_map.Extent()} unique Edges in result, "
+                           f"{known_edges_map.Extent()} already known")
 
-            # Iteriere über alle Edges im Result
+            # 2. Iterate result solid edges using IndexedMap for dedup
             explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
             new_count = 0
             local_index = 0
-            edge_index = 0
 
             while explorer.More():
                 edge = TopoDS.Edge_s(explorer.Current())
 
-                # Prüfe ob bereits gemappt
-                try:
-                    # Korrektur: Verwende TopTools_ShapeMapHasher.HashCode() statt direktem .HashCode()
-                    edge_hash = TopTools_ShapeMapHasher.HashCode(edge, 2**31 - 1)
-                    
-                    is_mapped = edge_hash in mapped_shapes
+                if not known_edges_map.Contains(edge):
+                    # Truly new edge → register
+                    shape_id = self.register_shape(
+                        ocp_shape=edge,
+                        shape_type=ShapeType.EDGE,
+                        feature_id=feature_id,
+                        local_index=local_index
+                    )
+                    known_edges_map.Add(edge)  # prevent double-registration
+                    new_count += 1
+                    local_index += 1
 
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"[TNP DEBUG] Edge {edge_index}: hash={edge_hash}, is_mapped={is_mapped}")
+                        logger.debug(f"[TNP] Neue Edge registriert: {shape_id.uuid[:8]}")
 
-                    if not is_mapped:
-                        # Neue Edge → Registrieren
-                        adaptor = BRepAdaptor_Curve(edge)
-                        u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
-                        pnt = adaptor.Value(u_mid)
-                        center = (pnt.X(), pnt.Y(), pnt.Z())
-
-                        # Länge berechnen
-                        props = GProp_GProps()
-                        BRepGProp.LinearProperties_s(edge, props)
-                        length = props.Mass()
-
-                        # Registrieren (erstellt ShapeID intern)
-                        shape_id = self.register_shape(
-                            ocp_shape=edge,
-                            shape_type=ShapeType.EDGE,
-                            feature_id=feature_id,
-                            local_index=local_index,
-                            geometry_data=(center, length)
-                        )
-
-                        if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"[TNP DEBUG] Neue Edge registriert: {shape_id.uuid[:8]}")
-                        new_count += 1
-                        local_index += 1
-
-                        # Add to mapped_shapes to avoid duplicates within this result
-                        mapped_shapes.add(edge_hash)
-
-                except Exception as e:
-                    logger.debug(f"Edge registrierung fehlgeschlagen: {e}")
-                    # Fallback: Versuche es mit Python id
-                    try:
-                        edge_hash = id(edge)
-                        if edge_hash not in mapped_shapes:
-                            # Versuche trotzdem zu registrieren
-                            adaptor = BRepAdaptor_Curve(edge)
-                            u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
-                            pnt = adaptor.Value(u_mid)
-                            center = (pnt.X(), pnt.Y(), pnt.Z())
-
-                            props = GProp_GProps()
-                            BRepGProp.LinearProperties_s(edge, props)
-                            length = props.Mass()
-
-                            shape_id = self.register_shape(
-                                ocp_shape=edge,
-                                shape_type=ShapeType.EDGE,
-                                feature_id=feature_id,
-                                local_index=local_index,
-                                geometry_data=(center, length)
-                            )
-                            
-                            new_count += 1
-                            local_index += 1
-                            mapped_shapes.add(edge_hash)
-                    except Exception as e2:
-                        logger.debug(f"Fallback Edge registrierung auch fehlgeschlagen: {e2}")
-
-                edge_index += 1
                 explorer.Next()
 
-            logger.info(f"[TNP] _register_unmapped_edges: {new_count} neue Edges registriert (von {total_edges_in_result} total)")
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"[TNP] _register_unmapped_edges: {new_count} neue Edges registriert")
             return new_count
 
         except Exception as e:
@@ -928,6 +915,17 @@ def get_naming_service(document_id: str) -> ShapeNamingService:
     if document_id not in _document_services:
         _document_services[document_id] = ShapeNamingService()
     return _document_services[document_id]
+
+
+def _safe_shape_hash(shape) -> int:
+    """Safe shape hashing that works across OCP versions."""
+    try:
+        return TopTools_ShapeMapHasher.HashCode_s(shape, 2**31 - 1)
+    except AttributeError:
+        try:
+            return shape.HashCode(2**31 - 1)
+        except AttributeError:
+            return id(shape)
 
 
 # Backward-Compatibility Aliases (für schrittweise Migration)
