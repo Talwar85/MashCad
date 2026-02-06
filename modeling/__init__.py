@@ -4349,28 +4349,37 @@ class Body:
             logger.debug(f"Face-Auflösung für Shell fehlgeschlagen: {e}")
             return []
 
-    def _update_edge_selectors_after_operation(self, solid):
+    def _update_edge_selectors_after_operation(self, solid, current_feature_index: int = -1):
         """
         Aktualisiert Edge-Selektoren in Fillet/Chamfer Features nach Geometrie-Operation.
-        
+
         SAUBERE LÖSUNG (kein Quickfix): Nach Push/Pull oder Boolean ändern sich
         Edge-Positionen. Diese Methode findet die neuen Edges und aktualisiert
         die gespeicherten GeometricEdgeSelectors.
-        
+
         Args:
             solid: Das neue Solid nach der Operation
+            current_feature_index: Index des aktuell angewandten Features im Rebuild.
+                Nur Features VOR diesem Index werden aktualisiert (die danach
+                werden bei ihrem eigenen Durchlauf aktualisiert).
+                -1 = alle aktualisieren (Backward-Compat für nicht-Rebuild Aufrufe).
         """
         if not solid or not hasattr(solid, 'edges'):
             return
-        
+
         all_edges = list(solid.edges())
         if not all_edges:
             return
-        
+
         from modeling.geometric_selector import GeometricEdgeSelector
-        
+
         updated_count = 0
-        for feature in self.features:
+        for feat_idx, feature in enumerate(self.features):
+            # Beim Rebuild: Nur Features aktualisieren die VOR dem aktuellen
+            # Feature liegen. Features danach werden bei ihrem eigenen Durchlauf
+            # ihre Edges im dann-aktuellen Solid finden.
+            if current_feature_index >= 0 and feat_idx >= current_feature_index:
+                continue
             # Nur Fillet und Chamfer Features
             if not isinstance(feature, (FilletFeature, ChamferFeature)):
                 continue
@@ -5284,19 +5293,21 @@ class Body:
                         # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
                         if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
-                        self._update_edge_selectors_after_operation(new_solid)
-                        
-                        # Registry für ALLE Fillet/Chamfer-Features aktualisieren
+                        self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
+
+                        # Registry für bereits angewandte Fillet/Chamfer-Features aktualisieren
                         if is_enabled("extrude_debug"):
-                            logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                            logger.debug(f"TNP DEBUG: Starte Registry-Update für Features vor Index {i}")
                         updated_count = 0
-                        for feat in self.features:
+                        for feat_idx, feat in enumerate(self.features):
+                            if feat_idx >= i:
+                                break  # Nur Features VOR dem aktuellen updaten
                             if isinstance(feat, (FilletFeature, ChamferFeature)):
                                 if is_enabled("extrude_debug"):
                                     logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                 self._update_registry_for_feature(feat, new_solid)
                                 updated_count += 1
-                        
+
                         if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                     else:
@@ -5341,13 +5352,15 @@ class Body:
                                     # 1. Edge-Selektoren für nachfolgende Features aktualisieren
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
-                                    self._update_edge_selectors_after_operation(new_solid)
+                                    self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                                     
-                                    # 2. Registry für ALLE Fillet/Chamfer-Features aktualisieren
+                                    # 2. Registry für bereits angewandte Fillet/Chamfer-Features aktualisieren
                                     if is_enabled("extrude_debug"):
-                                        logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
+                                        logger.debug(f"TNP DEBUG: Starte Registry-Update für Features vor Index {i}")
                                     updated_count = 0
-                                    for feat in self.features:
+                                    for feat_idx, feat in enumerate(self.features):
+                                        if feat_idx >= i:
+                                            break  # Nur Features VOR dem aktuellen updaten
                                         if isinstance(feat, (FilletFeature, ChamferFeature)):
                                             if is_enabled("extrude_debug"):
                                                 logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
@@ -5588,7 +5601,7 @@ class Body:
 
                         # SAUBERE LÖSUNG: Edge-Selektoren nach PushPull aktualisieren
                         # Weil sich Geometrie geändert hat, müssen Fillet/Chamfer Refs aktualisiert werden
-                        self._update_edge_selectors_after_operation(new_solid)
+                        self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
 
             # ================= N-SIDED PATCH =================
             elif isinstance(feature, NSidedPatchFeature):
