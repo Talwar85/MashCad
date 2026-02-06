@@ -19,6 +19,7 @@ import json
 import os
 from typing import Dict, Optional
 from loguru import logger
+from loguru import logger
 
 # Globale Variablen
 _current_language = 'de'  # Default: Deutsch
@@ -64,7 +65,7 @@ def load_language(lang: str) -> bool:
                 _translations[lang] = json.load(f)
             return True
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Error loading language file {filepath}: {e}")
+            logger.warning(f"Error loading language file {filepath}: {e}")
             return False
     return False
 
@@ -76,7 +77,7 @@ def set_language(lang: str) -> bool:
     # Lade Sprache wenn nicht bereits geladen
     if lang not in _translations:
         if not load_language(lang):
-            print(f"Language '{lang}' not found, using fallback '{_fallback_language}'")
+            logger.info(f"Language '{lang}' not found, using fallback '{_fallback_language}'")
             return False
     
     _current_language = lang

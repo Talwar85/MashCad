@@ -635,7 +635,7 @@ class TrimComparisonTest:
         match, details = test.compare(target, click_point)
 
         if not match:
-            print(f"Unterschied gefunden: {details}")
+            # logger.debug(f"TrimComparisonTest: Unterschied gefunden: {details}")  # Nur für Debugging
     """
 
     def __init__(self, sketch: 'Sketch'):

@@ -4466,7 +4466,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def keyPressEvent(self, event):
         key, mod = event.key(), event.modifiers()
         if key == Qt.Key_Escape:
-            print("Keypress")
+            logger.debug("[sketch_editor] Escape Keypress")
             self._handle_escape_logic()
             return
 

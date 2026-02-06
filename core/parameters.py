@@ -15,6 +15,7 @@ Verwendung:
 import re
 import math
 from typing import Dict, Any, Optional, List, Tuple
+from loguru import logger
 
 
 class Parameters:
@@ -127,7 +128,7 @@ class Parameters:
             result = eval(formula, {"__builtins__": {}}, namespace)
             return float(result)
         except Exception as e:
-            print(f"Fehler beim Evaluieren von '{formula}': {e}")
+            logger.warning(f"Fehler beim Evaluieren von '{formula}': {e}")
             return 0.0
     
     def _update_dependents(self, changed_param: str):

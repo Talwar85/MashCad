@@ -1117,12 +1117,12 @@ def demo_sketch():
     
     # Löse
     result = sketch.solve()
-    print(f"Solver: {result}")
-    print(f"Sketch: {sketch}")
+    logger.info(f"Solver: {result}")
+    logger.info(f"Sketch: {sketch}")
     
     # Zeige Koordinaten
     for i, line in enumerate(lines):
-        print(f"  Line {i}: {line.start} -> {line.end}")
+        logger.info(f"  Line {i}: {line.start} -> {line.end}")
     
     return sketch
 

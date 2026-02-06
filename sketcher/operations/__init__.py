@@ -14,7 +14,7 @@ Verwendung:
     if result.success:
         # Operation erfolgreich
     else:
-        print(result.error)
+        # logger.debug(f"TrimOperation Fehler: {result.error}")  # Deaktiviert - wird vom Aufrufer behandelt
 
 Feature-Flags:
     Jede Operation kann über Feature-Flags aktiviert/deaktiviert werden.

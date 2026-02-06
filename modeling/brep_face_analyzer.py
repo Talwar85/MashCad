@@ -213,7 +213,7 @@ class BRepFaceAnalyzer:
         result = analyzer.analyze(solid)
 
         for feature in result.features:
-            print(f"{feature.icon} {feature.display_name}: {feature.parameters}")
+            # logger.info(f"{feature.icon} {feature.display_name}: {feature.parameters}")  # Beispiel-Usage in Docstring"
     """
 
     # Toleranzen
