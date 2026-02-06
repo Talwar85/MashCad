@@ -1167,7 +1167,9 @@ class FullTransformController:
                     actor.SetUserTransform(transform)
             except Exception as e:
                 logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Transformation: {e}")
-        """Setzt Preview zurück"""
+
+    def _reset_body_preview(self, body_id: str):
+        """Setzt Preview zurück (entfernt UserTransform von allen Actors)."""
         if body_id not in self.viewport._body_actors:
             return
         for actor_name in self.viewport._body_actors[body_id]:
