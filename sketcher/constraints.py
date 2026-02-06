@@ -58,41 +58,47 @@ class ConstraintType(Enum):
     # Symmetrie
     SYMMETRIC = auto()          # Symmetrisch zu Linie
     MIDPOINT = auto()           # Punkt auf Mittelpunkt
+
+
+# Prioritäts-Mapping (außerhalb der Enum, da sonst Enum-Member)
+_CONSTRAINT_PRIORITIES = {
+    # CRITICAL: Topologisch wichtig
+    ConstraintType.FIXED: ConstraintPriority.CRITICAL,
+    ConstraintType.COINCIDENT: ConstraintPriority.CRITICAL,
+    ConstraintType.POINT_ON_LINE: ConstraintPriority.HIGH,
+    ConstraintType.POINT_ON_CIRCLE: ConstraintPriority.HIGH,
+    ConstraintType.MIDPOINT: ConstraintPriority.HIGH,
     
-    # Prioritäts-Mapping
-    _PRIORITIES = {
-        # CRITICAL: Topologisch wichtig
-        FIXED: ConstraintPriority.CRITICAL,
-        COINCIDENT: ConstraintPriority.CRITICAL,
-        POINT_ON_LINE: ConstraintPriority.HIGH,
-        POINT_ON_CIRCLE: ConstraintPriority.HIGH,
-        MIDPOINT: ConstraintPriority.HIGH,
-        
-        # HIGH: Geometrische Beziehungen
-        TANGENT: ConstraintPriority.HIGH,
-        PARALLEL: ConstraintPriority.HIGH,
-        PERPENDICULAR: ConstraintPriority.HIGH,
-        CONCENTRIC: ConstraintPriority.HIGH,
-        COLLINEAR: ConstraintPriority.HIGH,
-        SYMMETRIC: ConstraintPriority.HIGH,
-        
-        # MEDIUM: Orientierung & Gleichheit
-        HORIZONTAL: ConstraintPriority.MEDIUM,
-        VERTICAL: ConstraintPriority.MEDIUM,
-        EQUAL_LENGTH: ConstraintPriority.MEDIUM,
-        EQUAL_RADIUS: ConstraintPriority.MEDIUM,
-        
-        # LOW: Dimensionen (können flexibler sein)
-        LENGTH: ConstraintPriority.LOW,
-        DISTANCE: ConstraintPriority.LOW,
-        RADIUS: ConstraintPriority.LOW,
-        DIAMETER: ConstraintPriority.LOW,
-        ANGLE: ConstraintPriority.LOW,
-    }
+    # HIGH: Geometrische Beziehungen
+    ConstraintType.TANGENT: ConstraintPriority.HIGH,
+    ConstraintType.PARALLEL: ConstraintPriority.HIGH,
+    ConstraintType.PERPENDICULAR: ConstraintPriority.HIGH,
+    ConstraintType.CONCENTRIC: ConstraintPriority.HIGH,
+    ConstraintType.COLLINEAR: ConstraintPriority.HIGH,
+    ConstraintType.SYMMETRIC: ConstraintPriority.HIGH,
     
-    def get_priority(self) -> ConstraintPriority:
-        """Gibt die Standard-Priorität für diesen Constraint-Typ zurück."""
-        return self._PRIORITIES.get(self, ConstraintPriority.MEDIUM)
+    # MEDIUM: Orientierung & Gleichheit
+    ConstraintType.HORIZONTAL: ConstraintPriority.MEDIUM,
+    ConstraintType.VERTICAL: ConstraintPriority.MEDIUM,
+    ConstraintType.EQUAL_LENGTH: ConstraintPriority.MEDIUM,
+    ConstraintType.EQUAL_RADIUS: ConstraintPriority.MEDIUM,
+    
+    # LOW: Dimensionen (können flexibler sein)
+    ConstraintType.LENGTH: ConstraintPriority.LOW,
+    ConstraintType.DISTANCE: ConstraintPriority.LOW,
+    ConstraintType.RADIUS: ConstraintPriority.LOW,
+    ConstraintType.DIAMETER: ConstraintPriority.LOW,
+    ConstraintType.ANGLE: ConstraintPriority.LOW,
+}
+
+
+def get_constraint_priority(constraint_type: ConstraintType) -> ConstraintPriority:
+    """Gibt die Standard-Priorität für einen Constraint-Typ zurück."""
+    return _CONSTRAINT_PRIORITIES.get(constraint_type, ConstraintPriority.MEDIUM)
+
+
+# Kompatibilität: Methode auf ConstraintType
+ConstraintType.get_priority = get_constraint_priority
 
 
 @dataclass
