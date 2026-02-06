@@ -555,7 +555,8 @@ class ThreadFeature(Feature):
     direction: Tuple[float, float, float] = (0, 0, 1)
     tolerance_class: str = "6g"   # ISO 965-1 fit class
     tolerance_offset: float = 0.0 # Diameter offset in mm
-    
+    cosmetic: bool = True         # Kosmetisch: nur Helix-Linien im Viewport, echte Geometrie bei Export
+
     # TNP v3.0: ShapeID für zylindrische Face
     face_shape_id: Any = None  # ShapeID
     face_selector: dict = None  # GeometricFaceSelector als Fallback
@@ -1194,6 +1195,10 @@ class Body:
         self._face_info_cache = {}    # {face_id: {"normal": (x,y,z), "center": (x,y,z)}} - B-Rep Info!
         self._mesh_cache_valid = False  # Invalidiert wenn Solid sich ändert
 
+        # Kosmetische Gewinde-Linien (Helix-Visualisierung ohne echte Geometrie)
+        self._cosmetic_lines_cache = None   # pv.PolyData (Helix-Linien)
+        self._cosmetic_lines_valid = False
+
         # Legacy Visualisierungs-Daten (Nur als Fallback)
         self._mesh_vertices: List[Tuple[float, float, float]] = []
         self._mesh_triangles: List[Tuple[int, int, int]] = []
@@ -1254,9 +1259,102 @@ class Body:
         n_faces = len(self._face_info_cache) if self._face_info_cache else 0
         logger.debug(f"Mesh regenerated for '{self.name}': {n_pts} pts, {n_edges} edges, {n_faces} B-Rep faces")
 
+    @property
+    def vtk_cosmetic_lines(self):
+        """Lazy-loaded kosmetische Gewinde-Linien (Helix-Visualisierung)."""
+        if not self._cosmetic_lines_valid:
+            self._regenerate_cosmetic_lines()
+        return self._cosmetic_lines_cache
+
+    def _regenerate_cosmetic_lines(self):
+        """Erzeugt Helix-Linien für alle kosmetischen ThreadFeatures."""
+        self._cosmetic_lines_valid = True
+        cosmetic_threads = [f for f in self.features
+                            if isinstance(f, ThreadFeature) and f.cosmetic]
+        if not cosmetic_threads:
+            self._cosmetic_lines_cache = None
+            return
+
+        try:
+            import numpy as np
+            import pyvista as pv
+            from build123d import Helix
+
+            all_points = []
+            all_lines = []
+            offset = 0
+
+            for feat in cosmetic_threads:
+                r = feat.diameter / 2.0
+                H = 0.8660254 * feat.pitch
+                groove_depth = 0.625 * H
+
+                # Zwei Helix-Linien: Innen- und Außenradius des Gewindes
+                for radius in [r - groove_depth, r]:
+                    helix = Helix(
+                        pitch=feat.pitch,
+                        height=feat.depth,
+                        radius=radius,
+                        center=tuple(feat.position),
+                        direction=tuple(feat.direction)
+                    )
+                    # Sample Punkte entlang der Helix
+                    n_samples = max(20, int(feat.depth / feat.pitch * 12))
+                    pts = []
+                    for j in range(n_samples + 1):
+                        t = j / n_samples
+                        pt = helix.position_at(t)
+                        pts.append([pt.X, pt.Y, pt.Z])
+
+                    pts_arr = np.array(pts)
+                    n_pts = len(pts_arr)
+                    all_points.append(pts_arr)
+
+                    # Polyline: [n_pts, idx0, idx1, ..., idx_n-1]
+                    line = [n_pts] + list(range(offset, offset + n_pts))
+                    all_lines.extend(line)
+                    offset += n_pts
+
+            if all_points:
+                points = np.vstack(all_points)
+                self._cosmetic_lines_cache = pv.PolyData(points, lines=all_lines)
+                logger.debug(f"[COSMETIC] {len(cosmetic_threads)} thread(s) → "
+                             f"{points.shape[0]} pts helix lines")
+            else:
+                self._cosmetic_lines_cache = None
+        except Exception as e:
+            logger.warning(f"Cosmetic thread lines failed: {e}")
+            self._cosmetic_lines_cache = None
+
+    def _get_solid_with_threads(self):
+        """Berechnet echte Gewinde auf einer Kopie des Solids (für Export).
+
+        Iteriert über alle kosmetischen ThreadFeatures und wendet
+        _compute_thread() auf eine Kopie an. Original bleibt unverändert.
+        """
+        if self._build123d_solid is None:
+            return None
+
+        cosmetic_threads = [f for f in self.features
+                            if isinstance(f, ThreadFeature) and f.cosmetic]
+        if not cosmetic_threads:
+            return self._build123d_solid
+
+        logger.info(f"[EXPORT] Computing {len(cosmetic_threads)} real thread(s) for export...")
+        current = self._build123d_solid
+        for feat in cosmetic_threads:
+            try:
+                current = self._compute_thread(feat, current)
+                logger.debug(f"[EXPORT] Thread {feat.name} applied")
+            except Exception as e:
+                logger.warning(f"[EXPORT] Thread {feat.name} failed: {e}")
+
+        return current
+
     def invalidate_mesh(self):
         """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
         self._mesh_cache_valid = False
+        self._cosmetic_lines_valid = False
 
         # WICHTIG: Auch Face-Info-Cache löschen!
         # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungültig sind
@@ -3357,137 +3455,69 @@ class Body:
 
     def _compute_thread_helix(self, shape, pos, direction, r, pitch, depth, n_turns,
                                groove_depth, thread_type, tolerance_offset):
-        """Echtes Gewinde via OCP Helix + Sweep."""
-        import math
-        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax3, gp_Ax1, gp_Pnt2d, gp_Vec
-        from OCP.Geom import Geom_CylindricalSurface
-        from OCP.GCE2d import GCE2d_MakeSegment
-        from OCP.BRepBuilderAPI import (
-            BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeEdge,
-            BRepBuilderAPI_MakeFace
-        )
-        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+        """Echtes Gewinde via Helix + Sweep mit korrekter Profil-Orientierung.
+
+        Das Profil wird senkrecht zum Helix-Tangenten am Startpunkt platziert
+        (nicht auf Plane.XZ!). Dadurch entsteht saubere Geometrie mit wenigen
+        Faces/Edges → schnelle Tessellation ohne Lag.
+        """
+        import numpy as np
+        from build123d import (Helix, Solid, Polyline, BuildSketch, BuildLine,
+                               Plane, make_face, sweep, Vector)
         from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-        from OCP.TopoDS import TopoDS_Wire
-        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 
-        # gp_Ax3 für Geom_CylindricalSurface (nicht gp_Ax2!)
-        ax3 = gp_Ax3(gp_Pnt(*pos), gp_Dir(*direction))
+        logger.debug(f"[THREAD] Helix sweep: r={r:.2f}, pitch={pitch}, depth={depth}, "
+                     f"type={thread_type}, groove={groove_depth:.3f}")
 
+        # Helix-Radius: Mitte der Gewinderille
         if thread_type == "external":
             helix_r = r - groove_depth / 2
         else:
             helix_r = r + groove_depth / 2
 
-        # Create helix on cylindrical surface
-        cyl_surface = Geom_CylindricalSurface(ax3, helix_r)
+        # 1. Helix-Pfad via build123d
+        helix = Helix(
+            pitch=pitch,
+            height=depth,
+            radius=helix_r,
+            center=tuple(pos),
+            direction=tuple(direction)
+        )
 
-        # Helix as 2D line on unwrapped cylinder: u = angle, v = height
-        # Full turn = 2*pi in u, pitch in v
-        total_height = depth + pitch  # Extra turn for clean cut
-        total_angle = (total_height / pitch) * 2 * math.pi
+        # 2. ISO 60° Dreiecksprofil senkrecht zum Helix-Tangenten am Startpunkt
+        half_w = pitch * 0.3
 
-        p1 = gp_Pnt2d(0, -pitch / 2)  # Start slightly below
-        p2 = gp_Pnt2d(total_angle, total_height - pitch / 2)
+        # Profil-Plane senkrecht zur Helix-Tangente am Startpunkt
+        start_pt = helix.position_at(0)
+        tangent = helix.tangent_at(0)
+        profile_plane = Plane(origin=start_pt, z_dir=tangent)
 
-        seg = GCE2d_MakeSegment(p1, p2)
-        helix_edge = BRepBuilderAPI_MakeEdge(seg.Value(), cyl_surface).Edge()
-        helix_wire = BRepBuilderAPI_MakeWire(helix_edge).Wire()
+        with BuildSketch(profile_plane) as profile_sk:
+            with BuildLine():
+                Polyline(
+                    (-groove_depth / 2, -half_w),
+                    (groove_depth / 2, 0),
+                    (-groove_depth / 2, half_w),
+                    close=True
+                )
+            make_face()
 
-        # ISO 60° triangle profile (cross-section of thread groove)
-        # Profile perpendicular to helix at start
-        # Triangle: base at pitch radius, tip pointing inward/outward
-        h = groove_depth
-        half_pitch = pitch * 0.3  # Width of groove at base
+        # 3. Sweep Profil entlang Helix
+        thread_solid = sweep(profile_sk.sketch, path=helix)
+        thread_ocp = thread_solid.wrapped if hasattr(thread_solid, 'wrapped') else thread_solid
 
-        # Build triangular wire as profile
+        # 4. Boolean Operation
         if thread_type == "external":
-            # Profile cuts INTO cylinder (groove)
-            p_top = gp_Pnt(pos[0] + r * 1.01, pos[1], pos[2])
-            p_bl = gp_Pnt(pos[0] + (r - h), pos[1], pos[2] - half_pitch)
-            p_br = gp_Pnt(pos[0] + (r - h), pos[1], pos[2] + half_pitch)
+            op = BRepAlgoAPI_Cut(shape, thread_ocp)
         else:
-            # Profile adds INTO hole
-            p_top = gp_Pnt(pos[0] + r * 0.99, pos[1], pos[2])
-            p_bl = gp_Pnt(pos[0] + (r + h), pos[1], pos[2] - half_pitch)
-            p_br = gp_Pnt(pos[0] + (r + h), pos[1], pos[2] + half_pitch)
-
-        e1 = BRepBuilderAPI_MakeEdge(p_top, p_bl).Edge()
-        e2 = BRepBuilderAPI_MakeEdge(p_bl, p_br).Edge()
-        e3 = BRepBuilderAPI_MakeEdge(p_br, p_top).Edge()
-
-        profile_wire = BRepBuilderAPI_MakeWire(e1, e2, e3).Wire()
-
-        # Sweep profile along helix
-        pipe = BRepOffsetAPI_MakePipeShell(helix_wire)
-        pipe.Add(profile_wire)
-        pipe.SetMode(False)  # Frenet mode
-        pipe.Build()
-
-        if not pipe.IsDone():
-            raise RuntimeError("Pipe sweep for thread failed")
-
-        thread_shape = pipe.Shape()
-
-        # Boolean operation
-        if thread_type == "external":
-            op = BRepAlgoAPI_Cut(shape, thread_shape)
-        else:
-            op = BRepAlgoAPI_Fuse(shape, thread_shape)
+            op = BRepAlgoAPI_Fuse(shape, thread_ocp)
 
         op.Build()
         if not op.IsDone():
             raise RuntimeError("Thread boolean failed")
 
         result_shape = self._fix_shape_ocp(op.Shape())
-        from build123d import Solid
-        return Solid(result_shape)
-
-    def _compute_thread_rings(self, shape, pos, direction, r, pitch, depth, n_turns,
-                               groove_depth, thread_type):
-        """Ring-Fallback fuer Gewinde (alte Methode)."""
-        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2
-        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-
-        result_shape = shape
-        if thread_type == "external":
-            minor_r = r - groove_depth
-            for i in range(int(n_turns)):
-                z_offset = pos + direction * (i * pitch + pitch * 0.25)
-                ring_ax = gp_Ax2(gp_Pnt(*z_offset), gp_Dir(*direction))
-                outer = BRepPrimAPI_MakeCylinder(ring_ax, r + 0.01, pitch * 0.5)
-                inner = BRepPrimAPI_MakeCylinder(ring_ax, minor_r, pitch * 0.5)
-                outer.Build()
-                inner.Build()
-                if outer.IsDone() and inner.IsDone():
-                    ring_cut = BRepAlgoAPI_Cut(outer.Shape(), inner.Shape())
-                    ring_cut.Build()
-                    if ring_cut.IsDone():
-                        cut_op = BRepAlgoAPI_Cut(result_shape, ring_cut.Shape())
-                        cut_op.Build()
-                        if cut_op.IsDone():
-                            result_shape = cut_op.Shape()
-        else:
-            outer_r = r + groove_depth
-            for i in range(int(n_turns)):
-                z_offset = pos + direction * (i * pitch + pitch * 0.25)
-                ring_ax = gp_Ax2(gp_Pnt(*z_offset), gp_Dir(*direction))
-                outer = BRepPrimAPI_MakeCylinder(ring_ax, outer_r, pitch * 0.5)
-                inner = BRepPrimAPI_MakeCylinder(ring_ax, r, pitch * 0.5)
-                outer.Build()
-                inner.Build()
-                if outer.IsDone() and inner.IsDone():
-                    ring = BRepAlgoAPI_Cut(outer.Shape(), inner.Shape())
-                    ring.Build()
-                    if ring.IsDone():
-                        fuse_op = BRepAlgoAPI_Fuse(result_shape, ring.Shape())
-                        fuse_op.Build()
-                        if fuse_op.IsDone():
-                            result_shape = fuse_op.Shape()
-
-        result_shape = self._fix_shape_ocp(result_shape)
-        from build123d import Solid
+        logger.debug(f"[THREAD] Helix sweep completed successfully")
         return Solid(result_shape)
 
     def _profile_data_to_face(self, profile_data: dict):
@@ -5276,7 +5306,11 @@ class Body:
 
             # ================= THREAD =================
             elif isinstance(feature, ThreadFeature):
-                if current_solid:
+                if feature.cosmetic and is_enabled("cosmetic_threads"):
+                    # Kosmetisch: kein BREP-Update, nur Helix-Linien im Viewport
+                    status = "COSMETIC"
+                    logger.debug(f"Thread '{feature.name}' — cosmetic, kein BREP-Update")
+                elif current_solid:
                     def op_thread():
                         return self._compute_thread(feature, current_solid)
 
@@ -7337,6 +7371,7 @@ class Body:
                     "direction": list(feat.direction),
                     "tolerance_class": feat.tolerance_class,
                     "tolerance_offset": feat.tolerance_offset,
+                    "cosmetic": feat.cosmetic,
                     "face_selector": feat.face_selector,
                 })
                 # TNP v3.0: ShapeID serialisieren
@@ -7919,6 +7954,7 @@ class Body:
                     direction=tuple(feat_dict.get("direction", (0, 0, 1))),
                     tolerance_class=feat_dict.get("tolerance_class", "6g"),
                     tolerance_offset=feat_dict.get("tolerance_offset", 0.0),
+                    cosmetic=feat_dict.get("cosmetic", True),
                     face_selector=feat_dict.get("face_selector"),
                     **base_kwargs
                 )

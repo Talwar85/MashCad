@@ -70,6 +70,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # OCP Feature Audit Tier 3
     "mesh_converter_adaptive_tolerance": True,  # Adaptive Sewing-Toleranz + Post-Sewing Validation
     "loft_sweep_hardening": True,  # SetMaxDegree + MakePipeShell Fallback für Loft/Sweep
+
+    # Thread/Helix (Native OCP)
+    "native_ocp_helix": True,  # Native Geom_CylindricalSurface Helix statt build123d BSpline-Approximation
 }
 
 

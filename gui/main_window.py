@@ -787,14 +787,7 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(tr("Parameters..."), self._show_parameters_dialog, "Ctrl+Shift+P")
 
-        # Transform-Menü
-        transform_menu = mb.addMenu(tr("Transform"))
-        transform_menu.addAction(tr("Move (G)"), lambda: self._start_transform_mode("move"), "G")
-        transform_menu.addAction(tr("Rotate (R)"), lambda: self._start_transform_mode("rotate"), "R")
-        transform_menu.addAction(tr("Scale (S)"), lambda: self._start_transform_mode("scale"), "S")
-        transform_menu.addSeparator()
-        transform_menu.addAction(tr("Pattern..."), self._start_pattern)
-
+        
         # Ansicht-Menü
         view_menu = mb.addMenu(tr("View"))
         view_menu.addAction(tr("Isometric"), lambda: self.viewport_3d.set_view('iso'))
@@ -3105,7 +3098,7 @@ class MainWindow(QMainWindow):
                     tolerance_class=dialog.tolerance_class,
                     tolerance_offset=tolerance_offset,
                 )
-                threaded_solid = self._body_feature_engine._compute_thread(feature, bolt_solid)
+                threaded_solid = body._compute_thread(feature, bolt_solid)
                 body._build123d_solid = threaded_solid
                 logger.info(f"[BOLT] Echte Gewinde M{dia}x{pitch} erstellt")
             except Exception as thread_err:
@@ -3162,7 +3155,7 @@ class MainWindow(QMainWindow):
                     tolerance_class=dialog.tolerance_class,
                     tolerance_offset=tolerance_offset,
                 )
-                threaded_solid = self._body_feature_engine._compute_thread(feature, nut_solid)
+                threaded_solid = body._compute_thread(feature, nut_solid)
                 body._build123d_solid = threaded_solid
                 logger.info(f"[NUT] Echte Innengewinde M{dia}x{pitch} erstellt")
             except Exception as thread_err:
