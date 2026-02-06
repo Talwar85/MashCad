@@ -52,11 +52,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export
     "feature_dependency_tracking": True,  # Phase 7: Feature Dependency Graph
     "feature_solid_caching": True,  # Phase 8: In Phase 7 integriert (_solid_checkpoints)
-    "async_tessellation": False,  # Phase 9: Background Mesh Generation (TODO)
+    "async_tessellation": True,  # Phase 9: Background Mesh Generation
     # Phase 10: BooleanEngineV4 ist jetzt STANDARD - kein Flag mehr nötig
     "ocp_advanced_flags": True,  # Phase 11: SetFuzzyValue + SetRunParallel (AKTIV)
-    "ocp_glue_mode": False,  # Phase 11: SetGlue() - VERBOTEN (erzeugt kaputte Topologie, TNP kann nicht reparieren)
-    "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Fillets (TODO - bei vielen Fillets)
+    "ocp_glue_auto_detect": True,  # Auto-Erkennung von coinciding Faces → GlueShift für ~90% Speedup
+    "batch_fillets": True,  # Phase 12: Fillet/Chamfer History-Extraction für TNP
     "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
 
     # Boolean Robustness (OCP Feature Audit 2026)

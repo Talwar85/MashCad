@@ -13,6 +13,7 @@ from loguru import logger
 from typing import Tuple, Optional
 from contextlib import contextmanager
 import time
+import threading
 
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled
@@ -58,6 +59,7 @@ class CADTessellator:
     _edge_cache = {}  # { "hash_edges": poly_edges } - PERFORMANCE: Separater Edge-Cache (Phase 4)
     _cache_version = _TESSELLATOR_VERSION
     _cache_cleared = False
+    _cache_lock = threading.Lock()  # Phase 9: Thread-safety für async Tessellation
 
     # Performance Optimization 1.2: Per-Shape Versioning statt globaler Counter
     _shape_versions = {}  # { shape_id: version }
@@ -82,14 +84,15 @@ class CADTessellator:
         """
         global _CACHE_INVALIDATION_COUNTER
         _CACHE_INVALIDATION_COUNTER += 1
-        CADTessellator._mesh_cache.clear()
-        CADTessellator._edge_cache.clear()  # PERFORMANCE: Phase 4
-        CADTessellator._export_cache.clear()  # PERFORMANCE: Phase 6
-        CADTessellator._shape_versions.clear()
-        CADTessellator._cache_access_order.clear()
-        CADTessellator._edge_cache_access_order.clear()  # PERFORMANCE: Phase 4
-        CADTessellator._export_cache_access_order.clear()  # PERFORMANCE: Phase 6
-        CADTessellator._cache_cleared = True
+        with CADTessellator._cache_lock:  # Phase 9: Thread-safe
+            CADTessellator._mesh_cache.clear()
+            CADTessellator._edge_cache.clear()  # PERFORMANCE: Phase 4
+            CADTessellator._export_cache.clear()  # PERFORMANCE: Phase 6
+            CADTessellator._shape_versions.clear()
+            CADTessellator._cache_access_order.clear()
+            CADTessellator._edge_cache_access_order.clear()  # PERFORMANCE: Phase 4
+            CADTessellator._export_cache_access_order.clear()  # PERFORMANCE: Phase 6
+            CADTessellator._cache_cleared = True
         logger.info(f"CADTessellator Cache komplett geleert (Version {_TESSELLATOR_VERSION})")
 
     @staticmethod
@@ -464,32 +467,31 @@ class CADTessellator:
         mesh_key = f"{shape_hash}_{quality}_{angular_tolerance}_v{_TESSELLATOR_VERSION}"
         edge_key = f"{shape_hash}_edges_v{_TESSELLATOR_VERSION}"  # NO quality!
 
-        # Check both caches
-        mesh_cached = mesh_key in CADTessellator._mesh_cache
-        edge_cached = edge_key in CADTessellator._edge_cache
+        # Phase 9: Thread-safe Cache-Zugriff
+        with CADTessellator._cache_lock:
+            mesh_cached = mesh_key in CADTessellator._mesh_cache
+            edge_cached = edge_key in CADTessellator._edge_cache
 
-        if mesh_cached and edge_cached:
-            logger.debug(f"Tessellator: FULL Cache HIT (mesh+edge)")
-            # PERFORMANCE: O(1) LRU update
-            CADTessellator._cache_access_order.move_to_end(mesh_key)
-            CADTessellator._edge_cache_access_order.move_to_end(edge_key)
-            return CADTessellator._mesh_cache[mesh_key], CADTessellator._edge_cache[edge_key]
+            if mesh_cached and edge_cached:
+                logger.debug(f"Tessellator: FULL Cache HIT (mesh+edge)")
+                CADTessellator._cache_access_order.move_to_end(mesh_key)
+                CADTessellator._edge_cache_access_order.move_to_end(edge_key)
+                return CADTessellator._mesh_cache[mesh_key], CADTessellator._edge_cache[edge_key]
 
-        if mesh_cached:
-            logger.debug(f"Tessellator: PARTIAL Cache HIT (mesh only, edge miss)")
-            CADTessellator._cache_access_order.move_to_end(mesh_key)
-        elif edge_cached:
-            logger.debug(f"Tessellator: PARTIAL Cache HIT (edge only, mesh miss)")
-            CADTessellator._edge_cache_access_order.move_to_end(edge_key)
-        else:
-            logger.debug(f"Tessellator: FULL Cache MISS")
+            if mesh_cached:
+                logger.debug(f"Tessellator: PARTIAL Cache HIT (mesh only, edge miss)")
+                CADTessellator._cache_access_order.move_to_end(mesh_key)
+            elif edge_cached:
+                logger.debug(f"Tessellator: PARTIAL Cache HIT (edge only, mesh miss)")
+                CADTessellator._edge_cache_access_order.move_to_end(edge_key)
+            else:
+                logger.debug(f"Tessellator: FULL Cache MISS")
+
+            # PERFORMANCE Phase 4: Get edge from cache if available
+            edge_mesh_from_cache = CADTessellator._edge_cache.get(edge_key) if edge_cached else None
 
         mesh = None
-        edge_mesh = None
-
-        # PERFORMANCE Phase 4: Try to get edge from separate cache even if mesh misses
-        if edge_cached:
-            edge_mesh = CADTessellator._edge_cache[edge_key]
+        edge_mesh = edge_mesh_from_cache
 
         try:
             if HAS_OCP_TESSELLATE:
@@ -547,19 +549,22 @@ class CADTessellator:
 
                 # PERFORMANCE Phase 4: Cache edges separately (quality-independent!)
                 if edge_mesh is not None:
-                    CADTessellator._edge_cache[edge_key] = edge_mesh
-                    CADTessellator._edge_cache_access_order[edge_key] = True
+                    with CADTessellator._cache_lock:  # Phase 9: Thread-safe
+                        CADTessellator._edge_cache[edge_key] = edge_mesh
+                        CADTessellator._edge_cache_access_order[edge_key] = True
                     logger.debug(f"Edge cached: {edge_mesh.n_lines} Linien")
 
             # PERFORMANCE Phase 4: Cache mesh separately
-            if mesh is not None:
-                CADTessellator._mesh_cache[mesh_key] = mesh
-                CADTessellator._cache_access_order[mesh_key] = True
+            # Phase 9: Thread-safe Cache-Write
+            with CADTessellator._cache_lock:
+                if mesh is not None:
+                    CADTessellator._mesh_cache[mesh_key] = mesh
+                    CADTessellator._cache_access_order[mesh_key] = True
 
-            # LRU-Eviction prüfen
-            if (len(CADTessellator._mesh_cache) > CADTessellator.MAX_CACHE_ENTRIES or
-                len(CADTessellator._edge_cache) > CADTessellator.MAX_EDGE_CACHE_ENTRIES):
-                CADTessellator._evict_lru()
+                # LRU-Eviction prüfen
+                if (len(CADTessellator._mesh_cache) > CADTessellator.MAX_CACHE_ENTRIES or
+                    len(CADTessellator._edge_cache) > CADTessellator.MAX_EDGE_CACHE_ENTRIES):
+                    CADTessellator._evict_lru()
 
             return mesh, edge_mesh
 
@@ -775,13 +780,14 @@ class CADTessellator:
             geom_hash = CADTessellator._get_geometry_hash(solid)
             cache_key = f"{geom_hash}_{linear_deflection:.4f}_{angular_tolerance:.2f}"
 
-            # Cache-Hit?
-            if cache_key in CADTessellator._export_cache:
-                CADTessellator._export_cache_access_order.move_to_end(cache_key)
-                logger.success(f"⚡ [CACHE HIT] Export Tessellation wiederverwendet (80-90% schneller!)")
-                return CADTessellator._export_cache[cache_key]
+            # Phase 9: Thread-safe Cache-Zugriff
+            with CADTessellator._cache_lock:
+                if cache_key in CADTessellator._export_cache:
+                    CADTessellator._export_cache_access_order.move_to_end(cache_key)
+                    logger.success(f"[CACHE HIT] Export Tessellation wiederverwendet (80-90% schneller!)")
+                    return CADTessellator._export_cache[cache_key]
 
-            # Cache-Miss: Tessellieren
+            # Cache-Miss: Tessellieren (ohne Lock - teuer!)
             logger.info(f"[CACHE MISS] Export Tessellation wird neu berechnet...")
             b3d_mesh = solid.tessellate(
                 tolerance=linear_deflection,
@@ -790,16 +796,16 @@ class CADTessellator:
             verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
             faces = list(b3d_mesh[1])
 
-            # Im Cache speichern
-            CADTessellator._export_cache[cache_key] = (verts, faces)
-            CADTessellator._export_cache_access_order[cache_key] = True
+            # Phase 9: Thread-safe Cache-Write
+            with CADTessellator._cache_lock:
+                CADTessellator._export_cache[cache_key] = (verts, faces)
+                CADTessellator._export_cache_access_order[cache_key] = True
 
-            # LRU-Eviction wenn zu groß
-            while len(CADTessellator._export_cache) > CADTessellator.MAX_EXPORT_CACHE_ENTRIES:
-                oldest_key = next(iter(CADTessellator._export_cache_access_order))
-                del CADTessellator._export_cache[oldest_key]
-                del CADTessellator._export_cache_access_order[oldest_key]
-                logger.debug(f"Export cache evicted: {oldest_key}")
+                while len(CADTessellator._export_cache) > CADTessellator.MAX_EXPORT_CACHE_ENTRIES:
+                    oldest_key = next(iter(CADTessellator._export_cache_access_order))
+                    del CADTessellator._export_cache[oldest_key]
+                    del CADTessellator._export_cache_access_order[oldest_key]
+                    logger.debug(f"Export cache evicted: {oldest_key}")
 
             return verts, faces
 

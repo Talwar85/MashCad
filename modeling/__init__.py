@@ -1281,7 +1281,7 @@ class Body:
     def invalidate_mesh(self):
         """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
         self._mesh_cache_valid = False
-        
+
         # WICHTIG: Auch Face-Info-Cache löschen!
         # Sonst bleiben alte Face-IDs bestehen die nach Boolean/PushPull ungültig sind
         self._face_info_cache = {}
@@ -1293,6 +1293,44 @@ class Body:
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 pass  # Solid hat kein wrapped (selten)
+
+    def request_async_tessellation(self, on_ready=None):
+        """
+        Phase 9: Startet Tessellation im Hintergrund (Non-Blocking).
+
+        Das Mesh wird asynchron generiert und via Callback zurückgegeben.
+        vtk_mesh Property bleibt synchron (für Kompatibilität).
+
+        Args:
+            on_ready: Optional callback(body_id, mesh, edges, face_info)
+                      Wenn None, wird das Mesh direkt in den Cache geschrieben.
+        """
+        if not is_enabled("async_tessellation"):
+            # Synchroner Fallback
+            self._regenerate_mesh()
+            return
+
+        if self._build123d_solid is None:
+            return
+
+        from gui.workers.tessellation_worker import TessellationWorker
+
+        def _on_mesh_ready(body_id, mesh, edges, face_info):
+            """Callback: Mesh ist fertig, in Body-Cache schreiben."""
+            self._mesh_cache = mesh
+            self._edges_cache = edges
+            self._face_info_cache = face_info
+            self._mesh_cache_valid = True
+            n_pts = mesh.n_points if mesh else 0
+            logger.debug(f"Async Mesh ready for '{self.name}': {n_pts} pts")
+            if on_ready:
+                on_ready(body_id, mesh, edges, face_info)
+
+        worker = TessellationWorker(self.id, self._build123d_solid)
+        worker.mesh_ready.connect(_on_mesh_ready)
+        # Worker-Referenz halten damit er nicht garbage-collected wird
+        self._tessellation_worker = worker
+        worker.start()
 
     def add_feature(self, feature: Feature, rebuild: bool = True):
         """Feature hinzufügen und optional Geometrie neu berechnen.
@@ -1535,6 +1573,101 @@ class Body:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP v4.0 History-Registrierung fehlgeschlagen: {tnp_e}")
 
+    def _register_fillet_chamfer_history(self, result_solid, history, feature, operation_type: str = "FILLET"):
+        """
+        Registriert Fillet/Chamfer History für TNP v3.0 und v4.0.
+
+        Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() für präzises Shape-Tracking
+        nach Fillet/Chamfer-Operationen.
+
+        Args:
+            result_solid: Das resultierende Build123d Solid
+            history: BRepTools_History von der Fillet/Chamfer-Operation
+            feature: Das FilletFeature/ChamferFeature
+            operation_type: "FILLET" oder "CHAMFER"
+        """
+        if history is None:
+            return
+
+        # TNP v3.0: Shape Registry
+        if hasattr(self, '_shape_registry'):
+            try:
+                result_shape = result_solid.wrapped if hasattr(result_solid, 'wrapped') else result_solid
+                self._shape_registry.track_boolean_operation(
+                    operation=f"{operation_type}",
+                    input_shapes=[],
+                    result_shape=result_shape,
+                    history=history
+                )
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v3.0: {operation_type} History getrackt")
+            except Exception as tnp_e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v3.0 {operation_type} Tracking fehlgeschlagen: {tnp_e}")
+
+        # TNP v4.0: ShapeNamingService
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                service = self._document._shape_naming_service
+                service.record_operation(
+                    OperationRecord(
+                        operation_id=str(uuid.uuid4())[:8],
+                        operation_type=operation_type,
+                        feature_id=getattr(feature, 'id', 'unknown'),
+                        occt_history=history,
+                    )
+                )
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: {operation_type} History registriert")
+            except Exception as tnp_e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0 {operation_type} History-Registrierung fehlgeschlagen: {tnp_e}")
+
+    @staticmethod
+    def _build_history_from_make_shape(make_shape_op, input_shape):
+        """
+        Baut ein BRepTools_History aus einer BRepBuilderAPI_MakeShape-Operation.
+
+        Phase 12: BRepFilletAPI_MakeFillet/MakeChamfer erben von BRepBuilderAPI_MakeShape
+        und haben Generated()/Modified()/IsDeleted() aber kein direktes History().
+        Diese Methode konstruiert die History manuell.
+
+        Args:
+            make_shape_op: BRepBuilderAPI_MakeShape (z.B. BRepFilletAPI_MakeFillet)
+            input_shape: Das Original-Shape vor der Operation
+
+        Returns:
+            BRepTools_History mit allen Zuordnungen
+        """
+        from OCP.BRepTools import BRepTools_History
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+
+        history = BRepTools_History()
+
+        for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX):
+            explorer = TopExp_Explorer(input_shape, shape_type)
+            while explorer.More():
+                sub_shape = explorer.Current()
+                try:
+                    for s in make_shape_op.Generated(sub_shape):
+                        history.AddGenerated(sub_shape, s)
+                except Exception:
+                    pass
+                try:
+                    for s in make_shape_op.Modified(sub_shape):
+                        history.AddModified(sub_shape, s)
+                except Exception:
+                    pass
+                try:
+                    if make_shape_op.IsDeleted(sub_shape):
+                        history.Remove(sub_shape)
+                except Exception:
+                    pass
+                explorer.Next()
+
+        return history
+
     def _fix_shape_ocp(self, shape):
         """Repariert einen TopoDS_Shape mit OCP ShapeFix."""
         try:
@@ -1578,7 +1711,7 @@ class Body:
             logger.warning(f"Shape-Reparatur Fehler: {e}")
             return shape  # Gib Original zurück
 
-    def _ocp_fillet(self, solid, edges, radius):
+    def _ocp_fillet(self, solid, edges, radius, extract_history=False):
         """
         OCP-basiertes Fillet (robuster als Build123d).
 
@@ -1586,12 +1719,13 @@ class Body:
             solid: Build123d Solid
             edges: Liste von Edges
             radius: Fillet-Radius
+            extract_history: True → gibt (Solid, History) Tuple zurück für TNP
 
         Returns:
-            Build123d Solid oder None
+            Build123d Solid oder None (oder (Solid, History) wenn extract_history=True)
         """
         if not HAS_OCP:
-            return None
+            return (None, None) if extract_history else None
 
         try:
             from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
@@ -1613,9 +1747,19 @@ class Body:
 
             if not fillet_op.IsDone():
                 logger.warning("OCP Fillet IsDone() = False")
-                return None
+                return (None, None) if extract_history else None
 
             result_shape = fillet_op.Shape()
+
+            # History extrahieren (Phase 12: Batch Fillets TNP-Integration)
+            history = None
+            if extract_history:
+                try:
+                    history = self._build_history_from_make_shape(fillet_op, shape)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"Fillet History extrahiert: Gen={history.HasGenerated()}, Mod={history.HasModified()}, Rem={history.HasRemoved()}")
+                except Exception as h_e:
+                    logger.debug(f"Fillet History-Extraktion fehlgeschlagen: {h_e}")
 
             # Validiere
             analyzer = BRepCheck_Analyzer(result_shape)
@@ -1634,18 +1778,18 @@ class Body:
 
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.debug("OCP Fillet erfolgreich")
-                    return result
+                    return (result, history) if extract_history else result
                 else:
-                    return None
+                    return (None, None) if extract_history else None
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
-                return None
+                return (None, None) if extract_history else None
 
         except Exception as e:
             logger.debug(f"OCP Fillet Fehler: {e}")
-            return None
+            return (None, None) if extract_history else None
 
-    def _ocp_chamfer(self, solid, edges, distance):
+    def _ocp_chamfer(self, solid, edges, distance, extract_history=False):
         """
         OCP-basiertes Chamfer (robuster als Build123d).
 
@@ -1653,12 +1797,13 @@ class Body:
             solid: Build123d Solid
             edges: Liste von Edges
             distance: Chamfer-Distanz
+            extract_history: True → gibt (Solid, History) Tuple zurück für TNP
 
         Returns:
-            Build123d Solid oder None
+            Build123d Solid oder None (oder (Solid, History) wenn extract_history=True)
         """
         if not HAS_OCP:
-            return None
+            return (None, None) if extract_history else None
 
         try:
             from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer
@@ -1689,9 +1834,19 @@ class Body:
 
             if not chamfer_op.IsDone():
                 logger.warning("OCP Chamfer IsDone() = False")
-                return None
+                return (None, None) if extract_history else None
 
             result_shape = chamfer_op.Shape()
+
+            # History extrahieren (Phase 12: Batch Fillets TNP-Integration)
+            history = None
+            if extract_history:
+                try:
+                    history = self._build_history_from_make_shape(chamfer_op, shape)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"Chamfer History extrahiert: Gen={history.HasGenerated()}, Mod={history.HasModified()}, Rem={history.HasRemoved()}")
+                except Exception as h_e:
+                    logger.debug(f"Chamfer History-Extraktion fehlgeschlagen: {h_e}")
 
             # Validiere
             analyzer = BRepCheck_Analyzer(result_shape)
@@ -1710,16 +1865,16 @@ class Body:
 
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.debug("OCP Chamfer erfolgreich")
-                    return result
+                    return (result, history) if extract_history else result
                 else:
-                    return None
+                    return (None, None) if extract_history else None
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
-                return None
+                return (None, None) if extract_history else None
 
         except Exception as e:
             logger.debug(f"OCP Chamfer Fehler: {e}")
-            return None
+            return (None, None) if extract_history else None
 
     # ==================== PHASE 6: COMPUTE METHODS ====================
 
@@ -4871,15 +5026,24 @@ class Body:
                         logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
+                    _fillet_history_holder = [None]  # Closure-safe container
+
                     def op_fillet(rad=feature.radius):
                         # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges_to_fillet = self._resolve_edges_tnp(current_solid, feature)
                         if not edges_to_fillet:
                             raise ValueError("No edges selected (TNP resolution failed)")
-                        # OCP Fillet (primaer)
-                        result = self._ocp_fillet(current_solid, edges_to_fillet, rad)
-                        if result is not None:
-                            return result
+                        # Phase 12: History-Extraction für TNP
+                        if is_enabled("batch_fillets"):
+                            result, history = self._ocp_fillet(current_solid, edges_to_fillet, rad, extract_history=True)
+                            if result is not None:
+                                _fillet_history_holder[0] = history
+                                return result
+                        else:
+                            # OCP Fillet (primaer)
+                            result = self._ocp_fillet(current_solid, edges_to_fillet, rad)
+                            if result is not None:
+                                return result
                         # Build123d als Alternative (gleicher Radius)
                         return fillet(edges_to_fillet, radius=rad)
 
@@ -4889,6 +5053,9 @@ class Body:
                         new_solid = current_solid
                         status = "ERROR"
                         logger.error(f"Fillet R={feature.radius}mm fehlgeschlagen. Radius evtl. zu gross fuer die gewaehlten Kanten.")
+                    elif _fillet_history_holder[0] is not None:
+                        # Phase 12: TNP History registrieren
+                        self._register_fillet_chamfer_history(new_solid, _fillet_history_holder[0], feature, "FILLET")
 
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
@@ -4904,15 +5071,24 @@ class Body:
                         logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
+                    _chamfer_history_holder = [None]  # Closure-safe container
+
                     def op_chamfer(dist=feature.distance):
                         # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
                         edges = self._resolve_edges_tnp(current_solid, feature)
                         if not edges:
                             raise ValueError("No edges (TNP resolution failed)")
-                        # OCP Chamfer (primaer)
-                        result = self._ocp_chamfer(current_solid, edges, dist)
-                        if result is not None:
-                            return result
+                        # Phase 12: History-Extraction für TNP
+                        if is_enabled("batch_fillets"):
+                            result, history = self._ocp_chamfer(current_solid, edges, dist, extract_history=True)
+                            if result is not None:
+                                _chamfer_history_holder[0] = history
+                                return result
+                        else:
+                            # OCP Chamfer (primaer)
+                            result = self._ocp_chamfer(current_solid, edges, dist)
+                            if result is not None:
+                                return result
                         # Build123d als Alternative (gleiche Distance)
                         return chamfer(edges, length=dist)
 
@@ -4922,6 +5098,9 @@ class Body:
                         new_solid = current_solid
                         status = "ERROR"
                         logger.error(f"Chamfer D={feature.distance}mm fehlgeschlagen. Distance evtl. zu gross fuer die gewaehlten Kanten.")
+                    elif _chamfer_history_holder[0] is not None:
+                        # Phase 12: TNP History registrieren
+                        self._register_fillet_chamfer_history(new_solid, _chamfer_history_holder[0], feature, "CHAMFER")
 
             # ================= TRANSFORM =================
             elif isinstance(feature, TransformFeature):

@@ -1,0 +1,13 @@
+[32m2026-02-06 21:55:37.481[0m | [32m[1mSUCCESS [0m | [36mmodeling[0m:[36m<module>[0m:[36m70[0m - [32m[1m✓ OCP (OpenCASCADE) geladen.[0m
+[32m2026-02-06 21:55:37.482[0m | [32m[1mSUCCESS [0m | [36mmodeling[0m:[36m<module>[0m:[36m89[0m - [32m[1m✓ build123d geladen (High-Level API).[0m
+[32m2026-02-06 21:55:37.526[0m | [1mINFO    [0m | [36mmodeling.cad_tessellator[0m:[36mtessellate_with_face_ids[0m:[36m730[0m - [1mTessellated with face IDs: 12 triangles, 6 faces[0m
+[32m2026-02-06 21:55:37.529[0m | [34m[1mDEBUG   [0m | [36mmodeling.cad_tessellator[0m:[36mextract_brep_edges[0m:[36m306[0m - [34m[1mB-Rep Edges extrahiert: 24 Feature-Kanten[0m
+[32m2026-02-06 21:55:37.603[0m | [1mINFO    [0m | [36mmodeling.cad_tessellator[0m:[36mtessellate_with_face_ids[0m:[36m730[0m - [1mTessellated with face IDs: 12 triangles, 6 faces[0m
+[32m2026-02-06 21:55:37.607[0m | [34m[1mDEBUG   [0m | [36mmodeling.cad_tessellator[0m:[36mextract_brep_edges[0m:[36m306[0m - [34m[1mB-Rep Edges extrahiert: 24 Feature-Kanten[0m
+[32m2026-02-06 21:55:37.719[0m | [1mINFO    [0m | [36mmodeling.cad_tessellator[0m:[36mtessellate_with_face_ids[0m:[36m730[0m - [1mTessellated with face IDs: 12 triangles, 6 faces[0m
+[32m2026-02-06 21:55:37.721[0m | [34m[1mDEBUG   [0m | [36mmodeling.cad_tessellator[0m:[36mextract_brep_edges[0m:[36m306[0m - [34m[1mB-Rep Edges extrahiert: 24 Feature-Kanten[0m
+[32m2026-02-06 21:55:37.814[0m | [34m[1mDEBUG   [0m | [36mgui.workers.tessellation_worker[0m:[36mrequest_tessellation[0m:[36m121[0m - [34m[1mTessellation gecancelled für cancel_test (neuer Request)[0m
+[32m2026-02-06 21:55:37.822[0m | [1mINFO    [0m | [36mmodeling.cad_tessellator[0m:[36mtessellate_with_face_ids[0m:[36m730[0m - [1mTessellated with face IDs: 12 triangles, 6 faces[0m
+[32m2026-02-06 21:55:37.825[0m | [34m[1mDEBUG   [0m | [36mmodeling.cad_tessellator[0m:[36mextract_brep_edges[0m:[36m306[0m - [34m[1mB-Rep Edges extrahiert: 24 Feature-Kanten[0m
+
+ERROR conda.cli.main_run:execute(127): `conda run python test_phase9.py` failed. (See above for error)

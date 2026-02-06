@@ -4642,12 +4642,45 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         Aktualisiert NUR EINEN Body - ohne andere Bodies zu berühren.
 
         Performance-Optimierung: Kein Flicker für unveränderte Bodies.
+        Phase 9: Unterstützt async Tessellation wenn Feature-Flag aktiv.
 
         Args:
             body: Body-Objekt mit vtk_mesh
             color: Optional - Farbe
             inactive_component: True wenn in inaktiver Component
         """
+        from config.feature_flags import is_enabled
+
+        default_color = (0.7, 0.7, 0.7)
+        col = color if color else getattr(body, 'color', default_color)
+        if col is None:
+            col = default_color
+
+        # Phase 9: Async Tessellation
+        if is_enabled("async_tessellation") and hasattr(body, 'request_async_tessellation'):
+            if not hasattr(body, '_mesh_cache_valid') or not body._mesh_cache_valid:
+                # Mesh ist invalid → async tessellieren
+                def _on_async_mesh_ready(body_id, mesh, edges, face_info):
+                    """Callback: Mesh fertig, Actor im Main-Thread aktualisieren."""
+                    if mesh is None:
+                        return
+                    self.clear_bodies(only_body_id=body_id)
+                    self.add_body(
+                        bid=body_id,
+                        name=body.name,
+                        mesh_obj=mesh,
+                        edge_mesh_obj=edges,
+                        color=col,
+                        inactive_component=inactive_component
+                    )
+                    if hasattr(self, 'plotter'):
+                        from gui.viewport.render_utils import request_render
+                        request_render(self.plotter, immediate=True)
+
+                body.request_async_tessellation(on_ready=_on_async_mesh_ready)
+                return True
+
+        # Synchroner Pfad (Feature-Flag aus oder Mesh bereits im Cache)
         if not hasattr(body, 'vtk_mesh') or body.vtk_mesh is None:
             return False
 
@@ -4655,11 +4688,6 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.clear_bodies(only_body_id=body.id)
 
         # Neuen Actor hinzufügen
-        default_color = (0.7, 0.7, 0.7)
-        col = color if color else getattr(body, 'color', default_color)
-        if col is None:
-            col = default_color
-
         self.add_body(
             bid=body.id,
             name=body.name,

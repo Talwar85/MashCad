@@ -424,6 +424,79 @@ class BooleanEngineV4:
         return None
 
     @staticmethod
+    def _detect_glue_mode(shape1: Any, shape2: Any, fuzzy_tolerance: float) -> Optional[Any]:
+        """
+        Erkennt ob Shapes coinciding Faces haben für GlueShift-Optimierung.
+
+        GlueShift ist ~90% schneller, darf aber NUR bei Shapes mit
+        anliegenden/zusammenfallenden Faces verwendet werden - NICHT bei
+        echten Intersections (wo Shapes sich durchdringen).
+
+        Erkennung:
+        1. BRepExtrema_DistShapeShape: Shapes berühren sich (Distanz ~0)?
+        2. BBox-Overlap-Check: Durchdringen sich die Shapes (echte Intersection)?
+           - Wenn BBoxen sich in allen 3 Achsen überlappen → echte Intersection → KEIN Glue
+           - Wenn BBoxen nur berühren (touch) → coinciding Faces → GlueShift OK
+
+        Returns:
+            BOPAlgo_GlueShift wenn coinciding Faces erkannt, None sonst
+        """
+        if not is_enabled("ocp_glue_auto_detect"):
+            return None
+
+        try:
+            from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+            from OCP.Bnd import Bnd_Box
+            from OCP.BRepBndLib import BRepBndLib
+
+            dist_calc = BRepExtrema_DistShapeShape(shape1, shape2)
+            if not dist_calc.IsDone():
+                return None
+
+            min_dist = dist_calc.Value()
+
+            # Shapes berühren sich (Distanz ~0)
+            if min_dist < fuzzy_tolerance:
+                n_solutions = dist_calc.NbSolution()
+                # Viele Kontaktpunkte = Face-Kontakt (nicht nur Kante/Punkt)
+                if n_solutions >= 4:
+                    # Zusätzlicher Check: Durchdringen sich die Shapes?
+                    # BBox-Overlap in allen 3 Achsen = echte Intersection → KEIN Glue
+                    bbox1 = Bnd_Box()
+                    bbox2 = Bnd_Box()
+                    BRepBndLib.Add_s(shape1, bbox1)
+                    BRepBndLib.Add_s(shape2, bbox2)
+
+                    xmin1, ymin1, zmin1, xmax1, ymax1, zmax1 = bbox1.Get()
+                    xmin2, ymin2, zmin2, xmax2, ymax2, zmax2 = bbox2.Get()
+
+                    tol = fuzzy_tolerance
+                    # Overlap = min > max + tolerance in jeder Achse
+                    x_overlap = (xmin1 + tol) < xmax2 and (xmin2 + tol) < xmax1
+                    y_overlap = (ymin1 + tol) < ymax2 and (ymin2 + tol) < ymax1
+                    z_overlap = (zmin1 + tol) < zmax2 and (zmin2 + tol) < zmax1
+
+                    if x_overlap and y_overlap and z_overlap:
+                        logger.debug(
+                            f"Kein GlueShift: BBoxen überlappen in allen 3 Achsen "
+                            f"(echte Intersection, {n_solutions} Kontaktpunkte)"
+                        )
+                        return None
+
+                    logger.info(
+                        f"GlueShift erkannt: {n_solutions} Kontaktpunkte bei "
+                        f"Distanz={min_dist:.6f}mm, BBoxen berühren sich nur → "
+                        f"Performance-Optimierung aktiv"
+                    )
+                    return BOPAlgo_GlueEnum.BOPAlgo_GlueShift
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Glue-Erkennung fehlgeschlagen: {e}")
+            return None
+
+    @staticmethod
     def _execute_ocp_boolean(
         shape1: Any,
         shape2: Any,
@@ -433,10 +506,9 @@ class BooleanEngineV4:
         """
         Execute OpenCASCADE Boolean operation with robust settings.
 
-        Phase 3: Robuste Boolean-Defaults (CAD-ähnlich)
         - SetFuzzyValue: Toleranz für numerische Ungenauigkeiten
         - SetRunParallel: Multi-Threading für Performance
-        - SetGlue: Robustes Gluing für überlappende Geometrien
+        - SetGlue: Auto-Erkennung von coinciding Faces für ~90% Speedup
 
         Args:
             shape1: OCP TopoDS_Shape (target)
@@ -448,12 +520,9 @@ class BooleanEngineV4:
             (result_shape, history) or (None, None) on failure
         """
         try:
-            # Debug: Log input shapes
             logger.debug(f"OCP Boolean {operation}: shape1 type={type(shape1).__name__}, shape2 type={type(shape2).__name__}")
             logger.debug(f"  Fuzzy tolerance: {fuzzy_tolerance}")
 
-            # Phase 3: Use explicit API with robust settings
-            # Parameter-less constructor allows setting options before Build()
             if operation.lower() in ["join", "fuse"]:
                 op = BRepAlgoAPI_Fuse()
             elif operation.lower() == "cut":
@@ -464,7 +533,6 @@ class BooleanEngineV4:
                 logger.debug(f"Unknown operation: {operation}")
                 return None, None
 
-            # Create TopTools_ListOfShape (required by OCP API)
             args_list = TopTools_ListOfShape()
             args_list.Append(shape1)
 
@@ -474,13 +542,14 @@ class BooleanEngineV4:
             op.SetArguments(args_list)
             op.SetTools(tools_list)
 
-            # Phase 3: Robuste Boolean-Defaults (wie CAD)
-            op.SetFuzzyValue(fuzzy_tolerance)  # Toleranz für numerische Ungenauigkeiten
-            op.SetRunParallel(True)            # Multi-Threading für Performance
-            # HINWEIS: SetGlue(GlueShift) entfernt - verursachte kaputte Körper bei ~20% der Joins
-            # GlueOff (default) ist sicherer für allgemeine Operationen
+            op.SetFuzzyValue(fuzzy_tolerance)
+            op.SetRunParallel(True)
 
-            # Manual Build (nicht automatisch via Konstruktor)
+            # Intelligente Glue-Erkennung: coinciding Faces → GlueShift (~90% schneller)
+            glue_mode = BooleanEngineV4._detect_glue_mode(shape1, shape2, fuzzy_tolerance)
+            if glue_mode is not None:
+                op.SetGlue(glue_mode)
+
             op.Build()
             logger.debug("  Boolean operation built with Phase 3 settings")
 
