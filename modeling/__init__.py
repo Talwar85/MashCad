@@ -34,6 +34,7 @@ from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as 
 # from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker
 from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
 from config.feature_flags import is_enabled  # Für TNP Debug Logging
+from modeling.boolean_engine_v4 import BooleanEngineV4  # Zentraler Boolean-Engine
 
 # TNP v4.0 - Professionelles Topological Naming System
 from modeling.tnp_system import (
@@ -1485,372 +1486,54 @@ class Body:
             
             return None, "ERROR"
 
-    def _safe_boolean_operation_v2(self, solid1, solid2, operation: str) -> BooleanResult:
+    def _register_boolean_history(self, bool_result: BooleanResult, feature, operation_name: str = ""):
         """
-        Robuste Boolean Operation mit Result-Pattern für klare Status-Unterscheidung.
+        Registriert Boolean-History für TNP v3.0 und v4.0.
 
-        Result Status:
-        - SUCCESS: Operation erfolgreich durchgeführt
-        - WARNING: Operation erfolgreich aber Validierung/Reparatur war nötig
-        - EMPTY: Operation produzierte leeres Ergebnis (z.B. Intersect ohne Überlappung)
-        - ERROR: Operation fehlgeschlagen
+        Wird nach erfolgreichen Boolean-Operationen aufgerufen um
+        die BRepTools_History an die TNP-Systeme weiterzugeben.
 
         Args:
-            solid1: Erstes Solid (aktueller Body)
-            solid2: Zweites Solid (neues Teil)
-            operation: "Join", "Cut", oder "Intersect"
-
-        Returns:
-            BooleanResult mit klarem Status und Details
+            bool_result: BooleanResult mit history-Attribut
+            feature: Das Feature das die Boolean-Operation ausgelöst hat
+            operation_name: Name der Operation (Join/Cut/Intersect)
         """
-        op_type = operation.lower()
-        warnings = []
+        boolean_history = getattr(bool_result, 'history', None)
+        if boolean_history is None:
+            return
 
-        # --- Validierung ---
-        if not HAS_OCP:
-            return BooleanResult(
-                status=ResultStatus.ERROR,
-                message="OCP nicht verfügbar - Boolean Operations nicht möglich",
-                operation_type=op_type
-            )
-
-        if solid1 is None or solid2 is None:
-            return BooleanResult(
-                status=ResultStatus.ERROR,
-                message=f"Boolean {operation}: Eines der Solids ist None",
-                operation_type=op_type,
-                details={"solid1_none": solid1 is None, "solid2_none": solid2 is None}
-            )
-
-        try:
-            # 1. Extrahiere TopoDS_Shape
-            shape1 = solid1.wrapped if hasattr(solid1, 'wrapped') else solid1
-            shape2 = solid2.wrapped if hasattr(solid2, 'wrapped') else solid2
-
-            # 2. Repariere Shapes VOR Boolean
-            fixed_shape1 = self._fix_shape_ocp(shape1)
-            fixed_shape2 = self._fix_shape_ocp(shape2)
-
-            if fixed_shape1 is None or fixed_shape2 is None:
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message="Shape-Reparatur fehlgeschlagen",
-                    operation_type=op_type
-                )
-
-            # Prüfe ob Reparatur nötig war
-            if fixed_shape1 is not shape1:
-                warnings.append("solid1 wurde repariert")
-            if fixed_shape2 is not shape2:
-                warnings.append("solid2 wurde repariert")
-
-            # 3. Boolean Operation - Phase 5: Zentralisierte Toleranz
-            FUZZY_VALUE = Tolerances.KERNEL_FUZZY
-            result_shape = None
-            boolean_history = None  # BRepTools_History für TNP
-
-            if operation == "Join":
-                result_shape, boolean_history = self._ocp_fuse(fixed_shape1, fixed_shape2, FUZZY_VALUE, return_history=True)
-            elif operation == "Cut":
-                result_shape, boolean_history = self._ocp_cut(fixed_shape1, fixed_shape2, FUZZY_VALUE, return_history=True)
-            elif operation == "Intersect":
-                result_shape, boolean_history = self._ocp_common(fixed_shape1, fixed_shape2, FUZZY_VALUE, return_history=True)
-            else:
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=f"Unbekannte Operation: {operation}",
-                    operation_type=op_type
-                )
-
-            # TNP v3.0: Tracke Operation in neuer Registry
-            if boolean_history is not None and hasattr(self, '_shape_registry'):
-                try:
-                    self._shape_registry.track_boolean_operation(
-                        operation=f"Boolean_{operation}",
-                        input_shapes=[current_solid],
-                        result_shape=result_shape,
-                        history=boolean_history
-                    )
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
-                except Exception as tnp_e:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
-
-            # TNP v4.0: History an ShapeNamingService durchreichen (Feature #7)
-            if boolean_history is not None and self._document and hasattr(self._document, '_shape_naming_service'):
-                try:
-                    service = self._document._shape_naming_service
-                    service.record_operation(
-                        OperationRecord(
-                            operation_id=str(uuid.uuid4())[:8],
-                            operation_type=f"BOOLEAN_{operation.upper()}",
-                            feature_id=getattr(self, '_current_feature_id', 'unknown'),
-                            occt_history=boolean_history,
-                        )
-                    )
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v4.0: Boolean {operation} History registriert")
-                except Exception as tnp_e:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v4.0 History-Registrierung fehlgeschlagen: {tnp_e}")
-
-            # 4. Prüfe Ergebnis
-            if result_shape is None:
-                # Bei Intersect kann leeres Ergebnis gültig sein
-                if operation == "Intersect":
-                    return BooleanResult(
-                        status=ResultStatus.EMPTY,
-                        message="Intersect produzierte kein Ergebnis (keine Überlappung)",
-                        operation_type=op_type,
-                        details={"reason": "no_overlap"}
-                    )
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=f"{operation} produzierte None",
-                    operation_type=op_type
-                )
-
-            # 5. Repariere Resultat
-            fixed_result = self._fix_shape_ocp(result_shape)
-            if fixed_result is not result_shape:
-                warnings.append("Resultat wurde repariert")
-
-            if fixed_result is None:
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=f"{operation} Resultat-Reparatur fehlgeschlagen",
-                    operation_type=op_type
-                )
-
-            # 6. Wrap zu Build123d
+        # TNP v3.0: Shape Registry
+        if hasattr(self, '_shape_registry'):
             try:
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(fixed_result)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    result = Shape(fixed_result)
-
-                is_valid = hasattr(result, 'is_valid') and result.is_valid()
-
-                if not is_valid:
-                    warnings.append("Resultat war nach Wrap invalid")
-                    try:
-                        result = result.fix()
-                        is_valid = result.is_valid()
-                        if is_valid:
-                            warnings.append("fix() hat geholfen")
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-
-                if is_valid:
-                    if warnings:
-                        return BooleanResult(
-                            status=ResultStatus.WARNING,
-                            value=result,
-                            message=f"{operation} erfolgreich (mit Reparaturen)",
-                            operation_type=op_type,
-                            warnings=warnings,
-                            details={"fallback_used": "shape_repair"}
-                        )
-                    return BooleanResult(
-                        status=ResultStatus.SUCCESS,
-                        value=result,
-                        message=f"{operation} erfolgreich",
-                        operation_type=op_type
-                    )
-                else:
-                    return BooleanResult(
-                        status=ResultStatus.ERROR,
-                        message=f"{operation} Resultat invalid nach allen Reparatur-Versuchen",
-                        operation_type=op_type,
-                        warnings=warnings
-                    )
-
-            except Exception as e:
-                return BooleanResult(
-                    status=ResultStatus.ERROR,
-                    message=f"Wrap zu Build123d fehlgeschlagen: {e}",
-                    operation_type=op_type,
-                    details={"exception": str(e)}
+                self._shape_registry.track_boolean_operation(
+                    operation=f"Boolean_{operation_name}",
+                    input_shapes=[],
+                    result_shape=bool_result.value.wrapped if hasattr(bool_result.value, 'wrapped') else bool_result.value,
+                    history=boolean_history
                 )
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v3.0: Boolean {operation_name} getrackt")
+            except Exception as tnp_e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
-        except Exception as e:
-            return BooleanResult(
-                status=ResultStatus.ERROR,
-                message=f"Boolean {operation} Fehler: {e}",
-                operation_type=op_type,
-                details={"exception": str(e), "traceback": traceback.format_exc()[:500]}
-            )
-
-    def _safe_boolean_operation(self, solid1, solid2, operation: str):
-        """
-        Robuste Boolean Operation mit direkter OCP-API (wie Fusion360/OnShape).
-        Legacy-API - verwende _safe_boolean_operation_v2 für neue Implementierungen.
-
-        Args:
-            solid1: Erstes Solid (aktueller Body)
-            solid2: Zweites Solid (neues Teil)
-            operation: "Join", "Cut", oder "Intersect"
-
-        Returns:
-            (result_solid, success: bool)
-        """
-        if not HAS_OCP:
-            logger.error("OCP nicht verfügbar - Boolean Operations nicht möglich")
-            return solid1, False
-
-        try:
-            # 1. Validiere Eingaben
-            if solid1 is None or solid2 is None:
-                logger.error(f"Boolean {operation}: Eines der Solids ist None")
-                return solid1, False
-
-            # 2. Extrahiere TopoDS_Shape (OCP-Kern)
-            shape1 = solid1.wrapped if hasattr(solid1, 'wrapped') else solid1
-            shape2 = solid2.wrapped if hasattr(solid2, 'wrapped') else solid2
-
-            # 3. Repariere Shapes VOR Boolean (kritisch für Erfolg!)
-            shape1 = self._fix_shape_ocp(shape1)
-            shape2 = self._fix_shape_ocp(shape2)
-
-            if shape1 is None or shape2 is None:
-                logger.error("Shape-Reparatur fehlgeschlagen")
-                return solid1, False
-
-            # 4. Führe Boolean Operation aus (OCP-API)
-            logger.debug(f"OCP Boolean: {operation}...")
-            result_shape = None
-            boolean_history = None  # BRepTools_History für TNP
-
-            # DEBUG: Volumen vor Boolean loggen
+        # TNP v4.0: ShapeNamingService
+        if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
-                from OCP.GProp import GProp_GProps
-                from OCP.BRepGProp import BRepGProp
-
-                props1 = GProp_GProps()
-                props2 = GProp_GProps()
-                BRepGProp.VolumeProperties_s(shape1, props1)
-                BRepGProp.VolumeProperties_s(shape2, props2)
-                vol1 = props1.Mass()
-                vol2 = props2.Mass()
-                logger.debug(f"[BOOLEAN DEBUG] Vor {operation}: Body-Vol={vol1:.2f}mm³, Tool-Vol={vol2:.2f}mm³")
-            except Exception as e:
-                logger.debug(f"Volumen-Debug fehlgeschlagen: {e}")
-
-            # Phase 5: Zentralisierte Toleranz
-            FUZZY_VALUE = Tolerances.KERNEL_FUZZY
-
-            if operation == "Join":
-                result_shape, boolean_history = self._ocp_fuse(shape1, shape2, FUZZY_VALUE, return_history=True)
-            elif operation == "Cut":
-                # FIX: Versuche zuerst Build123d native Boolean (wie Menu Boolean)
-                # Das ist robuster für Through-Cuts
-                try:
-                    from build123d import Solid
-                    s1_b3d = Solid(shape1)
-                    s2_b3d = Solid(shape2)
-                    result_b3d = s1_b3d - s2_b3d  # Build123d native Cut
-                    if result_b3d and hasattr(result_b3d, 'wrapped') and not result_b3d.wrapped.IsNull():
-                        result_shape = result_b3d.wrapped
-                        boolean_history = None
-                        logger.debug("[CUT] Build123d native Boolean erfolgreich")
-                    else:
-                        # Fallback auf OCP Cut
-                        logger.debug("[CUT] Build123d native Boolean fehlgeschlagen, versuche OCP")
-                        result_shape, boolean_history = self._ocp_cut(shape1, shape2, FUZZY_VALUE, return_history=True)
-                except Exception as e:
-                    logger.debug(f"[CUT] Build123d Exception: {e}, Fallback auf OCP")
-                    result_shape, boolean_history = self._ocp_cut(shape1, shape2, FUZZY_VALUE, return_history=True)
-            elif operation == "Intersect":
-                result_shape, boolean_history = self._ocp_common(shape1, shape2, FUZZY_VALUE, return_history=True)
-            else:
-                logger.error(f"Unbekannte Operation: {operation}")
-                return solid1, False
-
-            # TNP v3.0: Tracke Operation in neuer Registry
-            if boolean_history is not None and hasattr(self, '_shape_registry'):
-                try:
-                    self._shape_registry.track_boolean_operation(
-                        operation=f"Boolean_{operation}",
-                        input_shapes=[shape1, shape2],
-                        result_shape=result_shape,
-                        history=boolean_history
+                service = self._document._shape_naming_service
+                service.record_operation(
+                    OperationRecord(
+                        operation_id=str(uuid.uuid4())[:8],
+                        operation_type=f"BOOLEAN_{operation_name.upper()}",
+                        feature_id=getattr(feature, 'id', 'unknown'),
+                        occt_history=boolean_history,
                     )
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v3.0: Boolean {operation} getrackt")
-                except Exception as tnp_e:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
-
-            # 5. Validiere und repariere Resultat
-            if result_shape is None:
-                logger.error(f"{operation} produzierte None")
-                return solid1, False
-
-            # Repariere Resultat
-            result_shape = self._fix_shape_ocp(result_shape)
-
-            if result_shape is None:
-                logger.error(f"{operation} Resultat-Reparatur fehlgeschlagen")
-                return solid1, False
-
-            # 6. Wrap zurück zu Build123d Solid
-            try:
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    result = Shape(result_shape)
-
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    # DEBUG: Volumen nach Boolean loggen
-                    vol_result = None
-                    try:
-                        from OCP.GProp import GProp_GProps
-                        from OCP.BRepGProp import BRepGProp
-
-                        props_result = GProp_GProps()
-                        BRepGProp.VolumeProperties_s(result.wrapped, props_result)
-                        vol_result = props_result.Mass()
-                        logger.debug(f"[BOOLEAN DEBUG] Nach {operation}: Result-Vol={vol_result:.2f}mm³")
-
-                        # FIX: Leeres Ergebnis (Volumen ~0) als Fehler behandeln
-                        if vol_result < 0.001:  # < 0.001 mm³ = praktisch leer
-                            logger.error(f"❌ {operation} erzeugte leeres Ergebnis (Vol={vol_result:.4f}mm³)")
-                            return solid1, False
-
-                        if operation == "Cut" and vol_result >= vol1 - 0.01:
-                            logger.warning(f"⚠️ Cut hatte keinen Effekt! Vol vorher={vol1:.2f}, nachher={vol_result:.2f}")
-                    except Exception as e:
-                        logger.debug(f"Volumen-Debug (result) fehlgeschlagen: {e}")
-
-                    logger.debug(f"✅ {operation} erfolgreich")
-                    return result, True
-                else:
-                    logger.warning(f"{operation} Resultat invalid nach Wrap")
-                    # Versuche Build123d fix()
-                    try:
-                        result = result.fix()
-                        if result.is_valid():
-                            logger.debug(f"✅ {operation} erfolgreich (nach fix)")
-                            return result, True
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-                    return solid1, False
-            except Exception as e:
-                logger.error(f"Wrap zu Build123d fehlgeschlagen: {e}")
-                return solid1, False
-
-        except Exception as e:
-            logger.error(f"Boolean {operation} Fehler: {e}")
-            import traceback
-            traceback.print_exc()
-            return solid1, False
+                )
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: Boolean {operation_name} History registriert")
+            except Exception as tnp_e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0 History-Registrierung fehlgeschlagen: {tnp_e}")
 
     def _fix_shape_ocp(self, shape):
         """Repariert einen TopoDS_Shape mit OCP ShapeFix."""
@@ -1894,235 +1577,6 @@ class Body:
         except Exception as e:
             logger.warning(f"Shape-Reparatur Fehler: {e}")
             return shape  # Gib Original zurück
-
-    def _ocp_fuse(self, shape1, shape2, fuzzy_value, return_history: bool = False):
-        """
-        OCP Fuse (Join) mit optimalen Parametern.
-
-        Args:
-            shape1: Erstes Shape
-            shape2: Zweites Shape
-            fuzzy_value: Toleranz für unscharfe Kanten
-            return_history: Wenn True, gibt (shape, history) Tuple zurück
-
-        Returns:
-            Shape oder (Shape, History) Tuple wenn return_history=True
-        """
-        try:
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from OCP.TopTools import TopTools_ListOfShape
-
-            # Methode 1: Standard Fuse mit Fuzzy
-            fuse_op = BRepAlgoAPI_Fuse()
-
-            # Setze Argumente (WICHTIG: VOR Build!)
-            args = TopTools_ListOfShape()
-            args.Append(shape1)
-            fuse_op.SetArguments(args)
-
-            tools = TopTools_ListOfShape()
-            tools.Append(shape2)
-            fuse_op.SetTools(tools)
-
-            # Setze Parameter für robustes Fuse
-            fuse_op.SetFuzzyValue(fuzzy_value)
-            fuse_op.SetRunParallel(True)
-            fuse_op.SetNonDestructive(True)  # Behält Original-Shapes
-            # SetGlue NICHT verwenden - verursacht kaputte Bodies bei ~20% der Joins
-            # (siehe boolean_engine_v4.py, ocp_glue_mode Flag)
-
-            # Build
-            fuse_op.Build()
-
-            if fuse_op.IsDone():
-                result_shape = fuse_op.Shape()
-                if return_history:
-                    # Extrahiere BRepTools_History für TNP-Tracking
-                    try:
-                        history = fuse_op.History()
-                        return result_shape, history
-                    except Exception as he:
-                        logger.debug(f"History-Extraktion fehlgeschlagen: {he}")
-                        return result_shape, None
-                return result_shape
-            else:
-                # Fallback: Einfacher Konstruktor
-                logger.debug("Versuche Fuse Fallback...")
-                fuse_simple = BRepAlgoAPI_Fuse(shape1, shape2)
-                fuse_simple.Build()
-                if fuse_simple.IsDone():
-                    result_shape = fuse_simple.Shape()
-                    if return_history:
-                        try:
-                            history = fuse_simple.History()
-                            return result_shape, history
-                        except Exception as e:
-                            logger.debug(f"[__init__.py] Fehler: {e}")
-                            return result_shape, None
-                    return result_shape
-
-                return (None, None) if return_history else None
-        except Exception as e:
-            logger.error(f"OCP Fuse Fehler: {e}")
-            return (None, None) if return_history else None
-
-    def _ocp_cut(self, shape1, shape2, fuzzy_value, return_history: bool = False):
-        """
-        OCP Cut mit optimalen Parametern (wie Fusion360).
-
-        Args:
-            shape1: Basis-Shape
-            shape2: Tool-Shape zum Schneiden
-            fuzzy_value: Toleranz
-            return_history: Wenn True, gibt (shape, history) Tuple zurück
-
-        Returns:
-            Shape oder (Shape, History) Tuple wenn return_history=True
-        """
-        try:
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-            from OCP.TopTools import TopTools_ListOfShape
-
-            # Methode 1: Erweiterte Cut-API
-            cut_op = BRepAlgoAPI_Cut()
-
-            # Setze Argumente (shape1 = Basis, shape2 = Tool zum Schneiden)
-            args = TopTools_ListOfShape()
-            args.Append(shape1)
-            cut_op.SetArguments(args)
-
-            tools = TopTools_ListOfShape()
-            tools.Append(shape2)
-            cut_op.SetTools(tools)
-
-            # Parameter für robustes Cut
-            cut_op.SetFuzzyValue(fuzzy_value)
-            cut_op.SetRunParallel(True)
-            cut_op.SetNonDestructive(True)
-
-            # SetGlue NICHT verwenden - verursacht kaputte Bodies bei ~20% der Joins
-            # (siehe boolean_engine_v4.py, ocp_glue_mode Flag)
-
-            # Build
-            cut_op.Build()
-
-            if cut_op.IsDone():
-                result_shape = cut_op.Shape()
-                if return_history:
-                    try:
-                        history = cut_op.History()
-                        return result_shape, history
-                    except Exception as he:
-                        logger.debug(f"History-Extraktion fehlgeschlagen: {he}")
-                        return result_shape, None
-                return result_shape
-
-            # Fallback 1: Ohne GlueShift
-            logger.debug("Versuche Cut Fallback 1 (ohne GlueShift)...")
-            cut_op2 = BRepAlgoAPI_Cut()
-            args2 = TopTools_ListOfShape()
-            args2.Append(shape1)
-            cut_op2.SetArguments(args2)
-            tools2 = TopTools_ListOfShape()
-            tools2.Append(shape2)
-            cut_op2.SetTools(tools2)
-            cut_op2.SetFuzzyValue(fuzzy_value * 10)  # Größere Toleranz
-            cut_op2.Build()
-
-            if cut_op2.IsDone():
-                result_shape = cut_op2.Shape()
-                if return_history:
-                    try:
-                        history = cut_op2.History()
-                        return result_shape, history
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        return result_shape, None
-                return result_shape
-
-            # Fallback 2: Einfacher Konstruktor
-            logger.debug("Versuche Cut Fallback 2 (simple)...")
-            cut_simple = BRepAlgoAPI_Cut(shape1, shape2)
-            cut_simple.Build()
-            if cut_simple.IsDone():
-                result_shape = cut_simple.Shape()
-                if return_history:
-                    try:
-                        history = cut_simple.History()
-                        return result_shape, history
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        return result_shape, None
-                return result_shape
-
-            return (None, None) if return_history else None
-        except Exception as e:
-            logger.error(f"OCP Cut Fehler: {e}")
-            return (None, None) if return_history else None
-
-    def _ocp_common(self, shape1, shape2, fuzzy_value, return_history: bool = False):
-        """
-        OCP Common (Intersect) mit optimalen Parametern.
-
-        Args:
-            shape1: Erstes Shape
-            shape2: Zweites Shape
-            fuzzy_value: Toleranz
-            return_history: Wenn True, gibt (shape, history) Tuple zurück
-
-        Returns:
-            Shape oder (Shape, History) Tuple wenn return_history=True
-        """
-        try:
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
-            from OCP.TopTools import TopTools_ListOfShape
-
-            common_op = BRepAlgoAPI_Common()
-
-            args = TopTools_ListOfShape()
-            args.Append(shape1)
-            common_op.SetArguments(args)
-
-            tools = TopTools_ListOfShape()
-            tools.Append(shape2)
-            common_op.SetTools(tools)
-
-            common_op.SetFuzzyValue(fuzzy_value)
-            common_op.SetRunParallel(True)
-            common_op.SetNonDestructive(True)
-
-            common_op.Build()
-
-            if common_op.IsDone():
-                result_shape = common_op.Shape()
-                if return_history:
-                    try:
-                        history = common_op.History()
-                        return result_shape, history
-                    except Exception as he:
-                        logger.debug(f"History-Extraktion fehlgeschlagen: {he}")
-                        return result_shape, None
-                return result_shape
-
-            # Fallback
-            logger.debug("Versuche Common Fallback...")
-            common_simple = BRepAlgoAPI_Common(shape1, shape2)
-            common_simple.Build()
-            if common_simple.IsDone():
-                result_shape = common_simple.Shape()
-                if return_history:
-                    try:
-                        history = common_simple.History()
-                        return result_shape, history
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        return result_shape, None
-                return result_shape
-
-            return (None, None) if return_history else None
-        except Exception as e:
-            logger.error(f"OCP Common Fehler: {e}")
-            return (None, None) if return_history else None
 
     def _ocp_fillet(self, solid, edges, radius):
         """
@@ -5356,25 +4810,28 @@ class Body:
                                     if is_enabled("tnp_debug_logging"):
                                         logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
-                            # Boolean Operation mit sicherer Helper-Methode
+                            # Boolean Operation über BooleanEngineV4
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
-                            result, success = self._safe_boolean_operation(
+                            bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                                 current_solid, part_geometry, feature.operation
                             )
 
-                            if success:
-                                new_solid = result
+                            if bool_result.is_success:
+                                new_solid = bool_result.value
                                 if is_enabled("extrude_debug"):
                                     logger.debug(f"TNP DEBUG: Boolean {feature.operation} erfolgreich")
-                                
+
+                                # TNP v4.0: History an ShapeNamingService durchreichen
+                                self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
+
                                 # TNP v3.0: Nach Boolean-Operation ALLE Shape-Referenzen aktualisieren
                                 if new_solid is not None:
                                     # 1. Edge-Selektoren für nachfolgende Features aktualisieren
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                                     self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
-                                    
+
                                     # 2. Registry für bereits angewandte Fillet/Chamfer-Features aktualisieren
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte Registry-Update für Features vor Index {i}")
@@ -5387,17 +4844,17 @@ class Body:
                                                 logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                             self._update_registry_for_feature(feat, new_solid)
                                             updated_count += 1
-                                    
+
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
-                                    
+
                                     # 3. DEBUG: Zeige Registry-Status
                                     if hasattr(self, '_shape_registry'):
                                         stats = self._shape_registry.get_stats()
                                         if is_enabled("extrude_debug"):
                                             logger.debug(f"TNP DEBUG: Registry Status = {stats}")
                             else:
-                                logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
+                                logger.warning(f"⚠️ {feature.operation} fehlgeschlagen: {bool_result.message}")
                                 status = "ERROR"
                                 # Behalte current_solid (keine Änderung)
                                 continue
@@ -5488,13 +4945,14 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                     else:
-                        result, success = self._safe_boolean_operation(
+                        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
                         )
-                        if success:
-                            new_solid = result
+                        if bool_result.is_success:
+                            new_solid = bool_result.value
+                            self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
                         else:
-                            logger.warning(f"Revolve Boolean fehlgeschlagen")
+                            logger.warning(f"Revolve Boolean fehlgeschlagen: {bool_result.message}")
                             status = "ERROR"
                             continue
 
@@ -5509,13 +4967,14 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                     else:
-                        result, success = self._safe_boolean_operation(
+                        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
                         )
-                        if success:
-                            new_solid = result
+                        if bool_result.is_success:
+                            new_solid = bool_result.value
+                            self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
                         else:
-                            logger.warning(f"Loft Boolean fehlgeschlagen")
+                            logger.warning(f"Loft Boolean fehlgeschlagen: {bool_result.message}")
                             status = "ERROR"
                             continue
 
@@ -5530,13 +4989,14 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                     else:
-                        result, success = self._safe_boolean_operation(
+                        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
                         )
-                        if success:
-                            new_solid = result
+                        if bool_result.is_success:
+                            new_solid = bool_result.value
+                            self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
                         else:
-                            logger.warning(f"Sweep Boolean fehlgeschlagen")
+                            logger.warning(f"Sweep Boolean fehlgeschlagen: {bool_result.message}")
                             status = "ERROR"
                             continue
 

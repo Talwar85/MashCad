@@ -234,22 +234,7 @@ class ProjectBrowser(QFrame):
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
-        
-        # Header mit Collapse-Button
-        header = QFrame()
-        header.setStyleSheet(f"background: {DesignTokens.COLOR_BG_PANEL.name()}; border-bottom: 1px solid {DesignTokens.COLOR_BORDER.name()};")
-        header.setFixedHeight(28)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(8, 0, 4, 0)
-        header_layout.setSpacing(4)
-        
-        title = QLabel("BROWSER")
-        title.setStyleSheet(f"color: {DesignTokens.COLOR_PRIMARY.name()}; font-weight: bold; font-size: 10px;")
-        header_layout.addWidget(title)
-        header_layout.addStretch()
-        
-        content_layout.addWidget(header)
-        
+
         # Tree Widget - Phase 6: Mit Drag & Drop Support
         self.tree = DraggableTreeWidget()
         self.tree.setHeaderHidden(True)

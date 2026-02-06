@@ -317,18 +317,10 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0,0,0,0)
         left_layout.setSpacing(0)
 
-        # 1. Spalte: Browser (oben) + Tabs [Log | TNP] (unten)
-        browser_log_splitter = QSplitter(Qt.Vertical)
-        browser_log_splitter.setHandleWidth(1)
-
-        self.browser = ProjectBrowser()
-        self.browser.set_document(self.document)
-        browser_log_splitter.addWidget(self.browser)
-
-        # Bottom tabs: Log + TNP Stats
+        # 1. Spalte: Tabs [Browser | Log | TNP]
         from PySide6.QtWidgets import QTabWidget
-        self.bottom_tabs = QTabWidget()
-        self.bottom_tabs.setStyleSheet(f"""
+        self.left_tabs = QTabWidget()
+        self.left_tabs.setStyleSheet(f"""
             QTabWidget::pane {{
                 border: none;
                 background: {DesignTokens.COLOR_BG_PANEL.name()};
@@ -351,19 +343,21 @@ class MainWindow(QMainWindow):
             }}
         """)
 
+        self.browser = ProjectBrowser()
+        self.browser.set_document(self.document)
+
         self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
 
-        self.bottom_tabs.addTab(self.log_panel, "Log")
-        self.bottom_tabs.addTab(self.tnp_stats_panel, "TNP")
-        self.bottom_tabs.setCurrentIndex(0)  # Log default
+        self.left_tabs.addTab(self.browser, "Browser")
+        self.left_tabs.addTab(self.log_panel, "Log")
+        self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
+        self.left_tabs.setCurrentIndex(0)  # Browser default
 
-        browser_log_splitter.addWidget(self.bottom_tabs)
+        # Backwards-compatible alias
+        self.bottom_tabs = self.left_tabs
 
-        browser_log_splitter.setStretchFactor(0, 3)
-        browser_log_splitter.setStretchFactor(1, 1)
-
-        left_layout.addWidget(browser_log_splitter)
+        left_layout.addWidget(self.left_tabs)
         
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
