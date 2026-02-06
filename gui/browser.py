@@ -16,6 +16,7 @@ from loguru import logger
 
 from i18n import tr
 from config.feature_flags import is_enabled
+from gui.design_tokens import DesignTokens
 
 
 class DraggableTreeWidget(QTreeWidget):
@@ -208,12 +209,7 @@ class ProjectBrowser(QFrame):
         self._collapsed = False
         self._expanded_width = 180
         
-        self.setStyleSheet("""
-            QFrame { 
-                background: #1e1e1e; 
-                border: none;
-            }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_browser())
         
         self.document = None
         self.sketch_visibility = {}
@@ -241,14 +237,14 @@ class ProjectBrowser(QFrame):
         
         # Header mit Collapse-Button
         header = QFrame()
-        header.setStyleSheet("background: #2d2d30; border-bottom: 1px solid #3f3f46;")
+        header.setStyleSheet(f"background: {DesignTokens.COLOR_BG_PANEL.name()}; border-bottom: 1px solid {DesignTokens.COLOR_BORDER.name()};")
         header.setFixedHeight(28)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 0, 4, 0)
         header_layout.setSpacing(4)
         
         title = QLabel("BROWSER")
-        title.setStyleSheet("color: #0078d4; font-weight: bold; font-size: 10px;")
+        title.setStyleSheet(f"color: {DesignTokens.COLOR_PRIMARY.name()}; font-weight: bold; font-size: 10px;")
         header_layout.addWidget(title)
         header_layout.addStretch()
         
@@ -259,25 +255,7 @@ class ProjectBrowser(QFrame):
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)  # Multi-Select aktivieren
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background: #1e1e1e;
-                border: none;
-                color: #ccc;
-                font-size: 11px;
-                outline: none;
-            }
-            QTreeWidget::item {
-                padding: 2px 4px;
-                border: none;
-            }
-            QTreeWidget::item:hover {
-                background: #2a2d2e;
-            }
-            QTreeWidget::item:selected {
-                background: transparent;
-            }
-        """)
+        self.tree.setStyleSheet(DesignTokens.stylesheet_browser())
         self.tree.itemClicked.connect(self._on_click)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -295,27 +273,23 @@ class ProjectBrowser(QFrame):
 
         # === ROLLBACK BAR ===
         self.rollback_frame = QFrame()
-        self.rollback_frame.setStyleSheet("background: #2d2d30; border-top: 1px solid #3f3f46;")
+        self.rollback_frame.setStyleSheet(f"background: {DesignTokens.COLOR_BG_PANEL.name()}; border-top: 1px solid {DesignTokens.COLOR_BORDER.name()};")
         self.rollback_frame.setFixedHeight(40)
         self.rollback_frame.setVisible(False)
         rb_layout = QHBoxLayout(self.rollback_frame)
         rb_layout.setContentsMargins(6, 2, 6, 2)
 
         rb_label = QLabel("⏪")
-        rb_label.setStyleSheet("color: #0078d4; font-size: 12px;")
+        rb_label.setStyleSheet(f"color: {DesignTokens.COLOR_PRIMARY.name()}; font-size: 12px;")
         rb_layout.addWidget(rb_label)
 
         self.rollback_slider = QSlider(Qt.Horizontal)
-        self.rollback_slider.setStyleSheet("""
-            QSlider::groove:horizontal { background: #3f3f46; height: 4px; border-radius: 2px; }
-            QSlider::handle:horizontal { background: #0078d4; width: 12px; margin: -4px 0; border-radius: 6px; }
-            QSlider::sub-page:horizontal { background: #0078d4; border-radius: 2px; }
-        """)
+        self.rollback_slider.setStyleSheet(DesignTokens.stylesheet_browser())
         self.rollback_slider.valueChanged.connect(self._on_rollback_changed)
         rb_layout.addWidget(self.rollback_slider)
 
         self.rollback_label = QLabel("")
-        self.rollback_label.setStyleSheet("color: #999; font-size: 10px; min-width: 30px;")
+        self.rollback_label.setStyleSheet(f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; font-size: 10px; min-width: 30px;")
         rb_layout.addWidget(self.rollback_label)
 
         content_layout.addWidget(self.rollback_frame)
@@ -327,14 +301,14 @@ class ProjectBrowser(QFrame):
         # === COLLAPSE BAR (rechts vom Content) ===
         self.collapse_bar = QFrame()
         self.collapse_bar.setFixedWidth(16)
-        self.collapse_bar.setStyleSheet("""
-            QFrame { 
-                background: #2d2d30; 
-                border-left: 1px solid #3f3f46;
-            }
-            QFrame:hover {
-                background: #3e3e42;
-            }
+        self.collapse_bar.setStyleSheet(f"""
+            QFrame {{ 
+                background: {DesignTokens.COLOR_BG_PANEL.name()}; 
+                border-left: 1px solid {DesignTokens.COLOR_BORDER.name()};
+            }}
+            QFrame:hover {{
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
+            }}
         """)
         self.collapse_bar.setCursor(Qt.PointingHandCursor)
         self.collapse_bar.mousePressEvent = self._toggle_collapse
@@ -344,7 +318,7 @@ class ProjectBrowser(QFrame):
         collapse_layout.setAlignment(Qt.AlignCenter)
         
         self.collapse_icon = QLabel("◀")
-        self.collapse_icon.setStyleSheet("color: #888; font-size: 10px;")
+        self.collapse_icon.setStyleSheet(f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; font-size: 10px;")
         collapse_layout.addWidget(self.collapse_icon)
         
         self.main_layout.addWidget(self.collapse_bar)
@@ -630,12 +604,7 @@ class ProjectBrowser(QFrame):
             return
         
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background: #0078d4; }
-            QMenu::separator { height: 1px; background: #3f3f46; margin: 4px 8px; }
-        """)
+        menu.setStyleSheet(DesignTokens.stylesheet_browser())
         
         if data[0] == 'sketch':
             sketch = data[1]
@@ -774,50 +743,7 @@ class ProjectBrowser(QFrame):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setFixedSize(340, 130)
-        dialog.setStyleSheet("""
-            QDialog {
-                background: #2d2d30;
-                border: 1px solid #0078d4;
-                border-radius: 4px;
-            }
-            QLabel {
-                color: #ccc;
-                font-size: 11px;
-            }
-            QLineEdit {
-                background: #1e1e1e;
-                border: 1px solid #3f3f46;
-                border-radius: 3px;
-                color: #fff;
-                padding: 6px 10px;
-                font-size: 12px;
-                selection-background-color: #0078d4;
-            }
-            QLineEdit:focus {
-                border-color: #0078d4;
-            }
-            QPushButton {
-                background: #0e639c;
-                border: none;
-                border-radius: 3px;
-                color: white;
-                padding: 6px 16px;
-                font-size: 11px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background: #1177bb;
-            }
-            QPushButton:pressed {
-                background: #0d5a8c;
-            }
-            QPushButton[text="Cancel"], QPushButton[text="Abbrechen"] {
-                background: #3f3f46;
-            }
-            QPushButton[text="Cancel"]:hover, QPushButton[text="Abbrechen"]:hover {
-                background: #4f4f56;
-            }
-        """)
+        dialog.setStyleSheet(DesignTokens.stylesheet_dialog())
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -944,11 +870,7 @@ class ProjectBrowser(QFrame):
             return None
 
         move_menu = QMenu(tr("Move to Component"), self)
-        move_menu.setStyleSheet("""
-            QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background: #0078d4; }
-        """)
+        move_menu.setStyleSheet(DesignTokens.stylesheet_browser())
 
         for target_comp in available_components:
             # Hierarchie-Indikator (→ zeigt Tiefe)

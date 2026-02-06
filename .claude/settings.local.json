@@ -65,7 +65,15 @@
       "Bash(GIT_SEQUENCE_EDITOR=\"sed -i ''s/^pick 633604f/reword 633604f/''\" git rebase -i 633604f^)",
       "Bash(git stash:*)",
       "Bash(git -C c:LiteCad status)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(del:*)",
+      "Bash(git -C \"c:\\\\LiteCad\" status)",
+      "Bash(git -C \"c:\\\\LiteCad\" diff --stat)",
+      "Bash(git -C \"c:\\\\LiteCad\" log --oneline -5)",
+      "Bash(git -C \"c:\\\\LiteCad\" add config/feature_flags.py modeling/boolean_engine_v4.py modeling/cad_tessellator.py modeling/__init__.py)",
+      "Bash(git -C \"c:\\\\LiteCad\" commit -m \"$\\(cat <<''EOF''\nOCP Feature Audit: Boolean-Robustheit + Adaptive Tessellierung + Export-Sicherheit\n\n5 neue OCP-Features implementiert \\(alle per Feature-Flag steuerbar\\):\n- BOPAlgo_CheckerSI: Self-Intersection Pre-Check vor Booleans\n- BOPAlgo_ArgumentAnalyzer: Boolean-Input Validierung \\(Warnung\\)\n- BRepCheck_Analyzer + ShapeFix_Shape: Post-Boolean Auto-Healing\n- Adaptive Tessellierung: Deflection = 0.1% BBox-Diagonale \\(0.001-0.5mm\\)\n- ShapeAnalysis_FreeBounds: Offene-Kanten-Check vor STL Export\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"c:\\\\LiteCad\" add config/feature_flags.py modeling/boolean_engine_v4.py modeling/__init__.py)",
+      "Bash(git -C \"c:\\\\LiteCad\" commit -m \"$\\(cat <<''EOF''\nOCP Feature Audit Tier 2: Toleranz-Monitoring + TNP v4.0 History-Integration\n\n- Feature #5: ShapeAnalysis_ShapeTolerance nach Boolean-Ops \\(warnt bei >10× Kernel-Toleranz\\)\n- Feature #7: Boolean-History wird jetzt auch an TNP v4.0 ShapeNamingService durchgereicht\n- Neues Feature-Flag: boolean_tolerance_monitoring\n- Plan aktualisiert: Boolean-Refactoring auf BooleanEngineV4 als TODO aufgenommen\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

@@ -11,6 +11,7 @@ from PySide6.QtGui import QFont, QIcon, QKeySequence
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from i18n import tr  # <--- NEU: Import
+from gui.design_tokens import DesignTokens
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -34,29 +35,33 @@ class ToolButton(QToolButton):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setFocusPolicy(Qt.NoFocus)
         
-        self.setStyleSheet("""
-            QToolButton {
-                background-color: #2d2d30;
-                border: 1px solid #3e3e3e;
+        p = DesignTokens.COLOR_PRIMARY.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        self.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {bg};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
                 border-radius: 3px;
-                color: #e0e0e0;
+                color: {txt};
                 font-family: Segoe UI, sans-serif;
                 font-size: 11px;
                 padding: 4px;
-            }
-            QToolButton:hover {
-                background-color: #3e3e42;
+            }}
+            QToolButton:hover {{
+                background-color: {elevated};
                 border-color: #555;
                 color: white;
-            }
-            QToolButton:checked {
-                background-color: #0078d4;
-                border-color: #0078d4;
+            }}
+            QToolButton:checked {{
+                background-color: {p};
+                border-color: {p};
                 color: white;
-            }
-            QToolButton:pressed {
-                background-color: #094771;
-            }
+            }}
+            QToolButton:pressed {{
+                background-color: {DesignTokens.COLOR_ACCENT.name()};
+            }}
         """)
 
 
@@ -75,27 +80,32 @@ class ToolPanel(QFrame):
         self.setMinimumWidth(220)
         # self.setMaximumWidth(220) <--- ENTFERNT
         
-        self.setStyleSheet("""
-            QFrame { 
-                background: #1e1e1e; 
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        self.setStyleSheet(f"""
+            QFrame {{ 
+                background: {bg}; 
                 border: none;
-            }
-            QLabel { color: #ccc; font-size: 11px; font-weight: bold; }
-            QGroupBox { 
-                border: 1px solid #333; 
+            }}
+            QLabel {{ color: {txt}; font-size: 11px; font-weight: bold; }}
+            QGroupBox {{ 
+                border: 1px solid {border}; 
                 border-radius: 2px; 
                 margin-top: 2ex; 
                 font-weight: bold;
                 text-transform: uppercase;
-                color: #888;
+                color: {muted};
                 font-size: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 5px; padding: 0 3px; }
-            QSpinBox, QDoubleSpinBox {
-                background: #2d2d30; border: 1px solid #3a3a3a; color: #ccc;
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 5px; padding: 0 3px; }}
+            QSpinBox, QDoubleSpinBox {{
+                background: {elevated}; border: 1px solid {border}; color: {txt};
                 padding: 4px; border-radius: 2px;
-            }
-            QCheckBox { color: #ccc; font-size: 11px; spacing: 5px; }
+            }}
+            QCheckBox {{ color: {txt}; font-size: 11px; spacing: 5px; }}
         """)
         
         self.buttons = {}
@@ -111,24 +121,25 @@ class ToolPanel(QFrame):
 
         # === SKETCH BEENDEN BUTTON (ganz oben, immer sichtbar) ===
         finish_container = QWidget()
-        finish_container.setStyleSheet("background: #262626;")
+        finish_container.setStyleSheet(f"background: {DesignTokens.COLOR_BG_PANEL.name()};")
         finish_layout = QHBoxLayout(finish_container)
         finish_layout.setContentsMargins(8, 8, 8, 8)
 
         self.btn_finish_sketch = QPushButton("✓ Sketch beenden (Esc)")
-        self.btn_finish_sketch.setStyleSheet("""
-            QPushButton {
-                background: #22c55e;
+        success = DesignTokens.COLOR_SUCCESS.name()
+        self.btn_finish_sketch.setStyleSheet(f"""
+            QPushButton {{
+                background: {success};
                 color: white;
                 border: none;
                 border-radius: 6px;
                 padding: 10px 16px;
                 font-weight: 600;
                 font-size: 13px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background: #16a34a;
-            }
+            }}
         """)
         self.btn_finish_sketch.setCursor(Qt.PointingHandCursor)
         self.btn_finish_sketch.clicked.connect(self.finish_sketch_requested.emit)
@@ -426,35 +437,40 @@ class PropertiesPanel(QFrame):
         super().__init__(parent)
         self.setMinimumWidth(140)
         self.setMaximumWidth(200)
-        self.setStyleSheet("""
-            QFrame { 
-                background: #1e1e1e; 
-                border-left: 1px solid #333; 
-            }
-            QLabel { color: #888; font-size: 9px; }
-            QGroupBox { 
-                color: #666; 
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        self.setStyleSheet(f"""
+            QFrame {{ 
+                background: {bg}; 
+                border-left: 1px solid {border}; 
+            }}
+            QLabel {{ color: {muted}; font-size: 9px; }}
+            QGroupBox {{ 
+                color: {muted}; 
                 font-size: 9px; 
                 font-weight: bold;
-                border: 1px solid #333;
+                border: 1px solid {border};
                 border-radius: 3px;
                 margin-top: 6px;
                 padding: 4px;
                 padding-top: 12px;
-                background: #1e1e1e;
-            }
-            QGroupBox::title {
+                background: {bg};
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 6px;
                 padding: 0 3px;
-            }
-            QDoubleSpinBox, QSpinBox {
-                background: #2d2d30;
-                border: 1px solid #3a3a3a;
-                color: #ccc;
+            }}
+            QDoubleSpinBox, QSpinBox {{
+                background: {elevated};
+                border: 1px solid {border};
+                color: {txt};
                 padding: 2px;
                 border-radius: 2px;
-            }
+            }}
         """)
         
         self._setup_ui()
@@ -467,7 +483,7 @@ class PropertiesPanel(QFrame):
         # Titel
         title = QLabel(tr("PROPERTIES")) # i18n
         title.setFont(QFont("Arial", 9, QFont.Bold))
-        title.setStyleSheet("color: #0078d4; padding: 2px 0; border-bottom: 1px solid #333;")
+        title.setStyleSheet(f"color: {DesignTokens.COLOR_PRIMARY.name()}; padding: 2px 0; border-bottom: 1px solid {DesignTokens.COLOR_BORDER.name()};")
         layout.addWidget(title)
         
         # Info

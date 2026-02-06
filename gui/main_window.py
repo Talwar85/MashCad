@@ -259,56 +259,8 @@ class MainWindow(QMainWindow):
             y_pos += notif.height() + spacing
             
     def _apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow { background: #262626; }
-            QMenuBar { background: #262626; color: #ccc; padding: 2px; border-bottom: 1px solid #333; }
-            QMenuBar::item { padding: 4px 8px; }
-            QMenuBar::item:selected { background: #333; }
-            QMenu { background: #262626; color: #ccc; border: 1px solid #333; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background: #2563eb; }
-            QToolBar {
-                background: #262626;
-                border: none;
-                border-bottom: 1px solid #404040;
-                padding: 0 16px;
-                spacing: 4px;
-                min-height: 56px;
-                max-height: 56px;
-            }
-            QToolBar QToolButton {
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #d4d4d4;
-                padding: 8px;
-                font-size: 12px;
-            }
-            QToolBar QToolButton:hover {
-                background: #404040;
-            }
-            QToolBar QToolButton:pressed, QToolBar QToolButton:checked {
-                background: #2563eb;
-                color: white;
-            }
-            QSplitter::handle {
-                background: #333;
-            }
-            QSplitter::handle:horizontal {
-                width: 1px;
-            }
-            QSplitter::handle:vertical {
-                height: 1px;
-            }
-            QSplitter::handle:hover {
-                background: #2563eb;
-            }
-            QStatusBar { 
-                background: #262626; 
-                color: #888; 
-                border-top: 1px solid #333;
-            }
-        """)
+        from gui.design_tokens import DesignTokens
+        self.setStyleSheet(DesignTokens.stylesheet_main())
         
     def _calculate_plane_axes(self, normal_vec):
         """
@@ -337,8 +289,9 @@ class MainWindow(QMainWindow):
         return tuple(x_dir), tuple(y_dir)
         
     def _create_ui(self):
+        from gui.design_tokens import DesignTokens
         central = QWidget()
-        central.setStyleSheet("background-color: #262626;")
+        central.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         self.setCentralWidget(central)
 
         # Haupt-Layout: Vertikal (Content oben, StatusBar unten)
@@ -348,7 +301,7 @@ class MainWindow(QMainWindow):
 
         # Content-Container für horizontales Layout
         content_widget = QWidget()
-        content_widget.setStyleSheet("background-color: #262626;")
+        content_widget.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         layout = QHBoxLayout(content_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -375,27 +328,27 @@ class MainWindow(QMainWindow):
         # Bottom tabs: Log + TNP Stats
         from PySide6.QtWidgets import QTabWidget
         self.bottom_tabs = QTabWidget()
-        self.bottom_tabs.setStyleSheet("""
-            QTabWidget::pane {
+        self.bottom_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
                 border: none;
-                background: #262626;
-            }
-            QTabBar::tab {
-                background: #262626;
-                color: #999;
+                background: {DesignTokens.COLOR_BG_PANEL.name()};
+            }}
+            QTabBar::tab {{
+                background: {DesignTokens.COLOR_BG_PANEL.name()};
+                color: {DesignTokens.COLOR_TEXT_MUTED.name()};
                 border: none;
                 padding: 6px 14px;
                 font-size: 11px;
                 font-family: 'Segoe UI';
-            }
-            QTabBar::tab:selected {
-                color: #ddd;
-                border-bottom: 2px solid #2563eb;
-            }
-            QTabBar::tab:hover {
-                color: #ccc;
-                background: #2d2d30;
-            }
+            }}
+            QTabBar::tab:selected {{
+                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                border-bottom: 2px solid {DesignTokens.COLOR_PRIMARY.name()};
+            }}
+            QTabBar::tab:hover {{
+                color: {DesignTokens.COLOR_TEXT_SECONDARY.name()};
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
+            }}
         """)
 
         self.log_panel = LogPanel()
@@ -415,7 +368,7 @@ class MainWindow(QMainWindow):
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
         self.tool_stack.setMinimumWidth(220)
-        self.tool_stack.setStyleSheet("background-color: #262626;")
+        self.tool_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
 
         # PERFORMANCE: TransformPanel wird später bei line 466 erstellt
         # Doppelte Erstellung entfernt (Memory Leak verhindert)
@@ -442,7 +395,7 @@ class MainWindow(QMainWindow):
         
         # === MITTE: Viewport / Sketch Editor ===
         self.center_stack = QStackedWidget()
-        self.center_stack.setStyleSheet("background-color: #262626;")
+        self.center_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         
         self.viewport_3d = PyVistaViewport()
         self.center_stack.addWidget(self.viewport_3d)
@@ -464,7 +417,7 @@ class MainWindow(QMainWindow):
         self.right_stack = QStackedWidget()
         self.right_stack.setMinimumWidth(140)
         self.right_stack.setMaximumWidth(200)
-        self.right_stack.setStyleSheet("background-color: #262626;")
+        self.right_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         
         # 3D-Properties (Index 0)
         self.body_properties = BodyPropertiesPanel()

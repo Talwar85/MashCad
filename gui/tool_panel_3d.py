@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QToolButton, Q
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from gui.widgets.collapsible_section import CollapsibleSection
+from gui.design_tokens import DesignTokens
 
 
 class ClickableHoverWidget(QFrame):
@@ -19,7 +20,7 @@ class ClickableHoverWidget(QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
     def _update_style(self):
-        bg = "#404040" if self._hovered else "transparent"
+        bg = DesignTokens.COLOR_BG_ELEVATED.name() if self._hovered else "transparent"
         self.setStyleSheet(f"QFrame {{ background: {bg}; border-radius: 4px; }}")
 
     def enterEvent(self, event):
@@ -42,29 +43,33 @@ class ToolPanel3D(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(300)  # Breiter für bessere Lesbarkeit
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #262626;
-                color: #d4d4d4;
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        p = DesignTokens.COLOR_PRIMARY.name()
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {bg};
+                color: {txt};
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 13px;
-            }
-            QToolButton {
+            }}
+            QToolButton {{
                 background: transparent;
                 border: none;
                 border-radius: 4px;
-                color: #d4d4d4;
+                color: {txt};
                 padding: 8px 16px;
                 text-align: left;
                 font-size: 13px;
-            }
-            QToolButton:hover {
-                background: #404040;
-            }
-            QToolButton:pressed {
-                background: #2563eb;
+            }}
+            QToolButton:hover {{
+                background: {elevated};
+            }}
+            QToolButton:pressed {{
+                background: {p};
                 color: white;
-            }
+            }}
         """)
         self._setup_ui()
         

@@ -5034,12 +5034,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background: #2d2d30; color: #ddd; border: 1px solid #3f3f46; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background: #094771; }
-            QMenu::separator { background: #3f3f46; height: 1px; margin: 4px 8px; }
-        """)
+        menu.setStyleSheet(DesignTokens.stylesheet_sketch())
 
         has_selection = self.selected_lines or self.selected_circles or self.selected_arcs
 

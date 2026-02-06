@@ -5,6 +5,7 @@ Moderne Statusleiste nach Figma-Design mit Koordinaten, Tool-Info, Grid und Zoom
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Qt
+from gui.design_tokens import DesignTokens
 
 
 class MashCadStatusBar(QWidget):
@@ -13,16 +14,19 @@ class MashCadStatusBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(32)
-        self.setStyleSheet("""
-            QWidget {
-                background: #262626;
-                border-top: 1px solid #404040;
-            }
-            QLabel {
-                color: #a3a3a3;
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        self.setStyleSheet(f"""
+            QWidget {{
+                background: {bg};
+                border-top: 1px solid {border};
+            }}
+            QLabel {{
+                color: {muted};
                 font-size: 11px;
                 font-family: 'Segoe UI', sans-serif;
-            }
+            }}
         """)
 
         layout = QHBoxLayout(self)
@@ -36,7 +40,7 @@ class MashCadStatusBar(QWidget):
         left_layout.setSpacing(6)
 
         self.status_dot = QLabel("\u25cf")  # ●
-        self.status_dot.setStyleSheet("color: #22c55e; font-size: 10px;")
+        self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 10px;")
         left_layout.addWidget(self.status_dot)
 
         self.status_text = QLabel("Bereit")
@@ -55,7 +59,7 @@ class MashCadStatusBar(QWidget):
 
         # === Center: Coordinates ===
         self.coord_label = QLabel("X: 0.00   Y: 0.00   Z: 0.00")
-        self.coord_label.setStyleSheet("color: #d4d4d4; font-family: 'Consolas', monospace;")
+        self.coord_label.setStyleSheet(f"color: {DesignTokens.COLOR_TEXT_SECONDARY.name()}; font-family: 'Consolas', monospace;")
         layout.addWidget(self.coord_label)
 
         layout.addStretch()
@@ -73,11 +77,13 @@ class MashCadStatusBar(QWidget):
 
         # DOF Badge (nur im Sketch-Modus sichtbar)
         self.dof_badge = QLabel("")
-        self.dof_badge.setStyleSheet("""
-            background: #404040;
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_SECONDARY.name()
+        self.dof_badge.setStyleSheet(f"""
+            background: {elevated};
             border-radius: 4px;
             padding: 2px 8px;
-            color: #d4d4d4;
+            color: {txt};
         """)
         self.dof_badge.setVisible(False)
         layout.addWidget(self.dof_badge)
@@ -87,11 +93,11 @@ class MashCadStatusBar(QWidget):
         layout.addWidget(self._dof_separator)
 
         self.zoom_badge = QLabel("100%")
-        self.zoom_badge.setStyleSheet("""
-            background: #404040;
+        self.zoom_badge.setStyleSheet(f"""
+            background: {elevated};
             border-radius: 4px;
             padding: 2px 8px;
-            color: #d4d4d4;
+            color: {txt};
         """)
         layout.addWidget(self.zoom_badge)
 
@@ -101,7 +107,7 @@ class MashCadStatusBar(QWidget):
         sep.setFrameShape(QFrame.VLine)
         sep.setFixedWidth(1)
         sep.setFixedHeight(16)
-        sep.setStyleSheet("background: #404040;")
+        sep.setStyleSheet(f"background: {DesignTokens.COLOR_BORDER.name()};")
         return sep
 
     def update_coordinates(self, x: float, y: float, z: float):
@@ -125,9 +131,9 @@ class MashCadStatusBar(QWidget):
         """Setzt den Status-Text und -Farbe."""
         self.status_text.setText(status)
         if is_error:
-            self.status_dot.setStyleSheet("color: #ef4444; font-size: 10px;")
+            self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 10px;")
         else:
-            self.status_dot.setStyleSheet("color: #22c55e; font-size: 10px;")
+            self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 10px;")
 
     def set_grid(self, grid_size: float):
         """Setzt die Grid-Anzeige."""
@@ -154,27 +160,27 @@ class MashCadStatusBar(QWidget):
         if dof < 0:
             # Fehler oder unbekannt
             self.dof_badge.setText("DOF: ?")
-            self.dof_badge.setStyleSheet("""
-                background: #404040;
+            self.dof_badge.setStyleSheet(f"""
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
                 border-radius: 4px;
                 padding: 2px 8px;
-                color: #a3a3a3;
+                color: {DesignTokens.COLOR_TEXT_MUTED.name()};
             """)
         elif dof == 0:
             # Fully Constrained - Grün
             self.dof_badge.setText("Fully Constrained")
-            self.dof_badge.setStyleSheet("""
-                background: #166534;
+            self.dof_badge.setStyleSheet(f"""
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
                 border-radius: 4px;
                 padding: 2px 8px;
-                color: #22c55e;
+                color: {DesignTokens.COLOR_SUCCESS.name()};
             """)
         else:
             # Under-Constrained - Gelb/Orange
             self.dof_badge.setText(f"DOF: {dof}")
-            self.dof_badge.setStyleSheet("""
-                background: #854d0e;
+            self.dof_badge.setStyleSheet(f"""
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
                 border-radius: 4px;
                 padding: 2px 8px;
-                color: #eab308;
+                color: #eab308;  /* Gelb für Under-Constrained */
             """)

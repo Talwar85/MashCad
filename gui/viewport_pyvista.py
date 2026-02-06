@@ -22,6 +22,7 @@ from gui.viewport.brep_cleanup_mixin import BRepCleanupMixin
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 3
+from gui.design_tokens import DesignTokens  # NEU: Single Source of Truth
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
@@ -61,19 +62,21 @@ class OverlayHomeButton(QToolButton):
         self.setFixedSize(32, 32)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Standardansicht (Home)")
-        self.setStyleSheet("""
-            QToolButton {
-                background-color: rgba(60, 60, 60, 180);
-                color: #e0e0e0;
-                border: 1px solid rgba(100, 100, 100, 100);
+        p = DesignTokens.COLOR_PRIMARY.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        self.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {elevated};
+                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
                 border-radius: 4px;
                 font-size: 16px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 120, 212, 230);
-                border: 1px solid #0078d4;
+            }}
+            QToolButton:hover {{
+                background-color: {p};
+                border: 1px solid {p};
                 color: white;
-            }
+            }}
         """)
 
 
@@ -120,7 +123,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.transform_state = None
 
         # Dunkler Hintergrund für das Widget selbst (Figma neutral-900)
-        self.setStyleSheet("background-color: #171717;")
+        self.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_CANVAS.name()};")
         self.setAutoFillBackground(True)
 
         self._setup_ui()
@@ -348,12 +351,14 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         """Floating selection filter toolbar (Figma-Style) at top-center of viewport."""
         from PySide6.QtWidgets import QPushButton, QHBoxLayout
         self._filter_bar = QFrame(self)
-        self._filter_bar.setStyleSheet("""
-            QFrame {
-                background: rgba(38, 38, 38, 0.95);
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        self._filter_bar.setStyleSheet(f"""
+            QFrame {{
+                background: {bg};
                 border-radius: 6px;
-                border: 1px solid #404040;
-            }
+                border: 1px solid {border};
+            }}
         """)
         bar_layout = QHBoxLayout(self._filter_bar)
         bar_layout.setContentsMargins(6, 4, 6, 4)
@@ -373,26 +378,30 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(key == "ALL")  # ALL ist default
-            btn.setStyleSheet("""
-                QPushButton {
+            elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+            border = DesignTokens.COLOR_BORDER.name()
+            p = DesignTokens.COLOR_PRIMARY.name()
+            txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+            btn.setStyleSheet(f"""
+                QPushButton {{
                     background: transparent;
-                    color: #d4d4d4;
-                    border: 1px solid #404040;
+                    color: {txt};
+                    border: 1px solid {border};
                     border-radius: 4px;
                     font-size: 12px;
                     font-family: 'Segoe UI', sans-serif;
                     padding: 6px 12px;
                     min-width: 70px;
-                }
-                QPushButton:hover {
-                    background: #404040;
+                }}
+                QPushButton:hover {{
+                    background: {elevated};
                     border-color: #525252;
-                }
-                QPushButton:checked {
-                    background: #2563eb;
-                    border-color: #2563eb;
+                }}
+                QPushButton:checked {{
+                    background: {p};
+                    border-color: {p};
                     color: white;
-                }
+                }}
             """)
             btn.clicked.connect(lambda checked, k=key: self._set_selection_filter(k))
             bar_layout.addWidget(btn)
@@ -474,7 +483,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         
         # QtInteractor erstellen
         self.plotter = QtInteractor(self)
-        self.plotter.interactor.setStyleSheet("background-color: #262626;")
+        self.plotter.interactor.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         self.main_layout.addWidget(self.plotter.interactor)
         
         # --- PERFORMANCE & FIX START ---
@@ -6386,16 +6395,17 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # Erstelle neues Label
         self._numeric_overlay = QLabel(f"Value: {text}", self)
-        self._numeric_overlay.setStyleSheet("""
-            QLabel {
-                background: rgba(0, 120, 212, 220);
+        p = DesignTokens.COLOR_PRIMARY.name()
+        self._numeric_overlay.setStyleSheet(f"""
+            QLabel {{
+                background: {p};
                 color: white;
                 padding: 8px 12px;
                 border-radius: 6px;
                 font-size: 14px;
                 font-weight: bold;
                 border: 2px solid rgba(255, 255, 255, 100);
-            }
+            }}
         """)
         self._numeric_overlay.setWindowFlags(Qt.ToolTip)  # Bleibt über allem
         self._numeric_overlay.adjustSize()

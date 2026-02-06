@@ -54,74 +54,9 @@ class SurfaceTexturePanel(QFrame):
         self.hide()
 
     def _setup_style(self):
-        """Konsistenter Style wie andere Panels."""
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel {
-                color: #fff;
-                border: none;
-                font-size: 12px;
-            }
-            QComboBox {
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px;
-                min-width: 120px;
-            }
-            QComboBox:hover { border-color: #0078d4; }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QDoubleSpinBox, QSpinBox {
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
-                font-weight: bold;
-            }
-            QCheckBox {
-                color: #fff;
-                border: none;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QPushButton {
-                background: #444;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background: #555; }
-            QPushButton#applyBtn {
-                background: #0078d4;
-                border: none;
-            }
-            QPushButton#applyBtn:hover { background: #1084d8; }
-            QGroupBox {
-                color: #aaa;
-                border: 1px solid #444;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
+        """Konsistenter Style via DesignTokens — Single Source of Truth."""
+        from gui.design_tokens import DesignTokens
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
     def _setup_ui(self):
         """Erstellt die UI-Elemente."""

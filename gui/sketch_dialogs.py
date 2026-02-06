@@ -139,6 +139,12 @@ class DimensionInput(QFrame):
                         padding: 2px 4px; min-width: 70px;
                     }}
                     QComboBox::drop-down {{ border: none; }}
+                    QComboBox QAbstractItemView {{
+                        background: {DesignTokens.COLOR_BG_INPUT.name()}; 
+                        color: {DesignTokens.COLOR_TEXT_PRIMARY.name()}; 
+                        selection-background-color: {DesignTokens.COLOR_ACCENT.name()};
+                        border: 1px solid {DesignTokens.COLOR_GRID_MAJOR.name()};
+                    }}
                 """)
                 widget.currentTextChanged.connect(lambda t, k=key: self.choice_changed.emit(k, t))
                 

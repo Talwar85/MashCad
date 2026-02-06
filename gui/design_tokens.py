@@ -209,6 +209,398 @@ class DesignTokens:
             }}
         """
 
+    @staticmethod
+    def stylesheet_panel():
+        """Stylesheet für Input-Panels (Fillet, Chamfer, Shell, etc.) — konsistent mit Dialogen."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        ph = DesignTokens.COLOR_PRIMARY_HOVER.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        inp = DesignTokens.COLOR_BG_INPUT.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        return f"""
+            QFrame {{
+                background: #2d2d30;
+                border: 2px solid #0078d4;
+                border-radius: 8px;
+            }}
+            QLabel {{
+                color: #fff;
+                border: none;
+                font-size: 12px;
+            }}
+            QComboBox {{
+                background: #1e1e1e;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                min-width: 120px;
+            }}
+            QComboBox:hover {{ border-color: #0078d4; }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: #1e1e1e;
+                color: #fff;
+                border: 1px solid #555;
+                selection-background-color: #0078d4;
+                selection-color: #fff;
+            }}
+            QDoubleSpinBox, QSpinBox {{
+                background: #1e1e1e;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px;
+                font-weight: bold;
+            }}
+            QCheckBox {{
+                color: #fff;
+                border: none;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+            }}
+            QPushButton {{
+                background: #444;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background: #555; }}
+            QPushButton#applyBtn {{
+                background: #0078d4;
+                border: none;
+            }}
+            QPushButton#applyBtn:hover {{ background: #1084d8; }}
+            QGroupBox {{
+                color: #aaa;
+                border: 1px solid #444;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_browser():
+        """Stylesheet für Browser (links) — Tree, Header, Slider."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        return f"""
+            QFrame {{
+                background: {bg};
+                border: none;
+            }}
+            QTreeWidget {{
+                background: {bg};
+                color: {txt};
+                border: none;
+                outline: none;
+                padding: 5px;
+            }}
+            QTreeWidget::item {{
+                padding: 4px 8px;
+                border-radius: 4px;
+            }}
+            QTreeWidget::item:selected {{
+                background: {p};
+                color: white;
+            }}
+            QTreeWidget::item:hover {{
+                background: {elevated};
+            }}
+            QHeaderView::section {{
+                background: {bg};
+                color: {muted};
+                padding: 8px;
+                border: none;
+                border-bottom: 1px solid {border};
+                font-weight: bold;
+                font-size: 10px;
+                text-transform: uppercase;
+            }}
+            QSlider {{
+                background: transparent;
+            }}
+            QSlider::groove:horizontal {{
+                background: {border};
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {p};
+                width: 16px;
+                height: 16px;
+                margin: -6px 0;
+                border-radius: 8px;
+            }}
+            QMenu {{
+                background: {elevated};
+                color: {txt};
+                border: 1px solid {border};
+                padding: 5px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background: {p};
+            }}
+            QLabel {{
+                color: {txt};
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_tool_panel():
+        """Stylesheet für Tool Panels (rechts) — Sketch und 3D."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        return f"""
+            QFrame {{
+                background: {bg};
+                border: none;
+            }}
+            QWidget {{
+                background: {bg};
+            }}
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel {{
+                color: {txt};
+                font-size: 13px;
+            }}
+            QPushButton {{
+                background: {elevated};
+                color: {txt};
+                border: 1px solid {border};
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background: #525252;
+                border-color: {p};
+            }}
+            QPushButton:pressed {{
+                background: {p};
+            }}
+            QPushButton#finishBtn {{
+                background: #4CAF50;
+                color: white;
+                font-weight: bold;
+            }}
+            QPushButton#finishBtn:hover {{
+                background: #45a049;
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_viewport():
+        """Stylesheet für Viewport-Overlays und UI-Elemente."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        bg = DesignTokens.COLOR_BG_CANVAS.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        return f"""
+            QFrame {{
+                background: {elevated};
+                border: 1px solid #555;
+                border-radius: 6px;
+            }}
+            QFrame#filterBar {{
+                background: #2d2d30;
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+            }}
+            QPushButton {{
+                background: transparent;
+                color: {muted};
+                border: none;
+                padding: 6px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                color: {txt};
+                background: rgba(255,255,255,0.1);
+            }}
+            QPushButton:checked {{
+                color: {p};
+                background: rgba(37,99,235,0.2);
+            }}
+            QLabel {{
+                color: {txt};
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_sketch():
+        """Stylesheet für Sketch-Editor UI-Elemente."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        canvas = DesignTokens.COLOR_BG_CANVAS.name()
+        panel = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        return f"""
+            QWidget {{
+                background: {canvas};
+            }}
+            QMenu {{
+                background: {elevated};
+                color: {txt};
+                border: 1px solid #555;
+                padding: 5px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background: {p};
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_widget():
+        """Generisches Stylesheet für kleine Widgets (Notifications, Status, etc.)."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        success = DesignTokens.COLOR_SUCCESS.name()
+        error = DesignTokens.COLOR_ERROR.name()
+        return f"""
+            QFrame {{
+                background: {bg};
+                border-radius: 6px;
+            }}
+            QFrame#notification {{
+                background: {elevated};
+                border: 1px solid #555;
+                border-radius: 8px;
+            }}
+            QFrame#notification.success {{
+                border-left: 4px solid {success};
+            }}
+            QFrame#notification.error {{
+                border-left: 4px solid {error};
+            }}
+            QLabel {{
+                color: {txt};
+            }}
+            QLabel#muted {{
+                color: {muted};
+            }}
+        """
+
+    @staticmethod
+    def stylesheet_main():
+        """Stylesheet für MainWindow (Menubar, Toolbar, Splitter, StatusBar)."""
+        p = DesignTokens.COLOR_PRIMARY.name()
+        ph = DesignTokens.COLOR_PRIMARY_HOVER.name()
+        bg = DesignTokens.COLOR_BG_PANEL.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
+        muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        border = DesignTokens.COLOR_BORDER.name()
+        return f"""
+            QMainWindow {{ background: {bg}; }}
+            QMenuBar {{ 
+                background: {bg}; 
+                color: {txt}; 
+                padding: 2px; 
+                border-bottom: 1px solid {border}; 
+            }}
+            QMenuBar::item {{ padding: 4px 8px; }}
+            QMenuBar::item:selected {{ background: {elevated}; }}
+            QMenu {{ 
+                background: {bg}; 
+                color: {txt}; 
+                border: 1px solid {border}; 
+            }}
+            QMenu::item {{ padding: 6px 20px; }}
+            QMenu::item:selected {{ background: {p}; }}
+            QToolBar {{
+                background: {bg};
+                border: none;
+                border-bottom: 1px solid {border};
+                padding: 0 16px;
+                spacing: 4px;
+                min-height: 56px;
+                max-height: 56px;
+            }}
+            QToolBar QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                color: {txt};
+                padding: 8px;
+                font-size: 12px;
+            }}
+            QToolBar QToolButton:hover {{
+                background: {elevated};
+            }}
+            QToolBar QToolButton:pressed, QToolBar QToolButton:checked {{
+                background: {p};
+                color: white;
+            }}
+            QSplitter::handle {{
+                background: {border};
+            }}
+            QSplitter::handle:horizontal {{
+                width: 1px;
+            }}
+            QSplitter::handle:vertical {{
+                height: 1px;
+            }}
+            QSplitter::handle:hover {{
+                background: {p};
+            }}
+            QStatusBar {{ 
+                background: {bg}; 
+                color: {muted}; 
+                border-top: 1px solid {border};
+            }}
+        """
+
+    @staticmethod
+    def color_style(color_attr, **kwargs):
+        """Erzeugt inline Style-String für eine einzelne Farbe mit optionalen Properties.
+        
+        Beispiel: DesignTokens.color_style('COLOR_PRIMARY', font_size='12px', font_weight='bold')
+        """
+        color = getattr(DesignTokens, color_attr).name()
+        props = {'color': color}
+        props.update(kwargs)
+        return '; '.join(f"{k.replace('_', '-')}: {v}" for k, v in props.items())
+
 
 # =============================================================================
 # Decimal Input Utilities - Für konsistente Zahleingabe mit Komma und Punkt

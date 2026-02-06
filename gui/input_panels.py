@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
 from PySide6.QtGui import QFont, QKeyEvent
 
 from i18n import tr
+from gui.design_tokens import DesignTokens  # NEU: Single Source of Truth für Styling
 
 # --- Hilfsklasse für Enter-Taste ---
 class ActionSpinBox(QDoubleSpinBox):
@@ -62,57 +63,8 @@ class ExtrudeInputPanel(QFrame):
         self.setMinimumWidth(560)  # Breiter für bessere Lesbarkeit
         self.setFixedHeight(65)
 
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel {
-                color: #ffffff;
-                font-weight: bold;
-                border: none;
-                font-size: 12px;
-            }
-            QComboBox {
-                background: #1e1e1e;
-                border: 1px solid #555;
-                border-radius: 4px;
-                color: #fff;
-                padding: 5px 8px;
-                min-width: 95px;
-                font-size: 12px;
-            }
-            QComboBox::drop-down { border: none; width: 18px; }
-            QComboBox QAbstractItemView {
-                background: #1e1e1e;
-                color: #fff;
-                selection-background-color: #0078d4;
-                border: 1px solid #555;
-                padding: 4px;
-                font-size: 12px;
-            }
-            QDoubleSpinBox {
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px 6px;
-                font-weight: bold;
-                min-width: 90px;
-                font-size: 13px;
-            }
-            QPushButton {
-                background: #444;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px 14px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-        """)
+        # DesignTokens für konsistentes Styling
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -373,23 +325,7 @@ class FilletChamferPanel(QFrame):
         self.setMinimumWidth(420)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px; font-weight: bold;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -550,23 +486,7 @@ class ShellInputPanel(QFrame):
         self.setMinimumWidth(450)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px; font-weight: bold;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -751,64 +671,7 @@ class SweepInputPanel(QFrame):
         self.setMinimumWidth(700)
         self.setFixedHeight(80)  # Höher für bessere Lesbarkeit
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel {
-                color: #fff;
-                font-weight: bold;
-                border: none;
-                font-size: 13px;
-            }
-            QComboBox {
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-weight: bold;
-                font-size: 12px;
-                min-width: 100px;
-            }
-            QComboBox::drop-down { border: none; width: 20px; }
-            QComboBox QAbstractItemView {
-                background: #1e1e1e;
-                color: #fff;
-                selection-background-color: #0078d4;
-                border: 1px solid #555;
-                padding: 4px;
-                font-size: 12px;
-            }
-            QCheckBox {
-                color: #fff;
-                font-size: 12px;
-                spacing: 6px;
-            }
-            QCheckBox::indicator { width: 18px; height: 18px; }
-            QCheckBox::indicator:unchecked { background: #1e1e1e; border: 1px solid #555; border-radius: 3px; }
-            QCheckBox::indicator:checked { background: #0078d4; border: 1px solid #0078d4; border-radius: 3px; }
-            QLineEdit {
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px 8px;
-                font-size: 12px;
-            }
-            QPushButton {
-                background: #444;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
@@ -1157,33 +1020,7 @@ class LoftInputPanel(QFrame):
         self.setMinimumWidth(480)
         self.setFixedHeight(80)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QComboBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 4px; font-weight: bold; font-size: 12px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView { background: #1e1e1e; color: #fff; selection-background-color: #0078d4; }
-            QCheckBox { color: #fff; font-size: 12px; }
-            QCheckBox::indicator { width: 16px; height: 16px; }
-            QCheckBox::indicator:unchecked { background: #1e1e1e; border: 1px solid #555; border-radius: 3px; }
-            QCheckBox::indicator:checked { background: #0078d4; border: 1px solid #0078d4; border-radius: 3px; }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px; font-weight: bold;
-            }
-            QPushButton:hover { background: #555; }
-            QListWidget {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; font-size: 10px;
-            }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 5, 10, 5)
@@ -1413,27 +1250,7 @@ class TransformPanel(QFrame):
         self.setMinimumWidth(520)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #ffffff; font-weight: bold; border: none; font-size: 12px; }
-            QComboBox {
-                background: #1e1e1e; border: 1px solid #555;
-                border-radius: 4px; color: #fff; padding: 4px; min-width: 100px;
-            }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 4px; font-weight: bold; min-width: 100px; font-size: 13px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -1790,28 +1607,7 @@ class RevolveInputPanel(QFrame):
         self.setMinimumWidth(580)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QComboBox {
-                background: #1e1e1e; border: 1px solid #555;
-                border-radius: 4px; color: #fff; padding: 4px; min-width: 110px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; }
-            QPushButton:checked { background: #0078d4; border-color: #0078d4; color: #fff; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -1971,27 +1767,7 @@ class OffsetPlaneInputPanel(QFrame):
         self.setMinimumWidth(450)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #bb88dd;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QLineEdit {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 4px; font-size: 12px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px; font-weight: bold;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -2087,27 +1863,7 @@ class HoleInputPanel(QFrame):
         self.setMinimumWidth(560)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #ff8800;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QComboBox {
-                background: #1e1e1e; border: 1px solid #555;
-                border-radius: 4px; color: #fff; padding: 4px; min-width: 110px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -2233,24 +1989,7 @@ class DraftInputPanel(QFrame):
         self.setMinimumWidth(520)
         self.setFixedHeight(75)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #e8a030;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-            QPushButton:checked { background: #e8a030; color: #000; border-color: #e8a030; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -2388,6 +2127,9 @@ class SplitInputPanel(QFrame):
             QComboBox {
                 background: #1e1e1e; color: #fff; border: 1px solid #555;
                 border-radius: 4px; padding: 4px; font-size: 12px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1e1e1e; color: #fff; selection-background-color: #0078d4; border: 1px solid #555;
             }
         """)
 
@@ -2669,6 +2411,9 @@ class PatternInputPanel(QFrame):
             QComboBox {
                 background: #1e1e1e; color: #fff; border: 1px solid #555;
                 border-radius: 4px; padding: 3px; min-width: 60px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1e1e1e; color: #fff; selection-background-color: #0078d4; border: 1px solid #555;
             }
             QPushButton {
                 background: #444; color: #fff; border: 1px solid #555;
