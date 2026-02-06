@@ -4000,7 +4000,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
             cell_ids.append(i)
 
-        logger.debug(f"Detector-Face → {len(cell_ids)} Dreiecke gefunden (Normal={face_normal}, Origin={face_origin})")
+        logger.trace(f"Detector-Face → {len(cell_ids)} Dreiecke gefunden (Normal={face_normal}, Origin={face_origin})")
         return cell_ids
 
     def _detect_brep_faces_for_texture(self, body_id: str):
@@ -5813,9 +5813,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # OPTIMIERUNG: O(1) Lookup mit gecachter Map
                 body_id = self._get_body_id_for_actor(actor)
 
-                # Debug: Zeige Hover-Status (nur bei Änderungen loggen um Spam zu reduzieren)
+                # Debug: Zeige Hover-Status nur bei TRACE level (vermeidet Log-Spam)
                 if self.texture_face_mode and body_id is not None:
-                    logger.debug(f"Hover: cell_id={cell_id}, body_id={body_id}")
+                    logger.trace(f"Hover: cell_id={cell_id}, body_id={body_id}")
 
                 if body_id is not None:
                     normal = cell_picker.GetPickNormal()

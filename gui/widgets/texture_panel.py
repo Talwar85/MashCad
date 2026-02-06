@@ -41,8 +41,8 @@ class SurfaceTexturePanel(QFrame):
         super().__init__(parent)
         self._face_count = 0
 
-        self.setMinimumWidth(420)
-        self.setMinimumHeight(400)
+        self.setMinimumWidth(520)
+        self.setMinimumHeight(480)
 
         self._setup_style()
         self._setup_ui()
@@ -162,6 +162,7 @@ class SurfaceTexturePanel(QFrame):
         params_group = QGroupBox(tr("Parameters"))
         params_layout = QFormLayout(params_group)
         params_layout.setSpacing(8)
+        params_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         # Scale
         self.scale_spin = QDoubleSpinBox()
@@ -169,6 +170,7 @@ class SurfaceTexturePanel(QFrame):
         self.scale_spin.setValue(2.0)
         self.scale_spin.setSuffix(" mm")
         self.scale_spin.setDecimals(1)
+        self.scale_spin.setMinimumWidth(120)
         self.scale_spin.valueChanged.connect(self._emit_preview)
         params_layout.addRow(tr("Scale:"), self.scale_spin)
 
@@ -178,6 +180,7 @@ class SurfaceTexturePanel(QFrame):
         self.depth_spin.setValue(1.0)
         self.depth_spin.setSuffix(" mm")
         self.depth_spin.setDecimals(2)
+        self.depth_spin.setMinimumWidth(120)
         self.depth_spin.valueChanged.connect(self._emit_preview)
         params_layout.addRow(tr("Depth:"), self.depth_spin)
 
@@ -187,6 +190,7 @@ class SurfaceTexturePanel(QFrame):
         self.rotation_spin.setValue(0)
         self.rotation_spin.setSuffix(" deg")
         self.rotation_spin.setDecimals(0)
+        self.rotation_spin.setMinimumWidth(120)
         self.rotation_spin.valueChanged.connect(self._emit_preview)
         params_layout.addRow(tr("Rotation:"), self.rotation_spin)
 
@@ -206,7 +210,7 @@ class SurfaceTexturePanel(QFrame):
 
         # === Type-Specific Parameters (Stacked Widget) ===
         self.type_params_stack = QStackedWidget()
-        self.type_params_stack.setMinimumHeight(120)  # Mindesthöhe für Type-Parameter
+        self.type_params_stack.setMinimumHeight(180)  # Mindesthöhe für Type-Parameter
         self._setup_type_params()
         main_layout.addWidget(self.type_params_stack)
         main_layout.addStretch()  # Stretch damit Buttons unten bleiben
@@ -237,15 +241,19 @@ class SurfaceTexturePanel(QFrame):
         # Ripple
         ripple_widget = QWidget()
         ripple_layout = QFormLayout(ripple_widget)
+        ripple_layout.setSpacing(6)
+        
         self.ripple_wave_count = QDoubleSpinBox()
         self.ripple_wave_count.setRange(1, 20)
         self.ripple_wave_count.setValue(5)
         self.ripple_wave_count.setDecimals(0)
+        self.ripple_wave_count.setMinimumWidth(140)
         self.ripple_wave_count.valueChanged.connect(self._emit_preview)
         ripple_layout.addRow(tr("Wave Count:"), self.ripple_wave_count)
 
         self.ripple_wave_shape = QComboBox()
         self.ripple_wave_shape.addItems(["sine", "triangle", "square"])
+        self.ripple_wave_shape.setMinimumWidth(140)
         self.ripple_wave_shape.currentTextChanged.connect(self._emit_preview)
         ripple_layout.addRow(tr("Wave Shape:"), self.ripple_wave_shape)
 
@@ -261,12 +269,13 @@ class SurfaceTexturePanel(QFrame):
         self.ripple_wave_width.setValue(0.0)  # 0 = automatisch (wave_count verwenden)
         self.ripple_wave_width.setSuffix(" mm")
         self.ripple_wave_width.setDecimals(2)
+        self.ripple_wave_width.setMinimumWidth(140)
         self.ripple_wave_width.setToolTip(tr("Width of each ripple wave. 0 = auto (uses wave count)."))
         self.ripple_wave_width.valueChanged.connect(self._emit_preview)
         ripple_layout.addRow(tr("Wave Width:"), self.ripple_wave_width)
         
         # Mindestgröße für Ripple-Widget setzen
-        ripple_widget.setMinimumHeight(150)
+        ripple_widget.setMinimumHeight(200)
 
         self.type_params_stack.addWidget(ripple_widget)
 
@@ -279,7 +288,7 @@ class SurfaceTexturePanel(QFrame):
         self.honeycomb_cell_size.setSuffix(" mm")
         self.honeycomb_cell_size.valueChanged.connect(self._emit_preview)
         honeycomb_layout.addRow(tr("Cell Size:"), self.honeycomb_cell_size)
-        honeycomb_widget.setMinimumHeight(80)
+        honeycomb_widget.setMinimumHeight(100)
         self.type_params_stack.addWidget(honeycomb_widget)
 
         # Diamond
@@ -290,7 +299,7 @@ class SurfaceTexturePanel(QFrame):
         self.diamond_aspect.setValue(1.0)
         self.diamond_aspect.valueChanged.connect(self._emit_preview)
         diamond_layout.addRow(tr("Aspect Ratio:"), self.diamond_aspect)
-        diamond_widget.setMinimumHeight(80)
+        diamond_widget.setMinimumHeight(100)
         self.type_params_stack.addWidget(diamond_widget)
 
         # Knurl
@@ -308,7 +317,7 @@ class SurfaceTexturePanel(QFrame):
         self.knurl_angle.setSuffix(" deg")
         self.knurl_angle.valueChanged.connect(self._emit_preview)
         knurl_layout.addRow(tr("Angle:"), self.knurl_angle)
-        knurl_widget.setMinimumHeight(120)
+        knurl_widget.setMinimumHeight(140)
         self.type_params_stack.addWidget(knurl_widget)
 
         # Crosshatch
@@ -320,7 +329,7 @@ class SurfaceTexturePanel(QFrame):
         self.crosshatch_spacing.setSuffix(" mm")
         self.crosshatch_spacing.valueChanged.connect(self._emit_preview)
         crosshatch_layout.addRow(tr("Line Spacing:"), self.crosshatch_spacing)
-        crosshatch_widget.setMinimumHeight(80)
+        crosshatch_widget.setMinimumHeight(100)
         self.type_params_stack.addWidget(crosshatch_widget)
 
         # Voronoi
@@ -338,7 +347,7 @@ class SurfaceTexturePanel(QFrame):
         self.voronoi_randomness.setDecimals(2)
         self.voronoi_randomness.valueChanged.connect(self._emit_preview)
         voronoi_layout.addRow(tr("Randomness:"), self.voronoi_randomness)
-        voronoi_widget.setMinimumHeight(120)
+        voronoi_widget.setMinimumHeight(140)
         self.type_params_stack.addWidget(voronoi_widget)
 
         # Custom (Heightmap)
@@ -351,7 +360,7 @@ class SurfaceTexturePanel(QFrame):
         self.custom_browse_btn.clicked.connect(self._browse_heightmap)
         custom_layout.addRow("", self.custom_browse_btn)
         self._custom_path = ""
-        custom_widget.setMinimumHeight(100)
+        custom_widget.setMinimumHeight(120)
         self.type_params_stack.addWidget(custom_widget)
 
     def _on_type_changed(self, text: str):
