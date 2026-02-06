@@ -1314,6 +1314,13 @@ class MainWindow(QMainWindow):
                         try:
                             self.viewport_3d.plotter.remove_actor(actor_name)
                         except: pass
+                    # Auch aus _body_actors entfernen
+                    del self.viewport_3d._body_actors[body.id]
+                
+                # WICHTIG: Body aus viewport.bodies entfernen damit er neu geladen wird
+                # (sonst überspringt _update_viewport_all_impl den Body weil er existiert)
+                if body.id in self.viewport_3d.bodies:
+                    del self.viewport_3d.bodies[body.id]
 
                 # Neu laden
                 self._update_viewport_all_impl()
@@ -1386,6 +1393,11 @@ class MainWindow(QMainWindow):
                         try:
                             self.viewport_3d.plotter.remove_actor(actor_name)
                         except: pass
+                    del self.viewport_3d._body_actors[body.id]
+                
+                # WICHTIG: Body aus viewport.bodies entfernen damit er neu geladen wird
+                if body.id in self.viewport_3d.bodies:
+                    del self.viewport_3d.bodies[body.id]
 
                 self._update_viewport_all_impl()
 
