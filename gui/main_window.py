@@ -1033,7 +1033,31 @@ class MainWindow(QMainWindow):
                 if col is None:
                     col = default_color
 
-                if hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
+                # Phase 9: Async Tessellation wenn Flag aktiv und Mesh noch nicht generiert
+                if (is_enabled("async_tessellation") and
+                    hasattr(b, 'request_async_tessellation') and
+                    hasattr(b, '_mesh_cache_valid') and not b._mesh_cache_valid):
+
+                    def _make_async_callback(body_ref, color_ref, inactive_ref):
+                        def _on_ready(body_id, mesh, edges, face_info):
+                            if mesh is None:
+                                return
+                            self.viewport_3d.add_body(
+                                bid=body_id,
+                                name=body_ref.name,
+                                mesh_obj=mesh,
+                                edge_mesh_obj=edges,
+                                color=color_ref,
+                                inactive_component=inactive_ref
+                            )
+                            if hasattr(self.viewport_3d, 'plotter'):
+                                from gui.viewport.render_utils import request_render
+                                request_render(self.viewport_3d.plotter, immediate=True)
+                        return _on_ready
+
+                    b.request_async_tessellation(on_ready=_make_async_callback(b, col, is_inactive))
+
+                elif hasattr(b, 'vtk_mesh') and b.vtk_mesh is not None:
                     self.viewport_3d.add_body(
                         bid=b.id,
                         name=b.name,

@@ -328,6 +328,10 @@ class ShapeNamingService:
             'faces': len(self._spatial_index[ShapeType.FACE])
         }
 
+    _CONSUMING_FEATURE_TYPES = frozenset([
+        'FilletFeature', 'ChamferFeature',
+    ])
+
     def get_health_report(self, body) -> Dict[str, Any]:
         """
         Erstellt einen Gesundheitsbericht für einen Body.
@@ -335,21 +339,9 @@ class ShapeNamingService:
         Prüft alle Features mit TNP-Referenzen (edge_shape_ids, face_shape_ids)
         und testet ob die ShapeIDs noch auflösbar sind.
 
-        Returns:
-            {
-                'body_name': str,
-                'status': 'ok' | 'fallback' | 'broken',
-                'ok': int, 'fallback': int, 'broken': int,
-                'features': [
-                    {
-                        'name': str,
-                        'type': str,
-                        'status': 'ok' | 'fallback' | 'broken' | 'no_refs',
-                        'ok': int, 'fallback': int, 'broken': int,
-                        'refs': [{'kind': str, 'status': str, 'method': str}]
-                    }
-                ]
-            }
+        Konsumierende Features (Fillet/Chamfer) zerstören ihre Input-Kanten
+        absichtlich. Deren Status wird aus dem letzten Rebuild übernommen
+        (feature.status), da die Referenzen nur VOR der Operation gültig sind.
         """
         report = {
             'body_name': getattr(body, 'name', 'Body'),
@@ -366,11 +358,15 @@ class ShapeNamingService:
             ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
         for feat in features:
+            feat_type_name = type(feat).__name__
+            is_consuming = feat_type_name in self._CONSUMING_FEATURE_TYPES
+
             feat_report = {
                 'name': getattr(feat, 'name', 'Feature'),
-                'type': type(feat).__name__.replace('Feature', ''),
+                'type': feat_type_name.replace('Feature', ''),
                 'status': 'no_refs',
                 'ok': 0, 'fallback': 0, 'broken': 0,
+                'consuming': is_consuming,
                 'refs': []
             }
 
@@ -388,40 +384,66 @@ class ShapeNamingService:
                 report['features'].append(feat_report)
                 continue
 
-            for sid in shape_ids:
-                if not isinstance(sid, ShapeID):
-                    continue
-
-                if ocp_solid is not None:
-                    _resolved, method = self.resolve_shape_with_method(sid, ocp_solid)
+            if is_consuming:
+                rebuild_status = getattr(feat, 'status', 'OK')
+                ref_count = sum(1 for s in shape_ids if isinstance(s, ShapeID))
+                if rebuild_status in ('OK', 'SUCCESS', 'WARNING'):
+                    feat_report['ok'] = ref_count
+                    report['ok'] += ref_count
+                    feat_report['status'] = 'ok'
+                    for sid in shape_ids:
+                        if isinstance(sid, ShapeID):
+                            feat_report['refs'].append({
+                                'kind': ref_kind,
+                                'status': 'ok',
+                                'method': 'rebuild'
+                            })
                 else:
-                    method = "unresolved"
-
-                if method in ("direct", "history"):
-                    status = "ok"
-                    feat_report['ok'] += 1
-                    report['ok'] += 1
-                elif method in ("brepfeat", "geometric"):
-                    status = "fallback"
-                    feat_report['fallback'] += 1
-                    report['fallback'] += 1
-                else:
-                    status = "broken"
-                    feat_report['broken'] += 1
-                    report['broken'] += 1
-
-                feat_report['refs'].append({
-                    'kind': ref_kind,
-                    'status': status,
-                    'method': method
-                })
-
-            if feat_report['broken'] > 0:
-                feat_report['status'] = 'broken'
-            elif feat_report['fallback'] > 0:
-                feat_report['status'] = 'fallback'
+                    feat_report['broken'] = ref_count
+                    report['broken'] += ref_count
+                    feat_report['status'] = 'broken'
+                    for sid in shape_ids:
+                        if isinstance(sid, ShapeID):
+                            feat_report['refs'].append({
+                                'kind': ref_kind,
+                                'status': 'broken',
+                                'method': 'rebuild'
+                            })
             else:
-                feat_report['status'] = 'ok'
+                for sid in shape_ids:
+                    if not isinstance(sid, ShapeID):
+                        continue
+
+                    if ocp_solid is not None:
+                        _resolved, method = self.resolve_shape_with_method(sid, ocp_solid)
+                    else:
+                        method = "unresolved"
+
+                    if method in ("direct", "history"):
+                        status = "ok"
+                        feat_report['ok'] += 1
+                        report['ok'] += 1
+                    elif method in ("brepfeat", "geometric"):
+                        status = "fallback"
+                        feat_report['fallback'] += 1
+                        report['fallback'] += 1
+                    else:
+                        status = "broken"
+                        feat_report['broken'] += 1
+                        report['broken'] += 1
+
+                    feat_report['refs'].append({
+                        'kind': ref_kind,
+                        'status': status,
+                        'method': method
+                    })
+
+                if feat_report['broken'] > 0:
+                    feat_report['status'] = 'broken'
+                elif feat_report['fallback'] > 0:
+                    feat_report['status'] = 'fallback'
+                else:
+                    feat_report['status'] = 'ok'
 
             report['features'].append(feat_report)
 

@@ -40,6 +40,7 @@ METHOD_LABELS = {
     'history': tr('History'),
     'brepfeat': tr('BRepFeat'),
     'geometric': tr('Geometrisch'),
+    'rebuild': tr('Rebuild OK'),
     'unresolved': tr('Nicht gefunden'),
 }
 
