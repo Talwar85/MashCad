@@ -7336,12 +7336,63 @@ class Body:
             logger.error("STL-Export fehlgeschlagen: Kein Build123d-Solid vorhanden")
             return False
 
+        # OCP Feature Audit: Offene-Kanten-Check vor Export
+        self._check_free_bounds_before_export()
+
         try:
             export_stl(self._build123d_solid, filename)
             return True
         except Exception as e:
             logger.error(f"STL-Export fehlgeschlagen: {e}")
             return False
+
+    def _check_free_bounds_before_export(self):
+        """
+        OCP Feature Audit: Prüft ob Body offene Kanten hat vor Export.
+
+        Offene Shells erzeugen STL-Dateien mit Löchern, die für 3D-Druck
+        unbrauchbar sind. Diese Warnung hilft dem User das Problem zu erkennen.
+        """
+        from config.feature_flags import is_enabled
+        if not is_enabled("export_free_bounds_check"):
+            return
+
+        try:
+            from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_WIRE
+
+            fb = ShapeAnalysis_FreeBounds(self._build123d_solid.wrapped)
+            closed_compound = fb.GetClosedWires()
+            open_compound = fb.GetOpenWires()
+
+            # GetClosedWires/GetOpenWires geben TopoDS_Compound zurück
+            def count_wires(compound):
+                exp = TopExp_Explorer(compound, TopAbs_WIRE)
+                n = 0
+                while exp.More():
+                    n += 1
+                    exp.Next()
+                return n
+
+            n_closed = count_wires(closed_compound)
+            n_open = count_wires(open_compound)
+
+            if n_open > 0:
+                logger.warning(
+                    f"⚠️ Body '{self.name}' hat {n_open} offene Kante(n)! "
+                    f"STL könnte Löcher haben → 3D-Druck problematisch."
+                )
+            elif n_closed > 0:
+                logger.warning(
+                    f"⚠️ Body '{self.name}' hat {n_closed} geschlossene freie Wire(s). "
+                    f"Mögliches internes Shell-Problem."
+                )
+            else:
+                logger.debug(f"Export Free-Bounds Check: Body '{self.name}' ist geschlossen (OK)")
+
+        except Exception as e:
+            logger.debug(f"Free-Bounds Check fehlgeschlagen: {e}")
 
     def _export_stl_simple(self, filename: str) -> bool:
         """Primitiver STL Export aus Mesh-Daten (Letzter Ausweg)"""

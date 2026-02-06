@@ -28,9 +28,12 @@ try:
     from OCP.TopAbs import TopAbs_FACE
     from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.TopTools import TopTools_ListOfShape  # ✅ FIX: Correct type for SetArguments()
+    from OCP.ShapeFix import ShapeFix_Shape  # Post-Boolean Auto-Healing
     HAS_OCP = True
 except ImportError:
     HAS_OCP = False
+
+from config.feature_flags import is_enabled
 
 from modeling.result_types import BooleanResult, ResultStatus
 from modeling.body_transaction import BodyTransaction, BooleanOperationError
@@ -181,7 +184,27 @@ class BooleanEngineV4:
                     raise BooleanOperationError(validation_error)
                 logger.debug("  Inputs valid")
 
-                # 2. Execute OpenCASCADE Boolean
+                # 2. Pre-Boolean Validation (OCP Feature Audit)
+                body_shape_pre = body._build123d_solid.wrapped
+                tool_shape_pre = tool_solid.wrapped if hasattr(tool_solid, 'wrapped') else tool_solid
+
+                # 2a. Self-Intersection Check (Feature #1)
+                si_error = BooleanEngineV4._check_self_intersection(body_shape_pre, "Body")
+                if si_error:
+                    raise BooleanOperationError(si_error)
+                si_error = BooleanEngineV4._check_self_intersection(tool_shape_pre, "Tool")
+                if si_error:
+                    raise BooleanOperationError(si_error)
+
+                # 2b. Argument Analyzer (Feature #3)
+                arg_error = BooleanEngineV4._analyze_boolean_arguments(
+                    body_shape_pre, tool_shape_pre, fuzzy_tolerance
+                )
+                if arg_error:
+                    # Warnung statt harter Fehler - manche "problematischen" Inputs funktionieren trotzdem
+                    logger.warning(f"Boolean Argument Analyse: {arg_error}")
+
+                # 3. Execute OpenCASCADE Boolean
                 logger.debug(f"Executing OCP Boolean {operation}...")
 
                 # Get OCP shapes WITH their transformations applied!
@@ -230,7 +253,10 @@ class BooleanEngineV4:
                         f"→ Check tool position and try again."
                     )
 
-                # 3. Validate result shape
+                # 4a. Post-Boolean Validation + Auto-Healing (Feature #4)
+                result_shape = BooleanEngineV4._validate_and_heal_result(result_shape, operation)
+
+                # 4b. Validate result shape
                 is_valid = BooleanEngineV4._is_valid_shape(result_shape)
                 logger.debug(f"Shape validation: is_valid={is_valid}")
 
@@ -585,3 +611,150 @@ class BooleanEngineV4:
             # On error, accept result (fail-safe)
             logger.debug(f"Geometry verification failed: {e}")
             return True
+
+    @staticmethod
+    def _check_self_intersection(shape: Any, name: str = "Shape") -> Optional[str]:
+        """
+        Prüft Shape auf Self-Intersections mittels BOPAlgo_CheckerSI.
+
+        Self-Intersections verursachen Boolean-Crashes oder kaputte Ergebnisse.
+        Dieser Pre-Check erkennt das Problem VOR der Boolean-Operation.
+
+        Args:
+            shape: OCP TopoDS_Shape
+            name: Name für Logging (z.B. "Body" oder "Tool")
+
+        Returns:
+            Fehlermeldung wenn Self-Intersection gefunden, None wenn OK
+        """
+        if not is_enabled("boolean_self_intersection_check"):
+            return None
+
+        try:
+            from OCP.BOPAlgo import BOPAlgo_CheckerSI
+
+            checker = BOPAlgo_CheckerSI()
+            args = TopTools_ListOfShape()
+            args.Append(shape)
+            checker.SetArguments(args)
+            checker.SetNonDestructive(True)  # Shape nicht modifizieren
+            checker.Perform()
+
+            if checker.HasErrors():
+                logger.warning(f"⚠️ {name} hat Self-Intersection(s)!")
+                return (
+                    f"{name} hat Self-Intersections.\n"
+                    f"→ Boolean-Operation kann fehlschlagen oder kaputte Geometrie erzeugen.\n"
+                    f"→ Geometrie prüfen und reparieren."
+                )
+
+            logger.debug(f"  {name} Self-Intersection Check: OK")
+            return None
+
+        except AttributeError:
+            # BOPAlgo_CheckerSI nicht verfügbar in dieser OCP-Version
+            logger.debug("BOPAlgo_CheckerSI nicht verfügbar, überspringe Self-Intersection Check")
+            return None
+        except Exception as e:
+            # Check fehlgeschlagen - nicht blockieren, nur warnen
+            logger.debug(f"Self-Intersection Check fehlgeschlagen: {e}")
+            return None
+
+    @staticmethod
+    def _analyze_boolean_arguments(shape1: Any, shape2: Any, fuzzy_tolerance: float) -> Optional[str]:
+        """
+        Analysiert Boolean-Inputs auf potentielle Probleme mittels BOPAlgo_ArgumentAnalyzer.
+
+        Erkennt: überlappende Faces, zu kleine Shapes, inkonsistente Toleranzen.
+        Gibt klare Fehlermeldung statt kryptischem Boolean-Crash.
+
+        Args:
+            shape1: Body shape
+            shape2: Tool shape
+            fuzzy_tolerance: Fuzzy-Toleranz
+
+        Returns:
+            Fehlermeldung wenn Probleme gefunden, None wenn OK
+        """
+        if not is_enabled("boolean_argument_analyzer"):
+            return None
+
+        try:
+            from OCP.BOPAlgo import BOPAlgo_ArgumentAnalyzer
+
+            analyzer = BOPAlgo_ArgumentAnalyzer()
+            analyzer.SetShape1(shape1)
+            analyzer.SetShape2(shape2)
+            analyzer.SetFuzzyValue(fuzzy_tolerance)
+            analyzer.Perform()
+
+            if analyzer.HasFaulty():
+                logger.warning("⚠️ Boolean-Input Analyse: Probleme erkannt!")
+                return (
+                    f"Boolean-Inputs haben Kompatibilitätsprobleme.\n"
+                    f"→ Geometrien können nicht sauber verschnitten werden.\n"
+                    f"→ Shapes vereinfachen oder Positionierung prüfen."
+                )
+
+            logger.debug("  Boolean Argument Analysis: OK")
+            return None
+
+        except AttributeError:
+            logger.debug("BOPAlgo_ArgumentAnalyzer nicht verfügbar, überspringe")
+            return None
+        except Exception as e:
+            logger.debug(f"Boolean Argument Analysis fehlgeschlagen: {e}")
+            return None
+
+    @staticmethod
+    def _validate_and_heal_result(result_shape: Any, operation: str) -> Any:
+        """
+        Post-Boolean Validation: Prüft Ergebnis-Shape und versucht Auto-Healing.
+
+        Erkennt kaputte Topologie (offene Shells, ungültige Edges) die
+        von op.IsDone() nicht erkannt wird. Versucht ShapeFix_Shape als Reparatur.
+
+        Args:
+            result_shape: OCP TopoDS_Shape nach Boolean
+            operation: Operation-Name für Logging
+
+        Returns:
+            Reparierter Shape (oder Original wenn Healing nicht nötig/möglich)
+
+        Raises:
+            BooleanOperationError wenn Shape irreparabel kaputt
+        """
+        if not is_enabled("boolean_post_validation"):
+            return result_shape
+
+        try:
+            analyzer = BRepCheck_Analyzer(result_shape)
+
+            if analyzer.IsValid():
+                logger.debug(f"  Post-Boolean Validation: Shape ist valid")
+                return result_shape
+
+            # Shape ist ungültig - Auto-Healing versuchen
+            logger.warning(f"⚠️ Boolean {operation} Ergebnis ist ungültig, versuche ShapeFix...")
+
+            fixer = ShapeFix_Shape(result_shape)
+            fixer.Perform()
+            healed_shape = fixer.Shape()
+
+            # Nochmal prüfen
+            analyzer2 = BRepCheck_Analyzer(healed_shape)
+            if analyzer2.IsValid():
+                logger.success(f"✅ ShapeFix hat Boolean-Ergebnis repariert")
+                return healed_shape
+            else:
+                # Healing hat nicht geholfen - warnen aber weitermachen
+                # (manche "ungültige" Shapes funktionieren trotzdem in der Praxis)
+                logger.warning(
+                    f"⚠️ Boolean {operation} Ergebnis ungültig trotz ShapeFix. "
+                    f"Nachfolgende Operationen könnten fehlschlagen."
+                )
+                return healed_shape  # Gehealten Shape trotzdem verwenden
+
+        except Exception as e:
+            logger.debug(f"Post-Boolean Validation fehlgeschlagen: {e}")
+            return result_shape

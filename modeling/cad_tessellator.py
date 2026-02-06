@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import time
 
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from config.feature_flags import is_enabled
 from collections import OrderedDict  # PERFORMANCE: O(1) LRU operations
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
@@ -390,6 +391,44 @@ class CADTessellator:
             CADTessellator._topology_cache.clear()
 
     @staticmethod
+    def _compute_adaptive_deflection(solid) -> float:
+        """
+        Berechnet adaptive LinearDeflection basierend auf Modellgröße.
+
+        Feste Deflection (0.01mm) ist für kleine Modelle OK, aber:
+        - Große Modelle (>100mm): unnötig fein → langsam
+        - Micro-Modelle (<1mm): zu grob → sichtbare Facetten
+
+        Lösung: 0.1% der BoundingBox-Diagonale, geclampt auf sinnvollen Bereich.
+
+        Returns:
+            Adaptive LinearDeflection in mm
+        """
+        try:
+            from OCP.Bnd import Bnd_Box
+            from OCP.BRepBndLib import BRepBndLib
+
+            bbox = Bnd_Box()
+            BRepBndLib.Add_s(solid.wrapped, bbox)
+            xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+
+            # Diagonale der Bounding Box
+            diag = ((xmax - xmin)**2 + (ymax - ymin)**2 + (zmax - zmin)**2) ** 0.5
+
+            # 0.1% der Diagonale als Deflection
+            adaptive = diag * 0.001
+
+            # Clamp auf sinnvollen Bereich: 0.001mm (Micro) bis 0.5mm (Macro)
+            adaptive = max(0.001, min(0.5, adaptive))
+
+            logger.debug(f"Adaptive Tessellation: BBox-Diag={diag:.1f}mm → Deflection={adaptive:.4f}mm")
+            return adaptive
+
+        except Exception as e:
+            logger.debug(f"Adaptive Deflection fehlgeschlagen: {e}, verwende Default")
+            return Tolerances.TESSELLATION_QUALITY
+
+    @staticmethod
     def tessellate(solid, quality=None, angular_tolerance=None) -> Tuple[Optional[pv.PolyData], Optional[pv.PolyData]]:
         """
         Konvertiert build123d Solid zu (FaceMesh, EdgeMesh).
@@ -397,18 +436,22 @@ class CADTessellator:
 
         Phase 4.3: Optimiert mit Topology-Caching.
         Phase 5: Verwendet zentralisierte Toleranzen.
+        OCP Feature Audit: Adaptive Tessellation (proportional zur Modellgröße).
 
         Args:
             solid: Build123d Solid
-            quality: Lineare Abweichung (default: Tolerances.TESSELLATION_QUALITY)
+            quality: Lineare Abweichung (default: adaptive oder Tolerances.TESSELLATION_QUALITY)
             angular_tolerance: Winkel-Abweichung (default: Tolerances.TESSELLATION_ANGULAR)
         """
         if not solid:
             return None, None
 
-        # Phase 5: Defaults aus zentraler Konfiguration
+        # OCP Feature Audit: Adaptive Deflection basierend auf Modellgröße
         if quality is None:
-            quality = Tolerances.TESSELLATION_QUALITY
+            if is_enabled("adaptive_tessellation"):
+                quality = CADTessellator._compute_adaptive_deflection(solid)
+            else:
+                quality = Tolerances.TESSELLATION_QUALITY
         if angular_tolerance is None:
             angular_tolerance = Tolerances.TESSELLATION_ANGULAR
 

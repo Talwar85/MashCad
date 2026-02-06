@@ -58,6 +58,13 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "ocp_glue_mode": False,  # Phase 11: SetGlue() - VERBOTEN (erzeugt kaputte Topologie, TNP kann nicht reparieren)
     "batch_fillets": False,  # Phase 12: BOPAlgo_Builder für Batch-Fillets (TODO - bei vielen Fillets)
     "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
+
+    # Boolean Robustness (OCP Feature Audit 2026)
+    "boolean_self_intersection_check": True,  # Pre-Check: BOPAlgo_CheckerSI vor Booleans
+    "boolean_post_validation": True,  # Post-Check: BRepCheck_Analyzer + ShapeFix nach Booleans
+    "boolean_argument_analyzer": True,  # Pre-Check: BOPAlgo_ArgumentAnalyzer Input-Validierung
+    "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
+    "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export
 }
 
 
