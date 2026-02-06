@@ -108,14 +108,14 @@ class FinalMeshConverter:
             'total_faces': 0
         }
 
-        logger.info("=== Final Mesh Converter (Cylinder Mode) ===")
+        logger.debug("=== Final Mesh Converter (Cylinder Mode) ===")
 
         faces_arr = mesh.faces.reshape(-1, 4)[:, 1:4]
         points = mesh.points
         precision = 4
 
         # 1. Erkenne Zylinder
-        logger.info("Schritt 1: Erkenne Zylinder-Löcher...")
+        logger.debug("Schritt 1: Erkenne Zylinder-Löcher...")
         detector = MeshPrimitiveDetector(
             angle_threshold=self.angle_thresh,
             min_region_faces=self.min_cyl_faces,
@@ -137,10 +137,10 @@ class FinalMeshConverter:
                 cylinder_face_indices.update(cyl.face_indices)
 
         stats['holes_detected'] = len(hole_cylinders)
-        logger.info(f"  {len(hole_cylinders)} Zylinder-Löcher erkannt")
+        logger.debug(f"  {len(hole_cylinders)} Zylinder-Löcher erkannt")
 
         # 2. Erstelle Vertex/Edge-Pool
-        logger.info("Schritt 2: Erstelle Geometry...")
+        logger.debug("Schritt 2: Erstelle Geometry...")
         vertex_pool = {}
         edge_pool = {}
 
@@ -162,7 +162,7 @@ class FinalMeshConverter:
             return edge_pool.get(edge_key)
 
         # 3. Erstelle alle Faces
-        logger.info("Schritt 3: Erstelle Faces...")
+        logger.debug("Schritt 3: Erstelle Faces...")
         all_faces = []
         cylinder_boundaries = defaultdict(list)
 
@@ -207,10 +207,10 @@ class FinalMeshConverter:
                 continue
 
         stats['triangulated_faces'] = len(all_faces)
-        logger.info(f"  {len(all_faces)} triangulierte Faces")
+        logger.debug(f"  {len(all_faces)} triangulierte Faces")
 
         # 4. Analytische Zylinder
-        logger.info("Schritt 4: Erstelle analytische Zylinder...")
+        logger.debug("Schritt 4: Erstelle analytische Zylinder...")
 
         for cyl_idx, cyl in enumerate(hole_cylinders):
             # Finde Boundary-Punkte für V-Bereich
@@ -245,13 +245,13 @@ class FinalMeshConverter:
             if cyl_face is not None:
                 all_faces.append(cyl_face)
                 stats['analytical_cylinders'] += 1
-                logger.success(f"  Zylinder {cyl_idx+1}: R={cyl.radius:.2f}mm erstellt")
+                logger.debug(f"  Zylinder {cyl_idx+1}: R={cyl.radius:.2f}mm erstellt")
 
         stats['total_faces'] = len(all_faces)
-        logger.info(f"  Total: {len(all_faces)} Faces")
+        logger.debug(f"  Total: {len(all_faces)} Faces")
 
         # 5. Compound erstellen (KEIN Sewing!)
-        logger.info("Schritt 5: Erstelle Compound...")
+        logger.debug("Schritt 5: Erstelle Compound...")
         builder = BRep_Builder()
         compound = TopoDS_Compound()
         builder.MakeCompound(compound)
@@ -262,7 +262,7 @@ class FinalMeshConverter:
         # Zähle zylindrische Faces
         cyl_count = self._count_cylindrical_faces(compound)
 
-        logger.success(f"Fertig: {len(all_faces)} Faces, {cyl_count} CYLINDRICAL_SURFACE")
+        logger.debug(f"Fertig: {len(all_faces)} Faces, {cyl_count} CYLINDRICAL_SURFACE")
 
         return FinalResult(
             compound,
@@ -279,7 +279,7 @@ class FinalMeshConverter:
             'brep_faces': 0
         }
 
-        logger.info("=== Final Mesh Converter (Solid Mode) ===")
+        logger.debug("=== Final Mesh Converter (Solid Mode) ===")
 
         faces_arr = mesh.faces.reshape(-1, 4)[:, 1:4]
         points = mesh.points
@@ -306,7 +306,7 @@ class FinalMeshConverter:
             return edge_pool.get(edge_key)
 
         # Erstelle alle Faces
-        logger.info("Erstelle Faces...")
+        logger.debug("Erstelle Faces...")
         all_faces = []
 
         for face_idx in range(len(faces_arr)):
@@ -338,10 +338,10 @@ class FinalMeshConverter:
                 logger.debug(f"[meshconverter] Fehler: {e}")
                 continue
 
-        logger.info(f"  {len(all_faces)} Faces erstellt")
+        logger.debug(f"  {len(all_faces)} Faces erstellt")
 
         # Sewing
-        logger.info("Sewing...")
+        logger.debug("Sewing...")
         sewer = BRepBuilderAPI_Sewing(self.sewing_tol)
         for face in all_faces:
             sewer.Add(face)
@@ -350,12 +350,12 @@ class FinalMeshConverter:
         sewn = sewer.SewedShape()
 
         # Solid erstellen
-        logger.info("Solid erstellen...")
+        logger.debug("Solid erstellen...")
         result = self._try_make_solid(sewn)
 
         if result is not None:
             stats['brep_faces'] = self._count_faces(result)
-            logger.success(f"Fertig: {stats['brep_faces']} Faces")
+            logger.debug(f"Fertig: {stats['brep_faces']} Faces")
 
             return FinalResult(result, "SUCCESS", stats, is_solid=True, cylindrical_surfaces=0)
 

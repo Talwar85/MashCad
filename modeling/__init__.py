@@ -1470,11 +1470,11 @@ class Body:
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {e}")
             
             if fallback_func:
-                logger.info(f"→ Versuche Fallback für '{op_name}'...")
+                logger.debug(f"→ Versuche Fallback für '{op_name}'...")
                 try:
                     res_fallback = fallback_func()
                     if res_fallback:
-                        logger.success(f"✓ Fallback für '{op_name}' erfolgreich.")
+                        logger.debug(f"✓ Fallback für '{op_name}' erfolgreich.")
                         return res_fallback, "WARNING"
                 except Exception as e2:
                     logger.error(f"✗ Auch Fallback fehlgeschlagen: {e2}")
@@ -1699,7 +1699,7 @@ class Body:
                 return solid1, False
 
             # 4. Führe Boolean Operation aus (OCP-API)
-            logger.info(f"OCP Boolean: {operation}...")
+            logger.debug(f"OCP Boolean: {operation}...")
             result_shape = None
             boolean_history = None  # BRepTools_History für TNP
 
@@ -1806,7 +1806,7 @@ class Body:
                     except Exception as e:
                         logger.debug(f"Volumen-Debug (result) fehlgeschlagen: {e}")
 
-                    logger.success(f"✅ {operation} erfolgreich")
+                    logger.debug(f"✅ {operation} erfolgreich")
                     return result, True
                 else:
                     logger.warning(f"{operation} Resultat invalid nach Wrap")
@@ -1814,7 +1814,7 @@ class Body:
                     try:
                         result = result.fix()
                         if result.is_valid():
-                            logger.success(f"✅ {operation} erfolgreich (nach fix)")
+                            logger.debug(f"✅ {operation} erfolgreich (nach fix)")
                             return result, True
                     except Exception as e:
                         logger.debug(f"[__init__.py] Fehler: {e}")
@@ -1925,7 +1925,7 @@ class Body:
                 return result_shape
             else:
                 # Fallback: Einfacher Konstruktor
-                logger.info("Versuche Fuse Fallback...")
+                logger.debug("Versuche Fuse Fallback...")
                 fuse_simple = BRepAlgoAPI_Fuse(shape1, shape2)
                 fuse_simple.Build()
                 if fuse_simple.IsDone():
@@ -1997,7 +1997,7 @@ class Body:
                 return result_shape
 
             # Fallback 1: Ohne GlueShift
-            logger.info("Versuche Cut Fallback 1 (ohne GlueShift)...")
+            logger.debug("Versuche Cut Fallback 1 (ohne GlueShift)...")
             cut_op2 = BRepAlgoAPI_Cut()
             args2 = TopTools_ListOfShape()
             args2.Append(shape1)
@@ -2020,7 +2020,7 @@ class Body:
                 return result_shape
 
             # Fallback 2: Einfacher Konstruktor
-            logger.info("Versuche Cut Fallback 2 (simple)...")
+            logger.debug("Versuche Cut Fallback 2 (simple)...")
             cut_simple = BRepAlgoAPI_Cut(shape1, shape2)
             cut_simple.Build()
             if cut_simple.IsDone():
@@ -2084,7 +2084,7 @@ class Body:
                 return result_shape
 
             # Fallback
-            logger.info("Versuche Common Fallback...")
+            logger.debug("Versuche Common Fallback...")
             common_simple = BRepAlgoAPI_Common(shape1, shape2)
             common_simple.Build()
             if common_simple.IsDone():
@@ -2197,22 +2197,17 @@ class Body:
             # Erstelle Chamfer-Operator
             chamfer_op = BRepFilletAPI_MakeChamfer(shape)
 
-            # Für Chamfer brauchen wir auch angrenzende Faces
+            # FIX: Nutze 2-Parameter Version (symmetrische Fase)
+            # OCP/Cascade errechnet die Fasen-Richtung automatisch
             for edge in edges:
                 edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
 
-                # Finde angrenzende Face
-                explorer = TopExp_Explorer(shape, TopAbs_FACE)
-                while explorer.More():
-                    face = explorer.Current()
-                    # Versuche Chamfer mit symmetrischer Distanz
-                    try:
-                        chamfer_op.Add(distance, edge_shape, face)
-                        break
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-                    explorer.Next()
+                try:
+                    # Nur Distanz und Edge - kein Face nötig!
+                    chamfer_op.Add(distance, edge_shape)
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Chamfer.Add fehlgeschlagen: {e}")
+                    continue
 
             # Build
             chamfer_op.Build()
@@ -2395,7 +2390,7 @@ class Body:
                 from build123d import loft
                 result = loft(sections, ruled=feature.ruled)
                 if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success("Build123d Loft erfolgreich")
+                    logger.debug("Build123d Loft erfolgreich")
                     return result
             except Exception as e:
                 logger.debug(f"Build123d loft fehlgeschlagen: {e}")
@@ -2449,7 +2444,7 @@ class Body:
                 try:
                     result = Solid(result_shape)
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success("OCP Loft erfolgreich")
+                        logger.debug("OCP Loft erfolgreich")
                         return result
                 except Exception as e_solid:
                     logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
@@ -2530,7 +2525,7 @@ class Body:
                 try:
                     result = Solid(result_shape)
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success(f"OCP Loft mit Kontinuität ({start_cont}/{end_cont}) erfolgreich")
+                        logger.debug(f"OCP Loft mit Kontinuität ({start_cont}/{end_cont}) erfolgreich")
                         return result
                 except Exception as e_solid:
                     logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
@@ -2578,7 +2573,7 @@ class Body:
         scale_end = getattr(feature, 'scale_end', 1.0)
         has_twist_or_scale = (twist_angle != 0.0 or scale_start != 1.0 or scale_end != 1.0)
 
-        logger.info(f"Sweep mit Frenet={feature.is_frenet}, Twist={twist_angle}°, Scale={scale_start}->{scale_end}")
+        logger.debug(f"Sweep mit Frenet={feature.is_frenet}, Twist={twist_angle}°, Scale={scale_start}->{scale_end}")
 
         # Phase 8: Erweiterter Sweep mit Twist/Scale
         if has_twist_or_scale:
@@ -2600,7 +2595,7 @@ class Body:
             from build123d import sweep
             result = sweep(profile_face, path=path_wire, is_frenet=feature.is_frenet)
             if result and hasattr(result, 'is_valid') and result.is_valid():
-                logger.success("Build123d Sweep erfolgreich")
+                logger.debug("Build123d Sweep erfolgreich")
                 return result
             else:
                 logger.warning(f"Build123d sweep: Ergebnis ungültig oder None")
@@ -2704,7 +2699,7 @@ class Body:
                 try:
                     result = Solid(result_shape)
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success("OCP Sweep erfolgreich")
+                        logger.debug("OCP Sweep erfolgreich")
                         return result
                 except Exception as e_solid:
                     logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
@@ -2830,7 +2825,7 @@ class Body:
             try:
                 result = Solid(result_shape)
                 if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success(f"OCP Sweep mit Twist={twist_angle}° Scale={scale_start}->{scale_end} erfolgreich")
+                    logger.debug(f"OCP Sweep mit Twist={twist_angle}° Scale={scale_start}->{scale_end} erfolgreich")
                     return result
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
@@ -2862,7 +2857,7 @@ class Body:
         # Öffnungs-Faces auflösen
         opening_faces = self._resolve_faces_for_shell(current_solid, feature.opening_face_selectors)
 
-        logger.info(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
+        logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
 
         # CASE 1: Mit Öffnungen - Build123d offset()
         if opening_faces:
@@ -2871,7 +2866,7 @@ class Body:
                 # Negatives amount für inward shell
                 result = offset(current_solid, amount=-feature.thickness, openings=opening_faces)
                 if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success("Build123d Shell mit Öffnungen erfolgreich")
+                    logger.debug("Build123d Shell mit Öffnungen erfolgreich")
                     return result
             except Exception as e:
                 logger.debug(f"Build123d offset fehlgeschlagen: {e}")
@@ -2892,7 +2887,7 @@ class Body:
                 # Boolean Subtraktion: outer - inner = hollow
                 result = current_solid - inner_solid
                 if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success("Build123d Shell (geschlossen) via Boolean erfolgreich")
+                    logger.debug("Build123d Shell (geschlossen) via Boolean erfolgreich")
                     return result
                 else:
                     logger.warning("Boolean-Subtraktion fehlgeschlagen, versuche cut()")
@@ -2900,7 +2895,7 @@ class Body:
                     from build123d import cut
                     result = cut(current_solid, inner_solid)
                     if result:
-                        logger.success("Build123d Shell (geschlossen) via cut() erfolgreich")
+                        logger.debug("Build123d Shell (geschlossen) via cut() erfolgreich")
                         return result
         except Exception as e:
             logger.debug(f"Build123d Boolean-Shell fehlgeschlagen: {e}")
@@ -2944,7 +2939,7 @@ class Body:
                 try:
                     result = Solid(result_shape)
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success("OCP Shell erfolgreich")
+                        logger.debug("OCP Shell erfolgreich")
                         return result
                 except Exception as e_solid:
                     logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
@@ -3013,7 +3008,7 @@ class Body:
         center = np.array(geo_selector.center)
         normal = np.array(geo_selector.normal)
 
-        logger.info(f"PushPull: Face gefunden (score={best_score:.2f}), distance={feature.distance}mm")
+        logger.debug(f"PushPull: Face gefunden (score={best_score:.2f}), distance={feature.distance}mm")
 
         # Extrusionsrichtung = Face-Normale * Distanz
         norm = np.array(normal)
@@ -3062,7 +3057,7 @@ class Body:
                         is_valid = True  # Bei Fehler: annehmen gültig
                 
                 if is_valid:
-                    logger.success(f"PushPull via BRepFeat_MakePrism erfolgreich")
+                    logger.debug(f"PushPull via BRepFeat_MakePrism erfolgreich")
                     
                     # === TNP v4.0: BRepFeat-Operation im NamingService speichern ===
                     try:
@@ -3125,7 +3120,7 @@ class Body:
 
                 result = Solid(result_shape)
                 if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success(f"PushPull via Extrude+Boolean erfolgreich")
+                    logger.debug(f"PushPull via Extrude+Boolean erfolgreich")
                     return (result, boolean_history)
 
             raise RuntimeError("Boolean fehlgeschlagen")
@@ -3249,7 +3244,7 @@ class Body:
                 pass
             raise ValueError(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
 
-        logger.info(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
+        logger.debug(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
 
         from modeling.nsided_patch import NSidedPatch
 
@@ -3326,7 +3321,7 @@ class Body:
                     result = Solid(maker.Shape())
                     result_faces = len(result.faces()) if hasattr(result, 'faces') else 0
                     if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.success(f"N-Sided Patch: Loch geschlossen! ({result_faces} Faces)")
+                        logger.debug(f"N-Sided Patch: Loch geschlossen! ({result_faces} Faces)")
                         return result
                     else:
                         logger.warning(f"N-Sided Patch: Solid mit {result_faces} Faces ungültig, versuche ShapeFix...")
@@ -3338,7 +3333,7 @@ class Body:
                             if fixer.Shape() and not fixer.Shape().IsNull():
                                 fixed = Solid(fixer.Shape())
                                 if hasattr(fixed, 'is_valid') and fixed.is_valid():
-                                    logger.success(f"N-Sided Patch: ShapeFix erfolgreich")
+                                    logger.debug(f"N-Sided Patch: ShapeFix erfolgreich")
                                     return fixed
                         except Exception as fix_err:
                             logger.debug(f"ShapeFix fehlgeschlagen: {fix_err}")
@@ -3366,7 +3361,7 @@ class Body:
                 if maker2.IsDone():
                     result2 = Solid(maker2.Shape())
                     if hasattr(result2, 'is_valid') and result2.is_valid():
-                        logger.success(f"N-Sided Patch: Loch geschlossen mit höherer Toleranz!")
+                        logger.debug(f"N-Sided Patch: Loch geschlossen mit höherer Toleranz!")
                         return result2
 
             # Letzter Fallback
@@ -3462,7 +3457,7 @@ class Body:
 
                 result = hollowed - cyl
                 if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.success(f"Hollow mit Drain Hole (⌀{feature.drain_diameter}mm) erfolgreich")
+                    logger.debug(f"Hollow mit Drain Hole (⌀{feature.drain_diameter}mm) erfolgreich")
                     return result
                 else:
                     logger.warning("Drain Hole Boolean fehlgeschlagen, verwende Shell ohne Drain")
@@ -3472,7 +3467,7 @@ class Body:
                 logger.warning(f"Drain Hole fehlgeschlagen: {e}, verwende Shell ohne Drain")
                 return hollowed
 
-        logger.success(f"Hollow (Wandstärke {feature.wall_thickness}mm) erfolgreich")
+        logger.debug(f"Hollow (Wandstärke {feature.wall_thickness}mm) erfolgreich")
         return hollowed
 
     def _compute_hole(self, feature: 'HoleFeature', current_solid):
@@ -3493,7 +3488,7 @@ class Body:
         # Tiefe: 0 = through all (verwende grosse Tiefe)
         depth = feature.depth if feature.depth > 0 else 1000.0
 
-        logger.info(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
+        logger.debug(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
 
         # === METHODE 1: BRepFeat_MakeCylindricalHole (nur für simple holes) ===
         if feature.hole_type == "simple":
@@ -3509,7 +3504,7 @@ class Body:
                 )
 
                 if result is not None:
-                    logger.success(f"Hole via BRepFeat: D={feature.diameter}mm")
+                    logger.debug(f"Hole via BRepFeat: D={feature.diameter}mm")
                     return result
                 else:
                     logger.debug("BRepFeat_MakeCylindricalHole fehlgeschlagen, Fallback auf Boolean")
@@ -3555,7 +3550,7 @@ class Body:
         # Boolean Cut: Bohrung vom Koerper abziehen
         result = current_solid.cut(hole_shape)
         if result and hasattr(result, 'is_valid') and result.is_valid():
-            logger.success(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
+            logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
             return result
 
         raise ValueError(f"Hole Boolean Cut fehlgeschlagen")
@@ -3706,7 +3701,7 @@ class Body:
             result_shape = self._fix_shape_ocp(result_shape)
             from build123d import Solid
             result = Solid(result_shape)
-            logger.success(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
+            logger.debug(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
             return result
 
         raise ValueError("Draft-Operation fehlgeschlagen")
@@ -3737,7 +3732,7 @@ class Body:
         normal = gp_Dir(*feature.plane_normal)
         plane = gp_Pln(origin, normal)
 
-        logger.info(f"Split: origin={feature.plane_origin}, normal={feature.plane_normal}, keep={feature.keep_side}")
+        logger.debug(f"Split: origin={feature.plane_origin}, normal={feature.plane_normal}, keep={feature.keep_side}")
 
         # === Phase 1: Grosse Ebene als Face erstellen ===
         face_builder = BRepBuilderAPI_MakeFace(plane, -1000, 1000, -1000, 1000)
@@ -3790,15 +3785,15 @@ class Body:
                     "normal": feature.plane_normal
                 }
             )
-            logger.success(f"Split (both) erfolgreich → 2 Bodies erstellt")
+            logger.debug(f"Split (both) erfolgreich → 2 Bodies erstellt")
             return result
         elif feature.keep_side == "above":
             # Legacy: Nur above zurückgeben
-            logger.success(f"Split (above) erfolgreich")
+            logger.debug(f"Split (above) erfolgreich")
             return body_above
         else:
             # Legacy: Nur below zurückgeben
-            logger.success(f"Split (below) erfolgreich")
+            logger.debug(f"Split (below) erfolgreich")
             return body_below
 
     def _compute_thread(self, feature: 'ThreadFeature', current_solid):
@@ -5284,7 +5279,7 @@ class Body:
                     if brepfeat_result and status == "SUCCESS":
                         new_solid = brepfeat_result
                         if is_enabled("tnp_debug_logging"):
-                            logger.success(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
+                            logger.debug(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
                         
                         # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
                         if is_enabled("extrude_debug"):
@@ -5753,7 +5748,7 @@ class Body:
 
             # Phase 7: Validierungs-Status loggen
             if validation.is_valid:
-                logger.success(f"✓ {self.name}: BREP Valid ({n_faces} Faces)")
+                logger.debug(f"✓ {self.name}: BREP Valid ({n_faces} Faces)")
             else:
                 logger.warning(f"⚠️ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
 
@@ -5958,7 +5953,7 @@ class Body:
         
         if found == total:
             if is_enabled("tnp_debug_logging"):
-                logger.success(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
+                logger.debug(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
         else:
             if is_enabled("tnp_debug_logging"):
                 logger.warning(f"TNP v4.0: Nur {found}/{total} Edges aufgelöst")
@@ -6692,7 +6687,7 @@ class Body:
         
         distance = feature.distance * feature.direction
         
-        logger.info(f"BRepFeat Push/Pull: Face gefunden (score={best_score:.2f}), distance={distance:.2f}mm")
+        logger.debug(f"BRepFeat Push/Pull: Face gefunden (score={best_score:.2f}), distance={distance:.2f}mm")
         
         # BRepFeat_MakePrism ausführen
         try:
@@ -6735,7 +6730,7 @@ class Body:
                     logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
 
                 if is_valid and hasattr(result, 'volume') and result.volume > 0.001:
-                    logger.success(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
+                    logger.debug(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
                     
                     # === TNP v4.0: BRepFeat-Operation tracken ===
                     try:
@@ -7286,7 +7281,7 @@ class Body:
                 logger.warning("Keine Solids erzeugt!")
                 return None
             
-            logger.success(f"Legacy Extrusion OK: {len(solids)} Solids erzeugt.")
+            logger.debug(f"Legacy Extrusion OK: {len(solids)} Solids erzeugt.")
 
             if len(solids) == 1:
                 return solids[0]
@@ -8719,7 +8714,7 @@ class Document:
         body_above.invalidate_mesh()
         body_below.invalidate_mesh()
 
-        logger.success(f"Split: '{body.name}' → '{body_above.name}' + '{body_below.name}'")
+        logger.debug(f"Split: '{body.name}' → '{body_above.name}' + '{body_below.name}'")
 
         # 7. Setze einen der Bodies als aktiv (optional - user kann das auch manuell machen)
         if self.active_body == body:
@@ -8836,7 +8831,7 @@ class Document:
 
         if new_bodies:
             self.active_body = new_bodies[0]
-            logger.success(f"STEP Import: {len(new_bodies)} Body(s) erstellt")
+            logger.debug(f"STEP Import: {len(new_bodies)} Body(s) erstellt")
 
         return new_bodies
 

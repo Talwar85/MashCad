@@ -137,7 +137,7 @@ class SolidBuilder:
             )
 
         # Erfolg!
-        logger.success("Solid erfolgreich erstellt und validiert")
+        logger.debug("Solid erfolgreich erstellt und validiert")
         return ConversionResult(
             status=ConversionStatus.SUCCESS,
             solid=b123d_solid,

@@ -44,7 +44,7 @@ class CreateComponentCommand(QUndoCommand):
         # Zur Parent hinzufügen
         if self.created_component not in self.parent_component.sub_components:
             self.parent_component.sub_components.append(self.created_component)
-            logger.info(f"[ASSEMBLY] Component erstellt: {self.component_name} in {self.parent_component.name}")
+            logger.debug(f"[ASSEMBLY] Component erstellt: {self.component_name} in {self.parent_component.name}")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
@@ -54,7 +54,7 @@ class CreateComponentCommand(QUndoCommand):
         """Component entfernen."""
         if self.created_component in self.parent_component.sub_components:
             self.parent_component.sub_components.remove(self.created_component)
-            logger.info(f"[ASSEMBLY] Component entfernt (Undo): {self.component_name}")
+            logger.debug(f"[ASSEMBLY] Component entfernt (Undo): {self.component_name}")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
@@ -88,7 +88,7 @@ class DeleteComponentCommand(QUndoCommand):
         """Component löschen."""
         if self.parent_component and self.component in self.parent_component.sub_components:
             self.parent_component.sub_components.remove(self.component)
-            logger.info(f"[ASSEMBLY] Component gelöscht: {self.component.name}")
+            logger.debug(f"[ASSEMBLY] Component gelöscht: {self.component.name}")
 
             # Falls gelöschte Component aktiv war, zur Parent wechseln
             if self.main_window.document._active_component == self.component:
@@ -108,7 +108,7 @@ class DeleteComponentCommand(QUndoCommand):
             idx = min(idx, len(self.parent_component.sub_components))
             self.parent_component.sub_components.insert(idx, self.component)
             self.component.parent = self.parent_component
-            logger.info(f"[ASSEMBLY] Component wiederhergestellt (Undo): {self.component.name}")
+            logger.debug(f"[ASSEMBLY] Component wiederhergestellt (Undo): {self.component.name}")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
@@ -162,7 +162,7 @@ class MoveBodyToComponentCommand(QUndoCommand):
         if self.body not in self.target_component.bodies:
             self.target_component.bodies.append(self.body)
 
-        logger.info(f"[ASSEMBLY] Body '{self.body.name}' verschoben: {self.source_component.name} → {self.target_component.name}")
+        logger.debug(f"[ASSEMBLY] Body '{self.body.name}' verschoben: {self.source_component.name} → {self.target_component.name}")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
@@ -184,7 +184,7 @@ class MoveBodyToComponentCommand(QUndoCommand):
             idx = min(self.source_index, len(self.source_component.bodies))
             self.source_component.bodies.insert(idx, self.body)
 
-        logger.info(f"[ASSEMBLY] Body '{self.body.name}' zurück verschoben (Undo): {self.target_component.name} → {self.source_component.name}")
+        logger.debug(f"[ASSEMBLY] Body '{self.body.name}' zurück verschoben (Undo): {self.target_component.name} → {self.source_component.name}")
 
         # UI aktualisieren
         self.main_window.browser.refresh()
@@ -228,7 +228,7 @@ class MoveSketchToComponentCommand(QUndoCommand):
         if self.sketch not in self.target_component.sketches:
             self.target_component.sketches.append(self.sketch)
 
-        logger.info(f"[ASSEMBLY] Sketch '{self.sketch.name}' verschoben: {self.source_component.name} → {self.target_component.name}")
+        logger.debug(f"[ASSEMBLY] Sketch '{self.sketch.name}' verschoben: {self.source_component.name} → {self.target_component.name}")
 
         self.main_window.browser.refresh()
         self.main_window._update_viewport_all_impl()
@@ -242,7 +242,7 @@ class MoveSketchToComponentCommand(QUndoCommand):
             idx = min(self.source_index, len(self.source_component.sketches))
             self.source_component.sketches.insert(idx, self.sketch)
 
-        logger.info(f"[ASSEMBLY] Sketch '{self.sketch.name}' zurück verschoben (Undo)")
+        logger.debug(f"[ASSEMBLY] Sketch '{self.sketch.name}' zurück verschoben (Undo)")
 
         self.main_window.browser.refresh()
         self.main_window._update_viewport_all_impl()
@@ -270,13 +270,13 @@ class RenameComponentCommand(QUndoCommand):
     def redo(self):
         """Umbenennen."""
         self.component.name = self.new_name
-        logger.info(f"[ASSEMBLY] Component umbenannt: {self.old_name} → {self.new_name}")
+        logger.debug(f"[ASSEMBLY] Component umbenannt: {self.old_name} → {self.new_name}")
         self.main_window.browser.refresh()
 
     def undo(self):
         """Zurück umbenennen."""
         self.component.name = self.old_name
-        logger.info(f"[ASSEMBLY] Component umbenannt (Undo): {self.new_name} → {self.old_name}")
+        logger.debug(f"[ASSEMBLY] Component umbenannt (Undo): {self.new_name} → {self.old_name}")
         self.main_window.browser.refresh()
 
 
@@ -351,7 +351,7 @@ class ActivateComponentCommand(QUndoCommand):
         self.component.is_active = True
         self.main_window.document._active_component = self.component
 
-        logger.info(f"[ASSEMBLY] Component aktiviert: {self.component.name}")
+        logger.debug(f"[ASSEMBLY] Component aktiviert: {self.component.name}")
 
         # UI aktualisieren - Browser refresh für Tree-Darstellung
         self.main_window.browser.refresh()
@@ -370,14 +370,14 @@ class ActivateComponentCommand(QUndoCommand):
             self.previous_active.is_active = True
             self.main_window.document._active_component = self.previous_active
             new_active = self.previous_active
-            logger.info(f"[ASSEMBLY] Component aktiviert (Undo): {self.previous_active.name}")
+            logger.debug(f"[ASSEMBLY] Component aktiviert (Undo): {self.previous_active.name}")
         else:
             # Fallback: Root-Component
             root = self.main_window.document.root_component
             root.is_active = True
             self.main_window.document._active_component = root
             new_active = root
-            logger.info(f"[ASSEMBLY] Root-Component aktiviert (Undo)")
+            logger.debug(f"[ASSEMBLY] Root-Component aktiviert (Undo)")
 
         # UI aktualisieren
         self.main_window.browser.refresh()

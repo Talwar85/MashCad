@@ -98,8 +98,8 @@ class DirectMeshConverter:
                 message="PyVista nicht verfügbar"
             )
 
-        logger.info("=== Direct Mesh Converter ===")
-        logger.info(f"Mesh: {mesh.n_points} Punkte, {mesh.n_cells} Faces")
+        logger.debug("=== Direct Mesh Converter ===")
+        logger.debug(f"Mesh: {mesh.n_points} Punkte, {mesh.n_cells} Faces")
 
         stats = {
             'input_points': mesh.n_points,
@@ -108,19 +108,19 @@ class DirectMeshConverter:
 
         try:
             # 1. Erstelle Vertex-Pool
-            logger.info("Erstelle Vertex-Pool...")
+            logger.debug("Erstelle Vertex-Pool...")
             vertices = self._create_vertex_pool(mesh)
 
             # 2. Erstelle globale Edge-Map
-            logger.info("Erstelle Edge-Map...")
+            logger.debug("Erstelle Edge-Map...")
             edge_map = self._create_edge_map(mesh, vertices)
             logger.debug(f"  → {len(edge_map)} unique Edges")
             stats['unique_edges'] = len(edge_map)
 
             # 3. Erstelle BREP Faces (1 pro Mesh-Dreieck)
-            logger.info("Erstelle BREP Faces...")
+            logger.debug("Erstelle BREP Faces...")
             faces = self._create_triangle_faces(mesh, vertices, edge_map)
-            logger.info(f"  → {len(faces)} Faces erstellt")
+            logger.debug(f"  → {len(faces)} Faces erstellt")
             stats['faces_created'] = len(faces)
 
             if len(faces) == 0:
@@ -131,10 +131,10 @@ class DirectMeshConverter:
                 )
 
             # 4. Sewing
-            logger.info("Sewing...")
+            logger.debug("Sewing...")
             result = self._sew_and_make_solid(faces, stats)
 
-            logger.info(f"=== Ergebnis: {result.status.name} ===")
+            logger.debug(f"=== Ergebnis: {result.status.name} ===")
             return result
 
         except Exception as e:
@@ -416,11 +416,11 @@ class DirectMeshConverter:
                                 compound = TopoDS.Compound_s(unified) if unified.ShapeType().name == 'TopAbs_COMPOUND' else compound
                                 n_faces = self._count_faces(compound)
                                 stats['faces_after_unify'] = n_faces
-                                logger.info(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
+                                logger.debug(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
                         except Exception as e:
                             logger.warning(f"UnifySameDomain auf Compound fehlgeschlagen: {e}")
 
-                    logger.success(f"Compound mit {len(shells)} Solids erstellt")
+                    logger.debug(f"Compound mit {len(shells)} Solids erstellt")
                     return ConversionResult(
                         status=ConversionStatus.SUCCESS,
                         solid=compound,
@@ -462,9 +462,9 @@ class DirectMeshConverter:
                             # Update Face-Count
                             n_faces = self._count_faces(solid)
                             stats['faces_after_unify'] = n_faces
-                            logger.info(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
+                            logger.debug(f"  Face-Merging: {stats['faces_created']} → {n_faces} Faces")
 
-                    logger.success("Solid erfolgreich erstellt und validiert")
+                    logger.debug("Solid erfolgreich erstellt und validiert")
                     return ConversionResult(
                         status=ConversionStatus.SUCCESS,
                         solid=solid,
@@ -479,7 +479,7 @@ class DirectMeshConverter:
                     if not fixed_solid.IsNull():
                         analyzer2 = BRepCheck_Analyzer(fixed_solid)
                         if analyzer2.IsValid():
-                            logger.success("Solid nach Reparatur gültig")
+                            logger.debug("Solid nach Reparatur gültig")
                             stats['is_valid'] = True
                             return ConversionResult(
                                 status=ConversionStatus.SUCCESS,

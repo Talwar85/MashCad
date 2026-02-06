@@ -859,7 +859,7 @@ class ProjectBrowser(QFrame):
 
         # Signal emittieren - MainWindow handhabt die Aktivierung
         self.component_activated.emit(component)
-        logger.info(f"[BROWSER] Component aktivieren: {component.name}")
+        logger.debug(f"[BROWSER] Component aktivieren: {component.name}")
 
     def _create_sub_component(self, parent_component):
         """Erstellt eine neue Sub-Component."""
@@ -882,7 +882,7 @@ class ProjectBrowser(QFrame):
 
             # Signal emittieren - MainWindow erstellt UndoCommand
             self.component_created.emit(parent_component, new_comp)
-            logger.info(f"[BROWSER] Neue Component: {name} in {parent_component.name}")
+            logger.debug(f"[BROWSER] Neue Component: {name} in {parent_component.name}")
 
     def _rename_component(self, component):
         """Benennt eine Component um."""
@@ -900,7 +900,7 @@ class ProjectBrowser(QFrame):
             old_name = component.name
             # Signal emittieren - MainWindow erstellt UndoCommand
             self.component_renamed.emit(component, new_name)
-            logger.info(f"[BROWSER] Component umbenennen: {old_name} → {new_name}")
+            logger.debug(f"[BROWSER] Component umbenennen: {old_name} → {new_name}")
 
     def _delete_component(self, component):
         """Löscht eine Component (nicht Root!)."""
@@ -913,7 +913,7 @@ class ProjectBrowser(QFrame):
 
         # Signal emittieren - MainWindow erstellt UndoCommand
         self.component_deleted.emit(component)
-        logger.info(f"[BROWSER] Component löschen: {component.name}")
+        logger.debug(f"[BROWSER] Component löschen: {component.name}")
 
     def _create_move_to_component_menu(self, item, item_type: str) -> 'QMenu':
         """
@@ -1000,10 +1000,10 @@ class ProjectBrowser(QFrame):
         """Emitiert Signal zum Verschieben eines Items."""
         if item_type == 'body':
             self.body_moved_to_component.emit(item, source_comp, target_comp)
-            logger.info(f"[BROWSER] Body '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
+            logger.debug(f"[BROWSER] Body '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
         elif item_type == 'sketch':
             self.sketch_moved_to_component.emit(item, source_comp, target_comp)
-            logger.info(f"[BROWSER] Sketch '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
+            logger.debug(f"[BROWSER] Sketch '{item.name}' verschieben: {source_comp.name} → {target_comp.name}")
 
     def _on_item_dropped(self, item_type: str, item, source_comp, target_comp):
         """
@@ -1014,7 +1014,7 @@ class ProjectBrowser(QFrame):
         if not self._assembly_enabled:
             return
 
-        logger.info(f"[BROWSER] Drag&Drop: {item_type} '{item.name}' von {source_comp.name} nach {target_comp.name}")
+        logger.debug(f"[BROWSER] Drag&Drop: {item_type} '{item.name}' von {source_comp.name} nach {target_comp.name}")
         self._move_item_to_component(item, source_comp, target_comp, item_type)
 
     def _on_keyboard_activate(self, component):
@@ -1028,7 +1028,7 @@ class ProjectBrowser(QFrame):
 
         if not component.is_active:
             self._activate_component(component)
-            logger.info(f"[BROWSER] Keyboard: Component aktiviert: {component.name}")
+            logger.debug(f"[BROWSER] Keyboard: Component aktiviert: {component.name}")
 
     def _on_keyboard_go_to_root(self):
         """
@@ -1042,7 +1042,7 @@ class ProjectBrowser(QFrame):
         root = self.document.root_component
         if root and not root.is_active:
             self._activate_component(root)
-            logger.info(f"[BROWSER] Keyboard: Zur Root-Component gewechselt")
+        logger.debug(f"[BROWSER] Keyboard: Zur Root-Component gewechselt")
 
     def get_selected_body_ids(self):
         """
