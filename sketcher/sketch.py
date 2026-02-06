@@ -579,6 +579,97 @@ class Sketch:
         result = self.solve()
         return result.status
     
+    def calculate_dof(self) -> Tuple[int, int, int]:
+        """
+        Berechnet die Degrees of Freedom (DOF) des Sketches.
+        
+        Returns:
+            Tuple von (total_variables, effective_constraints, dof)
+            - total_variables: Anzahl der beweglichen Variablen (2 pro Punkt, 1 pro Radius, etc.)
+            - effective_constraints: Anzahl der effektiven Constraints (ohne FIXED)
+            - dof: Verbleibende Freiheitsgrade (max 0)
+        """
+        # 1. Variablen zählen
+        n_vars = 0
+        processed_points = set()
+        
+        # Punkte (2 Variablen pro Punkt: x, y)
+        for p in self.points:
+            if not p.fixed and p.id not in processed_points:
+                n_vars += 2
+                processed_points.add(p.id)
+        
+        # Linien-Endpunkte (falls nicht schon gezählt)
+        for line in self.lines:
+            for p in [line.start, line.end]:
+                if not p.fixed and p.id not in processed_points:
+                    n_vars += 2
+                    processed_points.add(p.id)
+        
+        # Kreise (1 Variable: radius)
+        for circle in self.circles:
+            n_vars += 1
+            # Center-Punkt falls nicht schon gezählt
+            if not circle.center.fixed and circle.center.id not in processed_points:
+                n_vars += 2
+                processed_points.add(circle.center.id)
+        
+        # Bögen (3 Variablen: radius, start_angle, end_angle)
+        for arc in self.arcs:
+            n_vars += 3
+            # Center-Punkt falls nicht schon gezählt
+            if not arc.center.fixed and arc.center.id not in processed_points:
+                n_vars += 2
+                processed_points.add(arc.center.id)
+        
+        # 2. Effektive Constraints zählen (FIXED zählt nicht, da es durch Variablen-Entfernung behandelt wird)
+        n_constraints = len([c for c in self.constraints 
+                            if c.type != ConstraintType.FIXED and c.is_valid()])
+        
+        # 3. DOF berechnen
+        dof = max(0, n_vars - n_constraints)
+        
+        return n_vars, n_constraints, dof
+    
+    def get_constraint_summary(self) -> dict:
+        """
+        Gibt eine Zusammenfassung des Constraint-Status zurück.
+        
+        Returns:
+            Dictionary mit:
+            - total_constraints: Gesamtanzahl Constraints
+            - valid_constraints: Anzahl gültiger Constraints
+            - invalid_constraints: Liste ungültiger Constraints
+            - dof_info: (vars, constraints, dof) Tuple
+            - status: ConstraintStatus (ohne zu lösen)
+        """
+        total = len(self.constraints)
+        valid = [c for c in self.constraints if c.is_valid()]
+        invalid = [c for c in self.constraints if not c.is_valid()]
+        vars_count, constr_count, dof = self.calculate_dof()
+        
+        # Schnelle Status-Bestimmung ohne zu lösen
+        if invalid:
+            status = ConstraintStatus.INCONSISTENT
+        elif dof > 0:
+            status = ConstraintStatus.UNDER_CONSTRAINED
+        elif constr_count > vars_count:
+            status = ConstraintStatus.OVER_CONSTRAINED
+        else:
+            # Könnte FULLY_CONSTRAINED sein, aber wir wissen es nicht sicher
+            # ohne zu lösen - daher UNDER_CONSTRAINED als konservativer Default
+            status = ConstraintStatus.UNDER_CONSTRAINED
+        
+        return {
+            'total_constraints': total,
+            'valid_constraints': len(valid),
+            'invalid_constraints': invalid,
+            'variables': vars_count,
+            'effective_constraints': constr_count,
+            'dof': dof,
+            'status': status
+        }
+    
     def remove_constraint(self, constraint: Constraint):
         """Entfernt einen Constraint"""
         if constraint in self.constraints:

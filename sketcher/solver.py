@@ -102,6 +102,10 @@ class ConstraintSolver:
             refs.append((arc, 'end_angle'))
             x0_vals.append(arc.end_angle)
 
+        # Zähle Constraints (FIXED zählt nicht als "echter" Constraint)
+        n_effective_constraints = len([c for c in constraints 
+                                       if c.type != ConstraintType.FIXED])
+        
         if not x0_vals:
             # Keine beweglichen Teile - prüfen ob Constraints erfüllt
             # Performance Optimization 2.2: Batch-Berechnung
@@ -114,6 +118,16 @@ class ConstraintSolver:
 
         x0 = np.array(x0_vals, dtype=np.float64)
         n_vars = len(x0)
+        
+        # === OVER_CONSTRAINED Check ===
+        if n_effective_constraints > n_vars:
+            return SolverResult(
+                success=False,
+                iterations=0,
+                final_error=float('inf'),
+                status=ConstraintStatus.OVER_CONSTRAINED,
+                message=f"Überbestimmt: {n_effective_constraints} Constraints > {n_vars} Variablen"
+            )
 
         # 2. Fehlerfunktion mit Regularisierung
         def error_function(x):

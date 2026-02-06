@@ -62,12 +62,53 @@ class Constraint:
     driving: bool = True  # True = treibend, False = referenz
     satisfied: bool = False
     error: float = 0.0  # Abweichung vom Sollwert
+    
+    # Anzahl der erforderlichen Entities pro Constraint-Typ
+    _REQUIRED_ENTITIES = {
+        ConstraintType.FIXED: 1,
+        ConstraintType.COINCIDENT: 2,
+        ConstraintType.POINT_ON_LINE: 2,
+        ConstraintType.POINT_ON_CIRCLE: 2,
+        ConstraintType.HORIZONTAL: 1,
+        ConstraintType.VERTICAL: 1,
+        ConstraintType.PARALLEL: 2,
+        ConstraintType.PERPENDICULAR: 2,
+        ConstraintType.COLLINEAR: 2,
+        ConstraintType.EQUAL_LENGTH: 2,
+        ConstraintType.CONCENTRIC: 2,
+        ConstraintType.EQUAL_RADIUS: 2,
+        ConstraintType.TANGENT: 2,
+        ConstraintType.DISTANCE: 2,
+        ConstraintType.LENGTH: 1,
+        ConstraintType.ANGLE: 2,
+        ConstraintType.RADIUS: 1,
+        ConstraintType.DIAMETER: 1,
+        ConstraintType.SYMMETRIC: 3,
+        ConstraintType.MIDPOINT: 2,
+    }
 
     def __repr__(self):
         if self.formula:
             return f"{self.type.name}={self.formula}({self.value})"
         val_str = f"={self.value}" if self.value is not None else ""
         return f"{self.type.name}{val_str}"
+    
+    def get_required_entities(self) -> int:
+        """Gibt die Anzahl der benötigten Entities für diesen Constraint-Typ zurück."""
+        return self._REQUIRED_ENTITIES.get(self.type, 0)
+    
+    def is_valid(self) -> bool:
+        """Prüft ob der Constraint gültig ist (genug Entities vorhanden)."""
+        required = self.get_required_entities()
+        return len(self.entities) >= required
+    
+    def validation_error(self) -> Optional[str]:
+        """Gibt eine Fehlermeldung zurück wenn der Constraint ungültig ist, sonst None."""
+        required = self.get_required_entities()
+        actual = len(self.entities)
+        if actual < required:
+            return f"{self.type.name} benötigt {required} Entities, hat aber nur {actual}"
+        return None
 
 
 # === Constraint-Factories ===
@@ -263,32 +304,10 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     entities = constraint.entities
 
     # Defensive check: Ensure entities list has required number of elements
-    required_entities = {
-        ConstraintType.COINCIDENT: 2,
-        ConstraintType.HORIZONTAL: 1,
-        ConstraintType.VERTICAL: 1,
-        ConstraintType.LENGTH: 1,
-        ConstraintType.PARALLEL: 2,
-        ConstraintType.PERPENDICULAR: 2,
-        ConstraintType.EQUAL_LENGTH: 2,
-        ConstraintType.POINT_ON_LINE: 2,
-        ConstraintType.POINT_ON_CIRCLE: 2,
-        ConstraintType.RADIUS: 1,
-        ConstraintType.DIAMETER: 1,
-        ConstraintType.ANGLE: 2,
-        ConstraintType.CONCENTRIC: 2,
-        ConstraintType.MIDPOINT: 2,
-        ConstraintType.COLLINEAR: 2,
-        ConstraintType.SYMMETRIC: 3,
-        ConstraintType.TANGENT: 2,
-        ConstraintType.DISTANCE: 2,
-        ConstraintType.EQUAL_RADIUS: 2,
-        ConstraintType.FIXED: 1,
-    }
-    required = required_entities.get(ct, 0)
+    required = constraint.get_required_entities()
     if len(entities) < required:
         from loguru import logger
-        logger.warning(f"[Constraint] {ct.name} has {len(entities)} entities, expected {required}")
+        logger.debug(f"[Constraint] {ct.name} has {len(entities)} entities, expected {required}")
         return 0.0  # Return 0 error to avoid crashing
 
     if ct == ConstraintType.COINCIDENT:

@@ -1,18 +1,19 @@
 """
-MashCad - TNP Statistics Panel
-==============================
+MashCad - TNP v4.0 Statistics Panel
+===================================
 
-Zeigt Statistiken zur Topological Naming Problem (TNP) Auflösung.
-Hilft Benutzern zu verstehen, wie zuverlässig Feature-Referenzen sind.
+Zeigt Echtzeit-Statistiken zum TNP v4.0 ShapeNamingSystem.
+Hilft beim Debugging und Verständnis der Shape-Registry.
 
 Verwendung:
     panel = TNPStatsPanel(parent)
-    panel.update_stats(body)  # Body mit TNPTracker
+    panel.update_stats(body)  # Body aus einem Document mit ShapeNamingService
 """
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QProgressBar, QFrame, QGroupBox, QGridLayout
+    QProgressBar, QFrame, QGroupBox, QGridLayout,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -22,12 +23,13 @@ from i18n import tr
 
 class TNPStatsPanel(QWidget):
     """
-    Panel zur Anzeige von TNP (Topological Naming Problem) Statistiken.
+    Panel zur Anzeige von TNP v4.0 Statistiken.
 
     Zeigt:
-    - Gesamterfolgsrate der Referenz-Auflösung
-    - Auflösungen nach Strategie (History, Hash, Geometrie)
-    - Anzahl fehlgeschlagener Auflösungen
+    - Gesamtstatistiken (Shapes, Operations, Features)
+    - Verteilung nach Shape-Typ (Edges, Faces, Vertices)
+    - Letzte Operationen
+    - Feature-Registry Status
     """
 
     def __init__(self, parent=None):
@@ -37,118 +39,97 @@ class TNPStatsPanel(QWidget):
     def _setup_ui(self):
         """Erstellt das UI-Layout."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
-        # Header
-        header = QLabel(tr("TNP Reference Statistics"))
+        # === Header ===
+        header = QLabel(tr("TNP v4.0 Shape Registry"))
         header_font = QFont()
         header_font.setBold(True)
-        header_font.setPointSize(11)
+        header_font.setPointSize(12)
         header.setFont(header_font)
         header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("color: #ffffff; padding: 5px;")
         layout.addWidget(header)
 
-        # Erfolgsrate-Anzeige
-        success_group = QFrame()
-        success_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        success_group.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border: 1px solid #454545;
-                border-radius: 6px;
-                padding: 10px;
-            }
-        """)
-        success_layout = QVBoxLayout(success_group)
+        # === Status Card ===
+        status_card = self._create_card()
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setSpacing(8)
 
-        self._success_label = QLabel(tr("Success Rate: ---%%"))
-        self._success_label.setStyleSheet("font-size: 14px; color: #ffffff;")
-        self._success_label.setAlignment(Qt.AlignCenter)
-        success_layout.addWidget(self._success_label)
+        # Registry Status
+        status_header = QLabel(tr("Registry Status"))
+        status_header.setStyleSheet("font-weight: bold; color: #cccccc;")
+        status_layout.addWidget(status_header)
 
-        self._success_bar = QProgressBar()
-        self._success_bar.setRange(0, 100)
-        self._success_bar.setValue(0)
-        self._success_bar.setTextVisible(False)
-        self._success_bar.setFixedHeight(8)
-        self._success_bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #3d3d3d;
-                border: none;
-                border-radius: 4px;
-            }
-            QProgressBar::chunk {
-                background-color: #107c10;
-                border-radius: 4px;
-            }
-        """)
-        success_layout.addWidget(self._success_bar)
+        self._status_grid = QGridLayout()
+        self._status_grid.setSpacing(6)
 
-        layout.addWidget(success_group)
-
-        # Strategie-Details
-        strategy_group = QGroupBox(tr("Resolution Strategies"))
-        strategy_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #454545;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        strategy_layout = QGridLayout(strategy_group)
-        strategy_layout.setSpacing(8)
-
-        # Strategie-Labels
-        strategies = [
-            (tr("History"), "#0078d4", "history_success"),
-            (tr("Hash"), "#9b59b6", "hash_success"),
-            (tr("Geometry"), "#f39c12", "geometry_success"),
-            (tr("Failed"), "#d13438", "failed"),
+        self._status_labels = {}
+        status_items = [
+            ("total_shapes", tr("Total Shapes"), "#4a9eff"),
+            ("operations", tr("Operations"), "#9b59b6"),
+            ("features", tr("Features"), "#2ecc71"),
+            ("edges", tr("Edges Tracked"), "#f39c12"),
+            ("faces", tr("Faces Tracked"), "#e74c3c"),
         ]
 
-        self._strategy_labels = {}
-        for i, (name, color, key) in enumerate(strategies):
-            # Farbiger Punkt
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 12px;")
-            strategy_layout.addWidget(dot, i, 0)
-
-            # Name
-            name_label = QLabel(name)
-            name_label.setStyleSheet("color: #cccccc;")
-            strategy_layout.addWidget(name_label, i, 1)
+        for i, (key, label, color) in enumerate(status_items):
+            # Label
+            name_label = QLabel(f"{label}:")
+            name_label.setStyleSheet("color: #aaaaaa;")
+            self._status_grid.addWidget(name_label, i, 0)
 
             # Wert
             value_label = QLabel("0")
-            value_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+            value_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 14px;")
             value_label.setAlignment(Qt.AlignRight)
-            strategy_layout.addWidget(value_label, i, 2)
-            self._strategy_labels[key] = value_label
+            self._status_grid.addWidget(value_label, i, 1)
+            self._status_labels[key] = value_label
 
-        layout.addWidget(strategy_group)
+        status_layout.addLayout(self._status_grid)
+        layout.addWidget(status_card)
 
-        # Total-Anzeige
-        total_layout = QHBoxLayout()
-        total_label = QLabel(tr("Total:"))
-        total_label.setStyleSheet("color: #aaaaaa;")
-        self._total_label = QLabel(tr("0 Resolutions"))
-        self._total_label.setStyleSheet("color: #ffffff;")
-        total_layout.addWidget(total_label)
-        total_layout.addStretch()
-        total_layout.addWidget(self._total_label)
-        layout.addLayout(total_layout)
+        # === Last Operation Card ===
+        op_card = self._create_card()
+        op_layout = QVBoxLayout(op_card)
+        op_layout.setSpacing(8)
 
-        # Platzhalter-Nachricht
-        self._placeholder = QLabel(tr("No statistics available.\nPerform operations to collect data."))
-        self._placeholder.setStyleSheet("color: #888888; font-style: italic;")
+        op_header = QLabel(tr("Last Operation"))
+        op_header.setStyleSheet("font-weight: bold; color: #cccccc;")
+        op_layout.addWidget(op_header)
+
+        self._last_op_label = QLabel(tr("No operations yet"))
+        self._last_op_label.setStyleSheet("color: #888888; font-style: italic;")
+        self._last_op_label.setWordWrap(True)
+        op_layout.addWidget(self._last_op_label)
+
+        layout.addWidget(op_card)
+
+        # === Feature Registry Card ===
+        feature_card = self._create_card()
+        feature_layout = QVBoxLayout(feature_card)
+        feature_layout.setSpacing(8)
+
+        feature_header = QLabel(tr("Feature Registry"))
+        feature_header.setStyleSheet("font-weight: bold; color: #cccccc;")
+        feature_layout.addWidget(feature_header)
+
+        self._feature_list = QLabel(tr("No features registered"))
+        self._feature_list.setStyleSheet("color: #888888;")
+        self._feature_list.setWordWrap(True)
+        feature_layout.addWidget(self._feature_list)
+
+        layout.addWidget(feature_card)
+
+        # === Placeholder (wenn keine Daten) ===
+        self._placeholder = QLabel(tr(
+            "No TNP v4.0 data available.\n\n"
+            "The ShapeNamingService is initialized when:\n"
+            "• A project is created/loaded\n"
+            "• Features are added to bodies"
+        ))
+        self._placeholder.setStyleSheet("color: #666666; font-style: italic; padding: 20px;")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setWordWrap(True)
         layout.addWidget(self._placeholder)
@@ -158,98 +139,109 @@ class TNPStatsPanel(QWidget):
         # Initial state
         self._update_visibility(False)
 
+    def _create_card(self):
+        """Erstellt eine Style-Card."""
+        card = QFrame()
+        card.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #2a2a2a;
+                border: 1px solid #3d3d3d;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        return card
+
     def _update_visibility(self, has_data: bool):
         """Zeigt/versteckt die Statistik-Widgets basierend auf Datenverfügbarkeit."""
         self._placeholder.setVisible(not has_data)
 
     def update_stats(self, body):
         """
-        Aktualisiert die Anzeige mit Statistiken vom Body's TNPTracker.
+        Aktualisiert die Anzeige mit Statistiken vom Body's Document ShapeNamingService.
 
         Args:
-            body: Body-Objekt mit _tnp_tracker Attribut
+            body: Body-Objekt mit _document._shape_naming_service
         """
         if body is None:
             self._reset_stats()
             return
 
-        # TNP Tracker holen
-        tracker = getattr(body, '_tnp_tracker', None)
-        if tracker is None:
+        # TNP v4.0: ShapeNamingService vom Document holen
+        document = getattr(body, '_document', None)
+        if document is None:
+            self._reset_stats()
+            return
+
+        service = getattr(document, '_shape_naming_service', None)
+        if service is None:
             self._reset_stats()
             return
 
         try:
-            stats = tracker.get_statistics()
-            # Füge Referenz-Anzahl hinzu (zeigt dass etwas getrackt wird)
-            ref_count = len(tracker._references) if hasattr(tracker, '_references') else 0
-            stats['tracked_references'] = ref_count
-            self._display_stats(stats)
+            stats = service.get_stats()
+            last_op = service.get_last_operation()
+            self._display_stats(stats, last_op, service)
         except Exception as e:
             logger.error(f"Fehler beim Lesen der TNP-Statistiken: {e}")
             self._reset_stats()
 
-    def _display_stats(self, stats: dict):
+    def _display_stats(self, stats: dict, last_op, service):
         """Zeigt die Statistiken an."""
-        total = stats.get("total", 0)
-        tracked = stats.get("tracked_references", 0)
+        total_shapes = stats.get('total_shapes', 0)
 
-        if total == 0 and tracked == 0:
+        if total_shapes == 0:
             self._update_visibility(False)
             return
 
         self._update_visibility(True)
 
-        if total == 0 and tracked > 0:
-            self._success_label.setText(f"{tracked} {tr('References tracked')} — {tr('no rebuilds yet')}")
-            self._success_bar.setValue(0)
-            for label in self._strategy_labels.values():
-                label.setText("0")
-            self._total_label.setText(f"0 {tr('Resolutions')}")
-            return
-
-        # Erfolgsrate
-        success_rate = stats.get("success_rate", 0)
-        self._success_label.setText(f"{tr('Success Rate:')} {success_rate:.1f}%")
-        self._success_bar.setValue(int(success_rate))
-
-        # Farbe der Progress-Bar basierend auf Erfolgsrate
-        if success_rate >= 90:
-            color = "#107c10"  # Grün
-        elif success_rate >= 70:
-            color = "#f39c12"  # Orange
-        else:
-            color = "#d13438"  # Rot
-
-        self._success_bar.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: #3d3d3d;
-                border: none;
-                border-radius: 4px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 4px;
-            }}
-        """)
-
-        # Strategie-Werte
-        for key, label in self._strategy_labels.items():
+        # Status-Werte
+        for key, label in self._status_labels.items():
             value = stats.get(key, 0)
             label.setText(str(value))
 
-        # Total
-        self._total_label.setText(f"{total} {tr('Resolutions')}")
+        # Letzte Operation
+        if last_op:
+            op_text = f"""
+<b>Type:</b> {last_op.operation_type}<br>
+<b>Feature:</b> {last_op.feature_id[:16]}...<br>
+<b>Inputs:</b> {len(last_op.input_shape_ids)} shapes<br>
+<b>Outputs:</b> {len(last_op.output_shape_ids)} shapes
+"""
+            self._last_op_label.setText(op_text)
+            self._last_op_label.setStyleSheet("color: #cccccc;")
+        else:
+            self._last_op_label.setText(tr("No operations recorded"))
+            self._last_op_label.setStyleSheet("color: #888888; font-style: italic;")
+
+        # Feature Liste (die letzten 5)
+        features = list(service._by_feature.keys()) if hasattr(service, '_by_feature') else []
+        if features:
+            feature_text = "<br>".join([
+                f"• <code>{f[:20]}...</code>" 
+                for f in features[-5:]
+            ])
+            if len(features) > 5:
+                feature_text += f"<br><i>...and {len(features) - 5} more</i>"
+            self._feature_list.setText(feature_text)
+            self._feature_list.setStyleSheet("color: #cccccc; font-family: monospace;")
+        else:
+            self._feature_list.setText(tr("No features registered"))
+            self._feature_list.setStyleSheet("color: #888888;")
 
     def _reset_stats(self):
         """Setzt alle Statistik-Anzeigen zurück."""
-        self._success_label.setText(tr("Success Rate: ---%%"))
-        self._success_bar.setValue(0)
-
-        for label in self._strategy_labels.values():
+        for label in self._status_labels.values():
             label.setText("0")
 
-        self._total_label.setText(tr("0 Resolutions"))
+        self._last_op_label.setText(tr("No operations yet"))
+        self._last_op_label.setStyleSheet("color: #888888; font-style: italic;")
+
+        self._feature_list.setText(tr("No features registered"))
+        self._feature_list.setStyleSheet("color: #888888;")
+
         self._update_visibility(False)
 
     def refresh(self, body):
@@ -266,10 +258,11 @@ class TNPStatsDialog(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("TNP Statistiken")
-        self.setMinimumSize(300, 400)
+        self.setWindowTitle("TNP v4.0 Statistics")
+        self.setMinimumSize(350, 450)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self._stats_panel = TNPStatsPanel(self)
         layout.addWidget(self._stats_panel)
 
