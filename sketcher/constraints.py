@@ -329,37 +329,86 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     elif ct == ConstraintType.TANGENT:
         obj1, obj2 = entities
 
-        # Fall 1: Kreis-Kreis Tangente
+        # Fall 1: Kreis-Kreis / Kreis-Bogen / Bogen-Bogen Tangente
         is_circle1 = isinstance(obj1, (Circle2D, Arc2D))
         is_circle2 = isinstance(obj2, (Circle2D, Arc2D))
 
         if is_circle1 and is_circle2:
             # Abstand der Zentren muss gleich Summe der Radien sein (externe Tangente)
-            # oder Differenz der Radien (interne Tangente)
             c1, c2 = obj1, obj2
             center_dist = c1.center.distance_to(c2.center)
             sum_radii = c1.radius + c2.radius
             # Externe Tangente: dist = r1 + r2
             return abs(center_dist - sum_radii)
 
-        # Fall 2: Linie-Kreis Tangente
+        # Fall 2 & 3: Linie-Kreis oder Linie-Bogen Tangente
         if isinstance(obj1, Line2D):
             l, c = obj1, obj2
         else:
             l, c = obj2, obj1
+        
+        if isinstance(c, Arc2D):
+            # Fall 3: Linie-Bogen Tangente
+            # Die Linie muss tangential zum Bogen sein
+            # Berechne den Abstand vom Bogen-Zentrum zur Linie
+            dx = l.end.x - l.start.x
+            dy = l.end.y - l.start.y
+            len_sq = dx*dx + dy*dy
+            
+            if len_sq < 1e-8:
+                return 0.0
+            
+            # Abstand vom Zentrum zur Linie
+            cross = abs(dy * c.center.x - dx * c.center.y + l.end.x * l.start.y - l.end.y * l.start.x)
+            dist_to_center = cross / math.sqrt(len_sq)
+            
+            # Fehler 1: Abweichung vom Radius
+            radius_error = abs(dist_to_center - c.radius)
+            
+            # Fehler 2: Prüfe ob die Linie den Bogen tatsächlich schneidet
+            # Projektion des Zentrums auf die Linie
+            t = ((c.center.x - l.start.x) * dx + (c.center.y - l.start.y) * dy) / len_sq
+            t = max(0, min(1, t))  # Clamp auf Liniensegment
+            closest_x = l.start.x + t * dx
+            closest_y = l.start.y + t * dy
+            
+            # Winkel vom Bogen-Zentrum zum nächsten Punkt auf der Linie
+            angle_to_line = math.degrees(math.atan2(closest_y - c.center.y, closest_x - c.center.x))
+            
+            # Normalisiere Winkel auf [0, 360)
+            while angle_to_line < 0:
+                angle_to_line += 360
+            while angle_to_line >= 360:
+                angle_to_line -= 360
+            
+            # Prüfe ob der Winkel innerhalb des Bogenbereichs liegt
+            start_angle = c.start_angle % 360
+            end_angle = c.end_angle % 360
+            
+            if start_angle <= end_angle:
+                on_arc = start_angle <= angle_to_line <= end_angle
+            else:
+                # Bogen geht über 0° hinweg (z.B. 270° bis 90°)
+                on_arc = angle_to_line >= start_angle or angle_to_line <= end_angle
+            
+            # Wenn nicht auf dem Bogen, addiere einen Penalty
+            arc_penalty = 0.0 if on_arc else 100.0  # Großer Fehler wenn nicht auf Bogen
+            
+            return radius_error + arc_penalty
+        
+        else:
+            # Fall 2: Linie-Kreis Tangente (bestehende Implementierung)
+            dx = l.end.x - l.start.x
+            dy = l.end.y - l.start.y
+            len_sq = dx*dx + dy*dy
 
-        # Abstand vom Kreismittelpunkt zur Linie muss gleich dem Radius sein
-        dx = l.end.x - l.start.x
-        dy = l.end.y - l.start.y
-        len_sq = dx*dx + dy*dy
+            if len_sq < 1e-8:
+                return 0.0
 
-        if len_sq < 1e-8:
-            return 0.0
+            cross = abs(dy * c.center.x - dx * c.center.y + l.end.x * l.start.y - l.end.y * l.start.x)
+            dist = cross / math.sqrt(len_sq)
 
-        cross = abs(dy * c.center.x - dx * c.center.y + l.end.x * l.start.y - l.end.y * l.start.x)
-        dist = cross / math.sqrt(len_sq)
-
-        return abs(dist - c.radius)
+            return abs(dist - c.radius)
     elif ct == ConstraintType.DISTANCE:
         if len(entities) == 2:
             e1, e2 = entities

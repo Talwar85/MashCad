@@ -145,17 +145,44 @@ class ConstraintSolver:
             # Batch-Berechnung aller Errors (70-85% schneller!)
             errors = calculate_constraint_errors_batch(constraints)
 
-            # Gewichtung anwenden
+            # Gewichtung anwenden (basiert auf Constraint-Priorität)
+            # Topologische Constraints (Müssen zuerst gelten - höchste Priorität)
+            # Geometrische Constraints (Wichtig für Form)
+            # Dimensions-Constraints (Können etwas flexibler sein)
+            WEIGHTS = {
+                # Topologisch - höchste Priorität
+                ConstraintType.FIXED: 100.0,           # Fixierte Punkte dürfen sich nicht bewegen
+                ConstraintType.COINCIDENT: 50.0,       # Punkte müssen zusammenfallen
+                ConstraintType.POINT_ON_LINE: 40.0,    # Punkt muss auf Linie bleiben
+                ConstraintType.POINT_ON_CIRCLE: 40.0,  # Punkt muss auf Kreis bleiben
+                ConstraintType.MIDPOINT: 40.0,         # Punkt muss Mittelpunkt sein
+                
+                # Geometrisch - mittlere Priorität
+                ConstraintType.TANGENT: 30.0,          # Tangential ist wichtig für Übergänge
+                ConstraintType.PARALLEL: 25.0,         # Parallelität
+                ConstraintType.PERPENDICULAR: 25.0,    # Rechtwinkligkeit
+                ConstraintType.CONCENTRIC: 25.0,       # Konzentrisch
+                ConstraintType.COLLINEAR: 25.0,        # Kollinear
+                ConstraintType.HORIZONTAL: 20.0,       # Horizontal
+                ConstraintType.VERTICAL: 20.0,         # Vertikal
+                
+                # Dimensions-Constraints - können etwas flexibler sein
+                ConstraintType.LENGTH: 15.0,           # Länge
+                ConstraintType.DISTANCE: 15.0,         # Abstand
+                ConstraintType.RADIUS: 15.0,           # Radius
+                ConstraintType.DIAMETER: 15.0,         # Durchmesser
+                ConstraintType.ANGLE: 15.0,            # Winkel
+                
+                # Gleichheits-Constraints
+                ConstraintType.EQUAL_LENGTH: 20.0,     # Gleiche Länge
+                ConstraintType.EQUAL_RADIUS: 20.0,     # Gleicher Radius
+                
+                # Symmetrie
+                ConstraintType.SYMMETRIC: 25.0,        # Symmetrisch
+            }
+            
             for c, error in zip(constraints, errors):
-                if c.type == ConstraintType.COINCIDENT:
-                    weight = 10.0
-                elif c.type == ConstraintType.TANGENT:
-                    weight = 5.0
-                elif c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
-                    weight = 3.0
-                else:
-                    weight = 1.0
-
+                weight = WEIGHTS.get(c.type, 10.0)  # Default: 10.0
                 residuals.append(error * weight)
 
             # C. Regularisierung: Verhindere zu starke Abweichung von Startwerten
@@ -184,20 +211,54 @@ class ConstraintSolver:
                 val = result.x[i].item()
                 setattr(obj, attr, val)
 
-            # Erfolg prüfen (nur Constraint-Fehler, nicht Regularisierung)
+            # Erfolg prüfen mit verbesserten Konvergenzkriterien
             # Performance Optimization 2.2: Batch-Berechnung
             final_errors = calculate_constraint_errors_batch(constraints)
             constraint_error = sum(final_errors)
-            success = result.success and constraint_error < 1e-3
-            status = ConstraintStatus.FULLY_CONSTRAINED if success else ConstraintStatus.INCONSISTENT
-
+            
+            # Maximaler Einzelfehler (wichtig für geometrische Genauigkeit)
+            max_error = max(final_errors) if final_errors else 0.0
+            
+            # Konvergenzkriterien:
+            # 1. Der Solver muss konvergiert sein
+            # 2. Der Gesamtfehler muss klein sein (< 1e-3)
+            # 3. Der maximale Einzelfehler muss klein sein (< 1e-2)
+            solver_converged = result.success
+            total_error_small = constraint_error < 1e-3
+            max_error_small = max_error < 1e-2
+            
+            # Detaillierte Status-Bestimmung
+            if solver_converged and total_error_small and max_error_small:
+                success = True
+                # Prüfe auf vollständige Bestimmung (DOF = 0)
+                if n_effective_constraints >= n_vars:
+                    status = ConstraintStatus.FULLY_CONSTRAINED
+                    message = f"Vollständig bestimmt (Fehler: {constraint_error:.2e})"
+                else:
+                    status = ConstraintStatus.UNDER_CONSTRAINED
+                    dof = n_vars - n_effective_constraints
+                    message = f"Unterbestimmt ({dof} Freiheitsgrade)"
+            elif not solver_converged:
+                success = False
+                status = ConstraintStatus.INCONSISTENT
+                message = f"Solver nicht konvergiert (Status: {result.status})"
+            else:
+                # Solver konvergiert aber Fehler zu groß
+                success = False
+                status = ConstraintStatus.INCONSISTENT
+                if not total_error_small and not max_error_small:
+                    message = f"Constraints nicht erfüllt (Gesamt: {constraint_error:.2e}, Max: {max_error:.2e})"
+                elif not total_error_small:
+                    message = f"Gesamtfehler zu groß ({constraint_error:.2e})"
+                else:
+                    message = f"Maximaler Einzelfehler zu groß ({max_error:.2e})"
 
             return SolverResult(
                 success=bool(success),           # numpy.bool_ -> bool
                 iterations=int(result.nfev),     # numpy.int32 -> int
                 final_error=float(constraint_error), # numpy.float64 -> float
                 status=status,
-                message=str(result.message) if hasattr(result, 'message') else ""
+                message=message
             )
 
         except Exception as e:
