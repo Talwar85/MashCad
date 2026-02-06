@@ -687,10 +687,21 @@ class ShapeNamingService:
                         logger.debug(f"TNP BRepFeat: Mapped {old_shape_id.uuid[:8]} → {new_shape_id.uuid[:8]} (score={best_score:.3f})")
 
             # === Phase 3: Registriere alle neuen Edges (z.B. Side-Edges von Extrusion) ===
-            mappings_for_unmapped = [
-                type('Mapping', (), {'new_shape_uuid': uuid})()
-                for uuid in manual_mappings.values() if isinstance(manual_mappings.values(), dict)
-            ] if manual_mappings else []
+            # BUG FIX: Korrekte Iteration über manual_mappings.items()
+            mappings_for_unmapped = []
+            if manual_mappings:
+                for old_uuid, new_uuid_or_list in manual_mappings.items():
+                    if isinstance(new_uuid_or_list, list):
+                        # Liste von neuen UUIDs
+                        for new_uuid in new_uuid_or_list:
+                            mappings_for_unmapped.append(
+                                type('Mapping', (), {'new_shape_uuid': new_uuid})()
+                            )
+                    elif isinstance(new_uuid_or_list, str):
+                        # Einzelne UUID
+                        mappings_for_unmapped.append(
+                            type('Mapping', (), {'new_shape_uuid': new_uuid_or_list})()
+                        )
 
             new_edge_count = self._register_unmapped_edges(
                 result_solid=result_solid,
@@ -769,19 +780,53 @@ class ShapeNamingService:
                 logger.debug(f"[TNP DEBUG] _register_unmapped_edges: {len(existing_mappings)} existing mappings")
 
             # Sammle alle gemappten OCP Shapes
+            # FIX: Verwende OCP HashCode + ALLE Edges aus Registry (nicht nur existing_mappings!)
+            try:
+                from OCP.TopTools import TopTools_ShapeMapHasher
+                use_ocp_hash = True
+            except ImportError:
+                use_ocp_hash = False
+                logger.debug("[TNP] OCP TopTools nicht verfügbar, verwende Python id()")
+
             mapped_shapes = set()
+
+            # 1. Aktuelle Mappings (existing logic)
             for i, mapping in enumerate(existing_mappings):
                 if mapping.new_shape_uuid:
                     record = self._shapes.get(mapping.new_shape_uuid)
                     if record and record.ocp_shape:
-                        # Use Python id() for shape comparison
-                        shape_hash = id(record.ocp_shape)
-                        mapped_shapes.add(shape_hash)
-                        if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
+                        try:
+                            if use_ocp_hash:
+                                shape_hash = TopTools_ShapeMapHasher.HashCode_s(record.ocp_shape, 2**31 - 1)
+                            else:
+                                shape_hash = id(record.ocp_shape)
+                            mapped_shapes.add(shape_hash)
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"[TNP DEBUG] Mapping {i}: shape_hash={shape_hash}")
+                        except Exception:
+                            pass  # HashCode fehlgeschlagen, skip
+
+            # 2. ALLE bereits registrierten Edges aus Registry (BUG FIX!)
+            registry_edges_added = 0
+            for shape_uuid, record in self._shapes.items():
+                if record.shape_id.shape_type == ShapeType.EDGE and record.ocp_shape:
+                    try:
+                        if use_ocp_hash:
+                            shape_hash = TopTools_ShapeMapHasher.HashCode_s(record.ocp_shape, 2**31 - 1)
+                        else:
+                            shape_hash = id(record.ocp_shape)
+
+                        if shape_hash not in mapped_shapes:
+                            mapped_shapes.add(shape_hash)
+                            registry_edges_added += 1
+                    except Exception:
+                        pass  # HashCode fehlgeschlagen, skip
 
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"[TNP DEBUG] Total mapped_shapes: {len(mapped_shapes)}")
+                logger.debug(
+                    f"[TNP DEBUG] mapped_shapes: {len(mapped_shapes)} total "
+                    f"({len(existing_mappings)} current + {registry_edges_added} registry)"
+                )
 
             # Iteriere über alle Edges im Result
             explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
@@ -794,8 +839,12 @@ class ShapeNamingService:
 
                 # Prüfe ob bereits gemappt
                 try:
-                    # Use Python id() for shape comparison
-                    edge_hash = id(edge)
+                    # FIX: Verwende OCP HashCode (geometrisch stabil)
+                    if use_ocp_hash:
+                        edge_hash = TopTools_ShapeMapHasher.HashCode_s(edge, 2**31 - 1)
+                    else:
+                        edge_hash = id(edge)
+
                     is_mapped = edge_hash in mapped_shapes
 
                     if is_enabled("tnp_debug_logging"):
@@ -827,7 +876,7 @@ class ShapeNamingService:
                         new_count += 1
                         local_index += 1
 
-                        # Add to mapped_shapes to avoid duplicates
+                        # Add to mapped_shapes to avoid duplicates within this result
                         mapped_shapes.add(edge_hash)
 
                 except Exception as e:
@@ -836,6 +885,7 @@ class ShapeNamingService:
                 edge_index += 1
                 explorer.Next()
 
+            logger.info(f"[TNP] _register_unmapped_edges: {new_count} neue Edges registriert (von {total_edges_in_result} total)")
             return new_count
 
         except Exception as e:

@@ -4394,7 +4394,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     # UserTransform zurücksetzen NUR für Body-Actors
                     actor.SetUserTransform(None)
                     vtk_renderer.RemoveActor(actor)
-                    logger.debug(f"VTK: Actor '{actor_name}' aus Renderer entfernt")
+                    if is_enabled("viewport_debug"):
+                        logger.debug(f"VTK: Actor '{actor_name}' aus Renderer entfernt")
         except Exception as e:
             logger.warning(f"VTK Cleanup fehlgeschlagen: {e}")
         
@@ -4447,9 +4448,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # DEBUG: Mesh-Koordinaten loggen
                 bounds = mesh_obj.bounds
                 center = mesh_obj.center
-                logger.debug(f"Füge Mesh hinzu: {n_mesh}, {mesh_obj.n_points} Punkte")
-                logger.debug(f"  Mesh bounds: X({bounds[0]:.1f} to {bounds[1]:.1f}), Y({bounds[2]:.1f} to {bounds[3]:.1f}), Z({bounds[4]:.1f} to {bounds[5]:.1f})")
-                logger.debug(f"  Mesh center: ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f})")
+                if is_enabled("viewport_debug"):
+                    logger.debug(f"Füge Mesh hinzu: {n_mesh}, {mesh_obj.n_points} Punkte")
+                    logger.debug(f"  Mesh bounds: X({bounds[0]:.1f} to {bounds[1]:.1f}), Y({bounds[2]:.1f} to {bounds[3]:.1f}), Z({bounds[4]:.1f} to {bounds[5]:.1f})")
+                    logger.debug(f"  Mesh center: ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f})")
                 
                 # Phase 4 Assembly: Inaktive Components grau/transparent
                 render_color = (0.5, 0.5, 0.5) if inactive_component else col_rgb
@@ -4463,13 +4465,15 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 # Explizit sichtbar machen
                 if n_mesh in self.plotter.renderer.actors:
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)
-                    logger.debug(f"Actor '{n_mesh}' sichtbar gesetzt")
+                    if is_enabled("viewport_debug"):
+                        logger.debug(f"Actor '{n_mesh}' sichtbar gesetzt")
                     
                 actors_list.append(n_mesh)
                 
                 if edge_mesh_obj is not None:
                     n_edge = f"body_{bid}_e"
-                    logger.debug(f"Füge Edges hinzu: {n_edge}, {edge_mesh_obj.n_lines} Linien")
+                    if is_enabled("viewport_debug"):
+                        logger.debug(f"Füge Edges hinzu: {n_edge}, {edge_mesh_obj.n_lines} Linien")
                     self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
                     actors_list.append(n_edge)
                 
@@ -4797,7 +4801,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if face_data_list:
                 self.show_textured_faces_overlay(bid, face_data_list, 'mixed')
 
-        logger.debug(f"Texture-Previews aktualisiert für {len(body_ids)} Bodies")
+        if is_enabled("viewport_debug"):
+            logger.debug(f"Texture-Previews aktualisiert für {len(body_ids)} Bodies")
 
     def get_selected_faces(self):
         return [self.detected_faces[i] for i in self.selected_faces if i < len(self.detected_faces)]

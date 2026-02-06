@@ -4403,7 +4403,7 @@ class Body:
         Wird nach Boolean/PushPull aufgerufen.
         """
         if not hasattr(self, '_shape_registry'):
-            if is_enabled("tnp_debug_logging"):
+            if is_enabled("extrude_debug"):
                 logger.debug(f"TNP DEBUG: _update_registry_for_feature - KEINE REGISTRY!")
             return
         
@@ -4412,7 +4412,7 @@ class Body:
             from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
             
             updated = 0
-            if is_enabled("tnp_debug_logging"):
+            if is_enabled("extrude_debug"):
                 logger.debug(f"TNP DEBUG: _update_registry_for_feature für {feature.name} ({feature.id})")
             
             # Edge-basierte Features (Fillet, Chamfer)
@@ -4420,13 +4420,13 @@ class Body:
                 edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
                 geometric_selectors = getattr(feature, 'geometric_selectors', [])
                 
-                if is_enabled("tnp_debug_logging"):
+                if is_enabled("extrude_debug"):
                     logger.debug(f"TNP DEBUG: Feature hat {len(edge_shape_ids)} edge_shape_ids, "
                                f"{len(geometric_selectors)} selectors")
                 
                 # Hole Edges aus Solid für original_shape
                 all_edges = list(solid.edges()) if solid and hasattr(solid, 'edges') else []
-                if is_enabled("tnp_debug_logging"):
+                if is_enabled("extrude_debug"):
                     logger.debug(f"TNP DEBUG: Solid hat {len(all_edges)} edges")
                 
                 for i, shape_id in enumerate(edge_shape_ids):
@@ -4450,10 +4450,10 @@ class Body:
                                 original_shape = matched_edge.wrapped
                         
                         if original_shape:
-                            if is_enabled("tnp_debug_logging"):
+                            if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Edge {i} - Match gefunden, original_shape gesetzt")
                         else:
-                            if is_enabled("tnp_debug_logging"):
+                            if is_enabled("extrude_debug"):
                                 logger.warning(f"TNP DEBUG: Edge {i} - KEIN Match gefunden!")
                         
                         ref = ShapeReference(
@@ -5258,22 +5258,22 @@ class Body:
                             logger.success(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
                         
                         # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
-                        if is_enabled("tnp_debug_logging"):
+                        if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                         self._update_edge_selectors_after_operation(new_solid)
                         
                         # Registry für ALLE Fillet/Chamfer-Features aktualisieren
-                        if is_enabled("tnp_debug_logging"):
+                        if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
                         updated_count = 0
                         for feat in self.features:
                             if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                if is_enabled("tnp_debug_logging"):
+                                if is_enabled("extrude_debug"):
                                     logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                 self._update_registry_for_feature(feat, new_solid)
                                 updated_count += 1
                         
-                        if is_enabled("tnp_debug_logging"):
+                        if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                     else:
                         # Fallback zu normalem Extrude+Boolean
@@ -5289,7 +5289,7 @@ class Body:
                     if part_geometry:
                         if current_solid is None or feature.operation == "New Body":
                             new_solid = part_geometry
-                            if is_enabled("tnp_debug_logging"):
+                            if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
                             
                             # === TNP v4.0: Shape-Registrierung für Extrude ===
@@ -5301,7 +5301,7 @@ class Body:
                                         logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
                             # Boolean Operation mit sicherer Helper-Methode
-                            if is_enabled("tnp_debug_logging"):
+                            if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
                             result, success = self._safe_boolean_operation(
                                 current_solid, part_geometry, feature.operation
@@ -5309,34 +5309,34 @@ class Body:
 
                             if success:
                                 new_solid = result
-                                if is_enabled("tnp_debug_logging"):
+                                if is_enabled("extrude_debug"):
                                     logger.debug(f"TNP DEBUG: Boolean {feature.operation} erfolgreich")
                                 
                                 # TNP v3.0: Nach Boolean-Operation ALLE Shape-Referenzen aktualisieren
                                 if new_solid is not None:
                                     # 1. Edge-Selektoren für nachfolgende Features aktualisieren
-                                    if is_enabled("tnp_debug_logging"):
+                                    if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                                     self._update_edge_selectors_after_operation(new_solid)
                                     
                                     # 2. Registry für ALLE Fillet/Chamfer-Features aktualisieren
-                                    if is_enabled("tnp_debug_logging"):
+                                    if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte Registry-Update für {len(self.features)} Features")
                                     updated_count = 0
                                     for feat in self.features:
                                         if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                            if is_enabled("tnp_debug_logging"):
+                                            if is_enabled("extrude_debug"):
                                                 logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
                                             self._update_registry_for_feature(feat, new_solid)
                                             updated_count += 1
                                     
-                                    if is_enabled("tnp_debug_logging"):
+                                    if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                                     
                                     # 3. DEBUG: Zeige Registry-Status
                                     if hasattr(self, '_shape_registry'):
                                         stats = self._shape_registry.get_stats()
-                                        if is_enabled("tnp_debug_logging"):
+                                        if is_enabled("extrude_debug"):
                                             logger.debug(f"TNP DEBUG: Registry Status = {stats}")
                             else:
                                 logger.warning(f"⚠️ {feature.operation} fehlgeschlagen - Body bleibt unverändert")
@@ -5352,7 +5352,7 @@ class Body:
                     self._update_edge_selectors_for_feature(feature, current_solid)
                     
                     # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
-                    if is_enabled("tnp_debug_logging"):
+                    if is_enabled("extrude_debug"):
                         logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
@@ -5385,7 +5385,7 @@ class Body:
                     # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
                     # WICHTIG: Dies muss nach _update_edge_selectors_for_feature passieren
                     # damit die neuen Selektoren verwendet werden
-                    if is_enabled("tnp_debug_logging"):
+                    if is_enabled("extrude_debug"):
                         logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
                     self._update_registry_for_feature(feature, current_solid)
                     
@@ -6252,11 +6252,11 @@ class Body:
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
         
-        if is_enabled("tnp_debug_logging"):
+        if is_enabled("extrude_debug"):
             logger.debug(f"TNP DEBUG _compute_extrude_part: has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
         
         if not has_sketch and not has_polys and not has_face_brep:
-            if is_enabled("tnp_debug_logging"):
+            if is_enabled("extrude_debug"):
                 logger.debug("TNP DEBUG _compute_extrude_part: KEINE Geometrie-Quelle!")
             return None
 
@@ -6293,32 +6293,39 @@ class Body:
                         sketch_profiles, profile_selector
                     )
                     if polys_to_extrude:
-                        logger.info(f"Extrude: {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
+                        if is_enabled("extrude_debug"):
+                            logger.info(f"Extrude: {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
                         # Selektor hat nicht gematcht → Fehler, kein Fallback!
-                        logger.error(f"Extrude: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        logger.error(f"Extrude: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        if is_enabled("extrude_debug"):
+                            logger.error(f"Extrude: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
+                            logger.error(f"Extrude: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
                         # Leere Liste → keine Extrusion
                 elif sketch_profiles:
                     # Kein Selektor → alle Profile verwenden (Legacy/Import)
                     polys_to_extrude = list(sketch_profiles)
-                    logger.info(f"Extrude: Alle {len(polys_to_extrude)} Profile (kein Selektor)")
+                    if is_enabled("extrude_debug"):
+                        logger.info(f"Extrude: Alle {len(polys_to_extrude)} Profile (kein Selektor)")
                 else:
                     # Sketch hat keine closed_profiles
-                    logger.warning(f"Extrude: Sketch hat keine closed_profiles!")
+                    if is_enabled("extrude_debug"):
+                        logger.warning(f"Extrude: Sketch hat keine closed_profiles!")
             else:
                 # Ohne Sketch (Push/Pull): precalculated_polys oder face_brep
                 if has_polys:
                     polys_to_extrude = list(feature.precalculated_polys)
-                    logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+                    if is_enabled("extrude_debug"):
+                        logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
                 elif has_face_brep:
                     # Face aus BREP deserialisieren und direkt extrudieren (für Zylinder etc.)
-                    logger.info(f"Extrude: Face aus BREP (Push/Pull auf {feature.face_type})")
+                    if is_enabled("extrude_debug"):
+                        logger.info(f"Extrude: Face aus BREP (Push/Pull auf {feature.face_type})")
                     return self._extrude_from_face_brep(feature)
 
             # === Extrude-Logik ===
             if polys_to_extrude:
-                logger.info(f"Extrude: Verarbeite {len(polys_to_extrude)} Profile.")
+                if is_enabled("extrude_debug"):
+                    logger.info(f"Extrude: Verarbeite {len(polys_to_extrude)} Profile.")
 
                 faces_to_extrude = []
                 for idx, poly in enumerate(polys_to_extrude):
@@ -6473,8 +6480,10 @@ class Body:
                     amount = amount + (cut_extension if amount > 0 else -cut_extension)
                     logger.debug(f"[CUT] Extrusion verlängert: {original_amount:.2f} → {amount:.2f}mm (+{cut_extension:.2f}mm)")
 
-                logger.debug(f"[EXTRUDE DEBUG] distance={feature.distance}, direction={feature.direction}, amount={amount}")
-                logger.debug(f"[EXTRUDE DEBUG] plane.z_dir={plane.z_dir}, operation={feature.operation}")
+                if is_enabled("extrude_debug"):
+                    logger.debug(f"[EXTRUDE DEBUG] distance={feature.distance}, direction={feature.direction}, amount={amount}")
+                if is_enabled("extrude_debug"):
+                    logger.debug(f"[EXTRUDE DEBUG] plane.z_dir={plane.z_dir}, operation={feature.operation}")
 
                 for f in faces_to_extrude:
                     s = self._ocp_extrude_face(f, amount, plane.z_dir)
@@ -6485,14 +6494,16 @@ class Body:
                             from OCP.BRepGProp import BRepGProp
                             props = GProp_GProps()
                             BRepGProp.VolumeProperties_s(s.wrapped, props)
-                            logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mm³")
+                            if is_enabled("extrude_debug"):
+                                logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mm³")
                         except:
                             pass
                         solids.append(s)
 
             # === PFAD B: Fallback auf "Alten Code" (Rebuild / Scripting) ===
             if not solids:
-                logger.info("Extrude: Starte Auto-Detection (Legacy Mode)...")
+                if is_enabled("extrude_debug"):
+                    logger.info("Extrude: Starte Auto-Detection (Legacy Mode)...")
                 # ... [HIER FÜGST DU DEINEN GELIEFERTEN ALTEN CODE EIN] ...
                 # Ich rufe hier eine interne Methode auf, die deinen alten Code enthält, 
                 # um diesen Block übersichtlich zu halten.
@@ -6534,15 +6545,18 @@ class Body:
         used_profile_indices = set()  # Verhindert doppeltes Matchen
 
         # Debug: Zeige alle verfügbaren Profile
-        logger.debug(f"[SELECTOR] {len(profiles)} Profile verfügbar, {len(selector)} Selektoren")
+        if is_enabled("extrude_debug"):
+            logger.debug(f"[SELECTOR] {len(profiles)} Profile verfügbar, {len(selector)} Selektoren")
         for i, poly in enumerate(profiles):
             try:
                 c = poly.centroid
-                logger.debug(f"  Profile {i}: centroid=({c.x:.2f}, {c.y:.2f}), area={poly.area:.1f}")
+                if is_enabled("extrude_debug"):
+                    logger.debug(f"  Profile {i}: centroid=({c.x:.2f}, {c.y:.2f}), area={poly.area:.1f}")
             except:
                 pass
 
-        logger.debug(f"[SELECTOR] Selektoren: {selector}")
+        if is_enabled("extrude_debug"):
+            logger.debug(f"[SELECTOR] Selektoren: {selector}")
 
         # Für JEDEN Selektor das BESTE Match finden (nicht alle innerhalb Toleranz!)
         for sel_cx, sel_cy in selector:
@@ -6571,13 +6585,16 @@ class Body:
                 matched.append(profiles[best_match_idx])
                 used_profile_indices.add(best_match_idx)
                 c = profiles[best_match_idx].centroid
-                logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) ≈ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
+                if is_enabled("extrude_debug"):
+                    logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) ≈ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
             else:
-                logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
+                if is_enabled("extrude_debug"):
+                    logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
 
         # FAIL-FAST: Kein Fallback auf alle Profile!
         if not matched:
-            logger.warning(f"[SELECTOR] Kein Profil-Match! Selector passt zu keinem der {len(profiles)} Profile.")
+            if is_enabled("extrude_debug"):
+                logger.warning(f"[SELECTOR] Kein Profil-Match! Selector passt zu keinem der {len(profiles)} Profile.")
 
         return matched
 
@@ -6679,7 +6696,7 @@ class Body:
                 # DEBUG: Check validation criteria
                 has_volume_attr = hasattr(result, 'volume')
                 volume = result.volume if has_volume_attr else 0.0
-                if is_enabled("tnp_debug_logging"):
+                if is_enabled("extrude_debug"):
                     logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
 
                 if is_valid and hasattr(result, 'volume') and result.volume > 0.001:

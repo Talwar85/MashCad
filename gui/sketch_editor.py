@@ -1308,9 +1308,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.projected_world_origin = (float(np.dot(rel, u)), float(np.dot(rel, v)))
 
         from loguru import logger
-        logger.debug(f"[Orientation] Plane origin: {plane_origin}, normal: {plane_normal}")
-        logger.debug(f"[Orientation] Plane X-dir: {self.sketch_plane_x_dir}, Y-dir: {self.sketch_plane_y_dir}")
-        logger.debug(f"[Orientation] Projected world origin: {self.projected_world_origin}")
+        if is_enabled("sketch_debug"):
+            logger.debug(f"[Orientation] Plane origin: {plane_origin}, normal: {plane_normal}")
+            logger.debug(f"[Orientation] Plane X-dir: {self.sketch_plane_x_dir}, Y-dir: {self.sketch_plane_y_dir}")
+            logger.debug(f"[Orientation] Projected world origin: {self.projected_world_origin}")
 
         if not bodies_data:
             self.request_update()
@@ -1466,11 +1467,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # 1. Linien
         lines = [l for l in self.sketch.lines if not l.construction]
-        logger.info(f"[PROFILE] Lines: {len(lines)} non-construction / {len(self.sketch.lines)} total")
+        if is_enabled("sketch_debug"):
+            logger.info(f"[PROFILE] Lines: {len(lines)} non-construction / {len(self.sketch.lines)} total")
         for line_idx, line in enumerate(lines):
             p1 = get_welded_pt(line.start.x, line.start.y)
             p2 = get_welded_pt(line.end.x, line.end.y)
-            logger.debug(f"[PROFILE] Line {line_idx}: ({line.start.x:.2f},{line.start.y:.2f})→({line.end.x:.2f},{line.end.y:.2f}) welded to {p1}→{p2}")
+            if is_enabled("sketch_debug"):
+                logger.debug(f"[PROFILE] Line {line_idx}: ({line.start.x:.2f},{line.start.y:.2f})→({line.end.x:.2f},{line.end.y:.2f}) welded to {p1}→{p2}")
             if p1 != p2:
                 shapely_lines.append(LineString([p1, p2]))
                 geometry_sources.append(('line', line, p1, p2))
@@ -1478,16 +1481,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # 2. Bögen
         arcs = [a for a in self.sketch.arcs if not a.construction]
         all_arcs = self.sketch.arcs
-        logger.info(f"[PROFILE] Arcs: {len(arcs)} non-construction / {len(all_arcs)} total")
+        if is_enabled("sketch_debug"):
+            logger.info(f"[PROFILE] Arcs: {len(arcs)} non-construction / {len(all_arcs)} total")
         for arc_idx, arc in enumerate(arcs):
             # FIX: Für Slots verwende die Marker-Punkte (exakt mit Linien verbunden)
             # statt der berechneten start_point/end_point (können Floating-Point Abweichungen haben)
             start_marker = getattr(arc, '_start_marker', None)
             end_marker = getattr(arc, '_end_marker', None)
 
-            logger.debug(f"[PROFILE] Arc {arc_idx}: center=({arc.center.x:.2f}, {arc.center.y:.2f}), "
-                        f"r={arc.radius:.2f}, angles={arc.start_angle:.1f}°→{arc.end_angle:.1f}°, "
-                        f"construction={arc.construction}, has_markers={start_marker is not None}")
+            if is_enabled("sketch_debug"):
+                logger.debug(f"[PROFILE] Arc {arc_idx}: center=({arc.center.x:.2f}, {arc.center.y:.2f}), "
+                            f"r={arc.radius:.2f}, angles={arc.start_angle:.1f}°→{arc.end_angle:.1f}°, "
+                            f"construction={arc.construction}, has_markers={start_marker is not None}")
 
             if start_marker and end_marker:
                 # Slot-Arc: Verwende die exakten Verbindungspunkte
@@ -1509,9 +1514,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     sweep -= 360
 
                 use_start_angle = actual_start_angle
-                logger.debug(f"[PROFILE] Arc {arc_idx} (SLOT): marker_start=({start_marker.x:.2f}, {start_marker.y:.2f}), "
-                            f"marker_end=({end_marker.x:.2f}, {end_marker.y:.2f}), "
-                            f"actual_angles={actual_start_angle:.1f}°→{actual_end_angle:.1f}°, sweep={sweep:.1f}°")
+                if is_enabled("sketch_debug"):
+                    logger.debug(f"[PROFILE] Arc {arc_idx} (SLOT): marker_start=({start_marker.x:.2f}, {start_marker.y:.2f}), "
+                                f"marker_end=({end_marker.x:.2f}, {end_marker.y:.2f}), "
+                                f"actual_angles={actual_start_angle:.1f}°→{actual_end_angle:.1f}°, sweep={sweep:.1f}°")
             else:
                 # Normaler Arc: Berechne aus Winkeln
                 start_p = get_welded_pt(arc.start_point.x, arc.start_point.y)
@@ -1529,7 +1535,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     sweep = 360
 
                 use_start_angle = arc.start_angle
-                logger.debug(f"[PROFILE] Arc {arc_idx} (NORMAL): start_p={start_p}, end_p={end_p}, sweep={sweep:.1f}°")
+                if is_enabled("sketch_debug"):
+                    logger.debug(f"[PROFILE] Arc {arc_idx} (NORMAL): start_p={start_p}, end_p={end_p}, sweep={sweep:.1f}°")
 
             # Segmente basierend auf Sweep (mindestens 8 für gute Kurven)
             steps = max(8, int(sweep / 5))
@@ -1544,13 +1551,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 points.append(get_welded_pt(px, py))
             points.append(end_p)
 
-            logger.debug(f"[PROFILE] Arc {arc_idx}: Generated {len(points)} points for LineString")
+            if is_enabled("sketch_debug"):
+                logger.debug(f"[PROFILE] Arc {arc_idx}: Generated {len(points)} points for LineString")
             # Show first, middle, and last point to verify arc direction
             if len(points) >= 3:
                 mid_idx = len(points) // 2
-                logger.info(f"[PROFILE] Arc {arc_idx} trace: START({points[0][0]:.1f}, {points[0][1]:.1f}) → "
-                           f"MID({points[mid_idx][0]:.1f}, {points[mid_idx][1]:.1f}) → "
-                           f"END({points[-1][0]:.1f}, {points[-1][1]:.1f})")
+                if is_enabled("sketch_debug"):
+                    logger.info(f"[PROFILE] Arc {arc_idx} trace: START({points[0][0]:.1f}, {points[0][1]:.1f}) → "
+                               f"MID({points[mid_idx][0]:.1f}, {points[mid_idx][1]:.1f}) → "
+                               f"END({points[-1][0]:.1f}, {points[-1][1]:.1f})")
 
             if len(points) >= 2:
                 shapely_lines.append(LineString(points))
@@ -3858,7 +3867,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             QTimer.singleShot(0, self._cancel_tool)
             return
 
-        logger.debug(f"[DIM] Fallthrough hide at end of _on_dim_confirmed (tool={self.current_tool.name}, step={self.tool_step})")
+        if is_enabled("sketch_debug"):
+            logger.debug(f"[DIM] Fallthrough hide at end of _on_dim_confirmed (tool={self.current_tool.name}, step={self.tool_step})")
         self.dim_input.hide()
         self.dim_input.unlock_all()
         self.dim_input_active = False
@@ -3874,16 +3884,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.dim_input_active and self.dim_input.isVisible():
             panel_geo = self.dim_input.geometry()
             click_in_panel = panel_geo.contains(pos.toPoint())
-            logger.debug(f"[CLICK] dim_input_active=True, panel at {panel_geo}, click at {pos.toPoint()}, in_panel={click_in_panel}")
+            if is_enabled("sketch_debug"):
+                logger.debug(f"[CLICK] dim_input_active=True, panel at {panel_geo}, click at {pos.toPoint()}, in_panel={click_in_panel}")
             if not click_in_panel:
                 if event.button() == Qt.LeftButton:
                     # Links-Klick außerhalb = Bestätigen
-                    logger.info(f"[CLICK] Left-click outside panel → confirming dim_input")
+                    if is_enabled("sketch_debug"):
+                        logger.info(f"[CLICK] Left-click outside panel → confirming dim_input")
                     self._on_dim_confirmed()
                     return
                 elif event.button() == Qt.RightButton:
                     # Rechts-Klick außerhalb = Abbrechen
-                    logger.info(f"[CLICK] Right-click outside panel → canceling")
+                    if is_enabled("sketch_debug"):
+                        logger.info(f"[CLICK] Right-click outside panel → canceling")
                     self.dim_input.hide()
                     self.dim_input.unlock_all()
                     self.dim_input_active = False

@@ -17,6 +17,7 @@ import numpy as np
 from typing import Optional, List, Dict, Set, Tuple, Callable
 from dataclasses import dataclass, field
 from loguru import logger
+from config.feature_flags import is_enabled
 
 try:
     import pyvista as pv
@@ -764,7 +765,8 @@ class EdgeSelectionMixin:
                     name="tnp_debug_resolved",
                     pickable=False
                 )
-                logger.info(f"TNP Debug: {len(resolved_meshes)} Kanten in GRÜN (aufgelöst)")
+                if is_enabled("tnp_debug_logging"):
+                    logger.info(f"TNP Debug: {len(resolved_meshes)} Kanten in GRÜN (aufgelöst)")
             
             # Rot für nicht gefundene Kanten
             # Diese werden als kleine Kugeln an den Centers gezeichnet
