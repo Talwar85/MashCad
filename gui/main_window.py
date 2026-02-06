@@ -354,6 +354,8 @@ class MainWindow(QMainWindow):
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
         self.left_tabs.setCurrentIndex(0)  # Browser default
 
+        self.tnp_stats_panel.body_pick_requested.connect(self._on_tnp_body_pick_requested)
+
         # Backwards-compatible alias
         self.bottom_tabs = self.left_tabs
 
@@ -1435,12 +1437,12 @@ class MainWindow(QMainWindow):
                     self._highlighted_body_id = body.id
                 self.body_properties.clear()
                 self._hide_transform_ui()
-                self._update_tnp_stats(None)
+                self._update_tnp_stats(body)
             else:
                 self.statusBar().showMessage("Ready")
                 self.body_properties.clear()
                 self._hide_transform_ui()
-                self._update_tnp_stats(None)
+                self._update_tnp_stats()
     
     def _start_transform_mode(self, mode):
         """
@@ -1660,6 +1662,11 @@ class MainWindow(QMainWindow):
         # Prüfe auf Wall Thickness Pending Mode
         if getattr(self, '_pending_wall_thickness_mode', False):
             self._on_body_clicked_for_wall_thickness(body_id)
+            return
+
+        # Prüfe auf TNP Body-Pick Mode
+        if getattr(self, '_pending_tnp_pick_mode', False):
+            self._on_body_clicked_for_tnp(body_id)
             return
 
         # Nur reagieren wenn wir auf Body-Selektion warten (Transform)
@@ -10116,18 +10123,56 @@ class MainWindow(QMainWindow):
             return self.document.bodies[-1]
         return None
 
+    def _on_tnp_body_pick_requested(self):
+        """User hat den Pick-Button im TNP-Panel geklickt."""
+        self._pending_tnp_pick_mode = True
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(True)
+        self.statusBar().showMessage(tr("Body im Viewport anklicken…"))
+
+    def _on_body_clicked_for_tnp(self, body_id: str):
+        """Body wurde im Viewport für TNP-Panel ausgewählt."""
+        self._pending_tnp_pick_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        body = None
+        for b in self.document.bodies:
+            if getattr(b, 'id', None) == body_id:
+                body = b
+                break
+
+        if body:
+            self._update_tnp_stats(body)
+            self.statusBar().showMessage(f"TNP: {body.name}")
+        else:
+            self.tnp_stats_panel.set_picking_active(False)
+            self.statusBar().showMessage(tr("Body nicht gefunden"))
+
     def _update_tnp_stats(self, body=None):
         """
         Aktualisiert das TNP-Statistiken-Panel.
 
+        Merkt sich den letzten Body, sodass nach Aktionen das Panel
+        nicht leer wird (der User muss nicht erneut im Browser selektieren).
+
         Args:
-            body: Body-Objekt oder None (verwendet dann aktiven Body)
+            body: Body-Objekt oder None (verwendet dann letzten/aktiven Body)
         """
         if not hasattr(self, 'tnp_stats_panel'):
             return
 
-        if body is None:
+        if body is not None:
+            self._last_tnp_body_id = getattr(body, 'id', None)
+        else:
             body = self._get_active_body()
+            if body is None and hasattr(self, '_last_tnp_body_id') and self._last_tnp_body_id:
+                for b in self.document.bodies:
+                    if getattr(b, 'id', None) == self._last_tnp_body_id:
+                        body = b
+                        break
 
         try:
             self.tnp_stats_panel.update_stats(body)

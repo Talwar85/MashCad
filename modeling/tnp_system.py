@@ -265,39 +265,50 @@ class ShapeNamingService:
         3. BRepFeat Mapping Lookup
         4. Geometric Matching (Fallback)
         """
+        resolved, _method = self.resolve_shape_with_method(shape_id, current_solid)
+        return resolved
+
+    def resolve_shape_with_method(self, shape_id: ShapeID,
+                                  current_solid: Any) -> Tuple[Optional[Any], str]:
+        """
+        Löst eine ShapeID auf und gibt auch die verwendete Methode zurück.
+
+        Returns:
+            (resolved_shape, method) wobei method eines von:
+            "direct", "history", "brepfeat", "geometric", "unresolved"
+        """
         if shape_id.uuid not in self._shapes:
             logger.warning(f"Unbekannte ShapeID: {shape_id.uuid}")
-            return None
+            return None, "unresolved"
         
         record = self._shapes[shape_id.uuid]
         
         # Strategie 1: Direkter Lookup
         if record.is_valid and record.ocp_shape is not None:
-            # Prüfe ob Shape noch im aktuellen Solid existiert
             if self._shape_exists_in_solid(record.ocp_shape, current_solid):
                 logger.debug(f"Shape {shape_id.uuid[:8]} direkt gefunden")
-                return record.ocp_shape
+                return record.ocp_shape, "direct"
         
         # Strategie 2: History Tracing
         resolved = self._trace_via_history(shape_id, current_solid)
         if resolved:
             logger.debug(f"Shape {shape_id.uuid[:8]} via History gefunden")
-            return resolved
+            return resolved, "history"
         
         # Strategie 3: BRepFeat Mapping Lookup
         resolved = self._lookup_brepfeat_mapping(shape_id, current_solid)
         if resolved:
             logger.debug(f"Shape {shape_id.uuid[:8]} via BRepFeat Mapping gefunden")
-            return resolved
+            return resolved, "brepfeat"
         
         # Strategie 4: Geometric Matching (Fallback)
         resolved = self._match_geometrically(shape_id, current_solid)
         if resolved:
             logger.debug(f"Shape {shape_id.uuid[:8]} via Geometric Matching gefunden")
-            return resolved
+            return resolved, "geometric"
         
         logger.warning(f"Shape {shape_id.uuid[:8]} konnte nicht aufgelöst werden")
-        return None
+        return None, "unresolved"
     
     def get_shapes_by_feature(self, feature_id: str) -> List[ShapeID]:
         """Gibt alle Shapes zurück, die ein Feature erzeugt hat"""
@@ -316,7 +327,111 @@ class ShapeNamingService:
             'edges': len(self._spatial_index[ShapeType.EDGE]),
             'faces': len(self._spatial_index[ShapeType.FACE])
         }
-    
+
+    def get_health_report(self, body) -> Dict[str, Any]:
+        """
+        Erstellt einen Gesundheitsbericht für einen Body.
+
+        Prüft alle Features mit TNP-Referenzen (edge_shape_ids, face_shape_ids)
+        und testet ob die ShapeIDs noch auflösbar sind.
+
+        Returns:
+            {
+                'body_name': str,
+                'status': 'ok' | 'fallback' | 'broken',
+                'ok': int, 'fallback': int, 'broken': int,
+                'features': [
+                    {
+                        'name': str,
+                        'type': str,
+                        'status': 'ok' | 'fallback' | 'broken' | 'no_refs',
+                        'ok': int, 'fallback': int, 'broken': int,
+                        'refs': [{'kind': str, 'status': str, 'method': str}]
+                    }
+                ]
+            }
+        """
+        report = {
+            'body_name': getattr(body, 'name', 'Body'),
+            'status': 'ok',
+            'ok': 0, 'fallback': 0, 'broken': 0,
+            'features': []
+        }
+
+        features = getattr(body, 'features', [])
+        current_solid = getattr(body, '_build123d_solid', None)
+
+        ocp_solid = None
+        if current_solid is not None:
+            ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+        for feat in features:
+            feat_report = {
+                'name': getattr(feat, 'name', 'Feature'),
+                'type': type(feat).__name__.replace('Feature', ''),
+                'status': 'no_refs',
+                'ok': 0, 'fallback': 0, 'broken': 0,
+                'refs': []
+            }
+
+            shape_ids = []
+            ref_kind = None
+
+            if hasattr(feat, 'edge_shape_ids') and feat.edge_shape_ids:
+                shape_ids = feat.edge_shape_ids
+                ref_kind = 'Edge'
+            elif hasattr(feat, 'face_shape_ids') and feat.face_shape_ids:
+                shape_ids = feat.face_shape_ids
+                ref_kind = 'Face'
+
+            if not shape_ids:
+                report['features'].append(feat_report)
+                continue
+
+            for sid in shape_ids:
+                if not isinstance(sid, ShapeID):
+                    continue
+
+                if ocp_solid is not None:
+                    _resolved, method = self.resolve_shape_with_method(sid, ocp_solid)
+                else:
+                    method = "unresolved"
+
+                if method in ("direct", "history"):
+                    status = "ok"
+                    feat_report['ok'] += 1
+                    report['ok'] += 1
+                elif method in ("brepfeat", "geometric"):
+                    status = "fallback"
+                    feat_report['fallback'] += 1
+                    report['fallback'] += 1
+                else:
+                    status = "broken"
+                    feat_report['broken'] += 1
+                    report['broken'] += 1
+
+                feat_report['refs'].append({
+                    'kind': ref_kind,
+                    'status': status,
+                    'method': method
+                })
+
+            if feat_report['broken'] > 0:
+                feat_report['status'] = 'broken'
+            elif feat_report['fallback'] > 0:
+                feat_report['status'] = 'fallback'
+            else:
+                feat_report['status'] = 'ok'
+
+            report['features'].append(feat_report)
+
+        if report['broken'] > 0:
+            report['status'] = 'broken'
+        elif report['fallback'] > 0:
+            report['status'] = 'fallback'
+
+        return report
+
     def invalidate_feature(self, feature_id: str) -> None:
         """Remove all shapes from a feature (for undo/rebuild)."""
         if feature_id in self._by_feature:
@@ -566,8 +681,22 @@ class ShapeNamingService:
         best_score = float('inf')
         
         try:
+            # current_solid kann Build123d Solid ODER OCP TopoDS_Shape sein
+            if hasattr(current_solid, 'edges'):
+                solid_for_iteration = current_solid
+            else:
+                # OCP Shape → zu Build123d wrappen für .edges()
+                try:
+                    from build123d import Solid, Shape
+                    try:
+                        solid_for_iteration = Solid(current_solid)
+                    except Exception:
+                        solid_for_iteration = Shape(current_solid)
+                except Exception:
+                    return None
+
             if shape_id.shape_type == ShapeType.EDGE:
-                for edge in current_solid.edges():
+                for edge in solid_for_iteration.edges():
                     center = edge.center()
                     edge_center = np.array([center.X, center.Y, center.Z])
                     
