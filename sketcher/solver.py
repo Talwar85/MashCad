@@ -105,9 +105,20 @@ class ConstraintSolver:
             refs.append((arc, 'end_angle'))
             x0_vals.append(arc.end_angle)
 
-        # Zähle Constraints (FIXED zählt nicht als "echter" Constraint)
-        n_effective_constraints = len([c for c in constraints 
-                                       if c.type != ConstraintType.FIXED])
+        # Zähle Constraints gewichtet nach DOF-Verbrauch
+        # Manche Constraints binden mehr als 1 Freiheitsgrad
+        _CONSTRAINT_DOF = {
+            ConstraintType.COINCIDENT: 2,      # x + y
+            ConstraintType.CONCENTRIC: 2,      # x + y
+            ConstraintType.COLLINEAR: 2,       # parallel + punkt-auf-linie
+            ConstraintType.SYMMETRIC: 2,       # mittelpunkt + senkrecht
+            ConstraintType.MIDPOINT: 2,        # x + y
+        }
+        n_effective_constraints = sum(
+            _CONSTRAINT_DOF.get(c.type, 1)
+            for c in constraints
+            if c.type != ConstraintType.FIXED
+        )
         
         if not x0_vals:
             # Keine beweglichen Teile - prüfen ob Constraints erfüllt

@@ -557,12 +557,21 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     elif ct == ConstraintType.COLLINEAR:
         l1, l2 = entities
         # Beide Linien müssen auf derselben Geraden liegen
-        # = Parallel + Startpunkt von l2 auf l1
+        # = Parallel + beide Endpunkte von l2 auf der Geraden durch l1
         d1 = l1.direction
         d2 = l2.direction
         cross = abs(d1[0] * d2[1] - d1[1] * d2[0])  # Parallel-Check
-        dist = l1.distance_to_point(l2.start)  # Punkt-auf-Linie
-        return cross + dist
+
+        # Distanz zur unendlichen Geraden (nicht zum Segment)
+        dx = l1.end.x - l1.start.x
+        dy = l1.end.y - l1.start.y
+        line_len = math.hypot(dx, dy)
+        if line_len < 1e-10:
+            return cross
+        # Vorzeichenbehaftete Distanz: |cross(AB, AP)| / |AB|
+        dist_start = abs(dy * (l2.start.x - l1.start.x) - dx * (l2.start.y - l1.start.y)) / line_len
+        dist_end = abs(dy * (l2.end.x - l1.start.x) - dx * (l2.end.y - l1.start.y)) / line_len
+        return cross + dist_start + dist_end
 
     elif ct == ConstraintType.SYMMETRIC:
         p1, p2, axis = entities
@@ -571,10 +580,14 @@ def calculate_constraint_error(constraint: Constraint) -> float:
         mid_y = (p1.y + p2.y) / 2
         mid = Point2D(mid_x, mid_y)
         mid_dist = axis.distance_to_point(mid)
-        # Verbindungslinie p1-p2 muss senkrecht zur Achse sein
+        # Verbindungslinie p1-p2 muss senkrecht zur Achse sein (normalisiert)
         dx, dy = p2.x - p1.x, p2.y - p1.y
-        ax, ay = axis.direction
-        dot = abs(dx * ax + dy * ay)  # Sollte 0 sein für senkrecht
+        p_len = math.hypot(dx, dy)
+        ax, ay = axis.direction  # bereits normalisiert
+        if p_len > 1e-10:
+            dot = abs((dx * ax + dy * ay) / p_len)  # Normalisiert auf [0, 1]
+        else:
+            dot = 0.0
         return mid_dist + dot
 
     elif ct == ConstraintType.EQUAL_RADIUS:
@@ -653,8 +666,8 @@ def calculate_constraint_errors_batch(constraints: List[Constraint]) -> List[flo
 
             y_diffs = np.array([abs(c.entities[0].end.y - c.entities[0].start.y) for _, c in horizontal_constraints])
 
-        for i, err in enumerate(y_diffs):
-            errors[indices[i]] = err
+            for i, err in enumerate(y_diffs):
+                errors[indices[i]] = err
 
     # === VERTICAL: Vectorization ===
     if ConstraintType.VERTICAL in by_type:

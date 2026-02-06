@@ -458,27 +458,27 @@ def get_circle_circle_intersection(c1: 'Circle2D', c2: 'Circle2D') -> List['Poin
 def is_point_on_arc(point: 'Point2D', arc: 'Arc2D', tolerance: float = 1e-4) -> bool:
     """Prüft, ob ein Punkt winkeltechnisch auf dem Bogen liegt."""
     import math
-    
+
     # 1. Radius-Check (Grobfilter)
     if abs(point.distance_to(arc.center) - arc.radius) > tolerance:
         return False
-        
-    # 2. Winkel berechnen
-    angle = math.atan2(point.y - arc.center.y, point.x - arc.center.x)
-    if angle < 0: angle += 2 * math.pi
-    
-    start = arc.start_angle
-    end = arc.end_angle
-    
-    # Normalisierung [0, 2pi]
-    if start < 0: start += 2 * math.pi
-    if end < 0: end += 2 * math.pi
-    
-    # 3. Bereichsprüfung (Handling für 0-Übergang)
+
+    # 2. Winkel berechnen (in Grad, da Arc2D Winkel in Grad speichert)
+    angle = math.degrees(math.atan2(point.y - arc.center.y, point.x - arc.center.x))
+    if angle < 0: angle += 360.0
+
+    start = arc.start_angle % 360.0
+    end = arc.end_angle % 360.0
+
+    # Winkel-Toleranz in Grad
+    angle_tol = math.degrees(tolerance) if tolerance < 1.0 else tolerance
+
+    # 3. Bereichsprüfung (Handling für 0°-Übergang)
     if start <= end:
-        return start - tolerance <= angle <= end + tolerance
+        return start - angle_tol <= angle <= end + angle_tol
     else:
-        return angle >= start - tolerance or angle <= end + tolerance
+        # Bogen geht über 0° hinweg (z.B. 350° bis 10°)
+        return angle >= start - angle_tol or angle <= end + angle_tol
 
 def arc_line_intersection(arc: 'Arc2D', line: 'Line2D') -> List['Point2D']:
     """Schnitt Arc-Linie: Berechnet Kreis-Schnitt und filtert via Winkel."""
