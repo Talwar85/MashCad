@@ -304,7 +304,8 @@ class TexturedTessellator:
                 normal = (normal_vec.X(), normal_vec.Y(), normal_vec.Z())
             else:
                 normal = (0, 0, 1)
-        except:
+        except Exception as e:
+            logger.debug(f"[textured_tessellator.py] Fehler: {e}")
             normal = (0, 0, 1)
 
         return center, normal, area

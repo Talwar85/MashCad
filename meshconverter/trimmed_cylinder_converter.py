@@ -204,7 +204,8 @@ class TrimmedCylinderConverter:
                     face_builder = BRepBuilderAPI_MakeFace(wire_builder.Wire())
                     if face_builder.IsDone():
                         all_faces.append(face_builder.Face())
-            except:
+            except Exception as e:
+                logger.debug(f"[meshconverter] Fehler: {e}")
                 continue
 
         stats['triangulated_faces'] = len(all_faces)
@@ -494,7 +495,8 @@ class TrimmedCylinderConverter:
                 adaptor = BRepAdaptor_Surface(face)
                 if adaptor.GetType() == GeomAbs_Cylinder:
                     count += 1
-            except:
+            except Exception as e:
+                logger.debug(f"[meshconverter] Fehler: {e}")
                 pass
             exp.Next()
         return count

@@ -1285,7 +1285,8 @@ class Body:
         if self._build123d_solid is not None:
             try:
                 CADTessellator.invalidate_topology_cache(id(self._build123d_solid.wrapped))
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 pass  # Solid hat kein wrapped (selten)
 
     def add_feature(self, feature: Feature, rebuild: bool = True):
@@ -1605,7 +1606,8 @@ class Body:
                 from build123d import Solid, Shape
                 try:
                     result = Solid(fixed_result)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     result = Shape(fixed_result)
 
                 is_valid = hasattr(result, 'is_valid') and result.is_valid()
@@ -1617,7 +1619,8 @@ class Body:
                         is_valid = result.is_valid()
                         if is_valid:
                             warnings.append("fix() hat geholfen")
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
 
                 if is_valid:
@@ -1777,7 +1780,8 @@ class Body:
                 from build123d import Solid, Shape
                 try:
                     result = Solid(result_shape)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     result = Shape(result_shape)
 
                 if hasattr(result, 'is_valid') and result.is_valid():
@@ -1812,7 +1816,8 @@ class Body:
                         if result.is_valid():
                             logger.success(f"✅ {operation} erfolgreich (nach fix)")
                             return result, True
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                     return solid1, False
             except Exception as e:
@@ -1929,7 +1934,8 @@ class Body:
                         try:
                             history = fuse_simple.History()
                             return result_shape, history
-                        except:
+                        except Exception as e:
+                            logger.debug(f"[__init__.py] Fehler: {e}")
                             return result_shape, None
                     return result_shape
 
@@ -2008,7 +2014,8 @@ class Body:
                     try:
                         history = cut_op2.History()
                         return result_shape, history
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         return result_shape, None
                 return result_shape
 
@@ -2022,7 +2029,8 @@ class Body:
                     try:
                         history = cut_simple.History()
                         return result_shape, history
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         return result_shape, None
                 return result_shape
 
@@ -2085,7 +2093,8 @@ class Body:
                     try:
                         history = common_simple.History()
                         return result_shape, history
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         return result_shape, None
                 return result_shape
 
@@ -2144,7 +2153,8 @@ class Body:
                 from build123d import Solid, Shape
                 try:
                     result = Solid(result_shape)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     result = Shape(result_shape)
 
                 if hasattr(result, 'is_valid') and result.is_valid():
@@ -2152,7 +2162,8 @@ class Body:
                     return result
                 else:
                     return None
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 return None
 
         except Exception as e:
@@ -2198,7 +2209,8 @@ class Body:
                     try:
                         chamfer_op.Add(distance, edge_shape, face)
                         break
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                     explorer.Next()
 
@@ -2222,7 +2234,8 @@ class Body:
                 from build123d import Solid, Shape
                 try:
                     result = Solid(result_shape)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     result = Shape(result_shape)
 
                 if hasattr(result, 'is_valid') and result.is_valid():
@@ -2230,7 +2243,8 @@ class Body:
                     return result
                 else:
                     return None
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 return None
 
         except Exception as e:
@@ -2416,7 +2430,8 @@ class Body:
                     edge = explorer.Current()
                     try:
                         wire_builder.Add(edge)
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                     explorer.Next()
 
@@ -2496,7 +2511,8 @@ class Body:
                     edge = explorer.Current()
                     try:
                         wire_builder.Add(edge)
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                     explorer.Next()
 
@@ -2575,7 +2591,8 @@ class Body:
             profile_center = profile_face.center() if hasattr(profile_face, 'center') else "N/A"
             path_edges = path_wire.edges() if hasattr(path_wire, 'edges') else []
             logger.debug(f"Sweep: Profil-Zentrum={profile_center}, Pfad-Edges={len(path_edges)}")
-        except:
+        except Exception as e:
+            logger.debug(f"[__init__.py] Fehler: {e}")
             pass
 
         # PRIMARY: Build123d sweep (Standard ohne Twist/Scale)
@@ -2741,7 +2758,8 @@ class Body:
                 edge = explorer.Current()
                 try:
                     profile_wire_builder.Add(edge)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
                 explorer.Next()
 
@@ -2801,7 +2819,8 @@ class Body:
             # Zu Solid machen
             try:
                 pipe.MakeSolid()
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 pass
 
             result_shape = pipe.Shape()
@@ -2813,10 +2832,12 @@ class Body:
                 if hasattr(result, 'is_valid') and result.is_valid():
                     logger.success(f"OCP Sweep mit Twist={twist_angle}° Scale={scale_start}->{scale_end} erfolgreich")
                     return result
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 try:
                     return Shape(result_shape)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
 
             return None
@@ -3036,7 +3057,8 @@ class Body:
                 if hasattr(result, 'is_valid'):
                     try:
                         is_valid = result.is_valid()
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         is_valid = True  # Bei Fehler: annehmen gültig
                 
                 if is_valid:
@@ -4234,7 +4256,8 @@ class Body:
                 # Dot-Product (1.0 = gleiche Richtung, -1.0 = entgegengesetzt)
                 dot = abs(np.dot(face_normal, selector_normal))  # Abs für beide Richtungen
                 normal_score = dot
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 normal_score = 0.5  # Neutral wenn Normal nicht berechenbar
             
             # Area-Ähnlichkeit (20% Toleranz)
@@ -4246,7 +4269,8 @@ class Body:
                     area_score = area_ratio
                 else:
                     area_score = 0.5
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 area_score = 0.5
             
             # Gewichteter Gesamt-Score
@@ -4310,7 +4334,8 @@ class Body:
                             if score > best_score:
                                 best_score = score
                                 best_face = face
-                        except:
+                        except Exception as e:
+                            logger.debug(f"[__init__.py] Fehler: {e}")
                             continue
                     
                     if best_face and best_score > 0.4:  # 40% Mindest-Score
@@ -5034,7 +5059,8 @@ class Body:
                         if score > best_score:
                             best_score = score
                             best_face = face
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         continue
                 
                 if best_face and best_score > 0.4:
@@ -5083,7 +5109,8 @@ class Body:
                     result = result.fix()
                     if result.is_valid():
                         return result
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
         except Exception as e:
             logger.debug(f"Build123d extrude fehlgeschlagen: {e}")
@@ -5143,7 +5170,8 @@ class Body:
                 from build123d import Solid, Shape
                 try:
                     result = Solid(result_shape)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     result = Shape(result_shape)
 
                 if hasattr(result, 'is_valid') and result.is_valid():
@@ -5154,7 +5182,8 @@ class Body:
                         result = result.fix()
                         if result.is_valid():
                             return result
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                     logger.warning("OCP Extrude Resultat invalid")
                     return None
@@ -5835,7 +5864,8 @@ class Body:
                         if dist < min_dist:
                             min_dist = dist
                             best_edge = edge
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
 
                 if best_edge and min_dist < 20.0:
@@ -6038,7 +6068,8 @@ class Body:
                 try:
                     h = TopTools_ShapeMapHasher.HashCode(ocp_shape, 2**31 - 1)
                     target_hashes.add(h)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
 
             # Edges mit passenden Hashes finden
@@ -6048,7 +6079,8 @@ class Body:
                     h = TopTools_ShapeMapHasher.HashCode(ocp_edge, 2**31 - 1)
                     if h in target_hashes:
                         found.append(edge)
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
 
             return found
@@ -6496,7 +6528,8 @@ class Body:
                             BRepGProp.VolumeProperties_s(s.wrapped, props)
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mm³")
-                        except:
+                        except Exception as e:
+                            logger.debug(f"[__init__.py] Fehler: {e}")
                             pass
                         solids.append(s)
 
@@ -6552,7 +6585,8 @@ class Body:
                 c = poly.centroid
                 if is_enabled("extrude_debug"):
                     logger.debug(f"  Profile {i}: centroid=({c.x:.2f}, {c.y:.2f}), area={poly.area:.1f}")
-            except:
+            except Exception as e:
+                logger.debug(f"[__init__.py] Fehler: {e}")
                 pass
 
         if is_enabled("extrude_debug"):
@@ -6690,7 +6724,8 @@ class Body:
                 if hasattr(result, 'is_valid'):
                     try:
                         is_valid = result.is_valid()
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         is_valid = True
 
                 # DEBUG: Check validation criteria
@@ -7066,7 +7101,8 @@ class Body:
                         else:
                             # Fallback: Als LineString für polygonize
                             all_segments.append(LineString(pts))
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         all_segments.append(LineString(pts))
 
             for arc in sketch.arcs:
@@ -7373,7 +7409,8 @@ class Body:
                             p.wkt if hasattr(p, 'wkt') else str(p)
                             for p in feat.precalculated_polys
                         ]
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                 # Face-BREP für Push/Pull auf nicht-planaren Flächen (Zylinder etc.)
                 if hasattr(feat, 'face_brep') and feat.face_brep:
@@ -7852,7 +7889,8 @@ class Body:
                         feat.precalculated_polys = [
                             wkt.loads(w) for w in feat_dict["precalculated_polys_wkt"]
                         ]
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
                 # Face-BREP für Push/Pull auf nicht-planaren Flächen
                 if "face_brep" in feat_dict:
@@ -8343,7 +8381,8 @@ class Body:
                 feat = Feature(**base_kwargs)
                 try:
                     feat.type = FeatureType[feat_dict.get("type", "SKETCH")]
-                except:
+                except Exception as e:
+                    logger.debug(f"[__init__.py] Fehler: {e}")
                     pass
 
             if feat:

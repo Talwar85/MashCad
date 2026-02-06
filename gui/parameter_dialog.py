@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor, QBrush, QFont, QAction
 
 from i18n import tr
 from core.parameters import Parameters, get_parameters
+from loguru import logger
 
 
 class ParameterDialog(QDialog):
@@ -394,8 +395,8 @@ class ParameterInputWidget(QLineEdit):
             result = self.parameters.get(temp_name)
             self.parameters.delete(temp_name)
             return result
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[parameter_dialog] Fehler: {e}")
 
         return None
 

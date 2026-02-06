@@ -339,7 +339,8 @@ class BRepFaceAnalyzer:
             if analyzed.center is None:
                 com = props.CentreOfMass()
                 analyzed.center = np.array([com.X(), com.Y(), com.Z()])
-        except:
+        except Exception as e:
+            logger.debug(f"[brep_face_analyzer.py] Fehler: {e}")
             pass
 
         # Normale am Mittelpunkt berechnen falls nicht gesetzt
@@ -365,7 +366,8 @@ class BRepFaceAnalyzer:
                     analyzed.normal = np.array([normal_vec.X(), normal_vec.Y(), normal_vec.Z()])
                     if analyzed.orientation == TopAbs_REVERSED:
                         analyzed.normal = -analyzed.normal
-            except:
+            except Exception as e:
+                logger.debug(f"[brep_face_analyzer.py] Fehler: {e}")
                 pass
 
         return analyzed
@@ -1298,7 +1300,8 @@ class BRepFaceAnalyzer:
         try:
             center, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
             return center
-        except:
+        except Exception as e:
+            logger.debug(f"[brep_face_analyzer.py] Fehler: {e}")
             return None
 
 

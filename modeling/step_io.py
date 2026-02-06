@@ -394,7 +394,8 @@ class STEPReader:
             if extract_metadata:
                 try:
                     result.metadata.update(STEPReader._extract_metadata(reader))
-                except:
+                except Exception as e:
+                    logger.debug(f"[step_io.py] Fehler: {e}")
                     pass
 
             logger.success(f"STEP importiert: {len(result.solids)} Solid(s), {len(result.shapes)} Shape(s)")
@@ -450,7 +451,8 @@ class STEPReader:
 
             metadata["import_source"] = "STEP"
 
-        except:
+        except Exception as e:
+            logger.debug(f"[step_io.py] Fehler: {e}")
             pass
 
         return metadata

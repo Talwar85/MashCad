@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLayout, QGridLayout
 )
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QRectF
+from loguru import logger
 from PySide6.QtGui import QColor, QPalette, QPainter, QBrush, QPen, QFont
 
 try:
@@ -352,8 +353,8 @@ class DimensionInput(QFrame):
                     result = params.get(temp_name)
                     params.delete(temp_name)
                     return result
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[sketch_dialogs.py] Fehler: {e}")
 
         return None
 

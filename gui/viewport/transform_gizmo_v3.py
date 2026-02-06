@@ -145,8 +145,8 @@ class FullTransformGizmo:
                 # ACHTUNG: Kann bei einigen VTK-Versionen zu Problemen führen
                 if hasattr(mapper, 'SetResolveCoincidentTopologyToOff'):
                     pass  # Nutzen wir Polygon-Offset stattdessen
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Render-Priorität: {e}")
 
             logger.debug(f"Gizmo-Actor visibility improved: {actor_name}")
         except Exception as e:
@@ -178,7 +178,8 @@ class FullTransformGizmo:
                 distance = np.linalg.norm(cam_pos - self.center)
                 # Größerer Faktor für bessere Sichtbarkeit
                 self._size = max(distance * 0.20, 40.0)
-            except:
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler bei Größenberechnung: {e}")
                 self._size = 60.0
         
         self._create_all_elements()
@@ -192,8 +193,8 @@ class FullTransformGizmo:
         for name in all_actors:
             try:
                 self.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Entfernen des Actors: {e}")
         self._move_actors.clear()
         self._rotate_actors.clear()
         self._scale_actors.clear()
@@ -311,8 +312,8 @@ class FullTransformGizmo:
         for name in indicator_names:
             try:
                 self.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Entfernen des Indikators: {e}")
 
     # ==================== TRANSFORM METHODS ====================
 
@@ -330,8 +331,8 @@ class FullTransformGizmo:
                 actor = self.plotter.renderer.actors.get(name)
                 if actor:
                     actor.SetUserTransform(transform)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Transformation: {e}")
                 
     def get_current_center(self) -> np.ndarray:
         """Gibt aktuelles Zentrum zurück"""
@@ -375,8 +376,8 @@ class FullTransformGizmo:
                     if dist < best_dist:
                         best_dist = dist
                         best_element = element
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Ray-Trace: {e}")
 
         return best_element
         
@@ -627,8 +628,8 @@ class FullTransformGizmo:
                 actor = self.plotter.renderer.actors.get(name)
                 if actor:
                     actor.SetVisibility(self.mode == TransformMode.MOVE)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Sichtbarkeit: {e}")
                 
         # Rotate-Actors
         for name in self._rotate_actors:
@@ -636,8 +637,8 @@ class FullTransformGizmo:
                 actor = self.plotter.renderer.actors.get(name)
                 if actor:
                     actor.SetVisibility(self.mode == TransformMode.ROTATE)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Sichtbarkeit: {e}")
                 
         # Scale-Actors
         for name in self._scale_actors:
@@ -645,8 +646,8 @@ class FullTransformGizmo:
                 actor = self.plotter.renderer.actors.get(name)
                 if actor:
                     actor.SetVisibility(self.mode == TransformMode.SCALE)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Sichtbarkeit: {e}")
                 
         request_render(self.plotter)
         
@@ -680,8 +681,8 @@ class FullTransformGizmo:
                     actor = self.plotter.renderer.actors.get(name)
                     if actor:
                         actor.GetProperty().SetColor(pv.Color(color).float_rgb)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Farbe: {e}")
                     
         request_render(self.plotter)
 
@@ -799,8 +800,8 @@ class FullTransformController:
                             bounds[5] - bounds[4]
                         )
                         return size
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[transform_gizmo_v3] Fehler bei Body-Größenberechnung: {e}")
         return 50.0
         
     # ==================== MOUSE HANDLING ====================
@@ -1119,8 +1120,8 @@ class FullTransformController:
                 actor = self.plotter.renderer.actors.get(actor_name)
                 if actor:
                     actor.SetUserTransform(transform)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Transformation: {e}")
                 
     def _rotate_body_preview(self, body_id: str, axis: GizmoAxis, angle: float):
         """Rotate-Preview via UserTransform"""
@@ -1145,8 +1146,8 @@ class FullTransformController:
                 actor = self.plotter.renderer.actors.get(actor_name)
                 if actor:
                     actor.SetUserTransform(transform)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Transformation: {e}")
                 
     def _scale_body_preview(self, body_id: str, factor: float):
         """Scale-Preview via UserTransform"""
@@ -1164,10 +1165,8 @@ class FullTransformController:
                 actor = self.plotter.renderer.actors.get(actor_name)
                 if actor:
                     actor.SetUserTransform(transform)
-            except:
-                pass
-                
-    def _reset_body_preview(self, body_id: str):
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Setzen der Transformation: {e}")
         """Setzt Preview zurück"""
         if body_id not in self.viewport._body_actors:
             return
@@ -1176,8 +1175,8 @@ class FullTransformController:
                 actor = self.plotter.renderer.actors.get(actor_name)
                 if actor:
                     actor.SetUserTransform(None)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[transform_gizmo_v3] Fehler beim Zurücksetzen der Transformation: {e}")
                 
     def _get_ray(self, screen_pos: Tuple[int, int]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """Berechnet Ray aus Screen-Position"""
@@ -1199,7 +1198,8 @@ class FullTransformController:
             direction = direction / np.linalg.norm(direction)
             
             return near, direction
-        except:
+        except Exception as e:
+            logger.debug(f"[transform_gizmo_v3] Fehler bei Ray-Berechnung: {e}")
             return None, None
             
     # ==================== MIRROR ====================

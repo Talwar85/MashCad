@@ -18,6 +18,7 @@ Verwendung:
 import json
 import os
 from typing import Dict, Optional
+from loguru import logger
 
 # Globale Variablen
 _current_language = 'de'  # Default: Deutsch
@@ -37,8 +38,8 @@ def _load_config():
             with open(_config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 _current_language = config.get('language', 'de')
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"[i18n] Fehler: {e}")
 
 
 def _save_config():
@@ -47,8 +48,8 @@ def _save_config():
         config = {'language': _current_language}
         with open(_config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f)
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"[i18n] Fehler: {e}")
 
 
 def load_language(lang: str) -> bool:

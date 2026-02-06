@@ -115,7 +115,8 @@ class FaceSelectionLogger:
         if self._log_file:
             try:
                 self._log_file.close()
-            except:
+            except Exception as e:
+                logger.debug(f"[face_selection_logger.py] Fehler: {e}")
                 pass
             self._log_file = None
 

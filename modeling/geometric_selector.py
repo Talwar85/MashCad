@@ -187,7 +187,8 @@ class GeometricFaceSelector:
                     return "cylindrical"
                 elif 'Sphere' in surf_type:
                     return "spherical"
-        except:
+        except Exception as e:
+            logger.debug(f"[geometric_selector.py] Fehler: {e}")
             pass
         return "bspline"
 
@@ -372,7 +373,8 @@ class GeometricEdgeSelector:
                     return "line"
                 elif 'Circle' in curve_type:
                     return "circle"
-        except:
+        except Exception as e:
+            logger.debug(f"[geometric_selector.py] Fehler: {e}")
             pass
         return "bspline"
 

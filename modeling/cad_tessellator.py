@@ -257,7 +257,8 @@ class CADTessellator:
                                 dot = max(-1.0, min(1.0, dot))  # Clamp für acos
                                 angle = math.degrees(math.acos(abs(dot)))
                                 is_feature_edge = angle > FEATURE_ANGLE_THRESHOLD
-                        except:
+                        except Exception as e:
+                            logger.debug(f"[cad_tessellator.py] Fehler: {e}")
                             # Bei Fehler: Kante als Feature annehmen
                             is_feature_edge = True
 

@@ -224,7 +224,8 @@ class EdgeSelectionMixin:
                     )
                     self._selectable_edges.append(sel_edge)
                     self._edge_counter += 1
-                except:
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren der Kante: {e}")
                     continue
         except Exception as e:
             logger.error(f"Extraction Error: {e}")
@@ -298,7 +299,8 @@ class EdgeSelectionMixin:
                             convexity[edge_idx] = dot < 0.1  # Mit etwas Toleranz
                         else:
                             convexity[edge_idx] = True
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[edge_selection_mixin] Fehler bei Konvexitätsberechnung: {e}")
                         convexity[edge_idx] = True
                 else:
                     convexity[edge_idx] = True  # Freie Kante = konvex
@@ -318,7 +320,8 @@ class EdgeSelectionMixin:
             from build123d import GeomType
             try:
                 is_line = edge.geom_type() == GeomType.LINE
-            except:
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Prüfen des Geometrietyps: {e}")
                 is_line = False
 
             # V8: Auflösung für glatte Kurven (wichtig für Fillet/Chamfer)
@@ -331,7 +334,8 @@ class EdgeSelectionMixin:
                     pt = edge.position_at(t)
                     if pt is not None:
                         points.append([pt.X, pt.Y, pt.Z])
-                except:
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren des Punkts: {e}")
                     continue
 
             if len(points) < 2:
@@ -351,7 +355,8 @@ class EdgeSelectionMixin:
                 return None  # Nur 2 Punkte und gleich = degeneriert
 
             return points_arr
-        except:
+        except Exception as e:
+            logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren der Kantenpunkte: {e}")
             return None
 
     # ==================== Visualisierung ====================
@@ -410,8 +415,8 @@ class EdgeSelectionMixin:
         if hover_mesh is not None:
             try:
                 self.plotter.remove_actor("edge_hover")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Hover-Actors: {e}")
 
             self.plotter.add_mesh(
                 hover_mesh,
@@ -427,16 +432,16 @@ class EdgeSelectionMixin:
         else:
             try:
                 self.plotter.remove_actor("edge_hover")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Hover-Actors: {e}")
 
     def _update_batch_actor(self, name: str, meshes: List, color: str, width: float, priority: int):
         """Erstellt oder aktualisiert einen Batch-Actor für mehrere Kanten."""
         # Entferne alten Actor
         try:
             self.plotter.remove_actor(name)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Actors: {e}")
 
         if not meshes:
             return
@@ -486,16 +491,16 @@ class EdgeSelectionMixin:
         for name in self._edge_actors:
             try:
                 self.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Edge-Actors: {e}")
         self._edge_actors.clear()
 
         # Explizit die Batch-Namen entfernen
         for name in ["batch_edges_normal", "batch_edges_selected", "edge_hover"]:
             try:
                 self.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Batch-Actors: {e}")
 
     def set_edge_filter_mode(self, mode: str):
         """
@@ -733,8 +738,8 @@ class EdgeSelectionMixin:
             for name in ["tnp_debug_resolved", "tnp_debug_unresolved"]:
                 try:
                     self.plotter.remove_actor(name)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Debug-Actors: {e}")
             
             # Grün für gefundene Kanten
             resolved_meshes = []
@@ -744,8 +749,8 @@ class EdgeSelectionMixin:
                     if points is not None and len(points) >= 2:
                         mesh = pv.lines_from_points(points)
                         resolved_meshes.append(mesh)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren der Debug-Kante: {e}")
             
             if resolved_meshes:
                 if len(resolved_meshes) == 1:
@@ -786,8 +791,8 @@ class EdgeSelectionMixin:
                     
                     if center:
                         unresolved_centers.append(center)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren des Centers: {e}")
             
             if unresolved_centers:
                 # Zeichne kleine rote Kugeln an den nicht gefundenen Positionen
@@ -827,7 +832,8 @@ class EdgeSelectionMixin:
                         pt = edge.position_at(t)
                         if pt is not None:
                             points.append([pt.X, pt.Y, pt.Z])
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren des Punkts: {e}")
                         continue
                 
                 if len(points) >= 2:
@@ -851,11 +857,12 @@ class EdgeSelectionMixin:
                             p = discretizer.Value(i)
                             points.append([p.X(), p.Y(), p.Z()])
                         return np.array(points)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren der OCP-Kante: {e}")
             
             return None
-        except:
+        except Exception as e:
+            logger.debug(f"[edge_selection_mixin] Fehler beim Extrahieren der OCP-Kantenpunkte: {e}")
             return None
 
     def clear_debug_visualization(self):
@@ -866,7 +873,7 @@ class EdgeSelectionMixin:
         for name in ["tnp_debug_resolved", "tnp_debug_unresolved"]:
             try:
                 self.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[edge_selection_mixin] Fehler beim Entfernen des Debug-Actors: {e}")
         
         request_render(self.plotter)

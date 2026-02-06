@@ -363,7 +363,8 @@ class FilletAwareConverter:
             error = np.mean(np.abs(np.dot(centered, normal)))
 
             return {'normal': normal, 'centroid': centroid, 'error': error, 'points': points}
-        except:
+        except Exception as e:
+            logger.debug(f"[meshconverter] Fehler: {e}")
             return None
 
     def _fit_cylinder(self, mesh, face_ids: Set[int], cell_normals: np.ndarray) -> Optional[dict]:
@@ -569,7 +570,8 @@ class FilletAwareConverter:
                 hull = ConvexHull(points_2d)
                 boundary_indices = hull.vertices
                 boundary_points = points[boundary_indices]
-            except:
+            except Exception as e:
+                logger.debug(f"[meshconverter] Fehler: {e}")
                 boundary_points = points
 
             # Normalize normal
@@ -682,7 +684,8 @@ class FilletAwareConverter:
                         message="Shell created, not watertight",
                         stats={'shell_created': True}
                     )
-                except:
+                except Exception as e:
+                    logger.debug(f"[meshconverter] Fehler: {e}")
                     pass
 
             return ConversionResult(

@@ -997,16 +997,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return None
 
             for i, l in enumerate(sketch.lines):
-                if err := check(l.start.x, f"L{i}.start.x"): problems.append(err)
-                if err := check(l.start.y, f"L{i}.start.y"): problems.append(err)
-                if err := check(l.end.x, f"L{i}.end.x"): problems.append(err)
-                if err := check(l.end.y, f"L{i}.end.y"): problems.append(err)
+                err = check(l.start.x, f"L{i}.start.x")
+                if err: problems.append(err)
+                err = check(l.start.y, f"L{i}.start.y")
+                if err: problems.append(err)
+                err = check(l.end.x, f"L{i}.end.x")
+                if err: problems.append(err)
+                err = check(l.end.y, f"L{i}.end.y")
+                if err: problems.append(err)
 
             return problems
 
         # 1. RUN AUDIT
         # If this logs errors, we know the source data is 'infected' with numpy types
-        #if problems := audit_geometry(self.sketch):
+        #problems = audit_geometry(self.sketch)
+        #if problems:
             #logger.warning(f"⚠️ Geometry contains NumPy types! First 3 issues: {problems[:3]}")
             # We don't abort, because the casting below should handle it, but it's good to know.
 

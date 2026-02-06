@@ -225,7 +225,8 @@ class GeometryHealer:
                     from OCP.ShapeExtend import ShapeExtend_OK, ShapeExtend_DONE
                     if fixer.Status(ShapeExtend_DONE):
                         changes.append("ShapeFix hat Änderungen vorgenommen")
-                except:
+                except Exception as e:
+                    logger.debug(f"[geometry_healer.py] Fehler: {e}")
                     changes.append("ShapeFix angewendet")
 
                 if changes:
@@ -337,7 +338,8 @@ class GeometryHealer:
 
                     return healed_solid, HealingResult.healed(healed_solid, HealingStrategy.SEWING, changes)
 
-            except:
+            except Exception as e:
+                logger.debug(f"[geometry_healer.py] Fehler: {e}")
                 pass
 
             # Fallback: Direkt als Solid verwenden
@@ -348,7 +350,8 @@ class GeometryHealer:
                     HealingStrategy.SEWING,
                     [f"Sewing: {face_count} Faces zusammengenäht"]
                 )
-            except:
+            except Exception as e:
+                logger.debug(f"[geometry_healer.py] Fehler: {e}")
                 pass
 
             return solid, HealingResult.failed(solid, "Sewing: Konvertierung zu Solid fehlgeschlagen")

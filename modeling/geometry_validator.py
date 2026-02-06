@@ -225,7 +225,8 @@ class GeometryValidator:
                     from OCP.BRepCheck import BRepCheck_Status
                     # Status-Codes sind komplex - vereinfachte Ausgabe
                     issues.append("BRepCheck meldet Topologie-Fehler")
-                except:
+                except Exception as e:
+                    logger.debug(f"[geometry_validator.py] Fehler: {e}")
                     pass
 
         except Exception as e:
@@ -372,7 +373,8 @@ class GeometryValidator:
                 normal = face.normal_at(center)
                 if normal is None:
                     return ValidationResult.warning("Face-Normal konnte nicht berechnet werden")
-            except:
+            except Exception as e:
+                logger.debug(f"[geometry_validator.py] Fehler: {e}")
                 pass
 
             return ValidationResult.valid("Face ist valide", area=area)

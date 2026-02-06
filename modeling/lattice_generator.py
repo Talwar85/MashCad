@@ -478,7 +478,8 @@ class LatticeGenerator:
             try:
                 from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
-            except:
+            except Exception as e:
+                logger.debug(f"[lattice_generator.py] Fehler: {e}")
                 pass
 
         total = len(shapes)
@@ -544,7 +545,8 @@ class LatticeGenerator:
             try:
                 from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
-            except:
+            except Exception as e:
+                logger.debug(f"[lattice_generator.py] Fehler: {e}")
                 pass
 
         total = len(shapes)
@@ -622,7 +624,8 @@ class LatticeGenerator:
             try:
                 from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
-            except:
+            except Exception as e:
+                logger.debug(f"[lattice_generator.py] Fehler: {e}")
                 pass
 
         total = len(shapes)

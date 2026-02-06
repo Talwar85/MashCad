@@ -673,7 +673,8 @@ def _find_face_by_edge_geometry(shape, edge_shape):
 
                         if start_match and end_match:
                             return face
-                except:
+                except Exception as e:
+                    logger.debug(f"[edge_operations.py] Fehler: {e}")
                     pass
                 edge_explorer.Next()
             face_explorer.Next()
@@ -754,7 +755,8 @@ def _find_adjacent_face(shape, edge_shape):
                         if dist < tolerance:
                             logger.debug(f"Face via geometrischen Vergleich gefunden (dist={dist:.6f})")
                             return face
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[edge_operations.py] Fehler: {e}")
                         pass
                     edge_explorer.Next()
                 face_explorer.Next()
@@ -802,7 +804,8 @@ def _resolve_edge_on_solid(solid, original_edge) -> Optional[object]:
                 if dist < min_dist:
                     min_dist = dist
                     best_edge = edge
-            except:
+            except Exception as e:
+                logger.debug(f"[edge_operations.py] Fehler: {e}")
                 pass
 
         if best_edge and min_dist < tolerance:
@@ -837,11 +840,13 @@ def _validate_solid(solid) -> bool:
         shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
         analyzer = BRepCheck_Analyzer(shape)
         return analyzer.IsValid()
-    except:
+    except Exception as e:
+        logger.debug(f"[edge_operations.py] Fehler: {e}")
         # Fallback: Prüfe ob es Faces hat
         try:
             return len(solid.faces()) > 0
-        except:
+        except Exception as e:
+            logger.debug(f"[edge_operations.py] Fehler: {e}")
             return False
 
 
@@ -859,7 +864,8 @@ def _fix_shape(shape):
         fixer = ShapeFix_Shape(shape)
         fixer.Perform()
         return fixer.Shape()
-    except:
+    except Exception as e:
+        logger.debug(f"[edge_operations.py] Fehler: {e}")
         return shape
 
 
@@ -879,7 +885,8 @@ def _wrap_to_build123d(ocp_shape):
     try:
         try:
             return Solid(ocp_shape)
-        except:
+        except Exception as e:
+            logger.debug(f"[edge_operations.py] Fehler: {e}")
             return Shape(ocp_shape)
     except Exception as e:
         logger.error(f"Wrap zu build123d fehlgeschlagen: {e}")
@@ -956,7 +963,8 @@ def estimate_max_fillet_radius(edges: List) -> float:
             length = edge.length
             if length < min_length:
                 min_length = length
-        except:
+        except Exception as e:
+            logger.debug(f"[edge_operations.py] Fehler: {e}")
             pass
 
     if min_length == float('inf'):

@@ -1461,7 +1461,8 @@ class SketchRendererMixin:
                     spline_pts = generate_spline_points(ctrl_pts, segments_per_span=6)
                     for i in range(len(spline_pts) - 1):
                         p.drawLine(self.world_to_screen(QPointF(spline_pts[i][0], spline_pts[i][1])), self.world_to_screen(QPointF(spline_pts[i+1][0], spline_pts[i+1][1])))
-                except: pass
+                except Exception as e:
+                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
         
         # === PREVIEW FÜR BEARBEITUNGSTOOLS ===
         
@@ -1473,7 +1474,8 @@ class SketchRendererMixin:
                     vals = self.dim_input.get_values()
                     dx = vals.get("dx", 0)
                     dy = vals.get("dy", 0)
-                except:
+                except Exception as e:
+                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
                     dx = snap.x() - self.tool_points[0].x()
                     dy = snap.y() - self.tool_points[0].y()
             else:
@@ -1512,7 +1514,8 @@ class SketchRendererMixin:
                     vals = self.dim_input.get_values()
                     dx = vals.get("dx", 0)
                     dy = vals.get("dy", 0)
-                except:
+                except Exception as e:
+                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
                     dx = snap.x() - self.tool_points[0].x()
                     dy = snap.y() - self.tool_points[0].y()
             else:
@@ -1550,7 +1553,8 @@ class SketchRendererMixin:
                     vals = self.dim_input.get_values()
                     angle_deg = vals.get("angle", 0)
                     angle = math.radians(angle_deg)
-                except:
+                except Exception as e:
+                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
                     angle = math.atan2(snap.y() - center.y(), snap.x() - center.x())
                     angle_deg = math.degrees(angle)
             else:
@@ -1621,7 +1625,8 @@ class SketchRendererMixin:
                 try:
                     vals = self.dim_input.get_values()
                     factor = vals.get("factor", 1.0)
-                except:
+                except Exception as e:
+                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
                     current_dist = math.hypot(snap.x() - center.x(), snap.y() - center.y())
                     base_dist = self.tool_data.get('base_dist', current_dist)
                     factor = current_dist / base_dist if base_dist > 0.01 else 1.0

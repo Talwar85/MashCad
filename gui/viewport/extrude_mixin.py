@@ -291,6 +291,6 @@ class ExtrudeMixin:
         if self._preview_actor:
             try:
                 self.plotter.remove_actor(self._preview_actor)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[extrude_mixin] Fehler beim Entfernen der Vorschau: {e}")
             self._preview_actor = None

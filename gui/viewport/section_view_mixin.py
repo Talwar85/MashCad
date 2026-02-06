@@ -394,8 +394,8 @@ class SectionViewMixin:
         # Rendere halbtransparente Ebene
         try:
             self.plotter.remove_actor('section_plane_indicator')
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[section_view_mixin] Fehler beim Entfernen des Indicators: {e}")
 
         self.plotter.add_mesh(
             plane_mesh,
@@ -415,8 +415,8 @@ class SectionViewMixin:
         try:
             self.plotter.remove_actor('section_plane_indicator')
             logger.debug("🎨 Schnittebene-Indicator entfernt")
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[section_view_mixin] Fehler beim Entfernen des Indicators: {e}")
 
     def get_section_bounds(self):
         """

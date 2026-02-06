@@ -532,8 +532,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         labels = ["RECHTS", "LINKS", "HINTEN", "VORNE", "OBEN", "UNTEN"]
                         for i, text in enumerate(labels):
                             rep.SetLabelText(i, text)
-                except:
-                    pass 
+                except Exception as e:
+                    logger.debug(f"[viewport] Fehler beim SetLabelText: {e}")
                 self._cam_widget = widget
         except Exception as e:
             logger.warning(f"ViewCube creation warning: {e}")
@@ -1579,8 +1579,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for i in range(50):
             try:
                 self.plotter.remove_actor(f'draft_face_highlight_{i}')
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Entfernen draft_face_highlight_{i}: {e}")
 
     def _show_draft_preview_mesh(self, mesh):
         """Zeigt halbtransparentes Draft-Ergebnis als Live-Preview."""
@@ -2168,7 +2168,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             else:
                 self.plotter.setCursor(Qt.ArrowCursor)
                 return False
-        except:
+        except Exception as e:
+            logger.debug(f"[viewport] Fehler beim OffsetPlane Hover Cursor: {e}")
             return False
 
     def _is_point_on_offsetplane_handle(self, x, y):
@@ -2219,7 +2220,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             direction = direction / np.linalg.norm(direction)
             
             return near, direction
-        except:
+        except Exception as e:
+            logger.debug(f"[viewport] Fehler beim Raycasting für OffsetPlane: {e}")
             return None, None
     
     def _ray_intersects_sphere(self, ray_origin, ray_dir, sphere_center, sphere_radius):
@@ -3550,8 +3552,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         # Helle Farbe für Pfad-Kandidaten
                         actor.GetProperty().SetColor(0.0, 1.0, 0.5)  # Hellgrün
                         actor.GetProperty().SetLineWidth(5)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[viewport] Fehler beim Highlight Sketch-Pfad {actor_name}: {e}")
         request_render(self.plotter)
 
     def _unhighlight_sketch_paths(self):
@@ -3563,8 +3565,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     # Zurück zur Standardfarbe
                     actor.GetProperty().SetColor(0.3, 0.58, 1.0)  # #4d94ff
                     actor.GetProperty().SetLineWidth(3)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Unhighlight Sketch-Pfad {actor_name}: {e}")
         request_render(self.plotter)
 
     def _pick_sketch_element_at(self, x: int, y: int) -> tuple:
@@ -3871,11 +3873,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 name = f"edges_highlight_{bid}"
                 try:
                     self.plotter.remove_actor(name)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[viewport] Fehler beim Entfernen Edge-Highlight {name}: {e}")
             self.plotter.update()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[viewport] Fehler beim Entfernen Edge-Highlights: {e}")
 
     def mark_edge_as_failed(self, edge_idx):
         """Markiert eine Kante visuell als fehlgeschlagen (rot)."""
@@ -3943,8 +3945,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         col = self.bodies[bid].get('color', (0.6, 0.6, 0.8))
                         prop.SetColor(*col)
                         prop.SetOpacity(1.0)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Wiederherstellen Body-Farbe {bid}: {e}")
         request_render(self.plotter)
     
     def _get_cells_for_detector_face(self, detector_face, mesh):
@@ -4413,16 +4415,16 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for old_name in [n_mesh_old, n_edge_old]:
             try:
                 self.plotter.remove_actor(old_name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Entfernen Actor {old_name}: {e}")
         
         # Aus der internen Liste entfernen
         if bid in self._body_actors:
             for n in self._body_actors[bid]: 
                 try: 
                     self.plotter.remove_actor(n)
-                except: 
-                    pass
+                except Exception as e: 
+                    logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
             del self._body_actors[bid]
         
         # KRITISCH: Erzwinge Render nach dem Cleanup um sicherzustellen
@@ -4603,8 +4605,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 for n in self._body_actors[only_body_id]:
                     try:
                         self.plotter.remove_actor(n)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
                 del self._body_actors[only_body_id]
             if only_body_id in self.bodies:
                 del self.bodies[only_body_id]
@@ -4617,8 +4619,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 for n in names:
                     try:
                         self.plotter.remove_actor(n)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
             self._body_actors.clear()
             self.bodies.clear()
             if hasattr(self, '_actor_to_body_cache'):
@@ -4922,8 +4924,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for i in range(50):  # Max 50 highlights
             try:
                 self.plotter.remove_actor(f'texture_face_highlight_{i}')
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Entfernen Texture-Face-Highlight {i}: {e}")
 
     def show_textured_faces_overlay(self, body_id: str, face_data_list: list, texture_type: str):
         """
@@ -5109,8 +5111,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         for i in range(50):  # Max 50 Overlays pro Body
             try:
                 self.plotter.remove_actor(f'textured_overlay_{body_id}_{i}')
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Entfernen Texture-Overlay {body_id}_{i}: {e}")
 
     def get_extrusion_data(self, face_idx, height):
         if face_idx < 0 or face_idx >= len(self.detected_faces): 
@@ -5332,8 +5334,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                                 'poly': p, 
                                 'inside': {i}
                             })
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Entfernen Body-Face-Selection: {e}")
             
             current_regions = next_regions
         
@@ -5351,7 +5353,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if sym_diff.area < min(poly.area, existing.area) * 0.05:
                         is_dup = True
                         break
-                except:
+                except Exception as e:
+                    logger.debug(f"[viewport] Duplikat-Check Fehler: {e}")
                     pass
             if not is_dup:
                 final.append(poly)
@@ -6162,8 +6165,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             lines = pv.lines_from_points(pts)
             self.plotter.add_mesh(lines, color='orange', line_width=4, name='body_face_selection')
             self.plotter.update()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[viewport] Fehler beim Zeichnen Body-Face-Selection: {e}")
     
     def _clear_preview(self):
         if self._preview_actor: 
@@ -6336,7 +6339,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.plotter.view_vector(views[view_name])
                 self.plotter.reset_camera()
                 self.view_changed.emit()
-            except:
+            except Exception as e:
+                logger.debug(f"[viewport] Fehler beim Setzen der Ansicht {view_name}: {e}")
                 # Fallback
                 if view_name == 'iso':
                     self.plotter.view_isometric()

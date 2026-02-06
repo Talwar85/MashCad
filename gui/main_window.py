@@ -96,8 +96,8 @@ class MainWindow(QMainWindow):
         try:
             from modeling.cad_tessellator import CADTessellator
             CADTessellator.notify_body_changed()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[main_window] Fehler beim Leeren des Tessellator-Cache: {e}")
         
         self._setup_logging()
         self.document = Document("Projekt1")
@@ -2487,7 +2487,8 @@ class MainWindow(QMainWindow):
                     if dist < tolerance and dist < best_match_dist:
                         best_match_dist = dist
                         best_match_idx = i
-                except:
+                except Exception as e:
+                    logger.debug(f"[main_window] Profil-Matching Fehler: {e}")
                     continue
             
             if best_match_idx is not None:
@@ -2503,7 +2504,8 @@ class MainWindow(QMainWindow):
             try:
                 c = poly.centroid
                 return (round(c.x, 6), round(c.y, 6))
-            except:
+            except Exception as e:
+                logger.debug(f"[main_window] Fehler beim Profil-Sortieren: {e}")
                 return (0.0, 0.0)
         
         matched_profiles = sorted(matched_profiles, key=profile_sort_key)
@@ -2884,7 +2886,8 @@ class MainWindow(QMainWindow):
                     if dist < best_dist:
                         best_dist = dist
                         best_face = solid_face
-                except:
+                except Exception as e:
+                    logger.debug(f"[main_window] Hole Face-Selektor Fehler: {e}")
                     continue
             
             if best_face and best_dist < 5.0:
@@ -3453,7 +3456,8 @@ class MainWindow(QMainWindow):
                     if dist < best_dist:
                         best_dist = dist
                         best_face = face
-                except:
+                except Exception as e:
+                    logger.debug(f"[main_window] PushPull Face-Selektor Fehler: {e}")
                     continue
             
             if best_face and best_dist < 5.0:
@@ -4178,7 +4182,8 @@ class MainWindow(QMainWindow):
                             if dist < best_dist:
                                 best_dist = dist
                                 best_face = solid_face
-                        except:
+                        except Exception as e:
+                            logger.debug(f"[main_window] Boolean Face-Selektor Fehler: {e}")
                             continue
                     
                     if best_face and best_dist < 5.0:
@@ -6276,8 +6281,8 @@ class MainWindow(QMainWindow):
             # 4. Fill holes wenn vorhanden
             try:
                 mesh = mesh.fill_holes(hole_size=1000)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[main_window] Fehler beim Füllen von Mesh-Löchern: {e}")
                 
             return mesh
         except Exception as e:
@@ -7704,7 +7709,8 @@ class MainWindow(QMainWindow):
             # Kopiere das Solid (build123d .copy() auf dem Solid)
             try:
                 new_body._build123d_solid = body._build123d_solid.copy()
-            except:
+            except Exception as e:
+                logger.debug(f"[main_window] Fehler beim Kopieren des Bodies (Fallback wird verwendet): {e}")
                 # Fallback: Wrapped Shape kopieren
                 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
                 copier = BRepBuilderAPI_Copy(body._build123d_solid.wrapped)
@@ -7859,8 +7865,8 @@ class MainWindow(QMainWindow):
         for name in self._pattern_preview_bodies:
             try:
                 self.viewport_3d.plotter.remove_actor(name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[main_window] Fehler beim Entfernen von Pattern-Preview: {e}")
         self._pattern_preview_bodies.clear()
 
     def _on_pattern_confirmed(self):
@@ -8620,7 +8626,8 @@ class MainWindow(QMainWindow):
                     if dist < best_dist:
                         best_dist = dist
                         best_face = solid_face
-                except:
+                except Exception as e:
+                    logger.debug(f"[main_window] Shell Face-Selektor Fehler: {e}")
                     continue
             
             if best_face and best_dist < 5.0:

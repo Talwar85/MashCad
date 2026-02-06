@@ -578,7 +578,8 @@ class ShapeNamingService:
                     length = props.Mass()
                     
                     modified_face_centers.append((np.array([pnt.X(), pnt.Y(), pnt.Z()]), length))
-                except:
+                except Exception as e:
+                    logger.debug(f"[tnp_system.py] Fehler: {e}")
                     pass
                 face_edge_exp.Next()
             

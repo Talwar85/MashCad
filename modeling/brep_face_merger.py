@@ -273,11 +273,13 @@ class CylinderSurfaceFitter:
 
                         z_values.append(p1.Coord()[axis_idx])
                         z_values.append(p2.Coord()[axis_idx])
-                    except:
+                    except Exception as e:
+                        logger.debug(f"[brep_face_merger.py] Fehler: {e}")
                         pass
 
                     explorer.Next()
-            except:
+            except Exception as e:
+                logger.debug(f"[brep_face_merger.py] Fehler: {e}")
                 continue
 
         if not z_values:

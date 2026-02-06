@@ -119,8 +119,8 @@ class BodyRenderingMixin:
                 try:
                     self.plotter.remove_actor(n)
                     ActorPool.clear_hash(n)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
         
         actors_list = []
         # Verbesserte Standardfarbe: Warmes Silber-Grau (wie CAD)
@@ -304,8 +304,8 @@ class BodyRenderingMixin:
                         n = np.array(normals, dtype=np.float32)
                         if len(n) == len(v):
                             mesh.point_data["Normals"] = n
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[body_mixin] Fehler beim Setzen der Normalen: {e}")
                 
                 n_mesh = f"body_{bid}_m"
                 self.plotter.add_mesh(mesh, color=col_rgb, name=n_mesh, show_edges=False, smooth_shading=True, pickable=True)
@@ -350,8 +350,8 @@ class BodyRenderingMixin:
                 try:
                     self.plotter.remove_actor(name)
                     ActorPool.clear_hash(name)  # PERFORMANCE: Clear hash tracking
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
         self._body_actors.clear()
         self.bodies.clear()
         ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
@@ -452,8 +452,8 @@ class BodyRenderingMixin:
             name = self._body_actors[body_id][0]
             if name in self.plotter.renderer.actors:
                 return self.plotter.renderer.actors[name].GetVisibility()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[body_mixin] Fehler beim Prüfen der Sichtbarkeit: {e}")
         return False
 
     def _restore_body_colors(self):
@@ -520,8 +520,8 @@ class BodyRenderingMixin:
         """Entfernt das Body-Face Highlight"""
         try:
             self.plotter.remove_actor('body_face_hover')
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"[body_mixin] Fehler beim Entfernen des Highlights: {e}")
 
     def _draw_body_face_selection(self, pos, normal):
         """Zeichnet Selection-Highlight für selektierte Body-Fläche"""
@@ -565,6 +565,6 @@ class BodyRenderingMixin:
         for actor in self._face_actors:
             try:
                 self.plotter.remove_actor(actor)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[body_mixin] Fehler beim Entfernen des Face-Actors: {e}")
         self._face_actors.clear()

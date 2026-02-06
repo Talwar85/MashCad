@@ -630,8 +630,8 @@ class BRepCleanupMixin:
         for name, actor_name in list(self._brep_cleanup_highlight_actors.items()):
             try:
                 self.plotter.remove_actor(actor_name)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[brep_cleanup_mixin] Fehler beim Entfernen des Highlight-Actors: {e}")
 
         self._brep_cleanup_highlight_actors.clear()
 

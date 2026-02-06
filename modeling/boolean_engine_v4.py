@@ -439,7 +439,8 @@ class BooleanEngineV4:
                     logger.debug(f"  op.HasErrors() = {error_status}")
                     if error_status:
                         logger.debug("  OCP Boolean failed with errors")
-                except:
+                except Exception as e:
+                    logger.debug(f"[boolean_engine_v4.py] Fehler: {e}")
                     pass
                 logger.warning("OpenCASCADE Boolean returned IsDone=False")
                 return None, None
@@ -491,7 +492,8 @@ class BooleanEngineV4:
         try:
             analyzer = BRepCheck_Analyzer(shape)
             return analyzer.IsValid()
-        except:
+        except Exception as e:
+            logger.debug(f"[boolean_engine_v4.py] Fehler: {e}")
             return False
 
     @staticmethod
