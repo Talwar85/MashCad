@@ -32,7 +32,7 @@ if _project_root not in sys.path:
 
 from i18n import tr
 from sketcher import Sketch
-from modeling import Document, Body, ExtrudeFeature, FilletFeature, ChamferFeature, FeatureType, SurfaceTextureFeature
+from modeling import Document, Body, ExtrudeFeature, FilletFeature, ChamferFeature, FeatureType, SurfaceTextureFeature, PrimitiveFeature
 from modeling.brep_utils import pick_face_by_ray, find_closest_face
 
 # GUI Module
@@ -657,29 +657,61 @@ class MainWindow(QMainWindow):
         self._reposition_notifications()
     
     def _position_extrude_panel(self):
-        """Positioniert das Extrude-Panel am unteren Rand des Fensters, zentriert."""
+        """Positioniert das Extrude-Panel rechts mittig im Viewport."""
         if hasattr(self, 'extrude_panel') and self.extrude_panel.isVisible():
-            # Panel Größe holen (oder Standard annehmen)
-            pw = self.extrude_panel.width() if self.extrude_panel.width() > 10 else 320
-            ph = self.extrude_panel.height() if self.extrude_panel.height() > 10 else 150
-            
-            # Koordinaten berechnen (Relativ zum MainWindow)
-            # x = Mitte - halbe Panelbreite
-            x = (self.width() - pw) // 2
-            # y = Unten - Panelhöhe - etwas Abstand (z.B. 40px)
-            y = self.height() - ph - 40
-            
+            self.extrude_panel.adjustSize()
+            pw = self.extrude_panel.width()
+            ph = self.extrude_panel.height()
+
+            if hasattr(self, 'viewport_3d') and self.viewport_3d:
+                vg = self.viewport_3d.geometry()
+                top_left = self.viewport_3d.mapTo(self, QPoint(0, 0))
+                area_x, area_y, area_w, area_h = top_left.x(), top_left.y(), vg.width(), vg.height()
+            else:
+                area_x, area_y, area_w, area_h = 0, 0, self.width(), self.height()
+
+            margin = 12
+            x = area_x + area_w - pw - margin
+            y = area_y + (area_h - ph) // 2
+
+            # Position links vom Transform-Panel oder Transform-Toolbar
+            if hasattr(self, 'transform_panel') and self.transform_panel.isVisible():
+                x = min(x, self.transform_panel.x() - pw - margin)
+                y = self.transform_panel.y() + (self.transform_panel.height() - ph) // 2
+            if hasattr(self, 'transform_toolbar') and self.transform_toolbar.isVisible():
+                tb_pos = self.transform_toolbar.mapTo(self, QPoint(0, 0))
+                x = min(x, tb_pos.x() - pw - margin)
+
+            x = max(area_x + margin, min(x, area_x + area_w - pw - margin))
+            y = max(area_y + margin, min(y, area_y + area_h - ph - margin))
+
             self.extrude_panel.move(x, y)
-            self.extrude_panel.raise_() # Sicherstellen, dass es vorne ist
+            self.extrude_panel.raise_()
 
     def _position_transform_panel(self):
-        """Positioniert das Transform-Panel am unteren Rand, zentriert."""
+        """Positioniert das Transform-Panel rechts mittig im Viewport."""
         if hasattr(self, 'transform_panel') and self.transform_panel.isVisible():
-            pw = self.transform_panel.width() if self.transform_panel.width() > 10 else 520
-            ph = self.transform_panel.height() if self.transform_panel.height() > 10 else 60
+            self.transform_panel.adjustSize()
+            pw = self.transform_panel.width()
+            ph = self.transform_panel.height()
 
-            x = (self.width() - pw) // 2
-            y = self.height() - ph - 40
+            if hasattr(self, 'viewport_3d') and self.viewport_3d:
+                vg = self.viewport_3d.geometry()
+                top_left = self.viewport_3d.mapTo(self, QPoint(0, 0))
+                area_x, area_y, area_w, area_h = top_left.x(), top_left.y(), vg.width(), vg.height()
+            else:
+                area_x, area_y, area_w, area_h = 0, 0, self.width(), self.height()
+
+            margin = 12
+            x = area_x + area_w - pw - margin
+            y = area_y + (area_h - ph) // 2
+
+            if hasattr(self, 'transform_toolbar') and self.transform_toolbar.isVisible():
+                tb_pos = self.transform_toolbar.mapTo(self, QPoint(0, 0))
+                x = min(x, tb_pos.x() - pw - margin)
+
+            x = max(area_x + margin, min(x, area_x + area_w - pw - margin))
+            y = max(area_y + margin, min(y, area_y + area_h - ph - margin))
 
             self.transform_panel.move(x, y)
             self.transform_panel.raise_()
@@ -3840,29 +3872,39 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            import build123d as bd
-
             t = dialog.result_type
             if t == "box":
-                solid = bd.Box(dialog.length, dialog.width, dialog.height)
                 name = f"Box_{dialog.length:.0f}x{dialog.width:.0f}x{dialog.height:.0f}"
+                feature = PrimitiveFeature(
+                    primitive_type="box", name=name,
+                    length=dialog.length, width=dialog.width, height=dialog.height
+                )
             elif t == "cylinder":
-                solid = bd.Cylinder(dialog.radius, dialog.height)
                 name = f"Cylinder_R{dialog.radius:.0f}_H{dialog.height:.0f}"
+                feature = PrimitiveFeature(
+                    primitive_type="cylinder", name=name,
+                    radius=dialog.radius, height=dialog.height
+                )
             elif t == "sphere":
-                solid = bd.Sphere(dialog.radius)
                 name = f"Sphere_R{dialog.radius:.0f}"
+                feature = PrimitiveFeature(
+                    primitive_type="sphere", name=name,
+                    radius=dialog.radius
+                )
             elif t == "cone":
-                solid = bd.Cone(dialog.bottom_radius, dialog.top_radius, dialog.height)
                 name = f"Cone_R{dialog.bottom_radius:.0f}_H{dialog.height:.0f}"
+                feature = PrimitiveFeature(
+                    primitive_type="cone", name=name,
+                    bottom_radius=dialog.bottom_radius,
+                    top_radius=dialog.top_radius, height=dialog.height
+                )
             else:
                 return
 
             body = Body(name=name)
-            body._build123d_solid = solid
-            body.invalidate_mesh()
             self.document.bodies.append(body)
-            self._update_body_from_build123d(body, solid)
+            body.add_feature(feature)
+            self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
             self.statusBar().showMessage(f"{name} created")
             logger.success(f"Primitive {name} erstellt")

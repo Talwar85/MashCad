@@ -4,7 +4,7 @@ Fixed: TransformPanel Signal Blocking for circular updates.
 """
 
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit,
+    QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QFrame, QDoubleSpinBox, QCheckBox, QComboBox,
     QSizePolicy
 )
@@ -13,6 +13,57 @@ from PySide6.QtGui import QFont, QKeyEvent
 
 from i18n import tr
 from gui.design_tokens import DesignTokens  # NEU: Single Source of Truth für Styling
+
+# --- Panel positioning helpers ---
+def _panel_area_in_parent(panel: QWidget, pos_widget: QWidget):
+    parent = panel.parent() or pos_widget
+    if parent is None:
+        return None
+    if pos_widget is None:
+        pos_widget = parent
+
+    if pos_widget is parent:
+        return (0, 0, parent.width(), parent.height())
+
+    if pos_widget.parent() is parent:
+        geom = pos_widget.geometry()
+        return (geom.x(), geom.y(), geom.width(), geom.height())
+
+    top_left = pos_widget.mapTo(parent, QPoint(0, 0))
+    return (top_left.x(), top_left.y(), pos_widget.width(), pos_widget.height())
+
+
+def _position_panel_right_mid(panel: QWidget, pos_widget: QWidget = None, y_offset: int = 0):
+    parent = panel.parent() or pos_widget
+    if parent is None:
+        return
+
+    area = _panel_area_in_parent(panel, pos_widget)
+    if area is None:
+        return
+
+    panel.adjustSize()
+    area_x, area_y, area_w, area_h = area
+    margin = 12
+
+    x = area_x + area_w - panel.width() - margin
+    y = area_y + (area_h - panel.height()) // 2 + y_offset
+
+    tp = getattr(parent, "transform_panel", None)
+    if tp and tp.isVisible():
+        x = min(x, tp.x() - panel.width() - margin)
+        y = tp.y() + (tp.height() - panel.height()) // 2
+
+    tb = getattr(parent, "transform_toolbar", None)
+    if tb and tb.isVisible():
+        tb_pos = tb.mapTo(parent, QPoint(0, 0))
+        x = min(x, tb_pos.x() - panel.width() - margin)
+
+    x = max(area_x + margin, min(x, area_x + area_w - panel.width() - margin))
+    y = max(area_y + margin, min(y, area_y + area_h - panel.height() - margin))
+
+    panel.move(x, y)
+    panel.raise_()
 
 # --- Hilfsklasse für Enter-Taste ---
 class ActionSpinBox(QDoubleSpinBox):
@@ -60,103 +111,103 @@ class ExtrudeInputPanel(QFrame):
         self._visibility_state = 0  # 0=normal, 1=xray, 2=hidden
         self._direction = 1  # 1 or -1
         self._current_operation = "New Body"
-        self.setMinimumWidth(750)  # Breiter für bessere Lesbarkeit
-        self.setFixedHeight(65)
+        self.setMinimumWidth(380)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(130)
 
-        # DesignTokens für konsistentes Styling
+        # DesignTokens f?r konsistentes Styling
         self.setStyleSheet(DesignTokens.stylesheet_panel())
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
-        
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
         self.label = QLabel(tr("Extrude:"))
-        layout.addWidget(self.label)
-        
-        self.height_input = ActionSpinBox()
-        self.height_input.setRange(-99999.0, 99999.0)
-        self.height_input.setDecimals(2)
-        self.height_input.setSuffix(" mm")
-        self.height_input.setValue(0.0)
-        
-        self.height_input.valueChanged.connect(self._on_height_changed)
-        self.height_input.enterPressed.connect(self._confirm)
-        self.height_input.escapePressed.connect(self.cancelled.emit)
-        
-        layout.addWidget(self.height_input)
-        
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
+        header.addStretch()
+
         # Operation mit Farb-Indikator
-        self.op_indicator = QLabel("●")
-        self.op_indicator.setFixedWidth(20)
-        self.op_indicator.setStyleSheet("color: #6699ff; font-size: 16px;")
-        layout.addWidget(self.op_indicator)
+        self.op_indicator = QLabel("•")
+        self.op_indicator.setFixedWidth(14)
+        self.op_indicator.setStyleSheet("color: #8aa0c8; font-size: 14px;")
+        header.addWidget(self.op_indicator)
 
         self.op_combo = QComboBox()
         # Store internal keys as item data for comparison, display translated text
         for key in ["New Body", "Join", "Cut", "Intersect"]:
             self.op_combo.addItem(tr(key), key)
         self.op_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
-        layout.addWidget(self.op_combo)
+        header.addWidget(self.op_combo)
+
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        dist_label = QLabel(tr("Distance:"))
+        body.addWidget(dist_label, 0, 0)
+
+        self.height_input = ActionSpinBox()
+        self.height_input.setRange(-99999.0, 99999.0)
+        self.height_input.setDecimals(2)
+        self.height_input.setSuffix(" mm")
+        self.height_input.setValue(0.0)
+
+        self.height_input.valueChanged.connect(self._on_height_changed)
+        self.height_input.enterPressed.connect(self._confirm)
+        self.height_input.escapePressed.connect(self.cancelled.emit)
+
+        body.addWidget(self.height_input, 0, 1)
 
         # Flip Direction Button
-        self.flip_btn = QPushButton("⇅")
+        self.flip_btn = QPushButton("<->")
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
-        #self.flip_btn.setFixedSize(32, 32)
-        self.flip_btn.setStyleSheet("""
-            QPushButton {
-                background: #3a3a3a;
-                border: 1px solid #4a4a4a;
-                border-radius: 3px;
-                color: #ccc;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background: #4a4a4a;
-                color: #fff;
-            }
-            QPushButton:pressed {
-                background: #0078d4;
-            }
-        """)
+        self.flip_btn.setObjectName("ghost")
         self.flip_btn.clicked.connect(self._flip_direction)
-        layout.addWidget(self.flip_btn)
+        body.addWidget(self.flip_btn, 0, 2)
 
         # "To Face" Button
-        self.to_face_btn = QPushButton("⬆ To")
+        self.to_face_btn = QPushButton("To")
         self.to_face_btn.setToolTip(tr("Extrude to face (T)"))
-        #self.to_face_btn.setFixedSize(50, 32)
         self.to_face_btn.setCheckable(True)
-        self.to_face_btn.setStyleSheet("""
-            QPushButton {
-                background: #3a3a3a; border: 1px solid #4a4a4a;
-                border-radius: 3px; color: #ccc; font-size: 12px;
-            }
-            QPushButton:hover { background: #4a4a4a; color: #fff; }
-            QPushButton:checked { background: #0078d4; border-color: #0078d4; color: #fff; }
-        """)
+        self.to_face_btn.setObjectName("toggle")
         self.to_face_btn.clicked.connect(self._on_to_face_clicked)
-        layout.addWidget(self.to_face_btn)
+        body.addWidget(self.to_face_btn, 0, 3)
 
-        self.btn_vis = QPushButton("👁")
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        self.btn_vis = QPushButton("Vis")
         self.btn_vis.setCheckable(False)  # 3-Stufen-Toggle statt an/aus
-        #self.btn_vis.setFixedWidth(35)
-        self.btn_vis.setToolTip(tr("Bodies visible (click → X-Ray)"))
+        self.btn_vis.setToolTip(tr("Bodies visible (click -> X-Ray)"))
         self.btn_vis.clicked.connect(self._toggle_vis)
-        layout.addWidget(self.btn_vis)
-        
+        self.btn_vis.setObjectName("ghost")
+        actions.addWidget(self.btn_vis)
+
+        actions.addStretch()
+
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #0078d4; color: white; border: none;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
-        
+        actions.addWidget(self.btn_ok)
+
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
-        
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
+
         self.hide()
-        
+
     def _on_operation_changed_idx(self, index: int):
         """Aktualisiert Farb-Indikator und emittiert Signal"""
         # Get internal key from itemData
@@ -165,12 +216,12 @@ class ExtrudeInputPanel(QFrame):
             op_key = self.op_combo.currentText()  # Fallback
         self._current_operation = op_key
         colors = {
-            "New Body": "#6699ff",  # Blau
-            "Join": "#66ff66",      # Grün
-            "Cut": "#ff6666",       # Rot
-            "Intersect": "#ffaa66"  # Orange
+            "New Body": "#8aa0c8",  # Muted blue
+            "Join": "#7fa889",      # Muted green
+            "Cut": "#c98b8b",       # Muted red
+            "Intersect": "#c9a87f"  # Muted orange
         }
-        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#6699ff')}; font-size: 16px;")
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#8aa0c8')}; font-size: 14px;")
 
         # Tooltip-Warnung für Boolean Operations
         if op_key in ["Join", "Cut", "Intersect"]:
@@ -193,12 +244,12 @@ class ExtrudeInputPanel(QFrame):
     def get_operation_color(self) -> str:
         """Gibt die Farbe für die aktuelle Operation zurück"""
         colors = {
-            "New Body": "#6699ff",
-            "Join": "#66ff66", 
-            "Cut": "#ff6666",
-            "Intersect": "#ffaa66"
+            "New Body": "#8aa0c8",
+            "Join": "#7fa889", 
+            "Cut": "#c98b8b",
+            "Intersect": "#c9a87f"
         }
-        return colors.get(self._current_operation, "#6699ff")
+        return colors.get(self._current_operation, "#8aa0c8")
 
     def set_height(self, h):
         """Setzt den Wert von außen (z.B. durch Ziehen im Viewport)"""
@@ -300,13 +351,9 @@ class ExtrudeInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50 
-            self.move(x, y)
-            self.height_input.setFocus()
-            self.height_input.selectAll()
+        _position_panel_right_mid(self, pos_widget)
+        self.height_input.setFocus()
+        self.height_input.selectAll()
 
 
 class FilletChamferPanel(QFrame):
@@ -320,19 +367,40 @@ class FilletChamferPanel(QFrame):
         super().__init__(parent)
         self._radius = 2.0
         self._mode = "fillet"
-        self._target_body = None 
-        
-        self.setMinimumWidth(420)
-        self.setFixedHeight(75)
+        self._target_body = None
+
+        self.setMinimumWidth(340)
+        self.setMaximumWidth(420)
+        self.setMinimumHeight(120)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
         self.label = QLabel(tr("Fillet:"))
-        layout.addWidget(self.label)
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
+        header.addStretch()
+
+        # Kantenanzahl-Anzeige
+        self.edge_count_label = QLabel(tr("No edges"))
+        self.edge_count_label.setStyleSheet("color: #a0a6b0; font-size: 12px; border: none;")
+        self.edge_count_label.setMinimumWidth(80)
+        header.addWidget(self.edge_count_label)
+
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        radius_label = QLabel(tr("Radius:"))
+        body.addWidget(radius_label, 0, 0)
 
         self.radius_input = ActionSpinBox()
         self.radius_input.setRange(0.1, 1000.0)
@@ -344,33 +412,28 @@ class FilletChamferPanel(QFrame):
         self.radius_input.enterPressed.connect(self._confirm)
         self.radius_input.escapePressed.connect(self._cancel)
 
-        layout.addWidget(self.radius_input)
+        body.addWidget(self.radius_input, 0, 1)
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
 
-        # NEU: Kantenanzahl-Anzeige
-        self.edge_count_label = QLabel(tr("0 edges"))
-        self.edge_count_label.setStyleSheet("""
-            color: #888;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-            padding-left: 5px;
-        """)
-        self.edge_count_label.setMinimumWidth(80)
-        layout.addWidget(self.edge_count_label)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
         self.cancel_btn = QPushButton("X")
-        self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
-    
+
     def set_target_body(self, body):
         self._target_body = body
 
@@ -388,7 +451,7 @@ class FilletChamferPanel(QFrame):
         if count == 0:
             self.edge_count_label.setText(tr("No edges"))
             self.edge_count_label.setStyleSheet("""
-                color: #ff6666;
+                color: #b07a7a;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -397,7 +460,7 @@ class FilletChamferPanel(QFrame):
         elif count == 1:
             self.edge_count_label.setText(tr("1 edge"))
             self.edge_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -406,7 +469,7 @@ class FilletChamferPanel(QFrame):
         else:
             self.edge_count_label.setText(tr("{count} edges").format(count=count))
             self.edge_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -436,29 +499,10 @@ class FilletChamferPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        
-        if pos_widget:
-            # Position relativ zum Parent (dem Hauptfenster) berechnen
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            
-            # X mittig zentrieren
-            x = (parent.width() - self.width()) // 2
-            
-            # Y unten positionieren (mit 50px Abstand vom Rand)
-            y = parent.height() - self.height() - 50 
-            
-            # Sicherheitscheck, damit es nicht oben raus rutscht
-            if y < 0: y = 50
-            
-            self.move(x, y)
-            
-            # Fokus auf das Eingabefeld setzen (falls vorhanden)
-            if hasattr(self, 'height_input'):
-                self.height_input.setFocus()
-                self.height_input.selectAll()
-            elif hasattr(self, 'radius_input'):
-                self.radius_input.setFocus()
-                self.radius_input.selectAll()
+        _position_panel_right_mid(self, pos_widget)
+        if hasattr(self, 'radius_input'):
+            self.radius_input.setFocus()
+            self.radius_input.selectAll()
 
 
 # ==================== PHASE 6: SHELL INPUT PANEL ====================
@@ -483,20 +527,36 @@ class ShellInputPanel(QFrame):
         self._target_body = None
         self._opening_faces = []
 
-        self.setMinimumWidth(450)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(440)
+        self.setMinimumHeight(120)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # Label
+        header = QHBoxLayout()
+        header.setSpacing(8)
         self.label = QLabel(tr("Shell:"))
-        layout.addWidget(self.label)
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
+        header.addStretch()
 
-        # Thickness input
+        self.face_count_label = QLabel(tr("No opening"))
+        self.face_count_label.setStyleSheet("color: #a0a6b0; font-size: 12px; border: none;")
+        self.face_count_label.setMinimumWidth(90)
+        header.addWidget(self.face_count_label)
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        thickness_label = QLabel(tr("Thickness:"))
+        body.addWidget(thickness_label, 0, 0)
+
         self.thickness_input = ActionSpinBox()
         self.thickness_input.setRange(0.1, 100.0)
         self.thickness_input.setDecimals(2)
@@ -507,32 +567,25 @@ class ShellInputPanel(QFrame):
         self.thickness_input.enterPressed.connect(self._confirm)
         self.thickness_input.escapePressed.connect(self._cancel)
 
-        layout.addWidget(self.thickness_input)
+        body.addWidget(self.thickness_input, 0, 1)
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
 
-        # Face count label
-        self.face_count_label = QLabel(tr("0 openings"))
-        self.face_count_label.setStyleSheet("""
-            color: #888;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-            padding-left: 5px;
-        """)
-        self.face_count_label.setMinimumWidth(90)
-        layout.addWidget(self.face_count_label)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
-        # OK button
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel button
         self.cancel_btn = QPushButton("X")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -574,7 +627,7 @@ class ShellInputPanel(QFrame):
         if count == 0:
             self.face_count_label.setText(tr("No opening"))
             self.face_count_label.setStyleSheet("""
-                color: #ffaa00;
+                color: #b08a6a;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -583,7 +636,7 @@ class ShellInputPanel(QFrame):
         elif count == 1:
             self.face_count_label.setText(tr("1 opening"))
             self.face_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -592,7 +645,7 @@ class ShellInputPanel(QFrame):
         else:
             self.face_count_label.setText(tr("{count} openings").format(count=count))
             self.face_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -620,26 +673,11 @@ class ShellInputPanel(QFrame):
         self.cancelled.emit()
 
     def show_at(self, pos_widget=None):
-        """Zeigt das Panel zentriert unten im Parent-Widget."""
         self.show()
         self.raise_()
-
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-
-            # X mittig zentrieren
-            x = (parent.width() - self.width()) // 2
-
-            # Y unten positionieren (mit 50px Abstand vom Rand)
-            y = parent.height() - self.height() - 50
-
-            if y < 0:
-                y = 50
-
-            self.move(x, y)
-
-            self.thickness_input.setFocus()
-            self.thickness_input.selectAll()
+        _position_panel_right_mid(self, pos_widget)
+        self.thickness_input.setFocus()
+        self.thickness_input.selectAll()
 
 
 class SweepInputPanel(QFrame):
@@ -668,182 +706,157 @@ class SweepInputPanel(QFrame):
         self._operation = "New Body"
         self._is_frenet = False
 
-        self.setMinimumWidth(900)
-        self.setFixedHeight(80)  # Höher für bessere Lesbarkeit
+        self.setMinimumWidth(440)
+        self.setMaximumWidth(560)
+        self.setMinimumHeight(200)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # Label
+        header = QHBoxLayout()
+        header.setSpacing(8)
         self.label = QLabel(tr("Sweep:"))
-        layout.addWidget(self.label)
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
+        header.addStretch()
 
-        # Profile status with clear button
-        profile_container = QWidget()
-        profile_container.setStyleSheet("background: transparent; border: none;")
-        profile_layout = QHBoxLayout(profile_container)
-        profile_layout.setContentsMargins(0, 0, 0, 0)
-        profile_layout.setSpacing(4)
-
-        self.profile_status = QLabel(tr("⬜ Profile"))
-        self.profile_status.setStyleSheet("""
-            color: #ffaa00;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-        """)
-        profile_layout.addWidget(self.profile_status)
-
-        self.profile_clear_btn = QPushButton("×")
-        self.profile_clear_btn.setFixedSize(16, 16)
-        self.profile_clear_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #888;
-                border: none;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                color: #ff6666;
-            }
-        """)
-        self.profile_clear_btn.setToolTip(tr("Clear profile selection"))
-        self.profile_clear_btn.clicked.connect(self._on_profile_clear_clicked)
-        self.profile_clear_btn.hide()  # Initially hidden
-        profile_layout.addWidget(self.profile_clear_btn)
-        layout.addWidget(profile_container)
-
-        # Path status with clear button
-        path_container = QWidget()
-        path_container.setStyleSheet("background: transparent; border: none;")
-        path_layout = QHBoxLayout(path_container)
-        path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.setSpacing(2)
-
-        self.path_status = QLabel(tr("⬜ Path"))
-        self.path_status.setStyleSheet("""
-            color: #ffaa00;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-        """)
-        path_layout.addWidget(self.path_status)
-
-        self.path_clear_btn = QPushButton("×")
-        self.path_clear_btn.setFixedSize(16, 16)
-        self.path_clear_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #888;
-                border: none;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                color: #ff6666;
-            }
-        """)
-        self.path_clear_btn.setToolTip(tr("Clear path selection"))
-        self.path_clear_btn.clicked.connect(self._on_path_clear_clicked)
-        self.path_clear_btn.hide()  # Initially hidden
-        path_layout.addWidget(self.path_clear_btn)
-        layout.addWidget(path_container)
-
-        # Sketch Path button
-        self.sketch_path_btn = QPushButton(tr("Sketch"))
-        self.sketch_path_btn.setToolTip(tr("Select path from sketch (arc/line/spline)"))
-        #self.sketch_path_btn.setFixedWidth(55)
-        self.sketch_path_btn.clicked.connect(lambda: self.sketch_path_requested.emit())
-        layout.addWidget(self.sketch_path_btn)
-
-        # Frenet checkbox
-        self.frenet_check = QCheckBox(tr("Frenet"))
-        self.frenet_check.setToolTip(tr("Twist along path"))
-        self.frenet_check.stateChanged.connect(self._on_frenet_changed)
-        layout.addWidget(self.frenet_check)
-
-        # Twist angle
-        from PySide6.QtGui import QDoubleValidator
-        twist_lbl = QLabel(tr("Twist:"))
-        twist_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
-        layout.addWidget(twist_lbl)
-        self.twist_input = QLineEdit("0")
-        #self.twist_input.setFixedWidth(55)
-        self.twist_input.setStyleSheet(
-            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
-            "border-radius: 4px; padding: 5px; font-size: 12px;"
-        )
-        tv = QDoubleValidator(-3600, 3600, 1)
-        tv.setNotation(QDoubleValidator.StandardNotation)
-        self.twist_input.setValidator(tv)
-        self.twist_input.setToolTip(tr("Twist angle in degrees along path"))
-        layout.addWidget(self.twist_input)
-
-        # Scale
-        scale_lbl = QLabel(tr("Scale:"))
-        scale_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
-        layout.addWidget(scale_lbl)
-        self.scale_start_input = QLineEdit("1.0")
-        #self.scale_start_input.setFixedWidth(50)
-        self.scale_start_input.setStyleSheet(
-            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
-            "border-radius: 4px; padding: 5px; font-size: 12px;"
-        )
-        sv = QDoubleValidator(0.01, 100, 2)
-        sv.setNotation(QDoubleValidator.StandardNotation)
-        self.scale_start_input.setValidator(sv)
-        self.scale_start_input.setToolTip(tr("Scale at path start"))
-        layout.addWidget(self.scale_start_input)
-
-        arrow_lbl = QLabel("→")
-        arrow_lbl.setStyleSheet("font-weight: normal; font-size: 14px; border: none;")
-        layout.addWidget(arrow_lbl)
-
-        self.scale_end_input = QLineEdit("1.0")
-        #self.scale_end_input.setFixedWidth(50)
-        self.scale_end_input.setStyleSheet(
-            "background: #1e1e1e; color: #fff; border: 1px solid #555; "
-            "border-radius: 4px; padding: 5px; font-size: 12px;"
-        )
-        self.scale_end_input.setValidator(sv)
-        self.scale_end_input.setToolTip(tr("Scale at path end"))
-        layout.addWidget(self.scale_end_input)
-
-        # Operation combo
         self.operation_combo = QComboBox()
         # Store internal keys as item data for comparison, display translated text
         for key in ["New Body", "Join", "Cut", "Intersect"]:
             self.operation_combo.addItem(tr(key), key)
-        #self.operation_combo.setFixedWidth(110)
         self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
-        layout.addWidget(self.operation_combo)
+        header.addWidget(self.operation_combo)
+        layout.addLayout(header)
 
-        # OK button
+        body = QVBoxLayout()
+        body.setSpacing(6)
+
+        # Profile status with clear button
+        profile_container = QWidget()
+        profile_layout = QHBoxLayout(profile_container)
+        profile_layout.setContentsMargins(0, 0, 0, 0)
+        profile_layout.setSpacing(6)
+
+        self.profile_status = QLabel(tr("Profile: none"))
+        self.profile_status.setStyleSheet("color: #b08a6a; font-size: 12px; border: none;")
+        profile_layout.addWidget(self.profile_status)
+
+        self.profile_clear_btn = QPushButton("x")
+        self.profile_clear_btn.setFixedSize(18, 18)
+        self.profile_clear_btn.setObjectName("ghost")
+        self.profile_clear_btn.setToolTip(tr("Clear profile selection"))
+        self.profile_clear_btn.clicked.connect(self._on_profile_clear_clicked)
+        self.profile_clear_btn.hide()
+        profile_layout.addWidget(self.profile_clear_btn)
+
+        # Path status with clear button
+        path_container = QWidget()
+        path_layout = QHBoxLayout(path_container)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        path_layout.setSpacing(6)
+
+        self.path_status = QLabel(tr("Path: none"))
+        self.path_status.setStyleSheet("color: #b08a6a; font-size: 12px; border: none;")
+        path_layout.addWidget(self.path_status)
+
+        self.path_clear_btn = QPushButton("x")
+        self.path_clear_btn.setFixedSize(18, 18)
+        self.path_clear_btn.setObjectName("ghost")
+        self.path_clear_btn.setToolTip(tr("Clear path selection"))
+        self.path_clear_btn.clicked.connect(self._on_path_clear_clicked)
+        self.path_clear_btn.hide()
+        path_layout.addWidget(self.path_clear_btn)
+
+        select_row = QGridLayout()
+        select_row.setHorizontalSpacing(12)
+        select_row.addWidget(profile_container, 0, 0)
+        select_row.addWidget(path_container, 0, 1)
+        select_row.setColumnStretch(1, 1)
+        body.addLayout(select_row)
+
+        # Sketch Path button + Frenet
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(8)
+        self.sketch_path_btn = QPushButton(tr("Sketch"))
+        self.sketch_path_btn.setToolTip(tr("Select path from sketch (arc/line/spline)"))
+        self.sketch_path_btn.setObjectName("ghost")
+        self.sketch_path_btn.clicked.connect(lambda: self.sketch_path_requested.emit())
+        opts_row.addWidget(self.sketch_path_btn)
+
+        self.frenet_check = QCheckBox(tr("Frenet"))
+        self.frenet_check.setToolTip(tr("Twist along path"))
+        self.frenet_check.stateChanged.connect(self._on_frenet_changed)
+        opts_row.addWidget(self.frenet_check)
+        opts_row.addStretch()
+        body.addLayout(opts_row)
+
+        # Twist angle
+        from PySide6.QtGui import QDoubleValidator
+        twist_row = QHBoxLayout()
+        twist_row.setSpacing(8)
+        twist_lbl = QLabel(tr("Twist:"))
+        twist_row.addWidget(twist_lbl)
+        self.twist_input = QLineEdit("0")
+        tv = QDoubleValidator(-3600, 3600, 1)
+        tv.setNotation(QDoubleValidator.StandardNotation)
+        self.twist_input.setValidator(tv)
+        self.twist_input.setToolTip(tr("Twist angle in degrees along path"))
+        twist_row.addWidget(self.twist_input)
+        twist_row.addStretch()
+        body.addLayout(twist_row)
+
+        # Scale
+        scale_row = QHBoxLayout()
+        scale_row.setSpacing(6)
+        scale_lbl = QLabel(tr("Scale:"))
+        scale_row.addWidget(scale_lbl)
+        self.scale_start_input = QLineEdit("1.0")
+        sv = QDoubleValidator(0.01, 100, 2)
+        sv.setNotation(QDoubleValidator.StandardNotation)
+        self.scale_start_input.setValidator(sv)
+        self.scale_start_input.setToolTip(tr("Scale at path start"))
+        scale_row.addWidget(self.scale_start_input)
+
+        arrow_lbl = QLabel(tr("→"))
+        scale_row.addWidget(arrow_lbl)
+
+        self.scale_end_input = QLineEdit("1.0")
+        self.scale_end_input.setValidator(sv)
+        self.scale_end_input.setToolTip(tr("Scale at path end"))
+        scale_row.addWidget(self.scale_end_input)
+        scale_row.addStretch()
+        body.addLayout(scale_row)
+
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         self.ok_btn.setEnabled(False)  # Disabled until profile and path selected
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel button
         self.cancel_btn = QPushButton("X")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
     def set_profile(self, profile_data: dict):
         """Setzt das Profil für den Sweep."""
         self._profile_data = profile_data
-        self.profile_status.setText(tr("✅ Profile"))
+        self.profile_status.setText(tr("Profile: selected"))
         self.profile_status.setStyleSheet("""
-            color: #66ff66;
+            color: #7fa889;
             font-size: 12px;
             font-weight: normal;
             border: none;
@@ -854,9 +867,9 @@ class SweepInputPanel(QFrame):
     def clear_profile(self):
         """Löscht das Profil."""
         self._profile_data = None
-        self.profile_status.setText(tr("⬜ Profile"))
+        self.profile_status.setText(tr("Profile: none"))
         self.profile_status.setStyleSheet("""
-            color: #ffaa00;
+            color: #b08a6a;
             font-size: 12px;
             font-weight: normal;
             border: none;
@@ -867,9 +880,9 @@ class SweepInputPanel(QFrame):
     def set_path(self, path_data: dict):
         """Setzt den Pfad für den Sweep."""
         self._path_data = path_data
-        self.path_status.setText(tr("✅ Path"))
+        self.path_status.setText(tr("Path: selected"))
         self.path_status.setStyleSheet("""
-            color: #66ff66;
+            color: #7fa889;
             font-size: 12px;
             font-weight: normal;
             border: none;
@@ -880,9 +893,9 @@ class SweepInputPanel(QFrame):
     def clear_path(self):
         """Löscht den Pfad."""
         self._path_data = None
-        self.path_status.setText(tr("⬜ Path"))
+        self.path_status.setText(tr("Path: none"))
         self.path_status.setStyleSheet("""
-            color: #ffaa00;
+            color: #b08a6a;
             font-size: 12px;
             font-weight: normal;
             border: none;
@@ -978,20 +991,9 @@ class SweepInputPanel(QFrame):
         self.path_cleared.emit()
 
     def show_at(self, pos_widget=None):
-        """Zeigt das Panel zentriert unten im Parent-Widget."""
         self.show()
         self.raise_()
-
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-
-            if y < 0:
-                y = 50
-
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class LoftInputPanel(QFrame):
@@ -1017,76 +1019,80 @@ class LoftInputPanel(QFrame):
         self._operation = "New Body"
         self._ruled = False
 
-        self.setMinimumWidth(700)
-        self.setFixedHeight(80)
+        self.setMinimumWidth(420)
+        self.setMaximumWidth(560)
+        self.setMinimumHeight(170)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 5, 10, 5)
-        main_layout.setSpacing(5)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # Top row: Label, Profile count, Add button
-        top_row = QHBoxLayout()
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
         self.label = QLabel(tr("Loft:"))
-        top_row.addWidget(self.label)
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
 
         self.profile_count_label = QLabel(tr("0 profiles"))
-        self.profile_count_label.setStyleSheet("""
-            color: #ffaa00;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-        """)
+        self.profile_count_label.setStyleSheet("color: #b08a6a; font-size: 12px; border: none;")
         self.profile_count_label.setMinimumWidth(80)
-        top_row.addWidget(self.profile_count_label)
+        header.addWidget(self.profile_count_label)
 
-        self.add_profile_btn = QPushButton(tr("+ Profile"))
-        self.add_profile_btn.setStyleSheet("background: #3a3a3a; font-size: 10px;")
-        self.add_profile_btn.clicked.connect(self._on_add_profile)
-        top_row.addWidget(self.add_profile_btn)
+        header.addStretch()
 
-        # Ruled checkbox
-        self.ruled_check = QCheckBox(tr("Ruled"))
-        self.ruled_check.setToolTip(tr("Straight lines instead of smooth transitions"))
-        self.ruled_check.stateChanged.connect(self._on_ruled_changed)
-        top_row.addWidget(self.ruled_check)
-
-        # Operation combo
         self.operation_combo = QComboBox()
         # Store internal keys as item data for comparison, display translated text
         for key in ["New Body", "Join", "Cut", "Intersect"]:
             self.operation_combo.addItem(tr(key), key)
-        #self.operation_combo.setFixedWidth(90)
         self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
-        top_row.addWidget(self.operation_combo)
+        header.addWidget(self.operation_combo)
 
-        # OK button
+        layout.addLayout(header)
+
+        body = QVBoxLayout()
+        body.setSpacing(6)
+
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(8)
+
+        self.add_profile_btn = QPushButton(tr("+ Profile"))
+        self.add_profile_btn.setObjectName("ghost")
+        self.add_profile_btn.clicked.connect(self._on_add_profile)
+        controls_row.addWidget(self.add_profile_btn)
+
+        self.ruled_check = QCheckBox(tr("Ruled"))
+        self.ruled_check.setToolTip(tr("Straight lines instead of smooth transitions"))
+        self.ruled_check.stateChanged.connect(self._on_ruled_changed)
+        controls_row.addWidget(self.ruled_check)
+        controls_row.addStretch()
+
+        body.addLayout(controls_row)
+
+        self.profile_info = QLabel(tr("Select faces on different Z-planes"))
+        self.profile_info.setStyleSheet("color: #a0a6b0; font-size: 11px; border: none;")
+        body.addWidget(self.profile_info)
+
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         self.ok_btn.setEnabled(False)  # Disabled until 2+ profiles
-        top_row.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel button
         self.cancel_btn = QPushButton("X")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        top_row.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
 
-        main_layout.addLayout(top_row)
-
-        # Bottom row: Profile info
-        self.profile_info = QLabel(tr("Select faces on different Z-planes"))
-        self.profile_info.setStyleSheet("""
-            color: #888;
-            font-size: 10px;
-            font-weight: normal;
-            border: none;
-        """)
-        main_layout.addWidget(self.profile_info)
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -1135,7 +1141,7 @@ class LoftInputPanel(QFrame):
         if count == 0:
             self.profile_count_label.setText(tr("0 profiles"))
             self.profile_count_label.setStyleSheet("""
-                color: #ffaa00;
+                color: #b08a6a;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -1144,7 +1150,7 @@ class LoftInputPanel(QFrame):
             z_info = self._get_z_info(self._profiles[0])
             self.profile_count_label.setText(tr("1 profile ({z_info})").format(z_info=z_info))
             self.profile_count_label.setStyleSheet("""
-                color: #ffaa00;
+                color: #b08a6a;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -1154,7 +1160,7 @@ class LoftInputPanel(QFrame):
             z_max = max(self._get_z(p) for p in self._profiles)
             self.profile_count_label.setText(tr("{count} profiles (Z: {z_min:.0f}-{z_max:.0f})").format(count=count, z_min=z_min, z_max=z_max))
             self.profile_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -1208,20 +1214,9 @@ class LoftInputPanel(QFrame):
         self.cancelled.emit()
 
     def show_at(self, pos_widget=None):
-        """Zeigt das Panel zentriert unten im Parent-Widget."""
         self.show()
         self.raise_()
-
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-
-            if y < 0:
-                y = 50
-
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class TransformPanel(QFrame):
@@ -1247,14 +1242,22 @@ class TransformPanel(QFrame):
         self._mode = "move"
         self._ignore_signals = False
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(460)
+        self.setMinimumHeight(180)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Transform:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
 
         # Mode-Auswahl
         self.mode_combo = QComboBox()
@@ -1262,12 +1265,17 @@ class TransformPanel(QFrame):
         for key in ["Move", "Rotate", "Scale"]:
             self.mode_combo.addItem(tr(key), key)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed_idx)
-        layout.addWidget(self.mode_combo)
+        header.addWidget(self.mode_combo)
+
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
 
         # X Input
-        self.x_label = QLabel("X:")
-        self.x_label.setStyleSheet("color: #E63946;")
-        layout.addWidget(self.x_label)
+        self.x_label = QLabel(tr("X:"))
+        body.addWidget(self.x_label, 0, 0)
 
         self.x_input = ActionSpinBox()
         self.x_input.setRange(-99999, 99999)
@@ -1277,12 +1285,11 @@ class TransformPanel(QFrame):
         self.x_input.enterPressed.connect(self._on_confirm)
         self.x_input.escapePressed.connect(self._on_cancel)
         self.x_input.valueChanged.connect(self._on_value_changed)
-        layout.addWidget(self.x_input)
+        body.addWidget(self.x_input, 0, 1)
 
         # Y Input
-        self.y_label = QLabel("Y:")
-        self.y_label.setStyleSheet("color: #2A9D8F;")
-        layout.addWidget(self.y_label)
+        self.y_label = QLabel(tr("Y:"))
+        body.addWidget(self.y_label, 1, 0)
 
         self.y_input = ActionSpinBox()
         self.y_input.setRange(-99999, 99999)
@@ -1292,12 +1299,11 @@ class TransformPanel(QFrame):
         self.y_input.enterPressed.connect(self._on_confirm)
         self.y_input.escapePressed.connect(self._on_cancel)
         self.y_input.valueChanged.connect(self._on_value_changed)
-        layout.addWidget(self.y_input)
+        body.addWidget(self.y_input, 1, 1)
 
         # Z Input
-        self.z_label = QLabel("Z:")
-        self.z_label.setStyleSheet("color: #457B9D;")
-        layout.addWidget(self.z_label)
+        self.z_label = QLabel(tr("Z:"))
+        body.addWidget(self.z_label, 2, 0)
 
         self.z_input = ActionSpinBox()
         self.z_input.setRange(-99999, 99999)
@@ -1307,32 +1313,42 @@ class TransformPanel(QFrame):
         self.z_input.enterPressed.connect(self._on_confirm)
         self.z_input.escapePressed.connect(self._on_cancel)
         self.z_input.valueChanged.connect(self._on_value_changed)
-        layout.addWidget(self.z_input)
+        body.addWidget(self.z_input, 2, 1)
 
         # Grid-Size
+        grid_label = QLabel(tr("Grid:"))
+        body.addWidget(grid_label, 3, 0)
         self.grid_combo = QComboBox()
         self.grid_combo.addItems(["0.1", "0.5", "1", "5", "10"])
         self.grid_combo.setCurrentText("1")
         self.grid_combo.setToolTip(tr("Grid (Ctrl+Drag)"))
         self.grid_combo.currentTextChanged.connect(self._on_grid_changed)
-        layout.addWidget(self.grid_combo)
+        body.addWidget(self.grid_combo, 3, 1)
 
-        grid_unit = QLabel("mm")
-        grid_unit.setStyleSheet("color: #888;")
-        layout.addWidget(grid_unit)
+        grid_unit = QLabel(tr("mm"))
+        grid_unit.setStyleSheet("color: #a0a6b0;")
+        body.addWidget(grid_unit, 3, 2)
+
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
         # OK Button
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #0078d4; color: white; border: none;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._on_confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         # Cancel Button
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self._on_cancel)
-        layout.addWidget(self.btn_cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -1464,16 +1480,9 @@ class TransformPanel(QFrame):
         """Panel anzeigen und positionieren"""
         self.show()
         self.raise_()
-
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 40
-            if y < 0:
-                y = 50
-            self.move(x, y)
-            self.x_input.setFocus()
-            self.x_input.selectAll()
+        _position_panel_right_mid(self, pos_widget)
+        self.x_input.setFocus()
+        self.x_input.selectAll()
 
 
 class CenterHintWidget(QWidget):
@@ -1604,30 +1613,58 @@ class RevolveInputPanel(QFrame):
         self._direction = 1
         self._current_operation = "New Body"
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(170)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Revolve:"))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Revolve:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
 
-        # Axis toggle buttons
-        layout.addWidget(QLabel("Achse"))
+        self.op_indicator = QLabel("•")
+        self.op_indicator.setFixedWidth(14)
+        self.op_indicator.setStyleSheet("color: #8aa0c8; font-size: 14px;")
+        header.addWidget(self.op_indicator)
+
+        self.op_combo = QComboBox()
+        # Store internal keys as item data for comparison, display translated text
+        for key in ["New Body", "Join", "Cut", "Intersect"]:
+            self.op_combo.addItem(tr(key), key)
+        self.op_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
+        header.addWidget(self.op_combo)
+
+        layout.addLayout(header)
+
+        body = QVBoxLayout()
+        body.setSpacing(6)
+
+        axis_row = QHBoxLayout()
+        axis_row.setSpacing(6)
+        axis_row.addWidget(QLabel(tr("Axis:")))
         self._axis_buttons = {}
         for axis_name in ('X', 'Y', 'Z'):
             btn = QPushButton(axis_name)
             btn.setCheckable(True)
-            #btn.setFixedSize(32, 32)
+            btn.setObjectName("toggle")
             btn.clicked.connect(lambda checked, a=axis_name: self._on_axis_clicked(a))
-            layout.addWidget(btn)
+            axis_row.addWidget(btn)
             self._axis_buttons[axis_name] = btn
         self._axis_buttons['Y'].setChecked(True)
+        axis_row.addStretch()
+        body.addLayout(axis_row)
 
-        # Angle input
+        angle_row = QHBoxLayout()
+        angle_row.setSpacing(8)
+        angle_row.addWidget(QLabel(tr("Angle:")))
         self.angle_input = ActionSpinBox()
         self.angle_input.setRange(0.1, 360.0)
         self.angle_input.setDecimals(1)
@@ -1636,39 +1673,33 @@ class RevolveInputPanel(QFrame):
         self.angle_input.valueChanged.connect(self._on_angle_changed)
         self.angle_input.enterPressed.connect(self._confirm)
         self.angle_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.angle_input)
+        angle_row.addWidget(self.angle_input)
 
-        # Flip direction button
-        self.flip_btn = QPushButton("⇅")
+        self.flip_btn = QPushButton("<->")
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
-        #self.flip_btn.setFixedSize(32, 32)
+        self.flip_btn.setObjectName("ghost")
         self.flip_btn.clicked.connect(self._flip_direction)
-        layout.addWidget(self.flip_btn)
+        angle_row.addWidget(self.flip_btn)
+        angle_row.addStretch()
+        body.addLayout(angle_row)
 
-        # Operation combo with color indicator
-        self.op_indicator = QLabel("●")
-        self.op_indicator.setFixedWidth(16)
-        self.op_indicator.setStyleSheet("color: #6699ff; font-size: 16px;")
-        layout.addWidget(self.op_indicator)
+        layout.addLayout(body)
 
-        self.op_combo = QComboBox()
-        # Store internal keys as item data for comparison, display translated text
-        for key in ["New Body", "Join", "Cut", "Intersect"]:
-            self.op_combo.addItem(tr(key), key)
-        self.op_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
-        layout.addWidget(self.op_combo)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
-        # OK / Cancel
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #0078d4; color: white; border: none;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(30)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -1695,10 +1726,10 @@ class RevolveInputPanel(QFrame):
             op_key = self.op_combo.currentText()  # Fallback
         self._current_operation = op_key
         colors = {
-            "New Body": "#6699ff", "Join": "#66ff66",
-            "Cut": "#ff6666", "Intersect": "#ffaa66"
+            "New Body": "#8aa0c8", "Join": "#7fa889",
+            "Cut": "#b07a7a", "Intersect": "#c9a87f"
         }
-        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#6699ff')}; font-size: 16px;")
+        self.op_indicator.setStyleSheet(f"color: {colors.get(op_key, '#8aa0c8')}; font-size: 16px;")
         self.operation_changed.emit(op_key)
 
     def _confirm(self):
@@ -1744,13 +1775,7 @@ class RevolveInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class OffsetPlaneInputPanel(QFrame):
@@ -1764,17 +1789,29 @@ class OffsetPlaneInputPanel(QFrame):
         super().__init__(parent)
         self._offset = 0.0
 
-        self.setMinimumWidth(550)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(480)
+        self.setMinimumHeight(140)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Offset:"))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Offset Plane:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
 
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Offset:")), 0, 0)
         self.offset_input = ActionSpinBox()
         self.offset_input.setRange(-10000.0, 10000.0)
         self.offset_input.setDecimals(2)
@@ -1783,23 +1820,31 @@ class OffsetPlaneInputPanel(QFrame):
         self.offset_input.valueChanged.connect(self._on_value_changed)
         self.offset_input.enterPressed.connect(self._confirm)
         self.offset_input.escapePressed.connect(self._cancel)
-        layout.addWidget(self.offset_input)
+        body.addWidget(self.offset_input, 0, 1)
 
+        body.addWidget(QLabel(tr("Name:")), 1, 0)
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Name (auto)")
-        self.name_input.setMaximumWidth(120)
-        layout.addWidget(self.name_input)
+        self.name_input.setPlaceholderText(tr("Name (auto)"))
+        body.addWidget(self.name_input, 1, 1)
+
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #bb88dd; color: #000; border: none;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
         self.cancel_btn = QPushButton("X")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -1837,13 +1882,7 @@ class OffsetPlaneInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class HoleInputPanel(QFrame):
@@ -1860,16 +1899,22 @@ class HoleInputPanel(QFrame):
         self._diameter = 8.0
         self._depth = 0.0  # 0 = through all
 
-        self.setMinimumWidth(700)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(480)
+        self.setMinimumHeight(160)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel(tr("Hole:")))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Hole:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
 
         # Hole type
         self.type_combo = QComboBox()
@@ -1877,10 +1922,14 @@ class HoleInputPanel(QFrame):
         for key in ["Simple", "Counterbore", "Countersink"]:
             self.type_combo.addItem(tr(key), key)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed_idx)
-        layout.addWidget(self.type_combo)
+        header.addWidget(self.type_combo)
+        layout.addLayout(header)
 
-        # Diameter
-        layout.addWidget(QLabel("\u2300"))
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Diameter:")), 0, 0)
         self.diameter_input = ActionSpinBox()
         self.diameter_input.setRange(0.1, 500.0)
         self.diameter_input.setDecimals(2)
@@ -1889,10 +1938,9 @@ class HoleInputPanel(QFrame):
         self.diameter_input.valueChanged.connect(self._on_diameter_changed)
         self.diameter_input.enterPressed.connect(self._confirm)
         self.diameter_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.diameter_input)
+        body.addWidget(self.diameter_input, 0, 1)
 
-        # Depth
-        layout.addWidget(QLabel(tr("Depth:")))
+        body.addWidget(QLabel(tr("Depth:")), 1, 0)
         self.depth_input = ActionSpinBox()
         self.depth_input.setRange(0.0, 10000.0)
         self.depth_input.setDecimals(2)
@@ -1902,19 +1950,26 @@ class HoleInputPanel(QFrame):
         self.depth_input.valueChanged.connect(self._on_depth_changed)
         self.depth_input.enterPressed.connect(self._confirm)
         self.depth_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.depth_input)
+        body.addWidget(self.depth_input, 1, 1)
 
-        # OK / Cancel
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #ff8800; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -1963,13 +2018,7 @@ class HoleInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class DraftInputPanel(QFrame):
@@ -1986,65 +2035,82 @@ class DraftInputPanel(QFrame):
         self._pull_axis = "Z"
         self._selected_face_count = 0
 
-        self.setMinimumWidth(700)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(160)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Draft:"))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Draft:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
 
         # Face count indicator
-        self.face_label = QLabel("0 Faces")
-        self.face_label.setStyleSheet("color: #aaa; font-size: 12px; border: none;")
-        layout.addWidget(self.face_label)
+        self.face_label = QLabel(tr("0 faces"))
+        self.face_label.setStyleSheet("color: #a0a6b0; font-size: 12px; border: none;")
+        header.addWidget(self.face_label)
+        layout.addLayout(header)
 
-        # Angle
-        layout.addWidget(QLabel("\u2220"))
+        body = QVBoxLayout()
+        body.setSpacing(6)
+
+        angle_row = QHBoxLayout()
+        angle_row.setSpacing(8)
+        angle_row.addWidget(QLabel(tr("Angle:")))
         self.angle_input = ActionSpinBox()
         self.angle_input.setRange(0.1, 89.0)
         self.angle_input.setDecimals(1)
-        self.angle_input.setSuffix("\u00b0")
+        self.angle_input.setSuffix(" deg")
         self.angle_input.setValue(5.0)
         self.angle_input.valueChanged.connect(self._on_angle_changed)
         self.angle_input.enterPressed.connect(self._confirm)
         self.angle_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.angle_input)
+        angle_row.addWidget(self.angle_input)
+        angle_row.addStretch()
+        body.addLayout(angle_row)
 
-        # Pull direction axis buttons
-        layout.addWidget(QLabel("Pull:"))
+        axis_row = QHBoxLayout()
+        axis_row.setSpacing(6)
+        axis_row.addWidget(QLabel(tr("Pull:")))
         self._axis_btns = {}
         for axis in ["X", "Y", "Z"]:
             btn = QPushButton(axis)
             btn.setCheckable(True)
-            #btn.setFixedSize(32, 28)
+            btn.setObjectName("toggle")
             btn.clicked.connect(lambda checked, a=axis: self._set_axis(a))
             self._axis_btns[axis] = btn
-            layout.addWidget(btn)
-        self._axis_btns["Z"].setChecked(True)
+            axis_row.addWidget(btn)
+        if self._pull_axis in self._axis_btns:
+            self._axis_btns[self._pull_axis].setChecked(True)
+        axis_row.addStretch()
+        body.addLayout(axis_row)
 
-        # OK / Cancel
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #e8a030; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
-        self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
+        self.btn_cancel.setObjectName("danger")
+        self.btn_cancel.clicked.connect(self._cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
-
-    def _set_axis(self, axis):
-        self._pull_axis = axis
-        for a, btn in self._axis_btns.items():
-            btn.setChecked(a == axis)
-        self.axis_changed.emit(axis)
 
     def _on_angle_changed(self, value):
         self._angle = value
@@ -2053,6 +2119,16 @@ class DraftInputPanel(QFrame):
     def _confirm(self):
         self._angle = self.angle_input.value()
         self.confirmed.emit()
+
+    def _cancel(self):
+        self.cancelled.emit()
+
+    def _set_axis(self, axis: str):
+        self._pull_axis = axis
+        for name, btn in self._axis_btns.items():
+            btn.setChecked(name == axis)
+        self.axis_changed.emit(axis)
+
 
     def get_angle(self) -> float:
         return self.angle_input.value()
@@ -2078,13 +2154,7 @@ class DraftInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class SplitInputPanel(QFrame):
@@ -2104,54 +2174,43 @@ class SplitInputPanel(QFrame):
         self._angle = 0.0
         self._keep = "above"
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(190)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #5599dd;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 10px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-            QPushButton:checked { background: #5599dd; color: #000; border-color: #5599dd; }
-            QComboBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 4px; font-size: 12px;
-            }
-            QComboBox QAbstractItemView {
-                background: #1e1e1e; color: #fff; selection-background-color: #0078d4; border: 1px solid #555;
-            }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Split:"))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Split:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
 
-        # Plane buttons
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Plane:")), 0, 0)
+        plane_row = QHBoxLayout()
+        plane_row.setSpacing(6)
         self._plane_btns = {}
         for plane in ["XY", "XZ", "YZ"]:
             btn = QPushButton(plane)
             btn.setCheckable(True)
-            #btn.setFixedSize(36, 28)
+            btn.setObjectName("toggle")
             btn.clicked.connect(lambda checked, p=plane: self._set_plane(p))
             self._plane_btns[plane] = btn
-            layout.addWidget(btn)
+            plane_row.addWidget(btn)
         self._plane_btns["XY"].setChecked(True)
+        body.addLayout(plane_row, 0, 1)
 
-        # Position
-        layout.addWidget(QLabel("Pos:"))
+        body.addWidget(QLabel(tr("Pos:")), 1, 0)
         self.pos_input = ActionSpinBox()
         self.pos_input.setRange(-1000.0, 1000.0)
         self.pos_input.setDecimals(2)
@@ -2161,42 +2220,46 @@ class SplitInputPanel(QFrame):
         self.pos_input.valueChanged.connect(self._on_pos_changed)
         self.pos_input.enterPressed.connect(self._confirm)
         self.pos_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.pos_input)
+        body.addWidget(self.pos_input, 1, 1)
 
-        # Angle
-        layout.addWidget(QLabel(tr("Angle:")))
+        body.addWidget(QLabel(tr("Angle:")), 2, 0)
         self.angle_input = ActionSpinBox()
         self.angle_input.setRange(-89.0, 89.0)
         self.angle_input.setDecimals(1)
-        self.angle_input.setSuffix("°")
+        self.angle_input.setSuffix(" deg")
         self.angle_input.setValue(0.0)
         self.angle_input.setSingleStep(5.0)
         self.angle_input.valueChanged.connect(self._on_angle_changed)
         self.angle_input.enterPressed.connect(self._confirm)
         self.angle_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.angle_input)
+        body.addWidget(self.angle_input, 2, 1)
 
-        # Keep side
-        layout.addWidget(QLabel(tr("Keep:")))
+        body.addWidget(QLabel(tr("Keep:")), 3, 0)
         self.keep_combo = QComboBox()
         # Store internal keys as item data for comparison, display translated text
         for key in ["Above", "Below", "Both"]:
             self.keep_combo.addItem(tr(key), key)
         self.keep_combo.currentIndexChanged.connect(self._on_keep_changed_idx)
-        #self.keep_combo.setFixedWidth(80)
-        layout.addWidget(self.keep_combo)
+        body.addWidget(self.keep_combo, 3, 1)
 
-        # OK / Cancel
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #5599dd; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -2261,13 +2324,7 @@ class SplitInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 
@@ -2292,126 +2349,116 @@ class PatternInputPanel(QFrame):
         self._target_body = None
         self._pattern_type = "linear"  # "linear" or "circular"
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(70)
+        self.setMinimumWidth(420)
+        self.setMaximumWidth(560)
+        self.setMinimumHeight(190)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox, QSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 3px; font-weight: bold; font-size: 12px;
-            }
-            QComboBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 3px; min-width: 60px;
-            }
-            QComboBox QAbstractItemView {
-                background: #1e1e1e; color: #fff; selection-background-color: #0078d4; border: 1px solid #555;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 8px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; }
-            QPushButton:checked { background: #0078d4; border-color: #0078d4; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        # Pattern Type Toggle
-        self.linear_btn = QPushButton("Linear")
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Pattern:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
+
+        self.linear_btn = QPushButton(tr("Linear"))
         self.linear_btn.setCheckable(True)
         self.linear_btn.setChecked(True)
+        self.linear_btn.setObjectName("toggle")
         self.linear_btn.clicked.connect(lambda: self._set_pattern_type("linear"))
-        layout.addWidget(self.linear_btn)
+        header.addWidget(self.linear_btn)
 
-        self.circular_btn = QPushButton("Circular")
+        self.circular_btn = QPushButton(tr("Circular"))
         self.circular_btn.setCheckable(True)
+        self.circular_btn.setObjectName("toggle")
         self.circular_btn.clicked.connect(lambda: self._set_pattern_type("circular"))
-        layout.addWidget(self.circular_btn)
+        header.addWidget(self.circular_btn)
 
-        # Separator
-        sep = QLabel("|")
-        sep.setStyleSheet("color: #555; font-weight: normal;")
-        layout.addWidget(sep)
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
 
         # Count
-        layout.addWidget(QLabel("Count:"))
+        body.addWidget(QLabel(tr("Count:")), 0, 0)
         from PySide6.QtWidgets import QSpinBox
         self.count_spin = QSpinBox()
         self.count_spin.setRange(2, 100)
         self.count_spin.setValue(3)
         self.count_spin.valueChanged.connect(self._emit_parameters)
-        layout.addWidget(self.count_spin)
+        body.addWidget(self.count_spin, 0, 1)
+
+        # Axis
+        body.addWidget(QLabel(tr("Axis:")), 0, 2)
+        self.axis_combo = QComboBox()
+        self.axis_combo.addItems(["X", "Y", "Z"])
+        self.axis_combo.currentTextChanged.connect(self._emit_parameters)
+        body.addWidget(self.axis_combo, 0, 3)
 
         # Linear: Spacing
-        self.spacing_label = QLabel("Spacing:")
-        layout.addWidget(self.spacing_label)
+        self.spacing_label = QLabel(tr("Spacing:"))
+        body.addWidget(self.spacing_label, 1, 0)
         self.spacing_spin = QDoubleSpinBox()
         self.spacing_spin.setRange(0.1, 10000)
         self.spacing_spin.setValue(10.0)
         self.spacing_spin.setSuffix(" mm")
         self.spacing_spin.setDecimals(2)
         self.spacing_spin.valueChanged.connect(self._emit_parameters)
-        layout.addWidget(self.spacing_spin)
+        body.addWidget(self.spacing_spin, 1, 1)
 
         # Circular: Angle
         self.angle_label = QLabel(tr("Angle:"))
         self.angle_label.hide()
-        layout.addWidget(self.angle_label)
+        body.addWidget(self.angle_label, 1, 2)
         self.angle_spin = QDoubleSpinBox()
         self.angle_spin.setRange(1, 360)
         self.angle_spin.setValue(360)
-        self.angle_spin.setSuffix("°")
+        self.angle_spin.setSuffix(" deg")
         self.angle_spin.setDecimals(1)
         self.angle_spin.valueChanged.connect(self._emit_parameters)
         self.angle_spin.hide()
-        layout.addWidget(self.angle_spin)
+        body.addWidget(self.angle_spin, 1, 3)
 
         # Circular: Center Selection
         self.center_label = QLabel(tr("Center:"))
         self.center_label.hide()
-        layout.addWidget(self.center_label)
+        body.addWidget(self.center_label, 2, 0)
         self.center_combo = QComboBox()
         # Store internal keys as item data for comparison, display translated text
         for key in ["Body Center", "Origin (0,0,0)", "Custom..."]:
             self.center_combo.addItem(tr(key), key)
         self.center_combo.currentIndexChanged.connect(self._on_center_changed_idx)
         self.center_combo.hide()
-        layout.addWidget(self.center_combo)
+        body.addWidget(self.center_combo, 2, 1)
 
         # Custom center coordinates (hidden by default)
         self._custom_center = (0.0, 0.0, 0.0)
 
-        # Axis
-        layout.addWidget(QLabel(tr("Axis:")))
-        self.axis_combo = QComboBox()
-        self.axis_combo.addItems(["X", "Y", "Z"])
-        self.axis_combo.currentTextChanged.connect(self._emit_parameters)
-        layout.addWidget(self.axis_combo)
+        body.setColumnStretch(1, 1)
+        body.setColumnStretch(3, 1)
+        layout.addLayout(body)
 
-        # Stretch
-        layout.addStretch()
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
 
-        # OK Button
         self.ok_btn = QPushButton("OK")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none; min-width: 50px;")
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel Button
-        self.cancel_btn = QPushButton("✕")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -2526,13 +2573,7 @@ class PatternInputPanel(QFrame):
         """Show panel centered at bottom of viewport."""
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class NSidedPatchInputPanel(QFrame):
@@ -2551,77 +2592,65 @@ class NSidedPatchInputPanel(QFrame):
         self._degree = 3
         self._tangent = True
 
-        self.setMinimumWidth(650)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(160)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 3px; font-weight: bold; font-size: 12px;
-                min-width: 50px;
-            }
-            QCheckBox { color: #fff; font-size: 12px; }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 8px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # Label
-        self.label = QLabel("N-Sided Patch:")
-        layout.addWidget(self.label)
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
-        # Edge count display
-        self.edge_count_label = QLabel("0 Edges")
-        self.edge_count_label.setStyleSheet("""
-            color: #ff6666;
-            font-size: 12px;
-            font-weight: normal;
-            border: none;
-            padding-left: 5px;
-        """)
+        self.label = QLabel(tr("N-Sided Patch:"))
+        self.label.setObjectName("panelTitle")
+        header.addWidget(self.label)
+        header.addStretch()
+
+        self.edge_count_label = QLabel(tr("0 edges"))
+        self.edge_count_label.setStyleSheet("color: #b07a7a; font-size: 12px; border: none;")
         self.edge_count_label.setMinimumWidth(70)
-        layout.addWidget(self.edge_count_label)
+        header.addWidget(self.edge_count_label)
 
-        # Degree
-        layout.addWidget(QLabel("Degree:"))
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Degree:")), 0, 0)
         from PySide6.QtWidgets import QSpinBox
         self.degree_spin = QSpinBox()
         self.degree_spin.setRange(2, 6)
         self.degree_spin.setValue(3)
-        layout.addWidget(self.degree_spin)
+        body.addWidget(self.degree_spin, 0, 1)
 
-        # Tangent checkbox
-        self.tangent_check = QCheckBox("G1")
+        self.tangent_check = QCheckBox(tr("G1 (tangent)"))
         self.tangent_check.setChecked(True)
-        self.tangent_check.setToolTip("Match tangency with adjacent faces")
-        layout.addWidget(self.tangent_check)
+        self.tangent_check.setToolTip(tr("Match tangency with adjacent faces"))
+        body.addWidget(self.tangent_check, 1, 0, 1, 2)
 
-        layout.addStretch()
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
 
-        # OK Button
-        self.ok_btn = QPushButton("Fill")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none; min-width: 50px;")
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
+        self.ok_btn = QPushButton(tr("Fill"))
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel Button
-        self.cancel_btn = QPushButton("✕")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -2642,7 +2671,7 @@ class NSidedPatchInputPanel(QFrame):
         if count < 3:
             self.edge_count_label.setText(f"{count} Edges (min 3)")
             self.edge_count_label.setStyleSheet("""
-                color: #ff6666;
+                color: #b07a7a;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -2651,7 +2680,7 @@ class NSidedPatchInputPanel(QFrame):
         else:
             self.edge_count_label.setText(f"{count} Edges")
             self.edge_count_label.setStyleSheet("""
-                color: #66ff66;
+                color: #7fa889;
                 font-size: 12px;
                 font-weight: normal;
                 border: none;
@@ -2674,13 +2703,7 @@ class NSidedPatchInputPanel(QFrame):
         """Show panel centered at bottom of viewport."""
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 class LatticeInputPanel(QFrame):
@@ -2697,87 +2720,76 @@ class LatticeInputPanel(QFrame):
         super().__init__(parent)
         self._target_body = None
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(70)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(190)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox, QSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 3px; font-weight: bold; font-size: 12px;
-            }
-            QComboBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 3px; min-width: 100px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 8px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        # Label
-        layout.addWidget(QLabel(tr("Lattice:")))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Lattice:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
 
-        # Cell Type
-        layout.addWidget(QLabel(tr("Type:")))
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Type:")), 0, 0)
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["BCC", "FCC", "Octet", "Diamond"])  # Technical terms, not translated
-        layout.addWidget(self.type_combo)
+        self.type_combo.addItems(["BCC", "FCC", "Octet", "Diamond"])
+        body.addWidget(self.type_combo, 0, 1)
 
-        # Cell Size
-        layout.addWidget(QLabel(tr("Cell:")))
+        body.addWidget(QLabel(tr("Cell:")), 1, 0)
         self.cell_spin = QDoubleSpinBox()
         self.cell_spin.setRange(1.0, 100.0)
         self.cell_spin.setValue(5.0)
         self.cell_spin.setSuffix(" mm")
         self.cell_spin.setDecimals(1)
-        layout.addWidget(self.cell_spin)
+        body.addWidget(self.cell_spin, 1, 1)
 
-        # Beam Radius
-        layout.addWidget(QLabel(tr("Beam:")))
+        body.addWidget(QLabel(tr("Beam:")), 2, 0)
         self.beam_spin = QDoubleSpinBox()
         self.beam_spin.setRange(0.1, 10.0)
         self.beam_spin.setValue(0.5)
         self.beam_spin.setSuffix(" mm")
         self.beam_spin.setDecimals(2)
-        layout.addWidget(self.beam_spin)
+        body.addWidget(self.beam_spin, 2, 1)
 
-        # Shell Thickness
-        layout.addWidget(QLabel("Shell:"))
+        body.addWidget(QLabel(tr("Shell:")), 3, 0)
         self.shell_spin = QDoubleSpinBox()
         self.shell_spin.setRange(0.0, 50.0)
         self.shell_spin.setValue(1.0)
         self.shell_spin.setSuffix(" mm")
         self.shell_spin.setDecimals(1)
-        self.shell_spin.setToolTip("0 = no shell, >0 = preserve outer wall")
-        layout.addWidget(self.shell_spin)
+        self.shell_spin.setToolTip(tr("0 = no shell, >0 = preserve outer wall"))
+        body.addWidget(self.shell_spin, 3, 1)
 
-        # Stretch
-        layout.addStretch()
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
 
-        # OK Button
-        self.ok_btn = QPushButton("Generate")
-        self.ok_btn.setStyleSheet("background: #0078d4; border: none; min-width: 100px;")
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
+        self.ok_btn = QPushButton(tr("Generate"))
+        self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
-        layout.addWidget(self.ok_btn)
+        actions.addWidget(self.ok_btn)
 
-        # Cancel Button
-        self.cancel_btn = QPushButton("✕")
-        #self.cancel_btn.setFixedWidth(30)
-        self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        layout.addWidget(self.cancel_btn)
+        actions.addWidget(self.cancel_btn)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -2814,13 +2826,7 @@ class LatticeInputPanel(QFrame):
         """Show panel centered at bottom of viewport."""
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)
 
 
 # ISO metric coarse threads: (nominal_dia, pitch)
@@ -2858,36 +2864,22 @@ class ThreadInputPanel(QFrame):
         self._tolerance_offset = 0.0
         self._detected_diameter = None  # Auto-detected from cylindrical face
 
-        self.setMinimumWidth(750)
-        self.setFixedHeight(75)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(210)
 
-        self.setStyleSheet("""
-            QFrame {
-                background: #2d2d30;
-                border: 2px solid #00aaff;
-                border-radius: 8px;
-            }
-            QLabel { color: #fff; font-weight: bold; border: none; font-size: 12px; }
-            QDoubleSpinBox {
-                background: #1e1e1e; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 8px; font-weight: bold; font-size: 13px;
-            }
-            QComboBox {
-                background: #1e1e1e; border: 1px solid #555;
-                border-radius: 4px; color: #fff; padding: 4px; min-width: 80px;
-            }
-            QPushButton {
-                background: #444; color: #fff; border: 1px solid #555;
-                border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 12px;
-            }
-            QPushButton:hover { background: #555; border-color: #777; }
-        """)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel(tr("Thread:")))
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Thread:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+        header.addStretch()
 
         # Thread type (External/Internal)
         self.type_combo = QComboBox()
@@ -2895,7 +2887,7 @@ class ThreadInputPanel(QFrame):
         for key in ["External", "Internal"]:
             self.type_combo.addItem(tr(key), key)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed_idx)
-        layout.addWidget(self.type_combo)
+        header.addWidget(self.type_combo)
 
         # Size preset
         self.size_combo = QComboBox()
@@ -2904,10 +2896,15 @@ class ThreadInputPanel(QFrame):
             self.size_combo.addItem(name)
         self.size_combo.setCurrentText("M10")
         self.size_combo.currentTextChanged.connect(self._on_preset_changed)
-        layout.addWidget(self.size_combo)
+        header.addWidget(self.size_combo)
 
-        # Diameter
-        layout.addWidget(QLabel("\u2300"))  # ⌀
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Diameter:")), 0, 0)
         self.diameter_input = ActionSpinBox()
         self.diameter_input.setRange(0.5, 500.0)
         self.diameter_input.setDecimals(2)
@@ -2916,10 +2913,9 @@ class ThreadInputPanel(QFrame):
         self.diameter_input.valueChanged.connect(self._on_diameter_changed)
         self.diameter_input.enterPressed.connect(self._confirm)
         self.diameter_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.diameter_input)
+        body.addWidget(self.diameter_input, 0, 1)
 
-        # Pitch
-        layout.addWidget(QLabel("P:"))
+        body.addWidget(QLabel(tr("Pitch:")), 1, 0)
         self.pitch_input = ActionSpinBox()
         self.pitch_input.setRange(0.1, 10.0)
         self.pitch_input.setDecimals(2)
@@ -2928,10 +2924,9 @@ class ThreadInputPanel(QFrame):
         self.pitch_input.valueChanged.connect(self._on_pitch_changed)
         self.pitch_input.enterPressed.connect(self._confirm)
         self.pitch_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.pitch_input)
+        body.addWidget(self.pitch_input, 1, 1)
 
-        # Depth
-        layout.addWidget(QLabel(tr("Depth:")))
+        body.addWidget(QLabel(tr("Depth:")), 2, 0)
         self.depth_input = ActionSpinBox()
         self.depth_input.setRange(0.1, 10000.0)
         self.depth_input.setDecimals(2)
@@ -2940,10 +2935,9 @@ class ThreadInputPanel(QFrame):
         self.depth_input.valueChanged.connect(self._on_depth_changed)
         self.depth_input.enterPressed.connect(self._confirm)
         self.depth_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.depth_input)
+        body.addWidget(self.depth_input, 2, 1)
 
-        # Tolerance offset
-        layout.addWidget(QLabel("Tol:"))
+        body.addWidget(QLabel(tr("Tol:")), 3, 0)
         self.tolerance_input = ActionSpinBox()
         self.tolerance_input.setRange(-1.0, 1.0)
         self.tolerance_input.setDecimals(3)
@@ -2952,19 +2946,26 @@ class ThreadInputPanel(QFrame):
         self.tolerance_input.valueChanged.connect(self._on_tolerance_changed)
         self.tolerance_input.enterPressed.connect(self._confirm)
         self.tolerance_input.escapePressed.connect(self.cancelled.emit)
-        layout.addWidget(self.tolerance_input)
+        body.addWidget(self.tolerance_input, 3, 1)
 
-        # OK / Cancel
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+
         self.btn_ok = QPushButton("OK")
-        self.btn_ok.setStyleSheet("background: #00aaff; color: #000; border: none; font-weight: bold;")
+        self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
-        layout.addWidget(self.btn_ok)
+        actions.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        #self.btn_cancel.setFixedWidth(35)
-        self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
+        self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
-        layout.addWidget(self.btn_cancel)
+        actions.addWidget(self.btn_cancel)
+
+        layout.addLayout(actions)
 
         self.hide()
 
@@ -3075,10 +3076,4 @@ class ThreadInputPanel(QFrame):
     def show_at(self, pos_widget):
         self.show()
         self.raise_()
-        if pos_widget:
-            parent = pos_widget.parent() if pos_widget.parent() else pos_widget
-            x = (parent.width() - self.width()) // 2
-            y = parent.height() - self.height() - 50
-            if y < 0:
-                y = 50
-            self.move(x, y)
+        _position_panel_right_mid(self, pos_widget)

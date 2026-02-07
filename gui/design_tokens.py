@@ -214,51 +214,71 @@ class DesignTokens:
         """Stylesheet für Input-Panels (Fillet, Chamfer, Shell, etc.) — konsistent mit Dialogen."""
         p = DesignTokens.COLOR_PRIMARY.name()
         ph = DesignTokens.COLOR_PRIMARY_HOVER.name()
-        bg = DesignTokens.COLOR_BG_PANEL.name()
-        inp = DesignTokens.COLOR_BG_INPUT.name()
         txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
         muted = DesignTokens.COLOR_TEXT_MUTED.name()
+        panel_bg = "#20242d"
+        panel_bg2 = "#1b1f27"
+        panel_border = "#2f3541"
+        input_bg = "#1a1e26"
+        input_border = "#323846"
+        btn_bg = "#2b313c"
+        btn_border = "#3a4150"
+        danger_bg = "#3a2424"
+        danger_border = "#6a2b2b"
         return f"""
             QFrame {{
-                background: #2d2d30;
-                border: 2px solid #0078d4;
-                border-radius: 8px;
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {panel_bg}, stop:1 {panel_bg2});
+                border: 1px solid {panel_border};
+                border-radius: 10px;
             }}
             QLabel {{
-                color: #fff;
+                color: {txt};
                 border: none;
                 font-size: 12px;
             }}
+            QLabel#panelTitle {{
+                font-size: 13px;
+                font-weight: 600;
+            }}
             QComboBox {{
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px;
+                background: {input_bg};
+                color: {txt};
+                border: 1px solid {input_border};
+                border-radius: 6px;
+                padding: 6px 8px;
                 min-width: 120px;
             }}
-            QComboBox:hover {{ border-color: #0078d4; }}
+            QComboBox:hover {{ border-color: {p}; }}
             QComboBox::drop-down {{
                 border: none;
                 width: 20px;
             }}
             QComboBox QAbstractItemView {{
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                selection-background-color: #0078d4;
-                selection-color: #fff;
+                background: {panel_bg};
+                color: {txt};
+                border: 1px solid {panel_border};
+                selection-background-color: {p};
+                selection-color: {txt};
             }}
             QDoubleSpinBox, QSpinBox {{
-                background: #1e1e1e;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
-                font-weight: bold;
+                background: {input_bg};
+                color: {txt};
+                border: 1px solid {input_border};
+                border-radius: 6px;
+                padding: 5px 8px;
+            }}
+            QLineEdit {{
+                background: {input_bg};
+                color: {txt};
+                border: 1px solid {input_border};
+                border-radius: 6px;
+                padding: 6px 8px;
+            }}
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+                border: 1px solid {p};
             }}
             QCheckBox {{
-                color: #fff;
+                color: {txt};
                 border: none;
             }}
             QCheckBox::indicator {{
@@ -266,25 +286,42 @@ class DesignTokens:
                 height: 16px;
             }}
             QPushButton {{
-                background: #444;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
+                background: {btn_bg};
+                color: {txt};
+                border: 1px solid {btn_border};
+                border-radius: 6px;
+                padding: 6px 12px;
             }}
-            QPushButton:hover {{ background: #555; }}
-            QPushButton#applyBtn {{
-                background: #0078d4;
-                border: none;
+            QPushButton:hover {{ background: #353c48; }}
+            QPushButton#primary {{
+                background: {p};
+                border: 1px solid {p};
+                color: white;
             }}
-            QPushButton#applyBtn:hover {{ background: #1084d8; }}
+            QPushButton#primary:hover {{ background: {ph}; }}
+            QPushButton#danger {{
+                background: {danger_bg};
+                border: 1px solid {danger_border};
+                color: #ffdede;
+            }}
+            QPushButton#danger:hover {{ background: #4a2a2a; }}
+            QPushButton#ghost {{
+                background: transparent;
+                border: 1px solid {btn_border};
+                color: {txt};
+            }}
+            QPushButton#ghost:hover {{ background: #303744; }}
+            QPushButton#toggle:checked {{
+                background: {p};
+                border: 1px solid {p};
+                color: white;
+            }}
             QGroupBox {{
-                color: #aaa;
-                border: 1px solid #444;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 8px;
+                color: {muted};
+                border: 1px solid {panel_border};
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 10px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
