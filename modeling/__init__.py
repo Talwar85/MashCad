@@ -30,8 +30,7 @@ from modeling.geometry_validator import GeometryValidator, ValidationResult, Val
 from modeling.geometry_healer import GeometryHealer, HealingResult, HealingStrategy  # Phase 7
 from modeling.nurbs import NURBSCurve, NURBSSurface, ContinuityMode, CurveType  # Phase 8
 from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as step_export  # Phase 8.3
-# NOTE: Altes TNP-System (Phase 8.2) deaktiviert - verwendet TNP v3.0
-# from modeling.tnp_tracker import TNPTracker, ShapeReference, get_tnp_tracker
+# TNP v4.0 ist aktiv - TNP v3.0 Legacy-Systeme wurden durch modernes ShapeNamingService ersetzt
 from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
 from config.feature_flags import is_enabled  # Für TNP Debug Logging
 from modeling.boolean_engine_v4 import BooleanEngineV4  # Zentraler Boolean-Engine
@@ -117,6 +116,7 @@ class FeatureType(Enum):
     HOLLOW = auto()           # Aushöhlen mit optionalem Drain Hole
     LATTICE = auto()          # Gitterstruktur für Leichtbau
     NSIDED_PATCH = auto()     # N-seitiger Patch (Surface Fill)
+    PRIMITIVE = auto()        # Primitive (Box, Cylinder, Sphere, Cone)
     IMPORT = auto()           # Importierter Body (Mesh-Konvertierung, STEP Import)
 
 @dataclass
@@ -635,6 +635,44 @@ class NSidedPatchFeature(Feature):
             self.edge_shape_ids = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
+
+
+@dataclass
+class PrimitiveFeature(Feature):
+    """
+    Primitive Feature — Box, Cylinder, Sphere, Cone.
+
+    Speichert die Erstellungs-Parameter, sodass das Solid bei Rebuild
+    reproduzierbar ist. Dient als Base-Feature (erstes Feature eines Bodies).
+    """
+    primitive_type: str = "box"  # "box", "cylinder", "sphere", "cone"
+    length: float = 10.0
+    width: float = 10.0
+    height: float = 10.0
+    radius: float = 5.0
+    bottom_radius: float = 5.0
+    top_radius: float = 0.0
+
+    def __post_init__(self):
+        self.type = FeatureType.PRIMITIVE
+        if not self.name or self.name == "Feature":
+            self.name = f"Primitive ({self.primitive_type.capitalize()})"
+
+    def create_solid(self):
+        """Erstellt das Build123d Solid aus den Parametern."""
+        try:
+            import build123d as bd
+            if self.primitive_type == "box":
+                return bd.Box(self.length, self.width, self.height)
+            elif self.primitive_type == "cylinder":
+                return bd.Cylinder(self.radius, self.height)
+            elif self.primitive_type == "sphere":
+                return bd.Sphere(self.radius)
+            elif self.primitive_type == "cone":
+                return bd.Cone(self.bottom_radius, self.top_radius, self.height)
+        except Exception as e:
+            logger.error(f"PrimitiveFeature.create_solid() failed: {e}")
+        return None
 
 
 @dataclass
@@ -4904,8 +4942,18 @@ class Body:
             new_solid = None
             status = "OK"
 
+            # ================= PRIMITIVE (Base Feature) =================
+            if isinstance(feature, PrimitiveFeature):
+                base_solid = feature.create_solid()
+                if base_solid is not None:
+                    new_solid = base_solid
+                    logger.info(f"PrimitiveFeature: {feature.primitive_type} erstellt")
+                else:
+                    status = "ERROR"
+                    logger.error(f"PrimitiveFeature: Erstellung fehlgeschlagen")
+
             # ================= IMPORT (Base Feature) =================
-            if isinstance(feature, ImportFeature):
+            elif isinstance(feature, ImportFeature):
                 # ImportFeature enthält die Basis-Geometrie (z.B. konvertiertes Mesh)
                 base_solid = feature.get_solid()
                 if base_solid is not None:
@@ -7461,6 +7509,18 @@ class Body:
                     "data": feat.data,
                 })
 
+            elif isinstance(feat, PrimitiveFeature):
+                feat_dict.update({
+                    "feature_class": "PrimitiveFeature",
+                    "primitive_type": feat.primitive_type,
+                    "length": feat.length,
+                    "width": feat.width,
+                    "height": feat.height,
+                    "radius": feat.radius,
+                    "bottom_radius": feat.bottom_radius,
+                    "top_radius": feat.top_radius,
+                })
+
             elif isinstance(feat, ImportFeature):
                 feat_dict.update({
                     "feature_class": "ImportFeature",
@@ -8017,6 +8077,18 @@ class Body:
                 feat = TransformFeature(
                     mode=feat_dict.get("mode", "move"),
                     data=feat_dict.get("data", {}),
+                    **base_kwargs
+                )
+
+            elif feat_class == "PrimitiveFeature":
+                feat = PrimitiveFeature(
+                    primitive_type=feat_dict.get("primitive_type", "box"),
+                    length=feat_dict.get("length", 10.0),
+                    width=feat_dict.get("width", 10.0),
+                    height=feat_dict.get("height", 10.0),
+                    radius=feat_dict.get("radius", 5.0),
+                    bottom_radius=feat_dict.get("bottom_radius", 5.0),
+                    top_radius=feat_dict.get("top_radius", 0.0),
                     **base_kwargs
                 )
 
