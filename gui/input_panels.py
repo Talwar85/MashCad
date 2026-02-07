@@ -60,7 +60,7 @@ class ExtrudeInputPanel(QFrame):
         self._visibility_state = 0  # 0=normal, 1=xray, 2=hidden
         self._direction = 1  # 1 or -1
         self._current_operation = "New Body"
-        self.setMinimumWidth(560)  # Breiter für bessere Lesbarkeit
+        self.setMinimumWidth(750)  # Breiter für bessere Lesbarkeit
         self.setFixedHeight(65)
 
         # DesignTokens für konsistentes Styling
@@ -101,7 +101,7 @@ class ExtrudeInputPanel(QFrame):
         # Flip Direction Button
         self.flip_btn = QPushButton("⇅")
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
-        self.flip_btn.setFixedSize(32, 32)
+        #self.flip_btn.setFixedSize(32, 32)
         self.flip_btn.setStyleSheet("""
             QPushButton {
                 background: #3a3a3a;
@@ -124,7 +124,7 @@ class ExtrudeInputPanel(QFrame):
         # "To Face" Button
         self.to_face_btn = QPushButton("⬆ To")
         self.to_face_btn.setToolTip(tr("Extrude to face (T)"))
-        self.to_face_btn.setFixedSize(50, 32)
+        #self.to_face_btn.setFixedSize(50, 32)
         self.to_face_btn.setCheckable(True)
         self.to_face_btn.setStyleSheet("""
             QPushButton {
@@ -139,7 +139,7 @@ class ExtrudeInputPanel(QFrame):
 
         self.btn_vis = QPushButton("👁")
         self.btn_vis.setCheckable(False)  # 3-Stufen-Toggle statt an/aus
-        self.btn_vis.setFixedWidth(35)
+        #self.btn_vis.setFixedWidth(35)
         self.btn_vis.setToolTip(tr("Bodies visible (click → X-Ray)"))
         self.btn_vis.clicked.connect(self._toggle_vis)
         layout.addWidget(self.btn_vis)
@@ -150,7 +150,7 @@ class ExtrudeInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
         
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
@@ -529,7 +529,7 @@ class ShellInputPanel(QFrame):
 
         # Cancel button
         self.cancel_btn = QPushButton("X")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -668,7 +668,7 @@ class SweepInputPanel(QFrame):
         self._operation = "New Body"
         self._is_frenet = False
 
-        self.setMinimumWidth(700)
+        self.setMinimumWidth(900)
         self.setFixedHeight(80)  # Höher für bessere Lesbarkeit
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -756,7 +756,7 @@ class SweepInputPanel(QFrame):
         # Sketch Path button
         self.sketch_path_btn = QPushButton(tr("Sketch"))
         self.sketch_path_btn.setToolTip(tr("Select path from sketch (arc/line/spline)"))
-        self.sketch_path_btn.setFixedWidth(55)
+        #self.sketch_path_btn.setFixedWidth(55)
         self.sketch_path_btn.clicked.connect(lambda: self.sketch_path_requested.emit())
         layout.addWidget(self.sketch_path_btn)
 
@@ -772,7 +772,7 @@ class SweepInputPanel(QFrame):
         twist_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
         layout.addWidget(twist_lbl)
         self.twist_input = QLineEdit("0")
-        self.twist_input.setFixedWidth(55)
+        #self.twist_input.setFixedWidth(55)
         self.twist_input.setStyleSheet(
             "background: #1e1e1e; color: #fff; border: 1px solid #555; "
             "border-radius: 4px; padding: 5px; font-size: 12px;"
@@ -788,7 +788,7 @@ class SweepInputPanel(QFrame):
         scale_lbl.setStyleSheet("font-weight: normal; font-size: 12px; border: none;")
         layout.addWidget(scale_lbl)
         self.scale_start_input = QLineEdit("1.0")
-        self.scale_start_input.setFixedWidth(50)
+        #self.scale_start_input.setFixedWidth(50)
         self.scale_start_input.setStyleSheet(
             "background: #1e1e1e; color: #fff; border: 1px solid #555; "
             "border-radius: 4px; padding: 5px; font-size: 12px;"
@@ -804,7 +804,7 @@ class SweepInputPanel(QFrame):
         layout.addWidget(arrow_lbl)
 
         self.scale_end_input = QLineEdit("1.0")
-        self.scale_end_input.setFixedWidth(50)
+        #self.scale_end_input.setFixedWidth(50)
         self.scale_end_input.setStyleSheet(
             "background: #1e1e1e; color: #fff; border: 1px solid #555; "
             "border-radius: 4px; padding: 5px; font-size: 12px;"
@@ -818,7 +818,7 @@ class SweepInputPanel(QFrame):
         # Store internal keys as item data for comparison, display translated text
         for key in ["New Body", "Join", "Cut", "Intersect"]:
             self.operation_combo.addItem(tr(key), key)
-        self.operation_combo.setFixedWidth(110)
+        #self.operation_combo.setFixedWidth(110)
         self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         layout.addWidget(self.operation_combo)
 
@@ -831,7 +831,7 @@ class SweepInputPanel(QFrame):
 
         # Cancel button
         self.cancel_btn = QPushButton("X")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -1017,7 +1017,7 @@ class LoftInputPanel(QFrame):
         self._operation = "New Body"
         self._ruled = False
 
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(700)
         self.setFixedHeight(80)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -1058,7 +1058,7 @@ class LoftInputPanel(QFrame):
         # Store internal keys as item data for comparison, display translated text
         for key in ["New Body", "Join", "Cut", "Intersect"]:
             self.operation_combo.addItem(tr(key), key)
-        self.operation_combo.setFixedWidth(90)
+        #self.operation_combo.setFixedWidth(90)
         self.operation_combo.currentIndexChanged.connect(self._on_operation_changed_idx)
         top_row.addWidget(self.operation_combo)
 
@@ -1071,7 +1071,7 @@ class LoftInputPanel(QFrame):
 
         # Cancel button
         self.cancel_btn = QPushButton("X")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         top_row.addWidget(self.cancel_btn)
@@ -1247,7 +1247,7 @@ class TransformPanel(QFrame):
         self._mode = "move"
         self._ignore_signals = False
 
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(750)
         self.setFixedHeight(75)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -1329,7 +1329,7 @@ class TransformPanel(QFrame):
 
         # Cancel Button
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self._on_cancel)
         layout.addWidget(self.btn_cancel)
@@ -1604,7 +1604,7 @@ class RevolveInputPanel(QFrame):
         self._direction = 1
         self._current_operation = "New Body"
 
-        self.setMinimumWidth(580)
+        self.setMinimumWidth(750)
         self.setFixedHeight(75)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -1621,7 +1621,7 @@ class RevolveInputPanel(QFrame):
         for axis_name in ('X', 'Y', 'Z'):
             btn = QPushButton(axis_name)
             btn.setCheckable(True)
-            btn.setFixedSize(32, 32)
+            #btn.setFixedSize(32, 32)
             btn.clicked.connect(lambda checked, a=axis_name: self._on_axis_clicked(a))
             layout.addWidget(btn)
             self._axis_buttons[axis_name] = btn
@@ -1641,7 +1641,7 @@ class RevolveInputPanel(QFrame):
         # Flip direction button
         self.flip_btn = QPushButton("⇅")
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
-        self.flip_btn.setFixedSize(32, 32)
+        #self.flip_btn.setFixedSize(32, 32)
         self.flip_btn.clicked.connect(self._flip_direction)
         layout.addWidget(self.flip_btn)
 
@@ -1665,7 +1665,7 @@ class RevolveInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(30)
+        #self.btn_cancel.setFixedWidth(30)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
@@ -1764,7 +1764,7 @@ class OffsetPlaneInputPanel(QFrame):
         super().__init__(parent)
         self._offset = 0.0
 
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(550)
         self.setFixedHeight(75)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -1796,7 +1796,7 @@ class OffsetPlaneInputPanel(QFrame):
         layout.addWidget(self.ok_btn)
 
         self.cancel_btn = QPushButton("X")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -1860,7 +1860,7 @@ class HoleInputPanel(QFrame):
         self._diameter = 8.0
         self._depth = 0.0  # 0 = through all
 
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(700)
         self.setFixedHeight(75)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -1911,7 +1911,7 @@ class HoleInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
@@ -1986,7 +1986,7 @@ class DraftInputPanel(QFrame):
         self._pull_axis = "Z"
         self._selected_face_count = 0
 
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(700)
         self.setFixedHeight(75)
 
         self.setStyleSheet(DesignTokens.stylesheet_panel())
@@ -2020,7 +2020,7 @@ class DraftInputPanel(QFrame):
         for axis in ["X", "Y", "Z"]:
             btn = QPushButton(axis)
             btn.setCheckable(True)
-            btn.setFixedSize(32, 28)
+            #btn.setFixedSize(32, 28)
             btn.clicked.connect(lambda checked, a=axis: self._set_axis(a))
             self._axis_btns[axis] = btn
             layout.addWidget(btn)
@@ -2033,7 +2033,7 @@ class DraftInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
@@ -2104,7 +2104,7 @@ class SplitInputPanel(QFrame):
         self._angle = 0.0
         self._keep = "above"
 
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(750)
         self.setFixedHeight(75)
 
         self.setStyleSheet("""
@@ -2144,7 +2144,7 @@ class SplitInputPanel(QFrame):
         for plane in ["XY", "XZ", "YZ"]:
             btn = QPushButton(plane)
             btn.setCheckable(True)
-            btn.setFixedSize(36, 28)
+            #btn.setFixedSize(36, 28)
             btn.clicked.connect(lambda checked, p=plane: self._set_plane(p))
             self._plane_btns[plane] = btn
             layout.addWidget(btn)
@@ -2183,7 +2183,7 @@ class SplitInputPanel(QFrame):
         for key in ["Above", "Below", "Both"]:
             self.keep_combo.addItem(tr(key), key)
         self.keep_combo.currentIndexChanged.connect(self._on_keep_changed_idx)
-        self.keep_combo.setFixedWidth(80)
+        #self.keep_combo.setFixedWidth(80)
         layout.addWidget(self.keep_combo)
 
         # OK / Cancel
@@ -2193,7 +2193,7 @@ class SplitInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
@@ -2292,7 +2292,7 @@ class PatternInputPanel(QFrame):
         self._target_body = None
         self._pattern_type = "linear"  # "linear" or "circular"
 
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(750)
         self.setFixedHeight(70)
 
         self.setStyleSheet("""
@@ -2408,7 +2408,7 @@ class PatternInputPanel(QFrame):
 
         # Cancel Button
         self.cancel_btn = QPushButton("✕")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -2551,7 +2551,7 @@ class NSidedPatchInputPanel(QFrame):
         self._degree = 3
         self._tangent = True
 
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(650)
         self.setFixedHeight(75)
 
         self.setStyleSheet("""
@@ -2618,7 +2618,7 @@ class NSidedPatchInputPanel(QFrame):
 
         # Cancel Button
         self.cancel_btn = QPushButton("✕")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -2697,7 +2697,7 @@ class LatticeInputPanel(QFrame):
         super().__init__(parent)
         self._target_body = None
 
-        self.setMinimumWidth(580)
+        self.setMinimumWidth(750)
         self.setFixedHeight(70)
 
         self.setStyleSheet("""
@@ -2774,7 +2774,7 @@ class LatticeInputPanel(QFrame):
 
         # Cancel Button
         self.cancel_btn = QPushButton("✕")
-        self.cancel_btn.setFixedWidth(30)
+        #self.cancel_btn.setFixedWidth(30)
         self.cancel_btn.setStyleSheet("background: #d83b01; border: none;")
         self.cancel_btn.clicked.connect(self._cancel)
         layout.addWidget(self.cancel_btn)
@@ -2858,7 +2858,7 @@ class ThreadInputPanel(QFrame):
         self._tolerance_offset = 0.0
         self._detected_diameter = None  # Auto-detected from cylindrical face
 
-        self.setMinimumWidth(680)
+        self.setMinimumWidth(750)
         self.setFixedHeight(75)
 
         self.setStyleSheet("""
@@ -2961,7 +2961,7 @@ class ThreadInputPanel(QFrame):
         layout.addWidget(self.btn_ok)
 
         self.btn_cancel = QPushButton("X")
-        self.btn_cancel.setFixedWidth(35)
+        #self.btn_cancel.setFixedWidth(35)
         self.btn_cancel.setStyleSheet("background: #d83b01; color: white; border: none;")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         layout.addWidget(self.btn_cancel)
