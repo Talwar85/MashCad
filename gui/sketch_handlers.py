@@ -2616,7 +2616,7 @@ class SketchHandlersMixin:
             # Klick im Canvas (woanders als Zentrum) bestätigt auch
             self._apply_circular_pattern()
     
-    def _handle_gear(self, pos, snap_type):
+    def _handle_gear(self, pos, snap_type, snap_entity=None):
         """
         Erweitertes Zahnrad-Tool (CAD Kompatibel).
         Unterstützt Backlash, Profilverschiebung und Bohrung.
@@ -2768,14 +2768,29 @@ class SketchHandlersMixin:
 
     def _remove_preview_elements(self):
         """Entfernt markierte Vorschau-Elemente"""
-        # Listenkopie erstellen, da wir während der Iteration löschen
+        # Listenkopie erstellen, da wir waehrend der Iteration loeschen
         lines_to_remove = [l for l in self.sketch.lines if hasattr(l, 'is_preview') and l.is_preview]
         circles_to_remove = [c for c in self.sketch.circles if hasattr(c, 'is_preview') and c.is_preview]
-        
-        for l in lines_to_remove: 
+
+        for l in lines_to_remove:
             if l in self.sketch.lines: self.sketch.lines.remove(l)
-        for c in circles_to_remove: 
+        for c in circles_to_remove:
             if c in self.sketch.circles: self.sketch.circles.remove(c)
+
+        # Preview-Punkte entfernen, sofern sie nicht mehr referenziert sind
+        referenced = set()
+        for line in self.sketch.lines:
+            referenced.add(id(line.start))
+            referenced.add(id(line.end))
+        for circle in self.sketch.circles:
+            referenced.add(id(circle.center))
+        for arc in self.sketch.arcs:
+            referenced.add(id(arc.center))
+
+        preview_points = [p for p in self.sketch.points if hasattr(p, 'is_preview') and p.is_preview]
+        for p in preview_points:
+            if id(p) not in referenced and p in self.sketch.points:
+                self.sketch.points.remove(p)
 
     def _generate_involute_gear(self, cx, cy, module, teeth, pressure_angle, 
                               backlash=0.0, hole_diam=0.0, profile_shift=0.0, fillet=0.0,
@@ -2834,11 +2849,26 @@ class SketchHandlersMixin:
         # Der Winkel-Offset für den Start der Evolvente (am Grundkreis)
         # Theta_start = psi + inv_alpha
         half_tooth_angle = psi + inv_alpha
-        
         # --- 3. Profilberechnung (Eine Flanke) ---
-        steps = 3 if low_poly else 8
+        def _calc_flank_steps(teeth_count, module_size, low_poly_mode):
+            # Keep point counts bounded so multiple gears stay responsive.
+            base_points = 10 if low_poly_mode else 16  # points per tooth (both flanks)
+            pitch_diameter = max(1e-6, module_size * teeth_count)
+            size_factor = math.sqrt(pitch_diameter / 40.0)
+            size_factor = max(0.8, min(1.3, size_factor))
+            points_per_tooth = int(base_points * size_factor)
+
+            # Hard cap total points
+            max_total_points = 700 if low_poly_mode else 1400
+            max_points_per_tooth = max(6, int(max_total_points / max(1, teeth_count)))
+            points_per_tooth = min(points_per_tooth, max_points_per_tooth)
+
+            # points_per_tooth = 2 * (steps + 1)
+            steps = max(2 if low_poly_mode else 4, (points_per_tooth // 2) - 1)
+            return min(8 if low_poly_mode else 12, steps)
+
+        steps = _calc_flank_steps(teeth, module, low_poly)
         flank_points = []
-        
         # Wir berechnen Punkte vom Grundkreis (rb) bis Kopfkreis (ra)
         # Achtung: Wenn Fußkreis (rf) < Grundkreis (rb), startet Evolvente erst bei rb.
         # Darunter ist es eine Gerade oder ein Fillet.
@@ -2930,47 +2960,112 @@ class SketchHandlersMixin:
         # Jetzt haben wir: RootLeft -> TipLeft -> TipRight -> RootRight
         
         # --- 6. Rad erstellen ---
+        def _dist_point_line(px, py, ax, ay, bx, by):
+            dx = bx - ax
+            dy = by - ay
+            if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+                return math.hypot(px - ax, py - ay)
+            t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+            t = max(0.0, min(1.0, t))
+            proj_x = ax + t * dx
+            proj_y = ay + t * dy
+            return math.hypot(px - proj_x, py - proj_y)
+
+        def _rdp(points, eps):
+            if len(points) < 3:
+                return points
+            ax, ay = points[0]
+            bx, by = points[-1]
+            max_dist = -1.0
+            idx = -1
+            for i in range(1, len(points) - 1):
+                px, py = points[i]
+                dist = _dist_point_line(px, py, ax, ay, bx, by)
+                if dist > max_dist:
+                    max_dist = dist
+                    idx = i
+            if max_dist <= eps or idx == -1:
+                return [points[0], points[-1]]
+            left = _rdp(points[:idx + 1], eps)
+            right = _rdp(points[idx:], eps)
+            return left[:-1] + right
+
+        def _simplify_polyline(points, eps):
+            if len(points) < 5:
+                return points
+            # Remove nearly-duplicate consecutive points
+            cleaned = [points[0]]
+            for x, y in points[1:]:
+                lx, ly = cleaned[-1]
+                if math.hypot(x - lx, y - ly) > max(1e-6, eps * 0.2):
+                    cleaned.append((x, y))
+            if len(cleaned) < 5:
+                return cleaned
+            simplified = _rdp(cleaned, eps)
+            return simplified if len(simplified) >= 4 else cleaned
+
+        # Base tooth in cartesian (beta = 0)
+        base_tooth = [(r * math.cos(theta), r * math.sin(theta)) for r, theta in single_tooth]
+
+        # Simplify tooth polyline to reduce total points
+        simplify_tol = max(0.02, module * (0.06 if low_poly else 0.03))
+        base_tooth = _simplify_polyline(base_tooth, simplify_tol)
+
+        # Cap total points by relaxing tolerance if needed
+        max_total_points = 200 if low_poly else 300
+        total_points = len(base_tooth) * teeth
+        if total_points > max_total_points:
+            factor = total_points / max_total_points
+            base_tooth = _simplify_polyline(base_tooth, simplify_tol * factor)
+
         all_world_points = []
         angle_step = (2 * math.pi) / teeth
-        
+
         for i in range(teeth):
             beta = i * angle_step
             cos_b = math.cos(beta)
             sin_b = math.sin(beta)
-            
-            for r, theta in single_tooth:
-                # Polar zu Kartesisch mit Rotation beta
-                # Punkt Winkel = theta + beta
-                px = cx + r * math.cos(theta + beta)
-                py = cy + r * math.sin(theta + beta)
-                all_world_points.append(Point2D(px, py))
-                
+
+            for x, y in base_tooth:
+                px = cx + x * cos_b - y * sin_b
+                py = cy + x * sin_b + y * cos_b
+                all_world_points.append((px, py))
+
         # --- 7. Zeichnen ---
         lines = []
         circles = []
-        
-        # NOTE: Default add_line tolerance (1.0) is too large for dense gear profiles
-        # and can merge nearby points, which skews teeth. Use a much smaller tolerance.
-        point_merge_tol = max(module * 0.001, 1e-6)
-        
-        for i in range(len(all_world_points)):
-            p1 = all_world_points[i]
-            p2 = all_world_points[(i + 1) % len(all_world_points)]
-            
-            l = self.sketch.add_line(p1.x, p1.y, p2.x, p2.y, tolerance=point_merge_tol)
-            if preview: l.is_preview = True
+
+        point_objs = [Point2D(px, py) for px, py in all_world_points]
+        if preview:
+            for pt in point_objs:
+                pt.is_preview = True
+
+        self.sketch.points.extend(point_objs)
+
+        for i in range(len(point_objs)):
+            p1 = point_objs[i]
+            p2 = point_objs[(i + 1) % len(point_objs)]
+            l = Line2D(p1, p2)
+            if preview:
+                l.is_preview = True
             lines.append(l)
+            self.sketch.lines.append(l)
+
+        self.sketch.invalidate_profiles()
 
         # Bohrung
         if hole_diam > 0.01:
             h = self.sketch.add_circle(cx, cy, hole_diam / 2.0)
-            if preview: h.is_preview = True
+            if preview:
+                h.is_preview = True
+                h.center.is_preview = True
             circles.append(h)
             
         # Teilkreis als Konstruktionslinie (Hilfreich)
         if preview and not low_poly:
             pc = self.sketch.add_circle(cx, cy, r, construction=True)
             pc.is_preview = True
+            pc.center.is_preview = True
             circles.append(pc)
 
         return lines, circles
@@ -3047,20 +3142,16 @@ class SketchHandlersMixin:
             hex_radius = sw / math.sqrt(3)
             
             self._save_undo()
-            
-            # 6 Punkte für Sechskant mit Rotation
-            points = []
-            for i in range(6):
-                angle = rotation_angle + math.radians(30 + i * 60)
-                px = center.x() + hex_radius * math.cos(angle)
-                py = center.y() + hex_radius * math.sin(angle)
-                points.append((px, py))
-            
-            self.sketch.add_polygon(points, closed=True, construction=self.construction_mode)
-            
-            # Schraubenloch (Kreis in der Mitte)
-            self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
-            
+            angle_offset = rotation_angle + math.radians(30)
+            _, const_circle = self.sketch.add_regular_polygon(
+                center.x(), center.y(), hex_radius, 6,
+                angle_offset=angle_offset,
+                construction=self.construction_mode
+            )
+            self.sketch.add_radius(const_circle, hex_radius)
+            hole_circle = self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
+            self.sketch.add_radius(hole_circle, hole_radius)
+            self.sketch.add_concentric(const_circle, hole_circle)
             self.sketch.solve()
             self.sketched_changed.emit()
             self._find_closed_profiles()

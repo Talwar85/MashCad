@@ -869,29 +869,31 @@ class SketchRendererMixin:
         # Pre-filter: Nur Constraints mit Entities im Viewport
         visible_constraints = []
 
+        def _entity_visible(entity):
+            if hasattr(entity, 'start') and hasattr(entity, 'end'):  # Line
+                p_mid = self.world_to_screen(entity.midpoint)
+                return viewport_rect.contains(p_mid)
+
+            if hasattr(entity, 'center'):  # Circle/Arc
+                p_center = self.world_to_screen(entity.center)
+                if viewport_rect.contains(p_center):
+                    return True
+                r_screen = getattr(entity, 'radius', 0) * self.view_scale
+                bounds = QRectF(p_center.x() - r_screen, p_center.y() - r_screen, 2 * r_screen, 2 * r_screen)
+                return viewport_rect.intersects(bounds)
+
+            # Point2D / QPointF
+            if hasattr(entity, 'x') and hasattr(entity, 'y'):
+                p_pt = self.world_to_screen(entity)
+                return viewport_rect.contains(p_pt)
+
+            return False
+
         for c in self.sketch.constraints:
             if not c.entities:
                 continue
 
-            entity = c.entities[0]
-            is_visible = False
-
-            if hasattr(entity, 'start') and hasattr(entity, 'end'):  # Line
-                # Check ob Mittelpunkt im Viewport
-                p_mid = self.world_to_screen(entity.midpoint)
-                is_visible = viewport_rect.contains(p_mid)
-
-            elif hasattr(entity, 'center'):  # Circle/Arc
-                p_center = self.world_to_screen(entity.center)
-                # Check Center + Radius-Bounds
-                if viewport_rect.contains(p_center):
-                    is_visible = True
-                else:
-                    # Grober Radius-Check falls Center außerhalb
-                    r_screen = getattr(entity, 'radius', 0) * self.view_scale
-                    bounds = QRectF(p_center.x()-r_screen, p_center.y()-r_screen, 2*r_screen, 2*r_screen)
-                    is_visible = viewport_rect.intersects(bounds)
-
+            is_visible = any(_entity_visible(ent) for ent in c.entities)
             if is_visible:
                 visible_constraints.append(c)
 
@@ -1082,13 +1084,16 @@ class SketchRendererMixin:
                     
                 elif c.type == ConstraintType.RADIUS:
                     # Debug: Check why RADIUS constraints might not be drawn
-                    if not c.value:
+                    if c.value is None or c.value == 0:
                         logger.warning(f"[Constraints] RADIUS constraint has no value: {c}")
                     if not c.entities:
                         logger.warning(f"[Constraints] RADIUS constraint has no entities: {c}")
 
-                    if c.value and c.entities:
+                    if c.entities:
                         circle = c.entities[0]
+                        display_value = c.value if (c.value is not None and c.value != 0) else getattr(circle, 'radius', None)
+                        if display_value is None:
+                            continue
                         r_screen = circle.radius * self.view_scale
 
                         # Mittelpunkt im Screen-Space
@@ -1124,9 +1129,9 @@ class SketchRendererMixin:
 
                         # 3. Text Box
                         if c.formula:
-                            text = f"R {c.formula} = {c.value:.1f}"
+                            text = f"R {c.formula} = {display_value:.1f}"
                         else:
-                            text = f"R{c.value:.1f}"
+                            text = f"R{display_value:.1f}"
                         fm = QFontMetrics(p.font())
                         rect = fm.boundingRect(text)
 
