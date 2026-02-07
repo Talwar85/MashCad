@@ -120,7 +120,7 @@ class ToolPanel3D(QWidget):
             (tr("Hole..."), tr("Create hole (simple/counterbore/countersink)"), "hole"),
             (tr("Draft..."), tr("Add draft/taper angle to faces"), "draft"),
             (tr("Split Body..."), tr("Split body along a plane"), "split_body"),
-            (tr("Shell"), tr("Hollow out solid"), "shell"),           
+            (tr("Shell"), tr("Hollow out solid"), "shell"),            
             (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
             (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
             (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
