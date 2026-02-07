@@ -2949,11 +2949,15 @@ class SketchHandlersMixin:
         lines = []
         circles = []
         
+        # NOTE: Default add_line tolerance (1.0) is too large for dense gear profiles
+        # and can merge nearby points, which skews teeth. Use a much smaller tolerance.
+        point_merge_tol = max(module * 0.001, 1e-6)
+        
         for i in range(len(all_world_points)):
             p1 = all_world_points[i]
             p2 = all_world_points[(i + 1) % len(all_world_points)]
             
-            l = self.sketch.add_line(p1.x, p1.y, p2.x, p2.y)
+            l = self.sketch.add_line(p1.x, p1.y, p2.x, p2.y, tolerance=point_merge_tol)
             if preview: l.is_preview = True
             lines.append(l)
 
