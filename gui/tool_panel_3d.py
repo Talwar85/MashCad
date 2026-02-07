@@ -109,6 +109,8 @@ class ToolPanel3D(QWidget):
             (tr("Offset Plane..."), tr("Create offset construction plane"), "offset_plane"),
             (tr("Extrude..."), tr("Extrude"), "extrude", "E"),
             (tr("Revolve..."), tr("Revolve sketch around axis"), "revolve"),
+            (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
+            (tr("Loft"), tr("Loft between profiles"), "loft"),
         ], expanded=True)
 
         # --- Modify ---
@@ -118,25 +120,16 @@ class ToolPanel3D(QWidget):
             (tr("Hole..."), tr("Create hole (simple/counterbore/countersink)"), "hole"),
             (tr("Draft..."), tr("Add draft/taper angle to faces"), "draft"),
             (tr("Split Body..."), tr("Split body along a plane"), "split_body"),
-            (tr("Shell"), tr("Hollow out solid"), "shell"),
-            (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
-            (tr("Loft"), tr("Loft between profiles"), "loft"),
+            (tr("Shell"), tr("Hollow out solid"), "shell"),           
             (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
             (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
             (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
-        ])
-
-        # --- Transform ---
-        self._add_group("Transform", [
-            (tr("Move"), tr("Move body"), "move_body", "G"),
-            (tr("Rotate"), tr("Rotate body"), "rotate_body", "R"),
-            (tr("Scale"), tr("Scale body"), "scale_body"),
             (tr("Mirror"), tr("Mirror body"), "mirror_body", "M"),
             (tr("Copy"), tr("Duplicate body"), "copy_body", "D"),
-            ("Point Move", "Point-to-Point Move", "point_to_point_move"),
             (tr("Pattern"), tr("Create linear or circular pattern"), "pattern"),
         ])
 
+     
         # --- Boolean ---
         self._add_group("Boolean", [
             ("Union", tr("Combine bodies"), "boolean_union"),

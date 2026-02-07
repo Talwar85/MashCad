@@ -41,6 +41,7 @@ from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
 from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel, PatternInputPanel, NSidedPatchInputPanel, LatticeInputPanel
+from gui.widgets.transform_toolbar import TransformToolbar
 from gui.widgets.texture_panel import SurfaceTexturePanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
@@ -401,7 +402,13 @@ class MainWindow(QMainWindow):
         
         self.main_splitter.addWidget(self.center_stack)
         self.sketch_editor.viewport = self.viewport_3d
-        
+
+        # Transform Toolbar (floating rechts im Viewport)
+        self.transform_toolbar = TransformToolbar(self.viewport_3d)
+        self.transform_toolbar.action_triggered.connect(self._on_3d_action)
+        self.transform_toolbar.raise_()
+        QTimer.singleShot(100, self._position_transform_toolbar)
+
         # Splitter-Einstellungen
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
@@ -646,6 +653,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._position_extrude_panel()
         self._position_transform_panel()
+        self._position_transform_toolbar()
         self._reposition_notifications()
     
     def _position_extrude_panel(self):
@@ -676,6 +684,18 @@ class MainWindow(QMainWindow):
             self.transform_panel.move(x, y)
             self.transform_panel.raise_()
 
+    def _position_transform_toolbar(self):
+        """Positioniert die Transform-Toolbar rechts im Viewport, vertikal zentriert."""
+        if hasattr(self, 'transform_toolbar') and hasattr(self, 'viewport_3d'):
+            vw = self.viewport_3d.width()
+            vh = self.viewport_3d.height()
+            tw = self.transform_toolbar.width()
+            th = self.transform_toolbar.height()
+            x = vw - tw - 8
+            y = (vh - th) // 2
+            self.transform_toolbar.move(x, y)
+            self.transform_toolbar.raise_()
+
     def _on_transform_panel_confirmed(self, mode: str, data):
         """Handler wenn Transform im Panel bestätigt wird"""
         body_id = self._get_selected_body_id()
@@ -692,12 +712,15 @@ class MainWindow(QMainWindow):
             self.viewport_3d.hide_transform_gizmo()
         self.transform_panel.hide()
         self._selected_body_for_transform = None
+        self.transform_toolbar.clear_active()
         
     def _on_transform_mode_changed(self, mode: str):
         """Handler wenn Transform-Modus geändert wird"""
         if hasattr(self.viewport_3d, 'set_transform_mode'):
             self.viewport_3d.set_transform_mode(mode)
-        pass
+        mode_to_action = {"move": "move_body", "rotate": "rotate_body", "scale": "scale_body"}
+        if mode in mode_to_action:
+            self.transform_toolbar.set_active(mode_to_action[mode])
 
     def _on_grid_size_changed(self, grid_size: float):
         """Handler wenn Grid-Size geändert wird"""
@@ -722,7 +745,7 @@ class MainWindow(QMainWindow):
             return self._selected_body_for_transform
         return None
         
-    def _show_transform_ui(self, body_id: str, body_name: str):
+    def _show_transform_ui(self, body_id: str, body_name: str, mode: str = None):
         """Zeigt Transform-UI für einen Body"""
         self._selected_body_for_transform = body_id
 
@@ -734,6 +757,8 @@ class MainWindow(QMainWindow):
 
         # Transform-Panel zeigen
         self.transform_panel.reset_values()
+        if mode:
+            self.transform_panel.set_mode(mode)
         self.transform_panel.show()
         self.transform_panel.raise_()
         self._position_transform_panel()
@@ -750,6 +775,8 @@ class MainWindow(QMainWindow):
         self.transform_panel.hide()
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
+        if hasattr(self, 'transform_toolbar'):
+            self.transform_toolbar.clear_active()
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
@@ -1452,6 +1479,11 @@ class MainWindow(QMainWindow):
         Startet den Transform-Modus.
         Unterstützt Multi-Select aus Browser.
         """
+        # Toolbar-Button highlighten
+        mode_to_action = {"move": "move_body", "rotate": "rotate_body", "scale": "scale_body"}
+        if mode in mode_to_action:
+            self.transform_toolbar.set_active(mode_to_action[mode])
+
         # WICHTIG: Extrude-Panel KOMPLETT deaktivieren, auch im pending mode
         if hasattr(self, 'extrude_panel'):
             self.extrude_panel.setVisible(False)
@@ -1489,7 +1521,7 @@ class MainWindow(QMainWindow):
             self.viewport_3d.setCursor(Qt.ArrowCursor)
 
             # Transform-UI zeigen
-            self._show_transform_ui(body.id, body.name)
+            self._show_transform_ui(body.id, body.name, mode)
 
             # WICHTIG: Mode auf Viewport setzen, damit Gizmo korrekt angezeigt wird
             if hasattr(self.viewport_3d, 'set_transform_mode'):
@@ -1568,6 +1600,7 @@ class MainWindow(QMainWindow):
 
     def _start_point_to_point_move(self):
         """Startet Point-to-Point Move Modus (CAD-Style) - OHNE Body-Selektion möglich"""
+        self.transform_toolbar.set_active("point_to_point_move")
         body = self._get_active_body()
 
         if not body:
@@ -1707,7 +1740,7 @@ class MainWindow(QMainWindow):
         self._active_transform_body = body
 
         # Transform-UI zeigen
-        self._show_transform_ui(body.id, body.name)
+        self._show_transform_ui(body.id, body.name, mode)
 
         logger.success(f"{mode.capitalize()}: {body.name} - Ziehe am Gizmo oder Tab für Eingabe")
 
@@ -2174,6 +2207,8 @@ class MainWindow(QMainWindow):
             self.tool_stack.setCurrentIndex(0)  # 3D-ToolPanel
             self.center_stack.setCurrentIndex(0)  # Viewport
             self.right_stack.setVisible(False)
+            if hasattr(self, 'transform_toolbar'):
+                self.transform_toolbar.setVisible(True)
             # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("3D")
@@ -2183,6 +2218,8 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentIndex(1)  # Sketch Editor
             self.right_stack.setCurrentIndex(1)  # 2D Properties
             self.right_stack.setVisible(True)
+            if hasattr(self, 'transform_toolbar'):
+                self.transform_toolbar.setVisible(False)
             self.sketch_editor.setFocus()
             # Update UI
             if hasattr(self, 'mashcad_status_bar'):
@@ -7905,6 +7942,7 @@ class MainWindow(QMainWindow):
         else:
             if self.undo_stack.canUndo():
                 self.undo_stack.undo()
+                self._update_tnp_stats()
                 logger.debug("Smart Undo: 3D UndoStack")
 
     def _smart_redo(self):
@@ -7920,6 +7958,7 @@ class MainWindow(QMainWindow):
         else:
             if self.undo_stack.canRedo():
                 self.undo_stack.redo()
+                self._update_tnp_stats()
                 logger.debug("Smart Redo: 3D UndoStack")
 
     def _show_parameters_dialog(self):

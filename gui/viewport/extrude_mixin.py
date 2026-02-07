@@ -30,6 +30,7 @@ class ExtrudeMixin:
             self.is_dragging = False
             self._is_potential_drag = False
             self.extrude_height = 0.0
+            self._cut_transparency_active = False
 
             # X-RAY VISION: Bodies halbtransparent machen
             logger.debug(f"🔍 X-Ray Vision: Aktiviere für {len(self._body_actors)} Bodies")
@@ -115,7 +116,10 @@ class ExtrudeMixin:
         self.extrude_height = height
         
         if not self.selected_face_ids or abs(height) < 0.1:
+            self._set_cut_transparency(False)
             return
+
+        self._set_cut_transparency(operation == "Cut")
 
         try:
             preview_meshes = []
@@ -286,6 +290,44 @@ class ExtrudeMixin:
         height = float(np.dot(tgt_origin - src_origin, src_normal))
         return height
 
+    def _set_cut_transparency(self, enable: bool):
+        """
+        Macht den Quell-Body halbtransparent bei Cut-Operationen,
+        damit man sieht wohin der Cut geht.
+        """
+        cut_active = getattr(self, '_cut_transparency_active', False)
+        if enable == cut_active:
+            return
+
+        self._cut_transparency_active = enable
+
+        cut_body_id = None
+        for fid in self.selected_face_ids:
+            face = next((f for f in self.detector.selection_faces if f.id == fid), None)
+            if face and face.domain_type == 'body_face':
+                cut_body_id = getattr(face, 'owner_id', None)
+                break
+
+        if not cut_body_id:
+            return
+
+        actor_names = self._body_actors.get(cut_body_id)
+        if not actor_names:
+            return
+
+        mesh_actor_name = actor_names[0]
+        if mesh_actor_name not in self.plotter.renderer.actors:
+            return
+
+        mesh_actor = self.plotter.renderer.actors[mesh_actor_name]
+        try:
+            if enable:
+                mesh_actor.GetProperty().SetOpacity(0.15)
+            else:
+                mesh_actor.GetProperty().SetOpacity(0.3)
+        except Exception as e:
+            logger.debug(f"Cut transparency error: {e}")
+
     def _clear_preview(self):
         """Entfernt die Extrude-Vorschau"""
         if self._preview_actor:
@@ -294,3 +336,4 @@ class ExtrudeMixin:
             except Exception as e:
                 logger.debug(f"[extrude_mixin] Fehler beim Entfernen der Vorschau: {e}")
             self._preview_actor = None
+        self._set_cut_transparency(False)
