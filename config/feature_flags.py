@@ -55,7 +55,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "async_tessellation": True,  # Phase 9: Background Mesh Generation
     # Phase 10: BooleanEngineV4 ist jetzt STANDARD - kein Flag mehr nötig
     "ocp_advanced_flags": True,  # Phase 11: SetFuzzyValue + SetRunParallel (AKTIV)
-    "ocp_glue_auto_detect": True,  # Auto-Erkennung von coinciding Faces → GlueShift für ~90% Speedup
+    "ocp_glue_auto_detect": False,  # Auto-Erkennung von coinciding Faces → GlueShift für ~90% Speedup
     "batch_fillets": True,  # Phase 12: Fillet/Chamfer History-Extraction für TNP
     "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
 

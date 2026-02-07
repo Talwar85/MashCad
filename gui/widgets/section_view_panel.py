@@ -1,172 +1,111 @@
 """
 Section View Control Panel
 
-UI-Panel zur Steuerung der Schnittansicht (wie CAD Section Analysis).
-
-Autor: Claude (Section View Feature)
-Datum: 2026-01-22
+Compact floating panel for section view control.
+Styled to match other InputPanels.
 """
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QComboBox, QCheckBox, QGroupBox
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QSlider, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal
-from loguru import logger
+from PySide6.QtCore import Qt, Signal, QPoint
+
+from i18n import tr
+from gui.design_tokens import DesignTokens
 
 
-class SectionViewPanel(QWidget):
+class SectionViewPanel(QFrame):
     """
-    Panel zur Steuerung der Schnittansicht.
+    Panel for section view control.
 
     Signals:
-        section_enabled: Schnittansicht aktiviert (plane: str, position: float)
-        section_disabled: Schnittansicht deaktiviert
-        section_position_changed: Position geändert (position: float)
-        section_plane_changed: Ebene geändert (plane: str)
-        section_invert_toggled: Seitenansicht invertiert
+        section_enabled: emitted when section view is enabled (plane: str, position: float)
+        section_disabled: emitted when section view is disabled
+        section_position_changed: emitted on position change (position: float)
+        section_plane_changed: emitted when plane changes (plane: str)
+        section_invert_toggled: emitted when invert toggled
+        close_requested: emitted when panel should be closed
     """
 
-    section_enabled = Signal(str, float)  # plane, position
+    section_enabled = Signal(str, float)
     section_disabled = Signal()
     section_position_changed = Signal(float)
     section_plane_changed = Signal(str)
     section_invert_toggled = Signal()
+    close_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_active = False
+        self._plane = "XY"
+        self._user_moved = False
+        self._drag_active = False
+        self._drag_offset = QPoint()
+        self._drag_handle_height = 34
 
-        # ✅ FIX: Widget-Eigenschaften setzen für Sichtbarkeit
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setMinimumWidth(320)
+        self.setMaximumWidth(420)
+        self.setMinimumHeight(170)
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
 
-        # Feste Größe für bessere Sichtbarkeit
-        self.setMinimumWidth(300)
-        self.setMaximumWidth(350)
-        self.setMinimumHeight(400)
+        self._build_ui()
 
-        # Styling - Dark Theme für alle Widgets
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #2b2b2b;
-                color: #ffffff;
-            }
-            SectionViewPanel {
-                border: 2px solid #0078d4;
-                border-radius: 8px;
-            }
-            QGroupBox {
-                background-color: #333333;
-                border: 1px solid #555;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 10px;
-                padding: 0 5px;
-                color: #aaa;
-            }
-            QPushButton {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #4a4a4a;
-            }
-            QPushButton:checked {
-                background-color: #0078d4;
-                border-color: #0078d4;
-            }
-            QComboBox {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                padding: 8px 12px;
-                border-radius: 4px;
-                min-width: 150px;
-                font-size: 12px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2b2b2b;
-                color: #fff;
-                selection-background-color: #0078d4;
-                border: 1px solid #555;
-                padding: 4px;
-            }
-            QCheckBox {
-                font-size: 12px;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QSlider::groove:horizontal {
-                background: #3a3a3a;
-                height: 8px;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #0078d4;
-                width: 18px;
-                margin: -5px 0;
-                border-radius: 9px;
-            }
-            QLabel {
-                font-size: 12px;
-            }
-        """)
-
-        self._setup_ui()
-
-    def _setup_ui(self):
-        """Erstellt UI-Elemente."""
+    def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # === Header ===
-        header_layout = QHBoxLayout()
-        title = QLabel("🔪 Schnittansicht")
-        title.setStyleSheet("font-size: 14px; font-weight: bold;")
-        header_layout.addWidget(title)
-        header_layout.addStretch()
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
-        self.toggle_button = QPushButton("Aktivieren")
+        self.title_label = QLabel(tr("Section:"))
+        self.title_label.setObjectName("panelTitle")
+        header.addWidget(self.title_label)
+
+        self.status_label = QLabel(tr("Inactive"))
+        self.status_label.setStyleSheet("color: #a3a3a3; font-size: 12px; border: none;")
+        header.addWidget(self.status_label)
+        header.addStretch()
+
+        self.toggle_button = QPushButton(tr("Off"))
         self.toggle_button.setCheckable(True)
+        self.toggle_button.setObjectName("toggle")
         self.toggle_button.clicked.connect(self._on_toggle_clicked)
-        header_layout.addWidget(self.toggle_button)
+        header.addWidget(self.toggle_button)
 
-        layout.addLayout(header_layout)
+        self.close_button = QPushButton("X")
+        self.close_button.setObjectName("danger")
+        self.close_button.clicked.connect(self.close_requested.emit)
+        header.addWidget(self.close_button)
 
-        # === Plane Selection ===
-        plane_group = QGroupBox("Schnittebene")
-        plane_layout = QVBoxLayout(plane_group)
+        layout.addLayout(header)
 
-        self.plane_combo = QComboBox()
-        self.plane_combo.addItems(["XY (Horizontal)", "YZ (Vertikal - Seite)", "XZ (Vertikal - Front)"])
-        self.plane_combo.currentIndexChanged.connect(self._on_plane_changed)
-        plane_layout.addWidget(self.plane_combo)
+        # Plane row
+        plane_row = QHBoxLayout()
+        plane_row.setSpacing(6)
+        plane_row.addWidget(QLabel(tr("Plane:")))
+        self._plane_buttons = {}
+        for plane in ["XY", "YZ", "XZ"]:
+            btn = QPushButton(plane)
+            btn.setCheckable(True)
+            btn.setObjectName("toggle")
+            btn.clicked.connect(lambda checked, p=plane: self._set_plane(p))
+            self._plane_buttons[plane] = btn
+            plane_row.addWidget(btn)
+        self._plane_buttons["XY"].setChecked(True)
+        plane_row.addStretch()
+        layout.addLayout(plane_row)
 
-        layout.addWidget(plane_group)
-
-        # === Position Control ===
-        position_group = QGroupBox("Position")
-        position_layout = QVBoxLayout(position_group)
-
-        self.position_label = QLabel("Position: 0.0 mm")
-        position_layout.addWidget(self.position_label)
+        # Position row
+        pos_header = QHBoxLayout()
+        pos_header.setSpacing(6)
+        pos_header.addWidget(QLabel(tr("Position:")))
+        self.position_label = QLabel("0.0 mm")
+        self.position_label.setStyleSheet("color: #a3a3a3; font-size: 12px; border: none;")
+        pos_header.addWidget(self.position_label)
+        pos_header.addStretch()
+        layout.addLayout(pos_header)
 
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setMinimum(-1000)
@@ -174,122 +113,148 @@ class SectionViewPanel(QWidget):
         self.position_slider.setValue(0)
         self.position_slider.setEnabled(False)
         self.position_slider.valueChanged.connect(self._on_slider_changed)
-        position_layout.addWidget(self.position_slider)
+        layout.addWidget(self.position_slider)
 
-        # Slider Scale Info
-        scale_label = QLabel("Tipp: Scrolle für feine Anpassung")
-        scale_label.setStyleSheet("color: gray; font-size: 10px;")
-        position_layout.addWidget(scale_label)
-
-        layout.addWidget(position_group)
-
-        # === Options ===
-        options_group = QGroupBox("Optionen")
-        options_layout = QVBoxLayout(options_group)
-
-        self.invert_checkbox = QCheckBox("Seite invertieren")
+        # Options row
+        opts = QHBoxLayout()
+        opts.setSpacing(8)
+        self.invert_checkbox = QCheckBox(tr("Invert"))
         self.invert_checkbox.setEnabled(False)
         self.invert_checkbox.toggled.connect(self._on_invert_toggled)
-        options_layout.addWidget(self.invert_checkbox)
+        opts.addWidget(self.invert_checkbox)
 
-        self.highlight_checkbox = QCheckBox("Schnittflächen hervorheben")
+        self.highlight_checkbox = QCheckBox(tr("Highlight"))
         self.highlight_checkbox.setChecked(True)
         self.highlight_checkbox.setEnabled(False)
-        options_layout.addWidget(self.highlight_checkbox)
+        opts.addWidget(self.highlight_checkbox)
 
-        layout.addWidget(options_group)
+        opts.addStretch()
+        layout.addLayout(opts)
 
-        # === Help Text ===
-        help_text = QLabel(
-            "<b>Anwendung:</b><br>"
-            "1. Aktivieren → wähle Schnittebene<br>"
-            "2. Schiebe Position-Slider<br>"
-            "3. Prüfe Boolean Cuts und innere Geometrie<br><br>"
-            "<b>Shortcuts:</b><br>"
-            "• <b>Strg+Shift+S</b>: Toggle Section View"
-        )
-        help_text.setWordWrap(True)
-        help_text.setStyleSheet("background: #1e1e1e; padding: 10px; border-radius: 4px; font-size: 11px; color: #aaa;")
-        layout.addWidget(help_text)
+    def _set_plane(self, plane: str):
+        self._plane = plane
+        for p, btn in self._plane_buttons.items():
+            btn.setChecked(p == plane)
+        if self._is_active:
+            self.section_plane_changed.emit(plane)
+            self.section_enabled.emit(plane, self._get_slider_position())
 
-        layout.addStretch()
-
-    def _on_toggle_clicked(self, checked):
-        """Toggle Section View."""
+    def _on_toggle_clicked(self, checked: bool):
         self._is_active = checked
-
         if checked:
-            self.toggle_button.setText("Deaktivieren")
+            self.toggle_button.setText(tr("On"))
+            self.status_label.setText(tr("Active"))
             self.position_slider.setEnabled(True)
             self.invert_checkbox.setEnabled(True)
             self.highlight_checkbox.setEnabled(True)
-
-            # Emit Enable mit aktueller Plane & Position
-            plane = self._get_current_plane()
-            position = self._get_slider_position()
-
-            logger.info(f"🔪 Section View aktiviert: {plane} @ {position:.1f}mm")
-            self.section_enabled.emit(plane, position)
-
+            self.section_enabled.emit(self._plane, self._get_slider_position())
         else:
-            self.toggle_button.setText("Aktivieren")
+            self.toggle_button.setText(tr("Off"))
+            self.status_label.setText(tr("Inactive"))
             self.position_slider.setEnabled(False)
             self.invert_checkbox.setEnabled(False)
             self.highlight_checkbox.setEnabled(False)
-
-            logger.info("🔪 Section View deaktiviert")
             self.section_disabled.emit()
 
-    def _on_plane_changed(self, index):
-        """Schnittebene wurde geändert."""
-        if not self._is_active:
-            return
-
-        plane = self._get_current_plane()
-        logger.debug(f"🔪 Plane geändert: {plane}")
-        self.section_plane_changed.emit(plane)
-
-        # Re-enable mit neuer Plane
+    def _on_slider_changed(self, value: int):
         position = self._get_slider_position()
-        self.section_enabled.emit(plane, position)
-
-    def _on_slider_changed(self, value):
-        """Slider-Position wurde geändert."""
-        position = self._get_slider_position()
-        self.position_label.setText(f"Position: {position:.1f} mm")
-
+        self.position_label.setText(f"{position:.1f} mm")
         if self._is_active:
             self.section_position_changed.emit(position)
 
-    def _on_invert_toggled(self, checked):
-        """Seite invertieren."""
+    def _on_invert_toggled(self, checked: bool):
         if self._is_active:
-            logger.debug(f"🔪 Invert toggled: {checked}")
             self.section_invert_toggled.emit()
 
-    def _get_current_plane(self) -> str:
-        """Gibt aktuell gewählte Ebene zurück."""
-        index = self.plane_combo.currentIndex()
-        planes = ["XY", "YZ", "XZ"]
-        return planes[index]
-
     def _get_slider_position(self) -> float:
-        """Konvertiert Slider-Value zu Position in mm."""
-        # Slider: -1000 bis +1000 → -100mm bis +100mm (10:1 ratio)
         return self.position_slider.value() / 10.0
 
     def set_slider_bounds(self, min_pos: float, max_pos: float, default_pos: float):
-        """
-        Setzt Slider-Bounds basierend auf Geometrie.
-
-        Args:
-            min_pos: Minimum Position (mm)
-            max_pos: Maximum Position (mm)
-            default_pos: Default Position (mm)
-        """
-        # Slider arbeitet in 0.1mm Schritten (10x multipliziert)
+        if min_pos == max_pos:
+            min_pos -= 1.0
+            max_pos += 1.0
         self.position_slider.setMinimum(int(min_pos * 10))
         self.position_slider.setMaximum(int(max_pos * 10))
         self.position_slider.setValue(int(default_pos * 10))
+        self.position_label.setText(f"{default_pos:.1f} mm")
 
-        logger.debug(f"📏 Slider Bounds: [{min_pos:.1f}, {max_pos:.1f}] mm")
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        self._position_right_mid(pos_widget)
+
+    def _position_right_mid(self, pos_widget):
+        parent = self.parent() or pos_widget
+        if parent is None:
+            return
+
+        if pos_widget is None:
+            area_x, area_y, area_w, area_h = 0, 0, parent.width(), parent.height()
+        elif pos_widget.parent() is parent:
+            geom = pos_widget.geometry()
+            area_x, area_y, area_w, area_h = geom.x(), geom.y(), geom.width(), geom.height()
+        else:
+            top_left = pos_widget.mapTo(parent, QPoint(0, 0))
+            area_x, area_y, area_w, area_h = top_left.x(), top_left.y(), pos_widget.width(), pos_widget.height()
+
+        self.adjustSize()
+        margin = 12
+        x = area_x + area_w - self.width() - margin
+        y = area_y + (area_h - self.height()) // 2
+
+        tp = getattr(parent, "transform_panel", None)
+        if tp and tp.isVisible():
+            x = min(x, tp.x() - self.width() - margin)
+            y = tp.y() + (tp.height() - self.height()) // 2
+
+        tb = getattr(parent, "transform_toolbar", None)
+        if tb and tb.isVisible():
+            tb_pos = tb.mapTo(parent, QPoint(0, 0))
+            x = min(x, tb_pos.x() - self.width() - margin)
+
+        x = max(area_x + margin, min(x, area_x + area_w - self.width() - margin))
+        y = max(area_y + margin, min(y, area_y + area_h - self.height() - margin))
+
+        self.move(x, y)
+        self.raise_()
+
+    def clamp_to_parent(self):
+        parent = self.parent()
+        if parent is None:
+            return
+        margin = 8
+        max_x = parent.width() - self.width() - margin
+        max_y = parent.height() - self.height() - margin
+        x = max(margin, min(self.x(), max_x))
+        y = max(margin, min(self.y(), max_y))
+        self.move(x, y)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and event.pos().y() <= self._drag_handle_height:
+            child = self.childAt(event.pos())
+            if child and child != self and child.metaObject().className() in ("QPushButton", "QSlider", "QCheckBox"):
+                return super().mousePressEvent(event)
+            self._drag_active = True
+            self._drag_offset = event.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_active:
+            parent = self.parent()
+            if parent:
+                new_pos = self.mapToParent(event.pos() - self._drag_offset)
+                self.move(new_pos)
+                self.clamp_to_parent()
+                self._user_moved = True
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_active = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)

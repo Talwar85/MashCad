@@ -3077,3 +3077,210 @@ class ThreadInputPanel(QFrame):
         self.show()
         self.raise_()
         _position_panel_right_mid(self, pos_widget)
+
+
+class MeasureInputPanel(QFrame):
+    """Input panel for Measure tool (inspect)."""
+
+    pick_point_requested = Signal(int)  # 1 or 2
+    clear_requested = Signal()
+    close_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(150)
+
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Measure:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+
+        self.status_label = QLabel(tr("Pick first point"))
+        self.status_label.setStyleSheet("color: #a3a3a3; font-size: 12px; border: none;")
+        header.addWidget(self.status_label)
+        header.addStretch()
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("P1:")), 0, 0)
+        self.p1_edit = QLineEdit()
+        self.p1_edit.setReadOnly(True)
+        self.p1_edit.setPlaceholderText("-")
+        body.addWidget(self.p1_edit, 0, 1)
+        self.p1_btn = QPushButton(tr("Pick"))
+        self.p1_btn.setObjectName("ghost")
+        self.p1_btn.clicked.connect(lambda: self.pick_point_requested.emit(1))
+        body.addWidget(self.p1_btn, 0, 2)
+
+        body.addWidget(QLabel(tr("P2:")), 1, 0)
+        self.p2_edit = QLineEdit()
+        self.p2_edit.setReadOnly(True)
+        self.p2_edit.setPlaceholderText("-")
+        body.addWidget(self.p2_edit, 1, 1)
+        self.p2_btn = QPushButton(tr("Pick"))
+        self.p2_btn.setObjectName("ghost")
+        self.p2_btn.clicked.connect(lambda: self.pick_point_requested.emit(2))
+        body.addWidget(self.p2_btn, 1, 2)
+
+        body.addWidget(QLabel(tr("Distance:")), 2, 0)
+        self.dist_edit = QLineEdit()
+        self.dist_edit.setReadOnly(True)
+        self.dist_edit.setPlaceholderText("-")
+        body.addWidget(self.dist_edit, 2, 1, 1, 2)
+
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.clear_btn = QPushButton(tr("Clear"))
+        self.clear_btn.setObjectName("ghost")
+        self.clear_btn.clicked.connect(self.clear_requested.emit)
+        actions.addWidget(self.clear_btn)
+        actions.addStretch()
+
+        self.btn_close = QPushButton("X")
+        self.btn_close.setObjectName("danger")
+        self.btn_close.clicked.connect(self.close_requested.emit)
+        actions.addWidget(self.btn_close)
+        layout.addLayout(actions)
+
+        self.hide()
+
+    def set_status(self, text: str):
+        self.status_label.setText(text)
+
+    def set_points(self, p1, p2):
+        self.p1_edit.setText(self._format_point(p1) if p1 else "")
+        self.p2_edit.setText(self._format_point(p2) if p2 else "")
+
+    def set_distance(self, dist):
+        self.dist_edit.setText(f"{dist:.2f} mm" if dist is not None else "")
+
+    def reset(self):
+        self.set_status(tr("Pick first point"))
+        self.set_points(None, None)
+        self.set_distance(None)
+
+    def _format_point(self, p):
+        return f"{p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}"
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        _position_panel_right_mid(self, pos_widget)
+
+
+class PointToPointMovePanel(QFrame):
+    """Input panel for Point-to-Point Move."""
+
+    pick_body_requested = Signal()
+    reset_requested = Signal()
+    cancel_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(150)
+
+        self.setStyleSheet(DesignTokens.stylesheet_panel())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(tr("Point Move:"))
+        title.setObjectName("panelTitle")
+        header.addWidget(title)
+
+        self.status_label = QLabel(tr("Pick body"))
+        self.status_label.setStyleSheet("color: #a3a3a3; font-size: 12px; border: none;")
+        header.addWidget(self.status_label)
+        header.addStretch()
+        layout.addLayout(header)
+
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+
+        body.addWidget(QLabel(tr("Body:")), 0, 0)
+        self.body_edit = QLineEdit()
+        self.body_edit.setReadOnly(True)
+        self.body_edit.setPlaceholderText("-")
+        body.addWidget(self.body_edit, 0, 1, 1, 2)
+
+        body.addWidget(QLabel(tr("Start:")), 1, 0)
+        self.start_edit = QLineEdit()
+        self.start_edit.setReadOnly(True)
+        self.start_edit.setPlaceholderText("-")
+        body.addWidget(self.start_edit, 1, 1, 1, 2)
+
+        body.addWidget(QLabel(tr("Target:")), 2, 0)
+        self.target_edit = QLineEdit()
+        self.target_edit.setReadOnly(True)
+        self.target_edit.setPlaceholderText("-")
+        body.addWidget(self.target_edit, 2, 1, 1, 2)
+
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.pick_body_btn = QPushButton(tr("Pick Body"))
+        self.pick_body_btn.setObjectName("ghost")
+        self.pick_body_btn.clicked.connect(self.pick_body_requested.emit)
+        actions.addWidget(self.pick_body_btn)
+        self.reset_btn = QPushButton(tr("Reset"))
+        self.reset_btn.setObjectName("ghost")
+        self.reset_btn.clicked.connect(self.reset_requested.emit)
+        actions.addWidget(self.reset_btn)
+        actions.addStretch()
+
+        self.btn_cancel = QPushButton("X")
+        self.btn_cancel.setObjectName("danger")
+        self.btn_cancel.clicked.connect(self.cancel_requested.emit)
+        actions.addWidget(self.btn_cancel)
+        layout.addLayout(actions)
+
+        self.hide()
+
+    def set_status(self, text: str):
+        self.status_label.setText(text)
+
+    def set_body(self, name: str):
+        self.body_edit.setText(name or "")
+
+    def set_start_point(self, p):
+        self.start_edit.setText(self._format_point(p) if p else "")
+
+    def set_target_point(self, p):
+        self.target_edit.setText(self._format_point(p) if p else "")
+
+    def reset(self):
+        self.set_body("")
+        self.set_start_point(None)
+        self.set_target_point(None)
+        self.set_status(tr("Pick body"))
+
+    def _format_point(self, p):
+        return f"{p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}"
+
+    def show_at(self, pos_widget):
+        self.show()
+        self.raise_()
+        _position_panel_right_mid(self, pos_widget)

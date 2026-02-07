@@ -96,6 +96,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     body_mirror_requested = Signal(str, str)  # body_id, plane (XY/XZ/YZ)
     mirror_requested = Signal(str)  # body_id - Öffnet Mirror-Dialog
     point_to_point_move = Signal(str, tuple, tuple)  # body_id, start_point, end_point - NEU: Point-to-Point Move
+    point_to_point_start_picked = Signal(tuple)  # start point picked
+    point_to_point_cancelled = Signal()
     edge_selection_changed = Signal(int)  # NEU: Anzahl selektierter Kanten für Fillet/Chamfer
     sketch_path_clicked = Signal(str, str, int)  # NEU: sketch_id, geom_type ('line', 'arc', 'spline'), index
     texture_face_selected = Signal(int)  # NEU: Anzahl selektierter Faces für Texture
@@ -782,6 +784,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self.plotter.remove_actor("p2p_start_marker", render=False)
         self.plotter.remove_actor("p2p_line", render=True)
         logger.info("Point-to-Point Mode abgebrochen")
+        self.point_to_point_cancelled.emit()
 
     def highlight_edge(self, p1, p2):
         """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""
@@ -2614,6 +2617,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         # Erster Punkt ausgewählt
                         self.point_to_point_start = point
                         self.point_to_point_body_id = body_id
+                        self.point_to_point_start_picked.emit(point)
 
                         # Phase 3: Performance - Start-Marker cachen
                         if is_enabled("reuse_hover_markers"):

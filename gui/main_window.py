@@ -40,7 +40,7 @@ from gui.sketch_editor import SketchEditor, SketchTool
 from gui.tool_panel import ToolPanel, PropertiesPanel
 from gui.tool_panel_3d import ToolPanel3D, BodyPropertiesPanel
 from gui.browser import ProjectBrowser
-from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel, PatternInputPanel, NSidedPatchInputPanel, LatticeInputPanel
+from gui.input_panels import ExtrudeInputPanel, FilletChamferPanel, TransformPanel, CenterHintWidget, ShellInputPanel, SweepInputPanel, LoftInputPanel, PatternInputPanel, NSidedPatchInputPanel, LatticeInputPanel, MeasureInputPanel, PointToPointMovePanel
 from gui.widgets.transform_toolbar import TransformToolbar
 from gui.widgets.texture_panel import SurfaceTexturePanel
 from gui.viewport_pyvista import PyVistaViewport, HAS_PYVISTA, HAS_BUILD123D
@@ -395,6 +395,7 @@ class MainWindow(QMainWindow):
         self.center_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
         
         self.viewport_3d = PyVistaViewport()
+        self.viewport_3d.document = self.document
         self.center_stack.addWidget(self.viewport_3d)
         
         self.sketch_editor = SketchEditor()
@@ -613,7 +614,24 @@ class MainWindow(QMainWindow):
         self.section_panel.section_position_changed.connect(self._on_section_position_changed)
         self.section_panel.section_plane_changed.connect(self._on_section_plane_changed)
         self.section_panel.section_invert_toggled.connect(self._on_section_invert_toggled)
+        self.section_panel.close_requested.connect(self._toggle_section_view)
         self.section_panel.hide()  # Initially hidden
+
+        # Measure Panel (Inspect)
+        self.measure_panel = MeasureInputPanel(self)
+        self.measure_panel.pick_point_requested.connect(self._on_measure_pick_requested)
+        self.measure_panel.clear_requested.connect(self._clear_measure_points)
+        self.measure_panel.close_requested.connect(self._close_measure_panel)
+        self.measure_panel.hide()
+
+        # Point-to-Point Move Panel
+        self.p2p_panel = PointToPointMovePanel(self)
+        self.p2p_panel.pick_body_requested.connect(self._on_p2p_pick_body_requested)
+        self.p2p_panel.reset_requested.connect(self._reset_point_to_point_move)
+        self.p2p_panel.cancel_requested.connect(self._cancel_point_to_point_move)
+        self.p2p_panel.hide()
+        self._p2p_body_id = None
+        self._p2p_repick_body = False
 
         # BREP Cleanup Panel
         self.brep_cleanup_panel = BRepCleanupPanel(self)
@@ -655,6 +673,13 @@ class MainWindow(QMainWindow):
         self._position_transform_panel()
         self._position_transform_toolbar()
         self._reposition_notifications()
+        if hasattr(self, "measure_panel") and self.measure_panel.isVisible():
+            self.measure_panel.show_at(self.viewport_3d)
+        if hasattr(self, "p2p_panel") and self.p2p_panel.isVisible():
+            self.p2p_panel.show_at(self.viewport_3d)
+        if hasattr(self, "section_panel") and self.section_panel.isVisible():
+            if hasattr(self.section_panel, "clamp_to_parent"):
+                self.section_panel.clamp_to_parent()
     
     def _position_extrude_panel(self):
         """Positioniert das Extrude-Panel rechts mittig im Viewport."""
@@ -935,6 +960,10 @@ class MainWindow(QMainWindow):
         # NEU: Point-to-Point Move (CAD-Style)
         if hasattr(self.viewport_3d, 'point_to_point_move'):
             self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
+        if hasattr(self.viewport_3d, 'point_to_point_start_picked'):
+            self.viewport_3d.point_to_point_start_picked.connect(self._on_point_to_point_start_picked)
+        if hasattr(self.viewport_3d, 'point_to_point_cancelled'):
+            self.viewport_3d.point_to_point_cancelled.connect(self._on_point_to_point_cancelled)
 
         # NEU: TransformState-Referenz im Viewport setzen
         self.viewport_3d.transform_state = self.transform_state
@@ -1643,12 +1672,24 @@ class MainWindow(QMainWindow):
                 self.viewport_3d.set_pending_transform_mode(True)
 
             logger.info("Point-to-Point Move: Wähle einen Body im Browser oder 3D-Ansicht")
+            if hasattr(self, "p2p_panel"):
+                self._p2p_body_id = None
+                self.p2p_panel.reset()
+                self.p2p_panel.set_status(tr("Pick body"))
+                self.p2p_panel.show_at(self.viewport_3d)
             return
 
         # Body vorhanden -> Starte Point-to-Point Modus
         if hasattr(self.viewport_3d, 'start_point_to_point_mode'):
             self.viewport_3d.start_point_to_point_mode(body.id)
             logger.success(f"Point-to-Point Move für {body.name}: Wähle Start-Punkt, dann Ziel-Punkt")
+            if hasattr(self, "p2p_panel"):
+                self._p2p_body_id = body.id
+                self.p2p_panel.reset()
+                self.p2p_panel.set_body(body.name)
+                self.p2p_panel.set_status(tr("Pick start point"))
+                self.p2p_panel.show_at(self.viewport_3d)
+            self._p2p_repick_body = False
 
     def _on_viewport_body_clicked(self, body_id: str):
         """
@@ -1765,6 +1806,13 @@ class MainWindow(QMainWindow):
             if hasattr(self.viewport_3d, 'start_point_to_point_mode'):
                 self.viewport_3d.start_point_to_point_mode(body.id)
                 logger.success(f"Point-to-Point Move für {body.name}: Wähle Start-Punkt, dann Ziel-Punkt")
+                if hasattr(self, "p2p_panel"):
+                    self._p2p_body_id = body.id
+                    self.p2p_panel.reset()
+                    self.p2p_panel.set_body(body.name)
+                    self.p2p_panel.set_status(tr("Pick start point"))
+                    self.p2p_panel.show_at(self.viewport_3d)
+                self._p2p_repick_body = False
             return
 
         # Normaler Transform-Modus (Move/Rotate/Scale)
@@ -1812,10 +1860,82 @@ class MainWindow(QMainWindow):
 
             logger.success(f"✅ Point-to-Point Move auf {body.name} durchgeführt")
 
+            if hasattr(self, "p2p_panel"):
+                self.p2p_panel.set_target_point(end_point)
+                self.p2p_panel.set_status(tr("Done"))
+                self.p2p_panel.hide()
+            if hasattr(self, "transform_toolbar"):
+                self.transform_toolbar.clear_active()
+            self._p2p_body_id = None
+
         except Exception as e:
             logger.error(f"❌ Point-to-Point Move fehlgeschlagen: {e}")
             import traceback
             logger.error(traceback.format_exc())
+        finally:
+            self._p2p_repick_body = False
+
+    def _on_point_to_point_start_picked(self, point: tuple):
+        if hasattr(self, "p2p_panel"):
+            self.p2p_panel.set_start_point(point)
+            self.p2p_panel.set_status(tr("Pick target point"))
+
+    def _on_point_to_point_cancelled(self):
+        if self._p2p_repick_body:
+            return
+        if hasattr(self, "p2p_panel"):
+            self.p2p_panel.hide()
+        if hasattr(self, "transform_toolbar"):
+            self.transform_toolbar.clear_active()
+        self._p2p_body_id = None
+
+    def _reset_point_to_point_move(self):
+        if getattr(self, "_p2p_body_id", None):
+            if hasattr(self.viewport_3d, "start_point_to_point_mode"):
+                self.viewport_3d.start_point_to_point_mode(self._p2p_body_id)
+            if hasattr(self, "p2p_panel"):
+                self.p2p_panel.set_start_point(None)
+                self.p2p_panel.set_target_point(None)
+                self.p2p_panel.set_status(tr("Pick start point"))
+                self.p2p_panel.show_at(self.viewport_3d)
+        else:
+            self._pending_transform_mode = "point_to_point"
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+                self.viewport_3d.set_pending_transform_mode(True)
+            if hasattr(self, "p2p_panel"):
+                self.p2p_panel.reset()
+                self.p2p_panel.set_status(tr("Pick body"))
+                self.p2p_panel.show_at(self.viewport_3d)
+
+    def _cancel_point_to_point_move(self):
+        self._pending_transform_mode = None
+        if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+            self.viewport_3d.set_pending_transform_mode(False)
+        if hasattr(self.viewport_3d, "cancel_point_to_point_mode"):
+            self.viewport_3d.cancel_point_to_point_mode()
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self, "p2p_panel"):
+            self.p2p_panel.hide()
+        if hasattr(self, "transform_toolbar"):
+            self.transform_toolbar.clear_active()
+        self._p2p_body_id = None
+        self._p2p_repick_body = False
+
+    def _on_p2p_pick_body_requested(self):
+        """Allow re-picking the body for point-to-point move."""
+        self._p2p_repick_body = True
+        self._p2p_body_id = None
+        if hasattr(self.viewport_3d, "cancel_point_to_point_mode"):
+            self.viewport_3d.cancel_point_to_point_mode()
+        self._pending_transform_mode = "point_to_point"
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+            self.viewport_3d.set_pending_transform_mode(True)
+        if hasattr(self, "p2p_panel"):
+            self.p2p_panel.reset()
+            self.p2p_panel.set_status(tr("Pick body"))
+            self.p2p_panel.show_at(self.viewport_3d)
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -7884,14 +8004,18 @@ class MainWindow(QMainWindow):
 
     def _start_measure_mode(self):
         """Startet den Mess-Modus: 2 Punkte anklicken -> Distanz anzeigen"""
-        self._measure_points = []
+        self._measure_points = [None, None]
+        self._measure_pick_target = 1
         self._measure_active = True
         self.viewport_3d.measure_mode = True
-        self.statusBar().showMessage("Measure: Click first point on model")
+        self.statusBar().showMessage(tr("Measure: Click first point on model"))
         logger.info("Measure mode: Click 2 points to measure distance. Esc to cancel.")
 
-        # Alten Measure-Actors entfernen
         self._clear_measure_actors()
+        if hasattr(self, "measure_panel"):
+            self.measure_panel.reset()
+            self.measure_panel.set_status(tr("Pick first point"))
+            self.measure_panel.show_at(self.viewport_3d)
 
     def _on_measure_point_picked(self, point):
         """Wird aufgerufen wenn ein Punkt im Measure-Modus gepickt wurde"""
@@ -7902,56 +8026,32 @@ class MainWindow(QMainWindow):
 
         if not getattr(self, '_measure_active', False):
             return
-        self._measure_points.append(point)
 
-        # Marker zeichnen
-        import pyvista as pv
-        sphere = pv.Sphere(radius=0.3, center=point)
-        actor_name = f"_measure_pt_{len(self._measure_points)}"
-        self.viewport_3d.plotter.add_mesh(
-            sphere, color="#00ff88", name=actor_name,
-            reset_camera=False, pickable=False
-        )
+        target = getattr(self, "_measure_pick_target", None)
+        if target not in (1, 2):
+            target = 1 if self._measure_points[0] is None else 2
 
-        if len(self._measure_points) == 1:
-            self.statusBar().showMessage("Measure: Click second point")
-        elif len(self._measure_points) == 2:
-            self._show_measure_result()
+        idx = 0 if target == 1 else 1
+        self._measure_points[idx] = point
 
-    def _show_measure_result(self):
-        """Berechnet und zeigt die Distanz zwischen 2 Punkten"""
-        import numpy as np
-        import pyvista as pv
+        self._update_measure_visuals()
+        self._update_measure_ui()
 
-        p1 = np.array(self._measure_points[0])
-        p2 = np.array(self._measure_points[1])
-        dist = np.linalg.norm(p2 - p1)
-
-        # Linie zeichnen
-        line = pv.Line(p1, p2)
-        self.viewport_3d.plotter.add_mesh(
-            line, color="#ffaa00", line_width=3,
-            name="_measure_line", reset_camera=False, pickable=False
-        )
-
-        # Label am Mittelpunkt
-        mid = (p1 + p2) / 2
-        label_text = f"{dist:.2f} mm"
-        self.viewport_3d.plotter.add_point_labels(
-            [mid], [label_text],
-            name="_measure_label",
-            font_size=16, text_color="#ffaa00",
-            point_color="#ffaa00", point_size=0,
-            shape=None, fill_shape=False,
-            reset_camera=False, pickable=False
-        )
-
-        self.statusBar().showMessage(f"Distance: {dist:.2f} mm")
-        logger.success(f"Measure: {dist:.2f} mm  (P1={p1}, P2={p2})")
-
-        # Modus beenden, Geometrie bleibt sichtbar bis naechstes Measure oder Esc
-        self._measure_active = False
-        self.viewport_3d.measure_mode = False
+        # Auto-advance if other point missing
+        if self._measure_points[0] is None or self._measure_points[1] is None:
+            next_target = 1 if self._measure_points[0] is None else 2
+            self._measure_pick_target = next_target
+            self._measure_active = True
+            self.viewport_3d.measure_mode = True
+            if hasattr(self, "measure_panel"):
+                self.measure_panel.set_status(tr("Pick first point") if next_target == 1 else tr("Pick second point"))
+            self.statusBar().showMessage(tr("Measure: Click first point on model") if next_target == 1 else tr("Measure: Click second point"))
+        else:
+            self._measure_pick_target = None
+            self._measure_active = False
+            self.viewport_3d.measure_mode = False
+            if hasattr(self, "measure_panel"):
+                self.measure_panel.set_status(tr("Done"))
 
     def _clear_measure_actors(self):
         """Entfernt alle Mess-Visualisierungen"""
@@ -7961,13 +8061,106 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _update_measure_visuals(self):
+        """Aktualisiert alle Mess-Visualisierungen (Punkte, Linie, Label)."""
+        self._clear_measure_actors()
+        if not hasattr(self.viewport_3d, "plotter"):
+            return
+
+        import numpy as np
+        import pyvista as pv
+
+        p1 = self._measure_points[0]
+        p2 = self._measure_points[1]
+
+        if p1 is not None:
+            sphere = pv.Sphere(radius=0.3, center=p1)
+            self.viewport_3d.plotter.add_mesh(
+                sphere, color="#00ff88", name="_measure_pt_1",
+                reset_camera=False, pickable=False
+            )
+
+        if p2 is not None:
+            sphere = pv.Sphere(radius=0.3, center=p2)
+            self.viewport_3d.plotter.add_mesh(
+                sphere, color="#00ff88", name="_measure_pt_2",
+                reset_camera=False, pickable=False
+            )
+
+        if p1 is not None and p2 is not None:
+            p1n = np.array(p1)
+            p2n = np.array(p2)
+            dist = np.linalg.norm(p2n - p1n)
+            line = pv.Line(p1n, p2n)
+            self.viewport_3d.plotter.add_mesh(
+                line, color="#ffaa00", line_width=3,
+                name="_measure_line", reset_camera=False, pickable=False
+            )
+
+            mid = (p1n + p2n) / 2
+            label_text = f"{dist:.2f} mm"
+            self.viewport_3d.plotter.add_point_labels(
+                [mid], [label_text],
+                name="_measure_label",
+                font_size=16, text_color="#ffaa00",
+                point_color="#ffaa00", point_size=0,
+                shape=None, fill_shape=False,
+                reset_camera=False, pickable=False
+            )
+
+            self.statusBar().showMessage(tr("Distance: {d:.2f} mm").format(d=dist))
+            logger.success(f"Measure: {dist:.2f} mm  (P1={p1n}, P2={p2n})")
+
+    def _update_measure_ui(self):
+        if not hasattr(self, "measure_panel"):
+            return
+        p1 = self._measure_points[0]
+        p2 = self._measure_points[1]
+        self.measure_panel.set_points(p1, p2)
+        if p1 is not None and p2 is not None:
+            import numpy as np
+            dist = np.linalg.norm(np.array(p2) - np.array(p1))
+            self.measure_panel.set_distance(dist)
+        else:
+            self.measure_panel.set_distance(None)
+
+    def _on_measure_pick_requested(self, which: int):
+        """User wants to re-pick P1 or P2."""
+        if not hasattr(self, "_measure_points"):
+            self._measure_points = [None, None]
+        self._measure_pick_target = which
+        self._measure_active = True
+        self.viewport_3d.measure_mode = True
+        if hasattr(self, "measure_panel"):
+            self.measure_panel.set_status(tr("Pick first point") if which == 1 else tr("Pick second point"))
+        self.statusBar().showMessage(tr("Measure: Click first point on model") if which == 1 else tr("Measure: Click second point"))
+
+    def _clear_measure_points(self):
+        self._measure_points = [None, None]
+        self._measure_pick_target = 1
+        self._measure_active = True
+        self.viewport_3d.measure_mode = True
+        self._clear_measure_actors()
+        if hasattr(self, "measure_panel"):
+            self.measure_panel.reset()
+        self.statusBar().showMessage(tr("Measure: Click first point on model"))
+
+    def _close_measure_panel(self):
+        self._cancel_measure_mode()
+        if hasattr(self, "measure_panel"):
+            self.measure_panel.hide()
+
     def _cancel_measure_mode(self):
         """Bricht den Mess-Modus ab"""
         self._measure_active = False
-        self._measure_points = []
+        self._measure_points = [None, None]
+        self._measure_pick_target = None
         self.viewport_3d.measure_mode = False
         self._clear_measure_actors()
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage(tr("Ready"))
+        if hasattr(self, "measure_panel"):
+            self.measure_panel.reset()
+            self.measure_panel.set_status(tr("Inactive"))
         logger.info("Measure cancelled")
 
     # ── End Measure Tool ──────────────────────────────────────
@@ -9852,20 +10045,13 @@ class MainWindow(QMainWindow):
             logger.info("🔪 Section View Panel geschlossen")
         else:
             # Zeige Section View Panel
-            # ✅ FIX: Berechne Position relativ zum Viewport
-            viewport_geom = self.viewport_3d.geometry()
-
-            # Position: Rechts oben im Viewport-Bereich
-            panel_width = 320  # Feste Breite (aus SectionViewPanel)
-            panel_x = viewport_geom.right() - panel_width - 30
-            panel_y = viewport_geom.top() + 30
-
-            # ✅ DEBUG: Zeige Positions-Info
-            logger.debug(f"Section Panel Position: x={panel_x}, y={panel_y}, width={panel_width}")
-
-            self.section_panel.move(panel_x, panel_y)
-            self.section_panel.show()
-            self.section_panel.raise_()
+            if hasattr(self.section_panel, "_user_moved") and self.section_panel._user_moved:
+                self.section_panel.show()
+                self.section_panel.raise_()
+                if hasattr(self.section_panel, "clamp_to_parent"):
+                    self.section_panel.clamp_to_parent()
+            else:
+                self.section_panel.show_at(self.viewport_3d)
 
             # ✅ AUTO-AKTIVIEREN: Aktiviere Section View automatisch beim Öffnen
             if not self.section_panel._is_active:

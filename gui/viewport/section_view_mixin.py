@@ -426,7 +426,7 @@ class SectionViewMixin:
             (min, max, default): Bounds in mm
         """
         if not hasattr(self, 'document') or not self.document.bodies:
-            return (-100.0, 100.0, 0.0)
+            return (-1000.0, 1000.0, 0.0)
 
         # Berechne Bounding Box aller Bodies
         all_mins = []
@@ -439,7 +439,7 @@ class SectionViewMixin:
                 all_maxs.append([bounds[1], bounds[3], bounds[5]])
 
         if not all_mins:
-            return (-100.0, 100.0, 0.0)
+            return (-1000.0, 1000.0, 0.0)
 
         # Global Min/Max
         global_min = np.min(all_mins, axis=0)
