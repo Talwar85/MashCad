@@ -132,28 +132,28 @@ class ToolPanel3D(QWidget):
      
         # --- Boolean ---
         self._add_group("Boolean", [
-            ("Union", tr("Combine bodies"), "boolean_union"),
-            ("Cut", tr("Subtract bodies"), "boolean_cut"),
-            ("Intersect", tr("Intersection of bodies"), "boolean_intersect"),
+            (tr("Union"), tr("Combine bodies"), "boolean_union"),
+            (tr("Cut"), tr("Subtract bodies"), "boolean_cut"),
+            (tr("Intersect"), tr("Intersection of bodies"), "boolean_intersect"),
         ])
 
         # --- Inspect ---
         self._add_group("Inspect", [
-            ("Section View", tr("Cut through body to see internal structure"), "section_view"),
-            ("Check Geometry", tr("Find and fix invalid topology (open shells, bad faces)"), "geometry_check"),
+            (tr("Section View"), tr("Cut through body to see internal structure"), "section_view"),
+            (tr("Check Geometry"), tr("Find and fix invalid topology (open shells, bad faces)"), "geometry_check"),
             (tr("Surface Analysis"), tr("Visualize curvature, draft angles for moldability, zebra stripes for continuity"), "surface_analysis"),
             (tr("Mesh Repair"), tr("Fix mesh errors: gaps, self-intersections, degenerate faces"), "mesh_repair"),
             (tr("Wall Thickness"), tr("Check minimum wall thickness for 3D printing strength"), "wall_thickness"),
-            ("Measure", tr("Measure distances, angles, areas"), "measure"),
+            (tr("Measure"), tr("Measure distances, angles, areas"), "measure"),
             (tr("BREP Cleanup"), tr("Merge faces after mesh→BREP conversion (holes, fillets, pockets)"), "brep_cleanup"),
         ])
 
         # --- File ---
         self._add_group(tr("File"), [
-            ("Import Mesh", tr("Load STL/OBJ file"), "import_mesh"),
+            (tr("Import Mesh"), tr("Load STL/OBJ file"), "import_mesh"),
             (tr("Convert Mesh to CAD"), tr("Convert mesh to solid (BREP)"), "convert_to_brep"),
             (tr("Export STL..."), tr("Export as STL"), "export_stl"),
-            ("Export STEP...", tr("Export as STEP"), "export_step"),
+            (tr("Export STEP..."), tr("Export as STEP"), "export_step"),
         ])
 
         # --- Advanced ---

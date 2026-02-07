@@ -407,7 +407,7 @@ class MainWindow(QMainWindow):
         self.transform_toolbar = TransformToolbar(self.viewport_3d)
         self.transform_toolbar.action_triggered.connect(self._on_3d_action)
         self.transform_toolbar.raise_()
-        QTimer.singleShot(100, self._position_transform_toolbar)
+        self.viewport_3d.installEventFilter(self)
 
         # Splitter-Einstellungen
         self.main_splitter.setStretchFactor(0, 0)
@@ -2669,8 +2669,11 @@ class MainWindow(QMainWindow):
         super().keyReleaseEvent(event)
 
     def eventFilter(self, obj, event):
-        """Event-Filter für globale Shortcuts."""
+        """Event-Filter für globale Shortcuts und Viewport-Resize."""
         from PySide6.QtCore import QEvent
+
+        if obj is self.viewport_3d and event.type() == QEvent.Resize:
+            self._position_transform_toolbar()
 
         # Backup für 3D-Peek Space-Release
         if getattr(self, '_peek_3d_active', False):
