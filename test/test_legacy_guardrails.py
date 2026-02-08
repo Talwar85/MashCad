@@ -11,6 +11,8 @@ RULES = [
         "required": [
             r"\bdef\s+_resolve_path\(",
             r"\bdef\s+_compute_nsided_patch\(",
+            r"if\s+isinstance\(feature,\s*\(ThreadFeature,\s*ExtrudeFeature\)\)",
+            r"\"face_index\"\s*:\s*getattr\(feat,\s*\"face_index\"",
         ],
         "forbidden": [
             r"\btnp_shape_reference\b",
@@ -21,6 +23,7 @@ RULES = [
             r"\bdef\s+_load_legacy_format\(",
             r"\b_shape_registry\b",
             r"\btnp_data\b",
+            r"BRepFeat Push/Pull ben.*face_selector",
             r"\"path_data\"\s*:\s*feat\.path_data",
             r"Sweep:\s*Legacy edge_selector migriert",
             r"N-Sided Patch:\s*Legacy-Selector nicht aufgelöst",
@@ -33,6 +36,8 @@ RULES = [
         "required": [
             r"\bface_from_index\(",
             r"\bdef\s+_resolve_solid_face_from_pick\(",
+            r"face_shape_id=face_shape_id",
+            r"face_index=best_face_index",
         ],
         "forbidden": [
             r"if\s+face_idx\s*==\s*ocp_face_id",
@@ -40,6 +45,7 @@ RULES = [
             r"\bget_edge_selectors\(",
             r"['\"]edge_selector['\"]\s*:\s*self\.viewport_3d\.get_edge_selectors\(",
             r"geometry_data\s*=\s*\(0,\s*0,\s*0,\s*0\)",
+            r"TNP v3\.0:\s*Face-Selector f.r BRepFeat-Operationen",
         ],
     },
     {

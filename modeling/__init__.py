@@ -157,12 +157,19 @@ class ExtrudeFeature(Feature):
     # Push/Pull auf nicht-planaren Flächen: OCP Face als BREP-String speichern
     face_brep: Optional[str] = None  # Serialisierte OCP TopoDS_Face
     face_type: Optional[str] = None  # "plane", "cylinder", "cone", etc.
-    # TNP v3.0: Face-Selector für Push/Pull auf Body-Faces (BRepFeat-Operationen)
-    face_selector: dict = None  # GeometricFaceSelector.to_dict()
+    # TNP v4.0: Push/Pull Face-Referenz (ShapeID primary, Index secondary, Selector fallback)
+    face_shape_id: Any = None
+    face_index: Optional[int] = None
+    face_selector: dict = None  # GeometricFaceSelector als Legacy-Recovery
 
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
         if not self.name or self.name == "Feature": self.name = "Extrude"
+        if self.face_index is not None:
+            try:
+                self.face_index = int(self.face_index)
+            except Exception:
+                self.face_index = None
 
 @dataclass
 class RevolveFeature(Feature):
@@ -4356,8 +4363,8 @@ class Body:
             shape_attr = "face_shape_ids"
             index_attr = "face_indices"
             selector_attr = "opening_face_selectors"
-        elif isinstance(feature, ThreadFeature):
-            # ThreadFeature nutzt singuläre Referenzen.
+        elif isinstance(feature, (ThreadFeature, ExtrudeFeature)):
+            # Thread/Push-Pull nutzen singuläre Face-Referenzen.
             shape_attr = None
             index_attr = None
             selector_attr = None
@@ -5054,7 +5061,15 @@ class Body:
 
         if not isinstance(
             feature,
-            (ShellFeature, HoleFeature, DraftFeature, HollowFeature, ThreadFeature, SurfaceTextureFeature),
+            (
+                ShellFeature,
+                HoleFeature,
+                DraftFeature,
+                HollowFeature,
+                ThreadFeature,
+                SurfaceTextureFeature,
+                ExtrudeFeature,
+            ),
         ):
             return
 
@@ -5265,10 +5280,10 @@ class Body:
 
             # ================= EXTRUDE =================
             elif isinstance(feature, ExtrudeFeature):
-                # TNP v3.0: Prüfe ob dies ein Push/Pull auf Body-Face ist (precalculated_polys)
+                # Push/Pull auf Body-Face: BRepFeat für Join/Cut verwenden.
                 has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
-                
-                if has_polys and current_solid is not None:
+
+                if has_polys and current_solid is not None and feature.operation in ("Join", "Cut"):
                     # === PUSH/PULL auf Body-Face: Verwende BRepFeat für TNP-Robustheit ===
                     
                     def op_brepfeat():
@@ -6563,66 +6578,76 @@ class Body:
 
     def _compute_extrude_part_brepfeat(self, feature: 'ExtrudeFeature', current_solid):
         """
-        TNP v3.0: BRepFeat-basierter Push/Pull für Body-Face-Operationen.
-        
-        Verwendet BRepFeat_MakePrism statt Extrude+Boolean für bessere
-        Topologie-Erhaltung und TNP-Robustheit.
-        
-        Args:
-            feature: ExtrudeFeature mit face_selector (Push/Pull auf Body-Face)
-            current_solid: Der aktuelle Body (Build123d Solid)
-            
-        Returns:
-            Build123d Solid nach BRepFeat-Operation
+        TNP v4.0: BRepFeat-basierter Push/Pull für Body-Face-Operationen.
+
+        Face-Referenzauflösung:
+        1. face_index (topology_indexing)
+        2. face_shape_id (ShapeNamingService)
+        3. face_selector (Legacy-Recovery)
         """
         if current_solid is None:
             raise ValueError("BRepFeat Push/Pull benötigt einen existierenden Körper")
-        
-        if not hasattr(feature, 'face_selector') or feature.face_selector is None:
-            raise ValueError("BRepFeat Push/Pull benötigt face_selector")
-        
+
+        operation = getattr(feature, "operation", "")
+        if operation not in ("Join", "Cut"):
+            raise ValueError(f"BRepFeat Push/Pull unterstützt nur Join/Cut (erhalten: {operation})")
+
         import numpy as np
-        from modeling.geometric_selector import GeometricFaceSelector
-        
-        # Face-Selector laden
+
+        resolved_faces = self._resolve_feature_faces(feature, current_solid)
+        if not resolved_faces:
+            raise ValueError("BRepFeat Push/Pull: Zielfläche nicht gefunden (face_shape_id/face_index prüfen)")
+
+        best_face = resolved_faces[0]
+
+        selector_normal = None
+        selector_data = getattr(feature, "face_selector", None)
+        if isinstance(selector_data, dict):
+            raw_normal = selector_data.get("normal")
+            if isinstance(raw_normal, (list, tuple)) and len(raw_normal) == 3:
+                try:
+                    selector_normal = np.array(raw_normal, dtype=float)
+                except Exception:
+                    selector_normal = None
+
+        center = best_face.center()
+        if selector_normal is None or np.linalg.norm(selector_normal) < 1e-6:
+            face_normal = best_face.normal_at(center)
+            selector_normal = np.array([face_normal.X, face_normal.Y, face_normal.Z], dtype=float)
+
         try:
-            geo_selector = GeometricFaceSelector.from_dict(feature.face_selector)
-        except Exception as e:
-            raise ValueError(f"Ungültiger Face-Selector: {e}")
-        
-        # Face im Solid finden
-        all_faces = current_solid.faces() if hasattr(current_solid, 'faces') else []
-        if not all_faces:
-            raise ValueError("Solid hat keine Faces")
-        
-        best_face = None
-        best_score = -1.0
-        
-        for face in all_faces:
-            try:
-                score = self._score_face_match(face, geo_selector)
-                if score > best_score:
-                    best_score = score
-                    best_face = face
-            except Exception:
-                continue
-        
-        if best_face is None or best_score < 0.3:  # Niedrigerer Threshold für BRepFeat
-            raise ValueError(f"Face nicht gefunden für BRepFeat (best score: {best_score:.2f})")
-        
-        # Normal und Distanz
-        center = np.array(geo_selector.center)
-        normal = np.array(geo_selector.normal)
-        
-        norm_len = np.linalg.norm(normal)
+            from OCP.TopAbs import TopAbs_REVERSED
+
+            if best_face.wrapped.Orientation() == TopAbs_REVERSED:
+                selector_normal = -selector_normal
+        except Exception:
+            pass
+
+        norm_len = np.linalg.norm(selector_normal)
         if norm_len < 1e-6:
-            raise ValueError("Face-Normale ist Null")
-        normal = normal / norm_len
-        
-        distance = feature.distance * feature.direction
-        
-        logger.debug(f"BRepFeat Push/Pull: Face gefunden (score={best_score:.2f}), distance={distance:.2f}mm")
-        
+            raise ValueError("BRepFeat Push/Pull: Face-Normale ist Null")
+        normal = selector_normal / norm_len
+
+        signed_distance = float(getattr(feature, "distance", 0.0) or 0.0) * float(getattr(feature, "direction", 1) or 1)
+        abs_dist = abs(signed_distance) if abs(signed_distance) > 1e-9 else abs(float(getattr(feature, "distance", 0.0) or 0.0))
+        if abs_dist <= 1e-9:
+            raise ValueError("BRepFeat Push/Pull benötigt eine Distanz > 0")
+
+        if operation == "Cut":
+            normal = -normal
+            fuse_mode = 0
+        else:
+            fuse_mode = 1
+            if signed_distance < 0:
+                normal = -normal
+
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(
+                f"BRepFeat Push/Pull: Face via TNP-v4 aufgelöst "
+                f"(face_index={getattr(feature, 'face_index', None)}, "
+                f"has_shape_id={getattr(feature, 'face_shape_id', None) is not None})"
+            )
+
         # BRepFeat_MakePrism ausführen
         try:
             from OCP.BRepFeat import BRepFeat_MakePrism
@@ -6633,10 +6658,6 @@ class Body:
             face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
             
             direction = gp_Dir(float(normal[0]), float(normal[1]), float(normal[2]))
-            
-            # BRepFeat: fuse_mode=1 für Add, 0 für Cut
-            fuse_mode = 1 if distance > 0 else 0
-            abs_dist = abs(distance)
             
             prism = BRepFeat_MakePrism()
             prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
@@ -6676,7 +6697,7 @@ class Body:
                                 result_solid=result,
                                 modified_face=best_face,
                                 direction=(float(normal[0]), float(normal[1]), float(normal[2])),
-                                distance=abs(distance)
+                                distance=abs_dist
                             )
                     except Exception as tnp_e:
                         if is_enabled("tnp_debug_logging"):
@@ -7137,6 +7158,9 @@ class Body:
                     "sketch_id": feat.sketch.id if feat.sketch else None,
                     # CAD Kernel First: Profile-Selektor (Centroids)
                     "profile_selector": feat.profile_selector if feat.profile_selector else None,
+                    # TNP v4.0: Push/Pull Face-Referenz
+                    "face_index": getattr(feat, "face_index", None),
+                    "face_selector": getattr(feat, "face_selector", None),
                 })
                 # Serialisiere precalculated_polys (Shapely zu WKT) - Legacy Fallback
                 if feat.precalculated_polys:
@@ -7152,6 +7176,23 @@ class Body:
                 if hasattr(feat, 'face_brep') and feat.face_brep:
                     feat_dict["face_brep"] = feat.face_brep
                     feat_dict["face_type"] = getattr(feat, 'face_type', None)
+                if getattr(feat, "face_shape_id", None):
+                    sid = feat.face_shape_id
+                    if hasattr(sid, "uuid"):
+                        feat_dict["face_shape_id"] = {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp,
+                        }
+                    elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                        feat_dict["face_shape_id"] = {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": "FACE",
+                        }
 
             elif isinstance(feat, FilletFeature):
                 feat_dict.update({
@@ -7685,6 +7726,8 @@ class Body:
                     plane_normal=tuple(feat_dict.get("plane_normal", (0, 0, 1))) if feat_dict.get("plane_normal") else (0, 0, 1),
                     plane_x_dir=tuple(feat_dict["plane_x_dir"]) if feat_dict.get("plane_x_dir") else None,
                     plane_y_dir=tuple(feat_dict["plane_y_dir"]) if feat_dict.get("plane_y_dir") else None,
+                    face_index=feat_dict.get("face_index"),
+                    face_selector=feat_dict.get("face_selector"),
                     **base_kwargs
                 )
                 feat.distance_formula = feat_dict.get("distance_formula")
@@ -7707,6 +7750,29 @@ class Body:
                 if "face_brep" in feat_dict:
                     feat.face_brep = feat_dict["face_brep"]
                     feat.face_type = feat_dict.get("face_type")
+                if "face_shape_id" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+
+                    sid_data = feat_dict["face_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                        local_index = int(sid_data.get("local_index", sid_data.get("local_id", 0)))
+                        if sid_data.get("uuid"):
+                            feat.face_shape_id = ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=local_index,
+                                geometry_hash=sid_data.get("geometry_hash", f"legacy_extrude_face_{local_index}"),
+                                timestamp=sid_data.get("timestamp", 0.0),
+                            )
+                        else:
+                            feat.face_shape_id = ShapeID.create(
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                local_index=local_index,
+                                geometry_data=("legacy_extrude_face", feat_dict.get("id", feat.id), local_index),
+                            )
 
             elif feat_class == "FilletFeature":
                 legacy_edge_selectors = feat_dict.get("edge_selectors")

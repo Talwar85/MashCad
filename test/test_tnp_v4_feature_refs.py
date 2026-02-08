@@ -1,8 +1,11 @@
+import pytest
+
 from modeling import (
     Body,
     ChamferFeature,
     Document,
     DraftFeature,
+    ExtrudeFeature,
     FilletFeature,
     HoleFeature,
     HollowFeature,
@@ -192,6 +195,27 @@ def test_tnp_v4_fillet_chamfer_deserialize_migrates_legacy_edge_selectors():
     assert chamfer.edge_indices == []
     assert not hasattr(fillet, "edge_selectors")
     assert not hasattr(chamfer, "edge_selectors")
+
+
+def test_tnp_v4_extrude_pushpull_refs_roundtrip():
+    body = Body("tnp_v4_extrude_roundtrip")
+    extrude = ExtrudeFeature(sketch=None, distance=12.0, operation="Join")
+    extrude.face_shape_id = _make_shape_id(ShapeType.FACE, extrude.id, 0)
+    extrude.face_index = 6
+    extrude.face_selector = _face_selector()
+    body.features = [extrude]
+
+    serialized = body.to_dict()
+    extrude_dict = _feature_dict(serialized, "ExtrudeFeature")
+    assert extrude_dict["face_index"] == 6
+    for key in ("uuid", "shape_type", "feature_id", "local_index", "geometry_hash", "timestamp"):
+        assert key in extrude_dict["face_shape_id"]
+
+    restored = Body.from_dict(serialized)
+    restored_extrude = next(feat for feat in restored.features if isinstance(feat, ExtrudeFeature))
+    assert isinstance(restored_extrude.face_shape_id, ShapeID)
+    assert restored_extrude.face_index == 6
+    assert restored_extrude.face_selector is not None
 
 
 def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():
@@ -510,6 +534,75 @@ def test_resolve_feature_faces_does_not_use_selector_recovery_when_indices_resol
 
     assert len(resolved) == 1
     assert texture.face_indices == [0]
+
+
+def test_resolve_feature_faces_supports_extrude_face_index(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("extrude_face_index_resolver")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    extrude = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=2,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("selector fallback should not run when face_index resolves")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    resolved = body._resolve_feature_faces(extrude, solid)
+
+    assert len(resolved) == 1
+    assert extrude.face_index == 2
+    assert extrude.face_selector is not None
+
+
+def test_compute_extrude_part_brepfeat_prefers_face_index_before_selector(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    brepfeat_mod = pytest.importorskip("OCP.BRepFeat")
+
+    class _FakePrism:
+        def Init(self, shape, *_args):
+            self._shape = shape
+
+        def Perform(self, _distance):
+            return None
+
+        def IsDone(self):
+            return True
+
+        def Shape(self):
+            return self._shape
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("legacy selector matching should not run when face_index resolves")
+
+    body = Body("brepfeat_face_index_first")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=3.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    monkeypatch.setattr(body, "_unify_same_domain", lambda shape, _name: shape)
+    monkeypatch.setattr(brepfeat_mod, "BRepFeat_MakePrism", _FakePrism)
+
+    result = body._compute_extrude_part_brepfeat(feature, solid)
+
+    assert result is not None
+    assert feature.face_index == 0
 
 
 def test_texture_exporter_prefers_face_indices_over_legacy_selector_matching(monkeypatch):

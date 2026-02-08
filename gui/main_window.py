@@ -5726,7 +5726,7 @@ class MainWindow(QMainWindow):
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
             from OCP.gp import gp_Pnt
             from modeling.geometric_selector import GeometricFaceSelector
-            from modeling.topology_indexing import face_from_index, iter_faces_with_indices
+            from modeling.topology_indexing import face_from_index, face_index_of, iter_faces_with_indices
             import numpy as np
 
             # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
@@ -5754,6 +5754,7 @@ class MainWindow(QMainWindow):
 
             # Face-Suche: BREP-Face mit passender Normale UND nächster Distanz finden
             best_face = None
+            best_face_index = None
             best_dist = float('inf')
 
             # === NEU: DIREKTE FACE-SUCHE via ocp_face_id ===
@@ -5762,6 +5763,7 @@ class MainWindow(QMainWindow):
                 resolved = face_from_index(b3d_obj, int(ocp_face_id))
                 if resolved is not None:
                     best_face = resolved
+                    best_face_index = int(ocp_face_id)
                     best_dist = 0.0  # Exakter Match!
                     logger.info(f"Face direkt via ocp_face_id={ocp_face_id} gefunden")
 
@@ -5828,16 +5830,32 @@ class MainWindow(QMainWindow):
 
             logger.info(f"Face gefunden: dist={best_dist:.3f}")
 
-            # TNP v3.0: Face-Selector für BRepFeat-Operationen erstellen
-            try:
-                face_selector = GeometricFaceSelector.from_face(best_face)
-                face_selector_dict = face_selector.to_dict()
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP: GeometricFaceSelector erstellt: center={face_selector.center}")
-            except Exception as sel_e:
-                if is_enabled("tnp_debug_logging"):
-                    logger.warning(f"TNP: Konnte GeometricFaceSelector nicht erstellen: {sel_e}")
-                face_selector_dict = None
+            if best_face_index is None:
+                try:
+                    best_face_index = face_index_of(b3d_obj, best_face)
+                except Exception as idx_e:
+                    logger.debug(f"Face-Index-Auflösung fehlgeschlagen: {idx_e}")
+            if best_face_index is not None:
+                best_face_index = int(best_face_index)
+
+            face_shape_id = self._find_or_register_face_shape_id(
+                source_body,
+                best_face,
+                local_index=max(0, int(best_face_index) if best_face_index is not None else 0),
+            )
+            has_primary_face_ref = (face_shape_id is not None) or (best_face_index is not None)
+
+            # Geometric selector nur als Legacy-Recovery mitschreiben.
+            face_selector_dict = None
+            if not has_primary_face_ref:
+                try:
+                    face_selector = GeometricFaceSelector.from_face(best_face)
+                    face_selector_dict = face_selector.to_dict()
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP Legacy-Fallback: GeometricFaceSelector erstellt: center={face_selector.center}")
+                except Exception as sel_e:
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(f"TNP Legacy-Fallback: Konnte GeometricFaceSelector nicht erstellen: {sel_e}")
 
             # DEBUG: Prüfe Wire-Struktur des gefundenen Faces
             try:
@@ -6026,7 +6044,9 @@ class MainWindow(QMainWindow):
                                 plane_y_dir=plane_y_dir if polygon is not None else None,
                                 face_brep=face_brep_str,
                                 face_type=face_type_str,
-                                face_selector=face_selector_dict  # TNP v3.0: Für BRepFeat-Operationen
+                                face_shape_id=face_shape_id,
+                                face_index=best_face_index,
+                                face_selector=face_selector_dict,
                             )
 
                             # === TNP v4.0: BRepFeat Operation tracken (mit echter Feature-ID) ===
@@ -6230,7 +6250,9 @@ class MainWindow(QMainWindow):
                             plane_normal=plane_normal,
                             plane_x_dir=plane_x_dir if polygon is not None else None,
                             plane_y_dir=plane_y_dir if polygon is not None else None,
-                            face_selector=face_selector_dict  # TNP v3.0: Für BRepFeat-Operationen
+                            face_shape_id=face_shape_id,
+                            face_index=best_face_index,
+                            face_selector=face_selector_dict,
                         )
 
                         # KRITISCH: AddFeatureCommand für korrektes Undo/Redo!
