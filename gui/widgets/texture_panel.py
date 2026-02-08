@@ -11,12 +11,12 @@ Ermöglicht:
 from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QDoubleSpinBox, QCheckBox, QPushButton,
-    QGroupBox, QSlider, QFileDialog, QStackedWidget
+    QGroupBox, QFileDialog, QStackedWidget
 )
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Signal, QPoint
 
 from loguru import logger
+from gui.design_tokens import DesignTokens
 
 try:
     from i18n import tr
@@ -41,8 +41,9 @@ class SurfaceTexturePanel(QFrame):
         super().__init__(parent)
         self._face_count = 0
 
-        self.setMinimumWidth(520)
-        self.setMinimumHeight(480)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(520)
+        self.setMinimumHeight(440)
 
         self._setup_style()
         self._setup_ui()
@@ -55,27 +56,38 @@ class SurfaceTexturePanel(QFrame):
 
     def _setup_style(self):
         """Konsistenter Style via DesignTokens — Single Source of Truth."""
-        from gui.design_tokens import DesignTokens
         self.setStyleSheet(DesignTokens.stylesheet_panel())
 
     def _setup_ui(self):
         """Erstellt die UI-Elemente."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(8)
 
-        # Header
-        header = QLabel(tr("Surface Texture"))
-        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #0078d4;")
-        main_layout.addWidget(header)
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
 
-        # Face Count Info
-        self.face_info = QLabel(tr("0 Faces selected"))
-        self.face_info.setStyleSheet("color: #888; font-size: 11px;")
-        main_layout.addWidget(self.face_info)
+        title = QLabel(tr("Texture:"))
+        title.setObjectName("panelTitle")
+        header_row.addWidget(title)
+
+        self.face_info = QLabel(tr("No faces selected"))
+        self.face_info.setStyleSheet(
+            f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; font-size: 11px; border: none;"
+        )
+        header_row.addWidget(self.face_info)
+        header_row.addStretch()
+
+        self.close_btn = QPushButton("X")
+        self.close_btn.setObjectName("danger")
+        self.close_btn.clicked.connect(self._on_cancel)
+        header_row.addWidget(self.close_btn)
+
+        main_layout.addLayout(header_row)
 
         # === Textur-Typ ===
         type_layout = QHBoxLayout()
+        type_layout.setSpacing(8)
         type_layout.addWidget(QLabel(tr("Type:")))
 
         self.type_combo = QComboBox()
@@ -90,7 +102,6 @@ class SurfaceTexturePanel(QFrame):
         ])
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
         type_layout.addWidget(self.type_combo)
-        type_layout.addStretch()
         main_layout.addLayout(type_layout)
 
         # === Common Parameters ===
@@ -145,29 +156,30 @@ class SurfaceTexturePanel(QFrame):
 
         # === Type-Specific Parameters (Stacked Widget) ===
         self.type_params_stack = QStackedWidget()
-        self.type_params_stack.setMinimumHeight(180)  # Mindesthöhe für Type-Parameter
+        self.type_params_stack.setMinimumHeight(160)
         self._setup_type_params()
         main_layout.addWidget(self.type_params_stack)
-        main_layout.addStretch()  # Stretch damit Buttons unten bleiben
+        main_layout.addStretch()
 
-        # === Preview Checkbox (TODO: Nicht implementiert - ausgeblendet) ===
+        # Live preview ist aktuell optional/deaktiviert.
         self.preview_check = QCheckBox(tr("Live Preview"))
         self.preview_check.setChecked(False)
         self.preview_check.stateChanged.connect(self._emit_preview)
-        # main_layout.addWidget(self.preview_check)  # Ausgeblendet bis implementiert
 
         # === Buttons ===
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
         btn_layout.addStretch()
 
-        self.cancel_btn = QPushButton(tr("Cancel"))
-        self.cancel_btn.clicked.connect(self._on_cancel)
-        btn_layout.addWidget(self.cancel_btn)
-
         self.apply_btn = QPushButton(tr("Apply"))
-        self.apply_btn.setObjectName("applyBtn")
+        self.apply_btn.setObjectName("primary")
         self.apply_btn.clicked.connect(self._on_apply)
         btn_layout.addWidget(self.apply_btn)
+
+        self.cancel_btn = QPushButton("X")
+        self.cancel_btn.setObjectName("danger")
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        btn_layout.addWidget(self.cancel_btn)
 
         main_layout.addLayout(btn_layout)
 
@@ -289,7 +301,9 @@ class SurfaceTexturePanel(QFrame):
         custom_widget = QWidget()
         custom_layout = QFormLayout(custom_widget)
         self.custom_path_label = QLabel(tr("No file selected"))
-        self.custom_path_label.setStyleSheet("color: #888;")
+        self.custom_path_label.setStyleSheet(
+            f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; border: none;"
+        )
         custom_layout.addRow(tr("Heightmap:"), self.custom_path_label)
         self.custom_browse_btn = QPushButton(tr("Browse..."))
         self.custom_browse_btn.clicked.connect(self._browse_heightmap)
@@ -413,15 +427,21 @@ class SurfaceTexturePanel(QFrame):
         self._face_count = count
         if count == 0:
             self.face_info.setText(tr("No faces selected - click on faces"))
-            self.face_info.setStyleSheet("color: #ff6b6b;")
+            self.face_info.setStyleSheet(
+                f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 11px; border: none;"
+            )
             self.apply_btn.setEnabled(False)
         elif count == 1:
             self.face_info.setText(tr("1 Face selected"))
-            self.face_info.setStyleSheet("color: #6bff6b;")
+            self.face_info.setStyleSheet(
+                f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 11px; border: none;"
+            )
             self.apply_btn.setEnabled(True)
         else:
-            self.face_info.setText(tr(f"{count} Faces selected"))
-            self.face_info.setStyleSheet("color: #6bff6b;")
+            self.face_info.setText(tr("{count} Faces selected").format(count=count))
+            self.face_info.setStyleSheet(
+                f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 11px; border: none;"
+            )
             self.apply_btn.setEnabled(True)
 
     def reset(self):
@@ -438,18 +458,42 @@ class SurfaceTexturePanel(QFrame):
         self.set_face_count(0)
 
     def show_at(self, viewport):
-        """Positioniert das Panel am Viewport."""
-        # Rechts unten im Viewport
-        if viewport and hasattr(viewport, 'geometry'):
-            vp_rect = viewport.geometry()
-            panel_w = self.width()
-            panel_h = self.height()
-
-            # Rechts unten mit etwas Abstand
-            x = vp_rect.right() - panel_w - 20
-            y = vp_rect.bottom() - panel_h - 20
-
-            self.move(x, y)
-
+        """Positioniert das Panel rechts mittig am Viewport (InputPanel-Standard)."""
         self.show()
+        self.raise_()
+        self._position_right_mid(viewport)
+
+    def _position_right_mid(self, pos_widget):
+        parent = self.parent() or pos_widget
+        if parent is None:
+            return
+
+        if pos_widget is None:
+            area_x, area_y, area_w, area_h = 0, 0, parent.width(), parent.height()
+        elif pos_widget.parent() is parent:
+            geom = pos_widget.geometry()
+            area_x, area_y, area_w, area_h = geom.x(), geom.y(), geom.width(), geom.height()
+        else:
+            top_left = pos_widget.mapTo(parent, QPoint(0, 0))
+            area_x, area_y, area_w, area_h = top_left.x(), top_left.y(), pos_widget.width(), pos_widget.height()
+
+        self.adjustSize()
+        margin = 12
+        x = area_x + area_w - self.width() - margin
+        y = area_y + (area_h - self.height()) // 2
+
+        tp = getattr(parent, "transform_panel", None)
+        if tp and tp.isVisible():
+            x = min(x, tp.x() - self.width() - margin)
+            y = tp.y() + (tp.height() - self.height()) // 2
+
+        tb = getattr(parent, "transform_toolbar", None)
+        if tb and tb.isVisible():
+            tb_pos = tb.mapTo(parent, QPoint(0, 0))
+            x = min(x, tb_pos.x() - self.width() - margin)
+
+        x = max(area_x + margin, min(x, area_x + area_w - self.width() - margin))
+        y = max(area_y + margin, min(y, area_y + area_h - self.height() - margin))
+
+        self.move(x, y)
         self.raise_()
