@@ -1,4 +1,4 @@
-from modeling import Body, DraftFeature, HoleFeature, PrimitiveFeature
+from modeling import Body, DraftFeature, FilletFeature, HoleFeature, PrimitiveFeature
 
 
 def _make_box_body(name: str = "error_status_body") -> Body:
@@ -48,3 +48,39 @@ def test_draft_invalid_pull_direction_sets_feature_error_message():
 
     assert draft.status == "ERROR"
     assert "Pull-Richtung" in (draft.status_message or "")
+
+
+def test_hole_tnp_error_message_contains_reference_diagnostics():
+    body = _make_box_body("hole_tnp_diag")
+    hole = HoleFeature(
+        hole_type="simple",
+        diameter=4.0,
+        depth=5.0,
+        position=(0.0, 0.0, 10.0),
+        direction=(0.0, 0.0, -1.0),
+        face_indices=[999],
+        face_selectors=[{"center": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "area": 1.0}],
+    )
+
+    body.add_feature(hole)
+
+    msg = hole.status_message or ""
+    assert hole.status == "ERROR"
+    assert "refs:" in msg
+    assert "face_indices=[999]" in msg
+
+
+def test_fillet_tnp_error_message_contains_reference_diagnostics():
+    body = _make_box_body("fillet_tnp_diag")
+    fillet = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[{"center": [0.0, 0.0, 0.0], "direction": [1.0, 0.0, 0.0], "length": 1.0}],
+    )
+
+    body.add_feature(fillet)
+
+    msg = fillet.status_message or ""
+    assert fillet.status == "ERROR"
+    assert "refs:" in msg
+    assert "edge_indices=[999]" in msg

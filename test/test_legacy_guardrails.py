@@ -17,6 +17,10 @@ RULES = [
             r"profile_face_index:\s*Optional\[int\]\s*=\s*None",
             r"profile_shape_id/profile_face_index",
             r"Kein Geometric-Fallback",
+            r"\bdef\s+_collect_feature_reference_diagnostics\(",
+            r"Face-Referenz ist ungültig \(ShapeID/face_indices\)",
+            r"Edge-Referenz ist ungültig \(ShapeID/edge_indices\)",
+            r"Shell: Öffnungs-Faces konnten via TNP v4\.0 nicht aufgelöst werden",
         ],
         "forbidden": [
             r"\btnp_shape_reference\b",

@@ -1734,7 +1734,106 @@ class Body:
             traceback.print_exc()
             return False
             
-    def _safe_operation(self, op_name, op_func, fallback_func=None):
+    @staticmethod
+    def _format_index_refs_for_error(label: str, refs, max_items: int = 3) -> str:
+        """Formatiert Index-Referenzen kompakt für Fehlermeldungen."""
+        if refs is None:
+            return ""
+        values = refs if isinstance(refs, (list, tuple)) else [refs]
+        normalized = []
+        for raw in values:
+            try:
+                idx = int(raw)
+            except Exception:
+                continue
+            if idx >= 0:
+                normalized.append(idx)
+        if not normalized:
+            return ""
+        preview = normalized[:max_items]
+        suffix = "..." if len(normalized) > max_items else ""
+        return f"{label}={preview}{suffix}"
+
+    @staticmethod
+    def _format_shape_refs_for_error(label: str, refs, max_items: int = 3) -> str:
+        """Formatiert ShapeID-Referenzen kompakt für Fehlermeldungen."""
+        if refs is None:
+            return ""
+        values = refs if isinstance(refs, (list, tuple)) else [refs]
+        tokens = []
+        for raw in values:
+            if raw is None:
+                continue
+            try:
+                raw_uuid = getattr(raw, "uuid", None)
+                if raw_uuid:
+                    shape_type = getattr(raw, "shape_type", None)
+                    shape_name = shape_type.name if hasattr(shape_type, "name") else (str(shape_type) if shape_type else "?")
+                    local_index = getattr(raw, "local_index", None)
+                    token = f"{shape_name}:{str(raw_uuid)[:8]}"
+                    if local_index is not None:
+                        token += f"@{local_index}"
+                    tokens.append(token)
+                    continue
+                if isinstance(raw, dict):
+                    shape_name = raw.get("shape_type", "?")
+                    feature_id = raw.get("feature_id", "?")
+                    local_index = raw.get("local_index", raw.get("local_id", "?"))
+                    tokens.append(f"{shape_name}:{feature_id}@{local_index}")
+            except Exception:
+                continue
+        if not tokens:
+            return ""
+        preview = tokens[:max_items]
+        suffix = "..." if len(tokens) > max_items else ""
+        return f"{label}={preview}{suffix}"
+
+    def _collect_feature_reference_diagnostics(self, feature, max_parts: int = 6) -> str:
+        """
+        Baut eine kompakte Referenz-Zusammenfassung für Statusmeldungen.
+
+        Wird an Fehlermeldungen angehängt, damit GUI/Tooltip direkt zeigen kann,
+        welche Topologie-Referenzen betroffen waren.
+        """
+        if feature is None:
+            return ""
+
+        parts = []
+
+        def _add(part: str) -> None:
+            if part:
+                parts.append(part)
+
+        # Face-Referenzen
+        _add(self._format_index_refs_for_error("face_indices", getattr(feature, "face_indices", None)))
+        _add(self._format_index_refs_for_error("opening_face_indices", getattr(feature, "opening_face_indices", None)))
+        _add(self._format_index_refs_for_error("face_index", getattr(feature, "face_index", None)))
+        _add(self._format_index_refs_for_error("profile_face_index", getattr(feature, "profile_face_index", None)))
+
+        # Edge-Referenzen
+        _add(self._format_index_refs_for_error("edge_indices", getattr(feature, "edge_indices", None)))
+        path_data = getattr(feature, "path_data", None)
+        if isinstance(path_data, dict):
+            _add(self._format_index_refs_for_error("path.edge_indices", path_data.get("edge_indices", None)))
+
+        # ShapeID-Referenzen
+        _add(self._format_shape_refs_for_error("face_shape_ids", getattr(feature, "face_shape_ids", None)))
+        _add(self._format_shape_refs_for_error("opening_face_shape_ids", getattr(feature, "opening_face_shape_ids", None)))
+        _add(self._format_shape_refs_for_error("edge_shape_ids", getattr(feature, "edge_shape_ids", None)))
+        _add(self._format_shape_refs_for_error("face_shape_id", getattr(feature, "face_shape_id", None)))
+        _add(self._format_shape_refs_for_error("profile_shape_id", getattr(feature, "profile_shape_id", None)))
+        _add(self._format_shape_refs_for_error("path_shape_id", getattr(feature, "path_shape_id", None)))
+
+        if not parts:
+            return ""
+
+        if len(parts) > max_parts:
+            hidden = len(parts) - max_parts
+            parts = parts[:max_parts]
+            parts.append(f"+{hidden} weitere")
+        return "; ".join(parts)
+
+    def _safe_operation(self, op_name, op_func, fallback_func=None, feature=None):
         """
         Wrapper für kritische CAD-Operationen.
         Fängt Crashes ab und erlaubt Fallbacks.
@@ -1753,6 +1852,9 @@ class Body:
             
         except Exception as e:
             err_msg = str(e).strip() or e.__class__.__name__
+            ref_diag = self._collect_feature_reference_diagnostics(feature)
+            if ref_diag and "refs:" not in err_msg:
+                err_msg = f"{err_msg} | refs: {ref_diag}"
             self._last_operation_error = err_msg
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
@@ -2916,8 +3018,18 @@ class Body:
         if current_solid is None:
             raise ValueError("Shell benötigt einen existierenden Körper")
 
-        # Öffnungs-Faces auflösen (TNP v4.0 → Geometric Fallback)
+        # Öffnungs-Faces auflösen (TNP v4.0)
         opening_faces = self._resolve_faces_for_shell(current_solid, feature.opening_face_selectors, feature)
+        has_opening_refs = bool(
+            feature.face_shape_ids
+            or feature.face_indices
+            or feature.opening_face_selectors
+        )
+        if has_opening_refs and not opening_faces:
+            raise ValueError(
+                "Shell: Öffnungs-Faces konnten via TNP v4.0 nicht aufgelöst werden "
+                "(ShapeID/face_indices). Kein Geometric-Fallback."
+            )
 
         logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
 
@@ -3100,48 +3212,14 @@ class Body:
                     return
             resolved_edges.append(edge_obj)
 
-        # TNP v4.0 PRIMARY: ShapeID-basierte Auflösung
-        if feature.edge_shape_ids:
-            tnp_edges = self._resolve_edges_tnp(current_solid, feature)
-            for edge in tnp_edges:
-                _append_unique(edge)
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"N-Sided Patch: {len(tnp_edges)}/{len(feature.edge_shape_ids)} Edges via ShapeIDs aufgelöst")
-
-        # TNP v4.0 SECONDARY: Topology-Index-basierte Auflösung
-        if len(resolved_edges) < 3 and feature.edge_indices:
-            try:
-                from modeling.topology_indexing import edge_from_index
-
-                resolved_by_index = 0
-                for edge_idx in feature.edge_indices:
-                    edge = edge_from_index(current_solid, int(edge_idx))
-                    if edge is not None:
-                        _append_unique(edge)
-                        resolved_by_index += 1
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(
-                        f"N-Sided Patch: {resolved_by_index}/{len(feature.edge_indices)} "
-                        f"Edges via Topology-Index aufgelöst"
-                    )
-            except Exception as e:
-                logger.debug(f"N-Sided Patch: Topology-Index-Auflösung fehlgeschlagen: {e}")
-
-        # TNP v4.0 TERTIARY: GeometricEdgeSelector
-        if len(resolved_edges) < 3 and feature.geometric_selectors:
-            try:
-                from modeling.geometric_selector import GeometricEdgeSelector
-                for selector_data in feature.geometric_selectors:
-                    if isinstance(selector_data, dict):
-                        geo_sel = GeometricEdgeSelector.from_dict(selector_data)
-                    elif hasattr(selector_data, 'find_best_match'):
-                        geo_sel = selector_data
-                    else:
-                        continue
-                    best_edge = geo_sel.find_best_match(all_edges)
-                    _append_unique(best_edge)
-            except Exception as e:
-                logger.debug(f"N-Sided Patch: GeometricSelector-Auflösung fehlgeschlagen: {e}")
+        # TNP v4.0: Zentraler Resolver (ShapeID / edge_indices / strict Selector-Policy)
+        tnp_edges = self._resolve_edges_tnp(current_solid, feature)
+        for edge in tnp_edges:
+            _append_unique(edge)
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(
+                f"N-Sided Patch: {len(tnp_edges)} Edges via zentralem TNP-Resolver aufgelöst"
+            )
 
         # Für zukünftige Rebuilds ShapeIDs + GeometricSelectors + Edge-Indizes persistieren
         if resolved_edges:
@@ -3188,23 +3266,12 @@ class Body:
                 logger.debug(f"N-Sided Patch: Persistieren von ShapeIDs fehlgeschlagen: {e}")
 
         if len(resolved_edges) < 3:
-            # Weniger strikt: Wenn Body trotzdem valid ist, nicht als Fehler behandeln
             expected = (
                 len(feature.edge_shape_ids or [])
                 or len(feature.edge_indices or [])
                 or len(feature.geometric_selectors or [])
             )
             logger.warning(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
-            # Prüfe ob Body bereits geschlossen ist - dann ist das Feature evtl. schon angewendet
-            try:
-                from OCP.BRepCheck import BRepCheck_Analyzer
-                shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
-                analyzer = BRepCheck_Analyzer(shape)
-                if analyzer.IsValid():
-                    logger.info("Body ist bereits valid - N-Sided Patch möglicherweise bereits angewendet")
-                    return current_solid
-            except Exception:
-                pass
             raise ValueError(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
 
         logger.debug(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
@@ -4381,7 +4448,7 @@ class Body:
         Reihenfolge:
         1. ShapeIDs via ShapeNamingService
         2. Topologie-Indizes via topology_indexing.face_from_index
-        3. GeometricFaceSelector-Fallback (Legacy/Recovery)
+        3. GeometricFaceSelector-Fallback nur ohne Topologie-Referenzen.
         """
         if solid is None or not hasattr(solid, 'faces'):
             return []
@@ -4504,7 +4571,11 @@ class Body:
                 if not hasattr(shape_id, 'uuid'):
                     continue
                 try:
-                    resolved_ocp, method = service.resolve_shape_with_method(shape_id, solid)
+                    resolved_ocp, method = service.resolve_shape_with_method(
+                        shape_id,
+                        solid,
+                        log_unresolved=False,
+                    )
                     if resolved_ocp is None:
                         continue
                     from build123d import Face
@@ -4529,11 +4600,24 @@ class Body:
             _resolve_by_indices()
 
         expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
-        need_selector_recovery = (
-            not resolved_faces
-            or (valid_face_indices and len(resolved_face_indices) < len(valid_face_indices))
-            or (expected_shape_refs > 0 and not valid_face_indices and len(resolved_shape_ids) < expected_shape_refs)
+        has_topological_refs = bool(valid_face_indices or expected_shape_refs > 0)
+        unresolved_topology_refs = (
+            (valid_face_indices and len(resolved_face_indices) < len(valid_face_indices))
+            or (
+                expected_shape_refs > 0
+                and not valid_face_indices
+                and len(resolved_shape_ids) < expected_shape_refs
+            )
         )
+
+        if has_topological_refs and unresolved_topology_refs:
+            logger.warning(
+                f"{feature.name}: Face-Referenz ist ungültig (ShapeID/face_indices). "
+                "Kein Geometric-Fallback."
+            )
+            return []
+
+        need_selector_recovery = (not has_topological_refs) and (not resolved_faces)
 
         # 3) Geometric selector fallback (nur Recovery)
         if need_selector_recovery:
@@ -5330,7 +5414,11 @@ class Body:
                     def op_brepfeat():
                         return self._compute_extrude_part_brepfeat(feature, current_solid)
                     
-                    brepfeat_result, status = self._safe_operation(f"Extrude_BRepFeat_{i}", op_brepfeat)
+                    brepfeat_result, status = self._safe_operation(
+                        f"Extrude_BRepFeat_{i}",
+                        op_brepfeat,
+                        feature=feature,
+                    )
                     
                     if brepfeat_result and status == "SUCCESS":
                         new_solid = brepfeat_result
@@ -5349,7 +5437,11 @@ class Body:
                     def op_extrude():
                         return self._compute_extrude_part(feature)
                     
-                    part_geometry, status = self._safe_operation(f"Extrude_{i}", op_extrude)
+                    part_geometry, status = self._safe_operation(
+                        f"Extrude_{i}",
+                        op_extrude,
+                        feature=feature,
+                    )
 
                     if part_geometry:
                         if current_solid is None or feature.operation == "New Body":
@@ -5420,7 +5512,11 @@ class Body:
                         return fillet(edges_to_fillet, radius=rad)
 
                     # Fail-Fast: Kein Fallback mit reduziertem Radius
-                    new_solid, status = self._safe_operation(f"Fillet_{i}", op_fillet)
+                    new_solid, status = self._safe_operation(
+                        f"Fillet_{i}",
+                        op_fillet,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5458,7 +5554,11 @@ class Body:
                         return chamfer(edges, length=dist)
 
                     # Fail-Fast: Kein Fallback mit reduzierter Distance
-                    new_solid, status = self._safe_operation(f"Chamfer_{i}", op_chamfer)
+                    new_solid, status = self._safe_operation(
+                        f"Chamfer_{i}",
+                        op_chamfer,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5473,7 +5573,11 @@ class Body:
                     def op_transform():
                         return self._apply_transform_feature(current_solid, feature)
 
-                    new_solid, status = self._safe_operation(f"Transform_{i}", op_transform)
+                    new_solid, status = self._safe_operation(
+                        f"Transform_{i}",
+                        op_transform,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5483,7 +5587,11 @@ class Body:
                 def op_revolve():
                     return self._compute_revolve(feature)
 
-                part_geometry, status = self._safe_operation(f"Revolve_{i}", op_revolve)
+                part_geometry, status = self._safe_operation(
+                    f"Revolve_{i}",
+                    op_revolve,
+                    feature=feature,
+                )
 
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
@@ -5507,7 +5615,11 @@ class Body:
                 def op_loft():
                     return self._compute_loft(feature)
 
-                part_geometry, status = self._safe_operation(f"Loft_{i}", op_loft)
+                part_geometry, status = self._safe_operation(
+                    f"Loft_{i}",
+                    op_loft,
+                    feature=feature,
+                )
 
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
@@ -5531,7 +5643,11 @@ class Body:
                 def op_sweep():
                     return self._compute_sweep(feature, current_solid)
 
-                part_geometry, status = self._safe_operation(f"Sweep_{i}", op_sweep)
+                part_geometry, status = self._safe_operation(
+                    f"Sweep_{i}",
+                    op_sweep,
+                    feature=feature,
+                )
 
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
@@ -5559,7 +5675,11 @@ class Body:
                     def op_shell():
                         return self._compute_shell(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"Shell_{i}", op_shell)
+                    new_solid, status = self._safe_operation(
+                        f"Shell_{i}",
+                        op_shell,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5573,7 +5693,11 @@ class Body:
                     def op_hollow():
                         return self._compute_hollow(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"Hollow_{i}", op_hollow)
+                    new_solid, status = self._safe_operation(
+                        f"Hollow_{i}",
+                        op_hollow,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5591,7 +5715,11 @@ class Body:
                             shell_thickness=feature.shell_thickness,
                         )
 
-                    new_solid, status = self._safe_operation(f"Lattice_{i}", op_lattice)
+                    new_solid, status = self._safe_operation(
+                        f"Lattice_{i}",
+                        op_lattice,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5602,7 +5730,11 @@ class Body:
                     def op_nsided():
                         return self._compute_nsided_patch(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"NSidedPatch_{i}", op_nsided)
+                    new_solid, status = self._safe_operation(
+                        f"NSidedPatch_{i}",
+                        op_nsided,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5616,7 +5748,11 @@ class Body:
                     def op_hole():
                         return self._compute_hole(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"Hole_{i}", op_hole)
+                    new_solid, status = self._safe_operation(
+                        f"Hole_{i}",
+                        op_hole,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5632,7 +5768,11 @@ class Body:
                     def op_draft():
                         return self._compute_draft(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"Draft_{i}", op_draft)
+                    new_solid, status = self._safe_operation(
+                        f"Draft_{i}",
+                        op_draft,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5664,7 +5804,11 @@ class Body:
                                 return result.body_above
                             return result
 
-                    new_solid, status = self._safe_operation(f"Split_{i}", op_split)
+                    new_solid, status = self._safe_operation(
+                        f"Split_{i}",
+                        op_split,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5681,7 +5825,11 @@ class Body:
                     def op_thread():
                         return self._compute_thread(feature, current_solid)
 
-                    new_solid, status = self._safe_operation(f"Thread_{i}", op_thread)
+                    new_solid, status = self._safe_operation(
+                        f"Thread_{i}",
+                        op_thread,
+                        feature=feature,
+                    )
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
@@ -5850,36 +5998,37 @@ class Body:
 
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
-        TNP v4.0: Professional Topological Naming Resolution.
-        
-        Verwendet ShapeNamingService für Multi-Level Resolution:
-        1. Direct Lookup (unveränderte Shapes)
-        2. History Tracing (via Operation Graph)
-        3. BRepFeat Mapping Lookup (für Push/Pull)
-        4. Geometric Matching (Fallback)
-        
-        Args:
-            solid: Build123d Solid
-            feature: FilletFeature oder ChamferFeature mit TNP-Daten
-        
-        Returns:
-            Liste von gefundenen Edges
+        TNP v4.0 Edge-Auflösung.
+
+        Reihenfolge:
+        1. edge_indices (Topology-Index)
+        2. edge_shape_ids (ShapeNamingService)
+        3. geometric_selectors nur, wenn keine Topologie-Referenzen existieren.
         """
         all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
         if not all_edges:
             if is_enabled("tnp_debug_logging"):
                 logger.warning("TNP v4.0: Keine Edges im Solid gefunden")
             return []
-        
+
         feature_name = getattr(feature, 'name', 'Unknown')
         edge_shape_ids = list(getattr(feature, 'edge_shape_ids', []) or [])
-        edge_indices = list(getattr(feature, 'edge_indices', []) or [])
+        edge_indices_raw = list(getattr(feature, 'edge_indices', []) or [])
         geometric_selectors = list(getattr(feature, 'geometric_selectors', []) or [])
+
+        valid_edge_indices = []
+        for raw_idx in edge_indices_raw:
+            try:
+                idx = int(raw_idx)
+            except Exception:
+                continue
+            if idx >= 0 and idx not in valid_edge_indices:
+                valid_edge_indices.append(idx)
 
         if is_enabled("tnp_debug_logging"):
             logger.info(
                 f"TNP v4.0: Resolving edges for {feature_name} "
-                f"(shape_ids={len(edge_shape_ids)}, indices={len(edge_indices)}, "
+                f"(shape_ids={len(edge_shape_ids)}, indices={len(valid_edge_indices)}, "
                 f"selectors={len(geometric_selectors)}, solid_edges={len(all_edges)})"
             )
 
@@ -5889,20 +6038,46 @@ class Body:
 
         resolved_edges = []
         unresolved_shape_ids = []  # Für Debug-Visualisierung
+        resolved_shape_ids = []
+        resolved_edge_indices = []
 
-        def _append_unique(edge_obj) -> None:
+        def _edge_index_of(edge_obj):
+            for edge_idx, candidate in enumerate(all_edges):
+                if self._is_same_edge(candidate, edge_obj):
+                    return edge_idx
+            return None
+
+        def _append_unique(edge_obj, shape_id=None, topo_index=None) -> None:
             if edge_obj is None:
                 return
             for existing in resolved_edges:
                 if self._is_same_edge(existing, edge_obj):
                     return
             resolved_edges.append(edge_obj)
-
-        # 1) ShapeID-Auflösung (Primary)
-        if edge_shape_ids and service is not None:
-            for i, shape_id in enumerate(edge_shape_ids):
+            if shape_id is not None:
+                resolved_shape_ids.append(shape_id)
+            if topo_index is None:
+                topo_index = _edge_index_of(edge_obj)
+            if topo_index is not None:
                 try:
-                    resolved_ocp = service.resolve_shape(shape_id, solid)
+                    topo_index = int(topo_index)
+                    if topo_index >= 0 and topo_index not in resolved_edge_indices:
+                        resolved_edge_indices.append(topo_index)
+                except Exception:
+                    pass
+
+        def _resolve_by_shape_ids() -> None:
+            if not edge_shape_ids or service is None:
+                return
+            for i, shape_id in enumerate(edge_shape_ids):
+                if not hasattr(shape_id, "uuid"):
+                    continue
+                try:
+                    resolved_ocp, method = service.resolve_shape_with_method(
+                        shape_id,
+                        solid,
+                        log_unresolved=False,
+                    )
                     if resolved_ocp is None:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
@@ -5911,7 +6086,9 @@ class Body:
 
                     matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
                     if matching_edge is not None:
-                        _append_unique(matching_edge)
+                        _append_unique(matching_edge, shape_id=shape_id)
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelöst (method={method})")
                     else:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
@@ -5921,20 +6098,62 @@ class Body:
                     if is_enabled("tnp_debug_logging"):
                         logger.warning(f"TNP v4.0: Edge {i} ShapeID-Auflösung fehlgeschlagen: {e}")
 
-        # 2) Topology-Index-Auflösung (Secondary)
-        if edge_indices:
+        def _resolve_by_indices() -> None:
+            if not valid_edge_indices:
+                return
             try:
                 from modeling.topology_indexing import edge_from_index
 
-                for edge_idx in edge_indices:
+                for edge_idx in valid_edge_indices:
                     resolved = edge_from_index(solid, int(edge_idx))
-                    _append_unique(resolved)
+                    _append_unique(resolved, topo_index=edge_idx)
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
 
-        # 3) GeometricSelector-Auflösung (Fallback)
-        if geometric_selectors:
+        # Bei gesetzten edge_indices: index-first. Sonst ShapeID-first.
+        if valid_edge_indices:
+            _resolve_by_indices()
+            indices_complete = len(resolved_edge_indices) >= len(valid_edge_indices)
+            if not indices_complete:
+                _resolve_by_shape_ids()
+        else:
+            _resolve_by_shape_ids()
+            _resolve_by_indices()
+
+        expected_shape_refs = sum(1 for sid in edge_shape_ids if hasattr(sid, "uuid"))
+        has_topological_refs = bool(valid_edge_indices or expected_shape_refs > 0)
+        unresolved_topology_refs = (
+            (valid_edge_indices and len(resolved_edge_indices) < len(valid_edge_indices))
+            or (
+                expected_shape_refs > 0
+                and not valid_edge_indices
+                and len(resolved_shape_ids) < expected_shape_refs
+            )
+        )
+
+        if has_topological_refs and unresolved_topology_refs:
+            logger.warning(
+                f"{feature_name}: Edge-Referenz ist ungültig (ShapeID/edge_indices). "
+                "Kein Geometric-Fallback."
+            )
+            self._last_tnp_debug_data = {
+                'resolved': [],
+                'unresolved': unresolved_shape_ids,
+                'body_id': self.id,
+            }
+            if hasattr(self._document, '_tnp_debug_callback') and self._document._tnp_debug_callback:
+                try:
+                    self._document._tnp_debug_callback([], unresolved_shape_ids, self.id)
+                except Exception as e:
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
+            return []
+
+        need_selector_recovery = (not has_topological_refs) and (not resolved_edges)
+
+        # GeometricSelector-Auflösung nur ohne Topologie-Referenzen (Recovery)
+        if need_selector_recovery and geometric_selectors:
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
 
@@ -5982,7 +6201,7 @@ class Body:
             if new_shape_ids:
                 feature.edge_shape_ids = new_shape_ids
 
-        total_refs = max(len(edge_shape_ids), len(edge_indices), len(geometric_selectors))
+        total_refs = max(len(edge_shape_ids), len(valid_edge_indices), len(geometric_selectors))
         found = len(resolved_edges)
         if is_enabled("tnp_debug_logging"):
             if total_refs == 0:
@@ -6006,7 +6225,7 @@ class Body:
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
-        
+
         return resolved_edges
     
     def _validate_edge_in_solid(self, edge, all_edges, tolerance=0.01) -> bool:

@@ -582,6 +582,93 @@ def test_sweep_resolve_path_blocks_legacy_fallback_when_topology_refs_break(monk
     assert wire is None
 
 
+def test_resolve_edges_tnp_prefers_edge_indices_without_selector_fallback(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_index_first")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[0],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("edge selector fallback should not run when edge_indices resolve")
+
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved) == 1
+    assert feature.edge_indices == [0]
+
+
+def test_resolve_edges_tnp_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("edge selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert resolved == []
+    assert feature.edge_indices == [999]
+
+
+def test_resolve_edges_tnp_shapeid_fallback_is_quiet(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("edge_shapeid_quiet")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = FilletFeature(radius=1.0)
+    feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "missing_edge", 0)]
+    flags = []
+
+    def _fake_resolve(_shape_id, _solid, *, log_unresolved=True):
+        flags.append(log_unresolved)
+        return None, "unresolved"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fake_resolve)
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert resolved == []
+    assert flags == [False]
+
+
+def test_compute_nsided_patch_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("nsided_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = NSidedPatchFeature(
+        edge_indices=[999, 998, 997],
+        geometric_selectors=[_edge_selector(), _edge_selector(), _edge_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("nsided selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
+    with pytest.raises(ValueError, match="Nur 0 von"):
+        body._compute_nsided_patch(feature, solid)
+
+
 def test_compute_sweep_prefers_profile_face_index_without_selector_fallback(monkeypatch):
     import build123d
     from build123d import Solid
@@ -703,6 +790,88 @@ def test_resolve_feature_faces_does_not_use_selector_recovery_when_indices_resol
 
     assert len(resolved) == 1
     assert texture.face_indices == [0]
+
+
+def test_resolve_feature_faces_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("face_index_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    texture = SurfaceTextureFeature(face_indices=[999], face_selectors=[_face_selector()])
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    resolved = body._resolve_feature_faces(texture, solid)
+
+    assert resolved == []
+    assert texture.face_indices == [999]
+
+
+def test_compute_hole_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("hole_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = HoleFeature(
+        diameter=4.0,
+        depth=5.0,
+        position=(0.0, 0.0, 0.0),
+        direction=(0.0, 0.0, -1.0),
+        face_indices=[999],
+        face_selectors=[_face_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("hole selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    with pytest.raises(ValueError, match="TNP v4.0"):
+        body._compute_hole(feature, solid)
+
+
+def test_compute_draft_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("draft_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = DraftFeature(
+        draft_angle=5.0,
+        pull_direction=(0.0, 0.0, 1.0),
+        face_indices=[999],
+        face_selectors=[_face_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("draft selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    with pytest.raises(ValueError, match="TNP v4.0"):
+        body._compute_draft(feature, solid)
+
+
+def test_compute_hollow_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("hollow_no_legacy_fallback_on_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = HollowFeature(
+        wall_thickness=1.0,
+        opening_face_indices=[999],
+        opening_face_selectors=[_face_selector()],
+    )
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("hollow selector fallback must not run when topological refs exist but break")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    with pytest.raises(ValueError, match="Kein Geometric-Fallback"):
+        body._compute_hollow(feature, solid)
 
 
 def test_resolve_feature_faces_supports_extrude_face_index(monkeypatch):
