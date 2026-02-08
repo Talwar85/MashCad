@@ -541,9 +541,23 @@ class Sketch:
     
     
     # === Constraint-Solver ===
+
+    def _sanitize_for_solver(self) -> int:
+        """
+        Entfernt verwaiste Constraint-Referenzen vor dem Solve.
+
+        Returns:
+            Anzahl der entfernten Constraints.
+        """
+        before = len(self.constraints)
+        self._cleanup_orphan_constraints()
+        return before - len(self.constraints)
     
     def solve(self) -> SolverResult:
         """Löst alle Constraints"""
+        removed_orphans = self._sanitize_for_solver()
+        if removed_orphans > 0:
+            logger.debug(f"Sketch.solve: {removed_orphans} verwaiste Constraints entfernt")
         
         # 1. Versuche C++ Solver (falls vorhanden)
         try:

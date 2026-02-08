@@ -50,6 +50,190 @@ def test_trim_line_keeps_opposite_segment():
     )
 
 
+def test_trim_line_does_not_snap_to_nearby_unrelated_point():
+    sketch = Sketch("trim_precision")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_line(5.0, -5.0, 5.0, 5.0)
+    sketch.add_point(5.5, 0.0)  # nahe am echten Schnittpunkt, aber nicht identisch
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    horizontal = [l for l in sketch.lines if abs(l.start.y - l.end.y) < 1e-9]
+    assert len(horizontal) == 1
+    x_values = sorted([round(horizontal[0].start.x, 6), round(horizontal[0].end.x, 6)])
+    assert x_values == [5.0, 10.0]
+
+
+def test_trim_line_reuses_shared_endpoint_object():
+    sketch = Sketch("trim_shared_endpoint")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_line(5.0, -5.0, 5.0, 5.0)
+    branch = sketch.add_line(10.0, 0.0, 10.0, 8.0)
+    shared_point = branch.start
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    horizontal = [l for l in sketch.lines if abs(l.start.y - l.end.y) < 1e-9]
+    assert len(horizontal) == 1
+    remaining = horizontal[0]
+    assert remaining.start is shared_point or remaining.end is shared_point
+
+
+def test_trim_line_migrates_horizontal_constraint_to_remaining_segment():
+    sketch = Sketch("trim_constraint_migration")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_horizontal(target)
+    sketch.add_line(5.0, -5.0, 5.0, 5.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    horizontal_lines = [l for l in sketch.lines if abs(l.start.y - l.end.y) < 1e-9]
+    assert len(horizontal_lines) == 1
+    remaining_line = horizontal_lines[0]
+
+    horizontal_constraints = [c for c in sketch.constraints if c.type == ConstraintType.HORIZONTAL]
+    assert len(horizontal_constraints) == 1
+    assert horizontal_constraints[0].entities[0] is remaining_line
+
+
+def test_trim_line_does_not_migrate_length_constraint():
+    sketch = Sketch("trim_length_removed")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_length(target, 10.0)
+    sketch.add_line(5.0, -5.0, 5.0, 5.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    length_constraints = [c for c in sketch.constraints if c.type == ConstraintType.LENGTH]
+    assert len(length_constraints) == 0
+
+
+def test_trim_rolls_back_geometry_on_exception(monkeypatch):
+    sketch = Sketch("trim_rollback")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    cutter = sketch.add_line(5.0, -5.0, 5.0, 5.0)
+    sketch.add_horizontal(target)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2.0, 0.0))
+    assert find_result.success
+
+    before_line_ids = {id(line) for line in sketch.lines}
+    before_constraint_count = len(sketch.constraints)
+
+    def _boom(_segment):
+        raise RuntimeError("forced trim failure")
+
+    monkeypatch.setattr(op, "_recreate_line_segments", _boom)
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success is False
+
+    after_line_ids = {id(line) for line in sketch.lines}
+    assert before_line_ids == after_line_ids
+    assert target in sketch.lines
+    assert cutter in sketch.lines
+    assert len(sketch.constraints) == before_constraint_count
+
+
+def test_trim_circle_migrates_radius_constraint_to_created_arc():
+    sketch = Sketch("trim_circle_radius_migration")
+    target_circle = sketch.add_circle(0.0, 0.0, 10.0)
+    sketch.add_radius(target_circle, 10.0)
+    sketch.add_line(0.0, -20.0, 0.0, 20.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target_circle, Point2D(10.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+    assert len(sketch.circles) == 0
+    assert len(sketch.arcs) == 1
+
+    radius_constraints = [c for c in sketch.constraints if c.type == ConstraintType.RADIUS]
+    assert len(radius_constraints) == 1
+    assert radius_constraints[0].entities[0] is sketch.arcs[0]
+
+
+def test_trim_circle_does_not_migrate_diameter_constraint_to_arc():
+    sketch = Sketch("trim_circle_no_diameter_migration")
+    target_circle = sketch.add_circle(0.0, 0.0, 10.0)
+    sketch.add_diameter(target_circle, 20.0)
+    sketch.add_line(0.0, -20.0, 0.0, 20.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target_circle, Point2D(10.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+    assert len(sketch.arcs) == 1
+
+    diameter_constraints = [c for c in sketch.constraints if c.type == ConstraintType.DIAMETER]
+    assert len(diameter_constraints) == 0
+
+
+def test_trim_arc_migrates_concentric_constraint_when_single_segment_remains():
+    sketch = Sketch("trim_arc_concentric_migration")
+    target_arc = sketch.add_arc(0.0, 0.0, 10.0, 0.0, 180.0)
+    ref_circle = sketch.add_circle(0.0, 0.0, 4.0)
+    sketch.add_concentric(target_arc, ref_circle)
+    sketch.add_line(0.0, -20.0, 0.0, 20.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target_arc, Point2D(8.0, 5.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+    assert len(sketch.arcs) == 1
+
+    concentric_constraints = [c for c in sketch.constraints if c.type == ConstraintType.CONCENTRIC]
+    assert len(concentric_constraints) == 1
+    assert sketch.arcs[0] in concentric_constraints[0].entities
+    assert ref_circle in concentric_constraints[0].entities
+
+
+def test_trim_arc_skips_radius_migration_when_multiple_segments_remain():
+    sketch = Sketch("trim_arc_multi_segment_no_migration")
+    target_arc = sketch.add_arc(0.0, 0.0, 10.0, 0.0, 180.0)
+    sketch.add_radius(target_arc, 10.0)
+    sketch.add_line(-5.0, -20.0, -5.0, 20.0)
+    sketch.add_line(5.0, -20.0, 5.0, 20.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target_arc, Point2D(0.0, 10.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+    assert len(sketch.arcs) == 2
+
+    radius_constraints = [c for c in sketch.constraints if c.type == ConstraintType.RADIUS]
+    assert len(radius_constraints) == 0
+
+
 def test_trim_arc_recreates_remaining_arc_segment():
     sketch = Sketch("trim_arc")
     target_arc = sketch.add_arc(0.0, 0.0, 10.0, 0.0, 180.0)

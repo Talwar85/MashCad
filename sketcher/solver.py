@@ -149,6 +149,15 @@ class ConstraintSolver:
 
         x0 = np.array(x0_vals, dtype=np.float64)
         n_vars = len(x0)
+
+        if not np.all(np.isfinite(x0)):
+            return SolverResult(
+                False,
+                0,
+                float('inf'),
+                ConstraintStatus.INCONSISTENT,
+                "Ungültige Startwerte (NaN/Inf)"
+            )
         
         # Nur als Heuristik/Status-Metadatum nutzen. Harte Abbrüche erzeugen
         # bei abhängigen Constraints unnötige False-Negatives.
@@ -170,6 +179,9 @@ class ConstraintSolver:
             # Batch-Berechnung aller Errors (70-85% schneller!)
             errors = calculate_constraint_errors_batch(active_constraints)
 
+            if len(errors) != len(active_constraints):
+                raise ValueError("Constraint-Fehlerliste hat falsche Länge")
+
             # Gewichtung anwenden (basiert auf Constraint-Priorität)
             # Topologische Constraints (Müssen zuerst gelten - höchste Priorität)
             # Geometrische Constraints (Wichtig für Form)
@@ -177,8 +189,15 @@ class ConstraintSolver:
             # Gewichtung basierend auf Constraint-Priorität
             for c, error in zip(active_constraints, errors):
                 # Verwende Constraint's eigene Gewichtung
-                weight = c.get_weight()
-                residuals.append(error * weight)
+                safe_error = float(error)
+                if not np.isfinite(safe_error):
+                    safe_error = 1e6
+
+                weight = float(c.get_weight())
+                if not np.isfinite(weight) or weight <= 0.0:
+                    weight = 1.0
+
+                residuals.append(safe_error * weight)
 
             # C. Regularisierung: Verhindere zu starke Abweichung von Startwerten
             # Dies löst auch das Problem "mehr Residuen als Variablen" für 'lm'
@@ -186,7 +205,15 @@ class ConstraintSolver:
                 regularization_term = (x[i] - x0[i]) * self.regularization
                 residuals.append(regularization_term)
 
-            return residuals
+            residual_array = np.asarray(residuals, dtype=np.float64)
+            if not np.all(np.isfinite(residual_array)):
+                residual_array = np.nan_to_num(
+                    residual_array,
+                    nan=1e6,
+                    posinf=1e6,
+                    neginf=-1e6,
+                )
+            return residual_array
 
         # 3. Lösen mit Levenberg-Marquardt
         self.progress_callback = progress_callback
@@ -202,8 +229,12 @@ class ConstraintSolver:
                     for i, (obj, attr) in enumerate(refs):
                         setattr(obj, attr, x[i])
                     # Fehler berechnen
-                    errors = calculate_constraint_errors_batch(active_constraints)
-                    total_error = sum(errors)
+                    errors = np.asarray(
+                        calculate_constraint_errors_batch(active_constraints),
+                        dtype=np.float64,
+                    )
+                    errors = np.nan_to_num(errors, nan=1e6, posinf=1e6, neginf=1e6)
+                    total_error = float(errors.sum())
                     # Callback aufrufen
                     self.progress_callback(self._iteration_count, total_error)
             
@@ -228,6 +259,15 @@ class ConstraintSolver:
                 **lsq_kwargs,
             )
 
+            if not np.all(np.isfinite(result.x)):
+                return SolverResult(
+                    False,
+                    int(result.nfev),
+                    float('inf'),
+                    ConstraintStatus.INCONSISTENT,
+                    "Solver lieferte ungültige Werte (NaN/Inf)"
+                )
+
             # Finale Werte übernehmen
             for i, (obj, attr) in enumerate(refs):
                 # .item() konvertiert numpy.float64 -> float
@@ -236,11 +276,31 @@ class ConstraintSolver:
 
             # Erfolg prüfen mit verbesserten Konvergenzkriterien
             # Performance Optimization 2.2: Batch-Berechnung
-            final_errors = calculate_constraint_errors_batch(active_constraints)
-            constraint_error = sum(final_errors)
+            final_errors = np.asarray(
+                calculate_constraint_errors_batch(active_constraints),
+                dtype=np.float64,
+            )
+            if final_errors.size != len(active_constraints):
+                return SolverResult(
+                    False,
+                    int(result.nfev),
+                    float('inf'),
+                    ConstraintStatus.INCONSISTENT,
+                    "Ungültige Residuen (Längenfehler)"
+                )
+            if not np.all(np.isfinite(final_errors)):
+                return SolverResult(
+                    False,
+                    int(result.nfev),
+                    float('inf'),
+                    ConstraintStatus.INCONSISTENT,
+                    "Ungültige Residuen (NaN/Inf)"
+                )
+
+            constraint_error = float(final_errors.sum())
             
             # Maximaler Einzelfehler (wichtig für geometrische Genauigkeit)
-            max_error = max(final_errors) if final_errors else 0.0
+            max_error = float(final_errors.max()) if final_errors.size else 0.0
             
             # Konvergenzkriterien:
             # 1. Der Solver muss konvergiert sein

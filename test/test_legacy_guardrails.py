@@ -57,6 +57,16 @@ RULES = [
         "path": "gui/sketch_handlers.py",
         "forbidden": [
             r"\bdef\s+_handle_trim_legacy\(",
+            r"\bdef\s+_handle_trim_v2\(",
+            r"_handle_trim_v2\(",
+        ],
+    },
+    {
+        "path": "sketcher/operations/trim.py",
+        "forbidden": [
+            r"\bclass\s+TrimComparisonTest\b",
+            r"use_extracted_trim",
+            r"\[TRIM V2\]",
         ],
     },
 ]

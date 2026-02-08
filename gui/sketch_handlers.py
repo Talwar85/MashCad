@@ -1095,14 +1095,7 @@ class SketchHandlersMixin:
 
         Nutzt die extrahierte TrimOperation Klasse.
         """
-        # Direkt V2 (extrahierte TrimOperation) nutzen
-        self._handle_trim_v2(pos, snap_type, snap_entity)
-        return
-
-    def _handle_trim_v2(self, pos, snap_type, snap_entity=None):
-        """
-        Trim-Implementierung mit extrahierter TrimOperation Klasse.
-        """
+        # Direkt extrahierte TrimOperation nutzen
         from sketcher.operations import TrimOperation
 
         # Target bestimmen
@@ -1122,17 +1115,17 @@ class SketchHandlersMixin:
         result = trim_op.find_segment(target, click_point)
 
         # Debug: Zeige was gefunden wurde
-        logger.info(f"[TRIM V2] Target: {type(target).__name__}, cut_points: {len(result.cut_points)}")
+        logger.info(f"[TRIM] Target: {type(target).__name__}, cut_points: {len(result.cut_points)}")
         if result.success and result.segment:
             seg = result.segment
-            logger.info(f"[TRIM V2] Segment idx={seg.segment_index}, "
+            logger.info(f"[TRIM] Segment idx={seg.segment_index}, "
                        f"start=({seg.start_point.x:.2f}, {seg.start_point.y:.2f}), "
                        f"end=({seg.end_point.x:.2f}, {seg.end_point.y:.2f}), "
                        f"all_cuts={len(seg.all_cut_points)}")
 
         if not result.success:
             self.status_message.emit(result.error)
-            logger.warning(f"[TRIM V2] Failed: {result.error}")
+            logger.warning(f"[TRIM] Failed: {result.error}")
             return
 
         # Preview
@@ -1148,13 +1141,13 @@ class SketchHandlersMixin:
             op_result = trim_op.execute_trim(segment)
 
             if op_result.success:
-                logger.info(f"[TRIM V2] Success: {op_result.message}")
+                logger.info(f"[TRIM] Success: {op_result.message}")
                 if hasattr(self, "_solve_async"):
                     self._solve_async()
                 else:
                     self.sketch.solve()
             else:
-                logger.warning(f"[TRIM V2] Failed: {op_result.message}")
+                logger.warning(f"[TRIM] Failed: {op_result.message}")
 
             self.preview_geometry = []
             self.sketched_changed.emit()

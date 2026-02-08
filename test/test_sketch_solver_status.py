@@ -1,4 +1,5 @@
 from sketcher.constraints import Constraint, ConstraintType
+import sketcher.solver as solver_module
 from sketcher.sketch import ConstraintStatus, Sketch
 
 
@@ -74,3 +75,42 @@ def test_is_fully_constrained_supports_legacy_like_result(monkeypatch):
 
     monkeypatch.setattr(sketch, "solve", lambda: _LegacyLikeResult(False, 0))
     assert sketch.is_fully_constrained() is False
+
+
+def test_solve_removes_orphan_constraints_before_solving():
+    sketch = Sketch("orphan_cleanup")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    horizontal = sketch.add_horizontal(line)
+    assert horizontal is not None
+    assert len(sketch.constraints) == 1
+
+    sketch.lines.clear()  # simuliert stale Topology-Referenz
+    result = sketch.solve()
+
+    assert result.success is True
+    assert result.status == ConstraintStatus.UNDER_CONSTRAINED
+    assert len(sketch.constraints) == 0
+
+
+def test_solver_reports_non_finite_residuals(monkeypatch):
+    sketch = Sketch("nan_residuals")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_length(line, 10.0)
+
+    monkeypatch.setattr(
+        solver_module,
+        "calculate_constraint_errors_batch",
+        lambda constraints: [float("nan")] * len(constraints),
+    )
+
+    result = sketch._solver.solve(
+        sketch.points,
+        sketch.lines,
+        sketch.circles,
+        sketch.arcs,
+        sketch.constraints,
+    )
+
+    assert result.success is False
+    assert result.status == ConstraintStatus.INCONSISTENT
+    assert "NaN/Inf" in result.message

@@ -13,8 +13,6 @@ Verwendung:
     if result.success:
         op.execute_trim(result.data)
 
-Feature-Flag: "use_extracted_trim"
-
 Phase 13 Enhancement:
 - Fuzzy Intersection Fallback für Tangent-Constraint-Fälle
 - Behandelt numerische Instabilität bei Near-Miss Intersections
@@ -34,6 +32,7 @@ if TYPE_CHECKING:
 # === Fuzzy Intersection Toleranz ===
 # Für Tangent-Constraints und andere numerische Near-Miss-Fälle
 FUZZY_INTERSECTION_TOLERANCE = 1e-4  # 0.1mm - CAD-übliche Toleranz
+TRIM_POINT_MERGE_TOLERANCE = 1e-4    # konservatives Point-Reuse beim Rebuild
 
 
 @dataclass
@@ -108,6 +107,202 @@ class TrimOperation(SketchOperation):
     @staticmethod
     def _points_equal(p1, p2, tol: float = 1e-5) -> bool:
         return abs(p1.x - p2.x) <= tol and abs(p1.y - p2.y) <= tol
+
+    def _collect_transferable_line_constraints(self, target) -> List[Any]:
+        """
+        Sammelt line-bezogene Constraints, die nach Trim sicher auf ein einzelnes
+        verbleibendes Segment migriert werden können.
+        """
+        from sketcher import Line2D
+        from sketcher.constraints import ConstraintType
+
+        if not isinstance(target, Line2D):
+            return []
+
+        transferable_types = {
+            ConstraintType.HORIZONTAL,
+            ConstraintType.VERTICAL,
+            ConstraintType.PARALLEL,
+            ConstraintType.PERPENDICULAR,
+            ConstraintType.COLLINEAR,
+            ConstraintType.ANGLE,
+        }
+
+        collected = []
+        for constraint in getattr(self.sketch, "constraints", []):
+            entities = getattr(constraint, "entities", [])
+            if target in entities and constraint.type in transferable_types:
+                collected.append(constraint)
+        return collected
+
+    @staticmethod
+    def _clone_constraint_with_entity_replacement(constraint, old_entity, new_entity):
+        """Erzeugt ein Constraint-Duplikat mit ersetzter Entity-Referenz."""
+        from sketcher.constraints import Constraint
+
+        new_entities = [new_entity if entity is old_entity else entity for entity in constraint.entities]
+        return Constraint(
+            type=constraint.type,
+            entities=new_entities,
+            value=constraint.value,
+            formula=constraint.formula,
+            driving=getattr(constraint, "driving", True),
+            priority=getattr(constraint, "priority", None),
+            group=getattr(constraint, "group", None),
+            enabled=getattr(constraint, "enabled", True),
+        )
+
+    def _migrate_trimmed_line_constraints(self, old_line, candidates: List[Any]) -> int:
+        """
+        Migriert Constraints auf das neue Segment, falls genau ein Segment übrig blieb.
+        """
+        if not candidates:
+            return 0
+
+        created_segments = getattr(self, "_last_created_line_segments", [])
+        if len(created_segments) != 1:
+            logger.debug(
+                f"[TRIM] Constraint-Migration übersprungen: {len(created_segments)} verbleibende Segmente"
+            )
+            return 0
+
+        new_line = created_segments[0]
+        migrated = 0
+        for original in candidates:
+            cloned = self._clone_constraint_with_entity_replacement(original, old_line, new_line)
+            if not cloned.is_valid():
+                continue
+            if hasattr(self.sketch, "_constraint_exists") and self.sketch._constraint_exists(cloned.type, cloned.entities):
+                continue
+            self.sketch.constraints.append(cloned)
+            migrated += 1
+
+        if migrated:
+            logger.info(f"[TRIM] {migrated} Constraints auf neues Segment migriert")
+        return migrated
+
+    def _collect_transferable_curve_constraints(self, target) -> List[Any]:
+        """
+        Sammelt kurvenbezogene Constraints, die sich robust auf genau eine
+        verbleibende Kurve migrieren lassen.
+        """
+        from sketcher import Circle2D, Arc2D
+        from sketcher.constraints import ConstraintType
+
+        if not isinstance(target, (Circle2D, Arc2D)):
+            return []
+
+        transferable_types = {
+            ConstraintType.CONCENTRIC,
+            ConstraintType.EQUAL_RADIUS,
+            ConstraintType.RADIUS,
+            ConstraintType.DIAMETER,
+        }
+
+        collected = []
+        for constraint in getattr(self.sketch, "constraints", []):
+            entities = getattr(constraint, "entities", [])
+            if target in entities and constraint.type in transferable_types:
+                collected.append(constraint)
+        return collected
+
+    @staticmethod
+    def _is_curve_constraint_compatible(constraint, new_entity) -> bool:
+        """Prüft, ob ein Constraint-Typ zum neuen Kurven-Typ passt."""
+        from sketcher.constraints import ConstraintType
+
+        if constraint.type == ConstraintType.RADIUS:
+            return hasattr(new_entity, "radius")
+        if constraint.type == ConstraintType.DIAMETER:
+            return hasattr(new_entity, "diameter")
+        return True
+
+    def _migrate_trimmed_curve_constraints(self, old_curve, candidates: List[Any]) -> int:
+        """
+        Migriert kurvenbezogene Constraints auf die neue Kurve, falls genau
+        eine Zielkurve erzeugt wurde.
+        """
+        if not candidates:
+            return 0
+
+        created_curves = getattr(self, "_last_created_curve_entities", [])
+        if len(created_curves) != 1:
+            logger.debug(
+                f"[TRIM] Kurven-Constraint-Migration übersprungen: {len(created_curves)} verbleibende Kurven"
+            )
+            return 0
+
+        new_curve = created_curves[0]
+        migrated = 0
+        for original in candidates:
+            if not self._is_curve_constraint_compatible(original, new_curve):
+                continue
+            cloned = self._clone_constraint_with_entity_replacement(original, old_curve, new_curve)
+            if not cloned.is_valid():
+                continue
+            if hasattr(self.sketch, "_constraint_exists") and self.sketch._constraint_exists(cloned.type, cloned.entities):
+                continue
+            self.sketch.constraints.append(cloned)
+            migrated += 1
+
+        if migrated:
+            logger.info(f"[TRIM] {migrated} Kurven-Constraints auf neues Segment migriert")
+        return migrated
+
+    def _detach_target_entity(self, target) -> None:
+        """
+        Entfernt die Ziel-Entity ohne sofortiges Topologie-Cleanup.
+        Dadurch können Rebuild-Segmente existierende Punkt-Objekte weiterverwenden.
+        """
+        if target in self.sketch.lines:
+            self.sketch.lines.remove(target)
+        elif target in self.sketch.circles:
+            self.sketch.circles.remove(target)
+        elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs:
+            self.sketch.arcs.remove(target)
+
+    def _find_existing_point(self, point: 'Point2D', tolerance: float = TRIM_POINT_MERGE_TOLERANCE):
+        """Findet einen existierenden Punkt in Sketch-Geometrie nahe point."""
+        for existing in getattr(self.sketch, "points", []):
+            if self._points_equal(existing, point, tolerance):
+                return existing
+
+        for line in getattr(self.sketch, "lines", []):
+            if self._points_equal(line.start, point, tolerance):
+                return line.start
+            if self._points_equal(line.end, point, tolerance):
+                return line.end
+
+        for circle in getattr(self.sketch, "circles", []):
+            if self._points_equal(circle.center, point, tolerance):
+                return circle.center
+
+        for arc in getattr(self.sketch, "arcs", []):
+            if self._points_equal(arc.center, point, tolerance):
+                return arc.center
+
+        return None
+
+    def _resolve_trim_point(self, point: 'Point2D', target) -> 'Point2D':
+        """
+        Liefert ein stabiles Point-Objekt für Rebuild:
+        1) Original-Endpunkte des getrimmten Targets
+        2) Existierende Punkte im Sketch (mit kleiner CAD-Toleranz)
+        3) Neu erzeugter Punkt
+        """
+        if hasattr(target, "start") and self._points_equal(point, target.start):
+            return target.start
+        if hasattr(target, "end") and self._points_equal(point, target.end):
+            return target.end
+
+        existing = self._find_existing_point(point)
+        if existing is not None:
+            return existing
+
+        from sketcher import Point2D
+        new_point = Point2D(point.x, point.y)
+        self.sketch.points.append(new_point)
+        return new_point
 
     def _arc_param_to_local(self, arc: 'Arc2D', t_abs: float) -> float:
         """
@@ -212,7 +407,7 @@ class TrimOperation(SketchOperation):
                 # Prüfe ob der Punkt wirklich auf dem sichtbaren Arc liegt
                 if self._point_on_arc(arc_pt, target):
                     logger.warning(
-                        f"[TRIM V2] Fuzzy intersection injected: Arc-Line distance={dist:.6f}mm "
+                        f"[TRIM] Fuzzy intersection injected: Arc-Line distance={dist:.6f}mm "
                         f"at ({arc_pt.x:.2f}, {arc_pt.y:.2f})"
                     )
                     fuzzy_points.append(arc_pt)
@@ -225,7 +420,7 @@ class TrimOperation(SketchOperation):
                 t = self._get_geometry().get_param_on_entity(line_pt, target)
                 if 0.0 <= t <= 1.0:
                     logger.warning(
-                        f"[TRIM V2] Fuzzy intersection injected: Line-Arc distance={dist:.6f}mm "
+                        f"[TRIM] Fuzzy intersection injected: Line-Arc distance={dist:.6f}mm "
                         f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
                     )
                     fuzzy_points.append(line_pt)
@@ -236,7 +431,7 @@ class TrimOperation(SketchOperation):
 
             if dist < FUZZY_INTERSECTION_TOLERANCE and circle_pt is not None:
                 logger.warning(
-                    f"[TRIM V2] Fuzzy intersection injected: Circle-Line distance={dist:.6f}mm "
+                    f"[TRIM] Fuzzy intersection injected: Circle-Line distance={dist:.6f}mm "
                     f"at ({circle_pt.x:.2f}, {circle_pt.y:.2f})"
                 )
                 fuzzy_points.append(circle_pt)
@@ -248,7 +443,7 @@ class TrimOperation(SketchOperation):
                 t = self._get_geometry().get_param_on_entity(line_pt, target)
                 if 0.0 <= t <= 1.0:
                     logger.warning(
-                        f"[TRIM V2] Fuzzy intersection injected: Line-Circle distance={dist:.6f}mm "
+                        f"[TRIM] Fuzzy intersection injected: Line-Circle distance={dist:.6f}mm "
                         f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
                     )
                     fuzzy_points.append(line_pt)
@@ -556,7 +751,7 @@ class TrimOperation(SketchOperation):
         entity_type = type(target).__name__
         # Für Lines: 2 cut_points sind Start/Ende, echte Schnitte sind > 2
         real_cuts = len(cut_points) - 2 if isinstance(target, Line2D) else len(cut_points)
-        logger.debug(f"[TRIM V2] {entity_type}: {len(cut_points)} cut_points ({real_cuts} intersections)")
+        logger.debug(f"[TRIM] {entity_type}: {len(cut_points)} cut_points ({real_cuts} intersections)")
 
         # Segment finden je nach Entity-Typ
         segment = None
@@ -568,7 +763,7 @@ class TrimOperation(SketchOperation):
             segment = self._find_arc_segment(target, click_point, cut_points)
 
         if segment is None:
-            logger.debug(f"[TRIM V2] Failed: Kein Segment gefunden (cut_points: {len(cut_points)})")
+            logger.debug(f"[TRIM] Failed: Kein Segment gefunden (cut_points: {len(cut_points)})")
             return TrimResult.no_segment()
 
         self._last_trim_result = TrimResult.ok(segment, cut_points)
@@ -588,6 +783,17 @@ class TrimOperation(SketchOperation):
         geometry = self._get_geometry()
 
         target = segment.target_entity
+        self._last_created_line_segments = []
+        self._last_created_curve_entities = []
+        transferable_line_constraints = self._collect_transferable_line_constraints(target)
+        transferable_curve_constraints = self._collect_transferable_curve_constraints(target)
+
+        # Best-effort rollback bei Fehlern (z.B. Exception im Rebuild)
+        backup_lines = list(getattr(self.sketch, "lines", []))
+        backup_circles = list(getattr(self.sketch, "circles", []))
+        backup_arcs = list(getattr(self.sketch, "arcs", []))
+        backup_points = list(getattr(self.sketch, "points", []))
+        backup_constraints = list(getattr(self.sketch, "constraints", []))
 
         try:
             # 0. Constraints für diese Entity entfernen BEVOR sie gelöscht wird!
@@ -597,28 +803,22 @@ class TrimOperation(SketchOperation):
                 if removed_constraints > 0:
                     logger.info(f"[TRIM] {removed_constraints} Constraints entfernt für {type(target).__name__}")
 
-            # 1. Target entfernen (mit Topologie-Bereinigung)
-            if target in self.sketch.lines and hasattr(self.sketch, 'delete_line'):
-                self.sketch.delete_line(target)
-            elif target in self.sketch.circles and hasattr(self.sketch, 'delete_circle'):
-                self.sketch.delete_circle(target)
-            elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs and hasattr(self.sketch, 'delete_arc'):
-                self.sketch.delete_arc(target)
-            else:
-                if target in self.sketch.lines:
-                    self.sketch.lines.remove(target)
-                elif target in self.sketch.circles:
-                    self.sketch.circles.remove(target)
-                elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs:
-                    self.sketch.arcs.remove(target)
+            # 1. Target entfernen (ohne sofortiges Cleanup, damit Punkt-IDs stabil bleiben)
+            self._detach_target_entity(target)
 
             # 2. Übrige Teile erstellen
             if isinstance(target, Line2D):
                 result = self._recreate_line_segments(segment)
+                if result.success:
+                    self._migrate_trimmed_line_constraints(target, transferable_line_constraints)
             elif isinstance(target, Circle2D):
                 result = self._recreate_circle_arc(segment)
+                if result.success:
+                    self._migrate_trimmed_curve_constraints(target, transferable_curve_constraints)
             elif isinstance(target, Arc2D):
                 result = self._recreate_arc_segments(segment)
+                if result.success:
+                    self._migrate_trimmed_curve_constraints(target, transferable_curve_constraints)
             else:
                 result = OperationResult.ok("Trim erfolgreich")
 
@@ -631,6 +831,14 @@ class TrimOperation(SketchOperation):
             return result
 
         except Exception as e:
+            self.sketch.lines = backup_lines
+            self.sketch.circles = backup_circles
+            if hasattr(self.sketch, "arcs"):
+                self.sketch.arcs = backup_arcs
+            self.sketch.points = backup_points
+            self.sketch.constraints = backup_constraints
+            if hasattr(self.sketch, "invalidate_profiles"):
+                self.sketch.invalidate_profiles()
             logger.error(f"Trim failed: {e}")
             return OperationResult.error(f"Trim fehlgeschlagen: {e}")
 
@@ -639,6 +847,7 @@ class TrimOperation(SketchOperation):
         cut_points = segment.all_cut_points
         removed_start = segment.start_point
         removed_end = segment.end_point
+        created_lines = []
 
         logger.debug(f"[TRIM] Recreate line segments: {len(cut_points)} cut_points")
         logger.debug(f"[TRIM] Removed segment: ({removed_start.x:.2f}, {removed_start.y:.2f}) → "
@@ -663,17 +872,35 @@ class TrimOperation(SketchOperation):
                         f"({p_end.x:.2f}, {p_end.y:.2f}), is_removed={is_removed}")
 
             if not is_removed and p_start.distance_to(p_end) > 1e-3:
-                self.sketch.add_line(
-                    p_start.x, p_start.y, p_end.x, p_end.y,
-                    construction=getattr(segment.target_entity, 'construction', False)
-                )
+                start_pt = self._resolve_trim_point(p_start, segment.target_entity)
+                end_pt = self._resolve_trim_point(p_end, segment.target_entity)
+
+                if start_pt is end_pt or start_pt.distance_to(end_pt) <= 1e-6:
+                    continue
+
+                if hasattr(self.sketch, "add_line_from_points"):
+                    new_line = self.sketch.add_line_from_points(
+                        start_pt,
+                        end_pt,
+                        construction=getattr(segment.target_entity, 'construction', False)
+                    )
+                else:
+                    # Legacy-Fallback mit kleiner Merge-Toleranz
+                    new_line = self.sketch.add_line(
+                        start_pt.x, start_pt.y, end_pt.x, end_pt.y,
+                        construction=getattr(segment.target_entity, 'construction', False),
+                        tolerance=TRIM_POINT_MERGE_TOLERANCE
+                    )
+                created_lines.append(new_line)
                 created_count += 1
                 logger.debug(f"[TRIM] Created segment {created_count}")
 
+        self._last_created_line_segments = created_lines
         return OperationResult.ok(f"{created_count} Segmente erstellt")
 
     def _recreate_circle_arc(self, segment: TrimSegment) -> OperationResult:
         """Erstellt den Arc nach dem Circle-Trim."""
+        self._last_created_curve_entities = []
         if segment.is_full_delete:
             return OperationResult.ok("Kreis gelöscht")
 
@@ -699,7 +926,7 @@ class TrimOperation(SketchOperation):
         logger.debug(f"[TRIM] Arc angles: {ang_start_deg:.1f}° to {ang_end_deg:.1f}°")
 
         if abs(ang_end_deg - ang_start_deg) > 0.1:  # Mindestens 0.1° Bogen
-            self.sketch.add_arc(
+            new_arc = self.sketch.add_arc(
                 target.center.x,
                 target.center.y,
                 target.radius,
@@ -707,6 +934,7 @@ class TrimOperation(SketchOperation):
                 ang_end_deg,
                 construction=getattr(target, 'construction', False)
             )
+            self._last_created_curve_entities = [new_arc]
             return OperationResult.ok("Arc erstellt")
 
         return OperationResult.warning("Arc zu klein, nicht erstellt")
@@ -715,6 +943,7 @@ class TrimOperation(SketchOperation):
         """
         Erstellt verbleibende Arc-Segmente nach Trim eines Arc-Targets.
         """
+        self._last_created_curve_entities = []
         target = segment.target_entity
         cut_points = segment.all_cut_points
         if len(cut_points) < 2:
@@ -751,12 +980,13 @@ class TrimOperation(SketchOperation):
 
         sweep_deg = target.sweep_angle
         created = 0
+        created_arcs = []
         for t0, t1 in keep_intervals:
             start_deg = target.start_angle + t0 * sweep_deg
             end_deg = target.start_angle + t1 * sweep_deg
             if abs(end_deg - start_deg) <= 0.1:
                 continue
-            self.sketch.add_arc(
+            new_arc = self.sketch.add_arc(
                 target.center.x,
                 target.center.y,
                 target.radius,
@@ -764,8 +994,10 @@ class TrimOperation(SketchOperation):
                 end_deg,
                 construction=getattr(target, 'construction', False)
             )
+            created_arcs.append(new_arc)
             created += 1
 
+        self._last_created_curve_entities = created_arcs
         if created == 0:
             return OperationResult.warning("Arc zu klein, nicht erstellt")
         return OperationResult.ok(f"{created} Arc-Segment(e) erstellt")
@@ -787,44 +1019,3 @@ class TrimOperation(SketchOperation):
 
         return self.execute_trim(result.segment)
 
-
-# === Vergleichs-Modus für Testing ===
-
-class TrimComparisonTest:
-    """
-    Vergleicht alte und neue Trim-Implementierung.
-
-    Verwendung:
-        test = TrimComparisonTest(sketch)
-        match, details = test.compare(target, click_point)
-
-        if not match:
-            # logger.debug(f"TrimComparisonTest: Unterschied gefunden: {details}")  # Nur für Debugging
-    """
-
-    def __init__(self, sketch: 'Sketch'):
-        self.sketch = sketch
-        self.new_op = TrimOperation(sketch)
-
-    def compare(self, target, click_point: 'Point2D') -> Tuple[bool, str]:
-        """
-        Vergleicht ob beide Implementierungen das gleiche Segment finden.
-
-        Returns:
-            (match: bool, details: str)
-        """
-        # Neue Implementierung
-        new_result = self.new_op.find_segment(target, click_point)
-
-        # Details für Debugging
-        if not new_result.success:
-            return True, f"Kein Segment gefunden: {new_result.error}"
-
-        seg = new_result.segment
-        details = (
-            f"Segment: idx={seg.segment_index}, "
-            f"start=({seg.start_point.x:.3f}, {seg.start_point.y:.3f}), "
-            f"end=({seg.end_point.x:.3f}, {seg.end_point.y:.3f})"
-        )
-
-        return True, details
