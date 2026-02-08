@@ -24,11 +24,13 @@ RULES = [
         "path": "gui/main_window.py",
         "required": [
             r"\bface_from_index\(",
+            r"\bdef\s+_resolve_solid_face_from_pick\(",
         ],
         "forbidden": [
             r"if\s+face_idx\s*==\s*ocp_face_id",
             r"edge_selectors\s*=\s*edge_selectors",
             r"['\"]edge_selector['\"]\s*:\s*self\.viewport_3d\.get_edge_selectors\(",
+            r"geometry_data\s*=\s*\(0,\s*0,\s*0,\s*0\)",
         ],
     },
     {

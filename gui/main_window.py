@@ -483,6 +483,7 @@ class MainWindow(QMainWindow):
         self.hole_panel.confirmed.connect(self._on_hole_confirmed)
         self.hole_panel.cancelled.connect(self._on_hole_cancelled)
         self._hole_mode = False
+        self._hole_face_shape_id = None
 
         # Thread Input Panel (für interaktive Gewinde auf zylindrischen Flächen)
         from gui.input_panels import ThreadInputPanel
@@ -542,6 +543,7 @@ class MainWindow(QMainWindow):
         self._shell_mode = False
         self._shell_target_body = None
         self._shell_opening_faces = []  # Liste der ausgewählten Öffnungs-Flächen
+        self._shell_opening_face_shape_ids = []
 
         # Surface Texture Panel (Phase 7)
         self.texture_panel = SurfaceTexturePanel(self)
@@ -2897,6 +2899,8 @@ class MainWindow(QMainWindow):
         self._hide_transform_ui()
         self._hole_mode = True
         self._hole_target_body = None  # wird beim Face-Klick gesetzt
+        self._hole_face_selector = None
+        self._hole_face_shape_id = None
         self.viewport_3d.set_hole_mode(True)
         self.hole_panel.reset()
         self.hole_panel.show_at(self.viewport_3d)
@@ -2923,6 +2927,106 @@ class MainWindow(QMainWindow):
             diameter = self.hole_panel.get_diameter()
             self.viewport_3d.show_hole_preview(pos, normal, diameter, value)
 
+    def _resolve_ocp_face_id_from_cell(self, body_id: str, cell_id: int):
+        """Ermittelt OCP-Face-Index aus einem Mesh-Cell-Index."""
+        try:
+            body_data = getattr(self.viewport_3d, "bodies", {}).get(body_id, {})
+            mesh = body_data.get("mesh") if isinstance(body_data, dict) else None
+            if mesh is None or not hasattr(mesh, "cell_data") or "face_id" not in mesh.cell_data:
+                return None
+            face_ids = mesh.cell_data["face_id"]
+            if 0 <= int(cell_id) < len(face_ids):
+                return int(face_ids[int(cell_id)])
+        except Exception as e:
+            logger.debug(f"[main_window] OCP Face-ID Lookup fehlgeschlagen: {e}")
+        return None
+
+    def _resolve_solid_face_from_pick(
+        self,
+        body,
+        body_id: str,
+        *,
+        cell_id: int = None,
+        position=None,
+        ocp_face_id: int = None,
+        center_fallback_tol: float = 5.0,
+    ):
+        """
+        Loest ein Build123d-Face aus Klickdaten auf.
+        Reihenfolge: OCP face_id/index -> Distanz-Fallback ueber Face-Center.
+        """
+        if not body or not getattr(body, "_build123d_solid", None):
+            return None, ocp_face_id
+
+        if ocp_face_id is None and cell_id is not None:
+            ocp_face_id = self._resolve_ocp_face_id_from_cell(body_id, cell_id)
+
+        if ocp_face_id is not None:
+            try:
+                from modeling.topology_indexing import face_from_index
+
+                resolved = face_from_index(body._build123d_solid, int(ocp_face_id))
+                if resolved is not None:
+                    return resolved, int(ocp_face_id)
+            except Exception as e:
+                logger.debug(f"[main_window] face_from_index fehlgeschlagen: {e}")
+
+        if position is None:
+            return None, ocp_face_id
+
+        try:
+            pos_arr = np.array(position, dtype=float)
+            best_face = None
+            best_dist = float("inf")
+            for solid_face in body._build123d_solid.faces():
+                try:
+                    fc = solid_face.center()
+                    solid_center = np.array([fc.X, fc.Y, fc.Z], dtype=float)
+                    dist = np.linalg.norm(solid_center - pos_arr)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_face = solid_face
+                except Exception:
+                    continue
+            if best_face is not None and best_dist < center_fallback_tol:
+                return best_face, ocp_face_id
+        except Exception as e:
+            logger.debug(f"[main_window] Face-Center Fallback fehlgeschlagen: {e}")
+
+        return None, ocp_face_id
+
+    def _find_or_register_face_shape_id(self, body, face, *, local_index: int = 0):
+        """Sucht eine bestehende Face-ShapeID oder registriert sie im ShapeNamingService."""
+        if not body or face is None or not body._document or not hasattr(body._document, "_shape_naming_service"):
+            return None
+
+        service = body._document._shape_naming_service
+        try:
+            shape_id = service.find_shape_id_by_face(face)
+            if shape_id is not None:
+                return shape_id
+        except Exception as e:
+            logger.debug(f"[main_window] ShapeID Lookup fehlgeschlagen: {e}")
+
+        try:
+            if not hasattr(face, "wrapped"):
+                return None
+            from modeling.tnp_system import ShapeType
+
+            source_feature_id = body.features[-1].id if getattr(body, "features", None) else body.id
+            fc = face.center()
+            area = float(face.area) if hasattr(face, "area") else 0.0
+            return service.register_shape(
+                ocp_shape=face.wrapped,
+                shape_type=ShapeType.FACE,
+                feature_id=source_feature_id,
+                local_index=max(0, int(local_index)),
+                geometry_data=(fc.X, fc.Y, fc.Z, area),
+            )
+        except Exception as e:
+            logger.debug(f"[main_window] ShapeID Registrierung fehlgeschlagen: {e}")
+            return None
+
     def _on_hole_confirmed(self):
         """Hole bestätigt — Feature erstellen."""
         from modeling import HoleFeature
@@ -2944,8 +3048,6 @@ class MainWindow(QMainWindow):
         depth = self.hole_panel.get_depth()
         hole_type = self.hole_panel.get_hole_type()
 
-        from modeling.tnp_system import ShapeID, ShapeType
-        
         feature = HoleFeature(
             hole_type=hole_type,
             diameter=diameter,
@@ -2955,17 +3057,11 @@ class MainWindow(QMainWindow):
             face_selectors=[face_selector] if face_selector else [],
         )
         
-        # TNP v4.0: ShapeID für Face erstellen
-        if face_selector:
-            shape_id = ShapeID.create(
-                shape_type=ShapeType.FACE,
-                feature_id=feature.id,
-                local_index=0,
-                geometry_data=(0, 0, 0, 0)  # Placeholder
-            )
-            feature.face_shape_ids = [shape_id]
+        # TNP v4.0: ShapeID aus ShapeNamingService übernehmen
+        if self._hole_face_shape_id is not None:
+            feature.face_shape_ids = [self._hole_face_shape_id]
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v4.0: Face-ShapeID für Hole erstellt")
+                logger.debug("TNP v4.0: Hole Face-ShapeID aus ShapeNamingService übernommen")
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -2983,6 +3079,7 @@ class MainWindow(QMainWindow):
         self._hole_mode = False
         self._hole_target_body = None
         self._hole_face_selector = None
+        self._hole_face_shape_id = None
         self.viewport_3d.set_hole_mode(False)
         self.hole_panel.hide()
 
@@ -3003,45 +3100,39 @@ class MainWindow(QMainWindow):
         self.viewport_3d._hole_position = tuple(position)
         self.viewport_3d._hole_normal = tuple(normal)
         
-        # TNP-ROBUST: Erstelle GeometricFaceSelector vom Solid-Face
+        # TNP-ROBUST: GeometricFaceSelector + echte ShapeID aus aktuellem Solid.
         try:
             from modeling.geometric_selector import GeometricFaceSelector
-            import numpy as np
-            
-            # Finde das echte Face im Solid
-            position_arr = np.array(position)
-            best_face = None
-            best_dist = float('inf')
-            
-            for solid_face in body._build123d_solid.faces():
-                try:
-                    fc = solid_face.center()
-                    solid_center = np.array([fc.X, fc.Y, fc.Z])
-                    dist = np.linalg.norm(solid_center - position_arr)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_face = solid_face
-                except Exception as e:
-                    logger.debug(f"[main_window] Hole Face-Selektor Fehler: {e}")
-                    continue
-            
-            if best_face and best_dist < 5.0:
+
+            best_face, ocp_face_id = self._resolve_solid_face_from_pick(
+                body,
+                body.id,
+                cell_id=cell_id,
+                position=position,
+            )
+            if best_face is not None:
                 geo_selector = GeometricFaceSelector.from_face(best_face)
                 self._hole_face_selector = geo_selector.to_dict()
+                self._hole_face_shape_id = self._find_or_register_face_shape_id(
+                    body,
+                    best_face,
+                    local_index=ocp_face_id if ocp_face_id is not None else 0,
+                )
                 logger.debug(f"Hole: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
             else:
-                # Fallback
                 self._hole_face_selector = {
                     "center": list(position),
                     "normal": list(normal),
                     "area": 0.0,
                     "surface_type": "unknown",
-                    "tolerance": 10.0
+                    "tolerance": 10.0,
                 }
-                logger.warning(f"Hole: Konnte Face nicht finden, verwende Fallback")
+                self._hole_face_shape_id = None
+                logger.warning("Hole: Konnte Face nicht finden, verwende Fallback")
         except Exception as e:
             logger.warning(f"Hole: Konnte GeometricFaceSelector nicht erstellen: {e}")
             self._hole_face_selector = None
+            self._hole_face_shape_id = None
 
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
@@ -4145,71 +4236,63 @@ class MainWindow(QMainWindow):
 
         # TNP-ROBUST: Erstelle GeometricFaceSelectors für jedes Face
         face_selectors = []
-        for face_data in faces:
+        face_shape_ids = []
+        for idx, face_data in enumerate(faces):
             try:
-                # Berechne Face-Center aus den Daten
-                mesh = face_data.get('mesh')
-                cell_ids = face_data.get('cell_ids', [])
-                normal = face_data.get('normal', (0, 0, 1))
-                
-                if mesh and cell_ids and body._build123d_solid:
-                    # Berechne Center aus Mesh-Zellen
-                    cell_centers = mesh.cell_centers().points
-                    face_centers = cell_centers[cell_ids]
-                    center = np.mean(face_centers, axis=0)
-                    
-                    # Finde das echte Face im Solid
-                    best_face = None
-                    best_dist = float('inf')
-                    for solid_face in body._build123d_solid.faces():
-                        try:
-                            fc = solid_face.center()
-                            solid_center = np.array([fc.X, fc.Y, fc.Z])
-                            dist = np.linalg.norm(solid_center - center)
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_face = solid_face
-                        except Exception as e:
-                            logger.debug(f"[main_window] Boolean Face-Selektor Fehler: {e}")
-                            continue
-                    
-                    if best_face and best_dist < 5.0:
-                        geo_selector = GeometricFaceSelector.from_face(best_face)
-                        face_selectors.append(geo_selector.to_dict())
-                    else:
-                        # Fallback
-                        face_selectors.append({
+                normal = face_data.get("normal", (0, 0, 1))
+                center = face_data.get("center_3d", face_data.get("center", (0.0, 0.0, 0.0)))
+
+                cell_ids = face_data.get("cell_ids", []) or []
+                candidate_cell_id = int(cell_ids[0]) if cell_ids else None
+
+                explicit_face_id = face_data.get("face_id")
+                explicit_face_id = int(explicit_face_id) if explicit_face_id is not None else None
+
+                best_face, resolved_face_id = self._resolve_solid_face_from_pick(
+                    body,
+                    body.id,
+                    cell_id=candidate_cell_id,
+                    position=center,
+                    ocp_face_id=explicit_face_id,
+                )
+
+                if best_face is not None:
+                    geo_selector = GeometricFaceSelector.from_face(best_face)
+                    face_selectors.append(geo_selector.to_dict())
+                    shape_id = self._find_or_register_face_shape_id(
+                        body,
+                        best_face,
+                        local_index=resolved_face_id if resolved_face_id is not None else idx,
+                    )
+                    if shape_id is not None:
+                        face_shape_ids.append(shape_id)
+                else:
+                    face_selectors.append(
+                        {
                             "center": list(center),
                             "normal": list(normal),
                             "area": 0.0,
                             "surface_type": "unknown",
-                            "tolerance": 10.0
-                        })
+                            "tolerance": 10.0,
+                        }
+                    )
             except Exception as e:
-                logger.warning(f"Draft: Konnte Face-Selector nicht erstellen: {e}")
+                logger.warning(f"Draft: Konnte Face-Referenz nicht erstellen: {e}")
                 continue
 
-        from modeling.tnp_system import ShapeID, ShapeType
-        
         feature = DraftFeature(
             draft_angle=angle,
             pull_direction=pull_dir,
             face_selectors=face_selectors,
         )
         
-        # TNP v4.0: ShapeIDs für Faces erstellen
-        face_shape_ids = []
-        for i, _ in enumerate(face_selectors):
-            shape_id = ShapeID.create(
-                shape_type=ShapeType.FACE,
-                feature_id=feature.id,
-                local_index=i,
-                geometry_data=(0, 0, 0, 0)  # Placeholder
-            )
-            face_shape_ids.append(shape_id)
-        feature.face_shape_ids = face_shape_ids
+        if face_shape_ids:
+            feature.face_shape_ids = face_shape_ids
         if is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Draft erstellt")
+            logger.debug(
+                f"TNP v4.0: Draft-Referenzen vorbereitet "
+                f"(selectors={len(face_selectors)}, shape_ids={len(face_shape_ids)})"
+            )
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -8656,6 +8739,7 @@ class MainWindow(QMainWindow):
         self._shell_mode = True
         self._shell_target_body = body
         self._shell_opening_faces = []
+        self._shell_opening_face_shape_ids = []
         self._pending_shell_mode = False
 
         # WICHTIG: Face-Detection aktivieren damit Flächen wählbar sind
@@ -8693,16 +8777,15 @@ class MainWindow(QMainWindow):
             logger.warning(f"Shell: Nur Body-Flächen erlaubt, aber domain_type={face.domain_type}")
             return
 
-        # TNP-ROBUST: Erstelle GeometricFaceSelector vom Solid-Face
+        # TNP-v4: Face indexbasiert auflösen (ocp_face_id), dann Geometric-Fallback.
         try:
             from modeling.geometric_selector import GeometricFaceSelector
-            
-            # Finde das echte Face im Solid
+
             body = self._shell_target_body
             if not body or not body._build123d_solid:
                 return
-                
-            # Berechne Face-Center für Matching
+
+            # Face-Center als Fallback-Punkt
             face_center = None
             if face.shapely_poly:
                 centroid = face.shapely_poly.centroid
@@ -8715,29 +8798,24 @@ class MainWindow(QMainWindow):
             else:
                 logger.warning(f"Shell: Kann Face-Center nicht bestimmen")
                 return
-            
-            # Finde das Face im Solid
-            best_face = None
-            best_dist = float('inf')
-            for solid_face in body._build123d_solid.faces():
-                try:
-                    fc = solid_face.center()
-                    solid_center = np.array([fc.X, fc.Y, fc.Z])
-                    dist = np.linalg.norm(solid_center - face_center)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_face = solid_face
-                except Exception as e:
-                    logger.debug(f"[main_window] Shell Face-Selektor Fehler: {e}")
-                    continue
-            
-            if best_face and best_dist < 5.0:
-                # Erstelle GeometricFaceSelector
+
+            best_face, resolved_face_id = self._resolve_solid_face_from_pick(
+                body,
+                body.id,
+                position=face_center,
+                ocp_face_id=getattr(face, "ocp_face_id", None),
+            )
+
+            if best_face is not None:
                 geo_selector = GeometricFaceSelector.from_face(best_face)
                 face_selector = geo_selector.to_dict()
+                face_shape_id = self._find_or_register_face_shape_id(
+                    body,
+                    best_face,
+                    local_index=resolved_face_id if resolved_face_id is not None else 0,
+                )
                 logger.debug(f"Shell: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
             else:
-                # Fallback: Einfacher Dict
                 face_selector = {
                     "center": list(face_center),
                     "normal": list(face.plane_normal),
@@ -8745,8 +8823,9 @@ class MainWindow(QMainWindow):
                     "surface_type": "unknown",
                     "tolerance": 10.0
                 }
+                face_shape_id = None
                 logger.warning(f"Shell: Konnte Face nicht finden, verwende Fallback")
-                
+                 
         except Exception as e:
             logger.warning(f"Shell: Konnte GeometricFaceSelector nicht erstellen: {e}")
             return
@@ -8759,12 +8838,15 @@ class MainWindow(QMainWindow):
             if np.linalg.norm(existing_center - center_arr) < 0.1:
                 # Bereits ausgewählt → entfernen
                 self._shell_opening_faces.pop(i)
+                if i < len(self._shell_opening_face_shape_ids):
+                    self._shell_opening_face_shape_ids.pop(i)
                 already_selected = True
                 logger.info(f"Shell: Fläche entfernt ({len(self._shell_opening_faces)} Öffnungen)")
                 break
 
         if not already_selected:
             self._shell_opening_faces.append(face_selector)
+            self._shell_opening_face_shape_ids.append(face_shape_id)
             self.shell_panel.add_opening_face(face_selector)
             logger.info(f"Shell: Fläche hinzugefügt ({len(self._shell_opening_faces)} Öffnungen)")
 
@@ -8796,30 +8878,8 @@ class MainWindow(QMainWindow):
                 opening_face_selectors=self._shell_opening_faces.copy()
             )
 
-            # TNP v4.0: Existierende ShapeIDs für die Faces finden
-            face_shape_ids = []
-            if body._build123d_solid and body._document and hasattr(body._document, '_shape_naming_service'):
-                service = body._document._shape_naming_service
-                for selector_dict in self._shell_opening_faces:
-                    center = np.array(selector_dict.get("center", [0, 0, 0]))
-                    best_face = None
-                    best_dist = float('inf')
-                    for solid_face in body._build123d_solid.faces():
-                        try:
-                            fc = solid_face.center()
-                            d = np.linalg.norm(center - np.array([fc.X, fc.Y, fc.Z]))
-                            if d < best_dist:
-                                best_dist = d
-                                best_face = solid_face
-                        except Exception:
-                            continue
-                    if best_face and best_dist < 5.0:
-                        shape_id = service.find_shape_id_by_face(best_face)
-                        if shape_id:
-                            face_shape_ids.append(shape_id)
-                            if is_enabled("tnp_debug_logging"):
-                                logger.debug(f"TNP v4.0: ShapeID für Shell-Face gefunden: {shape_id.uuid[:8]}")
-
+            # TNP-v4: ShapeIDs aus der Face-Auswahl übernehmen (bereits beim Klick aufgelöst).
+            face_shape_ids = [sid for sid in self._shell_opening_face_shape_ids if sid is not None]
             shell_feature.face_shape_ids = face_shape_ids
             if is_enabled("tnp_debug_logging"):
                 logger.debug(f"TNP v4.0: {len(face_shape_ids)}/{len(self._shell_opening_faces)} Face-ShapeIDs für Shell gefunden")
@@ -8868,6 +8928,7 @@ class MainWindow(QMainWindow):
         self._shell_mode = False
         self._shell_target_body = None
         self._shell_opening_faces = []
+        self._shell_opening_face_shape_ids = []
         self.shell_panel.hide()
 
         # Face-Detection deaktivieren
