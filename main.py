@@ -52,6 +52,19 @@ def main():
     splash.set_progress(70, "Initializing GUI...")
     from gui.main_window import MainWindow
 
+    # Sprachauswahl beim ersten Start
+    from i18n import is_language_configured
+    if not is_language_configured():
+        splash.set_progress(80, "First start setup...")
+        splash.hide()
+        app.processEvents()
+
+        from gui.language_dialog import ask_language_on_first_start
+        ask_language_on_first_start()
+
+        splash.show()
+        app.processEvents()
+
     splash.set_progress(85, "Creating main window...")
     window = MainWindow()
 

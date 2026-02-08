@@ -90,6 +90,11 @@ def get_language() -> str:
     return _current_language
 
 
+def is_language_configured() -> bool:
+    """Prüft ob der User bereits eine Sprache gewählt hat (config.json existiert)."""
+    return os.path.exists(_config_file)
+
+
 def get_available_languages() -> list:
     """Gibt alle verfügbaren Sprachen zurück"""
     languages = []
