@@ -677,6 +677,28 @@ def test_resolve_edges_tnp_fillet_requires_shape_index_consistency(monkeypatch):
     assert resolved == []
 
 
+def test_resolve_edges_tnp_uses_indices_when_shapeid_local_index_is_stale(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("fillet_edge_shape_local_index_stale")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = FilletFeature(radius=1.0, edge_indices=[0])
+    feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_edge_stale_local", 999)]
+
+    def _fail_resolve(*_args, **_kwargs):
+        raise AssertionError("ShapeID resolution should not run for stale local_index when edge_indices are valid")
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fail_resolve)
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved) == 1
+    assert feature.edge_indices == [0]
+
+
 def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index
@@ -1812,6 +1834,29 @@ def test_tnp_health_report_uses_status_details_refs_when_topology_fields_missing
     assert feature_report["status_details"]["code"] == "operation_failed"
     assert feature_report["refs"][0]["method"] == "status_details"
     assert feature_report["refs"][0]["label"] == "face_indices"
+
+
+def test_tnp_health_report_feature_error_status_overrides_reference_probe():
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("tnp_health_feature_status_truth")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    texture = SurfaceTextureFeature(face_indices=[0], face_selectors=[_face_selector()])
+    texture.status = "ERROR"
+    texture.status_message = "synthetic rebuild error"
+    texture.status_details = {"code": "operation_failed"}
+    body.features = [texture]
+
+    report = doc._shape_naming_service.get_health_report(body)
+
+    assert report["status"] == "broken"
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "broken"
+    assert feature_report["broken"] >= 1
+    assert any(ref.get("method") == "feature_status" for ref in feature_report.get("refs", []))
 
 
 def test_tnp_health_report_texture_indices_stable_after_undo_redo_cycle():

@@ -586,6 +586,45 @@ class ShapeNamingService:
                     )
             return entries
 
+        def _enforce_feature_status_truth(feat: Any, feat_report: Dict[str, Any]) -> None:
+            """
+            Force health semantics to follow rebuild truth for feature-level status.
+
+            If a feature ended in ERROR/WARNING, report must reflect this even when
+            reference probing still resolves stale indices.
+            """
+            details = _status_details_dict(feat)
+            diag_status = _status_diag_level(feat, details)
+
+            if diag_status == "ok":
+                return
+
+            # If refs already indicate same/worse severity, do not duplicate.
+            if diag_status == "broken" and feat_report.get("broken", 0) > 0:
+                return
+            if diag_status == "fallback" and (
+                feat_report.get("fallback", 0) > 0 or feat_report.get("broken", 0) > 0
+            ):
+                return
+
+            # Add synthetic truth-ref so UI and totals stay consistent.
+            feat_report["refs"].append(
+                {
+                    "kind": "Ref",
+                    "status": diag_status,
+                    "method": "feature_status",
+                    "label": "feature_status",
+                    "value": str(getattr(feat, "status", "") or ""),
+                }
+            )
+
+            if diag_status == "broken":
+                feat_report["broken"] = int(feat_report.get("broken", 0)) + 1
+                report["broken"] = int(report.get("broken", 0)) + 1
+            elif diag_status == "fallback":
+                feat_report["fallback"] = int(feat_report.get("fallback", 0)) + 1
+                report["fallback"] = int(report.get("fallback", 0)) + 1
+
         def _collect_ref_groups(feat: Any) -> List[Tuple[str, List[Any], List[Optional[int]]]]:
             groups: List[Tuple[str, List[Any], List[Optional[int]]]] = []
 
@@ -714,6 +753,7 @@ class ShapeNamingService:
                                 "value": ref.get("value"),
                             }
                         )
+                _enforce_feature_status_truth(feat, feat_report)
                 if feat_report['broken'] > 0:
                     feat_report['status'] = 'broken'
                 elif feat_report['fallback'] > 0:
@@ -848,6 +888,7 @@ class ShapeNamingService:
                             'method': method
                         })
 
+            _enforce_feature_status_truth(feat, feat_report)
             if feat_report['broken'] > 0:
                 feat_report['status'] = 'broken'
             elif feat_report['fallback'] > 0:

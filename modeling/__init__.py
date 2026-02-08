@@ -6647,11 +6647,21 @@ class Body:
                     logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in edge_shape_ids if hasattr(sid, "uuid"))
+        shape_ids_index_aligned = True
+        if expected_shape_refs > 0 and valid_edge_indices:
+            for sid in edge_shape_ids:
+                if not hasattr(sid, "uuid"):
+                    continue
+                local_idx = getattr(sid, "local_index", None)
+                if not isinstance(local_idx, int) or not (0 <= int(local_idx) < len(valid_edge_indices)):
+                    shape_ids_index_aligned = False
+                    break
         strict_dual_edge_refs = (
             strict_edge_feature
             and expected_shape_refs > 0
             and bool(valid_edge_indices)
             and len(valid_edge_indices) == expected_shape_refs
+            and shape_ids_index_aligned
         )
 
         # Bei gesetzten edge_indices: index-first. Sonst ShapeID-first.
@@ -10362,6 +10372,97 @@ class Document:
             )
         return migrated_features
 
+    def _migrate_loaded_edge_refs_to_shape_ids(self) -> int:
+        """
+        Runtime migration after load:
+        synchronizes edge_shape_ids from stable edge_indices for strict edge features.
+
+        Hintergrund:
+        Nach Save/Load können gespeicherte edge_shape_ids stale sein, obwohl edge_indices
+        weiterhin korrekt auflösbar sind. Für Fillet/Chamfer sollen shape_ids danach
+        auf die aktuell indexaufgelösten Kanten zeigen.
+        """
+        service = getattr(self, "_shape_naming_service", None)
+        if service is None:
+            return 0
+
+        try:
+            from modeling.topology_indexing import edge_from_index
+            from modeling.tnp_system import ShapeType
+        except Exception:
+            return 0
+
+        migrated_features = 0
+
+        def _as_indices(raw_values) -> List[int]:
+            valid: List[int] = []
+            for raw_idx in list(raw_values or []):
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    continue
+                if idx < 0:
+                    continue
+                if idx not in valid:
+                    valid.append(idx)
+            return valid
+
+        for body in self.get_all_bodies():
+            solid = getattr(body, "_build123d_solid", None)
+            if solid is None:
+                continue
+
+            for feature in body.features:
+                if not isinstance(feature, (FilletFeature, ChamferFeature)):
+                    continue
+
+                edge_indices = _as_indices(getattr(feature, "edge_indices", []))
+                if not edge_indices:
+                    continue
+
+                new_shape_ids = []
+                for local_idx, edge_idx in enumerate(edge_indices):
+                    try:
+                        edge = edge_from_index(solid, int(edge_idx))
+                    except Exception:
+                        edge = None
+                    if edge is None:
+                        continue
+
+                    try:
+                        shape_id = service.find_shape_id_by_edge(edge)
+                        if shape_id is None and hasattr(edge, "wrapped"):
+                            ec = edge.center()
+                            edge_len = edge.length if hasattr(edge, "length") else 0.0
+                            shape_id = service.register_shape(
+                                ocp_shape=edge.wrapped,
+                                shape_type=ShapeType.EDGE,
+                                feature_id=feature.id,
+                                local_index=local_idx,
+                                geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
+                            )
+                        if shape_id is not None:
+                            new_shape_ids.append(shape_id)
+                    except Exception:
+                        continue
+
+                if len(new_shape_ids) != len(edge_indices):
+                    continue
+
+                old_ids = list(getattr(feature, "edge_shape_ids", []) or [])
+                old_tokens = [sid.uuid for sid in old_ids if hasattr(sid, "uuid")]
+                new_tokens = [sid.uuid for sid in new_shape_ids if hasattr(sid, "uuid")]
+                if old_tokens != new_tokens:
+                    feature.edge_shape_ids = new_shape_ids
+                    migrated_features += 1
+                    body.invalidate_mesh()
+
+        if migrated_features > 0:
+            logger.info(
+                f"[MIGRATION] Edge ShapeIDs aus edge_indices synchronisiert: {migrated_features}"
+            )
+        return migrated_features
+
     def _rehydrate_shape_naming_service_from_loaded_bodies(self) -> int:
         """
         Seed ShapeNamingService after load from already vorhandenen topology indices.
@@ -10572,12 +10673,13 @@ class Document:
             migrated_nsided = doc._migrate_loaded_nsided_features_to_indices()
             migrated_face_refs = doc._migrate_loaded_face_refs_to_indices()
             seeded_shape_refs = doc._rehydrate_shape_naming_service_from_loaded_bodies()
+            migrated_edge_shape_refs = doc._migrate_loaded_edge_refs_to_shape_ids()
             if seeded_shape_refs > 0 and is_enabled("tnp_debug_logging"):
                 logger.debug(
                     f"[MIGRATION] ShapeNamingService Rehydration: {seeded_shape_refs} mappings"
                 )
 
-            migrated_total = migrated_nsided + migrated_face_refs
+            migrated_total = migrated_nsided + migrated_face_refs + migrated_edge_shape_refs
             if migrated_total > 0:
                 import shutil
 
@@ -10592,7 +10694,8 @@ class Document:
                 if doc.save_project(str(path)):
                     logger.info(
                         "[MIGRATION] Projektdatei nach Referenz-Migration aktualisiert: "
-                        f"{path} (nsided={migrated_nsided}, face_refs={migrated_face_refs})"
+                        f"{path} (nsided={migrated_nsided}, face_refs={migrated_face_refs}, "
+                        f"edge_shape_refs={migrated_edge_shape_refs})"
                     )
                 else:
                     logger.warning(

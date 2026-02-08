@@ -42,6 +42,7 @@ METHOD_LABELS = {
     'brepfeat': tr('BRepFeat'),
     'geometric': tr('Geometrisch'),
     'rebuild': tr('Rebuild OK'),
+    'feature_status': tr('Feature-Status'),
     'unresolved': tr('Nicht gefunden'),
 }
 
