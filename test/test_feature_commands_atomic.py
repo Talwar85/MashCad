@@ -3,7 +3,9 @@ from gui.commands.feature_commands import (
     DeleteFeatureCommand,
     EditFeatureCommand,
 )
+from gui.commands.transform_command import TransformCommand
 from modeling import Body, ExtrudeFeature, PrimitiveFeature
+from modeling import TransformFeature
 
 
 class _DummyBrowser:
@@ -101,3 +103,45 @@ def test_edit_feature_command_redo_rolls_back_and_restores_old_params(monkeypatc
 
     assert feature.length == old_length
     assert getattr(feature, "status", "") != "ERROR"
+
+
+def test_transform_command_redo_rolls_back_on_transform_error(monkeypatch):
+    body = _make_body_with_box("transform_redo_rollback")
+    ui = _DummyMainWindow()
+    feature = TransformFeature(mode="move", data={"translation": [5.0, 0.0, 0.0]})
+    before_feature_ids = [feat.id for feat in body.features]
+    before_solid = body._build123d_solid
+
+    def _failing_transform(_solid, _feature):
+        raise RuntimeError("synthetic transform failure")
+
+    monkeypatch.setattr(body, "_apply_transform_feature", _failing_transform)
+
+    cmd = TransformCommand(body, feature, ui)
+    cmd.redo()
+
+    assert [feat.id for feat in body.features] == before_feature_ids
+    assert feature not in body.features
+    assert body._build123d_solid is before_solid
+
+
+def test_transform_command_undo_rolls_back_on_inverse_failure(monkeypatch):
+    body = _make_body_with_box("transform_undo_rollback")
+    ui = _DummyMainWindow()
+    feature = TransformFeature(mode="move", data={"translation": [3.0, 0.0, 0.0]})
+    cmd = TransformCommand(body, feature, ui)
+    cmd.redo()
+
+    assert feature in body.features
+    after_redo_feature_ids = [feat.id for feat in body.features]
+    after_redo_solid = body._build123d_solid
+
+    def _failing_inverse(_solid, _feature):
+        raise RuntimeError("synthetic inverse failure")
+
+    monkeypatch.setattr(body, "_apply_transform_feature", _failing_inverse)
+    cmd.undo()
+
+    assert [feat.id for feat in body.features] == after_redo_feature_ids
+    assert feature in body.features
+    assert body._build123d_solid is after_redo_solid

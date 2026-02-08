@@ -1,326 +1,191 @@
 """
 MashCad - Transform Command for Undo/Redo
-Implements QUndoCommand for undoable transform operations
+Implements QUndoCommand for undoable transform operations.
 """
+
+from copy import deepcopy
 
 from PySide6.QtGui import QUndoCommand
 from loguru import logger
 
+from .feature_commands import (
+    _capture_body_state,
+    _has_transaction_regression,
+    _restore_body_state,
+    _update_body_ui,
+)
+
 
 class TransformCommand(QUndoCommand):
-    """
-    Undoable transform operation that adds/removes TransformFeature.
-
-    Features:
-    - Adds feature on redo()
-    - Removes feature on undo()
-    - Triggers body rebuild automatically
-    - Integrates with Qt's QUndoStack
-    """
+    """Undoable transform operation that adds/removes TransformFeature atomically."""
 
     def __init__(self, body, feature, main_window):
-        """
-        Args:
-            body: Body instance to transform
-            feature: TransformFeature to add/remove
-            main_window: MainWindow reference for UI updates
-        """
         super().__init__(f"Transform: {feature.mode.capitalize()}")
         self.body = body
         self.feature = feature
         self.main_window = main_window
-        self.old_feature_count = len(body.features)
 
     def _update_gizmo_position(self):
-        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
-        viewport = self.main_window.viewport_3d
-        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
-            if hasattr(viewport, 'show_transform_gizmo'):
-                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
+        viewport = getattr(self.main_window, "viewport_3d", None)
+        if viewport is None:
+            return
+        try:
+            if hasattr(viewport, "is_transform_active") and viewport.is_transform_active():
+                if hasattr(viewport, "show_transform_gizmo"):
+                    viewport.show_transform_gizmo(self.body.id, force_refresh=True)
+        except Exception:
+            # Gizmo update must not break command consistency.
+            pass
+
+    def _apply_new_solid(self, new_solid):
+        self.body._build123d_solid = new_solid
+        if hasattr(new_solid, "wrapped"):
+            self.body.shape = new_solid.wrapped
+        try:
+            self.body.invalidate_mesh()
+        except Exception:
+            pass
+        self.body._update_mesh_from_solid(new_solid)
+
+    def _set_feature_ok(self):
+        self.feature.status = "OK"
+        self.feature.status_message = ""
+        self.feature.status_details = {}
+
+    def _set_feature_error(self, message, details=None):
+        self.feature.status = "ERROR"
+        self.feature.status_message = message
+        self.feature.status_details = details or {"code": "operation_failed"}
 
     def redo(self):
         """
-        Apply transform by adding feature to body.
-        Called automatically when command is pushed to stack.
+        Apply transform by adding feature and transforming current solid.
 
-        WICHTIG: Transform-Features werden NICHT über _rebuild() angewendet,
-        sondern direkt auf das aktuelle Solid. Das verhindert, dass vorherige
-        Features (z.B. Extrudes mit precalculated_polys) fehlschlagen.
+        Transform is applied incrementally (without full rebuild) to avoid
+        re-evaluating unrelated feature chain steps for simple move/rotate/scale.
         """
         from modeling.cad_tessellator import CADTessellator
 
-        logger.info(f"🔧 TransformCommand.redo() CALLED")
-        logger.info(f"   Body: {self.body.name}")
-        logger.info(f"   Feature: {self.feature.name}")
-        logger.info(f"   Mode: {self.feature.mode}")
-        logger.info(f"   Data: {self.feature.data}")
+        tx_state = _capture_body_state(self.body)
+        changed = False
+        try:
+            if self.feature not in self.body.features:
+                self.body.features.append(self.feature)
+                changed = True
 
-        # Only add if not already added
-        if len(self.body.features) == self.old_feature_count:
-            # Feature zur History hinzufügen (OHNE _rebuild!)
-            self.body.features.append(self.feature)
-            logger.info(f"   ✅ Feature added to body.features")
+            if changed:
+                current = getattr(self.body, "_build123d_solid", None)
+                if current is None:
+                    raise ValueError("Transform redo failed: body has no solid")
 
-            # Transform direkt auf aktuelles Solid anwenden
-            try:
-                logger.info(f"   🔨 Calling _apply_transform_feature...")
-                new_solid = self.body._apply_transform_feature(
-                    self.body._build123d_solid,
-                    self.feature
-                )
-                logger.info(f"   Transform result: {new_solid is not None}")
+                new_solid = self.body._apply_transform_feature(current, self.feature)
+                if new_solid is None:
+                    raise ValueError("Transform redo failed: _apply_transform_feature returned None")
 
-                if new_solid:
-                    logger.info(f"   ✅ Transform successful - updating body")
-                    self.body._build123d_solid = new_solid
-                    if hasattr(new_solid, 'wrapped'):
-                        self.body.shape = new_solid.wrapped
+                self._apply_new_solid(new_solid)
+                self._set_feature_ok()
 
-                    # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
-                    # Transform creates NEW solid which may reuse Python IDs
-                    CADTessellator.notify_body_changed()
-                    logger.debug(f"🔄 Cache komplett gelöscht nach Transform")
-                    # Mesh aktualisieren
-                    logger.info(f"   🔄 Updating mesh from solid...")
-                    self.body._update_mesh_from_solid(new_solid)
-                    self.feature.status = "OK"
-                    logger.success(f"✅ Transform direkt angewendet: {self.feature.mode}")
-                else:
-                    self.feature.status = "ERROR"
-                    logger.error("❌ Transform returned None")
-            except Exception as e:
-                self.feature.status = "ERROR"
-                logger.error(f"Transform Error: {e}")
+                regressed, reason = _has_transaction_regression(self.body, tx_state)
+                if regressed:
+                    raise ValueError(f"Transform redo regression: {reason}")
 
-            # UI Update (IMMER ausführen, auch bei Erfolg!)
-            logger.info(f"   🖼️  Updating UI (viewport + browser)...")
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
-            logger.info(f"   ✅ UI updated")
-
-            # Gizmo an neue Position verschieben falls aktiv
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
             self._update_gizmo_position()
-            logger.info(f"✅ TransformCommand.redo() FINISHED")
+            logger.debug(f"Redo: Transform {self.feature.mode} on {self.body.name}")
+        except Exception as e:
+            logger.error(f"Transform redo failed ({self.feature.mode}): {e}")
+            self._set_feature_error(str(e))
+            _restore_body_state(self.body, tx_state)
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
+            self._update_gizmo_position()
 
     def undo(self):
-        """
-        Revert transform by removing feature from body.
-        Called when user presses Ctrl+Z.
-
-        WICHTIG: Wendet die INVERSE Transform-Operation an, statt _rebuild().
-        Das verhindert Fehler bei vorherigen Extrude-Features.
-        """
+        """Revert transform by removing feature and applying inverse transform."""
         from modeling.cad_tessellator import CADTessellator
 
-        # Only remove if it was added
-        if len(self.body.features) > self.old_feature_count:
-            removed_feature = self.body.features.pop()
-            logger.debug(f"Undo: Removed {removed_feature.name} from {self.body.name}")
+        tx_state = _capture_body_state(self.body)
+        changed = False
+        try:
+            if self.feature in self.body.features:
+                self.body.features.remove(self.feature)
+                changed = True
 
-            # Inverse Transform anwenden statt _rebuild()
-            try:
-                # Erstelle inverse TransformFeature
-                inverse_feature = self._create_inverse_transform(removed_feature)
-                if inverse_feature:
-                    new_solid = self.body._apply_transform_feature(
-                        self.body._build123d_solid,
-                        inverse_feature
-                    )
-                    if new_solid:
-                        self.body._build123d_solid = new_solid
-                        if hasattr(new_solid, 'wrapped'):
-                            self.body.shape = new_solid.wrapped
+            if changed:
+                current = getattr(self.body, "_build123d_solid", None)
+                if current is None:
+                    raise ValueError("Transform undo failed: body has no solid")
 
-                        # ✅ CRITICAL FIX: Clear ENTIRE cache after transform
-                        CADTessellator.notify_body_changed()
-                        logger.debug(f"🔄 Cache komplett gelöscht nach Inverse Transform")
-
-                        self.body._update_mesh_from_solid(new_solid)
-                        logger.success(f"Undo: Inverse Transform angewendet")
-                    else:
-                        # Fallback zu _rebuild() wenn inverse Transform fehlschlägt
-                        logger.warning("Inverse Transform failed, using _rebuild()")
-                        self.body._rebuild()
+                inverse_feature = self._create_inverse_transform(self.feature)
+                if inverse_feature is not None:
+                    new_solid = self.body._apply_transform_feature(current, inverse_feature)
+                    if new_solid is None:
+                        raise ValueError("Transform undo failed: inverse transform returned None")
+                    self._apply_new_solid(new_solid)
                 else:
-                    # Fallback für unbekannte Transform-Typen
+                    # Fallback only for non-invertible transforms.
                     self.body._rebuild()
-            except Exception as e:
-                logger.error(f"Undo Error: {e}, using _rebuild()")
-                self.body._rebuild()
 
-            # UI Update (IMMER ausführen!)
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
+                regressed, reason = _has_transaction_regression(self.body, tx_state)
+                if regressed:
+                    raise ValueError(f"Transform undo regression: {reason}")
 
-            # Gizmo an neue Position verschieben falls aktiv
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
+            self._update_gizmo_position()
+            logger.debug(f"Undo: Transform {self.feature.mode} on {self.body.name}")
+        except Exception as e:
+            logger.error(f"Transform undo failed ({self.feature.mode}): {e}")
+            _restore_body_state(self.body, tx_state)
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
             self._update_gizmo_position()
 
-    def _create_inverse_transform(self, feature):
-        """
-        Erstellt ein inverses TransformFeature für Undo.
-        """
+    @staticmethod
+    def _create_inverse_transform(feature):
+        """Build inverse TransformFeature for undo."""
         from modeling import TransformFeature
 
-        mode = feature.mode
-        data = feature.data
+        mode = getattr(feature, "mode", "")
+        data = deepcopy(getattr(feature, "data", {})) or {}
 
         if mode == "move":
-            # Inverse: Negative Translation
-            trans = data.get("translation", [0, 0, 0])
+            trans = list(data.get("translation", [0.0, 0.0, 0.0]))
+            while len(trans) < 3:
+                trans.append(0.0)
             return TransformFeature(
                 mode="move",
-                data={"translation": [-trans[0], -trans[1], -trans[2]]}
+                data={"translation": [-float(trans[0]), -float(trans[1]), -float(trans[2])]},
             )
 
-        elif mode == "rotate":
-            # Inverse: Negative Winkel, gleiche Achse/Center
+        if mode == "rotate":
             return TransformFeature(
                 mode="rotate",
                 data={
                     "axis": data.get("axis", "Z"),
-                    "angle": -data.get("angle", 0),
-                    "center": data.get("center", [0, 0, 0])
-                }
+                    "angle": -float(data.get("angle", 0.0)),
+                    "center": list(data.get("center", [0.0, 0.0, 0.0])),
+                },
             )
 
-        elif mode == "scale":
-            # Inverse: 1/factor, gleicher Center
-            factor = data.get("factor", 1.0)
-            if abs(factor) < 1e-6:
-                return None  # Division by zero protection
+        if mode == "scale":
+            factor = float(data.get("factor", 1.0))
+            if abs(factor) < 1e-12:
+                return None
             return TransformFeature(
                 mode="scale",
                 data={
                     "factor": 1.0 / factor,
-                    "center": data.get("center", [0, 0, 0])
-                }
+                    "center": list(data.get("center", [0.0, 0.0, 0.0])),
+                },
             )
 
-        elif mode == "mirror":
-            # Mirror ist selbst-invers (mirror mirror = original)
+        if mode == "mirror":
             return TransformFeature(
                 mode="mirror",
-                data={"plane": data.get("plane", "XY")}
+                data={"plane": data.get("plane", "XY")},
             )
 
         return None
 
-
-class DeleteFeatureCommand(QUndoCommand):
-    """
-    Undoable feature deletion.
-
-    Stores feature index and data for restoration.
-    """
-
-    def __init__(self, body, feature, feature_index, main_window):
-        super().__init__(f"Delete {feature.name}")
-        self.body = body
-        self.feature = feature
-        self.feature_index = feature_index
-        self.main_window = main_window
-
-    def _update_gizmo_position(self):
-        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
-        viewport = self.main_window.viewport_3d
-        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
-            if hasattr(viewport, 'show_transform_gizmo'):
-                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
-
-    def redo(self):
-        """Remove feature"""
-        from modeling.cad_tessellator import CADTessellator
-
-        if self.feature in self.body.features:
-            self.body.features.remove(self.feature)
-            logger.debug(f"Redo: Deleted {self.feature.name}")
-
-            # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
-            self.body._rebuild()
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
-
-    def undo(self):
-        """Restore feature at original position"""
-        from modeling.cad_tessellator import CADTessellator
-
-        if self.feature not in self.body.features:
-            # Insert at original index
-            self.body.features.insert(self.feature_index, self.feature)
-            logger.debug(f"Undo: Restored {self.feature.name}")
-
-            # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
-            self.body._rebuild()
-            self.main_window._update_body_from_build123d(
-                self.body,
-                self.body._build123d_solid
-            )
-            self.main_window.browser.refresh()
-
-            # Gizmo an neue Position verschieben falls aktiv
-            self._update_gizmo_position()
-
-
-class EditFeatureCommand(QUndoCommand):
-    """
-    Undoable feature editing.
-
-    Stores old and new data for feature.
-    """
-
-    def __init__(self, body, feature, old_data, new_data, main_window):
-        super().__init__(f"Edit {feature.name}")
-        self.body = body
-        self.feature = feature
-        self.old_data = old_data.copy()
-        self.new_data = new_data.copy()
-        self.main_window = main_window
-
-    def _update_gizmo_position(self):
-        """Aktualisiert die Gizmo-Position falls es aktiv ist"""
-        viewport = self.main_window.viewport_3d
-        if hasattr(viewport, 'is_transform_active') and viewport.is_transform_active():
-            if hasattr(viewport, 'show_transform_gizmo'):
-                viewport.show_transform_gizmo(self.body.id, force_refresh=True)
-
-    def redo(self):
-        """Apply new data"""
-        from modeling.cad_tessellator import CADTessellator
-
-        self.feature.data = self.new_data.copy()
-        logger.debug(f"Redo: Applied new data to {self.feature.name}")
-
-        # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
-        self.body._rebuild()
-        self.main_window._update_body_from_build123d(
-            self.body,
-            self.body._build123d_solid
-        )
-        self.main_window.browser.refresh()
-
-    def undo(self):
-        """Restore old data"""
-        from modeling.cad_tessellator import CADTessellator
-
-        self.feature.data = self.old_data.copy()
-        logger.debug(f"Undo: Restored old data to {self.feature.name}")
-
-        # ✅ CRITICAL FIX: Cache clearing happens inside _rebuild()
-        self.body._rebuild()
-        self.main_window._update_body_from_build123d(
-            self.body,
-            self.body._build123d_solid
-        )
-        self.main_window.browser.refresh()
-
-        # Gizmo an neue Position verschieben falls aktiv
-        self._update_gizmo_position()

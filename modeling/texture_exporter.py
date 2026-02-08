@@ -218,7 +218,12 @@ class TextureExporter:
             # solid_base=True: Keine Löcher, nur positive Erhöhungen (für Top-Faces/3D-Druck)
             # solid_base=False: Bidirektional -0.5 bis +0.5 (für Seiten/Innenflächen)
             solid_base = getattr(texture_feature, 'solid_base', True)
-            
+
+            # print_safe erzwingt solid_base — negative Displacement erzeugt Hohlräume
+            tex_params = getattr(texture_feature, 'params', {}) or {}
+            if tex_params.get('print_safe', True):
+                solid_base = True
+
             if solid_base:
                 # Verschiebe so dass Minimum bei 0 ist (alles positiv, keine Löcher)
                 # Das bedeutet: Original-Oberfläche wird zum tiefsten Punkt
