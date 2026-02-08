@@ -20,6 +20,7 @@ Datum: 2026-01-22
 """
 
 import numpy as np
+import pyvista as pv
 from typing import Dict, Tuple, Optional
 from loguru import logger
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
@@ -68,11 +69,29 @@ class SectionClipCache:
         # Cache MISS - clippen und cachen
         logger.debug(f"SectionCache MISS: body={body_id}, plane={plane}, pos={quantized_pos}")
 
-        clipped_mesh = mesh.clip(
-            normal=normal,
-            origin=origin,
-            invert=False
-        )
+        try:
+            import vtkmodules.vtkFiltersGeneral as vtk_filters
+            import vtkmodules.vtkCommonDataModel as vtk_data
+
+            plane_vtk = vtk_data.vtkPlane()
+            plane_vtk.SetOrigin(*origin)
+            plane_vtk.SetNormal(*normal)
+
+            planes = vtk_data.vtkPlaneCollection()
+            planes.AddItem(plane_vtk)
+
+            clipper = vtk_filters.vtkClipClosedSurface()
+            clipper.SetInputData(mesh)
+            clipper.SetClippingPlanes(planes)
+            clipper.SetGenerateFaces(True)
+            clipper.SetGenerateOutline(False)
+            clipper.Update()
+
+            clipped_mesh = pv.wrap(clipper.GetOutput())
+            if clipped_mesh.n_points == 0:
+                raise ValueError("Empty result")
+        except Exception:
+            clipped_mesh = mesh.clip(normal=normal, origin=origin, invert=False)
 
         # Cache speichern
         cls._cache[cache_key] = clipped_mesh

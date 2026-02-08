@@ -136,6 +136,19 @@ class BodyRenderingMixin:
             # Pfad A: Modernes PyVista Objekt
             if mesh_obj is not None:
                 has_normals = "Normals" in mesh_obj.point_data
+                if not has_normals:
+                    try:
+                        mesh_obj = mesh_obj.compute_normals(
+                            cell_normals=False,
+                            point_normals=True,
+                            split_vertices=True,
+                            feature_angle=30.0,
+                            consistent_normals=True,
+                            auto_orient_normals=True,
+                        )
+                        has_normals = True
+                    except Exception:
+                        pass
 
                 # PERFORMANCE: Actor Pooling - wiederverwendet Actor wenn möglich
                 if can_reuse_mesh and ActorPool.needs_update(n_mesh, mesh_obj):
@@ -159,11 +172,11 @@ class BodyRenderingMixin:
                         mesh_obj, color=col_rgb, name=n_mesh, show_edges=False,
                         smooth_shading=True,
                         pbr=True,
-                        metallic=0.15,
-                        roughness=0.45,
-                        diffuse=0.9,
-                        specular=0.6,
-                        specular_power=30,
+                        metallic=0.05,
+                        roughness=0.55,
+                        diffuse=0.95,
+                        specular=0.5,
+                        specular_power=40,
                         pickable=True
                     )
 
