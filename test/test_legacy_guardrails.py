@@ -135,6 +135,15 @@ RULES = [
         ],
     },
     {
+        "path": "gui/widgets/tnp_stats_panel.py",
+        "required": [
+            r"\bdef\s+_status_detail_ref_lines\(",
+            r"status_details",
+            r"TNP-Detailanzeige fehlgeschlagen",
+            r"feature_status",
+        ],
+    },
+    {
         "path": "sketcher/operations/trim.py",
         "forbidden": [
             r"\bclass\s+TrimComparisonTest\b",

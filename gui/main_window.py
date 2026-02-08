@@ -9389,6 +9389,8 @@ class MainWindow(QMainWindow):
                     if resolved_face_id is not None:
                         face_indices.append(int(resolved_face_id))
                 else:
+                    if resolved_face_id is not None:
+                        face_indices.append(int(resolved_face_id))
                     selector = {
                         "center": list(center),
                         "normal": list(normal),
@@ -9399,6 +9401,8 @@ class MainWindow(QMainWindow):
                     }
             except Exception as e:
                 logger.warning(f"Texture: Face-Referenz konnte nicht aufgelöst werden: {e}")
+                if resolved_face_id is not None:
+                    face_indices.append(int(resolved_face_id))
                 selector = {
                     "center": list(center),
                     "normal": list(normal),
@@ -10834,19 +10838,24 @@ class MainWindow(QMainWindow):
         self.viewport_3d.setCursor(Qt.ArrowCursor)
         if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
             self.viewport_3d.set_pending_transform_mode(False)
+        try:
+            body = None
+            for b in self.document.bodies:
+                if getattr(b, 'id', None) == body_id:
+                    body = b
+                    break
 
-        body = None
-        for b in self.document.bodies:
-            if getattr(b, 'id', None) == body_id:
-                body = b
-                break
-
-        if body:
-            self._update_tnp_stats(body)
-            self.statusBar().showMessage(f"TNP: {body.name}")
-        else:
-            self.tnp_stats_panel.set_picking_active(False)
-            self.statusBar().showMessage(tr("Body nicht gefunden"))
+            if body:
+                self._update_tnp_stats(body)
+                self.statusBar().showMessage(f"TNP: {body.name}")
+            else:
+                self.statusBar().showMessage(tr("Body nicht gefunden"))
+        except Exception as e:
+            logger.error(f"TNP Body-Pick fehlgeschlagen: {e}")
+            self.statusBar().showMessage(tr("TNP-Auswahl fehlgeschlagen"))
+        finally:
+            if hasattr(self, "tnp_stats_panel"):
+                self.tnp_stats_panel.set_picking_active(False)
 
     def _update_tnp_stats(self, body=None):
         """
@@ -10874,8 +10883,11 @@ class MainWindow(QMainWindow):
         try:
             self.tnp_stats_panel.update_stats(body)
         except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Stats Update fehlgeschlagen: {e}")
+            logger.error(f"TNP Stats Update fehlgeschlagen: {e}")
+            try:
+                self.tnp_stats_panel.update_stats(None)
+            except Exception:
+                pass
 
     def _move_body(self):
         body = self._get_active_body()

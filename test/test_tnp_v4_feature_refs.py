@@ -13,6 +13,7 @@ from modeling import (
     SurfaceTextureFeature,
     SweepFeature,
     ThreadFeature,
+    PrimitiveFeature,
 )
 from modeling.geometric_selector import GeometricEdgeSelector
 from modeling.tnp_system import ShapeID, ShapeType
@@ -1254,3 +1255,74 @@ def test_tnp_health_report_shapeid_fallback_is_quiet(monkeypatch):
     feature_report = report["features"][0]
     assert feature_report["broken"] == 1
     assert feature_report["refs"][0]["method"] == "unresolved"
+
+
+def test_tnp_health_report_uses_status_details_refs_when_topology_fields_missing():
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("tnp_health_status_details_refs")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    texture = SurfaceTextureFeature(face_selectors=[_face_selector()])
+    texture.status = "ERROR"
+    texture.status_message = "Texture-Referenz nicht gefunden"
+    texture.status_details = {
+        "code": "operation_failed",
+        "hint": "Face neu wählen",
+        "refs": {
+            "face_indices": [999],
+        },
+    }
+    body.features = [texture]
+
+    report = doc._shape_naming_service.get_health_report(body)
+
+    assert report["status"] == "broken"
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "broken"
+    assert feature_report["broken"] == 1
+    assert feature_report["status_message"] == "Texture-Referenz nicht gefunden"
+    assert feature_report["status_details"]["code"] == "operation_failed"
+    assert feature_report["refs"][0]["method"] == "status_details"
+    assert feature_report["refs"][0]["label"] == "face_indices"
+
+
+def test_tnp_health_report_texture_indices_stable_after_undo_redo_cycle():
+    doc = Document()
+    body = Body("tnp_health_texture_undo_redo")
+    doc.add_body(body)
+
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0))
+
+    texture = SurfaceTextureFeature(
+        face_indices=[0, 1],
+        face_selectors=[_face_selector(), _face_selector()],
+    )
+
+    body.add_feature(texture)
+    report_after_add = doc._shape_naming_service.get_health_report(body)
+    texture_after_add = next(
+        feat for feat in report_after_add["features"] if feat.get("name") == texture.name
+    )
+    assert texture_after_add["broken"] == 0
+    assert texture_after_add["ok"] >= 2
+
+    # Undo simulieren (Feature entfernen + Rebuild)
+    body.features.remove(texture)
+    body._rebuild()
+
+    # Redo simulieren (gleiches Feature wieder hinzufügen + Rebuild)
+    body.features.append(texture)
+    body._rebuild()
+
+    report_after_redo = doc._shape_naming_service.get_health_report(body)
+    texture_after_redo = next(
+        feat for feat in report_after_redo["features"] if feat.get("name") == texture.name
+    )
+
+    assert texture_after_redo["status"] == "ok"
+    assert texture_after_redo["broken"] == 0
+    assert texture_after_redo["ok"] >= 2
+    assert all(ref.get("method") == "index" for ref in texture_after_redo.get("refs", []))

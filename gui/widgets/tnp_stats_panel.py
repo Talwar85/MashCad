@@ -216,6 +216,51 @@ class TNPStatsPanel(QWidget):
         self._summary_frame.setVisible(has_data)
         self._feature_list.setVisible(has_data)
 
+    @staticmethod
+    def _safe_int(value, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    @classmethod
+    def _feature_display_status(cls, feat: dict) -> str:
+        status = str((feat or {}).get("status", "no_refs"))
+        if status in ("ok", "fallback", "broken", "no_refs"):
+            base_status = status
+        else:
+            base_status = "no_refs"
+
+        details = (feat or {}).get("status_details", {})
+        if not isinstance(details, dict):
+            return base_status
+
+        code = str(details.get("code", "") or "").strip().lower()
+        if code in {"fallback_used"}:
+            return "fallback"
+        if code in {"operation_failed", "fallback_failed", "no_result_solid"}:
+            return "broken"
+        return base_status
+
+    @staticmethod
+    def _status_detail_ref_lines(details: dict, max_items: int = 8):
+        if not isinstance(details, dict):
+            return []
+        refs = details.get("refs")
+        if not isinstance(refs, dict):
+            return []
+
+        lines = []
+        for key, value in refs.items():
+            values = value if isinstance(value, (list, tuple)) else [value]
+            for raw in values:
+                if raw in (None, "", [], (), {}):
+                    continue
+                lines.append(f"{key}={raw!r}")
+                if len(lines) >= max_items:
+                    return lines
+        return lines
+
     def update_stats(self, body):
         """
         Aktualisiert das Panel mit dem Health-Report eines Bodies.
@@ -243,18 +288,22 @@ class TNPStatsPanel(QWidget):
             self._reset()
 
     def _display_report(self, report: dict):
-        self._current_report = report
-        has_refs = report['ok'] + report['fallback'] + report['broken'] > 0
+        safe_report = report if isinstance(report, dict) else {}
+        self._current_report = safe_report
+        ok_count = self._safe_int(safe_report.get("ok", 0))
+        fallback_count = self._safe_int(safe_report.get("fallback", 0))
+        broken_count = self._safe_int(safe_report.get("broken", 0))
+        has_refs = (ok_count + fallback_count + broken_count) > 0
 
         # Body name
-        body_name = report.get('body_name', '')
+        body_name = safe_report.get('body_name', '')
         self._body_name_label.setText(f"▸ {body_name}" if body_name else "")
 
         # Pick-Modus beenden
         self.set_picking_active(False)
 
         # Summary
-        status = report['status']
+        status = safe_report.get("status", "no_refs")
         self._status_dot.setStyleSheet(f"color: {STATUS_COLORS.get(status, '#666')}; font-size: 14px; border: none;")
 
         if not has_refs:
@@ -267,12 +316,12 @@ class TNPStatsPanel(QWidget):
             self._counts_label.setVisible(False)
         else:
             parts = []
-            if report['broken'] > 0:
-                parts.append(f"<span style='color:{STATUS_COLORS['broken']}'>{report['broken']} gebrochen</span>")
-            if report['fallback'] > 0:
-                parts.append(f"<span style='color:{STATUS_COLORS['fallback']}'>{report['fallback']} Fallback</span>")
-            if report['ok'] > 0:
-                parts.append(f"<span style='color:{STATUS_COLORS['ok']}'>{report['ok']} OK</span>")
+            if broken_count > 0:
+                parts.append(f"<span style='color:{STATUS_COLORS['broken']}'>{broken_count} gebrochen</span>")
+            if fallback_count > 0:
+                parts.append(f"<span style='color:{STATUS_COLORS['fallback']}'>{fallback_count} Fallback</span>")
+            if ok_count > 0:
+                parts.append(f"<span style='color:{STATUS_COLORS['ok']}'>{ok_count} OK</span>")
             self._summary_label.setText(" · ".join(parts))
             self._summary_label.setStyleSheet(f"font-size: 10px; border: none;")
 
@@ -280,68 +329,124 @@ class TNPStatsPanel(QWidget):
         self._feature_list.blockSignals(True)
         self._feature_list.clear()
 
-        for feat in report['features']:
-            feat_status = feat['status']
+        for feat in safe_report.get("features", []):
+            if not isinstance(feat, dict):
+                continue
+            feat_status = self._feature_display_status(feat)
             dot = STATUS_DOTS.get(feat_status, '○')
             color = STATUS_COLORS.get(feat_status, '#666')
 
-            ref_count = feat['ok'] + feat['fallback'] + feat['broken']
+            ref_count = self._safe_int(feat.get("ok", 0)) + self._safe_int(feat.get("fallback", 0)) + self._safe_int(feat.get("broken", 0))
             if feat_status == 'no_refs':
                 suffix = ""
             elif feat_status == 'ok':
                 suffix = f"  ({ref_count})"
             elif feat_status == 'broken':
-                suffix = f"  ({feat['broken']} ✗)"
+                suffix = f"  ({self._safe_int(feat.get('broken', 0))} ✗)"
             else:
-                suffix = f"  ({feat['fallback']} ⚠)"
+                suffix = f"  ({self._safe_int(feat.get('fallback', 0))} ⚠)"
 
-            item = QListWidgetItem(f"{dot}  {feat['name']}{suffix}")
+            feat_name = str(feat.get("name", tr("Feature")))
+            item = QListWidgetItem(f"{dot}  {feat_name}{suffix}")
             item.setForeground(QColor(color))
             self._feature_list.addItem(item)
 
         self._feature_list.blockSignals(False)
+        self._feature_list.setCurrentRow(-1)
 
         self._detail_frame.setVisible(False)
         self._set_has_data(True)
 
     def _on_feature_selected(self, row: int):
-        if self._current_report is None or row < 0:
-            self._detail_frame.setVisible(False)
-            return
+        try:
+            if self._current_report is None or row < 0:
+                self._detail_frame.setVisible(False)
+                return
 
-        features = self._current_report.get('features', [])
-        if row >= len(features):
-            self._detail_frame.setVisible(False)
-            return
+            features = self._current_report.get('features', [])
+            if not isinstance(features, list) or row >= len(features):
+                self._detail_frame.setVisible(False)
+                return
 
-        feat = features[row]
-        refs = feat.get('refs', [])
+            feat = features[row]
+            if not isinstance(feat, dict):
+                self._detail_frame.setVisible(False)
+                return
 
-        if not refs:
-            self._detail_label.setText(tr("Keine topologischen Referenzen"))
+            refs = feat.get('refs', [])
+            refs = refs if isinstance(refs, list) else []
+            details = feat.get("status_details", {})
+            details = details if isinstance(details, dict) else {}
+
+            lines = [f"<b>{feat.get('name', tr('Feature'))}</b> ({feat.get('type', '')})"]
+
+            feat_status = str(feat.get("feature_status", "") or "").strip().upper()
+            if feat_status:
+                lines.append(f"Feature-Status: {feat_status}")
+
+            status_msg = str(feat.get("status_message", "") or "").strip()
+            if status_msg:
+                lines.append(status_msg)
+
+            code = str(details.get("code", "") or "").strip()
+            if code:
+                lines.append(f"Code: {code}")
+
+            hint = str(details.get("hint", "") or "").strip()
+            if hint:
+                lines.append(f"{tr('Hint')}: {hint}")
+
+            lines.append(
+                f"Referenzen: {len(refs)}  "
+                f"(<span style='color:{STATUS_COLORS['ok']}'>✓{self._safe_int(feat.get('ok', 0))}</span>"
+                f" <span style='color:{STATUS_COLORS['fallback']}'>⚠{self._safe_int(feat.get('fallback', 0))}</span>"
+                f" <span style='color:{STATUS_COLORS['broken']}'>✗{self._safe_int(feat.get('broken', 0))}</span>)"
+            )
+
+            if refs:
+                lines.append("")
+                for ref in refs[:8]:
+                    ref_obj = ref if isinstance(ref, dict) else {}
+                    dot_color = STATUS_COLORS.get(ref_obj.get("status"), '#666')
+                    method_raw = str(ref_obj.get("method", ""))
+                    method = METHOD_LABELS.get(method_raw, method_raw or tr("Unbekannt"))
+                    label = str(ref_obj.get("label", "") or "").strip()
+                    value = ref_obj.get("value", None)
+                    suffix = ""
+                    if label:
+                        suffix = f" ({label})"
+                    if value not in (None, "", [], (), {}):
+                        suffix = f"{suffix}: {value!r}"
+                    lines.append(
+                        f"<span style='color:{dot_color}'>●</span> "
+                        f"{ref_obj.get('kind', 'Ref')} → {method}{suffix}"
+                    )
+
+                if len(refs) > 8:
+                    lines.append(f"<i>…+{len(refs) - 8} weitere</i>")
+            else:
+                detail_refs = self._status_detail_ref_lines(details, max_items=8)
+                if detail_refs:
+                    lines.append("")
+                    lines.append(tr("Broken refs:"))
+                    for item in detail_refs:
+                        lines.append(f"• {item}")
+                    if len(detail_refs) >= 8:
+                        lines.append("<i>…</i>")
+                else:
+                    lines.append("")
+                    lines.append(tr("Keine topologischen Referenzen"))
+
+            self._detail_label.setText("<br>".join(lines))
             self._detail_frame.setVisible(True)
-            return
-
-        lines = [f"<b>{feat['name']}</b> ({feat['type']})"]
-        lines.append(f"Referenzen: {len(refs)}  "
-                      f"(<span style='color:{STATUS_COLORS['ok']}'>✓{feat['ok']}</span>"
-                      f" <span style='color:{STATUS_COLORS['fallback']}'>⚠{feat['fallback']}</span>"
-                      f" <span style='color:{STATUS_COLORS['broken']}'>✗{feat['broken']}</span>)")
-        lines.append("")
-
-        for ref in refs[:8]:
-            dot_color = STATUS_COLORS.get(ref['status'], '#666')
-            method = METHOD_LABELS.get(ref['method'], ref['method'])
-            lines.append(f"<span style='color:{dot_color}'>●</span> {ref['kind']} → {method}")
-
-        if len(refs) > 8:
-            lines.append(f"<i>…+{len(refs) - 8} weitere</i>")
-
-        self._detail_label.setText("<br>".join(lines))
-        self._detail_frame.setVisible(True)
+        except Exception as e:
+            logger.error(f"TNP-Detailanzeige fehlgeschlagen: {e}")
+            self._detail_label.setText(tr("Details konnten nicht angezeigt werden"))
+            self._detail_frame.setVisible(True)
 
     def _reset(self):
         self._current_report = None
+        self.set_picking_active(False)
         self._feature_list.clear()
         self._detail_frame.setVisible(False)
         self._summary_label.setText(tr("Kein Body ausgewählt"))

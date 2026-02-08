@@ -437,6 +437,58 @@ class ShapeNamingService:
                     result.append(None)
             return result
 
+        def _status_details_dict(feat: Any) -> Dict[str, Any]:
+            details = getattr(feat, "status_details", {})
+            return details if isinstance(details, dict) else {}
+
+        def _status_diag_level(feat: Any, details: Dict[str, Any]) -> str:
+            code = str(details.get("code", "") or "").strip().lower()
+            if code in {"fallback_used"}:
+                return "fallback"
+            if code in {"operation_failed", "fallback_failed", "no_result_solid"}:
+                return "broken"
+
+            feat_status = str(getattr(feat, "status", "") or "").strip().upper()
+            if feat_status == "WARNING":
+                return "fallback"
+            if feat_status == "ERROR":
+                return "broken"
+            return "ok"
+
+        def _status_ref_kind(label: str) -> str:
+            txt = str(label or "").lower()
+            if "edge" in txt:
+                return "Edge"
+            if "face" in txt:
+                return "Face"
+            return "Ref"
+
+        def _collect_status_ref_entries(feat: Any) -> List[Dict[str, Any]]:
+            details = _status_details_dict(feat)
+            refs = details.get("refs")
+            if not isinstance(refs, dict):
+                return []
+
+            diag_status = _status_diag_level(feat, details)
+            entries: List[Dict[str, Any]] = []
+            for ref_label, raw_value in refs.items():
+                values = _to_list(raw_value)
+                if not values:
+                    continue
+                for value in values:
+                    if value in (None, "", [], (), {}):
+                        continue
+                    entries.append(
+                        {
+                            "kind": _status_ref_kind(ref_label),
+                            "status": diag_status,
+                            "method": "status_details",
+                            "label": str(ref_label),
+                            "value": value,
+                        }
+                    )
+            return entries
+
         def _collect_ref_groups(feat: Any) -> List[Tuple[str, List[Any], List[Optional[int]]]]:
             groups: List[Tuple[str, List[Any], List[Optional[int]]]] = []
 
@@ -502,6 +554,9 @@ class ShapeNamingService:
         for feat in features:
             feat_type_name = type(feat).__name__
             is_consuming = feat_type_name in self._CONSUMING_FEATURE_TYPES
+            feat_status_message = str(getattr(feat, "status_message", "") or "")
+            feat_status_details = _status_details_dict(feat)
+            status_ref_entries = _collect_status_ref_entries(feat)
 
             feat_report = {
                 'name': getattr(feat, 'name', 'Feature'),
@@ -509,11 +564,42 @@ class ShapeNamingService:
                 'status': 'no_refs',
                 'ok': 0, 'fallback': 0, 'broken': 0,
                 'consuming': is_consuming,
-                'refs': []
+                'refs': [],
+                'feature_status': str(getattr(feat, "status", "OK") or "OK"),
+                'status_message': feat_status_message,
+                'status_details': dict(feat_status_details),
+                'status_refs': list(status_ref_entries),
             }
 
             ref_groups = _collect_ref_groups(feat)
             if not ref_groups:
+                if status_ref_entries:
+                    for ref in status_ref_entries:
+                        ref_status = str(ref.get("status", "broken"))
+                        if ref_status == "ok":
+                            feat_report['ok'] += 1
+                            report['ok'] += 1
+                        elif ref_status == "fallback":
+                            feat_report['fallback'] += 1
+                            report['fallback'] += 1
+                        else:
+                            feat_report['broken'] += 1
+                            report['broken'] += 1
+                        feat_report['refs'].append(
+                            {
+                                "kind": ref.get("kind", "Ref"),
+                                "status": ref_status,
+                                "method": ref.get("method", "status_details"),
+                                "label": ref.get("label", ""),
+                                "value": ref.get("value"),
+                            }
+                        )
+                if feat_report['broken'] > 0:
+                    feat_report['status'] = 'broken'
+                elif feat_report['fallback'] > 0:
+                    feat_report['status'] = 'fallback'
+                elif feat_report['ok'] > 0:
+                    feat_report['status'] = 'ok'
                 report['features'].append(feat_report)
                 continue
 
