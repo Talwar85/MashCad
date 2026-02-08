@@ -607,7 +607,10 @@ class CADTessellator:
             return None, None, {}
 
         if quality is None:
-            quality = Tolerances.TESSELLATION_QUALITY
+            if is_enabled("adaptive_tessellation"):
+                quality = CADTessellator._compute_adaptive_deflection(solid)
+            else:
+                quality = Tolerances.TESSELLATION_QUALITY
 
         try:
             from OCP.TopAbs import TopAbs_FACE

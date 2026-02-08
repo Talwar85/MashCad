@@ -945,6 +945,7 @@ def get_param_on_entity(point: 'Point2D', entity) -> float:
     Gibt einen Sortier-Parameter zurück:
     - Linie: 0.0 (Start) bis 1.0 (Ende)
     - Kreis: 0.0 bis 2*PI (Winkel)
+    - Bogen: 0.0 bis 2*PI (absoluter Winkel)
     """
     import math
     
@@ -966,6 +967,14 @@ def get_param_on_entity(point: 'Point2D', entity) -> float:
         # Winkel berechnen
         angle = math.atan2(point.y - entity.center.y, point.x - entity.center.x)
         if angle < 0: angle += 2 * math.pi
+        return angle
+
+    elif isinstance(entity, Arc2D):
+        # Arc nutzt denselben Winkelparameter wie Circle.
+        # Die Arc-Begrenzung wird separat in Arc-Logik geprüft.
+        angle = math.atan2(point.y - entity.center.y, point.x - entity.center.x)
+        if angle < 0:
+            angle += 2 * math.pi
         return angle
         
     return 0.0

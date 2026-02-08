@@ -257,7 +257,7 @@ class AddBodyCommand(QUndoCommand):
         from modeling.cad_tessellator import CADTessellator
 
         if self.body not in self.document.bodies:
-            self.document.bodies.append(self.body)
+            self.document.add_body(self.body, set_active=False)
             logger.debug(f"Redo: Added body {self.body.name}")
 
         # Update UI
@@ -342,6 +342,7 @@ class SplitBodyCommand(QUndoCommand):
         if original is None:
             # Redo nach Undo: Original aus Snapshot wiederherstellen
             original = Body.from_dict(self.original_body_snapshot)
+            original._document = self.document
             original._rebuild()
             logger.debug(f"SplitBody Redo: Original '{original.name}' aus Snapshot wiederhergestellt")
 
@@ -405,6 +406,7 @@ class SplitBodyCommand(QUndoCommand):
 
         # 2. Original Body wiederherstellen
         original_body = Body.from_dict(self.original_body_snapshot)
+        original_body._document = self.document
 
         # WICHTIG: Split-Feature entfernen (wurde beim Split hinzugefügt)
         from modeling import SplitFeature
@@ -419,7 +421,7 @@ class SplitBodyCommand(QUndoCommand):
             logger.warning(f"SplitBody Undo: Rebuild fehlgeschlagen: {e}")
 
         # 3. Original Body zum Document hinzufügen
-        self.document.bodies.append(original_body)
+        self.document.add_body(original_body, set_active=False)
         logger.info(f"SplitBody Undo: Original '{original_body.name}' wiederhergestellt")
 
         # Update UI

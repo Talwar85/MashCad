@@ -2690,8 +2690,8 @@ class Body:
         if current_solid is None:
             raise ValueError("Shell benötigt einen existierenden Körper")
 
-        # Öffnungs-Faces auflösen
-        opening_faces = self._resolve_faces_for_shell(current_solid, feature.opening_face_selectors)
+        # Öffnungs-Faces auflösen (TNP v4.0 → Geometric Fallback)
+        opening_faces = self._resolve_faces_for_shell(current_solid, feature.opening_face_selectors, feature)
 
         logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
 
@@ -3681,15 +3681,32 @@ class Body:
                     logger.debug(f"Sweep: Verwende {len(build123d_edges)} direkte Build123d Edge(s)")
                     return Wire(build123d_edges)
 
-                # FALLBACK: Edge über Selektor finden
+                # FALLBACK: Edge über Punkt-Selektor finden (center-distance matching)
                 edge_selector = path_data.get('edge_selector')
                 if edge_selector and current_solid:
-                    # edge_selector kann eine Liste von Punkten sein
                     selectors = edge_selector if isinstance(edge_selector, list) else [edge_selector]
-                    edges = self._resolve_edges(current_solid, selectors)
-                    if edges:
-                        logger.debug(f"Sweep: {len(edges)} Edge(s) über Selektor aufgelöst")
-                        return Wire(edges)
+                    all_edges = list(current_solid.edges()) if hasattr(current_solid, 'edges') else []
+                    found_edges = []
+                    for sel in selectors:
+                        best_edge = None
+                        min_dist = float('inf')
+                        try:
+                            p_sel = Vector(sel) if not isinstance(sel, Vector) else sel
+                            for edge in all_edges:
+                                try:
+                                    dist = (edge.center() - p_sel).length
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        best_edge = edge
+                                except Exception:
+                                    pass
+                            if best_edge and min_dist < 20.0:
+                                found_edges.append(best_edge)
+                        except Exception:
+                            pass
+                    if found_edges:
+                        logger.debug(f"Sweep: {len(found_edges)} Edge(s) über Selektor aufgelöst")
+                        return Wire(found_edges)
 
             return None
 
@@ -3875,16 +3892,17 @@ class Body:
             logger.debug(f"Face-Scoring fehlgeschlagen: {e}")
             return 0.0
 
-    def _resolve_faces_for_shell(self, solid, face_selectors: List[dict]):
+    def _resolve_faces_for_shell(self, solid, face_selectors: List[dict],
+                                feature: 'ShellFeature' = None):
         """
         Löst Face-Selektoren für Shell-Öffnungen auf.
-        
-        TNP-robust: Verwendet GeometricFaceSelector für stabiles Face-Matching.
+
+        TNP v4.0: Ausschließlich über ShapeIDs.
 
         Args:
             solid: Build123d Solid
             face_selectors: Liste von GeometricFaceSelector.to_dict() Dicts
-                Enthalten: center, normal, area, surface_type, tolerance
+            feature: Optional ShellFeature mit face_shape_ids (TNP v4.0)
 
         Returns:
             Liste von Build123d Faces
@@ -3892,57 +3910,36 @@ class Body:
         if not face_selectors or solid is None:
             return []
 
-        try:
-            from modeling.geometric_selector import GeometricFaceSelector
-            
-            # Alle Faces vom Solid holen
-            all_faces = solid.faces() if hasattr(solid, 'faces') else []
-            if not all_faces:
-                logger.warning("Shell: Solid hat keine Faces")
-                return []
-
-            resolved = []
-            for selector_dict in face_selectors:
-                try:
-                    # Konvertiere zu GeometricFaceSelector
-                    if isinstance(selector_dict, dict):
-                        geo_selector = GeometricFaceSelector.from_dict(selector_dict)
-                    elif hasattr(selector_dict, 'center'):
-                        geo_selector = selector_dict
-                    else:
-                        # Legacy: Tuple-Format
-                        logger.warning(f"Shell: Legacy Selector-Format, konvertiere...")
-                        continue
-                    
-                    # Finde beste matching Face (TNP-robust)
-                    best_face = None
-                    best_score = -1.0
-                    
-                    for face in all_faces:
-                        try:
-                            score = self._score_face_match(face, geo_selector)
-                            if score > best_score:
-                                best_score = score
-                                best_face = face
-                        except Exception as e:
-                            logger.debug(f"[__init__.py] Fehler: {e}")
-                            continue
-                    
-                    if best_face and best_score > 0.4:  # 40% Mindest-Score
-                        resolved.append(best_face)
-                        logger.debug(f"Shell: Face aufgelöst (score={best_score:.2%})")
-                    else:
-                        logger.warning(f"Shell: Konnte Face nicht auflösen (best_score={best_score:.2%})")
-                        
-                except Exception as e:
-                    logger.debug(f"Shell: Selector-Auflösung fehlgeschlagen: {e}")
-                    continue
-
-            return resolved
-
-        except Exception as e:
-            logger.debug(f"Face-Auflösung für Shell fehlgeschlagen: {e}")
+        all_faces = solid.faces() if hasattr(solid, 'faces') else []
+        if not all_faces:
+            logger.warning("Shell: Solid hat keine Faces")
             return []
+
+        shape_ids = getattr(feature, 'face_shape_ids', []) if feature else []
+        if not shape_ids:
+            logger.warning("Shell: Keine ShapeIDs vorhanden, kann Faces nicht auflösen")
+            return []
+
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            logger.error("Shell: ShapeNamingService nicht verfügbar")
+            return []
+
+        resolved = []
+        service = self._document._shape_naming_service
+        for shape_id in shape_ids:
+            face, method = service.resolve_shape_with_method(shape_id, solid)
+            if face is not None:
+                resolved.append(face)
+                logger.debug(f"Shell: Face via TNP v4.0 aufgelöst (method={method})")
+            else:
+                logger.warning(f"Shell: ShapeID {shape_id.uuid[:8]} konnte nicht aufgelöst werden")
+
+        if resolved:
+            logger.info(f"Shell: {len(resolved)}/{len(shape_ids)} Faces via TNP v4.0 aufgelöst")
+        else:
+            logger.error(f"Shell: Keine Faces via TNP v4.0 aufgelöst ({len(shape_ids)} ShapeIDs versucht)")
+
+        return resolved
 
     def _update_edge_selectors_after_operation(self, solid, current_feature_index: int = -1):
         """
@@ -4527,6 +4524,25 @@ class Body:
             if is_enabled("tnp_debug_logging"):
                 logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
 
+    def _register_base_feature_edges(self, feature, solid) -> None:
+        """
+        TNP v4.0: Registriert alle Edges eines neu erzeugten Solids fuer Basis-Features
+        (Loft, Revolve, Sweep, Primitive, Import). Nur einmal pro Feature-ID.
+        """
+        if not self._document or not hasattr(self._document, '_shape_naming_service'):
+            return
+        if not solid or not hasattr(solid, 'edges'):
+            return
+
+        try:
+            service = self._document._shape_naming_service
+            if service.get_shapes_by_feature(feature.id):
+                return
+            service.register_solid_edges(solid, feature.id)
+        except Exception as e:
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v4.0: Base-Feature Registrierung fehlgeschlagen: {e}")
+
     def _register_brepfeat_operation(self, feature, original_solid, result_solid,
                                      input_shape, result_shape) -> None:
         """
@@ -4948,6 +4964,8 @@ class Body:
                 if base_solid is not None:
                     new_solid = base_solid
                     logger.info(f"PrimitiveFeature: {feature.primitive_type} erstellt")
+                    if current_solid is None:
+                        self._register_base_feature_edges(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"PrimitiveFeature: Erstellung fehlgeschlagen")
@@ -4959,6 +4977,8 @@ class Body:
                 if base_solid is not None:
                     new_solid = base_solid
                     logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
+                    if current_solid is None:
+                        self._register_base_feature_edges(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"ImportFeature: Konnte BREP nicht laden")
@@ -5184,6 +5204,8 @@ class Body:
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
+                        if current_solid is None:
+                            self._register_base_feature_edges(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5206,6 +5228,8 @@ class Body:
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
+                        if current_solid is None:
+                            self._register_base_feature_edges(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5228,6 +5252,8 @@ class Body:
                 if part_geometry:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
+                        if current_solid is None:
+                            self._register_base_feature_edges(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5533,41 +5559,6 @@ class Body:
             self._rebuild()
             return False
 
-    def _resolve_edges(self, solid, selectors):
-        """
-        Legacy-Methode für einfache Punkt-Selektoren.
-        Wird von _resolve_edges_tnp() als Fallback verwendet.
-        """
-        if not selectors:
-            return list(solid.edges()) if hasattr(solid, 'edges') else []
-
-        found_edges = []
-        all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
-
-        for sel in selectors:
-            best_edge = None
-            min_dist = float('inf')
-
-            try:
-                p_sel = Vector(sel) if not isinstance(sel, Vector) else sel
-                for edge in all_edges:
-                    try:
-                        dist = (edge.center() - p_sel).length
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_edge = edge
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-
-                if best_edge and min_dist < 20.0:
-                    found_edges.append(best_edge)
-
-            except Exception:
-                pass
-
-        return found_edges
-
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
         TNP v4.0: Professional Topological Naming Resolution.
@@ -5740,74 +5731,6 @@ class Body:
             logger.debug(f"_find_matching_edge_in_solid fehlgeschlagen: {e}")
             return None
     
-    # Legacy Methods removed - TNP v4.0 uses ShapeNamingService exclusively
-
-    def _resolve_edges_by_hash(self, all_edges, ocp_edge_shapes) -> List:
-        """
-        Findet Edges durch OCCT-native Shape-Identität (IndexedMapOfShape).
-        """
-        if not HAS_OCP:
-            return []
-
-        try:
-            from OCP.TopTools import TopTools_IndexedMapOfShape
-
-            # Build map of target shapes
-            target_map = TopTools_IndexedMapOfShape()
-            for ocp_shape in ocp_edge_shapes:
-                try:
-                    target_map.Add(ocp_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] target_map.Add fehlgeschlagen: {e}")
-
-            # Find edges that match
-            found = []
-            for edge in all_edges:
-                try:
-                    ocp_edge = edge.wrapped if hasattr(edge, 'wrapped') else edge
-                    if target_map.Contains(ocp_edge):
-                        found.append(edge)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Contains fehlgeschlagen: {e}")
-
-            return found
-
-        except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP IndexedMap-Matching Fehler: {e}")
-            return []
-
-    def _resolve_edges_by_geometry(self, all_edges, geometric_selectors) -> List:
-        """
-        Findet Edges durch GeometricEdgeSelector Matching.
-        """
-        found = []
-
-        for selector in geometric_selectors:
-            if hasattr(selector, 'find_best_match'):
-                # selector ist ein GeometricEdgeSelector Objekt
-                best = selector.find_best_match(all_edges)
-                if best is not None and best not in found:
-                    found.append(best)
-            elif isinstance(selector, dict):
-                # selector ist serialisiert - rekonstruieren
-                try:
-                    from modeling.geometric_selector import GeometricEdgeSelector
-                    gs = GeometricEdgeSelector(
-                        center=tuple(selector.get('center', (0, 0, 0))),
-                        direction=tuple(selector.get('direction', (1, 0, 0))),
-                        length=selector.get('length', 0),
-                        curve_type=selector.get('curve_type', 'line'),
-                        tolerance=selector.get('tolerance', 10.0)
-                    )
-                    best = gs.find_best_match(all_edges)
-                    if best is not None and best not in found:
-                        found.append(best)
-                except Exception as e:
-                    logger.debug(f"GeometricEdgeSelector Rekonstruktion fehlgeschlagen: {e}")
-
-        return found
-
     def _apply_transform_feature(self, solid, feature: TransformFeature):
         """
         Wendet ein TransformFeature auf einen Solid an.
@@ -6428,9 +6351,8 @@ class Body:
                     try:
                         if self._document and hasattr(self._document, '_shape_naming_service'):
                             service = self._document._shape_naming_service
-                            import uuid
                             service.track_brepfeat_operation(
-                                feature_id=str(uuid.uuid4())[:8],
+                                feature_id=feature.id,
                                 source_solid=current_solid,
                                 result_solid=result,
                                 modified_face=best_face,
@@ -8358,9 +8280,28 @@ class Document:
 
     def new_body(self, name=None):
         b = Body(name or f"Body{len(self.bodies)+1}", document=self)
-        self.bodies.append(b)
-        self.active_body = b
+        self.add_body(b, set_active=True)
         return b
+
+    def add_body(self, body: Body, component: Component = None, set_active: bool = False):
+        """Fügt einen Body dem Dokument hinzu und setzt die Document-Referenz."""
+        if body is None:
+            return None
+
+        body._document = self
+
+        if self._assembly_enabled:
+            target = component or self._active_component or self.root_component
+            if target and body not in target.bodies:
+                target.bodies.append(body)
+        else:
+            if body not in self._bodies:
+                self._bodies.append(body)
+
+        if set_active:
+            self.active_body = body
+
+        return body
 
     def new_sketch(self, name=None):
         s = Sketch(name or f"Sketch{len(self.sketches)+1}")
@@ -8436,8 +8377,8 @@ class Document:
             logger.debug(f"Split: Original-Body '{body.name}' entfernt")
 
         # 6. Beide neue Bodies hinzufügen
-        self.bodies.append(body_above)
-        self.bodies.append(body_below)
+        self.add_body(body_above, set_active=False)
+        self.add_body(body_below, set_active=False)
 
         # Invalidate meshes für beide Bodies
         body_above.invalidate_mesh()
@@ -8551,11 +8492,11 @@ class Document:
         # Bodies erstellen
         new_bodies = []
         for i, solid in enumerate(result.solids):
-            body = Body(name=f"Imported_{i+1}")
+            body = Body(name=f"Imported_{i+1}", document=self)
             body._build123d_solid = solid
             body._update_mesh_from_solid(solid)
 
-            self.bodies.append(body)
+            self.add_body(body, set_active=False)
             new_bodies.append(body)
 
         if new_bodies:
@@ -8715,6 +8656,9 @@ class Document:
             all_sketches = self.get_all_sketches()
             self.active_sketch = next((s for s in all_sketches if s.id == active_sketch_id), None)
 
+        # Bodies an Document anbinden (TNP v4.0)
+        self._attach_document_to_bodies()
+
     def _load_legacy_format(self, data: dict):
         """
         Lädt Dokument aus Legacy-Format (v8.x).
@@ -8786,6 +8730,14 @@ class Document:
         if active_sketch_id:
             all_sketches = sketches_to_add if not self._assembly_enabled else self.root_component.sketches
             self.active_sketch = next((s for s in all_sketches if s.id == active_sketch_id), None)
+
+        # Bodies an Document anbinden (TNP v4.0)
+        self._attach_document_to_bodies()
+
+    def _attach_document_to_bodies(self):
+        """Stellt sicher, dass alle Bodies eine Document-Referenz haben."""
+        for body in self.get_all_bodies():
+            body._document = self
 
     def _restore_sketch_references(self):
         """

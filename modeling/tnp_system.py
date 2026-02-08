@@ -254,6 +254,45 @@ class ShapeNamingService:
             logger.debug(f"ShapeID-Lookup für Edge fehlgeschlagen: {e}")
             return None
     
+    def find_shape_id_by_face(self, face: Any, tolerance: float = 0.5) -> Optional[ShapeID]:
+        """
+        Findet eine ShapeID für eine gegebene Face (geometrisches Matching).
+        Analog zu find_shape_id_by_edge, aber für Faces.
+        """
+        try:
+            import numpy as np
+
+            center = face.center()
+            face_center = np.array([center.X, center.Y, center.Z])
+            face_area = face.area if hasattr(face, 'area') else 0
+
+            best_match = None
+            best_score = float('inf')
+
+            for pos, shape_id in self._spatial_index[ShapeType.FACE]:
+                dist = np.linalg.norm(face_center - pos)
+
+                area_score = 0
+                record = self._shapes.get(shape_id.uuid)
+                if record and 'area' in record.geometric_signature and face_area > 0:
+                    stored_area = record.geometric_signature['area']
+                    area_score = abs(stored_area - face_area) * 0.01
+
+                score = dist + area_score
+
+                if score < best_score and dist < tolerance:
+                    best_score = score
+                    best_match = shape_id
+
+            if best_match and is_enabled("tnp_debug_logging"):
+                logger.debug(f"ShapeID gefunden für Face: {best_match.uuid[:8]}... (score={best_score:.4f})")
+
+            return best_match
+
+        except Exception as e:
+            logger.debug(f"ShapeID-Lookup für Face fehlgeschlagen: {e}")
+            return None
+
     def resolve_shape(self, shape_id: ShapeID, 
                       current_solid: Any) -> Optional[Any]:
         """

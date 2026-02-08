@@ -2184,7 +2184,7 @@ class MainWindow(QMainWindow):
         
         try:
             # 1. Neuen Body erstellen
-            new_body = Body(name=f"{body.name}_copy")
+            new_body = Body(name=f"{body.name}_copy", document=self.document)
             
             # 2. Solid kopieren (Build123d hat keine .copy() - wir müssen neu konstruieren)
             # Workaround: Kopiere durch Location-Identity-Transform
@@ -2227,7 +2227,7 @@ class MainWindow(QMainWindow):
             self._update_body_from_build123d(new_body, new_body._build123d_solid)
             
             # 6. Zum Document hinzufügen
-            self.document.bodies.append(new_body)
+            self.document.add_body(new_body, set_active=False)
             
             # 7. UI aktualisieren
             self.browser.refresh()
@@ -3274,7 +3274,7 @@ class MainWindow(QMainWindow):
             # 3. Fuse head + shaft (Build123d native operator)
             bolt_solid = head + shaft
 
-            body = Body(name=f"Bolt_M{dia:.0f}x{pitch}")
+            body = Body(name=f"Bolt_M{dia:.0f}x{pitch}", document=self.document)
             body._build123d_solid = bolt_solid
 
             # 4. Echte Gewinde auf Schaft anwenden
@@ -3298,7 +3298,7 @@ class MainWindow(QMainWindow):
                 # Fallback: Glatter Schaft (wie vorher)
 
             body.invalidate_mesh()
-            self.document.bodies.append(body)
+            self.document.add_body(body, set_active=False)
             self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
             tol_str = f" ({dialog.tolerance_class})" if dialog.tolerance_class != "custom" else f" (+{tolerance_offset:.3f}mm)"
@@ -3331,7 +3331,7 @@ class MainWindow(QMainWindow):
             # Build123d native operator für Cut
             nut_solid = hex_body - hole
 
-            body = Body(name=f"Nut_M{dia:.0f}")
+            body = Body(name=f"Nut_M{dia:.0f}", document=self.document)
             body._build123d_solid = nut_solid
 
             # 3. Echte Innengewinde anwenden
@@ -3355,7 +3355,7 @@ class MainWindow(QMainWindow):
                 # Fallback: Glatte Bohrung (wie vorher)
 
             body.invalidate_mesh()
-            self.document.bodies.append(body)
+            self.document.add_body(body, set_active=False)
             self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
             tol_str = f" ({dialog.tolerance_class})" if dialog.tolerance_class != "custom" else f" (+{tolerance_offset:.3f}mm)"
@@ -4021,8 +4021,8 @@ class MainWindow(QMainWindow):
             else:
                 return
 
-            body = Body(name=name)
-            self.document.bodies.append(body)
+            body = Body(name=name, document=self.document)
+            self.document.add_body(body, set_active=False)
             body.add_feature(feature)
             self._update_body_from_build123d(body, body._build123d_solid)
             self.browser.refresh()
@@ -5536,6 +5536,7 @@ class MainWindow(QMainWindow):
             from OCP.TopAbs import TopAbs_FACE
             from OCP.TopoDS import TopoDS
             from modeling.geometric_selector import GeometricFaceSelector
+            import numpy as np
 
             # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
             b3d_obj = source_body._build123d_solid
@@ -5554,13 +5555,14 @@ class MainWindow(QMainWindow):
 
             # Normale aus face_data für korrektes Matching
             expected_normal = face_data.get('normal')
+            expected_normal_vec = None
             use_normal = False
             if expected_normal:
-                import numpy as np
-                n_arr = np.array(expected_normal)
+                n_arr = np.array(expected_normal, dtype=float)
                 n_len = np.linalg.norm(n_arr)
                 if n_len > 0.1:
-                    expected_normal = n_arr / n_len  # Normalisieren
+                    expected_normal_vec = n_arr / n_len  # Normalisieren
+                    expected_normal = expected_normal_vec
                     use_normal = True
                     logger.debug(f"Face-Suche: Normale=({expected_normal[0]:.2f}, {expected_normal[1]:.2f}, {expected_normal[2]:.2f})")
 
@@ -5674,6 +5676,27 @@ class MainWindow(QMainWindow):
             # Das Face wird jetzt direkt via ocp_face_id gefunden, und die Preview-Logik
             # berechnet height bereits korrekt basierend auf der Drag-Richtung.
 
+            # Bestimme eine orientierte Face-Normale (Selection-Info bevorzugt)
+            face_center = best_face.center()
+            face_normal_vec = None
+            if expected_normal_vec is not None:
+                face_normal_vec = np.array(expected_normal_vec, dtype=float)
+            else:
+                f_normal = best_face.normal_at(face_center)
+                face_normal_vec = np.array([f_normal.X, f_normal.Y, f_normal.Z], dtype=float)
+                try:
+                    from OCP.TopAbs import TopAbs_REVERSED
+                    if best_face.wrapped.Orientation() == TopAbs_REVERSED:
+                        face_normal_vec = -face_normal_vec
+                except Exception:
+                    pass
+
+            n_len = np.linalg.norm(face_normal_vec)
+            if n_len < 1e-6:
+                face_normal_vec = np.array([0.0, 0.0, 1.0], dtype=float)
+            else:
+                face_normal_vec = face_normal_vec / n_len
+
             # --- SCHRITT B: Face-Kontur als Polygon extrahieren ---
             # Versuche Polygon zu extrahieren für parametrische Speicherung
             # Bei Fehlschlag: Extrusion läuft trotzdem, aber weniger parametrisch
@@ -5687,10 +5710,8 @@ class MainWindow(QMainWindow):
                 # Kein Problem für BRepFeat - das arbeitet direkt mit der Face
                 logger.debug("Polygon-Extraktion nicht möglich - BRepFeat nutzt Face direkt")
                 # Fallback: Nutze Face-Center und Normal als Referenz
-                face_center = best_face.center()
-                face_normal_at_center = best_face.normal_at(face_center)
                 plane_origin = (face_center.X, face_center.Y, face_center.Z)
-                plane_normal = (face_normal_at_center.X, face_normal_at_center.Y, face_normal_at_center.Z)
+                plane_normal = (float(face_normal_vec[0]), float(face_normal_vec[1]), float(face_normal_vec[2]))
 
                 # Face als BREP serialisieren für Rebuild!
                 try:
@@ -5730,8 +5751,14 @@ class MainWindow(QMainWindow):
             from OCP.gp import gp_Vec, gp_Dir
             from build123d import Solid
 
-            face_center = best_face.center()
-            face_normal = best_face.normal_at(face_center)
+            # Extrusionsrichtung bestimmen
+            direction_vec = np.array(face_normal_vec, dtype=float)
+            if operation == "Cut":
+                direction_vec = -direction_vec
+            elif operation not in ("Join", "Cut") and height < 0:
+                direction_vec = -direction_vec
+
+            abs_height = abs(height)
 
             new_geo = None
 
@@ -5741,19 +5768,16 @@ class MainWindow(QMainWindow):
                 try:
                     from OCP.BRepFeat import BRepFeat_MakePrism
 
-                    # Für Cut: Richtung umkehren (height ist bereits negativ)
+                    # direction_vec berücksichtigt Operation (Join/Cut) bereits
                     # fuse_mode: 1=Fuse (Join), 0=Cut
                     if operation == "Join":
-                        direction = gp_Dir(face_normal.X, face_normal.Y, face_normal.Z)
+                        direction = gp_Dir(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2]))
                         fuse_mode = 1
-                        abs_height = abs(height)
                     else:  # Cut
-                        # Bei Cut: height ist negativ → Richtung umkehren
-                        direction = gp_Dir(-face_normal.X, -face_normal.Y, -face_normal.Z)
+                        direction = gp_Dir(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2]))
                         fuse_mode = 0
-                        abs_height = abs(height)
 
-                    logger.debug(f"BRepFeat_MakePrism: direction=({face_normal.X:.3f}, {face_normal.Y:.3f}, {face_normal.Z:.3f}), fuse_mode={fuse_mode}, height={abs_height}")
+                    logger.debug(f"BRepFeat_MakePrism: direction=({direction_vec[0]:.3f}, {direction_vec[1]:.3f}, {direction_vec[2]:.3f}), fuse_mode={fuse_mode}, height={abs_height}")
 
                     prism = BRepFeat_MakePrism()
                     prism.Init(
@@ -5805,25 +5829,11 @@ class MainWindow(QMainWindow):
                             # ERFOLG! Direkt das Ergebnis verwenden - keine Boolean nötig!
                             logger.info(f"✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)")
                             
-                            # === TNP v4.0: BRepFeat Operation tracken ===
-                            try:
-                                if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
-                                    service = self.document._shape_naming_service
-                                    service.track_brepfeat_operation(
-                                        feature_id=str(uuid.uuid4())[:8],  # Wird später durch echte Feature-ID ersetzt
-                                        source_solid=source_body._build123d_solid,
-                                        result_solid=new_solid,
-                                        modified_face=best_face,
-                                        direction=(float(face_normal.X), float(face_normal.Y), float(face_normal.Z)),
-                                        distance=abs(height)
-                                    )
-                            except Exception as tnp_e:
-                                if is_enabled("tnp_debug_logging"):
-                                    logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
-
                             # Feature erstellen
                             from modeling import ExtrudeFeature
                             from gui.commands.feature_commands import AddFeatureCommand
+
+                            old_solid = source_body._build123d_solid
 
                             feat = ExtrudeFeature(
                                 sketch=None,
@@ -5839,6 +5849,22 @@ class MainWindow(QMainWindow):
                                 face_type=face_type_str,
                                 face_selector=face_selector_dict  # TNP v3.0: Für BRepFeat-Operationen
                             )
+
+                            # === TNP v4.0: BRepFeat Operation tracken (mit echter Feature-ID) ===
+                            try:
+                                if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
+                                    service = self.document._shape_naming_service
+                                    service.track_brepfeat_operation(
+                                        feature_id=feat.id,
+                                        source_solid=old_solid,
+                                        result_solid=new_solid,
+                                        modified_face=best_face,
+                                        direction=(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2])),
+                                        distance=abs_height
+                                    )
+                            except Exception as tnp_e:
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
 
                             # Body direkt aktualisieren (KEIN Boolean!)
                             source_body._build123d_solid = new_solid
@@ -5880,9 +5906,9 @@ class MainWindow(QMainWindow):
                 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 
                 extrude_vec = gp_Vec(
-                    face_normal.X * height,
-                    face_normal.Y * height,
-                    face_normal.Z * height
+                    float(direction_vec[0]) * abs_height,
+                    float(direction_vec[1]) * abs_height,
+                    float(direction_vec[2]) * abs_height
                 )
 
                 prism_maker = BRepPrimAPI_MakePrism(best_face.wrapped, extrude_vec)
@@ -5897,7 +5923,7 @@ class MainWindow(QMainWindow):
 
             except Exception as ocp_extrude_err:
                 logger.warning(f"OCP-Extrusion fehlgeschlagen: {ocp_extrude_err}, Fallback auf build123d")
-                new_geo = extrude(best_face, amount=height)
+                new_geo = extrude(best_face, amount=abs_height, dir=Vector(*direction_vec))
 
             # --- SCHRITT C: Multi-Body Operationen ---
 
@@ -7638,7 +7664,7 @@ class MainWindow(QMainWindow):
                 new_body.add_feature(transform_feature)
 
                 # Body zum Dokument hinzufügen
-                self.document.bodies.append(new_body)
+                self.document.add_body(new_body, set_active=False)
                 new_bodies.append(new_body)
 
             # UI aktualisieren
@@ -7684,7 +7710,7 @@ class MainWindow(QMainWindow):
         from modeling import Body
         from build123d import Solid
 
-        new_body = Body(name=new_name)
+        new_body = Body(name=new_name, document=self.document)
         new_body.id = f"{body.id}_{new_name.replace(' ', '_')}"
 
         if body._build123d_solid is not None:
@@ -7985,7 +8011,7 @@ class MainWindow(QMainWindow):
                     new_body.invalidate_mesh()
 
                 # Body zu Document hinzufügen
-                self.document.bodies.append(new_body)
+                self.document.add_body(new_body, set_active=False)
                 new_bodies.append(new_body)
 
             # UI aktualisieren
@@ -8495,8 +8521,20 @@ class MainWindow(QMainWindow):
                         if is_enabled("tnp_debug_logging"):
                             logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
                     else:
-                        if is_enabled("tnp_debug_logging"):
-                            logger.warning("TNP v4.0: Keine ShapeID für Edge gefunden!")
+                        # Fallback: Edge jetzt registrieren, damit TNP weiterarbeiten kann
+                        try:
+                            shape_id = service.register_shape(
+                                ocp_shape=edge.wrapped,
+                                shape_type=ShapeType.EDGE,
+                                feature_id=feature.id,
+                                local_index=len(edge_shape_ids)
+                            )
+                            edge_shape_ids.append(shape_id)
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP v4.0: Edge registriert (Fallback) {shape_id.uuid[:8]}...")
+                        except Exception as e:
+                            if is_enabled("tnp_debug_logging"):
+                                logger.warning(f"TNP v4.0: Keine ShapeID für Edge gefunden: {e}")
             else:
                 if is_enabled("tnp_debug_logging"):
                     logger.warning("TNP v4.0: Kein NamingService verfügbar")
@@ -8730,6 +8768,7 @@ class MainWindow(QMainWindow):
     def _on_shell_confirmed(self):
         """
         Wendet Shell auf den Body an.
+        TNP v4.0: Sucht existierende ShapeIDs für die ausgewählten Faces.
         """
         from modeling.cad_tessellator import CADTessellator
         from modeling import ShellFeature
@@ -8745,30 +8784,40 @@ class MainWindow(QMainWindow):
 
         try:
             from gui.commands.feature_commands import AddFeatureCommand
-            from modeling.tnp_system import ShapeID, ShapeType
 
-            # Shell Feature erstellen
             shell_feature = ShellFeature(
                 thickness=thickness,
                 opening_face_selectors=self._shell_opening_faces.copy()
             )
-            
-            # TNP v4.0: ShapeIDs für Faces erstellen
+
+            # TNP v4.0: Existierende ShapeIDs für die Faces finden
             face_shape_ids = []
-            for i, _ in enumerate(self._shell_opening_faces):
-                # Dummy geometry_data für Faces
-                shape_id = ShapeID.create(
-                    shape_type=ShapeType.FACE,
-                    feature_id=shell_feature.id,
-                    local_index=i,
-                    geometry_data=(0, 0, 0, 0)  # Placeholder
-                )
-                face_shape_ids.append(shape_id)
+            if body._build123d_solid and body._document and hasattr(body._document, '_shape_naming_service'):
+                service = body._document._shape_naming_service
+                for selector_dict in self._shell_opening_faces:
+                    center = np.array(selector_dict.get("center", [0, 0, 0]))
+                    best_face = None
+                    best_dist = float('inf')
+                    for solid_face in body._build123d_solid.faces():
+                        try:
+                            fc = solid_face.center()
+                            d = np.linalg.norm(center - np.array([fc.X, fc.Y, fc.Z]))
+                            if d < best_dist:
+                                best_dist = d
+                                best_face = solid_face
+                        except Exception:
+                            continue
+                    if best_face and best_dist < 5.0:
+                        shape_id = service.find_shape_id_by_face(best_face)
+                        if shape_id:
+                            face_shape_ids.append(shape_id)
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP v4.0: ShapeID für Shell-Face gefunden: {shape_id.uuid[:8]}")
+
             shell_feature.face_shape_ids = face_shape_ids
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v4.0: {len(face_shape_ids)} Face-ShapeIDs für Shell erstellt")
+                logger.debug(f"TNP v4.0: {len(face_shape_ids)}/{len(self._shell_opening_faces)} Face-ShapeIDs für Shell gefunden")
 
-            # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             cmd = AddFeatureCommand(body, shell_feature, self, description=f"Shell ({thickness}mm)")
             self.undo_stack.push(cmd)
 
@@ -9163,7 +9212,7 @@ class MainWindow(QMainWindow):
             if is_new_body:
                 # Neuen Body erstellen
                 from modeling import Body
-                target_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}")
+                target_body = Body(name=f"Sweep_{len(self.document.bodies) + 1}", document=self.document)
                 target_body.features.append(sweep_feature)
 
                 # Rebuild vor AddBodyCommand
@@ -9786,7 +9835,7 @@ class MainWindow(QMainWindow):
             is_new_body = operation == "New Body" or not self.document.bodies
             if is_new_body:
                 from modeling import Body
-                target_body = Body(name=f"Loft_{len(self.document.bodies) + 1}")
+                target_body = Body(name=f"Loft_{len(self.document.bodies) + 1}", document=self.document)
                 target_body.features.append(loft_feature)
 
                 # Rebuild vor AddBodyCommand
@@ -10345,7 +10394,7 @@ class MainWindow(QMainWindow):
         from modeling import Body
 
         # Neuen Body erstellen
-        new_b = Body(name=f"{body.name}_Kopie")
+        new_b = Body(name=f"{body.name}_Kopie", document=self.document)
 
         # Build123d Solid kopieren
         # HINWEIS: Build123d Part/Solid hat keine .copy() Methode!
@@ -10379,7 +10428,7 @@ class MainWindow(QMainWindow):
         self._update_body_from_build123d(new_b, new_b._build123d_solid)
 
         # Zum Document hinzufügen
-        self.document.bodies.append(new_b)
+        self.document.add_body(new_b, set_active=False)
 
         # UI aktualisieren
         self.browser.refresh()
