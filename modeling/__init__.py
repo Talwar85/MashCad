@@ -363,7 +363,7 @@ class SweepFeature(Feature):
     Build123d API: sweep(sections, path, is_frenet=False)
     OCP Fallback: BRepOffsetAPI_MakePipe
 
-    TNP v3.0: ShapeIDs für Profile und Path bei Body-Referenzen.
+    TNP v4.0: ShapeIDs für Profile und Path bei Body-Referenzen.
     Phase 8: Erweitert mit Twist, Skalierung und Auxiliary Spine
     """
     profile_data: dict = field(default_factory=dict)
@@ -382,7 +382,7 @@ class SweepFeature(Feature):
     #   "body_id": str | None
     # }
     
-    # TNP v4.0: ShapeIDs für Body-Referenzen
+    # TNP v4.0: ShapeIDs für Body-Referenzen (primary)
     profile_shape_id: Any = None  # ShapeID für Body-Face Profile
     path_shape_id: Any = None     # ShapeID für Body-Edge Path
 
@@ -448,7 +448,7 @@ class HoleFeature(Feature):
     Bohrung in eine Fläche.
     Typen: simple (Durchgangsbohrung/Sackloch), counterbore, countersink.
     
-    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
+    TNP v4.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
     """
     hole_type: str = "simple"  # "simple", "counterbore", "countersink"
     diameter: float = 8.0
@@ -456,7 +456,7 @@ class HoleFeature(Feature):
     depth: float = 0.0  # 0 = through all
     depth_formula: Optional[str] = None
     
-    # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
+    # TNP v4.0: Persistent ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
     
     # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
@@ -484,12 +484,12 @@ class DraftFeature(Feature):
     Entformungsschräge (Draft/Taper) auf Flächen.
     Build123d: draft() auf selektierte Faces.
     
-    TNP v3.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
+    TNP v4.0: Verwendet ShapeIDs + GeometricFaceSelector für stabile Face-Referenzierung.
     """
     draft_angle: float = 5.0  # Grad
     pull_direction: Tuple[float, float, float] = (0, 0, 1)
     
-    # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
+    # TNP v4.0: Persistent ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
     
     # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
@@ -614,11 +614,11 @@ class NSidedPatchFeature(Feature):
     """
     N-Sided Patch - Boundary-Edges mit glatter Fläche füllen.
     
-    TNP v3.0: ShapeIDs für stabile Edge-Referenzen.
+    TNP v4.0: ShapeIDs für stabile Edge-Referenzen.
     """
     edge_selectors: list = field(default_factory=list)  # Liste von (center, direction) Tupeln
     
-    # TNP v3.0: ShapeIDs für Edges (Primary)
+    # TNP v4.0: ShapeIDs für Edges (Primary)
     edge_shape_ids: List = None  # List[ShapeID]
     
     # Geometric Selectors als Fallback
@@ -2303,13 +2303,81 @@ class Body:
 
         Phase 8: Unterstützt Twist und Skalierung
         """
-        # Profil konvertieren
-        profile_face = self._profile_data_to_face(feature.profile_data)
+        profile_face = None
+        shape_service = None
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            shape_service = self._document._shape_naming_service
+
+        # TNP v4.0: Profil-Face primär über ShapeID auflösen
+        if current_solid is not None and feature.profile_shape_id and shape_service:
+            try:
+                resolved_ocp, method = shape_service.resolve_shape_with_method(
+                    feature.profile_shape_id, current_solid
+                )
+                if resolved_ocp is not None:
+                    from build123d import Face
+                    profile_face = Face(resolved_ocp)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"Sweep: Profil via ShapeID aufgelöst (method={method})")
+            except Exception as e:
+                logger.debug(f"Sweep: Profil-ShapeID Auflösung fehlgeschlagen: {e}")
+
+        # TNP v4.0 Fallback: GeometricFaceSelector
+        if profile_face is None and current_solid is not None and feature.profile_geometric_selector:
+            try:
+                from modeling.geometric_selector import GeometricFaceSelector
+                selectors = [feature.profile_geometric_selector]
+                if isinstance(feature.profile_geometric_selector, list):
+                    selectors = feature.profile_geometric_selector
+
+                all_faces = list(current_solid.faces()) if hasattr(current_solid, 'faces') else []
+                for selector_data in selectors:
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    elif hasattr(selector_data, 'find_best_match'):
+                        geo_sel = selector_data
+                    else:
+                        continue
+
+                    best_face = geo_sel.find_best_match(all_faces)
+                    if best_face is not None:
+                        profile_face = best_face
+                        break
+
+                if profile_face is not None:
+                    if feature.profile_geometric_selector is None:
+                        try:
+                            feature.profile_geometric_selector = (
+                                GeometricFaceSelector.from_face(profile_face).to_dict()
+                            )
+                        except Exception:
+                            pass
+
+                    if shape_service and not feature.profile_shape_id:
+                        shape_id = shape_service.find_shape_id_by_face(profile_face)
+                        if shape_id is None and hasattr(profile_face, 'wrapped'):
+                            fc = profile_face.center()
+                            area = profile_face.area if hasattr(profile_face, 'area') else 0.0
+                            shape_id = shape_service.register_shape(
+                                ocp_shape=profile_face.wrapped,
+                                shape_type=ShapeType.FACE,
+                                feature_id=feature.id,
+                                local_index=0,
+                                geometry_data=(fc.X, fc.Y, fc.Z, area)
+                            )
+                        if shape_id is not None:
+                            feature.profile_shape_id = shape_id
+            except Exception as e:
+                logger.debug(f"Sweep: Profil über GeometricSelector fehlgeschlagen: {e}")
+
+        # Legacy-Fallback: Profil aus gespeicherten Geometriedaten
+        if profile_face is None:
+            profile_face = self._profile_data_to_face(feature.profile_data)
         if profile_face is None:
             raise ValueError("Konnte Profil-Face nicht erstellen")
 
         # Pfad auflösen
-        path_wire = self._resolve_path(feature.path_data, current_solid)
+        path_wire = self._resolve_path(feature.path_data, current_solid, feature)
         if path_wire is None:
             raise ValueError("Konnte Pfad nicht auflösen")
 
@@ -2850,51 +2918,134 @@ class Body:
         if current_solid is None:
             raise ValueError("N-Sided Patch benötigt einen existierenden Körper")
 
-        import numpy as np
-
-        if not feature.edge_selectors or len(feature.edge_selectors) < 3:
-            raise ValueError(f"Mindestens 3 Kanten nötig, erhalten: {len(feature.edge_selectors) if feature.edge_selectors else 0}")
-
-        # Edges im Solid auflösen
         all_edges = current_solid.edges() if hasattr(current_solid, 'edges') else []
         if not all_edges:
             raise ValueError("Solid hat keine Kanten")
+        if not feature.edge_shape_ids and not feature.geometric_selectors and not feature.edge_selectors:
+            raise ValueError("N-Sided Patch benötigt mindestens 3 Kanten-Referenzen")
 
+        import numpy as np
         resolved_edges = []
-        for selector in feature.edge_selectors:
-            # Selector ist (center_x, center_y, center_z) oder ((cx,cy,cz), (dx,dy,dz))
-            if isinstance(selector, (list, tuple)) and len(selector) == 2:
-                if isinstance(selector[0], (list, tuple)):
-                    center = np.array(selector[0])
+
+        def _is_same_edge(edge_a, edge_b) -> bool:
+            try:
+                wa = edge_a.wrapped if hasattr(edge_a, 'wrapped') else edge_a
+                wb = edge_b.wrapped if hasattr(edge_b, 'wrapped') else edge_b
+                return wa.IsSame(wb)
+            except Exception:
+                return edge_a is edge_b
+
+        def _append_unique(edge_obj) -> None:
+            if edge_obj is None:
+                return
+            for existing in resolved_edges:
+                if _is_same_edge(existing, edge_obj):
+                    return
+            resolved_edges.append(edge_obj)
+
+        # TNP v4.0 PRIMARY: ShapeID-basierte Auflösung
+        if feature.edge_shape_ids:
+            tnp_edges = self._resolve_edges_tnp(current_solid, feature)
+            for edge in tnp_edges:
+                _append_unique(edge)
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"N-Sided Patch: {len(tnp_edges)}/{len(feature.edge_shape_ids)} Edges via ShapeIDs aufgelöst")
+
+        # TNP v4.0 SECONDARY: GeometricEdgeSelector
+        if len(resolved_edges) < 3 and feature.geometric_selectors:
+            try:
+                from modeling.geometric_selector import GeometricEdgeSelector
+                for selector_data in feature.geometric_selectors:
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricEdgeSelector.from_dict(selector_data)
+                    elif hasattr(selector_data, 'find_best_match'):
+                        geo_sel = selector_data
+                    else:
+                        continue
+                    best_edge = geo_sel.find_best_match(all_edges)
+                    _append_unique(best_edge)
+            except Exception as e:
+                logger.debug(f"N-Sided Patch: GeometricSelector-Auflösung fehlgeschlagen: {e}")
+
+        # Legacy-Fallback: Punkt-Selektoren (abwärtskompatibel)
+        if len(resolved_edges) < 3 and feature.edge_selectors:
+            legacy_tol = 5.0
+            try:
+                bb = current_solid.bounding_box()
+                diag = ((bb.max.X - bb.min.X) ** 2 +
+                        (bb.max.Y - bb.min.Y) ** 2 +
+                        (bb.max.Z - bb.min.Z) ** 2) ** 0.5
+                legacy_tol = min(15.0, max(2.0, diag * 0.02))
+            except Exception:
+                pass
+
+            for selector in feature.edge_selectors:
+                # Selector ist (center_x, center_y, center_z) oder ((cx,cy,cz), (dx,dy,dz))
+                if isinstance(selector, (list, tuple)) and len(selector) == 2:
+                    if isinstance(selector[0], (list, tuple)):
+                        center = np.array(selector[0])
+                    else:
+                        center = np.array(selector)
                 else:
                     center = np.array(selector)
-            else:
-                center = np.array(selector)
 
-            best_edge = None
-            best_dist = float('inf')
-            for edge in all_edges:
-                try:
-                    ec = edge.center()
-                    ec_arr = np.array([ec.X, ec.Y, ec.Z])
-                    dist = np.linalg.norm(ec_arr - center)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_edge = edge
-                except Exception:
-                    continue
+                best_edge = None
+                best_dist = float('inf')
+                for edge in all_edges:
+                    try:
+                        ec = edge.center()
+                        ec_arr = np.array([ec.X, ec.Y, ec.Z])
+                        dist = np.linalg.norm(ec_arr - center)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_edge = edge
+                    except Exception:
+                        continue
 
-            # Größere Toleranz nach Boolean-Operationen (Kanten können sich verschieben)
-            if best_edge is not None and best_dist < 50.0:  # 50mm Toleranz
-                resolved_edges.append(best_edge)
-                if best_dist > 5.0:
-                    logger.debug(f"Edge aufgelöst mit größerer Distanz: {best_dist:.2f}mm")
-            else:
-                logger.warning(f"Edge nicht aufgelöst (dist={best_dist:.2f}mm)")
+                if best_edge is not None and best_dist < legacy_tol:
+                    _append_unique(best_edge)
+                else:
+                    logger.debug(f"N-Sided Patch: Legacy-Selector nicht aufgelöst (dist={best_dist:.2f}mm)")
+
+        # Für zukünftige Rebuilds ShapeIDs + GeometricSelectors persistieren
+        if resolved_edges and self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                from modeling.geometric_selector import GeometricEdgeSelector
+                service = self._document._shape_naming_service
+
+                new_shape_ids = []
+                new_geo_selectors = []
+                for idx, edge in enumerate(resolved_edges):
+                    new_geo_selectors.append(GeometricEdgeSelector.from_edge(edge).to_dict())
+                    shape_id = service.find_shape_id_by_edge(edge)
+                    if shape_id is None and hasattr(edge, 'wrapped'):
+                        ec = edge.center()
+                        edge_len = edge.length if hasattr(edge, 'length') else 0.0
+                        shape_id = service.register_shape(
+                            ocp_shape=edge.wrapped,
+                            shape_type=ShapeType.EDGE,
+                            feature_id=feature.id,
+                            local_index=idx,
+                            geometry_data=(ec.X, ec.Y, ec.Z, edge_len)
+                        )
+                    if shape_id is not None:
+                        new_shape_ids.append(shape_id)
+
+                if new_shape_ids:
+                    feature.edge_shape_ids = new_shape_ids
+                if new_geo_selectors:
+                    feature.geometric_selectors = new_geo_selectors
+            except Exception as e:
+                logger.debug(f"N-Sided Patch: Persistieren von ShapeIDs fehlgeschlagen: {e}")
 
         if len(resolved_edges) < 3:
             # Weniger strikt: Wenn Body trotzdem valid ist, nicht als Fehler behandeln
-            logger.warning(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
+            expected = (
+                len(feature.edge_shape_ids or [])
+                or len(feature.geometric_selectors or [])
+                or len(feature.edge_selectors or [])
+            )
+            logger.warning(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
             # Prüfe ob Body bereits geschlossen ist - dann ist das Feature evtl. schon angewendet
             try:
                 from OCP.BRepCheck import BRepCheck_Analyzer
@@ -2905,7 +3056,7 @@ class Body:
                     return current_solid
             except Exception:
                 pass
-            raise ValueError(f"Nur {len(resolved_edges)} von {len(feature.edge_selectors)} Kanten aufgelöst")
+            raise ValueError(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
 
         logger.debug(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
 
@@ -3045,15 +3196,18 @@ class Body:
         if current_solid is None:
             raise ValueError("Hollow benötigt einen existierenden Körper")
 
+        # TNP v4.0: Face-Referenzen vor der Shell-Ausführung aktualisieren
+        self._update_face_selectors_for_feature(feature, current_solid)
+
         # Step 1: Create closed shell (reuse shell logic)
         # TNP v4.0: Leite opening_face_shape_ids und selectors durch
         shell_feat = ShellFeature(
             thickness=feature.wall_thickness,
             opening_face_selectors=feature.opening_face_selectors if feature.opening_face_selectors else []
         )
-        # Übertrage auch ShapeIDs an Shell-Feature
+        # Übertrage Opening-ShapeIDs auf ShellFeature.face_shape_ids (TNP v4.0)
         if feature.opening_face_shape_ids:
-            shell_feat.opening_face_shape_ids = feature.opening_face_shape_ids
+            shell_feat.face_shape_ids = list(feature.opening_face_shape_ids)
 
         hollowed = self._compute_shell(shell_feat, current_solid)
         if hollowed is None:
@@ -3144,8 +3298,30 @@ class Body:
         from build123d import Solid, Cylinder, Location, Vector, Axis, Plane, Align
         import math
 
+        # TNP v4.0: Face-Referenzen auflösen/aktualisieren
+        target_faces = self._resolve_feature_faces(feature, current_solid)
+        has_face_refs = bool(feature.face_shape_ids or feature.face_selectors)
+        if has_face_refs and not target_faces:
+            raise ValueError("Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden")
+
         pos = Vector(*feature.position)
         d = Vector(*feature.direction)
+        if target_faces:
+            # Falls Richtung ungültig ist, aus Face-Normale ableiten
+            try:
+                face_center = target_faces[0].center()
+                face_normal = target_faces[0].normal_at(face_center)
+                if d.length < 1e-9:
+                    d = Vector(-face_normal.X, -face_normal.Y, -face_normal.Z)
+                if pos.length < 1e-9:
+                    pos = Vector(face_center.X, face_center.Y, face_center.Z)
+            except Exception:
+                pass
+
+        if d.length < 1e-9:
+            raise ValueError("Hole: Ungültige Bohrungsrichtung (Nullvektor)")
+
+        d = d.normalized()
         radius = feature.diameter / 2.0
 
         # Tiefe: 0 = through all (verwende grosse Tiefe)
@@ -3160,8 +3336,8 @@ class Body:
 
                 result = brepfeat_cylindrical_hole(
                     base_solid=current_solid,
-                    position=feature.position,
-                    direction=feature.direction,
+                    position=(pos.X, pos.Y, pos.Z),
+                    direction=(d.X, d.Y, d.Z),
                     diameter=feature.diameter,
                     depth=feature.depth  # 0 = through all
                 )
@@ -3282,18 +3458,14 @@ class Body:
         """
         Wendet Draft/Taper auf selektierte Flaechen an.
         Verwendet OCP BRepOffsetAPI_DraftAngle.
-        Wenn face_selectors vorhanden: nur passende Faces draften.
+        TNP v4.0: Face-Selektion erfolgt über face_shape_ids (ShapeNamingService).
         """
         import math
-        import numpy as np
         from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
         from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
         from OCP.TopAbs import TopAbs_FACE
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopoDS import TopoDS
-        from OCP.BRep import BRep_Tool
-        from OCP.BRepAdaptor import BRepAdaptor_Surface
-        from OCP.GeomAbs import GeomAbs_Plane
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
@@ -3307,53 +3479,34 @@ class Body:
         # Neutrale Ebene (Basis der Entformung)
         neutral_plane = gp_Pln(gp_Pnt(0, 0, 0), pull_dir)
 
-        # Selektierte Normalen (wenn vorhanden)
-        selected_normals = None
-        if feature.face_selectors:
-            selected_normals = [s.get('normal') for s in feature.face_selectors if 'normal' in s]
+        target_faces = self._resolve_feature_faces(feature, current_solid)
+        has_face_refs = bool(feature.face_shape_ids or feature.face_selectors)
+
+        if has_face_refs and not target_faces:
+            raise ValueError("Draft: Ziel-Faces konnten via TNP v4.0 nicht aufgelöst werden")
 
         draft_op = BRepOffsetAPI_DraftAngle(shape)
-
-        explorer = TopExp_Explorer(shape, TopAbs_FACE)
         face_count = 0
 
-        while explorer.More():
-            face = TopoDS.Face_s(explorer.Current())
-
-            # Wenn Faces selektiert: nur passende draften
-            if selected_normals:
+        if target_faces:
+            for target_face in target_faces:
                 try:
-                    adaptor = BRepAdaptor_Surface(face)
-                    if adaptor.GetType() == GeomAbs_Plane:
-                        pln = adaptor.Plane()
-                        ax = pln.Axis().Direction()
-                        face_normal = np.array([ax.X(), ax.Y(), ax.Z()])
-                        # Orientierung beachten
-                        if face.IsEqual(face):  # immer True, aber face orientation check
-                            from OCP.TopAbs import TopAbs_REVERSED
-                            if face.Orientation() == TopAbs_REVERSED:
-                                face_normal = -face_normal
-
-                        # Prüfe ob diese Normale in der Selektion ist
-                        matched = False
-                        for sel_n in selected_normals:
-                            sel_arr = np.array(sel_n)
-                            if np.allclose(face_normal, sel_arr, atol=0.1):
-                                matched = True
-                                break
-                        if not matched:
-                            explorer.Next()
-                            continue
+                    topo_face = target_face.wrapped if hasattr(target_face, 'wrapped') else target_face
+                    draft_op.Add(TopoDS.Face_s(topo_face), pull_dir, angle_rad, neutral_plane)
+                    face_count += 1
                 except Exception:
-                    explorer.Next()
-                    continue
-
-            try:
-                draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
-                face_count += 1
-            except Exception:
-                pass  # Face nicht draftbar (z.B. parallel zur Pull-Direction)
-            explorer.Next()
+                    pass
+        else:
+            # Kein explizites Face-Target -> alle Faces draften (Legacy-Verhalten)
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            while explorer.More():
+                face = TopoDS.Face_s(explorer.Current())
+                try:
+                    draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
+                    face_count += 1
+                except Exception:
+                    pass
+                explorer.Next()
 
         if face_count == 0:
             raise ValueError("Keine Flaechen konnten gedraftet werden")
@@ -3651,7 +3804,7 @@ class Body:
             logger.debug(f"Profil-zu-Face Konvertierung fehlgeschlagen: {e}")
             return None
 
-    def _resolve_path(self, path_data: dict, current_solid):
+    def _resolve_path(self, path_data: dict, current_solid, feature: Optional['SweepFeature'] = None):
         """
         Löst Pfad-Daten zu Build123d Wire auf.
 
@@ -3673,20 +3826,100 @@ class Body:
                 return self._sketch_edge_to_wire(path_data)
 
             elif path_type == 'body_edge':
-                from build123d import Wire
+                from build123d import Wire, Edge, Vector
 
-                # PRIMÄR: Direkte Build123d Edges verwenden (robuster)
+                all_edges = list(current_solid.edges()) if current_solid and hasattr(current_solid, 'edges') else []
+                shape_service = None
+                if self._document and hasattr(self._document, '_shape_naming_service'):
+                    shape_service = self._document._shape_naming_service
+
+                def _persist_path_shape_id(edge_obj) -> None:
+                    if not feature or not shape_service or feature.path_shape_id is not None:
+                        return
+                    try:
+                        if feature.path_geometric_selector is None:
+                            try:
+                                from modeling.geometric_selector import GeometricEdgeSelector
+                                feature.path_geometric_selector = GeometricEdgeSelector.from_edge(edge_obj).to_dict()
+                            except Exception:
+                                pass
+
+                        shape_id = shape_service.find_shape_id_by_edge(edge_obj)
+                        if shape_id is None and hasattr(edge_obj, 'wrapped'):
+                            ec = edge_obj.center()
+                            edge_len = edge_obj.length if hasattr(edge_obj, 'length') else 0.0
+                            shape_id = shape_service.register_shape(
+                                ocp_shape=edge_obj.wrapped,
+                                shape_type=ShapeType.EDGE,
+                                feature_id=feature.id,
+                                local_index=0,
+                                geometry_data=(ec.X, ec.Y, ec.Z, edge_len)
+                            )
+                        if shape_id is not None:
+                            feature.path_shape_id = shape_id
+                    except Exception as e:
+                        logger.debug(f"Sweep: Konnte Path-ShapeID nicht persistieren: {e}")
+
+                # TNP v4.0: ShapeID-basierte Pfad-Auflösung
+                if feature and feature.path_shape_id and shape_service:
+                    try:
+                        resolved_ocp, method = shape_service.resolve_shape_with_method(
+                            feature.path_shape_id, current_solid
+                        )
+                        if resolved_ocp is not None:
+                            matching_edge = None
+                            if all_edges:
+                                matching_edge = self._find_matching_edge_in_solid(
+                                    resolved_ocp, all_edges, tolerance=0.1
+                                )
+                            if matching_edge is None:
+                                matching_edge = Edge(resolved_ocp)
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"Sweep: Path via ShapeID aufgelöst (method={method})")
+                            return Wire([matching_edge])
+                    except Exception as e:
+                        logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
+
+                # TNP v4.0 Fallback: GeometricEdgeSelector
+                path_geo_selector = getattr(feature, 'path_geometric_selector', None) if feature else None
+                if path_geo_selector and all_edges:
+                    try:
+                        from modeling.geometric_selector import GeometricEdgeSelector
+                        if isinstance(path_geo_selector, dict):
+                            geo_sel = GeometricEdgeSelector.from_dict(path_geo_selector)
+                        else:
+                            geo_sel = path_geo_selector
+
+                        best_edge = geo_sel.find_best_match(all_edges)
+                        if best_edge is not None:
+                            _persist_path_shape_id(best_edge)
+                            return Wire([best_edge])
+                    except Exception as e:
+                        logger.debug(f"Sweep: GeometricEdgeSelector Fallback fehlgeschlagen: {e}")
+
+                # Sekundär: Direkte Build123d Edges (Session-basiert)
                 build123d_edges = path_data.get('build123d_edges', [])
                 if build123d_edges:
+                    _persist_path_shape_id(build123d_edges[0])
                     logger.debug(f"Sweep: Verwende {len(build123d_edges)} direkte Build123d Edge(s)")
                     return Wire(build123d_edges)
 
-                # FALLBACK: Edge über Punkt-Selektor finden (center-distance matching)
+                # Legacy-Fallback: Edge über Punkt-Selektor finden (abwärtskompatibel)
                 edge_selector = path_data.get('edge_selector')
-                if edge_selector and current_solid:
+                if edge_selector and all_edges:
                     selectors = edge_selector if isinstance(edge_selector, list) else [edge_selector]
-                    all_edges = list(current_solid.edges()) if hasattr(current_solid, 'edges') else []
                     found_edges = []
+
+                    legacy_tol = 5.0
+                    try:
+                        bb = current_solid.bounding_box()
+                        diag = ((bb.max.X - bb.min.X) ** 2 +
+                                (bb.max.Y - bb.min.Y) ** 2 +
+                                (bb.max.Z - bb.min.Z) ** 2) ** 0.5
+                        legacy_tol = min(15.0, max(2.0, diag * 0.02))
+                    except Exception:
+                        pass
+
                     for sel in selectors:
                         best_edge = None
                         min_dist = float('inf')
@@ -3700,11 +3933,12 @@ class Body:
                                         best_edge = edge
                                 except Exception:
                                     pass
-                            if best_edge and min_dist < 20.0:
+                            if best_edge and min_dist < legacy_tol:
                                 found_edges.append(best_edge)
                         except Exception:
                             pass
                     if found_edges:
+                        _persist_path_shape_id(found_edges[0])
                         logger.debug(f"Sweep: {len(found_edges)} Edge(s) über Selektor aufgelöst")
                         return Wire(found_edges)
 
@@ -3892,54 +4126,159 @@ class Body:
             logger.debug(f"Face-Scoring fehlgeschlagen: {e}")
             return 0.0
 
+    def _resolve_feature_faces(self, feature, solid):
+        """
+        TNP v4.0: Löst Face-Referenzen eines Features auf und migriert Legacy-Daten.
+
+        Reihenfolge:
+        1. ShapeIDs via ShapeNamingService
+        2. GeometricFaceSelector-Fallback (Legacy/Recovery)
+        """
+        if solid is None or not hasattr(solid, 'faces'):
+            return []
+
+        all_faces = list(solid.faces())
+        if not all_faces:
+            return []
+
+        from modeling.geometric_selector import GeometricFaceSelector
+
+        # Feature-spezifische Felder bestimmen
+        if isinstance(feature, HollowFeature):
+            shape_attr = "opening_face_shape_ids"
+            selector_attr = "opening_face_selectors"
+        elif isinstance(feature, ShellFeature):
+            shape_attr = "face_shape_ids"
+            selector_attr = "opening_face_selectors"
+        else:
+            shape_attr = "face_shape_ids"
+            selector_attr = "face_selectors"
+
+        shape_ids = list(getattr(feature, shape_attr, []) or [])
+        selectors = list(getattr(feature, selector_attr, []) or [])
+        if not shape_ids and not selectors:
+            return []
+
+        service = None
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            service = self._document._shape_naming_service
+
+        resolved_faces = []
+        resolved_shape_ids = []
+        resolved_indices = set()
+
+        def _same_face(face_a, face_b) -> bool:
+            try:
+                wa = face_a.wrapped if hasattr(face_a, 'wrapped') else face_a
+                wb = face_b.wrapped if hasattr(face_b, 'wrapped') else face_b
+                return wa.IsSame(wb)
+            except Exception:
+                return face_a is face_b
+
+        def _append_face(face_obj, shape_id=None, selector_index=None) -> None:
+            if face_obj is None:
+                return
+            for existing in resolved_faces:
+                if _same_face(existing, face_obj):
+                    return
+            resolved_faces.append(face_obj)
+            if shape_id is not None:
+                resolved_shape_ids.append(shape_id)
+            if selector_index is not None:
+                resolved_indices.add(selector_index)
+
+        # 1) ShapeID Resolution (TNP v4.0 primary)
+        if service:
+            for idx, shape_id in enumerate(shape_ids):
+                if not hasattr(shape_id, 'uuid'):
+                    continue
+                try:
+                    resolved_ocp, method = service.resolve_shape_with_method(shape_id, solid)
+                    if resolved_ocp is None:
+                        continue
+                    from build123d import Face
+                    _append_face(Face(resolved_ocp), shape_id=shape_id, selector_index=idx)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(
+                            f"{feature.name}: Face via ShapeID aufgelöst "
+                            f"(method={method})"
+                        )
+                except Exception as e:
+                    logger.debug(f"{feature.name}: Face-ShapeID Auflösung fehlgeschlagen: {e}")
+
+        # 2) Geometric selector fallback (Legacy)
+        for idx, selector_data in enumerate(selectors):
+            if idx in resolved_indices:
+                continue
+
+            try:
+                if isinstance(selector_data, dict):
+                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                elif hasattr(selector_data, 'find_best_match'):
+                    geo_sel = selector_data
+                else:
+                    continue
+            except Exception:
+                continue
+
+            best_face = geo_sel.find_best_match(all_faces)
+            if best_face is None:
+                continue
+
+            shape_id = None
+            if service:
+                try:
+                    shape_id = service.find_shape_id_by_face(best_face)
+                    if shape_id is None and hasattr(best_face, 'wrapped'):
+                        fc = best_face.center()
+                        area = best_face.area if hasattr(best_face, 'area') else 0.0
+                        shape_id = service.register_shape(
+                            ocp_shape=best_face.wrapped,
+                            shape_type=ShapeType.FACE,
+                            feature_id=feature.id,
+                            local_index=idx,
+                            geometry_data=(fc.X, fc.Y, fc.Z, area)
+                        )
+                except Exception as e:
+                    logger.debug(f"{feature.name}: Face-ShapeID Registrierung fehlgeschlagen: {e}")
+
+            _append_face(best_face, shape_id=shape_id, selector_index=idx)
+
+        if not resolved_faces:
+            return []
+
+        # Persistiere aktualisierte Referenzen zurück ins Feature
+        try:
+            updated_selectors = [
+                GeometricFaceSelector.from_face(face).to_dict()
+                for face in resolved_faces
+            ]
+            setattr(feature, selector_attr, updated_selectors)
+        except Exception as e:
+            logger.debug(f"{feature.name}: Selector-Update fehlgeschlagen: {e}")
+
+        if resolved_shape_ids:
+            setattr(feature, shape_attr, resolved_shape_ids)
+
+        return resolved_faces
+
     def _resolve_faces_for_shell(self, solid, face_selectors: List[dict],
                                 feature: 'ShellFeature' = None):
         """
         Löst Face-Selektoren für Shell-Öffnungen auf.
-
-        TNP v4.0: Ausschließlich über ShapeIDs.
-
-        Args:
-            solid: Build123d Solid
-            face_selectors: Liste von GeometricFaceSelector.to_dict() Dicts
-            feature: Optional ShellFeature mit face_shape_ids (TNP v4.0)
-
-        Returns:
-            Liste von Build123d Faces
+        TNP v4.0: ShapeID-first, GeometricSelector als Fallback.
         """
-        if not face_selectors or solid is None:
+        if solid is None:
             return []
 
-        all_faces = solid.faces() if hasattr(solid, 'faces') else []
-        if not all_faces:
-            logger.warning("Shell: Solid hat keine Faces")
-            return []
+        if feature is None:
+            temp_feature = ShellFeature(opening_face_selectors=face_selectors or [])
+            return self._resolve_feature_faces(temp_feature, solid)
 
-        shape_ids = getattr(feature, 'face_shape_ids', []) if feature else []
-        if not shape_ids:
-            logger.warning("Shell: Keine ShapeIDs vorhanden, kann Faces nicht auflösen")
-            return []
+        if face_selectors and not getattr(feature, "opening_face_selectors", None):
+            feature.opening_face_selectors = list(face_selectors)
 
-        if not self._document or not hasattr(self._document, '_shape_naming_service'):
-            logger.error("Shell: ShapeNamingService nicht verfügbar")
-            return []
-
-        resolved = []
-        service = self._document._shape_naming_service
-        for shape_id in shape_ids:
-            face, method = service.resolve_shape_with_method(shape_id, solid)
-            if face is not None:
-                resolved.append(face)
-                logger.debug(f"Shell: Face via TNP v4.0 aufgelöst (method={method})")
-            else:
-                logger.warning(f"Shell: ShapeID {shape_id.uuid[:8]} konnte nicht aufgelöst werden")
-
-        if resolved:
-            logger.info(f"Shell: {len(resolved)}/{len(shape_ids)} Faces via TNP v4.0 aufgelöst")
-        else:
-            logger.error(f"Shell: Keine Faces via TNP v4.0 aufgelöst ({len(shape_ids)} ShapeIDs versucht)")
-
-        return resolved
+        return self._resolve_feature_faces(feature, solid)
 
     def _update_edge_selectors_after_operation(self, solid, current_feature_index: int = -1):
         """
@@ -4710,81 +5049,20 @@ class Body:
 
     def _update_face_selectors_for_feature(self, feature, solid):
         """
-        Aktualisiert Face-Selektoren eines SPEZIFISCHEN Features vor Ausführung.
-        
-        TNP-CRITICAL: Diese Methode muss BEVOR Shell/Hole/Draft ausgeführt werden,
-        weil das Solid sich durch vorherige Features verändert haben kann.
-        
-        Args:
-            feature: ShellFeature, HoleFeature oder DraftFeature
-            solid: Das aktuelle Solid (nach allen vorherigen Features)
+        TNP v4.0: Aktualisiert Face-Referenzen eines Features vor Ausführung.
+
+        Primary: ShapeIDs via ShapeNamingService
+        Fallback: GeometricFaceSelector (nur Legacy-Recovery)
         """
-        if not solid or not hasattr(solid, 'faces'):
+        if not solid:
             return
-        
-        all_faces = list(solid.faces())
-        if not all_faces:
+
+        if not isinstance(feature, (ShellFeature, HoleFeature, DraftFeature, HollowFeature)):
             return
-        
-        from modeling.geometric_selector import GeometricFaceSelector
-        
-        # Hole die Face-Selektoren je nach Feature-Typ
-        face_selectors = []
-        if isinstance(feature, (ShellFeature, HoleFeature, DraftFeature)):
-            face_selectors = getattr(feature, 'face_selectors', []) or getattr(feature, 'opening_face_selectors', [])
-        
-        if not face_selectors:
-            return
-        
-        updated_count = 0
-        new_selectors = []
-        
-        for selector_dict in face_selectors:
-            try:
-                # Konvertiere zu GeometricFaceSelector wenn nötig
-                if isinstance(selector_dict, dict):
-                    geo_sel = GeometricFaceSelector.from_dict(selector_dict)
-                elif hasattr(selector_dict, 'center'):
-                    geo_sel = selector_dict
-                else:
-                    new_selectors.append(selector_dict)
-                    continue
-                
-                # Finde beste matching Face im aktuellen Solid
-                best_face = None
-                best_score = -1.0
-                
-                for face in all_faces:
-                    try:
-                        score = self._score_face_match(face, geo_sel)
-                        if score > best_score:
-                            best_score = score
-                            best_face = face
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        continue
-                
-                if best_face and best_score > 0.4:
-                    # Erstelle neuen Selector mit aktualisierten Werten
-                    new_selector = GeometricFaceSelector.from_face(best_face)
-                    new_selectors.append(new_selector.to_dict())
-                    updated_count += 1
-                else:
-                    # Face nicht gefunden - behalte alten Selector bei
-                    logger.debug(f"Face nicht gefunden für Feature {feature.name} (score={best_score:.2%}), behalte alten Selector")
-                    new_selectors.append(selector_dict)
-            except Exception as e:
-                logger.debug(f"Face-Selector Update fehlgeschlagen: {e}")
-                new_selectors.append(selector_dict)
-        
-        # Aktualisiere Feature (je nach Attribut-Name)
-        if isinstance(feature, ShellFeature):
-            feature.opening_face_selectors = new_selectors
-        else:
-            feature.face_selectors = new_selectors
-        
-        if updated_count > 0:
-            logger.debug(f"Feature '{feature.name}': {updated_count}/{len(face_selectors)} Faces aktualisiert")
+
+        resolved_faces = self._resolve_feature_faces(feature, solid)
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"{feature.name}: {len(resolved_faces)} Face-Referenzen aufgelöst (TNP v4.0)")
 
     def _ocp_extrude_face(self, face, amount, direction):
         """
@@ -5283,6 +5561,9 @@ class Body:
             # ================= HOLLOW (3D-Druck) =================
             elif isinstance(feature, HollowFeature):
                 if current_solid:
+                    # TNP v4.0: Opening-Faces vor Hollow aktualisieren
+                    self._update_face_selectors_for_feature(feature, current_solid)
+
                     def op_hollow():
                         return self._compute_hollow(feature, current_solid)
 
@@ -7278,16 +7559,28 @@ class Body:
                     "counterbore_depth": feat.counterbore_depth,
                     "countersink_angle": feat.countersink_angle,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs vollstaendig serialisieren
                 if feat.face_shape_ids:
-                    feat_dict["face_shape_ids"] = [
-                        {
-                            "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
-                        }
-                        for sid in feat.face_shape_ids
-                    ]
+                    serialized_face_ids = []
+                    for sid in feat.face_shape_ids:
+                        if hasattr(sid, "uuid"):
+                            serialized_face_ids.append({
+                                "uuid": sid.uuid,
+                                "shape_type": sid.shape_type.name,
+                                "feature_id": sid.feature_id,
+                                "local_index": sid.local_index,
+                                "geometry_hash": sid.geometry_hash,
+                                "timestamp": sid.timestamp
+                            })
+                        elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                            # Legacy-Compatibility: altes Format beibehalten
+                            serialized_face_ids.append({
+                                "feature_id": sid.feature_id,
+                                "local_id": sid.local_id,
+                                "shape_type": sid.shape_type.name
+                            })
+                    if serialized_face_ids:
+                        feat_dict["face_shape_ids"] = serialized_face_ids
 
             elif isinstance(feat, HollowFeature):
                 feat_dict.update({
@@ -7359,16 +7652,27 @@ class Body:
                     "pull_direction": list(feat.pull_direction),
                     "face_selectors": feat.face_selectors,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs vollstaendig serialisieren
                 if feat.face_shape_ids:
-                    feat_dict["face_shape_ids"] = [
-                        {
-                            "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
-                        }
-                        for sid in feat.face_shape_ids
-                    ]
+                    serialized_face_ids = []
+                    for sid in feat.face_shape_ids:
+                        if hasattr(sid, "uuid"):
+                            serialized_face_ids.append({
+                                "uuid": sid.uuid,
+                                "shape_type": sid.shape_type.name,
+                                "feature_id": sid.feature_id,
+                                "local_index": sid.local_index,
+                                "geometry_hash": sid.geometry_hash,
+                                "timestamp": sid.timestamp
+                            })
+                        elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                            serialized_face_ids.append({
+                                "feature_id": sid.feature_id,
+                                "local_id": sid.local_id,
+                                "shape_type": sid.shape_type.name
+                            })
+                    if serialized_face_ids:
+                        feat_dict["face_shape_ids"] = serialized_face_ids
 
             elif isinstance(feat, SplitFeature):
                 feat_dict.update({
@@ -7385,16 +7689,27 @@ class Body:
                     "degree": feat.degree,
                     "tangent": feat.tangent,
                 })
-                # TNP v3.0: ShapeIDs und GeometricSelectors serialisieren
+                # TNP v4.0: ShapeIDs und GeometricSelectors serialisieren
                 if feat.edge_shape_ids:
-                    feat_dict["edge_shape_ids"] = [
-                        {
-                            "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
-                        }
-                        for sid in feat.edge_shape_ids
-                    ]
+                    serialized_edge_ids = []
+                    for sid in feat.edge_shape_ids:
+                        if hasattr(sid, "uuid"):
+                            serialized_edge_ids.append({
+                                "uuid": sid.uuid,
+                                "shape_type": sid.shape_type.name,
+                                "feature_id": sid.feature_id,
+                                "local_index": sid.local_index,
+                                "geometry_hash": sid.geometry_hash,
+                                "timestamp": sid.timestamp
+                            })
+                        elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                            serialized_edge_ids.append({
+                                "feature_id": sid.feature_id,
+                                "local_id": sid.local_id,
+                                "shape_type": sid.shape_type.name
+                            })
+                    if serialized_edge_ids:
+                        feat_dict["edge_shape_ids"] = serialized_edge_ids
                 if feat.geometric_selectors:
                     feat_dict["geometric_selectors"] = [
                         gs.to_dict() if hasattr(gs, 'to_dict') else gs
@@ -7810,18 +8125,31 @@ class Body:
                 )
                 feat.diameter_formula = feat_dict.get("diameter_formula")
                 feat.depth_formula = feat_dict.get("depth_formula")
-                # TNP v3.0: ShapeIDs deserialisieren
+                # TNP v4.0: ShapeIDs deserialisieren (inkl. Legacy-Fallback)
                 if "face_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.face_shape_ids = []
-                    for sid_data in feat_dict["face_shape_ids"]:
+                    for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                            feat.face_shape_ids.append(ShapeID(
-                                feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
-                            ))
+                            local_index = int(sid_data.get("local_index", sid_data.get("local_id", idx)))
+                            if sid_data.get("uuid"):
+                                feat.face_shape_ids.append(ShapeID(
+                                    uuid=sid_data.get("uuid", ""),
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", ""),
+                                    local_index=local_index,
+                                    geometry_hash=sid_data.get("geometry_hash", f"legacy_face_{local_index}"),
+                                    timestamp=sid_data.get("timestamp", 0.0)
+                                ))
+                            else:
+                                # Legacy-Datei ohne uuid/local_index
+                                feat.face_shape_ids.append(ShapeID.create(
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                    local_index=local_index,
+                                    geometry_data=("legacy_face", feat_dict.get("id", feat.id), local_index)
+                                ))
 
             elif feat_class == "HollowFeature":
                 feat = HollowFeature(
@@ -7881,18 +8209,30 @@ class Body:
                     tangent=feat_dict.get("tangent", True),
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeIDs und GeometricSelectors deserialisieren
+                # TNP v4.0: ShapeIDs und GeometricSelectors deserialisieren
                 if "edge_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.edge_shape_ids = []
-                    for sid_data in feat_dict["edge_shape_ids"]:
+                    for idx, sid_data in enumerate(feat_dict["edge_shape_ids"]):
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "EDGE")]
-                            feat.edge_shape_ids.append(ShapeID(
-                                feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
-                            ))
+                            local_index = int(sid_data.get("local_index", sid_data.get("local_id", idx)))
+                            if sid_data.get("uuid"):
+                                feat.edge_shape_ids.append(ShapeID(
+                                    uuid=sid_data.get("uuid", ""),
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", ""),
+                                    local_index=local_index,
+                                    geometry_hash=sid_data.get("geometry_hash", f"legacy_edge_{local_index}"),
+                                    timestamp=sid_data.get("timestamp", 0.0)
+                                ))
+                            else:
+                                feat.edge_shape_ids.append(ShapeID.create(
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                    local_index=local_index,
+                                    geometry_data=("legacy_edge", feat_dict.get("id", feat.id), local_index)
+                                ))
                 if "geometric_selectors" in feat_dict:
                     from modeling.geometric_selector import GeometricEdgeSelector
                     feat.geometric_selectors = [
@@ -7974,18 +8314,30 @@ class Body:
                     face_selectors=converted_selectors,
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeIDs deserialisieren
+                # TNP v4.0: ShapeIDs deserialisieren (inkl. Legacy-Fallback)
                 if "face_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.face_shape_ids = []
-                    for sid_data in feat_dict["face_shape_ids"]:
+                    for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                            feat.face_shape_ids.append(ShapeID(
-                                feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
-                            ))
+                            local_index = int(sid_data.get("local_index", sid_data.get("local_id", idx)))
+                            if sid_data.get("uuid"):
+                                feat.face_shape_ids.append(ShapeID(
+                                    uuid=sid_data.get("uuid", ""),
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", ""),
+                                    local_index=local_index,
+                                    geometry_hash=sid_data.get("geometry_hash", f"legacy_face_{local_index}"),
+                                    timestamp=sid_data.get("timestamp", 0.0)
+                                ))
+                            else:
+                                feat.face_shape_ids.append(ShapeID.create(
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                    local_index=local_index,
+                                    geometry_data=("legacy_face", feat_dict.get("id", feat.id), local_index)
+                                ))
 
             elif feat_class == "SplitFeature":
                 feat = SplitFeature(
