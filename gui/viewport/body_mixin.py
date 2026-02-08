@@ -198,11 +198,11 @@ class BodyRenderingMixin:
                         # Create new edge actor
                         self.plotter.add_mesh(
                             edge_mesh_obj,
-                            color=(0.2, 0.2, 0.22),
-                            line_width=2.0,
+                            color=(0.15, 0.15, 0.17),
+                            line_width=1.5,
                             name=n_edge,
                             pickable=False,
-                            render_lines_as_tubes=True,
+                            render_lines_as_tubes=False,
                             lighting=False,
                         )
 
