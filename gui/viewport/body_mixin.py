@@ -170,6 +170,9 @@ class BodyRenderingMixin:
                     if n_mesh in self.plotter.renderer.actors:
                         actor = self.plotter.renderer.actors[n_mesh]
                         actor.SetVisibility(True)
+                        face_mapper = actor.GetMapper()
+                        face_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                        face_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(2, 2)
                         # Store hash for future comparisons
                         ActorPool._mesh_hashes[n_mesh] = ActorPool.compute_mesh_hash(mesh_obj)
                         logger.debug(f"🆕 New actor created for {bid}: {mesh_obj.n_points} pts")
@@ -205,24 +208,19 @@ class BodyRenderingMixin:
 
                         # Phase 2.2: Duplicate Mapper SetInputData entfernt (Feature Flag)
                         if is_enabled("optimized_actor_pooling"):
-                            # OPTIMIZED: add_mesh() hat bereits SetInputData gemacht
                             if n_edge in self.plotter.renderer.actors:
                                 edge_actor = self.plotter.renderer.actors[n_edge]
                                 edge_mapper = edge_actor.GetMapper()
-                                # Polygon Offset für Z-Fighting Vermeidung
                                 edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
+                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
                         else:
-                            # LEGACY: Mit redundantem SetInputData (und Bug!)
                             if n_edge in self.plotter.renderer.actors:
                                 edge_actor = self.plotter.renderer.actors[n_edge]
                                 edge_mapper = edge_actor.GetMapper()
-                                edge_mapper.SetInputData(edge_mesh_obj)  # Redundant!
-                            edge_mapper.Modified()  # BUG: außerhalb if → crash wenn Actor nicht existiert!
-
-                            # Polygon Offset für Z-Fighting Vermeidung
-                            edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                            edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1, 1)
+                                edge_mapper.SetInputData(edge_mesh_obj)
+                                edge_mapper.Modified()
+                                edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
 
                     actors_list.append(n_edge)
                 
