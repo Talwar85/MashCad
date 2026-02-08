@@ -127,6 +127,7 @@ class Feature:
     visible: bool = True
     suppressed: bool = False
     status: str = "OK" # OK, ERROR, WARNING
+    status_message: str = ""
 
 @dataclass
 class ExtrudeFeature(Feature):
@@ -191,10 +192,10 @@ class FilletFeature(Feature):
     """
     Fillet-Feature mit professionellem TNP (Topological Naming Problem) Handling.
     
-    TNP v3.0 Architektur:
+    TNP v4.0 Architektur:
     1. edge_shape_ids: Persistent ShapeIDs für History-Tracking
+    2. edge_indices: Stabile Topologie-Indizes (solid.edges()[idx])
     2. geometric_selectors: Geometrische Fingerabdrücke (Fallback)
-    3. edge_selectors: Legacy Point-Selektoren (Kompatibilität)
     
     Das Feature speichert ShapeIDs beim Erstellen und löst diese
     via TNPResolver zum Zeitpunkt der Ausführung auf.
@@ -202,14 +203,13 @@ class FilletFeature(Feature):
     radius: float = 2.0
     radius_formula: Optional[str] = None
     
-    # TNP v3.0: Persistent ShapeIDs (Primary)
+    # TNP v4.0: Persistent ShapeIDs (Primary)
     edge_shape_ids: List = None  # List[ShapeID] - persistente IDs
+    edge_indices: List = None    # List[int] - stabile Kantenindizes
     
     # Fallback: Geometric Selectors
     geometric_selectors: List = None  # GeometricEdgeSelector Objekte
     
-    # Legacy
-    edge_selectors: List = None  # [(x,y,z), ...] Mittelpunkte
     ocp_edge_shapes: List = None  # OCP TopoDS_Edge Shapes
     
     # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
@@ -221,10 +221,10 @@ class FilletFeature(Feature):
             self.name = "Fillet"
         if self.edge_shape_ids is None:
             self.edge_shape_ids = []
+        if self.edge_indices is None:
+            self.edge_indices = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
-        if self.edge_selectors is None:
-            self.edge_selectors = []
         if self.ocp_edge_shapes is None:
             self.ocp_edge_shapes = []
 
@@ -234,10 +234,10 @@ class ChamferFeature(Feature):
     """
     Chamfer-Feature mit professionellem TNP (Topological Naming Problem) Handling.
     
-    TNP v3.0 Architektur:
+    TNP v4.0 Architektur:
     1. edge_shape_ids: Persistent ShapeIDs für History-Tracking
+    2. edge_indices: Stabile Topologie-Indizes (solid.edges()[idx])
     2. geometric_selectors: Geometrische Fingerabdrücke (Fallback)
-    3. edge_selectors: Legacy Point-Selektoren (Kompatibilität)
     
     Das Feature speichert ShapeIDs beim Erstellen und löst diese
     via TNPResolver zum Zeitpunkt der Ausführung auf.
@@ -245,14 +245,13 @@ class ChamferFeature(Feature):
     distance: float = 2.0
     distance_formula: Optional[str] = None
     
-    # TNP v3.0: Persistent ShapeIDs (Primary)
+    # TNP v4.0: Persistent ShapeIDs (Primary)
     edge_shape_ids: List = None  # List[ShapeID] - persistente IDs
+    edge_indices: List = None    # List[int] - stabile Kantenindizes
     
     # Fallback: Geometric Selectors
     geometric_selectors: List = None  # GeometricEdgeSelector Objekte
     
-    # Legacy
-    edge_selectors: List = None  # [(x,y,z), ...] Mittelpunkte
     ocp_edge_shapes: List = None  # OCP TopoDS_Edge Shapes
     
     # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
@@ -264,8 +263,8 @@ class ChamferFeature(Feature):
             self.name = "Chamfer"
         if self.edge_shape_ids is None:
             self.edge_shape_ids = []
-        if self.edge_selectors is None:
-            self.edge_selectors = []
+        if self.edge_indices is None:
+            self.edge_indices = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
         if self.ocp_edge_shapes is None:
@@ -793,6 +792,7 @@ class SurfaceTextureFeature(Feature):
             "visible": self.visible,
             "suppressed": self.suppressed,
             "status": self.status,
+            "status_message": self.status_message,
             "texture_type": self.texture_type,
             "face_selectors": self.face_selectors,
             "scale": self.scale,
@@ -813,6 +813,7 @@ class SurfaceTextureFeature(Feature):
             visible=data.get("visible", True),
             suppressed=data.get("suppressed", False),
             status=data.get("status", "OK"),
+            status_message=data.get("status_message", ""),
             texture_type=data.get("texture_type", "ripple"),
             face_selectors=data.get("face_selectors", []),
             scale=data.get("scale", 1.0),
@@ -1249,6 +1250,8 @@ class Body:
         self._mesh_triangles: List[Tuple[int, int, int]] = []
         self._mesh_normals = []
         self._mesh_edges = []
+        # Letzte operationelle Fehlermeldung aus _safe_operation für UI/Feature-Status.
+        self._last_operation_error = ""
 
     @staticmethod
     def _convert_legacy_nsided_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
@@ -1291,6 +1294,36 @@ class Body:
             migrated.append({
                 "center": center,
                 "direction": direction,
+                "length": 0.0,
+                "curve_type": "unknown",
+                "tolerance": 25.0,
+            })
+
+        return migrated
+
+    @staticmethod
+    def _convert_legacy_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
+        """
+        Konvertiert legacy Fillet/Chamfer edge_selectors zu GeometricEdgeSelector-Dicts.
+
+        Altes Format:
+        - (cx, cy, cz)
+        """
+        if not edge_selectors:
+            return []
+
+        migrated = []
+        for selector in edge_selectors:
+            if not isinstance(selector, (list, tuple)) or len(selector) < 3:
+                continue
+            try:
+                center = [float(selector[0]), float(selector[1]), float(selector[2])]
+            except Exception:
+                continue
+
+            migrated.append({
+                "center": center,
+                "direction": [1.0, 0.0, 0.0],
                 "length": 0.0,
                 "curve_type": "unknown",
                 "tolerance": 25.0,
@@ -1666,6 +1699,7 @@ class Body:
         Fängt Crashes ab und erlaubt Fallbacks.
         """
         try:
+            self._last_operation_error = ""
             result = op_func()
             
             if result is None:
@@ -1677,17 +1711,24 @@ class Body:
             return result, "SUCCESS"
             
         except Exception as e:
-            logger.warning(f"Feature '{op_name}' fehlgeschlagen: {e}")
+            err_msg = str(e).strip() or e.__class__.__name__
+            self._last_operation_error = err_msg
+            logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
             if fallback_func:
                 logger.debug(f"→ Versuche Fallback für '{op_name}'...")
                 try:
                     res_fallback = fallback_func()
                     if res_fallback:
+                        self._last_operation_error = f"Primärpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
                         logger.debug(f"✓ Fallback für '{op_name}' erfolgreich.")
                         return res_fallback, "WARNING"
                 except Exception as e2:
-                    logger.error(f"✗ Auch Fallback fehlgeschlagen: {e2}")
+                    fallback_msg = str(e2).strip() or e2.__class__.__name__
+                    self._last_operation_error = (
+                        f"Primärpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
+                    )
+                    logger.error(f"✗ Auch Fallback fehlgeschlagen: {fallback_msg}")
             
             return None, "ERROR"
 
@@ -3310,14 +3351,41 @@ class Body:
         1. BRepFeat_MakeCylindricalHole (für simple holes - saubere Topologie)
         2. Boolean Cut mit Zylinder (für counterbore, countersink, oder Fallback)
         """
-        from build123d import Solid, Cylinder, Location, Vector, Axis, Plane, Align
+        from build123d import Cylinder, Vector, Align
         import math
+
+        if current_solid is None:
+            raise ValueError("Hole: Kein gültiges Eingabe-Solid vorhanden")
+        if feature.diameter <= 0:
+            raise ValueError(f"Hole: Ungültiger Durchmesser {feature.diameter}mm (muss > 0 sein)")
+        if feature.depth < 0:
+            raise ValueError(f"Hole: Ungültige Tiefe {feature.depth}mm (muss >= 0 sein)")
+        if feature.hole_type not in {"simple", "counterbore", "countersink"}:
+            raise ValueError(f"Hole: Unbekannter hole_type '{feature.hole_type}'")
+        if feature.hole_type == "counterbore":
+            if feature.counterbore_diameter <= feature.diameter:
+                raise ValueError(
+                    f"Hole: Counterbore-Durchmesser {feature.counterbore_diameter}mm "
+                    f"muss größer als Bohrungsdurchmesser {feature.diameter}mm sein"
+                )
+            if feature.counterbore_depth <= 0:
+                raise ValueError(f"Hole: Counterbore-Tiefe {feature.counterbore_depth}mm muss > 0 sein")
+        if feature.hole_type == "countersink":
+            if feature.countersink_angle <= 0 or feature.countersink_angle >= 179:
+                raise ValueError(
+                    f"Hole: Countersink-Winkel {feature.countersink_angle}° ist ungültig "
+                    "(erwartet: 0 < Winkel < 179)"
+                )
 
         # TNP v4.0: Face-Referenzen auflösen/aktualisieren
         target_faces = self._resolve_feature_faces(feature, current_solid)
         has_face_refs = bool(feature.face_shape_ids or feature.face_selectors)
         if has_face_refs and not target_faces:
-            raise ValueError("Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden")
+            raise ValueError(
+                "Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden "
+                f"(ShapeIDs={len(feature.face_shape_ids or [])}, "
+                f"Selectors={len(feature.face_selectors or [])})"
+            )
 
         pos = Vector(*feature.position)
         d = Vector(*feature.direction)
@@ -3345,6 +3413,7 @@ class Body:
         logger.debug(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
 
         # === METHODE 1: BRepFeat_MakeCylindricalHole (nur für simple holes) ===
+        brepfeat_reason = ""
         if feature.hole_type == "simple":
             try:
                 from modeling.brepfeat_operations import brepfeat_cylindrical_hole
@@ -3361,8 +3430,10 @@ class Body:
                     logger.debug(f"Hole via BRepFeat: D={feature.diameter}mm")
                     return result
                 else:
+                    brepfeat_reason = "BRepFeat_MakeCylindricalHole lieferte kein Resultat"
                     logger.debug("BRepFeat_MakeCylindricalHole fehlgeschlagen, Fallback auf Boolean")
             except Exception as e:
+                brepfeat_reason = f"BRepFeat Fehler: {e}"
                 logger.debug(f"BRepFeat Hole: {e}, Fallback auf Boolean")
 
         # === METHODE 2: Boolean Cut (für counterbore, countersink, oder Fallback) ===
@@ -3387,8 +3458,9 @@ class Body:
             cb_cyl = Cylinder(cb_radius, cb_depth,
                               align=(Align.CENTER, Align.CENTER, Align.MIN))
             cb_shape = self._position_cylinder(cb_cyl, pos, d, cb_depth)
-            if cb_shape:
-                hole_shape = hole_shape.fuse(cb_shape)
+            if cb_shape is None:
+                raise ValueError("Hole: Counterbore-Geometrie konnte nicht positioniert werden")
+            hole_shape = hole_shape.fuse(cb_shape)
 
         # Countersink: Kegel oben
         elif feature.hole_type == "countersink":
@@ -3398,8 +3470,9 @@ class Body:
             cs_cone = Cone(feature.diameter, 0.01, cs_depth,
                            align=(Align.CENTER, Align.CENTER, Align.MIN))
             cs_shape = self._position_cylinder(cs_cone, pos, d, cs_depth)
-            if cs_shape:
-                hole_shape = hole_shape.fuse(cs_shape)
+            if cs_shape is None:
+                raise ValueError("Hole: Countersink-Geometrie konnte nicht positioniert werden")
+            hole_shape = hole_shape.fuse(cs_shape)
 
         # Boolean Cut: Bohrung vom Koerper abziehen
         result = current_solid.cut(hole_shape)
@@ -3407,7 +3480,8 @@ class Body:
             logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
             return result
 
-        raise ValueError(f"Hole Boolean Cut fehlgeschlagen")
+        detail = brepfeat_reason if brepfeat_reason else "Boolean-Cut war ungültig oder leer"
+        raise ValueError(f"Hole Boolean Cut fehlgeschlagen ({detail})")
 
     def _position_cylinder(self, cyl_solid, position, direction, depth):
         """Positioniert einen Zylinder an position entlang direction."""
@@ -3484,11 +3558,20 @@ class Body:
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
-        pull_dir = gp_Dir(
-            feature.pull_direction[0],
-            feature.pull_direction[1],
-            feature.pull_direction[2]
-        )
+        if current_solid is None:
+            raise ValueError("Draft: Kein gültiges Eingabe-Solid vorhanden")
+        if abs(feature.draft_angle) >= 89.9:
+            raise ValueError(
+                f"Draft: Ungültiger Winkel {feature.draft_angle}°. "
+                "Erwartet |Winkel| < 89.9°"
+            )
+        if len(feature.pull_direction) < 3:
+            raise ValueError("Draft: Pull-Richtung ist unvollständig")
+        px, py, pz = feature.pull_direction[0], feature.pull_direction[1], feature.pull_direction[2]
+        if (px * px + py * py + pz * pz) <= 1e-12:
+            raise ValueError("Draft: Ungültige Pull-Richtung (Nullvektor)")
+
+        pull_dir = gp_Dir(px, py, pz)
         angle_rad = math.radians(feature.draft_angle)
 
         # Neutrale Ebene (Basis der Entformung)
@@ -3502,29 +3585,33 @@ class Body:
 
         draft_op = BRepOffsetAPI_DraftAngle(shape)
         face_count = 0
+        add_errors = []
 
         if target_faces:
-            for target_face in target_faces:
+            for face_idx, target_face in enumerate(target_faces):
                 try:
                     topo_face = target_face.wrapped if hasattr(target_face, 'wrapped') else target_face
                     draft_op.Add(TopoDS.Face_s(topo_face), pull_dir, angle_rad, neutral_plane)
                     face_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    add_errors.append(f"Face[{face_idx}] konnte nicht hinzugefügt werden: {e}")
         else:
             # Kein explizites Face-Target -> alle Faces draften (Legacy-Verhalten)
             explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            all_face_idx = 0
             while explorer.More():
                 face = TopoDS.Face_s(explorer.Current())
                 try:
                     draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
                     face_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    add_errors.append(f"Face[{all_face_idx}] konnte nicht hinzugefügt werden: {e}")
                 explorer.Next()
+                all_face_idx += 1
 
         if face_count == 0:
-            raise ValueError("Keine Flaechen konnten gedraftet werden")
+            detail = add_errors[0] if add_errors else "kein kompatibles Ziel-Face gefunden"
+            raise ValueError(f"Draft: Keine Flächen konnten gedraftet werden ({detail})")
 
         draft_op.Build()
         if draft_op.IsDone():
@@ -4400,6 +4487,17 @@ class Body:
                         # TNP v4.0: ShapeNamingService Record aktualisieren
                         if idx < len(edge_shape_ids):
                             self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
+
+                        # TNP v4.0: Topology-Index aktualisieren
+                        try:
+                            edge_indices = getattr(feature, "edge_indices", None)
+                            if edge_indices is not None and idx < len(edge_indices):
+                                for edge_idx, candidate in enumerate(all_edges):
+                                    if self._is_same_edge(candidate, best_edge):
+                                        edge_indices[idx] = edge_idx
+                                        break
+                        except Exception:
+                            pass
                     else:
                         # Edge nicht gefunden - behalte alten Selector bei
                         logger.warning(f"Edge nicht gefunden nach Operation für {feature.name}")
@@ -4492,6 +4590,17 @@ class Body:
                     # TNP v4.0: ShapeNamingService Record aktualisieren
                     if idx < len(edge_shape_ids):
                         self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
+
+                    # TNP v4.0: Topology-Index aktualisieren
+                    try:
+                        edge_indices = getattr(feature, "edge_indices", None)
+                        if edge_indices is not None and idx < len(edge_indices):
+                            for edge_idx, candidate in enumerate(all_edges):
+                                if self._is_same_edge(candidate, best_edge):
+                                    edge_indices[idx] = edge_idx
+                                    break
+                    except Exception:
+                        pass
                 else:
                     # Edge nicht gefunden - behalte alten Selector bei
                     logger.debug(f"Edge nicht gefunden für Feature {feature.name}, behalte alten Selector")
@@ -4923,13 +5032,16 @@ class Body:
         for i in range(start_index):
             if i < len(self.features) and not self.features[i].suppressed:
                 self.features[i].status = "OK"  # Aus Checkpoint
+                self.features[i].status_message = ""
 
         for i, feature in enumerate(self.features):
             if i >= max_index:
                 feature.status = "ROLLED_BACK"
+                feature.status_message = ""
                 continue
             if feature.suppressed:
                 feature.status = "SUPPRESSED"
+                feature.status_message = ""
                 continue
 
             # === PHASE 7: Überspringe Features vor start_index (aus Checkpoint) ===
@@ -4938,6 +5050,7 @@ class Body:
 
             new_solid = None
             status = "OK"
+            self._last_operation_error = ""
 
             # ================= PRIMITIVE (Base Feature) =================
             if isinstance(feature, PrimitiveFeature):
@@ -5265,6 +5378,8 @@ class Body:
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+                        if not self._last_operation_error:
+                            self._last_operation_error = "Hole-Operation lieferte kein Ergebnis-Solid"
 
             # ================= DRAFT =================
             elif isinstance(feature, DraftFeature):
@@ -5279,6 +5394,8 @@ class Body:
                     if new_solid is None:
                         new_solid = current_solid
                         status = "ERROR"
+                        if not self._last_operation_error:
+                            self._last_operation_error = "Draft-Operation lieferte kein Ergebnis-Solid"
 
             # ================= SPLIT =================
             elif isinstance(feature, SplitFeature):
@@ -5333,6 +5450,10 @@ class Body:
                 logger.debug(f"SurfaceTexture '{feature.name}' — Metadaten-only, kein BREP-Update")
 
             feature.status = status
+            if status in ("ERROR", "WARNING"):
+                feature.status_message = self._last_operation_error or feature.status_message
+            else:
+                feature.status_message = ""
 
             if new_solid is not None:
                 current_solid = new_solid
@@ -5505,68 +5626,125 @@ class Body:
             return []
         
         feature_name = getattr(feature, 'name', 'Unknown')
-        edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
-        
+        edge_shape_ids = list(getattr(feature, 'edge_shape_ids', []) or [])
+        edge_indices = list(getattr(feature, 'edge_indices', []) or [])
+        geometric_selectors = list(getattr(feature, 'geometric_selectors', []) or [])
+
         if is_enabled("tnp_debug_logging"):
-            logger.info(f"TNP v4.0: Resolving {len(edge_shape_ids)} edges for {feature_name} "
-                   f"({len(all_edges)} edges in solid)")
-        
-        # TNP v4.0: Verwende Document's ShapeNamingService
-        if not self._document or not hasattr(self._document, '_shape_naming_service'):
-            if is_enabled("tnp_debug_logging"):
-                logger.warning("TNP v4.0: Kein ShapeNamingService verfügbar")
-            return []
-        
-        service = self._document._shape_naming_service
+            logger.info(
+                f"TNP v4.0: Resolving edges for {feature_name} "
+                f"(shape_ids={len(edge_shape_ids)}, indices={len(edge_indices)}, "
+                f"selectors={len(geometric_selectors)}, solid_edges={len(all_edges)})"
+            )
+
+        service = None
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            service = self._document._shape_naming_service
+
         resolved_edges = []
         unresolved_shape_ids = []  # Für Debug-Visualisierung
-        stats = {'direct': 0, 'history': 0, 'mapping': 0, 'geometric': 0, 'failed': 0}
-        
-        for i, shape_id in enumerate(edge_shape_ids):
+
+        def _append_unique(edge_obj) -> None:
+            if edge_obj is None:
+                return
+            for existing in resolved_edges:
+                if self._is_same_edge(existing, edge_obj):
+                    return
+            resolved_edges.append(edge_obj)
+
+        # 1) ShapeID-Auflösung (Primary)
+        if edge_shape_ids and service is not None:
+            for i, shape_id in enumerate(edge_shape_ids):
+                try:
+                    resolved_ocp = service.resolve_shape(shape_id, solid)
+                    if resolved_ocp is None:
+                        unresolved_shape_ids.append(shape_id)
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning(f"TNP v4.0: Edge {i} konnte via ShapeID nicht aufgelöst werden")
+                        continue
+
+                    matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
+                    if matching_edge is not None:
+                        _append_unique(matching_edge)
+                    else:
+                        unresolved_shape_ids.append(shape_id)
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning(f"TNP v4.0: Keine passende Solid-Edge für ShapeID-Edge {i}")
+                except Exception as e:
+                    unresolved_shape_ids.append(shape_id)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(f"TNP v4.0: Edge {i} ShapeID-Auflösung fehlgeschlagen: {e}")
+
+        # 2) Topology-Index-Auflösung (Secondary)
+        if edge_indices:
             try:
-                # ShapeID via Service auflösen
-                resolved_ocp = service.resolve_shape(shape_id, solid)
-                
-                if resolved_ocp is None:
-                    stats['failed'] += 1
-                    unresolved_shape_ids.append(shape_id)
-                    if is_enabled("tnp_debug_logging"):
-                        logger.warning(f"TNP v4.0: Edge {i} konnte nicht aufgelöst werden")
-                    continue
-                
-                # WICHTIG: Finde die PASSENDE Edge vom aktuellen Solid!
-                # Die aufgelöste Edge hat zwar die gleiche Geometrie, aber OCP erwartet
-                # Edges die tatsächlich im aktuellen Solid's BRep-Graph existieren.
-                matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
-                
-                if matching_edge is not None:
-                    resolved_edges.append(matching_edge)
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP v4.0: Edge {i} gefunden und mit aktuellem Solid verknüpft")
-                else:
-                    stats['failed'] += 1
-                    unresolved_shape_ids.append(shape_id)
-                    from build123d import Edge
-                    b3d_edge = Edge(resolved_ocp)
-                    if is_enabled("tnp_debug_logging"):
-                        logger.warning(f"TNP v4.0: Keine passende Edge im aktuellen Solid für Edge {i}! (Center: {b3d_edge.center()})")
-                    
+                from modeling.topology_indexing import edge_from_index
+
+                for edge_idx in edge_indices:
+                    resolved = edge_from_index(solid, int(edge_idx))
+                    _append_unique(resolved)
             except Exception as e:
-                stats['failed'] += 1
-                unresolved_shape_ids.append(shape_id)
                 if is_enabled("tnp_debug_logging"):
-                    logger.warning(f"TNP v4.0: Edge {i} Auflösung fehlgeschlagen: {e}")
-        
-        # Ergebnis
-        total = len(edge_shape_ids)
+                    logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
+
+        # 3) GeometricSelector-Auflösung (Fallback)
+        if geometric_selectors:
+            try:
+                from modeling.geometric_selector import GeometricEdgeSelector
+
+                for selector_data in geometric_selectors:
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricEdgeSelector.from_dict(selector_data)
+                    elif hasattr(selector_data, 'find_best_match'):
+                        geo_sel = selector_data
+                    else:
+                        continue
+                    _append_unique(geo_sel.find_best_match(all_edges))
+            except Exception as e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: GeometricEdgeSelector-Auflösung fehlgeschlagen: {e}")
+
+        # 4) Referenzen konsolidieren (indices + optional ShapeIDs)
+        resolved_indices = []
+        for edge in resolved_edges:
+            for edge_idx, candidate in enumerate(all_edges):
+                if self._is_same_edge(candidate, edge):
+                    resolved_indices.append(edge_idx)
+                    break
+        if resolved_indices:
+            feature.edge_indices = resolved_indices
+
+        if service is not None and resolved_edges:
+            new_shape_ids = []
+            for idx, edge in enumerate(resolved_edges):
+                try:
+                    shape_id = service.find_shape_id_by_edge(edge)
+                    if shape_id is None and hasattr(edge, 'wrapped'):
+                        ec = edge.center()
+                        edge_len = edge.length if hasattr(edge, 'length') else 0.0
+                        shape_id = service.register_shape(
+                            ocp_shape=edge.wrapped,
+                            shape_type=ShapeType.EDGE,
+                            feature_id=feature.id,
+                            local_index=idx,
+                            geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
+                        )
+                    if shape_id is not None:
+                        new_shape_ids.append(shape_id)
+                except Exception:
+                    continue
+            if new_shape_ids:
+                feature.edge_shape_ids = new_shape_ids
+
+        total_refs = max(len(edge_shape_ids), len(edge_indices), len(geometric_selectors))
         found = len(resolved_edges)
-        
-        if found == total:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v4.0: ALLE {total} Edges aufgelöst! ✅")
-        else:
-            if is_enabled("tnp_debug_logging"):
-                logger.warning(f"TNP v4.0: Nur {found}/{total} Edges aufgelöst")
+        if is_enabled("tnp_debug_logging"):
+            if total_refs == 0:
+                logger.warning("TNP v4.0: Feature hat keine Edge-Referenzen")
+            elif found >= total_refs:
+                logger.debug(f"TNP v4.0: {found}/{total_refs} Edges aufgelöst")
+            else:
+                logger.warning(f"TNP v4.0: Nur {found}/{total_refs} Edges aufgelöst")
         
         # === TNP v4.0 DEBUG: Visuelle Darstellung der Auflösung ===
         self._last_tnp_debug_data = {
@@ -5652,6 +5830,38 @@ class Body:
         except Exception as e:
             logger.debug(f"_find_matching_edge_in_solid fehlgeschlagen: {e}")
             return None
+
+    @staticmethod
+    def _is_same_edge(edge_a, edge_b) -> bool:
+        """
+        Robuster Edge-Vergleich für TNP-Pfade.
+
+        Bevorzugt OCP IsSame (Topologie-identisch), fällt auf eine leichte
+        Geometrie-Prüfung und zuletzt Objektidentität zurück.
+        """
+        if edge_a is None or edge_b is None:
+            return False
+        try:
+            wrapped_a = edge_a.wrapped if hasattr(edge_a, "wrapped") else edge_a
+            wrapped_b = edge_b.wrapped if hasattr(edge_b, "wrapped") else edge_b
+            if hasattr(wrapped_a, "IsSame") and wrapped_a.IsSame(wrapped_b):
+                return True
+        except Exception:
+            pass
+        try:
+            center_a = edge_a.center()
+            center_b = edge_b.center()
+            dx = float(center_a.X) - float(center_b.X)
+            dy = float(center_a.Y) - float(center_b.Y)
+            dz = float(center_a.Z) - float(center_b.Z)
+            if (dx * dx + dy * dy + dz * dz) <= 1e-12:
+                len_a = float(getattr(edge_a, "length", 0.0) or 0.0)
+                len_b = float(getattr(edge_b, "length", 0.0) or 0.0)
+                if abs(len_a - len_b) <= 1e-9:
+                    return True
+        except Exception:
+            pass
+        return edge_a is edge_b
     
     def _apply_transform_feature(self, solid, feature: TransformFeature):
         """
@@ -6718,6 +6928,7 @@ class Body:
                 "visible": feat.visible,
                 "suppressed": feat.suppressed,
                 "status": feat.status,
+                "status_message": getattr(feat, "status_message", ""),
             }
 
             # Feature-spezifische Daten
@@ -6757,9 +6968,10 @@ class Body:
                     "feature_class": "FilletFeature",
                     "radius": feat.radius,
                     "radius_formula": feat.radius_formula,
-                    "edge_selectors": feat.edge_selectors,
                     "depends_on_feature_id": feat.depends_on_feature_id,
                 })
+                if feat.edge_indices:
+                    feat_dict["edge_indices"] = list(feat.edge_indices)
                 # GeometricSelectors serialisieren
                 if feat.geometric_selectors:
                     feat_dict["geometric_selectors"] = [
@@ -6785,9 +6997,10 @@ class Body:
                     "feature_class": "ChamferFeature",
                     "distance": feat.distance,
                     "distance_formula": feat.distance_formula,
-                    "edge_selectors": feat.edge_selectors,
                     "depends_on_feature_id": feat.depends_on_feature_id,
                 })
+                if feat.edge_indices:
+                    feat_dict["edge_indices"] = list(feat.edge_indices)
                 if feat.geometric_selectors:
                     feat_dict["geometric_selectors"] = [
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
@@ -7256,6 +7469,7 @@ class Body:
                 "visible": feat_dict.get("visible", True),
                 "suppressed": feat_dict.get("suppressed", False),
                 "status": feat_dict.get("status", "OK"),
+                "status_message": feat_dict.get("status_message", ""),
             }
 
             feat = None
@@ -7294,9 +7508,10 @@ class Body:
                     feat.face_type = feat_dict.get("face_type")
 
             elif feat_class == "FilletFeature":
+                legacy_edge_selectors = feat_dict.get("edge_selectors")
                 feat = FilletFeature(
                     radius=feat_dict.get("radius", 2.0),
-                    edge_selectors=feat_dict.get("edge_selectors"),
+                    edge_indices=feat_dict.get("edge_indices", []),
                     depends_on_feature_id=feat_dict.get("depends_on_feature_id"),
                     **base_kwargs
                 )
@@ -7323,11 +7538,14 @@ class Body:
                                 geometry_hash=sid_data.get("geometry_hash", ""),
                                 timestamp=sid_data.get("timestamp", 0.0)
                             ))
+                if not feat.geometric_selectors and legacy_edge_selectors:
+                    feat.geometric_selectors = cls._convert_legacy_edge_selectors(legacy_edge_selectors)
 
             elif feat_class == "ChamferFeature":
+                legacy_edge_selectors = feat_dict.get("edge_selectors")
                 feat = ChamferFeature(
                     distance=feat_dict.get("distance", 2.0),
-                    edge_selectors=feat_dict.get("edge_selectors"),
+                    edge_indices=feat_dict.get("edge_indices", []),
                     depends_on_feature_id=feat_dict.get("depends_on_feature_id"),
                     **base_kwargs
                 )
@@ -7353,6 +7571,8 @@ class Body:
                                 geometry_hash=sid_data.get("geometry_hash", ""),
                                 timestamp=sid_data.get("timestamp", 0.0)
                             ))
+                if not feat.geometric_selectors and legacy_edge_selectors:
+                    feat.geometric_selectors = cls._convert_legacy_edge_selectors(legacy_edge_selectors)
 
             elif feat_class == "RevolveFeature":
                 feat = RevolveFeature(

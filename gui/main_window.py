@@ -3065,8 +3065,17 @@ class MainWindow(QMainWindow):
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
-        self.statusBar().showMessage(f"Hole D={diameter}mm erstellt")
-        logger.success(f"Hole {hole_type} D={diameter}mm at {pos}")
+        if feature.status == "ERROR":
+            msg = feature.status_message or "Kernel-Operation fehlgeschlagen"
+            self.statusBar().showMessage(f"Hole fehlgeschlagen: {msg}", 8000)
+            logger.error(f"Hole fehlgeschlagen: {msg}")
+        elif feature.status == "WARNING":
+            msg = feature.status_message or "Fallback verwendet"
+            self.statusBar().showMessage(f"Hole mit Warnung: {msg}", 6000)
+            logger.warning(f"Hole mit Warnung: {msg}")
+        else:
+            self.statusBar().showMessage(f"Hole D={diameter}mm erstellt")
+            logger.success(f"Hole {hole_type} D={diameter}mm at {pos}")
         self._finish_hole_ui()
 
     def _on_hole_cancelled(self):
@@ -4299,8 +4308,17 @@ class MainWindow(QMainWindow):
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
-        self.statusBar().showMessage(f"Draft {angle}° auf {len(faces)} Faces erstellt")
-        logger.success(f"Draft {angle}° auf {len(faces)} Faces")
+        if feature.status == "ERROR":
+            msg = feature.status_message or "Kernel-Operation fehlgeschlagen"
+            self.statusBar().showMessage(f"Draft fehlgeschlagen: {msg}", 8000)
+            logger.error(f"Draft fehlgeschlagen: {msg}")
+        elif feature.status == "WARNING":
+            msg = feature.status_message or "Fallback verwendet"
+            self.statusBar().showMessage(f"Draft mit Warnung: {msg}", 6000)
+            logger.warning(f"Draft mit Warnung: {msg}")
+        else:
+            self.statusBar().showMessage(f"Draft {angle}° auf {len(faces)} Faces erstellt")
+            logger.success(f"Draft {angle}° auf {len(faces)} Faces")
         self._finish_draft_ui()
 
     def _on_draft_cancelled(self):
@@ -8523,12 +8541,8 @@ class MainWindow(QMainWindow):
 
     def _on_fillet_confirmed(self):
         """
-        Wendet Fillet/Chamfer mit robuster Fallback-Strategie an.
-        Verwendet edge_operations.py für intelligente Fehlerbehandlung.
+        Wendet Fillet/Chamfer über die Feature-Pipeline mit Undo/Redo an.
         """
-        from modeling.edge_operations import apply_robust_fillet, apply_robust_chamfer
-        from modeling.cad_tessellator import CADTessellator
-
         radius = self.fillet_panel.get_radius()
         body = self.fillet_panel.get_target_body()
         mode = getattr(self, '_fillet_mode', 'fillet')
@@ -8554,11 +8568,31 @@ class MainWindow(QMainWindow):
         try:
             from gui.commands.feature_commands import AddFeatureCommand
             from modeling.geometric_selector import create_geometric_selectors_from_edges
-            from modeling.tnp_system import ShapeID, ShapeType
+            from modeling.tnp_system import ShapeType
 
-            # Legacy Point-Selectors (backward-compat)
-            # Bei "alle Kanten" wird selectors leer sein - das ist OK
-            selectors = self.viewport_3d.get_edge_selectors()
+            selected_edge_indices = []
+            if hasattr(self.viewport_3d, "get_selected_edge_topology_indices"):
+                selected_edge_indices = self.viewport_3d.get_selected_edge_topology_indices() or []
+            if not selected_edge_indices and body is not None and hasattr(body, "_build123d_solid") and body._build123d_solid:
+                try:
+                    all_edges = list(body._build123d_solid.edges())
+
+                    def _is_same_edge(edge_a, edge_b) -> bool:
+                        try:
+                            wa = edge_a.wrapped if hasattr(edge_a, "wrapped") else edge_a
+                            wb = edge_b.wrapped if hasattr(edge_b, "wrapped") else edge_b
+                            return wa.IsSame(wb)
+                        except Exception:
+                            return edge_a is edge_b
+
+                    for edge in edges:
+                        for edge_idx, candidate in enumerate(all_edges):
+                            if _is_same_edge(candidate, edge):
+                                selected_edge_indices.append(edge_idx)
+                                break
+                except Exception:
+                    pass
+            selected_edge_indices = sorted(set(int(i) for i in selected_edge_indices))
 
             # TNP Phase 1: GeometricSelectors erstellen
             # WICHTIG: Nutze die bereits ermittelten `edges` (inkl. "alle Kanten"),
@@ -8587,7 +8621,7 @@ class MainWindow(QMainWindow):
             if mode == "chamfer":
                 feature = ChamferFeature(
                     distance=radius,
-                    edge_selectors=selectors,
+                    edge_indices=selected_edge_indices,
                     geometric_selectors=geometric_selectors,
                     ocp_edge_shapes=ocp_edge_shapes,
                     depends_on_feature_id=depends_on_feature_id
@@ -8595,7 +8629,7 @@ class MainWindow(QMainWindow):
             else:
                 feature = FilletFeature(
                     radius=radius,
-                    edge_selectors=selectors,
+                    edge_indices=selected_edge_indices,
                     geometric_selectors=geometric_selectors,
                     ocp_edge_shapes=ocp_edge_shapes,
                     depends_on_feature_id=depends_on_feature_id

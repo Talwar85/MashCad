@@ -1,7 +1,9 @@
 from modeling import (
     Body,
+    ChamferFeature,
     Document,
     DraftFeature,
+    FilletFeature,
     HoleFeature,
     HollowFeature,
     NSidedPatchFeature,
@@ -87,6 +89,84 @@ def test_tnp_v4_refs_are_serialized_for_requested_features():
             assert key in entry
     assert nsided_dict["edge_indices"] == [0, 1, 2]
     assert "edge_selectors" not in nsided_dict
+
+
+def test_tnp_v4_fillet_chamfer_serialization_omits_legacy_edge_selectors():
+    body = Body("tnp_v4_fillet_chamfer_serialize")
+
+    fillet = FilletFeature(radius=1.5, edge_indices=[1, 3, 5])
+    fillet.edge_shape_ids = [
+        _make_shape_id(ShapeType.EDGE, fillet.id, 0),
+        _make_shape_id(ShapeType.EDGE, fillet.id, 1),
+    ]
+    fillet.geometric_selectors = [
+        {
+            "center": [0.0, 0.0, 0.0],
+            "direction": [1.0, 0.0, 0.0],
+            "length": 10.0,
+            "curve_type": "line",
+            "tolerance": 10.0,
+        }
+    ]
+
+    chamfer = ChamferFeature(distance=0.8, edge_indices=[2, 4])
+    chamfer.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, chamfer.id, 0)]
+    chamfer.geometric_selectors = [
+        {
+            "center": [1.0, 1.0, 1.0],
+            "direction": [0.0, 1.0, 0.0],
+            "length": 8.0,
+            "curve_type": "line",
+            "tolerance": 10.0,
+        }
+    ]
+
+    body.features = [fillet, chamfer]
+    data = body.to_dict()
+
+    fillet_dict = _feature_dict(data, "FilletFeature")
+    chamfer_dict = _feature_dict(data, "ChamferFeature")
+
+    assert fillet_dict["edge_indices"] == [1, 3, 5]
+    assert chamfer_dict["edge_indices"] == [2, 4]
+    assert "edge_selectors" not in fillet_dict
+    assert "edge_selectors" not in chamfer_dict
+
+
+def test_tnp_v4_fillet_chamfer_deserialize_migrates_legacy_edge_selectors():
+    body_data = {
+        "name": "legacy_fillet_chamfer",
+        "features": [
+            {
+                "feature_class": "FilletFeature",
+                "name": "Fillet",
+                "radius": 2.0,
+                "edge_selectors": [
+                    (0.0, 0.0, 0.0),
+                    ((10.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                ],
+            },
+            {
+                "feature_class": "ChamferFeature",
+                "name": "Chamfer",
+                "distance": 1.0,
+                "edge_selectors": [
+                    (5.0, 5.0, 0.0),
+                ],
+            },
+        ],
+    }
+
+    restored = Body.from_dict(body_data)
+    fillet = next(feat for feat in restored.features if isinstance(feat, FilletFeature))
+    chamfer = next(feat for feat in restored.features if isinstance(feat, ChamferFeature))
+
+    assert fillet.geometric_selectors
+    assert chamfer.geometric_selectors
+    assert fillet.edge_indices == []
+    assert chamfer.edge_indices == []
+    assert not hasattr(fillet, "edge_selectors")
+    assert not hasattr(chamfer, "edge_selectors")
 
 
 def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():

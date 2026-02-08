@@ -472,6 +472,9 @@ class ProjectBrowser(QFrame):
                     fi = QTreeWidgetItem(bi, [f"{prefix} {f.name}"])
                     fi.setData(0, Qt.UserRole, ('feature', f, b))
                     fi.setForeground(0, QColor(color))
+                    status_msg = getattr(f, "status_message", "")
+                    if status_msg:
+                        fi.setToolTip(0, status_msg)
 
     def _is_component_visible(self, component) -> bool:
         """Prüft ob Component und alle Parent-Components sichtbar sind."""
@@ -1012,4 +1015,3 @@ class ProjectBrowser(QFrame):
         idx = value if value < n else None  # None = all features
         self._rollback_body.rollback_index = idx
         self.rollback_changed.emit(self._rollback_body, value)
-

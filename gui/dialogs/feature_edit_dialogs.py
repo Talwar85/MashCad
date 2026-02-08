@@ -206,7 +206,9 @@ class FilletEditDialog(QDialog):
         self.radius_input.setText(str(feature.radius))
 
         # Edge count info (read-only)
-        n_edges = len(feature.edge_selectors) if feature.edge_selectors else 0
+        n_edges = len(getattr(feature, "edge_indices", []) or [])
+        if feature.edge_shape_ids:
+            n_edges = max(n_edges, len(feature.edge_shape_ids))
         if feature.geometric_selectors:
             n_edges = max(n_edges, len(feature.geometric_selectors))
         edge_info = QLabel(f"Edges: {n_edges}")
@@ -254,7 +256,9 @@ class ChamferEditDialog(QDialog):
         self.distance_input = _create_number_input(tr("Distance:"), group_layout, "mm")
         self.distance_input.setText(str(feature.distance))
 
-        n_edges = len(feature.edge_selectors) if feature.edge_selectors else 0
+        n_edges = len(getattr(feature, "edge_indices", []) or [])
+        if feature.edge_shape_ids:
+            n_edges = max(n_edges, len(feature.edge_shape_ids))
         if feature.geometric_selectors:
             n_edges = max(n_edges, len(feature.geometric_selectors))
         edge_info = QLabel(f"Edges: {n_edges}")
