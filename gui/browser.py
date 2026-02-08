@@ -19,6 +19,74 @@ from config.feature_flags import is_enabled
 from gui.design_tokens import DesignTokens
 
 
+def _format_feature_status_tooltip(status_msg: str, status: str = "", status_details=None) -> str:
+    """
+    Formatiert Feature-Statusmeldungen für den Browser-Tooltip.
+
+    Erkennt den technischen Suffix `| refs: ...` und stellt Referenzen
+    als eigene Liste dar, damit gebrochene TNP-Referenzen direkt lesbar sind.
+    """
+    details = status_details if isinstance(status_details, dict) else {}
+    if not status_msg and not details:
+        return ""
+
+    msg = str(status_msg).strip()
+    if not msg:
+        msg = str(details.get("message", "") or "").strip()
+    if not msg and not details.get("refs") and not details.get("hint") and not details.get("code"):
+        return ""
+
+    marker = "| refs:"
+    base_msg = msg
+    refs_part = ""
+    if marker in msg:
+        base_msg, refs_part = msg.split(marker, 1)
+        base_msg = base_msg.strip().rstrip(";")
+        refs_part = refs_part.strip()
+
+    if not base_msg:
+        base_msg = str(details.get("message", "") or "").strip()
+
+    lines = []
+    if status == "ERROR":
+        lines.append(tr("Error"))
+    elif status == "WARNING":
+        lines.append(tr("Warning"))
+
+    if base_msg:
+        lines.append(base_msg)
+
+    ref_items = []
+    if refs_part:
+        ref_items = [item.strip() for item in refs_part.split(";") if item.strip()]
+    elif isinstance(details.get("refs"), dict):
+        for key, value in details["refs"].items():
+            if value in (None, "", [], (), {}):
+                continue
+            ref_items.append(f"{key}={value!r}")
+
+    if ref_items:
+        lines.append("")
+        lines.append(tr("Broken refs:"))
+        max_items = 8
+        for item in ref_items[:max_items]:
+            lines.append(f"- {item}")
+        if len(ref_items) > max_items:
+            lines.append(f"- +{len(ref_items) - max_items} {tr('more')}")
+
+    hint = str(details.get("hint", "") or "").strip()
+    if hint:
+        lines.append("")
+        lines.append(f"{tr('Hint')}: {hint}")
+
+    code = str(details.get("code", "") or "").strip()
+    if code:
+        lines.append("")
+        lines.append(f"{tr('Code')}: {code}")
+
+    return "\n".join(lines)
+
+
 class DraggableTreeWidget(QTreeWidget):
     """
     QTreeWidget mit Drag & Drop Support für Bodies/Sketches zwischen Components.
@@ -473,8 +541,15 @@ class ProjectBrowser(QFrame):
                     fi.setData(0, Qt.UserRole, ('feature', f, b))
                     fi.setForeground(0, QColor(color))
                     status_msg = getattr(f, "status_message", "")
-                    if status_msg:
-                        fi.setToolTip(0, status_msg)
+                    status_details = getattr(f, "status_details", {}) or {}
+                    if status_msg or status_details:
+                        tooltip = _format_feature_status_tooltip(
+                            status_msg,
+                            getattr(f, "status", ""),
+                            status_details,
+                        )
+                        if tooltip:
+                            fi.setToolTip(0, tooltip)
 
     def _is_component_visible(self, component) -> bool:
         """Prüft ob Component und alle Parent-Components sichtbar sind."""

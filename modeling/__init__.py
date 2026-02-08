@@ -128,6 +128,8 @@ class Feature:
     suppressed: bool = False
     status: str = "OK" # OK, ERROR, WARNING
     status_message: str = ""
+    # Structured status payload for UI/diagnostics (code, refs, hints).
+    status_details: dict = field(default_factory=dict)
 
 @dataclass
 class ExtrudeFeature(Feature):
@@ -832,6 +834,7 @@ class SurfaceTextureFeature(Feature):
             "suppressed": self.suppressed,
             "status": self.status,
             "status_message": self.status_message,
+            "status_details": self.status_details,
             "texture_type": self.texture_type,
             "face_indices": self.face_indices,
             "face_selectors": self.face_selectors,
@@ -854,6 +857,7 @@ class SurfaceTextureFeature(Feature):
             suppressed=data.get("suppressed", False),
             status=data.get("status", "OK"),
             status_message=data.get("status_message", ""),
+            status_details=data.get("status_details", {}),
             texture_type=data.get("texture_type", "ripple"),
             face_indices=data.get("face_indices", []),
             face_selectors=data.get("face_selectors", []),
@@ -1293,6 +1297,7 @@ class Body:
         self._mesh_edges = []
         # Letzte operationelle Fehlermeldung aus _safe_operation für UI/Feature-Status.
         self._last_operation_error = ""
+        self._last_operation_error_details = {}
 
     @staticmethod
     def _convert_legacy_nsided_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
@@ -1833,6 +1838,118 @@ class Body:
             parts.append(f"+{hidden} weitere")
         return "; ".join(parts)
 
+    @staticmethod
+    def _collect_feature_reference_payload(feature) -> dict:
+        """
+        Liefert maschinenlesbare Referenzdaten für Status-Details.
+        """
+        if feature is None:
+            return {}
+
+        payload = {}
+
+        def _indices(value):
+            values = value if isinstance(value, (list, tuple)) else [value]
+            out = []
+            for raw in values:
+                try:
+                    idx = int(raw)
+                except Exception:
+                    continue
+                if idx >= 0:
+                    out.append(idx)
+            return out
+
+        def _shape_tokens(value):
+            values = value if isinstance(value, (list, tuple)) else [value]
+            out = []
+            for raw in values:
+                if raw is None:
+                    continue
+                try:
+                    raw_uuid = getattr(raw, "uuid", None)
+                    if raw_uuid:
+                        shape_type = getattr(raw, "shape_type", None)
+                        shape_name = shape_type.name if hasattr(shape_type, "name") else (str(shape_type) if shape_type else "?")
+                        local_index = getattr(raw, "local_index", None)
+                        token = f"{shape_name}:{str(raw_uuid)[:8]}"
+                        if local_index is not None:
+                            token += f"@{local_index}"
+                        out.append(token)
+                        continue
+                    if isinstance(raw, dict):
+                        shape_name = raw.get("shape_type", "?")
+                        feature_id = raw.get("feature_id", "?")
+                        local_index = raw.get("local_index", raw.get("local_id", "?"))
+                        out.append(f"{shape_name}:{feature_id}@{local_index}")
+                except Exception:
+                    continue
+            return out
+
+        face_indices = _indices(getattr(feature, "face_indices", None))
+        if face_indices:
+            payload["face_indices"] = face_indices
+
+        opening_face_indices = _indices(getattr(feature, "opening_face_indices", None))
+        if opening_face_indices:
+            payload["opening_face_indices"] = opening_face_indices
+
+        face_index = _indices(getattr(feature, "face_index", None))
+        if face_index:
+            payload["face_index"] = face_index
+
+        profile_face_index = _indices(getattr(feature, "profile_face_index", None))
+        if profile_face_index:
+            payload["profile_face_index"] = profile_face_index
+
+        edge_indices = _indices(getattr(feature, "edge_indices", None))
+        if edge_indices:
+            payload["edge_indices"] = edge_indices
+
+        path_data = getattr(feature, "path_data", None)
+        if isinstance(path_data, dict):
+            path_edge_indices = _indices(path_data.get("edge_indices", None))
+            if path_edge_indices:
+                payload["path.edge_indices"] = path_edge_indices
+
+        for key in (
+            "face_shape_ids",
+            "opening_face_shape_ids",
+            "edge_shape_ids",
+            "face_shape_id",
+            "profile_shape_id",
+            "path_shape_id",
+        ):
+            tokens = _shape_tokens(getattr(feature, key, None))
+            if tokens:
+                payload[key] = tokens
+
+        return payload
+
+    def _build_operation_error_details(
+        self,
+        *,
+        op_name: str,
+        code: str,
+        message: str,
+        feature=None,
+        hint: str = "",
+        fallback_error: str = "",
+    ) -> dict:
+        details = {
+            "code": code,
+            "operation": op_name,
+            "message": message,
+        }
+        refs = self._collect_feature_reference_payload(feature)
+        if refs:
+            details["refs"] = refs
+        if hint:
+            details["hint"] = hint
+        if fallback_error:
+            details["fallback_error"] = fallback_error
+        return details
+
     def _safe_operation(self, op_name, op_func, fallback_func=None, feature=None):
         """
         Wrapper für kritische CAD-Operationen.
@@ -1840,6 +1957,7 @@ class Body:
         """
         try:
             self._last_operation_error = ""
+            self._last_operation_error_details = {}
             result = op_func()
             
             if result is None:
@@ -1856,6 +1974,12 @@ class Body:
             if ref_diag and "refs:" not in err_msg:
                 err_msg = f"{err_msg} | refs: {ref_diag}"
             self._last_operation_error = err_msg
+            self._last_operation_error_details = self._build_operation_error_details(
+                op_name=op_name,
+                code="operation_failed",
+                message=err_msg,
+                feature=feature,
+            )
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
             if fallback_func:
@@ -1864,12 +1988,25 @@ class Body:
                     res_fallback = fallback_func()
                     if res_fallback:
                         self._last_operation_error = f"Primärpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
+                        self._last_operation_error_details = self._build_operation_error_details(
+                            op_name=op_name,
+                            code="fallback_used",
+                            message=self._last_operation_error,
+                            feature=feature,
+                        )
                         logger.debug(f"✓ Fallback für '{op_name}' erfolgreich.")
                         return res_fallback, "WARNING"
                 except Exception as e2:
                     fallback_msg = str(e2).strip() or e2.__class__.__name__
                     self._last_operation_error = (
                         f"Primärpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
+                    )
+                    self._last_operation_error_details = self._build_operation_error_details(
+                        op_name=op_name,
+                        code="fallback_failed",
+                        message=self._last_operation_error,
+                        feature=feature,
+                        fallback_error=fallback_msg,
                     )
                     logger.error(f"✗ Auch Fallback fehlgeschlagen: {fallback_msg}")
             
@@ -5359,15 +5496,18 @@ class Body:
             if i < len(self.features) and not self.features[i].suppressed:
                 self.features[i].status = "OK"  # Aus Checkpoint
                 self.features[i].status_message = ""
+                self.features[i].status_details = {}
 
         for i, feature in enumerate(self.features):
             if i >= max_index:
                 feature.status = "ROLLED_BACK"
                 feature.status_message = ""
+                feature.status_details = {}
                 continue
             if feature.suppressed:
                 feature.status = "SUPPRESSED"
                 feature.status_message = ""
+                feature.status_details = {}
                 continue
 
             # === PHASE 7: Überspringe Features vor start_index (aus Checkpoint) ===
@@ -5377,6 +5517,7 @@ class Body:
             new_solid = None
             status = "OK"
             self._last_operation_error = ""
+            self._last_operation_error_details = {}
 
             # ================= PRIMITIVE (Base Feature) =================
             if isinstance(feature, PrimitiveFeature):
@@ -5758,6 +5899,12 @@ class Body:
                         status = "ERROR"
                         if not self._last_operation_error:
                             self._last_operation_error = "Hole-Operation lieferte kein Ergebnis-Solid"
+                            self._last_operation_error_details = self._build_operation_error_details(
+                                op_name=f"Hole_{i}",
+                                code="no_result_solid",
+                                message=self._last_operation_error,
+                                feature=feature,
+                            )
 
             # ================= DRAFT =================
             elif isinstance(feature, DraftFeature):
@@ -5778,6 +5925,12 @@ class Body:
                         status = "ERROR"
                         if not self._last_operation_error:
                             self._last_operation_error = "Draft-Operation lieferte kein Ergebnis-Solid"
+                            self._last_operation_error_details = self._build_operation_error_details(
+                                op_name=f"Draft_{i}",
+                                code="no_result_solid",
+                                message=self._last_operation_error,
+                                feature=feature,
+                            )
 
             # ================= SPLIT =================
             elif isinstance(feature, SplitFeature):
@@ -5846,8 +5999,10 @@ class Body:
             feature.status = status
             if status in ("ERROR", "WARNING"):
                 feature.status_message = self._last_operation_error or feature.status_message
+                feature.status_details = dict(self._last_operation_error_details or {})
             else:
                 feature.status_message = ""
+                feature.status_details = {}
 
             if new_solid is not None:
                 current_solid = new_solid
@@ -7400,6 +7555,7 @@ class Body:
                 "suppressed": feat.suppressed,
                 "status": feat.status,
                 "status_message": getattr(feat, "status_message", ""),
+                "status_details": getattr(feat, "status_details", {}),
             }
 
             # Feature-spezifische Daten
@@ -7975,6 +8131,7 @@ class Body:
                 "suppressed": feat_dict.get("suppressed", False),
                 "status": feat_dict.get("status", "OK"),
                 "status_message": feat_dict.get("status_message", ""),
+                "status_details": feat_dict.get("status_details", {}),
             }
 
             feat = None

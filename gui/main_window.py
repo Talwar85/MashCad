@@ -198,6 +198,137 @@ class MainWindow(QMainWindow):
         # Nutze bestehende Toast-Overlay Methode
         self._show_toast_overlay(level, full_message)
 
+    def _preview_track_actor(self, group: str, actor_name: str):
+        """Registriert einen Preview-Aktor in einer Gruppe für konsistentes Cleanup."""
+        if not group or not actor_name:
+            return
+        if not hasattr(self, "_preview_actor_groups") or not isinstance(self._preview_actor_groups, dict):
+            self._preview_actor_groups = {}
+        group_actors = self._preview_actor_groups.setdefault(group, set())
+        group_actors.add(actor_name)
+
+    def _preview_clear_group(self, group: str, *, render: bool = True):
+        """Entfernt alle Preview-Aktoren einer Gruppe."""
+        if not group:
+            return
+        groups = getattr(self, "_preview_actor_groups", {})
+        names = list(groups.get(group, set()))
+        if not names:
+            return
+
+        plotter = getattr(getattr(self, "viewport_3d", None), "plotter", None)
+        removed_any = False
+        if plotter:
+            for actor_name in names:
+                try:
+                    plotter.remove_actor(actor_name)
+                    removed_any = True
+                except Exception:
+                    pass
+
+        groups[group] = set()
+        if removed_any and render and plotter:
+            try:
+                request_render(plotter)
+            except Exception:
+                pass
+
+    def _preview_clear_all(self, *, render: bool = True):
+        """Entfernt alle registrierten Preview-Aktoren."""
+        groups = getattr(self, "_preview_actor_groups", {})
+        if not groups:
+            return
+
+        for group in list(groups.keys()):
+            self._preview_clear_group(group, render=False)
+
+        if render:
+            plotter = getattr(getattr(self, "viewport_3d", None), "plotter", None)
+            if plotter:
+                try:
+                    request_render(plotter)
+                except Exception:
+                    pass
+
+    def _clear_transient_previews(self, reason: str = "", *, clear_interaction_modes: bool = False):
+        """
+        Zentrales Cleanup für flüchtige Previews/Highlights beim Tool- oder Mode-Wechsel.
+
+        Entfernt sowohl MainWindow-seitig registrierte Preview-Aktoren als auch
+        viewport-interne Vorschauen (Extrude/Revolve/Hole/Thread/Draft/Split/Offset).
+        """
+        if reason:
+            logger.debug(f"[preview] clear transient previews: {reason}")
+
+        self._preview_clear_all(render=False)
+
+        viewport = getattr(self, "viewport_3d", None)
+        if viewport is None:
+            return
+
+        clear_methods = (
+            "clear_draft_preview",
+            "clear_split_preview_meshes",
+            "clear_revolve_preview",
+            "clear_hole_preview",
+            "clear_thread_preview",
+            "clear_offset_plane_preview",
+            "_clear_preview",
+        )
+        for method_name in clear_methods:
+            method = getattr(viewport, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+
+        if clear_interaction_modes:
+            mode_calls = (
+                ("set_pending_transform_mode", False),
+                ("set_plane_select_mode", False),
+                ("set_offset_plane_mode", False),
+                ("set_split_mode", False),
+                ("set_draft_mode", False),
+                ("set_revolve_mode", False),
+                ("set_hole_mode", False),
+                ("set_thread_mode", False),
+            )
+            for method_name, value in mode_calls:
+                method = getattr(viewport, method_name, None)
+                if callable(method):
+                    try:
+                        method(value)
+                    except Exception:
+                        pass
+
+            set_extrude_mode = getattr(viewport, "set_extrude_mode", None)
+            if callable(set_extrude_mode):
+                try:
+                    set_extrude_mode(False)
+                except Exception:
+                    pass
+
+            for method_name in ("stop_sketch_path_mode", "stop_edge_selection_mode", "stop_texture_face_mode"):
+                method = getattr(viewport, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
+
+            try:
+                viewport.measure_mode = False
+            except Exception:
+                pass
+
+        plotter = getattr(viewport, "plotter", None)
+        if plotter:
+            try:
+                request_render(plotter)
+            except Exception:
+                pass
+
 
 
     def _cleanup_notification(self, notif):
@@ -597,7 +728,8 @@ class MainWindow(QMainWindow):
         self._pattern_mode = False
         self._pattern_target_body = None
         self._pattern_center_pick_mode = False
-        self._pattern_preview_bodies = []  # Preview bodies
+        # Gruppenbasierte Preview-Aktor-Verwaltung (robustes Cleanup)
+        self._preview_actor_groups = {}
         self._pending_pattern_mode = False  # Für Viewport-Selektion
 
         # N-Sided Patch Panel
@@ -2338,6 +2470,12 @@ class MainWindow(QMainWindow):
                 )
 
     def _set_mode(self, mode):
+        prev_mode = getattr(self, "mode", None)
+        if prev_mode != mode:
+            self._clear_transient_previews(
+                reason=f"mode:{prev_mode}->{mode}",
+                clear_interaction_modes=True,
+            )
         self.mode = mode
         if mode == "3d":
             # 3D-Modus
@@ -7939,6 +8077,7 @@ class MainWindow(QMainWindow):
         - Falls Body ausgewählt → sofort starten
         - Falls kein Body → Pending-Mode, warte auf Klick
         """
+        self._clear_transient_previews(reason="start_pattern", clear_interaction_modes=True)
         selected_bodies = self.browser.get_selected_bodies()
 
         if not selected_bodies:
@@ -7996,7 +8135,7 @@ class MainWindow(QMainWindow):
     def _update_pattern_preview(self, params: dict):
         """Generiert/aktualisiert Pattern-Preview."""
         # Alte Preview entfernen
-        self._clear_pattern_preview()
+        self._preview_clear_group("pattern")
 
         if not self._pattern_target_body:
             return
@@ -8065,7 +8204,7 @@ class MainWindow(QMainWindow):
                         opacity=0.5,
                         name=actor_name
                     )
-                    self._pattern_preview_bodies.append(actor_name)
+                    self._preview_track_actor("pattern", actor_name)
 
             request_render(self.viewport_3d.plotter)
 
@@ -8074,12 +8213,7 @@ class MainWindow(QMainWindow):
 
     def _clear_pattern_preview(self):
         """Entfernt Pattern-Preview."""
-        for name in self._pattern_preview_bodies:
-            try:
-                self.viewport_3d.plotter.remove_actor(name)
-            except Exception as e:
-                logger.debug(f"[main_window] Fehler beim Entfernen von Pattern-Preview: {e}")
-        self._pattern_preview_bodies.clear()
+        self._preview_clear_group("pattern")
 
     def _on_pattern_confirmed(self):
         """Handler wenn Pattern bestätigt wird."""
@@ -8234,6 +8368,7 @@ class MainWindow(QMainWindow):
 
     def _start_measure_mode(self):
         """Startet den Mess-Modus: 2 Punkte anklicken -> Distanz anzeigen"""
+        self._clear_transient_previews(reason="start_measure_mode", clear_interaction_modes=True)
         self._measure_points = [None, None]
         self._measure_pick_target = 1
         self._measure_active = True
@@ -8283,18 +8418,15 @@ class MainWindow(QMainWindow):
             if hasattr(self, "measure_panel"):
                 self.measure_panel.set_status(tr("Done"))
 
-    def _clear_measure_actors(self):
+    def _clear_measure_actors(self, render: bool = True):
         """Entfernt alle Mess-Visualisierungen"""
-        for name in ["_measure_pt_1", "_measure_pt_2", "_measure_line", "_measure_label"]:
-            try:
-                self.viewport_3d.plotter.remove_actor(name)
-            except Exception:
-                pass
+        self._preview_clear_group("measure", render=render)
 
     def _update_measure_visuals(self):
         """Aktualisiert alle Mess-Visualisierungen (Punkte, Linie, Label)."""
-        self._clear_measure_actors()
-        if not hasattr(self.viewport_3d, "plotter"):
+        self._clear_measure_actors(render=False)
+        plotter = getattr(self.viewport_3d, "plotter", None)
+        if not plotter:
             return
 
         import numpy as np
@@ -8304,42 +8436,51 @@ class MainWindow(QMainWindow):
         p2 = self._measure_points[1]
 
         if p1 is not None:
+            actor_name = "_measure_pt_1"
             sphere = pv.Sphere(radius=0.3, center=p1)
-            self.viewport_3d.plotter.add_mesh(
-                sphere, color="#00ff88", name="_measure_pt_1",
+            plotter.add_mesh(
+                sphere, color="#00ff88", name=actor_name,
                 reset_camera=False, pickable=False
             )
+            self._preview_track_actor("measure", actor_name)
 
         if p2 is not None:
+            actor_name = "_measure_pt_2"
             sphere = pv.Sphere(radius=0.3, center=p2)
-            self.viewport_3d.plotter.add_mesh(
-                sphere, color="#00ff88", name="_measure_pt_2",
+            plotter.add_mesh(
+                sphere, color="#00ff88", name=actor_name,
                 reset_camera=False, pickable=False
             )
+            self._preview_track_actor("measure", actor_name)
 
         if p1 is not None and p2 is not None:
             p1n = np.array(p1)
             p2n = np.array(p2)
             dist = np.linalg.norm(p2n - p1n)
             line = pv.Line(p1n, p2n)
-            self.viewport_3d.plotter.add_mesh(
+            actor_name = "_measure_line"
+            plotter.add_mesh(
                 line, color="#ffaa00", line_width=3,
-                name="_measure_line", reset_camera=False, pickable=False
+                name=actor_name, reset_camera=False, pickable=False
             )
+            self._preview_track_actor("measure", actor_name)
 
             mid = (p1n + p2n) / 2
             label_text = f"{dist:.2f} mm"
-            self.viewport_3d.plotter.add_point_labels(
+            actor_name = "_measure_label"
+            plotter.add_point_labels(
                 [mid], [label_text],
-                name="_measure_label",
+                name=actor_name,
                 font_size=16, text_color="#ffaa00",
                 point_color="#ffaa00", point_size=0,
                 shape=None, fill_shape=False,
                 reset_camera=False, pickable=False
             )
+            self._preview_track_actor("measure", actor_name)
 
             self.statusBar().showMessage(tr("Distance: {d:.2f} mm").format(d=dist))
             logger.success(f"Measure: {dist:.2f} mm  (P1={p1n}, P2={p2n})")
+        request_render(plotter)
 
     def _update_measure_ui(self):
         if not hasattr(self, "measure_panel"):
@@ -8835,6 +8976,7 @@ class MainWindow(QMainWindow):
         - Falls Body ausgewählt → sofort starten
         - Falls kein Body → Pending-Mode, warte auf Klick
         """
+        self._clear_transient_previews(reason="start_shell", clear_interaction_modes=True)
         # Prüfe ob Body im Browser ausgewählt
         selected_bodies = self.browser.get_selected_bodies()
 
@@ -9116,6 +9258,7 @@ class MainWindow(QMainWindow):
         - Body bereits im Browser ausgewählt → direkt starten
         - Kein Body ausgewählt → Pending-Mode für Viewport-Selektion
         """
+        self._clear_transient_previews(reason="start_texture_mode", clear_interaction_modes=True)
         # Prüfe ob Body im Browser ausgewählt
         selected_bodies = self.browser.get_selected_bodies()
 
@@ -9360,6 +9503,7 @@ class MainWindow(QMainWindow):
         1. Profil auswählen (Face)
         2. Pfad auswählen (Edge)
         """
+        self._clear_transient_previews(reason="start_sweep", clear_interaction_modes=True)
         # WICHTIG: Transform-Gizmo ausblenden, damit Klicks nicht abgefangen werden
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
@@ -9683,15 +9827,9 @@ class MainWindow(QMainWindow):
         # Entferne Highlight im Viewport
         self._clear_sweep_highlight('path')
 
-    def _clear_sweep_highlight(self, element_type: str):
+    def _clear_sweep_highlight(self, element_type: str, render: bool = True):
         """Entfernt das Sweep-Highlight für Profil oder Pfad."""
-        actor_name = f"sweep_{element_type}_highlight"
-        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
-            try:
-                self.viewport_3d.plotter.remove_actor(actor_name)
-                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
-            except Exception:
-                pass  # Actor existiert nicht, ignorieren
+        self._preview_clear_group(f"sweep_{element_type}", render=render)
 
     def _highlight_sweep_profile(self, profile_data: dict):
         """Highlightet das ausgewählte Sweep-Profil im Viewport."""
@@ -9703,7 +9841,7 @@ class MainWindow(QMainWindow):
 
         try:
             # Entferne altes Highlight
-            self._clear_sweep_highlight('profile')
+            self._clear_sweep_highlight('profile', render=False)
 
             shapely_poly = profile_data.get('shapely_poly')
             if not shapely_poly:
@@ -9743,13 +9881,15 @@ class MainWindow(QMainWindow):
             lines = np.array(lines, dtype=np.int32)
 
             poly = pv.PolyData(points, lines=lines)
+            actor_name = "sweep_profile_highlight"
             self.viewport_3d.plotter.add_mesh(
                 poly,
-                name="sweep_profile_highlight",
+                name=actor_name,
                 color="#00ff00",  # Grün für Profil
                 line_width=4,
                 render_lines_as_tubes=True
             )
+            self._preview_track_actor("sweep_profile", actor_name)
             request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
@@ -9765,7 +9905,7 @@ class MainWindow(QMainWindow):
 
         try:
             # Entferne altes Highlight
-            self._clear_sweep_highlight('path')
+            self._clear_sweep_highlight('path', render=False)
 
             path_type = path_data.get('type')
 
@@ -9879,13 +10019,15 @@ class MainWindow(QMainWindow):
             lines = np.array(lines, dtype=np.int32)
 
             poly = pv.PolyData(points, lines=lines)
+            actor_name = "sweep_path_highlight"
             self.viewport_3d.plotter.add_mesh(
                 poly,
-                name="sweep_path_highlight",
+                name=actor_name,
                 color="#ff8800",  # Orange für Pfad
                 line_width=4,
                 render_lines_as_tubes=True
             )
+            self._preview_track_actor("sweep_path", actor_name)
             request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
@@ -10111,7 +10253,7 @@ class MainWindow(QMainWindow):
         self.sweep_panel.hide()
 
         # Highlights entfernen
-        self._clear_sweep_highlight('profile')
+        self._clear_sweep_highlight('profile', render=False)
         self._clear_sweep_highlight('path')
 
         # Sketch-Pfad-Modus stoppen
@@ -10130,6 +10272,7 @@ class MainWindow(QMainWindow):
 
         Loft verbindet mehrere Profile auf verschiedenen Z-Ebenen.
         """
+        self._clear_transient_previews(reason="start_loft", clear_interaction_modes=True)
         # WICHTIG: Transform-Gizmo ausblenden, damit Klicks nicht abgefangen werden
         if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
             self.viewport_3d.hide_transform_gizmo()
@@ -10323,26 +10466,11 @@ class MainWindow(QMainWindow):
 
     def _clear_loft_highlights(self):
         """Entfernt alle Loft-Profile-Highlights."""
-        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
-            # Entferne bis zu 10 Profile-Highlights
-            for i in range(10):
-                try:
-                    self.viewport_3d.plotter.remove_actor(f"loft_profile_{i}_highlight")
-                except Exception:
-                    pass
-            try:
-                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
-            except Exception:
-                pass
+        self._preview_clear_group("loft_highlights")
 
     def _clear_loft_preview(self):
         """Entfernt die Loft-Preview."""
-        if hasattr(self.viewport_3d, 'plotter') and self.viewport_3d.plotter:
-            try:
-                self.viewport_3d.plotter.remove_actor("loft_preview")
-                request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
-            except Exception:
-                pass
+        self._preview_clear_group("loft_preview")
 
     def _highlight_loft_profile(self, profile_data: dict, profile_index: int):
         """Highlightet ein Loft-Profil im Viewport."""
@@ -10394,13 +10522,15 @@ class MainWindow(QMainWindow):
             color = colors[profile_index % len(colors)]
 
             poly = pv.PolyData(points, lines=lines)
+            actor_name = f"loft_profile_{profile_index}_highlight"
             self.viewport_3d.plotter.add_mesh(
                 poly,
-                name=f"loft_profile_{profile_index}_highlight",
+                name=actor_name,
                 color=color,
                 line_width=4,
                 render_lines_as_tubes=True
             )
+            self._preview_track_actor("loft_highlights", actor_name)
             request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:
@@ -10476,6 +10606,7 @@ class MainWindow(QMainWindow):
                 opacity=0.6,
                 render_lines_as_tubes=True
             )
+            self._preview_track_actor("loft_preview", "loft_preview")
             request_render(self.viewport_3d.plotter)  # PERFORMANCE: Use debounced queue
 
         except Exception as e:

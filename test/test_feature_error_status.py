@@ -12,6 +12,7 @@ def test_feature_status_message_roundtrip():
     feat = PrimitiveFeature(primitive_type="box", length=10.0, width=10.0, height=10.0)
     feat.status = "ERROR"
     feat.status_message = "Primitive konnte nicht erzeugt werden"
+    feat.status_details = {"code": "primitive_failed", "refs": {"edge_indices": [1, 2]}}
     body.features = [feat]
 
     restored = Body.from_dict(body.to_dict())
@@ -19,6 +20,7 @@ def test_feature_status_message_roundtrip():
 
     assert restored_feat.status == "ERROR"
     assert restored_feat.status_message == "Primitive konnte nicht erzeugt werden"
+    assert restored_feat.status_details == {"code": "primitive_failed", "refs": {"edge_indices": [1, 2]}}
 
 
 def test_hole_invalid_diameter_sets_feature_error_message():
@@ -35,6 +37,7 @@ def test_hole_invalid_diameter_sets_feature_error_message():
 
     assert hole.status == "ERROR"
     assert "Durchmesser" in (hole.status_message or "")
+    assert (hole.status_details or {}).get("code") == "operation_failed"
 
 
 def test_draft_invalid_pull_direction_sets_feature_error_message():
@@ -48,6 +51,7 @@ def test_draft_invalid_pull_direction_sets_feature_error_message():
 
     assert draft.status == "ERROR"
     assert "Pull-Richtung" in (draft.status_message or "")
+    assert (draft.status_details or {}).get("code") == "operation_failed"
 
 
 def test_hole_tnp_error_message_contains_reference_diagnostics():
@@ -68,6 +72,7 @@ def test_hole_tnp_error_message_contains_reference_diagnostics():
     assert hole.status == "ERROR"
     assert "refs:" in msg
     assert "face_indices=[999]" in msg
+    assert (hole.status_details or {}).get("refs", {}).get("face_indices") == [999]
 
 
 def test_fillet_tnp_error_message_contains_reference_diagnostics():
@@ -84,3 +89,4 @@ def test_fillet_tnp_error_message_contains_reference_diagnostics():
     assert fillet.status == "ERROR"
     assert "refs:" in msg
     assert "edge_indices=[999]" in msg
+    assert (fillet.status_details or {}).get("refs", {}).get("edge_indices") == [999]
