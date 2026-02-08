@@ -5865,6 +5865,7 @@ class MainWindow(QMainWindow):
             from build123d import Vector, extrude, Shape, Compound
             from OCP.BRepExtrema import BRepExtrema_DistShapeShape
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+            from OCP.TopExp import TopExp_Explorer
             from OCP.gp import gp_Pnt
             from modeling.geometric_selector import GeometricFaceSelector
             from modeling.topology_indexing import face_from_index, face_index_of, iter_faces_with_indices
@@ -6215,7 +6216,6 @@ class MainWindow(QMainWindow):
                             self.undo_stack.push(cmd)
 
                             # Face-Zählung für Debug
-                            from OCP.TopExp import TopExp_Explorer
                             from OCP.TopAbs import TopAbs_FACE
                             face_count = 0
                             exp = TopExp_Explorer(new_solid.wrapped, TopAbs_FACE)
@@ -6335,7 +6335,6 @@ class MainWindow(QMainWindow):
                     if new_solid is not None:
                         try:
                             from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-                            from OCP.TopExp import TopExp_Explorer
                             from OCP.TopAbs import TopAbs_FACE
                             from build123d import Solid
 
