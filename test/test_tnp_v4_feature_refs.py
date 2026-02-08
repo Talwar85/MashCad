@@ -1,11 +1,13 @@
 from modeling import (
     Body,
+    Document,
     DraftFeature,
     HoleFeature,
     HollowFeature,
     NSidedPatchFeature,
     SweepFeature,
 )
+from modeling.geometric_selector import GeometricEdgeSelector
 from modeling.tnp_system import ShapeID, ShapeType
 
 
@@ -198,6 +200,66 @@ def test_tnp_v4_legacy_shape_id_fallback_for_requested_features():
 
     assert nsided.edge_shape_ids[0].uuid
     assert nsided.edge_shape_ids[0].local_index == 4
+    assert nsided.geometric_selectors
+    assert not hasattr(nsided, "edge_selectors")
+
+
+def test_document_payload_migration_converts_legacy_nsided_edge_selectors():
+    payload = {
+        "name": "legacy_payload",
+        "root_component": {
+            "id": "root",
+            "name": "Root",
+            "bodies": [
+                {
+                    "id": "b1",
+                    "name": "Body1",
+                    "features": [
+                        {
+                            "feature_class": "NSidedPatchFeature",
+                            "name": "Patch",
+                            "edge_selectors": [
+                                (0.0, 0.0, 0.0),
+                                ((10.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                                (0.0, 10.0, 0.0),
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "sketches": [],
+            "planes": [],
+            "sub_components": [],
+        },
+    }
+
+    stripped, converted = Document._migrate_legacy_nsided_payload(payload)
+    feat = payload["root_component"]["bodies"][0]["features"][0]
+
+    assert stripped == 1
+    assert converted == 1
+    assert "edge_selectors" not in feat
+    assert len(feat.get("geometric_selectors", [])) == 3
+
+
+def test_document_runtime_migrates_nsided_selectors_to_indices_and_shape_ids():
+    from build123d import Solid
+
+    doc = Document("runtime_nsided_migration")
+    body = Body("BodyRuntime", document=doc)
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+
+    all_edges = list(body._build123d_solid.edges())
+    selectors = [GeometricEdgeSelector.from_edge(edge).to_dict() for edge in all_edges[:3]]
+    patch = NSidedPatchFeature(geometric_selectors=selectors)
+    body.features = [patch]
+    doc.add_body(body, set_active=True)
+
+    migrated = doc._migrate_loaded_nsided_features_to_indices()
+
+    assert migrated == 1
+    assert len(patch.edge_indices) >= 3
+    assert len(patch.edge_shape_ids) >= 3
 
 
 def test_tnp_v4_sweep_deserialize_moves_path_geometric_selector_out_of_path_data():

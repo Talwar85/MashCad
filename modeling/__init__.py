@@ -616,7 +616,6 @@ class NSidedPatchFeature(Feature):
     
     TNP v4.0: ShapeIDs für stabile Edge-Referenzen.
     """
-    edge_selectors: list = field(default_factory=list)  # Legacy: nur für Migration alter Dateien
     edge_indices: list = field(default_factory=list)    # Primär: stable edge indices (solid.edges()[idx])
     
     # TNP v4.0: ShapeIDs für Edges (Primary)
@@ -635,7 +634,6 @@ class NSidedPatchFeature(Feature):
                 len(self.edge_shape_ids or [])
                 or len(self.edge_indices or [])
                 or len(self.geometric_selectors or [])
-                or len(self.edge_selectors or [])
             )
             self.name = f"N-Sided Patch ({edge_count} edges)"
         if self.edge_shape_ids is None:
@@ -1251,6 +1249,54 @@ class Body:
         self._mesh_triangles: List[Tuple[int, int, int]] = []
         self._mesh_normals = []
         self._mesh_edges = []
+
+    @staticmethod
+    def _convert_legacy_nsided_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
+        """
+        Konvertiert legacy NSided edge_selectors zu GeometricEdgeSelector-Dicts.
+
+        Altes Format:
+        - (cx, cy, cz)
+        - ((cx, cy, cz), (dx, dy, dz))
+        """
+        if not edge_selectors:
+            return []
+
+        def _as_vec3(value):
+            if not isinstance(value, (list, tuple)) or len(value) < 3:
+                return None
+            try:
+                return [float(value[0]), float(value[1]), float(value[2])]
+            except Exception:
+                return None
+
+        migrated = []
+        for selector in edge_selectors:
+            center = None
+            direction = None
+
+            if isinstance(selector, (list, tuple)):
+                if len(selector) == 2 and isinstance(selector[0], (list, tuple)):
+                    center = _as_vec3(selector[0])
+                    direction = _as_vec3(selector[1])
+                else:
+                    center = _as_vec3(selector)
+
+            if center is None:
+                continue
+
+            if direction is None or abs(direction[0]) + abs(direction[1]) + abs(direction[2]) < 1e-12:
+                direction = [1.0, 0.0, 0.0]
+
+            migrated.append({
+                "center": center,
+                "direction": direction,
+                "length": 0.0,
+                "curve_type": "unknown",
+                "tolerance": 25.0,
+            })
+
+        return migrated
 
     # === PHASE 2: Lazy-Loaded Properties ===
     @property
@@ -2900,11 +2946,6 @@ class Body:
         if not all_edges:
             raise ValueError("Solid hat keine Kanten")
         if not feature.edge_shape_ids and not feature.edge_indices and not feature.geometric_selectors:
-            if feature.edge_selectors:
-                raise ValueError(
-                    "N-Sided Patch Legacy edge_selectors werden nicht mehr aufgelöst. "
-                    "Bitte Kanten neu auswählen (TNP v4: edge_indices/ShapeIDs)."
-                )
             raise ValueError("N-Sided Patch benötigt mindestens 3 Kanten-Referenzen")
 
         resolved_edges = []
@@ -3009,9 +3050,6 @@ class Body:
                     feature.edge_shape_ids = new_shape_ids
                 if new_geo_selectors:
                     feature.geometric_selectors = new_geo_selectors
-                if (feature.edge_shape_ids or feature.edge_indices or feature.geometric_selectors) and feature.edge_selectors:
-                    feature.edge_selectors = []
-                    logger.debug("N-Sided Patch: Legacy edge_selectors nach TNP-v4-Migration entfernt")
             except Exception as e:
                 logger.debug(f"N-Sided Patch: Persistieren von ShapeIDs fehlgeschlagen: {e}")
 
@@ -3021,7 +3059,6 @@ class Body:
                 len(feature.edge_shape_ids or [])
                 or len(feature.edge_indices or [])
                 or len(feature.geometric_selectors or [])
-                or len(feature.edge_selectors or [])
             )
             logger.warning(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
             # Prüfe ob Body bereits geschlossen ist - dann ist das Feature evtl. schon angewendet
@@ -7610,8 +7647,8 @@ class Body:
                 continue
 
             elif feat_class == "NSidedPatchFeature":
+                legacy_edge_selectors = feat_dict.get("edge_selectors", [])
                 feat = NSidedPatchFeature(
-                    edge_selectors=feat_dict.get("edge_selectors", []),
                     edge_indices=feat_dict.get("edge_indices", []),
                     degree=feat_dict.get("degree", 3),
                     tangent=feat_dict.get("tangent", True),
@@ -7647,8 +7684,8 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
-                if feat.edge_indices or feat.edge_shape_ids or feat.geometric_selectors:
-                    feat.edge_selectors = []
+                elif legacy_edge_selectors:
+                    feat.geometric_selectors = cls._convert_legacy_nsided_edge_selectors(legacy_edge_selectors)
 
             elif feat_class == "SurfaceTextureFeature":
                 feat = SurfaceTextureFeature(
@@ -8355,6 +8392,13 @@ class Document:
             payload.setdefault("active_component_id", payload["root_component"].get("id"))
             logger.info(f"[MIGRATION] Flat-Format v{version} zu Root-Component migriert")
 
+        stripped_legacy, converted_legacy = cls._migrate_legacy_nsided_payload(payload)
+        if stripped_legacy > 0:
+            logger.info(
+                f"[MIGRATION] NSided legacy edge_selectors entfernt: {stripped_legacy} "
+                f"(zu geometric_selectors konvertiert: {converted_legacy})"
+            )
+
         logger.info(f"[ASSEMBLY] Lade Component-Format v{version}")
         doc._load_assembly_format(payload)
 
@@ -8465,6 +8509,56 @@ class Document:
             "sub_components": [],
         }
 
+    @staticmethod
+    def _iter_component_payloads(component_data: dict):
+        """Iteriert rekursiv über Component-Dicts eines Payloads."""
+        if not isinstance(component_data, dict):
+            return
+        yield component_data
+        for sub in component_data.get("sub_components", []) or []:
+            yield from Document._iter_component_payloads(sub)
+
+    @staticmethod
+    def _migrate_legacy_nsided_payload(payload: dict) -> Tuple[int, int]:
+        """
+        Entfernt legacy NSided edge_selectors aus dem Payload und konvertiert sie.
+
+        Returns:
+            (stripped_count, converted_count)
+        """
+        root = payload.get("root_component")
+        if not isinstance(root, dict):
+            return 0, 0
+
+        stripped_count = 0
+        converted_count = 0
+
+        for comp in Document._iter_component_payloads(root):
+            for body_data in comp.get("bodies", []) or []:
+                for feat_data in body_data.get("features", []) or []:
+                    if feat_data.get("feature_class") != "NSidedPatchFeature":
+                        continue
+
+                    legacy = feat_data.pop("edge_selectors", None)
+                    if legacy is None:
+                        continue
+                    stripped_count += 1
+
+                    has_modern_refs = bool(
+                        feat_data.get("edge_indices")
+                        or feat_data.get("edge_shape_ids")
+                        or feat_data.get("geometric_selectors")
+                    )
+                    if has_modern_refs:
+                        continue
+
+                    migrated_geo = Body._convert_legacy_nsided_edge_selectors(legacy)
+                    if migrated_geo:
+                        feat_data["geometric_selectors"] = migrated_geo
+                        converted_count += 1
+
+        return stripped_count, converted_count
+
     def _attach_document_to_bodies(self):
         """Stellt sicher, dass alle Bodies eine Document-Referenz haben."""
         for body in self.get_all_bodies():
@@ -8494,6 +8588,138 @@ class Document:
 
         if restored_count > 0:
             logger.info(f"[PARAMETRIC] {restored_count} Sketch-Referenzen wiederhergestellt")
+
+    def _migrate_loaded_nsided_features_to_indices(self) -> int:
+        """
+        Einmalige Laufzeitmigration: NSided-Features auf edge_indices/ShapeIDs heben.
+
+        Nutzt vorhandene geometric_selectors und das aktuelle Body-Solid, um
+        stabile Kanten-Indizes + ShapeIDs zu persistieren.
+        """
+        migrated_features = 0
+
+        def _is_same_edge(edge_a, edge_b) -> bool:
+            try:
+                wa = edge_a.wrapped if hasattr(edge_a, "wrapped") else edge_a
+                wb = edge_b.wrapped if hasattr(edge_b, "wrapped") else edge_b
+                return wa.IsSame(wb)
+            except Exception:
+                return edge_a is edge_b
+
+        try:
+            from modeling.geometric_selector import GeometricEdgeSelector
+            from modeling.tnp_system import ShapeType
+        except Exception:
+            return 0
+
+        shape_service = getattr(self, "_shape_naming_service", None)
+
+        for body in self.get_all_bodies():
+            solid = getattr(body, "_build123d_solid", None)
+            if solid is None or not hasattr(solid, "edges"):
+                continue
+
+            all_edges = list(solid.edges())
+            if not all_edges:
+                continue
+
+            for feature in body.features:
+                if not isinstance(feature, NSidedPatchFeature):
+                    continue
+
+                if feature.edge_indices and feature.edge_shape_ids:
+                    continue
+
+                selectors = feature.geometric_selectors or []
+                if not selectors:
+                    continue
+
+                resolved_edges = []
+                for sel_data in selectors:
+                    try:
+                        geo_sel = (
+                            GeometricEdgeSelector.from_dict(sel_data)
+                            if isinstance(sel_data, dict)
+                            else sel_data
+                        )
+                        if not hasattr(geo_sel, "find_best_match"):
+                            continue
+                        edge = geo_sel.find_best_match(all_edges)
+                        if edge is None:
+                            continue
+                        if any(_is_same_edge(edge, existing) for existing in resolved_edges):
+                            continue
+                        resolved_edges.append(edge)
+                    except Exception:
+                        continue
+
+                if len(resolved_edges) < 3:
+                    continue
+
+                resolved_indices = []
+                for edge in resolved_edges:
+                    match_idx = None
+                    for i, candidate in enumerate(all_edges):
+                        if _is_same_edge(candidate, edge):
+                            match_idx = i
+                            break
+                    if match_idx is not None and match_idx not in resolved_indices:
+                        resolved_indices.append(match_idx)
+
+                if len(resolved_indices) < 3:
+                    continue
+
+                changed = False
+                if feature.edge_indices != resolved_indices:
+                    feature.edge_indices = resolved_indices
+                    changed = True
+
+                try:
+                    canonical_selectors = [
+                        GeometricEdgeSelector.from_edge(edge).to_dict()
+                        for edge in resolved_edges
+                    ]
+                    if canonical_selectors:
+                        feature.geometric_selectors = canonical_selectors
+                        changed = True
+                except Exception:
+                    pass
+
+                if shape_service:
+                    migrated_shape_ids = []
+                    for local_idx, edge in enumerate(resolved_edges):
+                        try:
+                            shape_id = shape_service.find_shape_id_by_edge(edge)
+                            if shape_id is None and hasattr(edge, "wrapped"):
+                                ec = edge.center()
+                                edge_len = edge.length if hasattr(edge, "length") else 0.0
+                                shape_id = shape_service.register_shape(
+                                    ocp_shape=edge.wrapped,
+                                    shape_type=ShapeType.EDGE,
+                                    feature_id=feature.id,
+                                    local_index=local_idx,
+                                    geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
+                                )
+                            if shape_id is not None:
+                                migrated_shape_ids.append(shape_id)
+                        except Exception:
+                            continue
+
+                    if migrated_shape_ids and (
+                        not feature.edge_shape_ids or len(feature.edge_shape_ids) != len(migrated_shape_ids)
+                    ):
+                        feature.edge_shape_ids = migrated_shape_ids
+                        changed = True
+
+                if changed:
+                    migrated_features += 1
+                    body.invalidate_mesh()
+
+        if migrated_features > 0:
+            logger.info(
+                f"[MIGRATION] NSided Features auf edge_indices/ShapeIDs migriert: {migrated_features}"
+            )
+        return migrated_features
 
     def save_project(self, filename: str) -> bool:
         """
@@ -8570,7 +8796,7 @@ class Document:
             doc = cls.from_dict(data)
 
             # Bodies: BREP direkt laden oder Rebuild als Fallback
-            for body in doc.bodies:
+            for body in doc.get_all_bodies():
                 if body._build123d_solid is not None:
                     logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nötig)")
                 elif body.features:
@@ -8579,6 +8805,24 @@ class Document:
                         logger.debug(f"Body '{body.name}': Rebuild aus Feature-Tree")
                     except Exception as e:
                         logger.warning(f"Body '{body.name}' rebuild fehlgeschlagen: {e}")
+
+            # Einmalige Legacy-Migration für NSided edge_selectors -> edge_indices/ShapeIDs.
+            migrated_nsided = doc._migrate_loaded_nsided_features_to_indices()
+            if migrated_nsided > 0:
+                import shutil
+
+                backup_path = path.with_suffix(path.suffix + ".pre_nsided_migration.bak")
+                try:
+                    if not backup_path.exists():
+                        shutil.copy2(path, backup_path)
+                        logger.info(f"[MIGRATION] Backup vor NSided-Migration erstellt: {backup_path}")
+                except Exception as e:
+                    logger.warning(f"[MIGRATION] Backup für NSided-Migration fehlgeschlagen: {e}")
+
+                if doc.save_project(str(path)):
+                    logger.info(f"[MIGRATION] Projektdatei nach NSided-Migration aktualisiert: {path}")
+                else:
+                    logger.warning("[MIGRATION] Projektdatei konnte nach NSided-Migration nicht gespeichert werden")
 
             return doc
 

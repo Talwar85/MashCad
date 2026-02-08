@@ -24,6 +24,8 @@ RULES = [
             r"\"path_data\"\s*:\s*feat\.path_data",
             r"Sweep:\s*Legacy edge_selector migriert",
             r"N-Sided Patch:\s*Legacy-Selector nicht aufgelöst",
+            r"edge_selectors:\s*list\s*=\s*field\(default_factory=list\)",
+            r"NSidedPatchFeature\(\s*edge_selectors=",
         ],
     },
     {
