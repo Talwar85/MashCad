@@ -13,6 +13,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
 from loguru import logger
+from modeling.topology_indexing import iter_faces_with_indices
 
 try:
     import pyvista as pv
@@ -21,9 +22,6 @@ except ImportError:
     HAS_PYVISTA = False
 
 try:
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopAbs import TopAbs_FACE
-    from OCP.TopoDS import TopoDS  # Für Face-Casting
     from OCP.BRep import BRep_Tool
     from OCP.TopLoc import TopLoc_Location
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -147,13 +145,9 @@ class TexturedTessellator:
         face_mappings = []
         vertex_offset = 0
 
-        # Iteriere über alle Faces
-        explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
-        face_idx = 0
-
-        while explorer.More():
-            # WICHTIG: Shape zu Face casten (explorer.Current() gibt TopoDS_Shape zurück)
-            face = TopoDS.Face_s(explorer.Current())
+        # Iteriere über alle Faces (kanonische Reihenfolge)
+        for face_idx, b3d_face in iter_faces_with_indices(solid):
+            face = b3d_face.wrapped if hasattr(b3d_face, "wrapped") else b3d_face
 
             try:
                 mapping = TexturedTessellator._process_face(
@@ -171,9 +165,6 @@ class TexturedTessellator:
             except Exception as e:
                 logger.warning(f"Face {face_idx} Tessellation fehlgeschlagen: {e}")
                 # Fail-Fast: Wir brechen nicht komplett ab, aber loggen den Fehler
-
-            face_idx += 1
-            explorer.Next()
 
         if not all_vertices:
             raise RuntimeError("Keine Vertices generiert - Solid ist möglicherweise leer")

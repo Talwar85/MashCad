@@ -1,0 +1,83 @@
+import numpy as np
+
+from build123d import Solid
+
+from modeling.cad_tessellator import CADTessellator
+from modeling.shape_reference import create_reference_map, find_face_by_id
+from modeling.topology_indexing import (
+    dump_topology_faces,
+    face_from_index,
+    iter_faces_with_indices,
+    map_index_to_face,
+)
+
+
+def _make_box():
+    return Solid.make_box(10.0, 20.0, 30.0)
+
+
+def test_face_from_index_matches_build123d_faces_order():
+    solid = _make_box()
+    faces = list(solid.faces())
+    assert len(faces) > 0
+
+    for idx, expected in enumerate(faces):
+        resolved = face_from_index(solid, idx)
+        assert resolved is not None
+        assert resolved.wrapped.IsSame(expected.wrapped)
+
+        # Alias sollte identisch funktionieren
+        resolved_alias = map_index_to_face(solid, idx)
+        assert resolved_alias is not None
+        assert resolved_alias.wrapped.IsSame(expected.wrapped)
+
+    assert face_from_index(solid, -1) is None
+    assert face_from_index(solid, len(faces)) is None
+
+
+def test_iter_faces_with_indices_is_dense_zero_based():
+    solid = _make_box()
+    indexed_faces = list(iter_faces_with_indices(solid))
+
+    assert indexed_faces
+    assert [idx for idx, _ in indexed_faces] == list(range(len(indexed_faces)))
+
+
+def test_dump_topology_faces_contains_all_face_indices():
+    solid = _make_box()
+    dump = dump_topology_faces(solid)
+
+    assert dump
+    assert [entry["index"] for entry in dump] == list(range(len(dump)))
+    assert all("center" in entry for entry in dump)
+
+
+def test_tessellate_with_face_ids_uses_consistent_face_index_domain():
+    solid = _make_box()
+    mesh, _, face_info = CADTessellator.tessellate_with_face_ids(solid, quality=0.5)
+
+    assert mesh is not None
+    assert face_info
+    assert "face_id" in mesh.cell_data
+
+    face_ids = np.asarray(mesh.cell_data["face_id"], dtype=np.int32)
+    assert face_ids.size > 0
+
+    unique_ids = sorted(int(x) for x in np.unique(face_ids))
+    expected_ids = list(range(len(list(solid.faces()))))
+    assert unique_ids == expected_ids
+    assert sorted(face_info.keys()) == expected_ids
+
+
+def test_shape_reference_face_id_mapping_matches_topology_indexing():
+    solid = _make_box()
+    ref_map = create_reference_map(solid.wrapped)
+
+    assert ref_map
+    for idx in range(len(list(solid.faces()))):
+        face_ocp = find_face_by_id(solid.wrapped, idx)
+        assert face_ocp is not None
+
+        mapped = face_from_index(solid, idx)
+        assert mapped is not None
+        assert mapped.wrapped.IsSame(face_ocp)

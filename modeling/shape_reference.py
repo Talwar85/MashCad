@@ -33,8 +33,10 @@ from modeling.face_hash import (
 
 if HAS_OCP:
     from OCP.TopoDS import TopoDS_Face, TopoDS_Shape, TopoDS
+    from OCP.TopExp import TopExp
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopTools import TopTools_IndexedMapOfShape
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
@@ -306,13 +308,15 @@ def find_face_by_id(solid: 'TopoDS_Shape', target_id: int) -> Optional['TopoDS_F
         return None
 
     try:
-        explorer = TopExp_Explorer(solid, TopAbs_FACE)
-        current_id = 0
-        while explorer.More():
-            if current_id == target_id:
-                return TopoDS.Face_s(explorer.Current())
-            current_id += 1
-            explorer.Next()
+        if target_id < 0:
+            return None
+
+        face_map = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(solid, TopAbs_FACE, face_map)
+        one_based = target_id + 1
+        if one_based > face_map.Extent():
+            return None
+        return TopoDS.Face_s(face_map.FindKey(one_based))
         return None
     except Exception as e:
         logger.error(f"[ShapeRef] find_face_by_id failed: {e}")
@@ -337,13 +341,12 @@ def create_reference_map(solid: 'TopoDS_Shape') -> Dict[int, ShapeReference]:
         return result
 
     try:
-        explorer = TopExp_Explorer(solid, TopAbs_FACE)
-        face_id = 0
-        while explorer.More():
-            face = TopoDS.Face_s(explorer.Current())
+        face_map = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(solid, TopAbs_FACE, face_map)
+        for one_based in range(1, face_map.Extent() + 1):
+            face_id = one_based - 1
+            face = TopoDS.Face_s(face_map.FindKey(one_based))
             result[face_id] = ShapeReference.from_face(face, face_id)
-            face_id += 1
-            explorer.Next()
     except Exception as e:
         logger.error(f"[ShapeRef] create_reference_map failed: {e}")
 

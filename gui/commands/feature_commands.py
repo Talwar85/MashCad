@@ -46,9 +46,6 @@ class AddFeatureCommand(QUndoCommand):
             self.body.add_feature(self.feature, rebuild=rebuild)
             logger.debug(f"Redo: Added {self.feature.name} to {self.body.name} (rebuild={rebuild})")
 
-            # TNP v3.0: ShapeReferences registrieren
-            self.body._register_feature_shape_refs(self.feature)
-
         # Rebuild & Update UI
         try:
             CADTessellator.notify_body_changed()
@@ -66,9 +63,6 @@ class AddFeatureCommand(QUndoCommand):
         Called when user presses Ctrl+Z.
         """
         from modeling.cad_tessellator import CADTessellator
-
-        # TNP v3.0: ShapeReferences vor Entfernung aus Registry entfernen
-        self.body._unregister_feature_shape_refs(self.feature)
 
         # Feature entfernen
         if self.feature in self.body.features:
@@ -113,9 +107,6 @@ class DeleteFeatureCommand(QUndoCommand):
         """Delete feature."""
         from modeling.cad_tessellator import CADTessellator
 
-        # TNP v3.0: Unregister shape refs
-        self.body._unregister_feature_shape_refs(self.feature)
-
         # Remove feature
         if self.feature in self.body.features:
             self.body.features.remove(self.feature)
@@ -142,9 +133,6 @@ class DeleteFeatureCommand(QUndoCommand):
         # Re-insert feature at original index
         self.body.features.insert(self.feature_index, self.feature)
         logger.debug(f"Undo: Restored {self.feature.name}")
-
-        # TNP v3.0: Re-register shape refs
-        self.body._register_feature_shape_refs(self.feature)
 
         # Rebuild
         CADTessellator.notify_body_changed()

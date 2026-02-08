@@ -1159,34 +1159,6 @@ class MainWindow(QMainWindow):
                 request_render(self.viewport_3d.plotter, immediate=True)
             self.viewport_3d.update()
 
-    def _update_viewport_all(self):
-        """Aktualisiert ALLES im Viewport (Legacy Wrapper)"""
-        # Sketches
-        self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
-        
-        # Bodies - komplett neu laden
-        self.viewport_3d.clear_bodies()
-        default_col = (0.7, 0.1, 0.1)
-        
-        for i, body_info in enumerate(self.browser.get_visible_bodies()):
-            # Assembly-System: 3-Tupel (body, visible, is_inactive_component)
-            if len(body_info) == 3:
-                b, visible, is_inactive = body_info
-            else:
-                b, visible = body_info
-                is_inactive = False
-
-            if visible and hasattr(b, '_mesh_vertices') and b._mesh_vertices:
-                # FIX: Benannte Argumente verwenden!
-                self.viewport_3d.add_body(
-                    bid=b.id,
-                    name=b.name,
-                    verts=b._mesh_vertices,     # Explizit benennen
-                    faces=b._mesh_triangles,    # Explizit benennen
-                    color=default_col,
-                    inactive_component=is_inactive  # Grau/transparent für inaktive Components
-                )
-
     def _update_single_body(self, body):
         """
         Aktualisiert NUR EINEN Body im Viewport - ohne Flicker bei anderen Bodies.
@@ -5532,10 +5504,8 @@ class MainWindow(QMainWindow):
             from OCP.BRepExtrema import BRepExtrema_DistShapeShape
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
             from OCP.gp import gp_Pnt
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_FACE
-            from OCP.TopoDS import TopoDS
             from modeling.geometric_selector import GeometricFaceSelector
+            from modeling.topology_indexing import face_from_index, iter_faces_with_indices
             import numpy as np
 
             # --- SCHRITT A: Face finden (Robuste Logik wie zuvor) ---
@@ -5543,12 +5513,7 @@ class MainWindow(QMainWindow):
             candidate_faces = b3d_obj.faces()
 
             if not candidate_faces:
-                explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
-                candidate_faces = []
-                while explorer.More():
-                    from build123d import Face
-                    candidate_faces.append(Face(TopoDS.Face_s(explorer.Current())))
-                    explorer.Next()
+                candidate_faces = [face for _, face in iter_faces_with_indices(b3d_obj)]
 
             mesh_center = Vector(face_data['center_3d'])
             ocp_pt_vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(mesh_center.X, mesh_center.Y, mesh_center.Z)).Vertex()
@@ -5573,18 +5538,11 @@ class MainWindow(QMainWindow):
             # === NEU: DIREKTE FACE-SUCHE via ocp_face_id ===
             ocp_face_id = face_data.get('ocp_face_id')
             if ocp_face_id is not None:
-                # Iteriere durch B-Rep Faces und finde die mit passender ID
-                explorer = TopExp_Explorer(b3d_obj.wrapped, TopAbs_FACE)
-                face_idx = 0
-                while explorer.More():
-                    if face_idx == ocp_face_id:
-                        from build123d import Face
-                        best_face = Face(TopoDS.Face_s(explorer.Current()))
-                        best_dist = 0.0  # Exakter Match!
-                        logger.info(f"Face direkt via ocp_face_id={ocp_face_id} gefunden")
-                        break
-                    face_idx += 1
-                    explorer.Next()
+                resolved = face_from_index(b3d_obj, int(ocp_face_id))
+                if resolved is not None:
+                    best_face = resolved
+                    best_dist = 0.0  # Exakter Match!
+                    logger.info(f"Face direkt via ocp_face_id={ocp_face_id} gefunden")
 
             # Fallback: Distanz-basierte Suche (nur wenn ocp_face_id nicht gefunden)
             if best_face is None:

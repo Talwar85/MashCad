@@ -18,6 +18,7 @@ import threading
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled
 from collections import OrderedDict  # PERFORMANCE: O(1) LRU operations
+from modeling.topology_indexing import iter_faces_with_indices
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
 _TESSELLATOR_VERSION = 4
@@ -575,16 +576,10 @@ class CADTessellator:
     @staticmethod
     def count_brep_faces(solid) -> int:
         """Zählt die echten B-Rep Faces (nicht Tessellations-Dreiecke)"""
-        if not HAS_OCP or solid is None:
+        if solid is None:
             return 0
         try:
-            from OCP.TopAbs import TopAbs_FACE
-            explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
-            count = 0
-            while explorer.More():
-                count += 1
-                explorer.Next()
-            return count
+            return sum(1 for _ in iter_faces_with_indices(solid))
         except Exception as e:
             logger.debug(f"Face-Count fehlgeschlagen: {e}")
             return 0
@@ -613,7 +608,6 @@ class CADTessellator:
                 quality = Tolerances.TESSELLATION_QUALITY
 
         try:
-            from OCP.TopAbs import TopAbs_FACE
             from OCP.BRepMesh import BRepMesh_IncrementalMesh
             from OCP.TopLoc import TopLoc_Location
             from OCP.BRep import BRep_Tool
@@ -631,14 +625,9 @@ class CADTessellator:
             face_info = {}
 
             vertex_offset = 0
-            face_id = 0
-
-            # 2. Iteriere über jedes B-Rep Face
-            explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
-            while explorer.More():
-                # WICHTIG: Cast zu TopoDS_Face (explorer.Current() gibt TopoDS_Shape zurück)
-                from OCP.TopoDS import TopoDS
-                face = TopoDS.Face_s(explorer.Current())
+            # 2. Iteriere über jedes B-Rep Face (kanonische Reihenfolge)
+            for face_id, b3d_face in iter_faces_with_indices(solid):
+                face = b3d_face.wrapped if hasattr(b3d_face, "wrapped") else b3d_face
 
                 # Face-Eigenschaften extrahieren
                 props = GProp_GProps()
@@ -712,9 +701,6 @@ class CADTessellator:
 
                     vertex_offset += n_verts
 
-                face_id += 1
-                explorer.Next()
-
             if not all_vertices or not all_triangles:
                 return None, None, {}
 
@@ -730,7 +716,10 @@ class CADTessellator:
             # WICHTIG: Face-IDs als Cell-Data speichern!
             mesh.cell_data["face_id"] = np.array(all_face_ids, dtype=np.int32)
 
-            logger.info(f"Tessellated with face IDs: {len(all_triangles)} triangles, {face_id} faces")
+            logger.info(
+                f"Tessellated with face IDs: {len(all_triangles)} triangles, "
+                f"{len(face_info)} faces"
+            )
 
             # Edges extrahieren
             edge_mesh = CADTessellator.extract_brep_edges(solid, deflection=quality * 10)

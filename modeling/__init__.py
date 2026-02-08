@@ -1638,7 +1638,7 @@ class Body:
 
     def _register_boolean_history(self, bool_result: BooleanResult, feature, operation_name: str = ""):
         """
-        Registriert Boolean-History für TNP v3.0 und v4.0.
+        Registriert Boolean-History für TNP v4.0.
 
         Wird nach erfolgreichen Boolean-Operationen aufgerufen um
         die BRepTools_History an die TNP-Systeme weiterzugeben.
@@ -1651,21 +1651,6 @@ class Body:
         boolean_history = getattr(bool_result, 'history', None)
         if boolean_history is None:
             return
-
-        # TNP v3.0: Shape Registry
-        if hasattr(self, '_shape_registry'):
-            try:
-                self._shape_registry.track_boolean_operation(
-                    operation=f"Boolean_{operation_name}",
-                    input_shapes=[],
-                    result_shape=bool_result.value.wrapped if hasattr(bool_result.value, 'wrapped') else bool_result.value,
-                    history=boolean_history
-                )
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v3.0: Boolean {operation_name} getrackt")
-            except Exception as tnp_e:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v3.0 Tracking fehlgeschlagen: {tnp_e}")
 
         # TNP v4.0: ShapeNamingService
         if self._document and hasattr(self._document, '_shape_naming_service'):
@@ -1687,7 +1672,7 @@ class Body:
 
     def _register_fillet_chamfer_history(self, result_solid, history, feature, operation_type: str = "FILLET"):
         """
-        Registriert Fillet/Chamfer History für TNP v3.0 und v4.0.
+        Registriert Fillet/Chamfer History für TNP v4.0.
 
         Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() für präzises Shape-Tracking
         nach Fillet/Chamfer-Operationen.
@@ -1700,22 +1685,6 @@ class Body:
         """
         if history is None:
             return
-
-        # TNP v3.0: Shape Registry
-        if hasattr(self, '_shape_registry'):
-            try:
-                result_shape = result_solid.wrapped if hasattr(result_solid, 'wrapped') else result_solid
-                self._shape_registry.track_boolean_operation(
-                    operation=f"{operation_type}",
-                    input_shapes=[],
-                    result_shape=result_shape,
-                    history=history
-                )
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v3.0: {operation_type} History getrackt")
-            except Exception as tnp_e:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v3.0 {operation_type} Tracking fehlgeschlagen: {tnp_e}")
 
         # TNP v4.0: ShapeNamingService
         if self._document and hasattr(self._document, '_shape_naming_service'):
@@ -4379,123 +4348,8 @@ class Body:
             # Aktualisiere Feature
             feature.geometric_selectors = new_selectors
 
-            # TNP v3.0: Registry für dieses Feature auch aktualisieren
-            self._update_registry_for_feature(feature, solid)
-
         if updated_count > 0:
             logger.info(f"Aktualisiert {updated_count} Edge-Selektoren nach Geometrie-Operation")
-
-    def _update_registry_for_feature(self, feature, solid):
-        """
-        TNP v3.0: Aktualisiert Registry-Einträge für ein Feature nach Geometrie-Änderung.
-        Wird nach Boolean aufgerufen.
-        """
-        if not hasattr(self, '_shape_registry'):
-            if is_enabled("extrude_debug"):
-                logger.debug(f"TNP DEBUG: _update_registry_for_feature - KEINE REGISTRY!")
-            return
-        
-        try:
-            from modeling.tnp_shape_reference import ShapeReference, ShapeType
-            from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
-            
-            updated = 0
-            if is_enabled("extrude_debug"):
-                logger.debug(f"TNP DEBUG: _update_registry_for_feature für {feature.name} ({feature.id})")
-            
-            # Edge-basierte Features (Fillet, Chamfer)
-            if isinstance(feature, (FilletFeature, ChamferFeature)):
-                edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
-                geometric_selectors = getattr(feature, 'geometric_selectors', [])
-                
-                if is_enabled("extrude_debug"):
-                    logger.debug(f"TNP DEBUG: Feature hat {len(edge_shape_ids)} edge_shape_ids, "
-                               f"{len(geometric_selectors)} selectors")
-                
-                # Hole Edges aus Solid für original_shape
-                all_edges = list(solid.edges()) if solid and hasattr(solid, 'edges') else []
-                if is_enabled("extrude_debug"):
-                    logger.debug(f"TNP DEBUG: Solid hat {len(all_edges)} edges")
-                
-                for i, shape_id in enumerate(edge_shape_ids):
-                    if i < len(geometric_selectors):
-                        # Alte Referenz entfernen
-                        self._shape_registry.unregister(shape_id)
-                        
-                        # Neue Referenz mit aktualisiertem Selector erstellen
-                        selector = geometric_selectors[i]
-                        if isinstance(selector, dict):
-                            geo_sel = GeometricEdgeSelector.from_dict(selector)
-                        else:
-                            geo_sel = selector
-                        
-                        # Finde original_shape im aktuellen Solid
-                        original_shape = None
-                        matched_edge = None
-                        if all_edges and hasattr(geo_sel, 'find_best_match'):
-                            matched_edge = geo_sel.find_best_match(all_edges)
-                            if matched_edge and hasattr(matched_edge, 'wrapped'):
-                                original_shape = matched_edge.wrapped
-                        
-                        if original_shape:
-                            if is_enabled("extrude_debug"):
-                                logger.debug(f"TNP DEBUG: Edge {i} - Match gefunden, original_shape gesetzt")
-                        else:
-                            if is_enabled("extrude_debug"):
-                                logger.warning(f"TNP DEBUG: Edge {i} - KEIN Match gefunden!")
-                        
-                        ref = ShapeReference(
-                            ref_id=shape_id,
-                            shape_type=ShapeType.EDGE,
-                            geometric_selector=geo_sel,
-                            created_by=feature.id,
-                            original_shape=original_shape
-                        )
-                        self._shape_registry.register(ref)
-                        updated += 1
-            
-            # Face-basierte Features (Shell, Hole, Draft)
-            elif isinstance(feature, (ShellFeature, HoleFeature, DraftFeature)):
-                face_shape_ids = getattr(feature, 'face_shape_ids', [])
-                face_selectors = getattr(feature, 'opening_face_selectors', []) or getattr(feature, 'face_selectors', [])
-                
-                # Hole Faces aus Solid
-                all_faces = list(solid.faces()) if solid and hasattr(solid, 'faces') else []
-                
-                for i, shape_id in enumerate(face_shape_ids):
-                    if i < len(face_selectors):
-                        self._shape_registry.unregister(shape_id)
-                        
-                        selector_data = face_selectors[i]
-                        if isinstance(selector_data, dict):
-                            geo_sel = GeometricFaceSelector.from_dict(selector_data)
-                        else:
-                            continue
-                        
-                        # Finde original_shape
-                        original_shape = None
-                        if all_faces and hasattr(geo_sel, 'find_best_match'):
-                            matched_face = geo_sel.find_best_match(all_faces)
-                            if matched_face and hasattr(matched_face, 'wrapped'):
-                                original_shape = matched_face.wrapped
-                        
-                        ref = ShapeReference(
-                            ref_id=shape_id,
-                            shape_type=ShapeType.FACE,
-                            geometric_selector=geo_sel,
-                            created_by=feature.id,
-                            original_shape=original_shape
-                        )
-                        self._shape_registry.register(ref)
-                        updated += 1
-            
-            if updated > 0:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v3.0: Registry für {feature.name} aktualisiert ({updated} refs)")
-                
-        except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v3.0: Registry-Update fehlgeschlagen: {e}")
 
     def _update_edge_selectors_for_feature(self, feature, solid):
         """
@@ -4649,169 +4503,6 @@ class Body:
 
         except Exception as e:
             logger.debug(f"Shape Naming Record Update fehlgeschlagen: {e}")
-
-    def _register_feature_shape_refs(self, feature) -> None:
-        """
-        TNP v3.0: Registriert alle ShapeReferences eines Features in der Registry.
-        Wird aufgerufen wenn ein Feature neu erstellt oder restored (Redo) wird.
-        
-        WICHTIG: Extrahiert original_shape aus dem aktuellen Solid für History-Tracking.
-        """
-        if not hasattr(self, '_shape_registry') or not feature:
-            return
-        
-        try:
-            from modeling.tnp_shape_reference import ShapeReference, ShapeType
-            from modeling.geometric_selector import GeometricEdgeSelector, GeometricFaceSelector
-            
-            # Hole aktuelles Solid um original_shape zu extrahieren
-            current_solid = self._build123d_solid
-            all_edges = list(current_solid.edges()) if current_solid and hasattr(current_solid, 'edges') else []
-            all_faces = list(current_solid.faces()) if current_solid and hasattr(current_solid, 'faces') else []
-            
-            # Edge ShapeIDs (Fillet, Chamfer)
-            edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
-            geometric_selectors = getattr(feature, 'geometric_selectors', [])
-            
-            for i, shape_id in enumerate(edge_shape_ids):
-                if i < len(geometric_selectors):
-                    selector_data = geometric_selectors[i]
-                    
-                    # Finde die Edge im aktuellen Solid um original_shape zu bekommen
-                    original_shape = None
-                    if all_edges:
-                        if isinstance(selector_data, dict):
-                            geo_sel = GeometricEdgeSelector.from_dict(selector_data)
-                        else:
-                            geo_sel = selector_data
-                        
-                        if hasattr(geo_sel, 'find_best_match'):
-                            matched_edge = geo_sel.find_best_match(all_edges)
-                            if matched_edge and hasattr(matched_edge, 'wrapped'):
-                                original_shape = matched_edge.wrapped
-                    
-                    ref = ShapeReference(
-                        ref_id=shape_id,
-                        shape_type=ShapeType.EDGE,
-                        geometric_selector=selector_data,
-                        created_by=feature.id,
-                        original_shape=original_shape  # WICHTIG: Für History-Resolution
-                    )
-                    self._shape_registry.register(ref)
-            
-            # Face ShapeIDs (Shell, Hole, Draft)
-            face_shape_ids = getattr(feature, 'face_shape_ids', [])
-            face_selectors = getattr(feature, 'opening_face_selectors', []) or getattr(feature, 'face_selectors', [])
-            
-            for i, shape_id in enumerate(face_shape_ids):
-                if i < len(face_selectors):
-                    selector_data = face_selectors[i]
-                    if isinstance(selector_data, dict):
-                        geo_sel = GeometricFaceSelector.from_dict(selector_data)
-                    else:
-                        continue
-                    
-                    # Finde die Face im aktuellen Solid
-                    original_shape = None
-                    if all_faces and hasattr(geo_sel, 'find_best_match'):
-                        matched_face = geo_sel.find_best_match(all_faces)
-                        if matched_face and hasattr(matched_face, 'wrapped'):
-                            original_shape = matched_face.wrapped
-                    
-                    ref = ShapeReference(
-                        ref_id=shape_id,
-                        shape_type=ShapeType.FACE,
-                        geometric_selector=geo_sel,
-                        created_by=feature.id,
-                        original_shape=original_shape
-                    )
-                    self._shape_registry.register(ref)
-            
-            # Draft/etc: Einzelne face_shape_id
-            face_shape_id = getattr(feature, 'face_shape_id', None)
-            if face_shape_id:
-                selector_data = getattr(feature, 'face_selector', None)
-                if isinstance(selector_data, dict):
-                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
-                    
-                    # Finde die Face
-                    original_shape = None
-                    if all_faces and hasattr(geo_sel, 'find_best_match'):
-                        matched_face = geo_sel.find_best_match(all_faces)
-                        if matched_face and hasattr(matched_face, 'wrapped'):
-                            original_shape = matched_face.wrapped
-                    
-                    ref = ShapeReference(
-                        ref_id=face_shape_id,
-                        shape_type=ShapeType.FACE,
-                        geometric_selector=geo_sel,
-                        created_by=feature.id,
-                        original_shape=original_shape
-                    )
-                    self._shape_registry.register(ref)
-            
-            # Loft: profile_shape_ids (keine GeometricSelector, nur ID)
-            profile_shape_ids = getattr(feature, 'profile_shape_ids', [])
-            for shape_id in profile_shape_ids:
-                ref = ShapeReference(
-                    ref_id=shape_id,
-                    shape_type=ShapeType.FACE,
-                    created_by=feature.id
-                )
-                self._shape_registry.register(ref)
-            
-            # Sweep: profile_shape_id und path_shape_id
-            profile_shape_id = getattr(feature, 'profile_shape_id', None)
-            if profile_shape_id:
-                ref = ShapeReference(
-                    ref_id=profile_shape_id,
-                    shape_type=ShapeType.FACE,
-                    created_by=feature.id
-                )
-                self._shape_registry.register(ref)
-            path_shape_id = getattr(feature, 'path_shape_id', None)
-            if path_shape_id:
-                ref = ShapeReference(
-                    ref_id=path_shape_id,
-                    shape_type=ShapeType.EDGE,
-                    created_by=feature.id
-                )
-                self._shape_registry.register(ref)
-            
-            # Thread: face_shape_id
-            thread_face_shape_id = getattr(feature, 'face_shape_id', None)
-            if thread_face_shape_id and hasattr(feature, 'face_selector'):
-                selector_data = getattr(feature, 'face_selector', None)
-                if isinstance(selector_data, dict):
-                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
-                    
-                    # Finde die Face
-                    original_shape = None
-                    if all_faces and hasattr(geo_sel, 'find_best_match'):
-                        matched_face = geo_sel.find_best_match(all_faces)
-                        if matched_face and hasattr(matched_face, 'wrapped'):
-                            original_shape = matched_face.wrapped
-                    
-                    ref = ShapeReference(
-                        ref_id=thread_face_shape_id,
-                        shape_type=ShapeType.FACE,
-                        geometric_selector=geo_sel,
-                        created_by=feature.id,
-                        original_shape=original_shape
-                    )
-                    self._shape_registry.register(ref)
-            
-            total = (len(edge_shape_ids) + len(face_shape_ids) + 
-                    (1 if face_shape_id else 0) + len(profile_shape_ids) +
-                    (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
-                    (1 if thread_face_shape_id else 0))
-            if total > 0:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} registriert (mit original_shape)")
-                
-        except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Registry Registrierung fehlgeschlagen: {e}")
 
     def _register_extrude_shapes(self, feature: 'ExtrudeFeature', solid) -> None:
         """
@@ -4992,60 +4683,6 @@ class Body:
                 logger.warning(f"TNP v4.0: BRepFeat-Registrierung fehlgeschlagen: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
-
-    def _unregister_feature_shape_refs(self, feature) -> None:
-        """
-        TNP v3.0: Entfernt alle ShapeReferences eines Features aus der Registry.
-        Wird aufgerufen wenn ein Feature entfernt (Undo) wird.
-        """
-        if not hasattr(self, '_shape_registry') or not feature:
-            return
-        
-        try:
-            # Edge ShapeIDs entfernen
-            edge_shape_ids = getattr(feature, 'edge_shape_ids', [])
-            for shape_id in edge_shape_ids:
-                self._shape_registry.unregister(shape_id)
-            
-            # Face ShapeIDs entfernen
-            face_shape_ids = getattr(feature, 'face_shape_ids', [])
-            for shape_id in face_shape_ids:
-                self._shape_registry.unregister(shape_id)
-            
-            # Draft/etc: Einzelne face_shape_id entfernen
-            face_shape_id = getattr(feature, 'face_shape_id', None)
-            if face_shape_id:
-                self._shape_registry.unregister(face_shape_id)
-            
-            # Loft: profile_shape_ids entfernen
-            profile_shape_ids = getattr(feature, 'profile_shape_ids', [])
-            for shape_id in profile_shape_ids:
-                self._shape_registry.unregister(shape_id)
-            
-            # Sweep: profile_shape_id und path_shape_id entfernen
-            profile_shape_id = getattr(feature, 'profile_shape_id', None)
-            if profile_shape_id:
-                self._shape_registry.unregister(profile_shape_id)
-            path_shape_id = getattr(feature, 'path_shape_id', None)
-            if path_shape_id:
-                self._shape_registry.unregister(path_shape_id)
-            
-            # Thread: face_shape_id entfernen
-            thread_face_shape_id = getattr(feature, 'face_shape_id', None)
-            if thread_face_shape_id:
-                self._shape_registry.unregister(thread_face_shape_id)
-            
-            total = (len(edge_shape_ids) + len(face_shape_ids) + 
-                    (1 if face_shape_id else 0) + len(profile_shape_ids) +
-                    (1 if profile_shape_id else 0) + (1 if path_shape_id else 0) +
-                    (1 if thread_face_shape_id else 0))
-            if total > 0:
-                if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP: {total} ShapeReferences für Feature {feature.id} entfernt")
-                
-        except Exception as e:
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Registry Unregister fehlgeschlagen: {e}")
 
     def _update_face_selectors_for_feature(self, feature, solid):
         """
@@ -5279,26 +4916,9 @@ class Body:
                         if is_enabled("tnp_debug_logging"):
                             logger.debug(f"TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism")
                         
-                        # TNP v3.0: Nach BRepFeat Operation Registry aktualisieren
                         if is_enabled("extrude_debug"):
                             logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                         self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
-
-                        # Registry für bereits angewandte Fillet/Chamfer-Features aktualisieren
-                        if is_enabled("extrude_debug"):
-                            logger.debug(f"TNP DEBUG: Starte Registry-Update für Features vor Index {i}")
-                        updated_count = 0
-                        for feat_idx, feat in enumerate(self.features):
-                            if feat_idx >= i:
-                                break  # Nur Features VOR dem aktuellen updaten
-                            if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                if is_enabled("extrude_debug"):
-                                    logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
-                                self._update_registry_for_feature(feat, new_solid)
-                                updated_count += 1
-
-                        if is_enabled("extrude_debug"):
-                            logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
                     else:
                         # Fallback zu normalem Extrude+Boolean
                         has_polys = False
@@ -5339,34 +4959,11 @@ class Body:
                                 # TNP v4.0: History an ShapeNamingService durchreichen
                                 self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
 
-                                # TNP v3.0: Nach Boolean-Operation ALLE Shape-Referenzen aktualisieren
+                                # Nach Boolean-Operation: Edge-Selektoren für nachfolgende Features aktualisieren
                                 if new_solid is not None:
-                                    # 1. Edge-Selektoren für nachfolgende Features aktualisieren
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                                     self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
-
-                                    # 2. Registry für bereits angewandte Fillet/Chamfer-Features aktualisieren
-                                    if is_enabled("extrude_debug"):
-                                        logger.debug(f"TNP DEBUG: Starte Registry-Update für Features vor Index {i}")
-                                    updated_count = 0
-                                    for feat_idx, feat in enumerate(self.features):
-                                        if feat_idx >= i:
-                                            break  # Nur Features VOR dem aktuellen updaten
-                                        if isinstance(feat, (FilletFeature, ChamferFeature)):
-                                            if is_enabled("extrude_debug"):
-                                                logger.debug(f"TNP DEBUG: Update Registry für {feat.name} (ID: {feat.id})")
-                                            self._update_registry_for_feature(feat, new_solid)
-                                            updated_count += 1
-
-                                    if is_enabled("extrude_debug"):
-                                        logger.debug(f"TNP DEBUG: Registry aktualisiert für {updated_count} Features")
-
-                                    # 3. DEBUG: Zeige Registry-Status
-                                    if hasattr(self, '_shape_registry'):
-                                        stats = self._shape_registry.get_stats()
-                                        if is_enabled("extrude_debug"):
-                                            logger.debug(f"TNP DEBUG: Registry Status = {stats}")
                             else:
                                 logger.warning(f"⚠️ {feature.operation} fehlgeschlagen: {bool_result.message}")
                                 status = "ERROR"
@@ -5379,11 +4976,6 @@ class Body:
                     # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgeführt wird
                     # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
-                    
-                    # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
-                    if is_enabled("extrude_debug"):
-                        logger.debug(f"TNP DEBUG Fillet: Aktualisiere Registry vor Resolution")
-                    self._update_registry_for_feature(feature, current_solid)
                     
                     _fillet_history_holder = [None]  # Closure-safe container
 
@@ -5422,13 +5014,6 @@ class Body:
                     # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgeführt wird
                     # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
-                    
-                    # TNP v3.0: AUCH Registry aktualisieren für History-Resolution!
-                    # WICHTIG: Dies muss nach _update_edge_selectors_for_feature passieren
-                    # damit die neuen Selektoren verwendet werden
-                    if is_enabled("extrude_debug"):
-                        logger.debug(f"TNP DEBUG Chamfer: Aktualisiere Registry vor Resolution")
-                    self._update_registry_for_feature(feature, current_solid)
                     
                     _chamfer_history_holder = [None]  # Closure-safe container
 
@@ -5772,34 +5357,24 @@ class Body:
 
     def _migrate_tnp_references(self, new_solid):
         """
-        TNP v3.0: Migration von ShapeReferences nach Rebuild.
-        
-        DEAKTIVIERT: Altes TNP-System (Phase 8.2) wurde durch TNP v3.0 ersetzt.
-        Das neue System verwendet ShapeReferenceRegistry mit geometrischem Matching.
-        
-        Args:
-            new_solid: Das neue Build123d Solid nach Rebuild
+        Kompatibilitäts-Hook nach Rebuild.
+
+        Das alte TNP-v3 Registry-System wurde entfernt; TNP v4 wird über den
+        ShapeNamingService im Document gepflegt.
         """
-        # TNP v3.0: Nur noch Logging für Debugging
-        if hasattr(self, '_shape_registry'):
-            stats = self._shape_registry.get_stats()
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v3.0 Registry Status: {stats}")
+        return
 
     def update_feature_references(self, feature_id: str, old_solid, new_solid):
         """
-        TNP v3.0: Aktualisiert Referenzen wenn ein spezifisches Feature modifiziert wurde.
-        
-        Das neue System verwendet ShapeReferenceRegistry mit automatischer Resolution.
-        
+        Kompatibilitäts-Hook bei Feature-Änderungen.
+
         Args:
             feature_id: ID des modifizierten Features
             old_solid: Solid VOR der Änderung
             new_solid: Solid NACH der Änderung
         """
-        # TNP v3.0: Neue Registry verwendet automatische Resolution
         if is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v3.0: Feature {feature_id} wurde modifiziert - Registry bleibt aktiv")
+            logger.debug(f"TNP v4.0: Feature {feature_id} wurde modifiziert")
 
     def reorder_features(self, old_index: int, new_index: int) -> bool:
         """
@@ -6424,14 +5999,11 @@ class Body:
                             pass
                         solids.append(s)
 
-            # === PFAD B: Fallback auf "Alten Code" (Rebuild / Scripting) ===
+            # CAD-kernel-first: Kein Legacy-Fallback mehr.
             if not solids:
                 if is_enabled("extrude_debug"):
-                    logger.info("Extrude: Starte Auto-Detection (Legacy Mode)...")
-                # ... [HIER FÜGST DU DEINEN GELIEFERTEN ALTEN CODE EIN] ...
-                # Ich rufe hier eine interne Methode auf, die deinen alten Code enthält, 
-                # um diesen Block übersichtlich zu halten.
-                return self._compute_extrude_legacy(feature, plane)
+                    logger.info("Extrude: keine gueltigen Profile/Faces gefunden (kein Legacy-Fallback aktiv)")
+                return None
             
             if not solids: return None
             return solids[0] if len(solids) == 1 else Compound(children=solids)
@@ -6947,250 +6519,6 @@ class Body:
 
         return None
 
-    def _compute_extrude_legacy(self, feature, plane):
-        """
-        Legacy-Logik für Extrusion (Auto-Detection von Löchern etc.),
-        falls keine vorausberechneten Polygone vorhanden sind.
-        Entspricht exakt der alten, robusten Implementierung.
-        """
-        if not HAS_BUILD123D or not feature.sketch: return None
-
-        try:
-            from shapely.geometry import LineString, Point, Polygon as ShapelyPoly
-            from shapely.ops import unary_union, polygonize
-            from build123d import make_face, Vector, Wire, Compound, Shape
-            import math
-
-            logger.info(f"--- Starte Legacy Extrusion: {feature.name} ---")
-
-            sketch = feature.sketch
-            # plane ist bereits übergeben
-
-            # --- 1. Segmente sammeln ---
-            all_segments = []
-            # NEU: Separate Liste für geschlossene Ringe (Kreise)
-            closed_rings = []
-            def rnd(val): return round(val, 5)
-
-            for l in sketch.lines:
-                if not l.construction:
-                    all_segments.append(LineString([(rnd(l.start.x), rnd(l.start.y)), (rnd(l.end.x), rnd(l.end.y))]))
-
-            # NEU: Kreise separat als Polygone speichern (nicht als LineStrings!)
-            for c in sketch.circles:
-                if not c.construction:
-                    pts = [(rnd(c.center.x + c.radius * math.cos(i * 2 * math.pi / 64)),
-                            rnd(c.center.y + c.radius * math.sin(i * 2 * math.pi / 64))) for i in range(65)]
-                    # WICHTIG: Geschlossenen Ring als Polygon speichern, NICHT als LineString
-                    # polygonize() funktioniert nicht mit isolierten geschlossenen Ringen!
-                    try:
-                        circle_poly = ShapelyPoly(pts)
-                        if circle_poly.is_valid:
-                            closed_rings.append(circle_poly)
-                            logger.debug(f"Kreis als geschlossener Ring: center=({c.center.x:.1f}, {c.center.y:.1f}), r={c.radius:.1f}")
-                        else:
-                            # Fallback: Als LineString für polygonize
-                            all_segments.append(LineString(pts))
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        all_segments.append(LineString(pts))
-
-            for arc in sketch.arcs:
-                 if not arc.construction:
-                    pts = []
-                    start, end = arc.start_angle, arc.end_angle
-                    sweep = end - start
-                    if sweep < 0.1: sweep += 360
-                    steps = max(12, int(sweep / 5))
-                    for i in range(steps + 1):
-                        t = math.radians(start + sweep * i / steps)
-                        x = arc.center.x + arc.radius * math.cos(t)
-                        y = arc.center.y + arc.radius * math.sin(t)
-                        pts.append((rnd(x), rnd(y)))
-                    if len(pts) >= 2: all_segments.append(LineString(pts))
-            for spline in getattr(sketch, 'splines', []):
-                 if not getattr(spline, 'construction', False):
-                     pts_raw = []
-                     if hasattr(spline, 'get_curve_points'):
-                         pts_raw = spline.get_curve_points(segments_per_span=16)
-                     elif hasattr(spline, 'to_lines'):
-                         lines = spline.to_lines(segments_per_span=16)
-                         if lines:
-                             pts_raw.append((lines[0].start.x, lines[0].start.y))
-                             for ln in lines: pts_raw.append((ln.end.x, ln.end.y))
-                     pts = [(rnd(p[0]), rnd(p[1])) for p in pts_raw]
-                     if len(pts) >= 2: all_segments.append(LineString(pts))
-
-            if not all_segments and not closed_rings:
-                return None
-
-            # --- 2. Polygonize & Deduplizierung ---
-            candidates = []
-
-            # 2a. Geschlossene Ringe (Kreise) direkt als Kandidaten hinzufügen
-            for ring in closed_rings:
-                candidates.append(ring)
-                logger.debug(f"Geschlossener Ring als Kandidat: area={ring.area:.1f}")
-
-            # 2b. Lineare Segmente mit polygonize verarbeiten
-            if all_segments:
-                try:
-                    merged = unary_union(all_segments)
-                    raw_candidates = list(polygonize(merged))
-
-                    for rc in raw_candidates:
-                        clean_poly = rc.buffer(0) # Reparatur
-                        is_dup = False
-                        for existing in candidates:
-                            if abs(clean_poly.area - existing.area) < 1e-4 and clean_poly.centroid.distance(existing.centroid) < 1e-4:
-                                is_dup = True
-                                break
-                        if not is_dup:
-                            candidates.append(clean_poly)
-
-                except Exception as e:
-                    logger.warning(f"Polygonize fehlgeschlagen: {e}")
-                    # Weiter mit geschlossenen Ringen falls vorhanden
-
-            logger.info(f"Kandidaten (Unique): {len(candidates)}")
-
-            if not candidates: return None
-
-            # --- 3. Selektion ---
-            selected_indices = set()
-            if feature.selector:
-                selectors = feature.selector
-                if isinstance(selectors, tuple) and len(selectors) == 2 and isinstance(selectors[0], (int, float)):
-                    selectors = [selectors]
-                
-                for sel_pt in selectors:
-                    pt = Point(sel_pt)
-                    matches = []
-                    for i, poly in enumerate(candidates):
-                        if poly.contains(pt) or poly.distance(pt) < 1e-2:
-                            matches.append(i)
-                    if matches:
-                        best = min(matches, key=lambda i: candidates[i].area)
-                        selected_indices.add(best)
-            else:
-                selected_indices = set(range(len(candidates)))
-
-            if not selected_indices: return None
-
-            # --- 4. Faces bauen ---
-            faces_to_extrude = []
-
-            def to_3d_wire(shapely_poly):
-                """Konvertiert Shapely Polygon zu Build123d Wire. Erkennt Kreise!"""
-                try:
-                    pts_2d = list(shapely_poly.exterior.coords[:-1])
-                    if len(pts_2d) < 3: return None
-
-                    # NEU: Prüfen ob es ein Kreis ist
-                    circle_info = self._detect_circle_from_points(pts_2d)
-                    if circle_info:
-                        cx, cy, radius = circle_info
-                        logger.debug(f"to_3d_wire: Erkenne Kreis r={radius:.2f}")
-                        center_3d = plane.from_local_coords((cx, cy))
-                        from build123d import Plane as B3DPlane
-                        circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
-                        return Wire.make_circle(radius, circle_plane)
-
-                    # Standard: Polygon-Wire
-                    pts_3d = [plane.from_local_coords((p[0], p[1])) for p in pts_2d]
-                    return Wire.make_polygon(pts_3d)
-                except Exception as e:
-                    logger.debug(f"to_3d_wire error: {e}")
-                    return None
-
-            for outer_idx in selected_indices:
-                try:
-                    outer_poly = candidates[outer_idx]
-                    outer_wire = to_3d_wire(outer_poly)
-                    if not outer_wire: continue
-
-                    main_face = make_face(outer_wire)
-                    
-                    # Löcher suchen
-                    for i, potential_hole in enumerate(candidates):
-                        if i == outer_idx: continue
-                        
-                        # WICHTIG 1: Ein Loch muss kleiner sein!
-                        if potential_hole.area >= outer_poly.area * 0.99:
-                            continue
-
-                        # Check: Ist es drinnen?
-                        is_inside = False
-                        reason = ""
-                        
-                        try:
-                            # A) Konzentrisch (Sehr starkes Indiz für Loch)
-                            if outer_poly.centroid.distance(potential_hole.centroid) < 1e-3:
-                                is_inside = True; reason = "Concentric"
-                            
-                            # B) Intersection
-                            elif not is_inside:
-                                intersect = outer_poly.intersection(potential_hole)
-                                ratio = intersect.area / potential_hole.area if potential_hole.area > 0 else 0
-                                if ratio > 0.9: 
-                                    is_inside = True; reason = f"Overlap {ratio:.2f}"
-                            
-                            # C) Centroid Check
-                            if not is_inside:
-                                if outer_poly.contains(potential_hole.centroid):
-                                    is_inside = True; reason = "Centroid"
-                        except Exception as e_hole:
-                            logger.debug(f"Hole-in-face check fehlgeschlagen: {e_hole}")
-
-                        if is_inside:
-                            # Nur schneiden, wenn nicht selbst ausgewählt
-                            if i not in selected_indices:
-                                logger.info(f"  -> Schneide Loch #{i} ({reason})")
-                                hole_wire = to_3d_wire(potential_hole)
-                                if hole_wire:
-                                    try:
-                                        hole_face = make_face(hole_wire)
-                                        main_face = main_face - hole_face
-                                    except Exception as e:
-                                        logger.warning(f"Cut failed: {e}")
-
-                    faces_to_extrude.append(main_face)
-                except Exception as e:
-                    logger.error(f"Face construction error: {e}")
-
-            if not faces_to_extrude: return None
-
-            # --- 5. Extrudieren mit OCP ---
-            solids = []
-            amount = feature.distance * feature.direction
-            direction_vec = plane.z_dir
-
-            for f in faces_to_extrude:
-                s = self._ocp_extrude_face(f, amount, direction_vec)
-                if s is not None:
-                    solids.append(s)
-                else:
-                    logger.warning(f"Extrude für Face fehlgeschlagen")
-
-            if not solids: 
-                logger.warning("Keine Solids erzeugt!")
-                return None
-            
-            logger.debug(f"Legacy Extrusion OK: {len(solids)} Solids erzeugt.")
-
-            if len(solids) == 1:
-                return solids[0]
-            else:
-                return Compound(children=solids)
-            
-        except Exception as e:
-            logger.error(f"Legacy Extrude CRASH: {e}")
-            raise e
-
-
-        
-    
-    
     def _get_plane_from_sketch(self, sketch):
         origin = getattr(sketch, 'plane_origin', (0,0,0))
         normal = getattr(sketch, 'plane_normal', (0,0,1))
@@ -7533,16 +6861,27 @@ class Body:
                     "thickness_formula": feat.thickness_formula,
                     "opening_face_selectors": feat.opening_face_selectors,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs vollstaendig serialisieren (inkl. Legacy-Fallback)
                 if feat.face_shape_ids:
-                    feat_dict["face_shape_ids"] = [
-                        {
-                            "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
-                        }
-                        for sid in feat.face_shape_ids
-                    ]
+                    serialized_face_ids = []
+                    for sid in feat.face_shape_ids:
+                        if hasattr(sid, "uuid"):
+                            serialized_face_ids.append({
+                                "uuid": sid.uuid,
+                                "shape_type": sid.shape_type.name,
+                                "feature_id": sid.feature_id,
+                                "local_index": sid.local_index,
+                                "geometry_hash": sid.geometry_hash,
+                                "timestamp": sid.timestamp
+                            })
+                        elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                            serialized_face_ids.append({
+                                "feature_id": sid.feature_id,
+                                "local_id": sid.local_id,
+                                "shape_type": sid.shape_type.name
+                            })
+                    if serialized_face_ids:
+                        feat_dict["face_shape_ids"] = serialized_face_ids
 
             elif isinstance(feat, HoleFeature):
                 feat_dict.update({
@@ -7637,13 +6976,24 @@ class Body:
                     "cosmetic": feat.cosmetic,
                     "face_selector": feat.face_selector,
                 })
-                # TNP v3.0: ShapeID serialisieren
+                # TNP v4.0: ShapeID serialisieren (inkl. Legacy-Fallback)
                 if feat.face_shape_id:
-                    feat_dict["face_shape_id"] = {
-                        "feature_id": feat.face_shape_id.feature_id,
-                        "local_id": feat.face_shape_id.local_id,
-                        "shape_type": feat.face_shape_id.shape_type.name
-                    }
+                    sid = feat.face_shape_id
+                    if hasattr(sid, "uuid"):
+                        feat_dict["face_shape_id"] = {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
+                        }
+                    elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                        feat_dict["face_shape_id"] = {
+                            "feature_id": sid.feature_id,
+                            "local_id": sid.local_id,
+                            "shape_type": sid.shape_type.name
+                        }
 
             elif isinstance(feat, DraftFeature):
                 feat_dict.update({
@@ -7728,16 +7078,27 @@ class Body:
                     "type_params": feat.type_params,
                     "export_subdivisions": feat.export_subdivisions,
                 })
-                # TNP v3.0: ShapeIDs serialisieren
+                # TNP v4.0: ShapeIDs serialisieren (inkl. Legacy-Fallback)
                 if feat.face_shape_ids:
-                    feat_dict["face_shape_ids"] = [
-                        {
-                            "feature_id": sid.feature_id,
-                            "local_id": sid.local_id,
-                            "shape_type": sid.shape_type.name
-                        }
-                        for sid in feat.face_shape_ids
-                    ]
+                    serialized_face_ids = []
+                    for sid in feat.face_shape_ids:
+                        if hasattr(sid, "uuid"):
+                            serialized_face_ids.append({
+                                "uuid": sid.uuid,
+                                "shape_type": sid.shape_type.name,
+                                "feature_id": sid.feature_id,
+                                "local_index": sid.local_index,
+                                "geometry_hash": sid.geometry_hash,
+                                "timestamp": sid.timestamp
+                            })
+                        elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
+                            serialized_face_ids.append({
+                                "feature_id": sid.feature_id,
+                                "local_id": sid.local_id,
+                                "shape_type": sid.shape_type.name
+                            })
+                    if serialized_face_ids:
+                        feat_dict["face_shape_ids"] = serialized_face_ids
 
             elif isinstance(feat, TransformFeature):
                 feat_dict.update({
@@ -7768,15 +7129,6 @@ class Body:
 
             features_data.append(feat_dict)
 
-        # TNP v3.0: Registry-Status exportieren
-        tnp_data = {}
-        if hasattr(self, '_shape_registry'):
-            stats = self._shape_registry.get_stats()
-            tnp_data = {
-                "version": "3.0",
-                "statistics": stats,
-            }
-
         # B-Rep Snapshot: exakte Geometrie speichern
         brep_string = None
         if self._build123d_solid is not None:
@@ -7802,9 +7154,8 @@ class Body:
             "name": self.name,
             "id": self.id,
             "features": features_data,
-            "tnp_data": tnp_data,
             "brep": brep_string,
-            "version": "8.3",
+            "version": "9.1",
             # Multi-Body Split-Tracking (AGENTS.md Phase 2)
             "source_body_id": self.source_body_id,
             "split_index": self.split_index,
@@ -8082,18 +7433,30 @@ class Body:
                     **base_kwargs
                 )
                 feat.thickness_formula = feat_dict.get("thickness_formula")
-                # TNP v3.0: ShapeIDs deserialisieren
+                # TNP v4.0: ShapeIDs deserialisieren (inkl. Legacy-Fallback)
                 if "face_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.face_shape_ids = []
-                    for sid_data in feat_dict["face_shape_ids"]:
+                    for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                            feat.face_shape_ids.append(ShapeID(
-                                feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
-                            ))
+                            local_index = int(sid_data.get("local_index", sid_data.get("local_id", idx)))
+                            if sid_data.get("uuid"):
+                                feat.face_shape_ids.append(ShapeID(
+                                    uuid=sid_data.get("uuid", ""),
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", ""),
+                                    local_index=local_index,
+                                    geometry_hash=sid_data.get("geometry_hash", f"legacy_shell_face_{local_index}"),
+                                    timestamp=sid_data.get("timestamp", 0.0)
+                                ))
+                            else:
+                                feat.face_shape_ids.append(ShapeID.create(
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                    local_index=local_index,
+                                    geometry_data=("legacy_shell_face", feat_dict.get("id", feat.id), local_index)
+                                ))
 
             elif feat_class == "HoleFeature":
                 selectors = feat_dict.get("face_selectors", [])
@@ -8252,18 +7615,30 @@ class Body:
                     export_subdivisions=feat_dict.get("export_subdivisions", 2),
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeIDs deserialisieren
+                # TNP v4.0: ShapeIDs deserialisieren (inkl. Legacy-Fallback)
                 if "face_shape_ids" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     feat.face_shape_ids = []
-                    for sid_data in feat_dict["face_shape_ids"]:
+                    for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
                         if isinstance(sid_data, dict):
                             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                            feat.face_shape_ids.append(ShapeID(
-                                feature_id=sid_data.get("feature_id", ""),
-                                local_id=sid_data.get("local_id", 0),
-                                shape_type=shape_type
-                            ))
+                            local_index = int(sid_data.get("local_index", sid_data.get("local_id", idx)))
+                            if sid_data.get("uuid"):
+                                feat.face_shape_ids.append(ShapeID(
+                                    uuid=sid_data.get("uuid", ""),
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", ""),
+                                    local_index=local_index,
+                                    geometry_hash=sid_data.get("geometry_hash", f"legacy_texture_face_{local_index}"),
+                                    timestamp=sid_data.get("timestamp", 0.0)
+                                ))
+                            else:
+                                feat.face_shape_ids.append(ShapeID.create(
+                                    shape_type=shape_type,
+                                    feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                    local_index=local_index,
+                                    geometry_data=("legacy_texture_face", feat_dict.get("id", feat.id), local_index)
+                                ))
 
             elif feat_class == "ThreadFeature":
                 feat = ThreadFeature(
@@ -8280,17 +7655,29 @@ class Body:
                     face_selector=feat_dict.get("face_selector"),
                     **base_kwargs
                 )
-                # TNP v3.0: ShapeID deserialisieren
+                # TNP v4.0: ShapeID deserialisieren (inkl. Legacy-Fallback)
                 if "face_shape_id" in feat_dict:
-                    from modeling.tnp_shape_reference import ShapeID, ShapeType
+                    from modeling.tnp_system import ShapeID, ShapeType
                     sid_data = feat_dict["face_shape_id"]
                     if isinstance(sid_data, dict):
                         shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
-                        feat.face_shape_id = ShapeID(
-                            feature_id=sid_data.get("feature_id", ""),
-                            local_id=sid_data.get("local_id", 0),
-                            shape_type=shape_type
-                        )
+                        local_index = int(sid_data.get("local_index", sid_data.get("local_id", 0)))
+                        if sid_data.get("uuid"):
+                            feat.face_shape_id = ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=local_index,
+                                geometry_hash=sid_data.get("geometry_hash", f"legacy_thread_face_{local_index}"),
+                                timestamp=sid_data.get("timestamp", 0.0)
+                            )
+                        else:
+                            feat.face_shape_id = ShapeID.create(
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                local_index=local_index,
+                                geometry_data=("legacy_thread_face", feat_dict.get("id", feat.id), local_index)
+                            )
 
             elif feat_class == "DraftFeature":
                 selectors = feat_dict.get("face_selectors", [])
@@ -8451,13 +7838,6 @@ class Body:
                     logger.warning(f"BREP leer für '{body.name}' — Rebuild wird versucht")
             except Exception as e:
                 logger.warning(f"BREP-Laden fehlgeschlagen für '{body.name}': {e}")
-
-        # TNP v3.0: Daten importieren
-        tnp_data = data.get("tnp_data", {})
-        if tnp_data and hasattr(body, '_shape_registry'):
-            # ShapeIDs werden aus den Features rekonstruiert
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v3.0: Body '{body.name}' geladen - Registry wird aus Features aufgebaut")
 
         # Multi-Body Split-Tracking (AGENTS.md Phase 2)
         body.source_body_id = data.get("source_body_id")
@@ -8865,8 +8245,7 @@ class Document:
         """
         Serialisiert gesamtes Dokument zu Dictionary.
 
-        Version 9.0+: Assembly-System mit Component-Hierarchie
-        Version 8.x: Legacy-Format (flat lists)
+        Persistiert immer im Component-basierten Format (v9+).
 
         Returns:
             Dictionary für JSON-Serialisierung
@@ -8879,60 +8258,27 @@ class Document:
         except ImportError:
             params_data = {}
 
-        # =========================================================================
-        # Assembly-Format (v9.0) vs Legacy-Format (v8.x)
-        # =========================================================================
-        if self._assembly_enabled and self.root_component:
-            # NEU: Component-basierte Speicherung
-            return {
-                "version": "9.0",
-                "name": self.name,
-                "parameters": params_data,
-                "assembly_enabled": True,
-                "root_component": self.root_component.to_dict(),
-                "active_component_id": self._active_component.id if self._active_component else None,
-                "active_body_id": self.active_body.id if self.active_body else None,
-                "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
-            }
-        else:
-            # Legacy-Format für Backward-Compatibility
-            return {
-                "version": "8.3",
-                "name": self.name,
-                "parameters": params_data,
-                "bodies": [body.to_dict() for body in self._bodies],
-                "sketches": [
-                    {
-                        **sketch.to_dict(),
-                        "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
-                        "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
-                        "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
-                        "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
-                    }
-                    for sketch in self._sketches
-                ],
-                "planes": [
-                    {
-                        "id": plane.id,
-                        "name": plane.name,
-                        "origin": list(plane.origin),
-                        "normal": list(plane.normal),
-                        "x_dir": list(plane.x_dir),
-                    }
-                    for plane in self._planes
-                ],
-                "active_body_id": self.active_body.id if self.active_body else None,
-                "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
-            }
+        root_component_data = self._build_root_component_payload()
+        active_component_id = self._active_component.id if self._active_component else root_component_data.get("id")
+
+        return {
+            "version": "9.1",
+            "name": self.name,
+            "parameters": params_data,
+            "assembly_enabled": True,
+            "root_component": root_component_data,
+            "active_component_id": active_component_id,
+            "active_body_id": self.active_body.id if self.active_body else None,
+            "active_sketch_id": self.active_sketch.id if self.active_sketch else None,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Document':
         """
         Deserialisiert Dokument aus Dictionary.
 
-        Unterstützt:
-        - Version 9.0+: Assembly-Format mit Component-Hierarchie
-        - Version 8.x: Legacy-Format (flat lists) mit optionaler Migration
+        Lädt primär Component-Format (v9+). Flat-Format-Daten werden
+        on-the-fly in eine Root-Component migriert.
 
         Args:
             data: Dictionary mit Dokument-Daten
@@ -8941,7 +8287,7 @@ class Document:
             Neues Document-Objekt
         """
         doc = cls(name=data.get("name", "Imported"))
-        version = data.get("version", "8.0")
+        version = data.get("version", "unknown")
 
         # Parameter laden
         if "parameters" in data:
@@ -8955,19 +8301,15 @@ class Document:
             except Exception as e:
                 logger.warning(f"Parameter konnten nicht geladen werden: {e}")
 
-        # =========================================================================
-        # Format-Erkennung und Laden
-        # =========================================================================
-        is_assembly_format = data.get("assembly_enabled", False) and "root_component" in data
+        payload = dict(data)
+        if "root_component" not in payload:
+            payload["root_component"] = cls._migrate_flat_document_payload(data)
+            payload["assembly_enabled"] = True
+            payload.setdefault("active_component_id", payload["root_component"].get("id"))
+            logger.info(f"[MIGRATION] Flat-Format v{version} zu Root-Component migriert")
 
-        if is_assembly_format:
-            # V9.0 Assembly-Format laden
-            logger.info(f"[ASSEMBLY] Lade Assembly-Format v{version}")
-            doc._load_assembly_format(data)
-        else:
-            # Legacy-Format laden (v8.x oder älter)
-            logger.info(f"Lade Legacy-Format v{version}")
-            doc._load_legacy_format(data)
+        logger.info(f"[ASSEMBLY] Lade Component-Format v{version}")
+        doc._load_assembly_format(payload)
 
         # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
         doc._restore_sketch_references()
@@ -8987,16 +8329,19 @@ class Document:
         root_data = data.get("root_component", {})
         if root_data:
             self.root_component = Component.from_dict(root_data)
-            self._active_component = self.root_component  # Default
+        else:
+            self.root_component = Component(name="Root")
 
-            # Aktive Component wiederherstellen
-            active_comp_id = data.get("active_component_id")
-            if active_comp_id:
-                found = self.root_component.find_component_by_id(active_comp_id)
-                if found:
-                    self._active_component = found
-                    found.is_active = True
-                    logger.debug(f"[ASSEMBLY] Aktive Component wiederhergestellt: {found.name}")
+        self._active_component = self.root_component  # Default
+
+        # Aktive Component wiederherstellen
+        active_comp_id = data.get("active_component_id")
+        if active_comp_id:
+            found = self.root_component.find_component_by_id(active_comp_id)
+            if found:
+                self._active_component = found
+                found.is_active = True
+                logger.debug(f"[ASSEMBLY] Aktive Component wiederhergestellt: {found.name}")
 
         # Aktive Auswahl wiederherstellen
         active_body_id = data.get("active_body_id")
@@ -9011,80 +8356,67 @@ class Document:
         # Bodies an Document anbinden (TNP v4.0)
         self._attach_document_to_bodies()
 
-    def _load_legacy_format(self, data: dict):
+    def _build_root_component_payload(self) -> dict:
         """
-        Lädt Dokument aus Legacy-Format (v8.x).
+        Liefert serialisierbare Root-Component-Daten.
 
-        Wenn Assembly aktiviert ist, werden die Daten in die Root-Component migriert.
+        Wenn Assembly aktiv ist, wird die bestehende Root-Component genutzt.
+        Andernfalls werden die flachen Dokumentlisten in eine Root-Component
+        gemappt (ohne Legacy-Format zu schreiben).
         """
-        # Bodies laden
-        bodies_to_add = []
-        for body_data in data.get("bodies", []):
-            try:
-                body = Body.from_dict(body_data)
-                bodies_to_add.append(body)
-            except Exception as e:
-                logger.warning(f"Body konnte nicht geladen werden: {e}")
-
-        # Sketches laden
-        sketches_to_add = []
-        for sketch_data in data.get("sketches", []):
-            try:
-                sketch = Sketch.from_dict(sketch_data)
-                # Plane-Daten wiederherstellen
-                if "plane_origin" in sketch_data:
-                    sketch.plane_origin = tuple(sketch_data["plane_origin"])
-                if "plane_normal" in sketch_data:
-                    sketch.plane_normal = tuple(sketch_data["plane_normal"])
-                if sketch_data.get("plane_x_dir"):
-                    sketch.plane_x_dir = tuple(sketch_data["plane_x_dir"])
-                if sketch_data.get("plane_y_dir"):
-                    sketch.plane_y_dir = tuple(sketch_data["plane_y_dir"])
-                sketches_to_add.append(sketch)
-            except Exception as e:
-                logger.warning(f"Sketch konnte nicht geladen werden: {e}")
-
-        # Planes laden
-        planes_to_add = []
-        for plane_data in data.get("planes", []):
-            try:
-                plane = ConstructionPlane(
-                    id=plane_data.get("id", str(uuid.uuid4())[:8]),
-                    name=plane_data.get("name", "Plane"),
-                    origin=tuple(plane_data.get("origin", (0, 0, 0))),
-                    normal=tuple(plane_data.get("normal", (0, 0, 1))),
-                    x_dir=tuple(plane_data.get("x_dir", (1, 0, 0))),
-                )
-                planes_to_add.append(plane)
-            except Exception as e:
-                logger.warning(f"Plane konnte nicht geladen werden: {e}")
-
-        # Daten zuweisen (respektiert assembly_enabled via Properties)
         if self._assembly_enabled and self.root_component:
-            # Migration: Legacy-Daten in Root-Component
-            self.root_component.bodies = bodies_to_add
-            self.root_component.sketches = sketches_to_add
-            self.root_component.planes = planes_to_add
-            logger.info(f"[ASSEMBLY] Legacy-Daten in Root-Component migriert")
-        else:
-            # Direkte Zuweisung (Legacy-Modus)
-            self._bodies = bodies_to_add
-            self._sketches = sketches_to_add
-            self._planes = planes_to_add
+            return self.root_component.to_dict()
 
-        # Aktive Auswahl wiederherstellen
-        active_body_id = data.get("active_body_id")
-        if active_body_id:
-            all_bodies = bodies_to_add if not self._assembly_enabled else self.root_component.bodies
-            self.active_body = next((b for b in all_bodies if b.id == active_body_id), None)
+        return {
+            "id": "root",
+            "name": "Root",
+            "position": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0],
+            "visible": True,
+            "is_active": True,
+            "expanded": True,
+            "bodies": [body.to_dict() for body in self._bodies],
+            "sketches": [
+                {
+                    **sketch.to_dict(),
+                    "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
+                    "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
+                    "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
+                    "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
+                }
+                for sketch in self._sketches
+            ],
+            "planes": [
+                {
+                    "id": plane.id,
+                    "name": plane.name,
+                    "origin": list(plane.origin),
+                    "normal": list(plane.normal),
+                    "x_dir": list(plane.x_dir),
+                }
+                for plane in self._planes
+            ],
+            "sub_components": [],
+        }
 
-        active_sketch_id = data.get("active_sketch_id")
-        if active_sketch_id:
-            all_sketches = sketches_to_add if not self._assembly_enabled else self.root_component.sketches
-            self.active_sketch = next((s for s in all_sketches if s.id == active_sketch_id), None)
-
-        # Bodies an Document anbinden (TNP v4.0)
-        self._attach_document_to_bodies()
+    @staticmethod
+    def _migrate_flat_document_payload(data: dict) -> dict:
+        """
+        Migriert altes Flat-Dokumentformat in eine Root-Component-Struktur.
+        """
+        return {
+            "id": "root",
+            "name": "Root",
+            "position": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0],
+            "visible": True,
+            "is_active": True,
+            "expanded": True,
+            "bodies": data.get("bodies", []),
+            "sketches": data.get("sketches", []),
+            "planes": data.get("planes", []),
+            "sub_components": [],
+        }
 
     def _attach_document_to_bodies(self):
         """Stellt sicher, dass alle Bodies eine Document-Referenz haben."""
