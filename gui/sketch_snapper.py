@@ -199,14 +199,19 @@ class SmartSnapper:
             if nearest_virtual_dist <= (snap_radius * 3.0):
                 return (
                     f"Virtueller Schnittpunkt knapp ausserhalb Fangradius "
-                    f"({nearest_virtual_dist:.2f}mm > {snap_radius:.2f}mm)."
+                    f"({nearest_virtual_dist:.2f}mm > {snap_radius:.2f}mm). "
+                    "Tipp: Leicht reinzoomen oder Snap-Radius im Toolpanel erhoehen."
                 )
             return (
                 f"Virtueller Schnittpunkt erkannt, aber zu weit entfernt "
-                f"({nearest_virtual_dist:.2f}mm)."
+                f"({nearest_virtual_dist:.2f}mm). "
+                "Tipp: Mit F Ansicht einpassen und dann naeher an die Zielstelle zoomen."
             )
 
-        return "Kein Fangpunkt im aktuellen Radius. Zoom naeher heran oder Radius erhoehen."
+        return (
+            "Kein Fangpunkt im aktuellen Radius. "
+            "Tipp: Mit Mausrad zoomen und Snap-Radius im Toolpanel pruefen."
+        )
 
     def snap(self, mouse_screen_pos: QPointF) -> SnapResult:
         mouse_world = self.editor.screen_to_world(mouse_screen_pos)

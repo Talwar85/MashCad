@@ -127,6 +127,23 @@ def test_snapper_reports_virtual_intersection_near_miss_diagnostic():
 
     assert result.type == SnapType.NONE
     assert "Virtueller Schnittpunkt" in result.diagnostic
+    assert "Tipp:" in result.diagnostic
+    assert "Snap-Radius" in result.diagnostic
+
+
+def test_snapper_reports_far_virtual_intersection_with_fit_tip():
+    sketch = Sketch("virtual_diag_far")
+    sketch.add_line(100.0, 0.0, 200.0, 0.0)
+    sketch.add_line(150.0, 100.0, 150.0, 200.0)
+    editor = _FakeEditor(sketch, snap_radius=5, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(150.0, 600.0))
+
+    assert result.type == SnapType.NONE
+    assert "zu weit entfernt" in result.diagnostic
+    assert "Mit F Ansicht einpassen" in result.diagnostic
 
 
 def test_snapper_no_diagnostic_in_non_drawing_mode():
