@@ -62,6 +62,13 @@ if _project_root not in sys.path:
 
 from i18n import tr
 from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
+try:
+    from gui.sketch_feedback import format_solver_failure_message
+except ImportError:
+    try:
+        from sketch_feedback import format_solver_failure_message
+    except ImportError:
+        from .sketch_feedback import format_solver_failure_message
 
 # Phase 8: Sketch Input Logger
 try:
@@ -633,7 +640,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     construction_mode_changed = Signal(bool)
     grid_snap_mode_changed = Signal(bool)
     exit_requested = Signal()  # Escape Level 4: Sketch verlassen
-    solver_finished_signal = Signal(bool, str, float) # success, message, dof
+    solver_finished_signal = Signal(bool, str, float, str) # success, message, dof, status
     peek_3d_requested = Signal(bool)  # True = zeige 3D, False = zurück zu Sketch
 
     # Farben
@@ -663,6 +670,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._solver_lock = threading.Lock()
         self.solver_finished_signal.connect(self._on_solver_finished)
         self._is_solving = False
+        self._last_solver_feedback_ms = 0.0
+        self._last_solver_feedback_text = ""
 
         self.sketch = Sketch("Sketch1")
         self.view_offset = QPointF(0, 0)
@@ -867,6 +876,39 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if isinstance(value, np.bool_):
             return bool(value)  # numpy bool → Python bool
         return bool(value)
+
+    @staticmethod
+    def _solver_status_name(result) -> str:
+        status = getattr(result, "status", None)
+        name = getattr(status, "name", "")
+        if isinstance(name, str):
+            return name
+        if isinstance(status, str):
+            return status
+        return ""
+
+    def _emit_solver_feedback(self, success: bool, message: str, dof: float = 0.0, status_name: str = "", context: str = "Solver", show_hud: bool = True):
+        """
+        Konsistentes UI-Feedback fuer Solver-Resultate.
+        """
+        if success:
+            return
+
+        import time
+
+        text = format_solver_failure_message(status_name, message, dof=dof, context=context)
+        self.status_message.emit(text)
+        logger.warning(text)
+
+        if not show_hud:
+            return
+
+        now_ms = time.time() * 1000.0
+        repeated = text == self._last_solver_feedback_text and (now_ms - self._last_solver_feedback_ms) < 1200.0
+        if not repeated:
+            self._last_solver_feedback_ms = now_ms
+            self._last_solver_feedback_text = text
+            self.show_message(text, 4000, QColor(255, 90, 90))
     
     def _solve_async(self):
         """
@@ -889,13 +931,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     # Extract safe primitive types to pass via Signal
                     success = getattr(result, 'success', True)
                     msg = getattr(result, 'message', "Solved")
-                    dof = getattr(result, 'dof', 0)
+                    dof = getattr(result, 'dof', None)
+                    if dof is None:
+                        try:
+                            _, _, dof = self.sketch.calculate_dof()
+                        except Exception:
+                            dof = 0.0
+                    status_name = self._solver_status_name(result)
                     
                     # Emit result to Main Thread
-                    self.solver_finished_signal.emit(success, msg, self._safe_float(dof))
+                    self.solver_finished_signal.emit(success, msg, self._safe_float(dof), status_name)
                 except Exception as e:
                     logger.error(f"Solver Crash: {e}")
-                    self.solver_finished_signal.emit(False, str(e), 0.0)
+                    self.solver_finished_signal.emit(False, str(e), 0.0, "INCONSISTENT")
                 finally:
                     self._is_solving = False
 
@@ -903,14 +951,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         thread = Thread(target=run_solver, daemon=True)
         thread.start()
 
-    def _on_solver_finished(self, success, message, dof):
+    def _on_solver_finished(self, success, message, dof, status_name):
         """
         Called when the background thread finishes. 
         Safe to update UI here.
         """
         if not success:
-            # Subtle visual warning or log (don't spam toast messages on drag)
-            logger.warning(f"Solver divergence: {message}")
+            # Do not spam HUD while user is actively dragging.
+            is_live_interaction = self.is_panning or (QApplication.mouseButtons() != Qt.NoButton)
+            self._emit_solver_feedback(
+                success=False,
+                message=message,
+                dof=dof,
+                status_name=status_name,
+                context="Constraint solve",
+                show_hud=not is_live_interaction,
+            )
         
         # Recalculate profiles (Faces) based on new solved geometry
         self._find_closed_profiles()
@@ -3492,15 +3548,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Helper für Solver-Check und Profil-Update
         def run_solver_and_update():
             result = self.sketch.solve()
-            if not result.success:
-                logger.warning(f"Solver nicht konvergiert: {result.message}")
+            success = bool(getattr(result, "success", True))
+            status_name = self._solver_status_name(result)
+            dof = getattr(result, "dof", None)
+            if dof is None:
+                try:
+                    _, _, dof = self.sketch.calculate_dof()
+                except Exception:
+                    dof = 0.0
+            self._emit_solver_feedback(
+                success=success,
+                message=getattr(result, "message", ""),
+                dof=self._safe_float(dof),
+                status_name=status_name,
+                context="Constraint edit",
+                show_hud=True,
+            )
             self._find_closed_profiles()
             self.sketched_changed.emit()
-            
-            # Prüfen ob der Solver erfolgreich war
-            if hasattr(result, 'success') and not result.success:
-                msg = getattr(result, 'message', 'Unbekannter Fehler')
-                self.show_message(f"⚠️ Geometrie-Konflikt: {msg}", 4000, QColor(255, 50, 50))
             return result
 
         # === EDITING MODE: Constraint/Geometrie bearbeiten ===
@@ -5278,4 +5343,3 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         super().resizeEvent(event)
         if self.view_offset == QPointF(0, 0):
             self._center_view()
-

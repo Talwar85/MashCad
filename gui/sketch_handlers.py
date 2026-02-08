@@ -16,6 +16,13 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
 
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
+try:
+    from gui.sketch_feedback import format_trim_failure_message
+except ImportError:
+    try:
+        from sketch_feedback import format_trim_failure_message
+    except ImportError:
+        from .sketch_feedback import format_trim_failure_message
 
 # Importiere SketchTool und SnapType
 try:
@@ -1124,8 +1131,12 @@ class SketchHandlersMixin:
                        f"all_cuts={len(seg.all_cut_points)}")
 
         if not result.success:
-            self.status_message.emit(result.error)
-            logger.warning(f"[TRIM] Failed: {result.error}")
+            target_type = type(target).__name__ if target is not None else ""
+            msg = format_trim_failure_message(result.error, target_type=target_type)
+            self.status_message.emit(msg)
+            if hasattr(self, "show_message"):
+                self.show_message(msg, 3500, QColor(255, 90, 90))
+            logger.warning(f"[TRIM] Failed: {msg}")
             return
 
         # Preview
@@ -1141,13 +1152,20 @@ class SketchHandlersMixin:
             op_result = trim_op.execute_trim(segment)
 
             if op_result.success:
+                ok_msg = f"Trim: {op_result.message}"
                 logger.info(f"[TRIM] Success: {op_result.message}")
+                self.status_message.emit(ok_msg)
                 if hasattr(self, "_solve_async"):
                     self._solve_async()
                 else:
                     self.sketch.solve()
             else:
-                logger.warning(f"[TRIM] Failed: {op_result.message}")
+                target_type = type(target).__name__ if target is not None else ""
+                msg = format_trim_failure_message(op_result.message, target_type=target_type)
+                self.status_message.emit(msg)
+                if hasattr(self, "show_message"):
+                    self.show_message(msg, 3500, QColor(255, 90, 90))
+                logger.warning(f"[TRIM] Failed: {msg}")
 
             self.preview_geometry = []
             self.sketched_changed.emit()
