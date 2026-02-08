@@ -105,6 +105,22 @@ class TrimOperation(SketchOperation):
             entities.extend(self.sketch.arcs)
         return entities
 
+    @staticmethod
+    def _points_equal(p1, p2, tol: float = 1e-5) -> bool:
+        return abs(p1.x - p2.x) <= tol and abs(p1.y - p2.y) <= tol
+
+    def _arc_param_to_local(self, arc: 'Arc2D', t_abs: float) -> float:
+        """
+        Wandelt absoluten Winkelparameter (0..2π) in lokalen Arc-Parameter (0..1) um.
+        """
+        sweep_rad = math.radians(arc.sweep_angle)
+        if sweep_rad <= 1e-12:
+            return 0.0
+
+        start_rad = math.radians(arc.start_angle % 360.0)
+        delta = (t_abs - start_rad) % (2.0 * math.pi)
+        return max(0.0, min(1.0, delta / sweep_rad))
+
     # === Fuzzy Intersection Fallback (Phase 13) ===
 
     def _get_min_distance_to_line(self, entity, line: 'Line2D') -> Tuple[float, Optional['Point2D'], Optional['Point2D']]:
@@ -285,10 +301,16 @@ class TrimOperation(SketchOperation):
 
         cut_points = []
 
-        # Start/Ende des Targets selbst (für Linien)
+        # Start/Ende des Targets selbst
         if isinstance(target, Line2D):
             cut_points.append((0.0, target.start))
             cut_points.append((1.0, target.end))
+        elif isinstance(target, Arc2D):
+            # Für Arc-Trim müssen Arc-Enden explizit als Schnittgrenzen existieren.
+            t_start = geometry.get_param_on_entity(target.start_point, target)
+            t_end = geometry.get_param_on_entity(target.end_point, target)
+            cut_points.append((t_start, target.start_point))
+            cut_points.append((t_end, target.end_point))
 
         # Schnittpunkte mit anderen Entities
         for other in other_entities:
@@ -351,7 +373,9 @@ class TrimOperation(SketchOperation):
             for t, p in cut_points[1:]:
                 prev_t, prev_p = unique_cuts[-1]
                 # Punkt ist duplikat wenn Parameter oder Position sehr ähnlich
-                if abs(t - prev_t) > 0.001:  # Mindestabstand im Parameter-Raum
+                same_t = abs(t - prev_t) <= 0.001
+                same_p = abs(p.x - prev_p.x) <= 1e-4 and abs(p.y - prev_p.y) <= 1e-4
+                if not (same_t or same_p):
                     unique_cuts.append((t, p))
             cut_points = unique_cuts
 
@@ -444,6 +468,68 @@ class TrimOperation(SketchOperation):
 
         return None
 
+    def _find_arc_segment(self, target: 'Arc2D', click_point: 'Point2D',
+                          cut_points: List[Tuple[float, 'Point2D']]) -> Optional[TrimSegment]:
+        """
+        Findet das Segment auf einem Arc.
+        Anders als beim Kreis gibt es keine Wrap-Around-Logik außerhalb des Arc-Sweeps.
+        """
+        geometry = self._get_geometry()
+
+        if len(cut_points) < 2:
+            return None
+
+        # In lokalen Arc-Parameter 0..1 umrechnen und sortieren
+        local_cuts = []
+        for t_abs, p in cut_points:
+            t_local = self._arc_param_to_local(target, t_abs)
+            local_cuts.append((t_local, p))
+        local_cuts.sort(key=lambda x: x[0])
+
+        # Deduplizieren nach lokalem Parameter
+        dedup = [local_cuts[0]]
+        for t, p in local_cuts[1:]:
+            if abs(t - dedup[-1][0]) > 1e-6:
+                dedup.append((t, p))
+        local_cuts = dedup
+
+        t_mouse_abs = geometry.get_param_on_entity(click_point, target)
+        t_mouse = self._arc_param_to_local(target, t_mouse_abs)
+
+        for i in range(len(local_cuts) - 1):
+            t_start, p_start = local_cuts[i]
+            t_end, p_end = local_cuts[i + 1]
+            if t_start <= t_mouse <= t_end:
+                return TrimSegment(
+                    start_point=p_start,
+                    end_point=p_end,
+                    segment_index=i,
+                    all_cut_points=local_cuts,
+                    target_entity=target
+                )
+
+        # Fallback: nächstes Segment
+        if len(local_cuts) >= 2:
+            best_i = 0
+            best_dist = float('inf')
+            for i in range(len(local_cuts) - 1):
+                t0 = local_cuts[i][0]
+                t1 = local_cuts[i + 1][0]
+                mid = 0.5 * (t0 + t1)
+                d = abs(mid - t_mouse)
+                if d < best_dist:
+                    best_dist = d
+                    best_i = i
+            return TrimSegment(
+                start_point=local_cuts[best_i][1],
+                end_point=local_cuts[best_i + 1][1],
+                segment_index=best_i,
+                all_cut_points=local_cuts,
+                target_entity=target
+            )
+
+        return None
+
     def find_segment(self, target, click_point: 'Point2D') -> TrimResult:
         """
         Analysiert welches Segment getrimmt werden soll.
@@ -479,8 +565,7 @@ class TrimOperation(SketchOperation):
         elif isinstance(target, Circle2D):
             segment = self._find_circle_segment(target, click_point, cut_points)
         elif isinstance(target, Arc2D):
-            # Arc2D wird wie Circle behandelt (gleiche Segment-Logik)
-            segment = self._find_circle_segment(target, click_point, cut_points)
+            segment = self._find_arc_segment(target, click_point, cut_points)
 
         if segment is None:
             logger.debug(f"[TRIM V2] Failed: Kein Segment gefunden (cut_points: {len(cut_points)})")
@@ -512,21 +597,38 @@ class TrimOperation(SketchOperation):
                 if removed_constraints > 0:
                     logger.info(f"[TRIM] {removed_constraints} Constraints entfernt für {type(target).__name__}")
 
-            # 1. Target entfernen
-            if target in self.sketch.lines:
-                self.sketch.lines.remove(target)
-            elif target in self.sketch.circles:
-                self.sketch.circles.remove(target)
-            elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs:
-                self.sketch.arcs.remove(target)
+            # 1. Target entfernen (mit Topologie-Bereinigung)
+            if target in self.sketch.lines and hasattr(self.sketch, 'delete_line'):
+                self.sketch.delete_line(target)
+            elif target in self.sketch.circles and hasattr(self.sketch, 'delete_circle'):
+                self.sketch.delete_circle(target)
+            elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs and hasattr(self.sketch, 'delete_arc'):
+                self.sketch.delete_arc(target)
+            else:
+                if target in self.sketch.lines:
+                    self.sketch.lines.remove(target)
+                elif target in self.sketch.circles:
+                    self.sketch.circles.remove(target)
+                elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs:
+                    self.sketch.arcs.remove(target)
 
             # 2. Übrige Teile erstellen
             if isinstance(target, Line2D):
-                return self._recreate_line_segments(segment)
+                result = self._recreate_line_segments(segment)
             elif isinstance(target, Circle2D):
-                return self._recreate_circle_arc(segment)
+                result = self._recreate_circle_arc(segment)
+            elif isinstance(target, Arc2D):
+                result = self._recreate_arc_segments(segment)
+            else:
+                result = OperationResult.ok("Trim erfolgreich")
 
-            return OperationResult.ok("Trim erfolgreich")
+            # 3. Topologie konsistent halten
+            if hasattr(self.sketch, '_cleanup_orphan_points'):
+                self.sketch._cleanup_orphan_points()
+            if hasattr(self.sketch, 'invalidate_profiles'):
+                self.sketch.invalidate_profiles()
+
+            return result
 
         except Exception as e:
             logger.error(f"Trim failed: {e}")
@@ -553,16 +655,18 @@ class TrimOperation(SketchOperation):
             p_end = cut_points[i + 1][1]
 
             # Prüfe ob das das gelöschte Segment ist
-            is_removed = (
-                abs(p_start.x - removed_start.x) < 1e-5 and
-                abs(p_start.y - removed_start.y) < 1e-5
-            )
+            same_dir = self._points_equal(p_start, removed_start) and self._points_equal(p_end, removed_end)
+            opp_dir = self._points_equal(p_start, removed_end) and self._points_equal(p_end, removed_start)
+            is_removed = same_dir or opp_dir
 
             logger.debug(f"[TRIM] Segment {i}: ({p_start.x:.2f}, {p_start.y:.2f}) → "
                         f"({p_end.x:.2f}, {p_end.y:.2f}), is_removed={is_removed}")
 
             if not is_removed and p_start.distance_to(p_end) > 1e-3:
-                self.sketch.add_line(p_start.x, p_start.y, p_end.x, p_end.y)
+                self.sketch.add_line(
+                    p_start.x, p_start.y, p_end.x, p_end.y,
+                    construction=getattr(segment.target_entity, 'construction', False)
+                )
                 created_count += 1
                 logger.debug(f"[TRIM] Created segment {created_count}")
 
@@ -600,11 +704,71 @@ class TrimOperation(SketchOperation):
                 target.center.y,
                 target.radius,
                 ang_start_deg,
-                ang_end_deg
+                ang_end_deg,
+                construction=getattr(target, 'construction', False)
             )
             return OperationResult.ok("Arc erstellt")
 
         return OperationResult.warning("Arc zu klein, nicht erstellt")
+
+    def _recreate_arc_segments(self, segment: TrimSegment) -> OperationResult:
+        """
+        Erstellt verbleibende Arc-Segmente nach Trim eines Arc-Targets.
+        """
+        target = segment.target_entity
+        cut_points = segment.all_cut_points
+        if len(cut_points) < 2:
+            return OperationResult.ok("Arc gelöscht")
+
+        # cut_points sind hier lokale Arc-Parameter (0..1), siehe _find_arc_segment.
+        removed_start = segment.start_point
+        removed_end = segment.end_point
+
+        removed_idx = None
+        for i in range(len(cut_points) - 1):
+            p_s = cut_points[i][1]
+            p_e = cut_points[i + 1][1]
+            same_dir = self._points_equal(p_s, removed_start) and self._points_equal(p_e, removed_end)
+            opp_dir = self._points_equal(p_s, removed_end) and self._points_equal(p_e, removed_start)
+            if same_dir or opp_dir:
+                removed_idx = i
+                break
+
+        if removed_idx is None:
+            removed_idx = max(0, min(segment.segment_index, len(cut_points) - 2))
+
+        keep_intervals = []
+        for i in range(len(cut_points) - 1):
+            if i == removed_idx:
+                continue
+            t0 = cut_points[i][0]
+            t1 = cut_points[i + 1][0]
+            if t1 - t0 > 1e-6:
+                keep_intervals.append((t0, t1))
+
+        if not keep_intervals:
+            return OperationResult.ok("Arc gelöscht")
+
+        sweep_deg = target.sweep_angle
+        created = 0
+        for t0, t1 in keep_intervals:
+            start_deg = target.start_angle + t0 * sweep_deg
+            end_deg = target.start_angle + t1 * sweep_deg
+            if abs(end_deg - start_deg) <= 0.1:
+                continue
+            self.sketch.add_arc(
+                target.center.x,
+                target.center.y,
+                target.radius,
+                start_deg,
+                end_deg,
+                construction=getattr(target, 'construction', False)
+            )
+            created += 1
+
+        if created == 0:
+            return OperationResult.warning("Arc zu klein, nicht erstellt")
+        return OperationResult.ok(f"{created} Arc-Segment(e) erstellt")
 
     def execute(self, target, click_point: 'Point2D') -> OperationResult:
         """

@@ -371,7 +371,8 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     if len(entities) < required:
         from loguru import logger
         logger.debug(f"[Constraint] {ct.name} has {len(entities)} entities, expected {required}")
-        return 0.0  # Return 0 error to avoid crashing
+        # Ungültige Constraints dürfen nicht als "erfüllt" gelten.
+        return 1e6
 
     if ct == ConstraintType.COINCIDENT:
         p1, p2 = entities
@@ -387,7 +388,7 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     
     elif ct == ConstraintType.LENGTH:
         line = entities[0]
-        target = constraint.value
+        target = resolve_constraint_value(constraint)
         return abs(line.length - target)
     elif ct == ConstraintType.TANGENT:
         obj1, obj2 = entities
@@ -475,13 +476,16 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     elif ct == ConstraintType.DISTANCE:
         if len(entities) == 2:
             e1, e2 = entities
+            target = resolve_constraint_value(constraint)
             if isinstance(e1, Point2D) and isinstance(e2, Point2D):
                 actual = e1.distance_to(e2)
             elif isinstance(e1, Point2D) and isinstance(e2, Line2D):
                 actual = e2.distance_to_point(e1)
+            elif isinstance(e1, Line2D) and isinstance(e2, Point2D):
+                actual = e1.distance_to_point(e2)
             else:
                 return 0.0
-            return abs(actual - constraint.value)
+            return abs(actual - target)
     
     elif ct == ConstraintType.PARALLEL:
         l1, l2 = entities
@@ -520,20 +524,23 @@ def calculate_constraint_error(constraint: Constraint) -> float:
     
     elif ct == ConstraintType.RADIUS:
         circle = entities[0]
-        return abs(circle.radius - constraint.value)
+        target = resolve_constraint_value(constraint)
+        return abs(circle.radius - target)
     
     elif ct == ConstraintType.DIAMETER:
         circle = entities[0]
-        return abs(circle.diameter - constraint.value)
+        target = resolve_constraint_value(constraint)
+        return abs(circle.diameter - target)
     
     elif ct == ConstraintType.ANGLE:
         l1, l2 = entities
+        target = resolve_constraint_value(constraint)
         angle1 = l1.angle
         angle2 = l2.angle
         actual = abs(angle2 - angle1)
         if actual > 180:
             actual = 360 - actual
-        return abs(actual - constraint.value)
+        return abs(actual - target)
     
     elif ct == ConstraintType.CONCENTRIC:
         c1, c2 = entities
@@ -687,7 +694,7 @@ def calculate_constraint_errors_batch(constraints: List[Constraint]) -> List[flo
             indices = [idx for idx, _ in length_constraints]
 
             lengths = np.array([c.entities[0].length for _, c in length_constraints])
-            targets = np.array([c.value for _, c in length_constraints])
+            targets = np.array([resolve_constraint_value(c) for _, c in length_constraints])
 
             length_errors = np.abs(lengths - targets)
 
@@ -715,7 +722,7 @@ def calculate_constraint_errors_batch(constraints: List[Constraint]) -> List[flo
             indices = [idx for idx, _ in radius_constraints]
 
             radii = np.array([c.entities[0].radius for _, c in radius_constraints])
-            targets = np.array([c.value for _, c in radius_constraints])
+            targets = np.array([resolve_constraint_value(c) for _, c in radius_constraints])
 
             radius_errors = np.abs(radii - targets)
 

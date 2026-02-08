@@ -1348,9 +1348,14 @@ class SketchHandlersMixin:
 
             if op_result.success:
                 logger.info(f"[TRIM V2] Success: {op_result.message}")
+                if hasattr(self, "_solve_async"):
+                    self._solve_async()
+                else:
+                    self.sketch.solve()
             else:
                 logger.warning(f"[TRIM V2] Failed: {op_result.message}")
 
+            self.preview_geometry = []
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self.mouse_buttons = Qt.NoButton

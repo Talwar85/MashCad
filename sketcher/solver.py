@@ -5,6 +5,7 @@ Numerischer Solver für geometrische Constraints mit SciPy least_squares
 
 from dataclasses import dataclass
 from typing import List, Optional
+import inspect
 import numpy as np
 
 from .geometry import Point2D, Line2D, Circle2D, Arc2D
@@ -63,6 +64,22 @@ class ConstraintSolver:
         if not constraints:
             return SolverResult(True, 0, 0.0, ConstraintStatus.UNDER_CONSTRAINED, "Keine Constraints")
 
+        # Nur aktive und valide Constraints für die numerische Lösung verwenden.
+        active_constraints = [c for c in constraints if getattr(c, 'enabled', True) and c.is_valid()]
+        invalid_enabled = [c for c in constraints if getattr(c, 'enabled', True) and not c.is_valid()]
+
+        if invalid_enabled:
+            return SolverResult(
+                False,
+                0,
+                float('inf'),
+                ConstraintStatus.INCONSISTENT,
+                f"Ungültige Constraints: {len(invalid_enabled)}"
+            )
+
+        if not active_constraints:
+            return SolverResult(True, 0, 0.0, ConstraintStatus.UNDER_CONSTRAINED, "Keine aktiven Constraints")
+
         if not HAS_SCIPY:
             return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, "SciPy nicht installiert!")
 
@@ -116,14 +133,14 @@ class ConstraintSolver:
         }
         n_effective_constraints = sum(
             _CONSTRAINT_DOF.get(c.type, 1)
-            for c in constraints
+            for c in active_constraints
             if c.type != ConstraintType.FIXED
         )
         
         if not x0_vals:
             # Keine beweglichen Teile - prüfen ob Constraints erfüllt
             # Performance Optimization 2.2: Batch-Berechnung
-            errors = calculate_constraint_errors_batch(constraints)
+            errors = calculate_constraint_errors_batch(active_constraints)
             total_error = sum(errors)
             if total_error < self.tolerance:
                 return SolverResult(True, 0, total_error, ConstraintStatus.FULLY_CONSTRAINED, "Statisch bestimmt")
@@ -133,15 +150,9 @@ class ConstraintSolver:
         x0 = np.array(x0_vals, dtype=np.float64)
         n_vars = len(x0)
         
-        # === OVER_CONSTRAINED Check ===
-        if n_effective_constraints > n_vars:
-            return SolverResult(
-                success=False,
-                iterations=0,
-                final_error=float('inf'),
-                status=ConstraintStatus.OVER_CONSTRAINED,
-                message=f"Überbestimmt: {n_effective_constraints} Constraints > {n_vars} Variablen"
-            )
+        # Nur als Heuristik/Status-Metadatum nutzen. Harte Abbrüche erzeugen
+        # bei abhängigen Constraints unnötige False-Negatives.
+        overconstrained_hint = n_effective_constraints > n_vars
 
         # 2. Fehlerfunktion mit Regularisierung
         def error_function(x):
@@ -157,17 +168,14 @@ class ConstraintSolver:
             residuals = []
 
             # Batch-Berechnung aller Errors (70-85% schneller!)
-            errors = calculate_constraint_errors_batch(constraints)
+            errors = calculate_constraint_errors_batch(active_constraints)
 
             # Gewichtung anwenden (basiert auf Constraint-Priorität)
             # Topologische Constraints (Müssen zuerst gelten - höchste Priorität)
             # Geometrische Constraints (Wichtig für Form)
             # Dimensions-Constraints (Können etwas flexibler sein)
             # Gewichtung basierend auf Constraint-Priorität
-            for c, error in zip(constraints, errors):
-                # Überspringe deaktivierte Constraints
-                if not getattr(c, 'enabled', True):
-                    continue
+            for c, error in zip(active_constraints, errors):
                 # Verwende Constraint's eigene Gewichtung
                 weight = c.get_weight()
                 residuals.append(error * weight)
@@ -194,20 +202,30 @@ class ConstraintSolver:
                     for i, (obj, attr) in enumerate(refs):
                         setattr(obj, attr, x[i])
                     # Fehler berechnen
-                    errors = calculate_constraint_errors_batch(constraints)
+                    errors = calculate_constraint_errors_batch(active_constraints)
                     total_error = sum(errors)
                     # Callback aufrufen
                     self.progress_callback(self._iteration_count, total_error)
             
-            result = least_squares(
-                error_function,
-                x0,
+            lsq_kwargs = dict(
                 method='lm',  # Levenberg-Marquardt
                 ftol=1e-8,
                 xtol=1e-8,
                 gtol=1e-8,
                 max_nfev=1000,
-                callback=iteration_callback if progress_callback else None
+            )
+            if progress_callback:
+                try:
+                    if 'callback' in inspect.signature(least_squares).parameters:
+                        lsq_kwargs['callback'] = iteration_callback
+                except Exception:
+                    # Ältere SciPy-Version ohne Signature/Callback-Support.
+                    pass
+
+            result = least_squares(
+                error_function,
+                x0,
+                **lsq_kwargs,
             )
 
             # Finale Werte übernehmen
@@ -218,7 +236,7 @@ class ConstraintSolver:
 
             # Erfolg prüfen mit verbesserten Konvergenzkriterien
             # Performance Optimization 2.2: Batch-Berechnung
-            final_errors = calculate_constraint_errors_batch(constraints)
+            final_errors = calculate_constraint_errors_batch(active_constraints)
             constraint_error = sum(final_errors)
             
             # Maximaler Einzelfehler (wichtig für geometrische Genauigkeit)
@@ -245,12 +263,12 @@ class ConstraintSolver:
                     message = f"Unterbestimmt ({dof} Freiheitsgrade)"
             elif not solver_converged:
                 success = False
-                status = ConstraintStatus.INCONSISTENT
+                status = ConstraintStatus.OVER_CONSTRAINED if overconstrained_hint else ConstraintStatus.INCONSISTENT
                 message = f"Solver nicht konvergiert (Status: {result.status})"
             else:
                 # Solver konvergiert aber Fehler zu groß
                 success = False
-                status = ConstraintStatus.INCONSISTENT
+                status = ConstraintStatus.OVER_CONSTRAINED if overconstrained_hint else ConstraintStatus.INCONSISTENT
                 if not total_error_small and not max_error_small:
                     message = f"Constraints nicht erfüllt (Gesamt: {constraint_error:.2e}, Max: {max_error:.2e})"
                 elif not total_error_small:

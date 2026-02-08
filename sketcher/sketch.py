@@ -549,11 +549,18 @@ class Sketch:
         try:
             from .parametric_solver import ParametricSolver, check_solvespace_available
             if check_solvespace_available():
-                res = ParametricSolver(self).solve()
-                # Winkel-Update für Arcs ist wichtig nach dem Solve!
-                if res.success: 
-                    self._update_arc_angles() # (Methode aus vorherigem Schritt)
-                    return res
+                param_solver = ParametricSolver(self)
+                is_supported, reason = param_solver.supports_current_sketch()
+                if is_supported:
+                    res = param_solver.solve()
+                    # Winkel-Update für Arcs ist wichtig nach dem Solve!
+                    if res.success:
+                        self._update_arc_angles()
+                        self.invalidate_profiles()
+                        return res
+                    logger.debug(f"py-slvs Solve fehlgeschlagen, fallback auf SciPy: {res.message}")
+                else:
+                    logger.debug(f"py-slvs übersprungen: {reason}")
         except ImportError:
             logger.info("py-slvs nicht verfügbar, nutze SciPy-Fallback")
 
@@ -572,12 +579,22 @@ class Sketch:
     def is_fully_constrained(self) -> bool:
         """Prüft ob der Sketch vollständig bestimmt ist"""
         result = self.solve()
-        return result.status == ConstraintStatus.FULLY_CONSTRAINED
+        if hasattr(result, 'status'):
+            return result.status == ConstraintStatus.FULLY_CONSTRAINED
+        if hasattr(result, 'success') and hasattr(result, 'dof'):
+            return bool(result.success) and int(result.dof) <= 0
+        return False
     
     def get_constraint_status(self) -> ConstraintStatus:
         """Gibt den aktuellen Constraint-Status zurück"""
         result = self.solve()
-        return result.status
+        if hasattr(result, 'status'):
+            return result.status
+        if hasattr(result, 'success') and hasattr(result, 'dof'):
+            if not result.success:
+                return ConstraintStatus.INCONSISTENT
+            return ConstraintStatus.FULLY_CONSTRAINED if int(result.dof) <= 0 else ConstraintStatus.UNDER_CONSTRAINED
+        return ConstraintStatus.INCONSISTENT
     
     def calculate_dof(self) -> Tuple[int, int, int]:
         """
@@ -624,7 +641,7 @@ class Sketch:
         
         # 2. Effektive Constraints zählen (FIXED zählt nicht, da es durch Variablen-Entfernung behandelt wird)
         n_constraints = len([c for c in self.constraints 
-                            if c.type != ConstraintType.FIXED and c.is_valid()])
+                            if c.type != ConstraintType.FIXED and c.is_valid() and getattr(c, 'enabled', True)])
         
         # 3. DOF berechnen
         dof = max(0, n_vars - n_constraints)

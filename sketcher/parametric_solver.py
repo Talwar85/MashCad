@@ -88,6 +88,74 @@ class ParametricSolver:
         
         # Fixierte Punkte
         self._fixed_points: set = set()
+
+    def supports_current_sketch(self) -> Tuple[bool, str]:
+        """
+        Prüft ob das aktuelle Sketch-System vollständig von py-slvs abgedeckt ist.
+        Bei Unsupported-Features wird auf den SciPy-Solver zurückgefallen.
+        """
+        from .constraints import ConstraintType
+
+        # Arcs werden aktuell nicht in py-slvs-Geometrie konvertiert.
+        if getattr(self.sketch, "arcs", []):
+            return False, "Arcs im Sketch nicht vollständig durch py-slvs-Bridge unterstützt"
+
+        # Spline-Geometrie hat derzeit keine py-slvs-Entsprechung.
+        if getattr(self.sketch, "splines", []) or getattr(self.sketch, "native_splines", []):
+            return False, "Spline-Geometrie nicht durch py-slvs-Bridge unterstützt"
+
+        supported_types = {
+            ConstraintType.FIXED,
+            ConstraintType.HORIZONTAL,
+            ConstraintType.VERTICAL,
+            ConstraintType.PARALLEL,
+            ConstraintType.PERPENDICULAR,
+            ConstraintType.EQUAL_LENGTH,
+            ConstraintType.COINCIDENT,
+            ConstraintType.LENGTH,
+            ConstraintType.DISTANCE,
+            ConstraintType.ANGLE,
+            ConstraintType.RADIUS,
+            ConstraintType.DIAMETER,
+            ConstraintType.POINT_ON_LINE,
+            ConstraintType.POINT_ON_CIRCLE,
+            ConstraintType.MIDPOINT,
+            ConstraintType.TANGENT,
+            ConstraintType.CONCENTRIC,
+            ConstraintType.EQUAL_RADIUS,
+        }
+
+        for c in self.sketch.constraints:
+            if not getattr(c, "enabled", True):
+                continue
+            if not c.is_valid():
+                return False, f"Ungültiger Constraint: {c.type.name}"
+            if c.type not in supported_types:
+                return False, f"Constraint-Typ nicht unterstützt: {c.type.name}"
+
+            entities = c.entities
+            # Typ-spezifische Einschränkungen der aktuellen Bridge
+            if c.type == ConstraintType.DISTANCE:
+                if len(entities) >= 2:
+                    p1, p2 = entities[0], entities[1]
+                    if not (hasattr(p1, "x") and hasattr(p1, "y") and hasattr(p2, "x") and hasattr(p2, "y")):
+                        return False, "DISTANCE ist in py-slvs-Bridge nur als Punkt-Punkt unterstützt"
+
+            elif c.type == ConstraintType.POINT_ON_CIRCLE:
+                if len(entities) >= 2 and not hasattr(entities[1], "radius"):
+                    return False, "POINT_ON_CIRCLE benötigt Kreis-Entity"
+
+            elif c.type == ConstraintType.TANGENT:
+                if len(entities) >= 2:
+                    e1, e2 = entities[0], entities[1]
+                    line_like_1 = hasattr(e1, "start") and hasattr(e1, "end")
+                    line_like_2 = hasattr(e2, "start") and hasattr(e2, "end")
+                    circle_like_1 = hasattr(e1, "center") and hasattr(e1, "radius")
+                    circle_like_2 = hasattr(e2, "center") and hasattr(e2, "radius")
+                    if not ((line_like_1 and circle_like_2) or (line_like_2 and circle_like_1)):
+                        return False, "TANGENT ist in py-slvs-Bridge nur als Linie-Kreis unterstützt"
+
+        return True, ""
     
     def _next_handle(self) -> int:
         """Gibt nächsten Handle zurück und inkrementiert"""
@@ -522,13 +590,18 @@ class ParametricSolver:
     
     def _convert_constraints(self):
         """Konvertiert alle LiteCAD-Constraints zu py-slvs"""
-        from .constraints import ConstraintType
-        
+        from .constraints import ConstraintType, resolve_constraint_value
+
         for constraint in self.sketch.constraints:
             try:
+                if not getattr(constraint, "enabled", True):
+                    continue
+                if not constraint.is_valid():
+                    continue
+
                 ct = constraint.type
                 entities = constraint.entities
-                value = constraint.value
+                value = resolve_constraint_value(constraint)
                 
                 if ct == ConstraintType.HORIZONTAL:
                     if entities and hasattr(entities[0], 'id'):
@@ -560,7 +633,9 @@ class ParametricSolver:
                 
                 elif ct == ConstraintType.DISTANCE:
                     if len(entities) >= 2:
-                        self._add_constraint_distance(entities[0].id, entities[1].id, value)
+                        p1, p2 = entities[0], entities[1]
+                        if hasattr(p1, 'x') and hasattr(p1, 'y') and hasattr(p2, 'x') and hasattr(p2, 'y'):
+                            self._add_constraint_distance(p1.id, p2.id, value)
                 
                 elif ct == ConstraintType.ANGLE:
                     if len(entities) >= 2:
@@ -577,6 +652,12 @@ class ParametricSolver:
                 elif ct == ConstraintType.POINT_ON_LINE:
                     if len(entities) >= 2:
                         self._add_constraint_point_on_line(entities[0].id, entities[1].id)
+
+                elif ct == ConstraintType.POINT_ON_CIRCLE:
+                    if len(entities) >= 2:
+                        point, circle = entities[0], entities[1]
+                        if circle.id in self._circle_map:
+                            self._add_constraint_point_on_circle(point.id, circle.id)
                 
                 elif ct == ConstraintType.MIDPOINT:
                     if len(entities) >= 2:
@@ -584,7 +665,14 @@ class ParametricSolver:
                 
                 elif ct == ConstraintType.TANGENT:
                     if len(entities) >= 2:
-                        self._add_constraint_tangent(entities[0].id, entities[1].id)
+                        e1, e2 = entities[0], entities[1]
+                        e1_is_line = hasattr(e1, 'start') and hasattr(e1, 'end')
+                        e2_is_line = hasattr(e2, 'start') and hasattr(e2, 'end')
+
+                        if e1_is_line and e2.id in self._circle_map:
+                            self._add_constraint_tangent(e1.id, e2.id)
+                        elif e2_is_line and e1.id in self._circle_map:
+                            self._add_constraint_tangent(e2.id, e1.id)
                 
                 elif ct == ConstraintType.CONCENTRIC:
                     if len(entities) >= 2:
@@ -592,10 +680,16 @@ class ParametricSolver:
                         c1, c2 = entities[0], entities[1]
                         if hasattr(c1, 'center') and hasattr(c2, 'center'):
                             self._add_constraint_coincident(c1.center.id, c2.center.id)
+
+                elif ct == ConstraintType.EQUAL_RADIUS:
+                    if len(entities) >= 2:
+                        c1, c2 = entities[0], entities[1]
+                        if c1.id in self._circle_map and c2.id in self._circle_map:
+                            self._add_constraint_equal_radius(c1.id, c2.id)
                 
             except Exception as e:
                 from loguru import logger
-                logger.warning(f"Constraint-Konvertierung übersprungen ({c.type.name}): {e}")
+                logger.warning(f"Constraint-Konvertierung übersprungen ({constraint.type.name}): {e}")
     
     def _ensure_fixed_point(self):
         """Stellt sicher dass mindestens ein Punkt fixiert ist.
