@@ -56,6 +56,7 @@ class SnapType(Enum):
     MIDPOINT = auto()
     CENTER = auto()
     INTERSECTION = auto()
+    VIRTUAL_INTERSECTION = auto()
     QUADRANT = auto()
     GRID = auto()
     PERPENDICULAR = auto()

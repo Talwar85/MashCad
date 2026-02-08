@@ -23,20 +23,21 @@ try:
     
     # Import aus dem Nachbar-Modul im gleichen Ordner (gui) oder via Root
     try:
-        from gui.sketch_tools import SnapType
+        from gui.sketch_tools import SketchTool, SnapType
     except ImportError:
-        from sketch_tools import SnapType
+        from sketch_tools import SketchTool, SnapType
 
 except ImportError as e:
     logger.error(f"CRITICAL IMPORT ERROR in Snapper: {e}")
     # Fallback für Flat-Structure (wenn alle Dateien in einem Ordner liegen)
     try:
         import geometry
-        from sketch_tools import SnapType
+        from sketch_tools import SketchTool, SnapType
         from sketcher import Point2D, Line2D, Circle2D, Arc2D
     except ImportError:
         # Notfall-Dummy, damit die IDE nicht komplett rot leuchtet
         class Point2D: pass
+        class SketchTool: pass
         class SnapType: pass
 
 @dataclass
@@ -63,6 +64,7 @@ class SmartSnapper:
         SnapType.CENTER: 15,
         SnapType.QUADRANT: 15,
         SnapType.INTERSECTION: 18, # Schnittpunkte sind wichtig!
+        SnapType.VIRTUAL_INTERSECTION: 11,
         SnapType.ORIGIN: 19,       # Origin hat hohe Priorität (fast wie Endpoint)
         SnapType.EDGE: 5,          # Irgendwo auf der Kante (niedrigste Prio der Geo-Snaps)
         SnapType.GRID: 1,
@@ -157,6 +159,30 @@ class SmartSnapper:
         self._intersection_cache.clear()
         self._cache_version += 1
 
+    def _is_drawing_tool_active(self) -> bool:
+        tool = getattr(self.editor, "current_tool", None)
+        drawing_tools = {
+            SketchTool.LINE,
+            SketchTool.RECTANGLE,
+            SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE,
+            SketchTool.CIRCLE_2POINT,
+            SketchTool.CIRCLE_3POINT,
+            SketchTool.POLYGON,
+            SketchTool.ARC_3POINT,
+            SketchTool.SLOT,
+            SketchTool.SPLINE,
+            SketchTool.POINT,
+        }
+        return tool in drawing_tools
+
+    def _priority_for_snap_type(self, snap_type: SnapType) -> int:
+        priority = int(self.PRIORITY_MAP.get(snap_type, 0))
+        if snap_type == SnapType.VIRTUAL_INTERSECTION and self._is_drawing_tool_active():
+            # In drawing mode prefer virtual intersections over generic edge snaps.
+            priority += 6
+        return priority
+
     def snap(self, mouse_screen_pos: QPointF) -> SnapResult:
         mouse_world = self.editor.screen_to_world(mouse_screen_pos)
         snap_radius = self._compute_snap_radius_world()
@@ -220,8 +246,23 @@ class SmartSnapper:
                     self._intersection_cache[cache_key] = intersects
 
                 for p in intersects:
-                    # Schnittpunkt nur gültig, wenn beide Objekte getroffen
-                    self._check_point(p, mouse_world, snap_radius, SnapType.INTERSECTION, None, candidates)
+                    snap_type = SnapType.INTERSECTION
+                    target_entity = None
+                    point_obj = p
+
+                    # Line/Line liefert Meta-Infos fuer virtuelle Schnitte.
+                    if isinstance(p, tuple) and len(p) >= 2 and isinstance(p[1], bool):
+                        point_obj = p[0]
+                        is_virtual = bool(p[1])
+                        entities = p[2] if len(p) > 2 else None
+                        snap_type = SnapType.VIRTUAL_INTERSECTION if is_virtual else SnapType.INTERSECTION
+                        if entities is not None:
+                            target_entity = {
+                                "virtual": is_virtual,
+                                "entities": entities,
+                            }
+
+                    self._check_point(point_obj, mouse_world, snap_radius, snap_type, target_entity, candidates)
 
         # 3. ORIGIN (Achsenursprung 0,0)
         origin = Point2D(0, 0)
@@ -232,7 +273,7 @@ class SmartSnapper:
             grid_pt = self._calculate_grid_snap(mouse_world)
             dist = math.hypot(grid_pt.x() - mouse_world.x(), grid_pt.y() - mouse_world.y())
             if dist < snap_radius:
-                candidates.append((dist, self.PRIORITY_MAP[SnapType.GRID], SnapResult(grid_pt, SnapType.GRID)))
+                candidates.append((dist, self._priority_for_snap_type(SnapType.GRID), SnapResult(grid_pt, SnapType.GRID)))
 
         # Gewinner ermitteln
         if not candidates:
@@ -251,7 +292,18 @@ class SmartSnapper:
         dist = math.hypot(px - mouse_world.x(), py - mouse_world.y())
         if dist < radius:
             res = SnapResult(QPointF(px, py), type_enum, entity)
-            candidates_list.append((dist, self.PRIORITY_MAP[type_enum], res))
+            candidates_list.append((dist, self._priority_for_snap_type(type_enum), res))
+
+    @staticmethod
+    def _line_param(line: Line2D, point: Point2D) -> float:
+        dx = float(line.end.x - line.start.x)
+        dy = float(line.end.y - line.start.y)
+        denom = dx * dx + dy * dy
+        if denom < 1e-12:
+            return float("inf")
+        px = float(point.x - line.start.x)
+        py = float(point.y - line.start.y)
+        return (px * dx + py * dy) / denom
 
     def _closest_point_on_segment(self, p1, p2, p):
         # Vektor-Projektion um den nächsten Punkt auf einer Linie zu finden
@@ -294,7 +346,16 @@ class SmartSnapper:
                 # geometry.line_line_intersection gibt einen einzelnen Point2D oder None zurück.
                 # Wir müssen das in eine Liste [] packen!
                 pt = geometry.line_line_intersection(e1, e2)
-                return [pt] if pt else []
+                if not pt:
+                    return []
+
+                t1 = self._line_param(e1, pt)
+                t2 = self._line_param(e2, pt)
+                seg_tol = 1e-6
+                on_seg_1 = -seg_tol <= t1 <= 1.0 + seg_tol
+                on_seg_2 = -seg_tol <= t2 <= 1.0 + seg_tol
+                is_virtual = not (on_seg_1 and on_seg_2)
+                return [(pt, is_virtual, (e1, e2))]
 
             # 2. Kreis - Linie (und umgekehrt)
             elif is_c1 and is_l2:

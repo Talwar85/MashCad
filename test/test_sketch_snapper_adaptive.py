@@ -4,7 +4,7 @@ from PySide6.QtCore import QPointF
 
 from gui.sketch_handlers import SketchHandlersMixin
 from gui.sketch_snapper import SmartSnapper
-from gui.sketch_tools import SnapType
+from gui.sketch_tools import SketchTool, SnapType
 from sketcher.sketch import Sketch
 
 
@@ -13,6 +13,7 @@ class _FakeEditor:
         self.sketch = sketch
         self.snap_radius = snap_radius
         self.view_scale = view_scale
+        self.current_tool = SketchTool.SELECT
         self.grid_snap = False
         self.grid_size = 1.0
         self.spatial_index = None
@@ -71,3 +72,44 @@ def test_handlers_adaptive_world_tolerance_is_bounded():
     dummy.view_scale = 1e6
     low = dummy._adaptive_world_tolerance(scale=0.4, min_world=0.05, max_world=1.5)
     assert math.isclose(low, 0.05, rel_tol=0.0, abs_tol=1e-9)
+
+
+def test_snapper_classifies_virtual_line_intersection():
+    sketch = Sketch("virtual_intersection")
+    # Real intersection point is on line 1 segment but outside line 2 segment.
+    sketch.add_line(100.0, 0.0, 200.0, 0.0)
+    sketch.add_line(150.0, 100.0, 150.0, 200.0)
+    editor = _FakeEditor(sketch, snap_radius=20, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(150.1, 0.1))
+
+    assert result.type == SnapType.VIRTUAL_INTERSECTION
+    assert isinstance(result.target_entity, dict)
+    assert result.target_entity.get("virtual") is True
+
+
+def test_snapper_classifies_real_line_intersection():
+    sketch = Sketch("real_intersection")
+    sketch.add_line(100.0, 0.0, 200.0, 0.0)
+    sketch.add_line(150.0, -50.0, 150.0, 50.0)
+    editor = _FakeEditor(sketch, snap_radius=20, view_scale=1.0)
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(150.05, 0.05))
+
+    assert result.type == SnapType.INTERSECTION
+
+
+def test_virtual_intersection_priority_boost_in_drawing_mode():
+    sketch = Sketch("virtual_priority")
+    editor = _FakeEditor(sketch, snap_radius=20, view_scale=1.0)
+    snapper = SmartSnapper(editor)
+
+    editor.current_tool = SketchTool.SELECT
+    p_select = snapper._priority_for_snap_type(SnapType.VIRTUAL_INTERSECTION)
+    editor.current_tool = SketchTool.LINE
+    p_draw = snapper._priority_for_snap_type(SnapType.VIRTUAL_INTERSECTION)
+
+    assert p_draw > p_select

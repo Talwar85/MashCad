@@ -1832,6 +1832,30 @@ class SketchRendererMixin:
         elif st == SnapType.INTERSECTION:
             p.drawLine(int(pos.x())-5, int(pos.y())-5, int(pos.x())+5, int(pos.y())+5)
             p.drawLine(int(pos.x())+5, int(pos.y())-5, int(pos.x())-5, int(pos.y())+5)
+        elif st == SnapType.VIRTUAL_INTERSECTION:
+            p.save()
+            p.setPen(QPen(QColor(120, 220, 255), 2, Qt.DashLine))
+            p.drawLine(int(pos.x())-6, int(pos.y())-6, int(pos.x())+6, int(pos.y())+6)
+            p.drawLine(int(pos.x())+6, int(pos.y())-6, int(pos.x())-6, int(pos.y())+6)
+            p.drawEllipse(pos, 4, 4)
+
+            # Optional visual hint for extension lines when metadata is available.
+            snap_meta = self.current_snap[2] if len(self.current_snap) > 2 else None
+            entities = snap_meta.get("entities") if isinstance(snap_meta, dict) else None
+            if entities:
+                p.setPen(QPen(QColor(120, 220, 255, 140), 1, Qt.DashLine))
+                for entity in entities:
+                    if not (hasattr(entity, "start") and hasattr(entity, "end")):
+                        continue
+                    s = self.world_to_screen(QPointF(entity.start.x, entity.start.y))
+                    e = self.world_to_screen(QPointF(entity.end.x, entity.end.y))
+                    p.drawLine(s, e)
+                    # Extension ray from closer endpoint to virtual snap point.
+                    ds = (s.x() - pos.x()) ** 2 + (s.y() - pos.y()) ** 2
+                    de = (e.x() - pos.x()) ** 2 + (e.y() - pos.y()) ** 2
+                    anchor = s if ds <= de else e
+                    p.drawLine(anchor, pos)
+            p.restore()
         elif st == SnapType.ORIGIN:
             # Origin: Kreis mit Kreuz (ähnlich wie Center aber größer/hervorgehoben)
             p.drawEllipse(pos, 6, 6)

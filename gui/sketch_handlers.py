@@ -163,7 +163,7 @@ class SketchHandlersMixin:
                 h_tolerance = self._adaptive_world_tolerance(scale=0.35, min_world=0.05, max_world=2.0)
                 
                 # Nur prÃ¼fen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
-                if snap_type not in [SnapType.EDGE, SnapType.INTERSECTION]:
+                if snap_type not in [SnapType.EDGE, SnapType.INTERSECTION, SnapType.VIRTUAL_INTERSECTION]:
                     if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
                         if hasattr(self.sketch, 'add_horizontal'):
                             self.sketch.add_horizontal(line)

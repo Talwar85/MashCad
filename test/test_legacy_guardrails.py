@@ -128,6 +128,27 @@ RULES = [
         ],
     },
     {
+        "path": "gui/sketch_tools.py",
+        "required": [
+            r"VIRTUAL_INTERSECTION",
+        ],
+    },
+    {
+        "path": "gui/sketch_snapper.py",
+        "required": [
+            r"SnapType\.VIRTUAL_INTERSECTION",
+            r"_priority_for_snap_type",
+            r"_is_drawing_tool_active",
+            r"_line_param",
+        ],
+    },
+    {
+        "path": "gui/sketch_renderer.py",
+        "required": [
+            r"SnapType\.VIRTUAL_INTERSECTION",
+        ],
+    },
+    {
         "path": "gui/viewport_pyvista.py",
         "required": [
             r"has_topological_refs\s*=\s*bool\(",
