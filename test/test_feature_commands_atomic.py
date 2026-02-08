@@ -1,0 +1,103 @@
+from gui.commands.feature_commands import (
+    AddFeatureCommand,
+    DeleteFeatureCommand,
+    EditFeatureCommand,
+)
+from modeling import Body, ExtrudeFeature, PrimitiveFeature
+
+
+class _DummyBrowser:
+    def refresh(self):
+        return None
+
+
+class _DummyMainWindow:
+    def __init__(self):
+        self.browser = _DummyBrowser()
+        self.viewport_3d = type("_Viewport", (), {"remove_body": lambda self, _bid: None})()
+
+    def _update_body_from_build123d(self, _body, _solid):
+        return None
+
+
+def _make_body_with_box(name="cmd_atomic_body"):
+    body = Body(name)
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=10.0, width=10.0, height=10.0))
+    return body
+
+
+def test_add_feature_command_redo_rolls_back_on_new_feature_error(monkeypatch):
+    body = _make_body_with_box("add_feature_rollback")
+    ui = _DummyMainWindow()
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        name="Push/Pull (Join)",
+    )
+    before_feature_ids = [feat.id for feat in body.features]
+
+    def _failing_add_feature(feat, rebuild=True):
+        body.features.append(feat)
+        feat.status = "ERROR"
+        feat.status_message = "synthetic failure"
+        feat.status_details = {"code": "operation_failed"}
+
+    monkeypatch.setattr(body, "add_feature", _failing_add_feature)
+
+    cmd = AddFeatureCommand(body, feature, ui)
+    cmd.redo()
+
+    assert [feat.id for feat in body.features] == before_feature_ids
+    assert feature not in body.features
+    assert all(getattr(feat, "status", "") != "ERROR" for feat in body.features)
+
+
+def test_delete_feature_command_redo_rolls_back_on_rebuild_regression(monkeypatch):
+    body = _make_body_with_box("delete_feature_rollback")
+    second = PrimitiveFeature(primitive_type="box", length=8.0, width=8.0, height=8.0)
+    body.add_feature(second)
+    ui = _DummyMainWindow()
+    before_feature_ids = [feat.id for feat in body.features]
+
+    def _failing_rebuild():
+        if body.features:
+            body.features[0].status = "ERROR"
+            body.features[0].status_message = "synthetic rebuild regression"
+            body.features[0].status_details = {"code": "operation_failed"}
+
+    monkeypatch.setattr(body, "_rebuild", _failing_rebuild)
+
+    cmd = DeleteFeatureCommand(body, second, 1, ui)
+    cmd.redo()
+
+    assert [feat.id for feat in body.features] == before_feature_ids
+    assert second in body.features
+    assert all(getattr(feat, "status", "") != "ERROR" for feat in body.features)
+
+
+def test_edit_feature_command_redo_rolls_back_and_restores_old_params(monkeypatch):
+    body = _make_body_with_box("edit_feature_rollback")
+    ui = _DummyMainWindow()
+    feature = body.features[0]
+    old_length = feature.length
+
+    def _failing_rebuild():
+        feature.status = "ERROR"
+        feature.status_message = "synthetic edit regression"
+        feature.status_details = {"code": "operation_failed"}
+
+    monkeypatch.setattr(body, "_rebuild", _failing_rebuild)
+
+    cmd = EditFeatureCommand(
+        body,
+        feature,
+        old_params={"length": old_length},
+        new_params={"length": old_length + 25.0},
+        main_window=ui,
+    )
+    cmd.redo()
+
+    assert feature.length == old_length
+    assert getattr(feature, "status", "") != "ERROR"

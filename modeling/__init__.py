@@ -1983,6 +1983,25 @@ class Body:
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
             if fallback_func:
+                strict_self_heal = is_enabled("self_heal_strict")
+                has_topology_refs = self._feature_has_topological_references(feature) if feature is not None else False
+                if strict_self_heal and has_topology_refs:
+                    self._last_operation_error = (
+                        f"Primärpfad fehlgeschlagen: {err_msg}; "
+                        "Strict Self-Heal blockiert Fallback bei Topologie-Referenzen"
+                    )
+                    self._last_operation_error_details = self._build_operation_error_details(
+                        op_name=op_name,
+                        code="fallback_blocked_strict",
+                        message=self._last_operation_error,
+                        feature=feature,
+                        hint="Feature neu referenzieren oder Parameter reduzieren.",
+                    )
+                    logger.error(
+                        f"Strict Self-Heal: Fallback für '{op_name}' blockiert "
+                        "(Topologie-Referenzen aktiv)."
+                    )
+                    return None, "ERROR"
                 logger.debug(f"→ Versuche Fallback für '{op_name}'...")
                 try:
                     res_fallback = fallback_func()
@@ -5581,6 +5600,36 @@ class Body:
         from config.feature_flags import is_enabled
 
         max_index = rebuild_up_to if rebuild_up_to is not None else len(self.features)
+        strict_self_heal = is_enabled("self_heal_strict")
+
+        def _solid_metrics(solid_obj) -> dict:
+            if solid_obj is None:
+                return {"volume": None, "faces": 0, "edges": 0}
+            try:
+                volume = float(getattr(solid_obj, "volume", 0.0))
+            except Exception:
+                volume = None
+            try:
+                faces = len(list(solid_obj.faces()))
+            except Exception:
+                faces = 0
+            try:
+                edges = len(list(solid_obj.edges()))
+            except Exception:
+                edges = 0
+            return {"volume": volume, "faces": faces, "edges": edges}
+
+        def _format_metrics(metrics: dict) -> str:
+            volume = metrics.get("volume")
+            if volume is None:
+                vol_text = "n/a"
+            else:
+                vol_text = f"{volume:.3f}"
+            return (
+                f"vol={vol_text}mm³, "
+                f"faces={metrics.get('faces', 0)}, "
+                f"edges={metrics.get('edges', 0)}"
+            )
 
         # === PHASE 7: Inkrementeller Rebuild mit Checkpoints ===
         start_index = 0
@@ -5601,6 +5650,9 @@ class Body:
             else:
                 start_index = 0  # Kein Checkpoint, starte von 0
 
+        last_valid_solid = current_solid
+        last_valid_feature_index = start_index - 1 if current_solid is not None else -1
+
         logger.info(f"Rebuilding Body '{self.name}' (Features {start_index}-{max_index-1}/{len(self.features)})...")
 
         # Reset Cache (Phase 2: Lazy-Loading)
@@ -5620,6 +5672,7 @@ class Body:
         blocked_by_feature_index = -1
 
         for i, feature in enumerate(self.features):
+            solid_before_feature = current_solid
             if i >= max_index:
                 feature.status = "ROLLED_BACK"
                 feature.status_message = ""
@@ -6148,6 +6201,60 @@ class Body:
                 status = "OK"
                 logger.debug(f"SurfaceTexture '{feature.name}' — Metadaten-only, kein BREP-Update")
 
+            if strict_self_heal and status == "WARNING" and self._feature_has_topological_references(feature):
+                rollback_from = _solid_metrics(new_solid) if new_solid is not None else _solid_metrics(current_solid)
+                rollback_to = _solid_metrics(solid_before_feature)
+                status = "ERROR"
+                new_solid = solid_before_feature
+                self._last_operation_error = (
+                    f"Strict Self-Heal: Warning/Fallback bei Topologie-Referenzen blockiert "
+                    f"(Feature '{feature.name}')."
+                )
+                self._last_operation_error_details = self._build_operation_error_details(
+                    op_name=f"StrictSelfHeal_{i}",
+                    code="self_heal_blocked_topology_warning",
+                    message=self._last_operation_error,
+                    feature=feature,
+                    hint="Feature-Referenzen neu auswählen oder Parameter reduzieren.",
+                )
+                self._last_operation_error_details["rollback"] = {
+                    "from": rollback_from,
+                    "to": rollback_to,
+                }
+                logger.error(self._last_operation_error)
+                logger.error(
+                    f"Strict Self-Heal Rollback ({feature.name}): "
+                    f"{_format_metrics(rollback_from)} -> {_format_metrics(rollback_to)}"
+                )
+
+            if strict_self_heal and new_solid is not None and status != "ERROR":
+                step_validation = GeometryValidator.validate_solid(new_solid, ValidationLevel.NORMAL)
+                if step_validation.is_error:
+                    rollback_from = _solid_metrics(new_solid)
+                    rollback_to = _solid_metrics(solid_before_feature)
+                    status = "ERROR"
+                    new_solid = solid_before_feature
+                    self._last_operation_error = (
+                        f"Strict Self-Heal: Feature '{feature.name}' erzeugte ungültige Geometrie "
+                        f"({step_validation.message}) – Rollback auf letzten validen Stand."
+                    )
+                    self._last_operation_error_details = self._build_operation_error_details(
+                        op_name=f"StrictSelfHeal_{i}",
+                        code="self_heal_rollback_invalid_result",
+                        message=self._last_operation_error,
+                        feature=feature,
+                        hint=step_validation.message,
+                    )
+                    self._last_operation_error_details["rollback"] = {
+                        "from": rollback_from,
+                        "to": rollback_to,
+                    }
+                    logger.error(self._last_operation_error)
+                    logger.error(
+                        f"Strict Self-Heal Rollback ({feature.name}): "
+                        f"{_format_metrics(rollback_from)} -> {_format_metrics(rollback_to)}"
+                    )
+
             feature.status = status
             if status in ("ERROR", "WARNING"):
                 feature.status_message = self._last_operation_error or feature.status_message
@@ -6161,8 +6268,10 @@ class Body:
                 blocked_by_feature_name = feature.name
                 blocked_by_feature_index = i
 
-            if new_solid is not None:
+            if new_solid is not None and status != "ERROR":
                 current_solid = new_solid
+                last_valid_solid = current_solid
+                last_valid_feature_index = i
 
                 # === PHASE 7: Checkpoint erstellen (alle N Features) ===
                 if use_incremental and self._dependency_graph.should_create_checkpoint(i):
@@ -6180,13 +6289,54 @@ class Body:
 
             if validation.is_error:
                 logger.warning(f"⚠️ Geometrie-Validierung fehlgeschlagen: {validation.message}")
-                # Auto-Healing versuchen
+                before_heal_metrics = _solid_metrics(current_solid)
                 healed, heal_result = GeometryHealer.heal_solid(current_solid)
-                if heal_result.success and heal_result.changes_made:
-                    logger.info(f"🔧 Auto-Healing: {', '.join(heal_result.changes_made)}")
-                    current_solid = healed
+                heal_applied = False
+
+                if heal_result.success and healed is not None:
+                    healed_validation = GeometryValidator.validate_solid(healed, ValidationLevel.NORMAL)
+                    healed_metrics = _solid_metrics(healed)
+                    topology_changed = (
+                        before_heal_metrics["faces"] != healed_metrics["faces"]
+                        or before_heal_metrics["edges"] != healed_metrics["edges"]
+                    )
+                    active_topology_refs = self._has_active_topological_references(max_index=max_index)
+
+                    if strict_self_heal and active_topology_refs and topology_changed:
+                        logger.error(
+                            "Strict Self-Heal: Healing-Ergebnis verworfen "
+                            "(Topologie geändert bei aktiven TNP-Referenzen)."
+                        )
+                    elif healed_validation.is_error:
+                        logger.warning(
+                            f"⚠️ Auto-Healing Ergebnis weiterhin ungültig: {healed_validation.message}"
+                        )
+                    else:
+                        current_solid = healed
+                        validation = healed_validation
+                        heal_applied = True
+                        if heal_result.changes_made:
+                            logger.info(f"🔧 Auto-Healing: {', '.join(heal_result.changes_made)}")
+                        logger.info(
+                            f"Self-Heal Delta: {_format_metrics(before_heal_metrics)} -> "
+                            f"{_format_metrics(healed_metrics)}"
+                        )
                 elif not heal_result.success:
                     logger.warning(f"⚠️ Auto-Healing fehlgeschlagen: {heal_result.message}")
+
+                if strict_self_heal and not heal_applied and last_valid_solid is not None and last_valid_feature_index >= 0:
+                    rollback_from = _solid_metrics(current_solid)
+                    rollback_to = _solid_metrics(last_valid_solid)
+                    logger.error(
+                        f"Strict Self-Heal: Rollback auf letzten validen Checkpoint "
+                        f"(Feature Index {last_valid_feature_index})."
+                    )
+                    logger.error(
+                        f"Strict Self-Heal Rollback (final): "
+                        f"{_format_metrics(rollback_from)} -> {_format_metrics(rollback_to)}"
+                    )
+                    current_solid = last_valid_solid
+                    validation = GeometryValidator.validate_solid(current_solid, ValidationLevel.NORMAL)
 
             # Phase 9:
             # Globales UnifySameDomain nur ohne aktive TNP-Referenzen.

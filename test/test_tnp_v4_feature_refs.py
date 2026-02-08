@@ -1151,6 +1151,59 @@ def test_rebuild_pushpull_failure_blocks_downstream_and_skips_legacy_fallback(mo
     assert (downstream.status_details or {}).get("code") == "blocked_by_upstream_error"
 
 
+def test_safe_operation_strict_blocks_topology_fallback(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+
+    body = Body("strict_self_heal_fallback_block")
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+    )
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", True)
+
+    result, status = body._safe_operation(
+        "StrictFallbackBlock",
+        lambda: (_ for _ in ()).throw(ValueError("primary failed")),
+        fallback_func=lambda: object(),
+        feature=feature,
+    )
+
+    assert result is None
+    assert status == "ERROR"
+    assert (body._last_operation_error_details or {}).get("code") == "fallback_blocked_strict"
+
+
+def test_rebuild_strict_self_heal_rolls_back_invalid_feature_result(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.geometry_validator import GeometryValidator, ValidationLevel, ValidationResult
+
+    body = Body("strict_self_heal_feature_rollback")
+    base = PrimitiveFeature(primitive_type="box", length=10.0, width=10.0, height=10.0, name="base_box")
+    invalid = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0, name="invalid_box")
+    body.features = [base, invalid]
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", True)
+
+    def _validate_for_test(solid, level=ValidationLevel.NORMAL):
+        volume = float(getattr(solid, "volume", 0.0))
+        if volume > 5000.0:
+            return ValidationResult.invalid("synthetic invalid solid")
+        return ValidationResult.valid("synthetic valid solid")
+
+    monkeypatch.setattr(GeometryValidator, "validate_solid", staticmethod(_validate_for_test))
+
+    body._rebuild()
+
+    assert base.status in ("OK", "SUCCESS")
+    assert invalid.status == "ERROR"
+    assert (invalid.status_details or {}).get("code") == "self_heal_rollback_invalid_result"
+    assert body._build123d_solid is not None
+    assert body._build123d_solid.volume == pytest.approx(1000.0, rel=1e-6)
+
+
 def test_tnp_health_report_extrude_uses_rebuild_status_for_input_refs(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import face_from_index
@@ -1306,6 +1359,84 @@ def test_pushpull_sequence_with_chamfer_reports_stable_health():
 
     assert edge_indices
     chamfer = ChamferFeature(distance=0.8, edge_indices=edge_indices[:4])
+    body.add_feature(chamfer)
+    assert chamfer.status in ("OK", "SUCCESS"), chamfer.status_message
+
+    report = doc._shape_naming_service.get_health_report(body)
+    pushpull_reports = [f for f in report["features"] if f.get("type") == "Extrude"]
+    assert pushpull_reports
+    assert all(f.get("broken", 0) == 0 for f in pushpull_reports)
+    assert all(f.get("status") == "ok" for f in pushpull_reports)
+
+
+@pytest.mark.parametrize(
+    "directions",
+    [
+        [(0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (-1.0, 0.0, 0.0)],
+        [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (-1.0, 0.0, 0.0)],
+        [(0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, -1.0)],
+    ],
+)
+def test_pushpull_directional_sequences_keep_tnp_health_stable(directions):
+    from modeling.topology_indexing import edge_index_of, face_index_of
+
+    pytest.importorskip("OCP.BRepFeat")
+
+    doc = Document()
+    body = Body("pushpull_directional_stable_health")
+    doc.add_body(body)
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=38.0, width=26.0, height=18.0))
+
+    for step, direction in enumerate(directions):
+        solid = body._build123d_solid
+        assert solid is not None
+
+        dx, dy, dz = direction
+        target_face = max(
+            list(solid.faces()),
+            key=lambda f: (f.center().X * dx) + (f.center().Y * dy) + (f.center().Z * dz),
+        )
+        target_idx = face_index_of(solid, target_face)
+        assert target_idx is not None
+
+        fc = target_face.center()
+        sid = doc._shape_naming_service.register_shape(
+            ocp_shape=target_face.wrapped,
+            shape_type=ShapeType.FACE,
+            feature_id=f"pp_dir_seed_{step}",
+            local_index=int(target_idx),
+            geometry_data=(fc.X, fc.Y, fc.Z, float(target_face.area)),
+        )
+
+        pushpull = ExtrudeFeature(
+            sketch=None,
+            distance=2.0 + (0.4 * step),
+            operation="Join",
+            face_index=int(target_idx),
+            face_shape_id=sid,
+            precalculated_polys=[object()],
+            name=f"Push/Pull Dir {step}",
+        )
+        body.add_feature(pushpull)
+        assert pushpull.status in ("OK", "SUCCESS"), pushpull.status_message
+
+    solid = body._build123d_solid
+    assert solid is not None and solid.volume > 0.0
+
+    top_face = max(list(solid.faces()), key=lambda f: f.center().Z)
+    edge_indices = []
+    for edge in top_face.edges():
+        edge_idx = edge_index_of(solid, edge)
+        if edge_idx is None:
+            continue
+        idx = int(edge_idx)
+        if idx not in edge_indices:
+            edge_indices.append(idx)
+        if len(edge_indices) >= 4:
+            break
+
+    assert len(edge_indices) >= 2
+    chamfer = ChamferFeature(distance=0.5, edge_indices=edge_indices[:4])
     body.add_feature(chamfer)
     assert chamfer.status in ("OK", "SUCCESS"), chamfer.status_message
 
