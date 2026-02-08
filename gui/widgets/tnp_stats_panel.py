@@ -36,6 +36,7 @@ STATUS_DOTS = {
 }
 
 METHOD_LABELS = {
+    'index': tr('Index'),
     'direct': tr('Direkt'),
     'history': tr('History'),
     'brepfeat': tr('BRepFeat'),

@@ -293,8 +293,10 @@ class ShapeNamingService:
             logger.debug(f"ShapeID-Lookup für Face fehlgeschlagen: {e}")
             return None
 
-    def resolve_shape(self, shape_id: ShapeID, 
-                      current_solid: Any) -> Optional[Any]:
+    def resolve_shape(self, shape_id: ShapeID,
+                      current_solid: Any,
+                      *,
+                      log_unresolved: bool = True) -> Optional[Any]:
         """
         Löst eine ShapeID zur aktuellen Geometrie auf.
         
@@ -304,11 +306,17 @@ class ShapeNamingService:
         3. BRepFeat Mapping Lookup
         4. Geometric Matching (Fallback)
         """
-        resolved, _method = self.resolve_shape_with_method(shape_id, current_solid)
+        resolved, _method = self.resolve_shape_with_method(
+            shape_id,
+            current_solid,
+            log_unresolved=log_unresolved,
+        )
         return resolved
 
     def resolve_shape_with_method(self, shape_id: ShapeID,
-                                  current_solid: Any) -> Tuple[Optional[Any], str]:
+                                  current_solid: Any,
+                                  *,
+                                  log_unresolved: bool = True) -> Tuple[Optional[Any], str]:
         """
         Löst eine ShapeID auf und gibt auch die verwendete Methode zurück.
 
@@ -317,7 +325,8 @@ class ShapeNamingService:
             "direct", "history", "brepfeat", "geometric", "unresolved"
         """
         if shape_id.uuid not in self._shapes:
-            logger.warning(f"Unbekannte ShapeID: {shape_id.uuid}")
+            if log_unresolved:
+                logger.warning(f"Unbekannte ShapeID: {shape_id.uuid}")
             return None, "unresolved"
         
         record = self._shapes[shape_id.uuid]
@@ -346,7 +355,8 @@ class ShapeNamingService:
             logger.debug(f"Shape {shape_id.uuid[:8]} via Geometric Matching gefunden")
             return resolved, "geometric"
         
-        logger.warning(f"Shape {shape_id.uuid[:8]} konnte nicht aufgelöst werden")
+        if log_unresolved:
+            logger.warning(f"Shape {shape_id.uuid[:8]} konnte nicht aufgelöst werden")
         return None, "unresolved"
     
     def get_shapes_by_feature(self, feature_id: str) -> List[ShapeID]:
@@ -396,6 +406,78 @@ class ShapeNamingService:
         if current_solid is not None:
             ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
+        face_from_index = None
+        edge_from_index = None
+        try:
+            from modeling.topology_indexing import (
+                face_from_index as _face_from_index,
+                edge_from_index as _edge_from_index,
+            )
+            face_from_index = _face_from_index
+            edge_from_index = _edge_from_index
+        except Exception:
+            pass
+
+        def _to_list(value: Any) -> List[Any]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return list(value)
+            if isinstance(value, tuple):
+                return list(value)
+            return [value]
+
+        def _to_index_list(value: Any) -> List[Optional[int]]:
+            result: List[Optional[int]] = []
+            for raw_idx in _to_list(value):
+                try:
+                    idx = int(raw_idx)
+                    result.append(idx if idx >= 0 else None)
+                except Exception:
+                    result.append(None)
+            return result
+
+        def _collect_ref_groups(feat: Any) -> List[Tuple[str, List[Any], List[Optional[int]]]]:
+            groups: List[Tuple[str, List[Any], List[Optional[int]]]] = []
+
+            edge_shape_ids = _to_list(getattr(feat, "edge_shape_ids", []))
+            edge_indices = _to_index_list(getattr(feat, "edge_indices", []))
+            if edge_shape_ids or edge_indices:
+                groups.append(("Edge", edge_shape_ids, edge_indices))
+
+            face_shape_ids = _to_list(getattr(feat, "face_shape_ids", []))
+            face_indices = _to_index_list(getattr(feat, "face_indices", []))
+            if face_shape_ids or face_indices:
+                groups.append(("Face", face_shape_ids, face_indices))
+
+            opening_face_shape_ids = _to_list(getattr(feat, "opening_face_shape_ids", []))
+            opening_face_indices = _to_index_list(getattr(feat, "opening_face_indices", []))
+            if opening_face_shape_ids or opening_face_indices:
+                groups.append(("Face", opening_face_shape_ids, opening_face_indices))
+
+            single_face_shape_id = getattr(feat, "face_shape_id", None)
+            single_face_index = getattr(feat, "face_index", None)
+            if single_face_shape_id is not None or single_face_index is not None:
+                groups.append((
+                    "Face",
+                    _to_list(single_face_shape_id),
+                    _to_index_list(single_face_index),
+                ))
+
+            return groups
+
+        def _resolve_index_ref(ref_kind: str, topo_index: Optional[int]) -> bool:
+            if topo_index is None or current_solid is None:
+                return False
+            try:
+                if ref_kind == "Face" and face_from_index is not None:
+                    return face_from_index(current_solid, topo_index) is not None
+                if ref_kind == "Edge" and edge_from_index is not None:
+                    return edge_from_index(current_solid, topo_index) is not None
+            except Exception:
+                return False
+            return False
+
         for feat in features:
             feat_type_name = type(feat).__name__
             is_consuming = feat_type_name in self._CONSUMING_FEATURE_TYPES
@@ -409,80 +491,92 @@ class ShapeNamingService:
                 'refs': []
             }
 
-            shape_ids = []
-            ref_kind = None
-
-            if hasattr(feat, 'edge_shape_ids') and feat.edge_shape_ids:
-                shape_ids = feat.edge_shape_ids
-                ref_kind = 'Edge'
-            elif hasattr(feat, 'face_shape_ids') and feat.face_shape_ids:
-                shape_ids = feat.face_shape_ids
-                ref_kind = 'Face'
-
-            if not shape_ids:
+            ref_groups = _collect_ref_groups(feat)
+            if not ref_groups:
                 report['features'].append(feat_report)
                 continue
 
             if is_consuming:
                 rebuild_status = getattr(feat, 'status', 'OK')
-                ref_count = sum(1 for s in shape_ids if isinstance(s, ShapeID))
-                if rebuild_status in ('OK', 'SUCCESS', 'WARNING'):
-                    feat_report['ok'] = ref_count
-                    report['ok'] += ref_count
-                    feat_report['status'] = 'ok'
-                    for sid in shape_ids:
-                        if isinstance(sid, ShapeID):
-                            feat_report['refs'].append({
-                                'kind': ref_kind,
-                                'status': 'ok',
-                                'method': 'rebuild'
-                            })
-                else:
-                    feat_report['broken'] = ref_count
-                    report['broken'] += ref_count
-                    feat_report['status'] = 'broken'
-                    for sid in shape_ids:
-                        if isinstance(sid, ShapeID):
-                            feat_report['refs'].append({
-                                'kind': ref_kind,
-                                'status': 'broken',
-                                'method': 'rebuild'
-                            })
-            else:
-                for sid in shape_ids:
-                    if not isinstance(sid, ShapeID):
+                for ref_kind, shape_ids, index_refs in ref_groups:
+                    ref_count = max(
+                        len(shape_ids),
+                        len(index_refs),
+                        sum(1 for sid in shape_ids if isinstance(sid, ShapeID)),
+                        sum(1 for idx in index_refs if idx is not None),
+                    )
+                    if ref_count <= 0:
                         continue
 
-                    if ocp_solid is not None:
-                        _resolved, method = self.resolve_shape_with_method(sid, ocp_solid)
+                    if rebuild_status in ('OK', 'SUCCESS', 'WARNING'):
+                        feat_report['ok'] += ref_count
+                        report['ok'] += ref_count
+                        ref_status = 'ok'
                     else:
-                        method = "unresolved"
+                        feat_report['broken'] += ref_count
+                        report['broken'] += ref_count
+                        ref_status = 'broken'
 
-                    if method in ("direct", "history"):
-                        status = "ok"
-                        feat_report['ok'] += 1
-                        report['ok'] += 1
-                    elif method in ("brepfeat", "geometric"):
-                        status = "fallback"
-                        feat_report['fallback'] += 1
-                        report['fallback'] += 1
-                    else:
-                        status = "broken"
-                        feat_report['broken'] += 1
-                        report['broken'] += 1
+                    for _ in range(ref_count):
+                        feat_report['refs'].append({
+                            'kind': ref_kind,
+                            'status': ref_status,
+                            'method': 'rebuild'
+                        })
+            else:
+                for ref_kind, shape_ids, index_refs in ref_groups:
+                    ref_count = max(len(shape_ids), len(index_refs))
+                    for ref_idx in range(ref_count):
+                        topo_index = index_refs[ref_idx] if ref_idx < len(index_refs) else None
+                        shape_id = shape_ids[ref_idx] if ref_idx < len(shape_ids) else None
 
-                    feat_report['refs'].append({
-                        'kind': ref_kind,
-                        'status': status,
-                        'method': method
-                    })
+                        if _resolve_index_ref(ref_kind, topo_index):
+                            status = "ok"
+                            method = "index"
+                        elif isinstance(shape_id, ShapeID):
+                            if ocp_solid is not None:
+                                _resolved, method = self.resolve_shape_with_method(
+                                    shape_id,
+                                    ocp_solid,
+                                    log_unresolved=False,
+                                )
+                            else:
+                                method = "unresolved"
 
-                if feat_report['broken'] > 0:
-                    feat_report['status'] = 'broken'
-                elif feat_report['fallback'] > 0:
-                    feat_report['status'] = 'fallback'
-                else:
-                    feat_report['status'] = 'ok'
+                            if method in ("direct", "history"):
+                                status = "ok"
+                            elif method in ("brepfeat", "geometric"):
+                                status = "fallback"
+                            else:
+                                status = "broken"
+                        elif topo_index is not None:
+                            status = "broken"
+                            method = "index"
+                        else:
+                            continue
+
+                        if status == "ok":
+                            feat_report['ok'] += 1
+                            report['ok'] += 1
+                        elif status == "fallback":
+                            feat_report['fallback'] += 1
+                            report['fallback'] += 1
+                        else:
+                            feat_report['broken'] += 1
+                            report['broken'] += 1
+
+                        feat_report['refs'].append({
+                            'kind': ref_kind,
+                            'status': status,
+                            'method': method
+                        })
+
+            if feat_report['broken'] > 0:
+                feat_report['status'] = 'broken'
+            elif feat_report['fallback'] > 0:
+                feat_report['status'] = 'fallback'
+            elif feat_report['ok'] > 0:
+                feat_report['status'] = 'ok'
 
             report['features'].append(feat_report)
 
