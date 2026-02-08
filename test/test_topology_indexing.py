@@ -5,9 +5,13 @@ from build123d import Solid
 from modeling.cad_tessellator import CADTessellator
 from modeling.shape_reference import create_reference_map, find_face_by_id
 from modeling.topology_indexing import (
+    dump_topology_edges,
     dump_topology_faces,
+    edge_from_index,
     face_from_index,
+    iter_edges_with_indices,
     iter_faces_with_indices,
+    map_index_to_edge,
     map_index_to_face,
 )
 
@@ -35,6 +39,24 @@ def test_face_from_index_matches_build123d_faces_order():
     assert face_from_index(solid, len(faces)) is None
 
 
+def test_edge_from_index_matches_build123d_edges_order():
+    solid = _make_box()
+    edges = list(solid.edges())
+    assert len(edges) > 0
+
+    for idx, expected in enumerate(edges):
+        resolved = edge_from_index(solid, idx)
+        assert resolved is not None
+        assert resolved.wrapped.IsSame(expected.wrapped)
+
+        resolved_alias = map_index_to_edge(solid, idx)
+        assert resolved_alias is not None
+        assert resolved_alias.wrapped.IsSame(expected.wrapped)
+
+    assert edge_from_index(solid, -1) is None
+    assert edge_from_index(solid, len(edges)) is None
+
+
 def test_iter_faces_with_indices_is_dense_zero_based():
     solid = _make_box()
     indexed_faces = list(iter_faces_with_indices(solid))
@@ -43,9 +65,26 @@ def test_iter_faces_with_indices_is_dense_zero_based():
     assert [idx for idx, _ in indexed_faces] == list(range(len(indexed_faces)))
 
 
+def test_iter_edges_with_indices_is_dense_zero_based():
+    solid = _make_box()
+    indexed_edges = list(iter_edges_with_indices(solid))
+
+    assert indexed_edges
+    assert [idx for idx, _ in indexed_edges] == list(range(len(indexed_edges)))
+
+
 def test_dump_topology_faces_contains_all_face_indices():
     solid = _make_box()
     dump = dump_topology_faces(solid)
+
+    assert dump
+    assert [entry["index"] for entry in dump] == list(range(len(dump)))
+    assert all("center" in entry for entry in dump)
+
+
+def test_dump_topology_edges_contains_all_edge_indices():
+    solid = _make_box()
+    dump = dump_topology_edges(solid)
 
     assert dump
     assert [entry["index"] for entry in dump] == list(range(len(dump)))

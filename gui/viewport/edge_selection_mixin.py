@@ -34,6 +34,7 @@ from gui.viewport.render_queue import request_render  # Phase 4: Performance
 class SelectableEdge:
     """Repräsentiert eine selektierbare Kante."""
     id: int
+    topology_index: int
     body_id: str
     build123d_edge: object
     center: Tuple[float, float, float]
@@ -213,6 +214,7 @@ class EdgeSelectionMixin:
 
                     sel_edge = SelectableEdge(
                         id=self._edge_counter,
+                        topology_index=i,
                         body_id=body_id,
                         build123d_edge=edge,
                         center=edge.center().to_tuple(),
@@ -697,6 +699,15 @@ class EdgeSelectionMixin:
     
     def get_selected_edge_ids(self) -> Set[int]:
         return self._selected_edge_ids.copy()
+
+    def get_selected_edge_topology_indices(self) -> List[int]:
+        """Gibt stabile Topologie-Indizes (solid.edges()[index]) zurück."""
+        indices = [
+            e.topology_index
+            for e in self._selectable_edges
+            if e.id in self._selected_edge_ids and e.topology_index >= 0
+        ]
+        return sorted(set(indices))
 
     def get_edge_selectors(self):
         """Gibt Legacy Point-Selectors zurück (backward-compat)"""

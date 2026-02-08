@@ -3567,8 +3567,11 @@ class MainWindow(QMainWindow):
 
         # Kanten aus Edge-Selection holen
         selected_edges = []
+        selected_edge_indices = []
         if hasattr(self.viewport_3d, 'get_selected_edges'):
             selected_edges = self.viewport_3d.get_selected_edges() or []
+        if hasattr(self.viewport_3d, 'get_selected_edge_topology_indices'):
+            selected_edge_indices = self.viewport_3d.get_selected_edge_topology_indices() or []
 
         if len(selected_edges) < 3:
             logger.warning("N-Sided Patch benötigt mindestens 3 Kanten")
@@ -3594,7 +3597,7 @@ class MainWindow(QMainWindow):
             return
 
         feat = NSidedPatchFeature(
-            edge_selectors=[],
+            edge_indices=selected_edge_indices,
             geometric_selectors=geometric_selectors,
             degree=degree,
             tangent=tangent,
@@ -3637,7 +3640,7 @@ class MainWindow(QMainWindow):
             self.browser.refresh()
             logger.success(
                 f"N-Sided Patch mit {len(selected_edges)} Kanten angewendet "
-                f"(ShapeIDs: {len(edge_shape_ids)})"
+                f"(TopoIdx: {len(selected_edge_indices)}, ShapeIDs: {len(edge_shape_ids)})"
             )
 
         # Mode beenden
@@ -9227,6 +9230,10 @@ class MainWindow(QMainWindow):
 
         # Hole echte Build123d Edges für robuste Pfad-Auflösung
         build123d_edges = self.viewport_3d.get_selected_edges()
+        edge_indices = []
+        if hasattr(self.viewport_3d, "get_selected_edge_topology_indices"):
+            edge_indices = self.viewport_3d.get_selected_edge_topology_indices() or []
+        path_body_id = getattr(self.viewport_3d, "_edge_selection_body_id", None)
         path_geo_selector = None
         try:
             from modeling.geometric_selector import GeometricEdgeSelector
@@ -9237,7 +9244,8 @@ class MainWindow(QMainWindow):
         # Pfad-Daten speichern
         path_data = {
             'type': 'body_edge',
-            'edge': edge,
+            'body_id': path_body_id,
+            'edge_indices': edge_indices,
             'build123d_edges': build123d_edges,  # Direkte Edge-Referenzen (Session)
             'path_geometric_selector': path_geo_selector,
         }
@@ -9248,7 +9256,10 @@ class MainWindow(QMainWindow):
         # Pfad im Viewport highlighten
         self._highlight_sweep_path(path_data)
 
-        logger.info(f"Sweep: Pfad ausgewählt ({len(build123d_edges)} Edges). Drücke OK zum Ausführen")
+        logger.info(
+            f"Sweep: Pfad ausgewählt ({len(build123d_edges)} Edge(s), "
+            f"TopoIdx={len(edge_indices)}). Drücke OK zum Ausführen"
+        )
 
     def _on_sweep_confirmed(self):
         """
@@ -9286,11 +9297,27 @@ class MainWindow(QMainWindow):
                 sweep_feature.path_geometric_selector = path_geo_selector
 
             path_edges = self._sweep_path_data.get("build123d_edges") or []
+            path_edge_indices = self._sweep_path_data.get("edge_indices") or []
             shape_service = getattr(self.document, "_shape_naming_service", None)
-            if path_edges and shape_service:
+            if (path_edges or path_edge_indices) and shape_service:
                 try:
                     from modeling.tnp_system import ShapeType
-                    path_edge = path_edges[0]
+                    path_edge = None
+                    if path_edge_indices:
+                        from modeling.topology_indexing import edge_from_index
+
+                        path_body_id = self._sweep_path_data.get("body_id")
+                        path_body = self.document.find_body_by_id(path_body_id) if path_body_id else None
+                        if path_body is None and self.document.bodies:
+                            path_body = self.document.bodies[0]
+                        if path_body and getattr(path_body, "_build123d_solid", None):
+                            path_edge = edge_from_index(path_body._build123d_solid, int(path_edge_indices[0]))
+
+                    if path_edge is None and path_edges:
+                        path_edge = path_edges[0]
+                    if path_edge is None:
+                        raise ValueError("Keine gültige Sweep-Pfadkante für ShapeID-Registrierung gefunden")
+
                     shape_id = shape_service.find_shape_id_by_edge(path_edge)
                     if shape_id is None and hasattr(path_edge, "wrapped"):
                         ec = path_edge.center()
@@ -9509,7 +9536,25 @@ class MainWindow(QMainWindow):
 
             elif path_type == 'body_edge':
                 # Body-Edge-basierter Pfad
-                build123d_edges = path_data.get('build123d_edges', [])
+                build123d_edges = list(path_data.get('build123d_edges', []) or [])
+                if not build123d_edges:
+                    edge_indices = path_data.get("edge_indices") or []
+                    if edge_indices:
+                        try:
+                            from modeling.topology_indexing import edge_from_index
+
+                            body_id = path_data.get("body_id")
+                            body = self.document.find_body_by_id(body_id) if body_id else None
+                            if body is None and self.document.bodies:
+                                body = self.document.bodies[0]
+                            solid = getattr(body, "_build123d_solid", None) if body else None
+                            if solid is not None:
+                                for edge_idx in edge_indices:
+                                    resolved = edge_from_index(solid, int(edge_idx))
+                                    if resolved is not None:
+                                        build123d_edges.append(resolved)
+                        except Exception as e:
+                            logger.debug(f"Sweep: Highlight-Edge-Auflösung via Topology-Index fehlgeschlagen: {e}")
                 if not build123d_edges:
                     return
 

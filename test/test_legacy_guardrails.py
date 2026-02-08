@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RULES = [
     {
         "path": "modeling/__init__.py",
+        "required": [
+            r"\bdef\s+_resolve_path\(",
+            r"\bdef\s+_compute_nsided_patch\(",
+        ],
         "forbidden": [
             r"\btnp_shape_reference\b",
             r"\bdef\s+_update_registry_for_feature\(",
@@ -18,6 +22,8 @@ RULES = [
             r"\b_shape_registry\b",
             r"\btnp_data\b",
             r"\"path_data\"\s*:\s*feat\.path_data",
+            r"Sweep:\s*Legacy edge_selector migriert",
+            r"N-Sided Patch:\s*Legacy-Selector nicht aufgelöst",
         ],
     },
     {
@@ -40,6 +46,15 @@ RULES = [
         ],
         "forbidden": [
             r"face_id\s*\+=\s*1",
+        ],
+    },
+    {
+        "path": "modeling/topology_indexing.py",
+        "required": [
+            r"\bdef\s+face_from_index\(",
+            r"\bdef\s+edge_from_index\(",
+            r"\bdef\s+iter_faces_with_indices\(",
+            r"\bdef\s+iter_edges_with_indices\(",
         ],
     },
     {

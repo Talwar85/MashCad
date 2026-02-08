@@ -51,7 +51,7 @@ def test_tnp_v4_refs_are_serialized_for_requested_features():
     hollow = HollowFeature(wall_thickness=2.0, opening_face_selectors=[_face_selector()])
     hollow.opening_face_shape_ids = [_make_shape_id(ShapeType.FACE, hollow.id, 0)]
 
-    nsided = NSidedPatchFeature(edge_selectors=[(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 10.0, 0.0)])
+    nsided = NSidedPatchFeature(edge_indices=[0, 1, 2])
     nsided.edge_shape_ids = [
         _make_shape_id(ShapeType.EDGE, nsided.id, 0),
         _make_shape_id(ShapeType.EDGE, nsided.id, 1),
@@ -83,6 +83,7 @@ def test_tnp_v4_refs_are_serialized_for_requested_features():
     for entry in nsided_dict["edge_shape_ids"]:
         for key in ("uuid", "shape_type", "feature_id", "local_index", "geometry_hash", "timestamp"):
             assert key in entry
+    assert nsided_dict["edge_indices"] == [0, 1, 2]
     assert "edge_selectors" not in nsided_dict
 
 
@@ -102,6 +103,8 @@ def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():
                 "curve_type": "line",
                 "tolerance": 10.0,
             },
+            "edge_indices": [2, 4],
+            "body_id": "body_a",
         },
     )
     body.features = [sweep]
@@ -113,6 +116,8 @@ def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():
     assert "build123d_edges" not in sweep_dict["path_data"]
     assert "edge_selector" not in sweep_dict["path_data"]
     assert "path_geometric_selector" not in sweep_dict["path_data"]
+    assert sweep_dict["path_data"]["edge_indices"] == [2, 4]
+    assert sweep_dict["path_data"]["body_id"] == "body_a"
 
 
 def test_tnp_v4_refs_roundtrip_for_requested_features():
@@ -131,7 +136,7 @@ def test_tnp_v4_refs_roundtrip_for_requested_features():
     hollow = HollowFeature(opening_face_selectors=[_face_selector()])
     hollow.opening_face_shape_ids = [_make_shape_id(ShapeType.FACE, hollow.id, 0)]
 
-    nsided = NSidedPatchFeature(edge_selectors=[(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 10.0, 0.0)])
+    nsided = NSidedPatchFeature(edge_indices=[7, 8, 9])
     nsided.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, nsided.id, 0)]
 
     body.features = [sweep, hole, draft, hollow, nsided]
@@ -152,6 +157,7 @@ def test_tnp_v4_refs_roundtrip_for_requested_features():
     assert restored_draft.face_shape_ids and isinstance(restored_draft.face_shape_ids[0], ShapeID)
     assert restored_hollow.opening_face_shape_ids and isinstance(restored_hollow.opening_face_shape_ids[0], ShapeID)
     assert restored_nsided.edge_shape_ids and isinstance(restored_nsided.edge_shape_ids[0], ShapeID)
+    assert restored_nsided.edge_indices == [7, 8, 9]
 
 
 def test_tnp_v4_legacy_shape_id_fallback_for_requested_features():
@@ -211,6 +217,7 @@ def test_tnp_v4_sweep_deserialize_moves_path_geometric_selector_out_of_path_data
                         "curve_type": "line",
                         "tolerance": 10.0,
                     },
+                    "edge_selector": [(1.0, 2.0, 3.0)],
                 },
             }
         ],
@@ -221,6 +228,7 @@ def test_tnp_v4_sweep_deserialize_moves_path_geometric_selector_out_of_path_data
 
     assert sweep.path_geometric_selector is not None
     assert "path_geometric_selector" not in sweep.path_data
+    assert "edge_selector" not in sweep.path_data
 
 
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):

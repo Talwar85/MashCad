@@ -377,7 +377,7 @@ class SweepFeature(Feature):
     path_data: dict = field(default_factory=dict)
     # {
     #   "type": "sketch_edge" | "body_edge",
-    #   "edge_selector": tuple,  # Mittelpunkt für TNP-Fallback
+    #   "edge_indices": List[int],  # Topologie-Indizes im Referenz-Body
     #   "sketch_id": str | None,
     #   "body_id": str | None
     # }
@@ -616,7 +616,8 @@ class NSidedPatchFeature(Feature):
     
     TNP v4.0: ShapeIDs für stabile Edge-Referenzen.
     """
-    edge_selectors: list = field(default_factory=list)  # Liste von (center, direction) Tupeln
+    edge_selectors: list = field(default_factory=list)  # Legacy: nur für Migration alter Dateien
+    edge_indices: list = field(default_factory=list)    # Primär: stable edge indices (solid.edges()[idx])
     
     # TNP v4.0: ShapeIDs für Edges (Primary)
     edge_shape_ids: List = None  # List[ShapeID]
@@ -632,12 +633,15 @@ class NSidedPatchFeature(Feature):
         if not self.name or self.name == "Feature":
             edge_count = (
                 len(self.edge_shape_ids or [])
+                or len(self.edge_indices or [])
                 or len(self.geometric_selectors or [])
                 or len(self.edge_selectors or [])
             )
             self.name = f"N-Sided Patch ({edge_count} edges)"
         if self.edge_shape_ids is None:
             self.edge_shape_ids = []
+        if self.edge_indices is None:
+            self.edge_indices = []
         if self.geometric_selectors is None:
             self.geometric_selectors = []
 
@@ -2895,10 +2899,14 @@ class Body:
         all_edges = current_solid.edges() if hasattr(current_solid, 'edges') else []
         if not all_edges:
             raise ValueError("Solid hat keine Kanten")
-        if not feature.edge_shape_ids and not feature.geometric_selectors and not feature.edge_selectors:
+        if not feature.edge_shape_ids and not feature.edge_indices and not feature.geometric_selectors:
+            if feature.edge_selectors:
+                raise ValueError(
+                    "N-Sided Patch Legacy edge_selectors werden nicht mehr aufgelöst. "
+                    "Bitte Kanten neu auswählen (TNP v4: edge_indices/ShapeIDs)."
+                )
             raise ValueError("N-Sided Patch benötigt mindestens 3 Kanten-Referenzen")
 
-        import numpy as np
         resolved_edges = []
 
         def _is_same_edge(edge_a, edge_b) -> bool:
@@ -2925,7 +2933,26 @@ class Body:
             if is_enabled("tnp_debug_logging"):
                 logger.debug(f"N-Sided Patch: {len(tnp_edges)}/{len(feature.edge_shape_ids)} Edges via ShapeIDs aufgelöst")
 
-        # TNP v4.0 SECONDARY: GeometricEdgeSelector
+        # TNP v4.0 SECONDARY: Topology-Index-basierte Auflösung
+        if len(resolved_edges) < 3 and feature.edge_indices:
+            try:
+                from modeling.topology_indexing import edge_from_index
+
+                resolved_by_index = 0
+                for edge_idx in feature.edge_indices:
+                    edge = edge_from_index(current_solid, int(edge_idx))
+                    if edge is not None:
+                        _append_unique(edge)
+                        resolved_by_index += 1
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(
+                        f"N-Sided Patch: {resolved_by_index}/{len(feature.edge_indices)} "
+                        f"Edges via Topology-Index aufgelöst"
+                    )
+            except Exception as e:
+                logger.debug(f"N-Sided Patch: Topology-Index-Auflösung fehlgeschlagen: {e}")
+
+        # TNP v4.0 TERTIARY: GeometricEdgeSelector
         if len(resolved_edges) < 3 and feature.geometric_selectors:
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
@@ -2941,48 +2968,20 @@ class Body:
             except Exception as e:
                 logger.debug(f"N-Sided Patch: GeometricSelector-Auflösung fehlgeschlagen: {e}")
 
-        # Legacy-Fallback: Punkt-Selektoren (abwärtskompatibel)
-        # Legacy-Migration (einmalig): Punkt-Selektoren -> GeometricSelectors/ShapeIDs
-        if len(resolved_edges) < 3 and feature.edge_selectors:
-            legacy_tol = 5.0
+        # Für zukünftige Rebuilds ShapeIDs + GeometricSelectors + Edge-Indizes persistieren
+        if resolved_edges:
             try:
-                bb = current_solid.bounding_box()
-                diag = ((bb.max.X - bb.min.X) ** 2 +
-                        (bb.max.Y - bb.min.Y) ** 2 +
-                        (bb.max.Z - bb.min.Z) ** 2) ** 0.5
-                legacy_tol = min(15.0, max(2.0, diag * 0.02))
-            except Exception:
-                pass
+                resolved_indices = []
+                for edge in resolved_edges:
+                    for edge_idx, candidate in enumerate(all_edges):
+                        if _is_same_edge(candidate, edge):
+                            resolved_indices.append(edge_idx)
+                            break
+                if resolved_indices:
+                    feature.edge_indices = resolved_indices
+            except Exception as e:
+                logger.debug(f"N-Sided Patch: Persistieren von Edge-Indizes fehlgeschlagen: {e}")
 
-            for selector in feature.edge_selectors:
-                # Selector ist (center_x, center_y, center_z) oder ((cx,cy,cz), (dx,dy,dz))
-                if isinstance(selector, (list, tuple)) and len(selector) == 2:
-                    if isinstance(selector[0], (list, tuple)):
-                        center = np.array(selector[0])
-                    else:
-                        center = np.array(selector)
-                else:
-                    center = np.array(selector)
-
-                best_edge = None
-                best_dist = float('inf')
-                for edge in all_edges:
-                    try:
-                        ec = edge.center()
-                        ec_arr = np.array([ec.X, ec.Y, ec.Z])
-                        dist = np.linalg.norm(ec_arr - center)
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_edge = edge
-                    except Exception:
-                        continue
-
-                if best_edge is not None and best_dist < legacy_tol:
-                    _append_unique(best_edge)
-                else:
-                    logger.debug(f"N-Sided Patch: Legacy-Selector nicht aufgelöst (dist={best_dist:.2f}mm)")
-
-        # Für zukünftige Rebuilds ShapeIDs + GeometricSelectors persistieren
         if resolved_edges and self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
@@ -3010,7 +3009,7 @@ class Body:
                     feature.edge_shape_ids = new_shape_ids
                 if new_geo_selectors:
                     feature.geometric_selectors = new_geo_selectors
-                if (feature.edge_shape_ids or feature.geometric_selectors) and feature.edge_selectors:
+                if (feature.edge_shape_ids or feature.edge_indices or feature.geometric_selectors) and feature.edge_selectors:
                     feature.edge_selectors = []
                     logger.debug("N-Sided Patch: Legacy edge_selectors nach TNP-v4-Migration entfernt")
             except Exception as e:
@@ -3020,6 +3019,7 @@ class Body:
             # Weniger strikt: Wenn Body trotzdem valid ist, nicht als Fehler behandeln
             expected = (
                 len(feature.edge_shape_ids or [])
+                or len(feature.edge_indices or [])
                 or len(feature.geometric_selectors or [])
                 or len(feature.edge_selectors or [])
             )
@@ -3787,7 +3787,7 @@ class Body:
         Löst Pfad-Daten zu Build123d Wire auf.
 
         Args:
-            path_data: Dict mit edge_selector, sketch_id, etc.
+            path_data: Dict mit edge_indices, sketch_id, etc.
             current_solid: Aktueller Solid für Body-Edge-Auflösung
 
         Returns:
@@ -3804,9 +3804,16 @@ class Body:
                 return self._sketch_edge_to_wire(path_data)
 
             elif path_type == 'body_edge':
-                from build123d import Wire, Edge, Vector
+                from build123d import Wire, Edge
 
-                all_edges = list(current_solid.edges()) if current_solid and hasattr(current_solid, 'edges') else []
+                source_solid = current_solid
+                source_body_id = path_data.get("body_id")
+                if source_body_id and self._document and hasattr(self._document, "find_body_by_id"):
+                    ref_body = self._document.find_body_by_id(source_body_id)
+                    if ref_body is not None and getattr(ref_body, "_build123d_solid", None) is not None:
+                        source_solid = ref_body._build123d_solid
+
+                all_edges = list(source_solid.edges()) if source_solid and hasattr(source_solid, 'edges') else []
                 shape_service = None
                 if self._document and hasattr(self._document, '_shape_naming_service'):
                     shape_service = self._document._shape_naming_service
@@ -3842,7 +3849,7 @@ class Body:
                 if feature and feature.path_shape_id and shape_service:
                     try:
                         resolved_ocp, method = shape_service.resolve_shape_with_method(
-                            feature.path_shape_id, current_solid
+                            feature.path_shape_id, source_solid
                         )
                         if resolved_ocp is not None:
                             matching_edge = None
@@ -3857,6 +3864,30 @@ class Body:
                             return Wire([matching_edge])
                     except Exception as e:
                         logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
+
+                # TNP v4.0 SECONDARY: Topology-Index-basierte Pfad-Auflösung
+                edge_indices = path_data.get("edge_indices") or []
+                if edge_indices and all_edges:
+                    try:
+                        from modeling.topology_indexing import edge_from_index
+                        resolved_edges = []
+                        for edge_idx in edge_indices:
+                            resolved = edge_from_index(source_solid, int(edge_idx))
+                            if resolved is not None:
+                                resolved_edges.append(resolved)
+                        if resolved_edges:
+                            if feature and getattr(feature, "path_geometric_selector", None) is None:
+                                try:
+                                    from modeling.geometric_selector import GeometricEdgeSelector
+                                    feature.path_geometric_selector = GeometricEdgeSelector.from_edge(
+                                        resolved_edges[0]
+                                    ).to_dict()
+                                except Exception:
+                                    pass
+                            _persist_path_shape_id(resolved_edges[0])
+                            return Wire(resolved_edges)
+                    except Exception as e:
+                        logger.debug(f"Sweep: Topology-Index-Pfadauflösung fehlgeschlagen: {e}")
 
                 # TNP v4.0 Fallback: GeometricEdgeSelector (Feature-Feld oder path_data)
                 path_geo_selector = getattr(feature, 'path_geometric_selector', None) if feature else None
@@ -3903,54 +3934,11 @@ class Body:
                         pass
                     return Wire([direct_edge])
 
-                # Legacy-Migration: edge_selector (Punkt-Matching) -> TNP v4 Felder
-                edge_selector = path_data.get('edge_selector')
-                if edge_selector and all_edges:
-                    selectors = edge_selector if isinstance(edge_selector, list) else [edge_selector]
-                    found_edges = []
-
-                    legacy_tol = 5.0
-                    try:
-                        bb = current_solid.bounding_box()
-                        diag = ((bb.max.X - bb.min.X) ** 2 +
-                                (bb.max.Y - bb.min.Y) ** 2 +
-                                (bb.max.Z - bb.min.Z) ** 2) ** 0.5
-                        legacy_tol = min(15.0, max(2.0, diag * 0.02))
-                    except Exception:
-                        pass
-
-                    for sel in selectors:
-                        best_edge = None
-                        min_dist = float('inf')
-                        try:
-                            p_sel = Vector(sel) if not isinstance(sel, Vector) else sel
-                            for edge in all_edges:
-                                try:
-                                    dist = (edge.center() - p_sel).length
-                                    if dist < min_dist:
-                                        min_dist = dist
-                                        best_edge = edge
-                                except Exception:
-                                    pass
-                            if best_edge and min_dist < legacy_tol:
-                                found_edges.append(best_edge)
-                        except Exception:
-                            pass
-                    if found_edges:
-                        try:
-                            from modeling.geometric_selector import GeometricEdgeSelector
-                            migrated_selector = GeometricEdgeSelector.from_edge(found_edges[0]).to_dict()
-                            if feature is not None:
-                                feature.path_geometric_selector = migrated_selector
-                            path_data['path_geometric_selector'] = migrated_selector
-                            path_data.pop('edge_selector', None)
-                        except Exception:
-                            pass
-                        _persist_path_shape_id(found_edges[0])
-                        logger.debug(
-                            f"Sweep: Legacy edge_selector migriert ({len(found_edges)} Edge(s) aufgelöst)"
-                        )
-                        return Wire(found_edges)
+                if path_data.get("edge_selector") is not None:
+                    logger.warning(
+                        "Sweep: Legacy path_data.edge_selector wird nicht mehr aufgelöst. "
+                        "Bitte Pfad neu auswählen (TNP v4: edge_indices/ShapeID)."
+                    )
 
             return None
 
@@ -7084,9 +7072,8 @@ class Body:
                     "degree": feat.degree,
                     "tangent": feat.tangent,
                 })
-                # Legacy-only: Nur persistieren wenn noch keine TNP-v4 Referenzen existieren.
-                if feat.edge_selectors and not (feat.edge_shape_ids or feat.geometric_selectors):
-                    feat_dict["edge_selectors"] = feat.edge_selectors
+                if feat.edge_indices:
+                    feat_dict["edge_indices"] = list(feat.edge_indices)
                 # TNP v4.0: ShapeIDs und GeometricSelectors serialisieren
                 if feat.edge_shape_ids:
                     serialized_edge_ids = []
@@ -7463,8 +7450,9 @@ class Body:
                     if isinstance(sel_data, dict):
                         feat.path_geometric_selector = GeometricEdgeSelector(**sel_data)
                 # Gemischte Strategien vermeiden: alte edge_selector-Felder nur als Legacy-Lesehilfe.
-                if isinstance(feat.path_data, dict) and feat.path_geometric_selector is not None:
+                if isinstance(feat.path_data, dict):
                     feat.path_data.pop("path_geometric_selector", None)
+                    feat.path_data.pop("edge_selector", None)
 
             elif feat_class == "ShellFeature":
                 selectors = feat_dict.get("opening_face_selectors", [])
@@ -7624,6 +7612,7 @@ class Body:
             elif feat_class == "NSidedPatchFeature":
                 feat = NSidedPatchFeature(
                     edge_selectors=feat_dict.get("edge_selectors", []),
+                    edge_indices=feat_dict.get("edge_indices", []),
                     degree=feat_dict.get("degree", 3),
                     tangent=feat_dict.get("tangent", True),
                     **base_kwargs
@@ -7658,6 +7647,8 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
+                if feat.edge_indices or feat.edge_shape_ids or feat.geometric_selectors:
+                    feat.edge_selectors = []
 
             elif feat_class == "SurfaceTextureFeature":
                 feat = SurfaceTextureFeature(
