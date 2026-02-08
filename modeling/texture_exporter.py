@@ -364,6 +364,14 @@ def apply_textures_to_body(
         if hasattr(mapping, "face_index")
     }
 
+    def _add_mapping(face_idx: int, selected_mappings: List[Any], seen_face_indices: set) -> bool:
+        mapping = mapping_by_face_index.get(int(face_idx))
+        if mapping is None or int(face_idx) in seen_face_indices:
+            return False
+        selected_mappings.append(mapping)
+        seen_face_indices.add(int(face_idx))
+        return True
+
     # PHASE 1: Alle Texturen aus dem ORIGINAL-Mesh extrahieren und verarbeiten
     for feature in body.features:
         if not isinstance(feature, SurfaceTextureFeature):
@@ -374,6 +382,10 @@ def apply_textures_to_body(
 
         selected_mappings = []
         seen_face_indices = set()
+        has_topological_refs = bool(
+            (getattr(feature, "face_indices", []) or [])
+            or (getattr(feature, "face_shape_ids", []) or [])
+        )
 
         # TNP v4.0 primary: Face-Indizes direkt auf Mappings auflösen.
         for raw_idx in getattr(feature, "face_indices", []) or []:
@@ -381,14 +393,46 @@ def apply_textures_to_body(
                 face_idx = int(raw_idx)
             except Exception:
                 continue
-            mapping = mapping_by_face_index.get(face_idx)
-            if mapping is None or face_idx in seen_face_indices:
-                continue
-            selected_mappings.append(mapping)
-            seen_face_indices.add(face_idx)
+            _add_mapping(face_idx, selected_mappings, seen_face_indices)
 
-        # Fallback: Geometrischer Selector-Match (Legacy/Recovery).
-        if not selected_mappings:
+        # TNP v4.0 secondary: ShapeIDs -> FaceIndex -> Mapping.
+        if not selected_mappings and getattr(feature, "face_shape_ids", []):
+            shape_service = None
+            if getattr(body, "_document", None) is not None:
+                shape_service = getattr(body._document, "_shape_naming_service", None)
+            solid = getattr(body, "_build123d_solid", None)
+
+            if shape_service is not None and solid is not None:
+                try:
+                    from build123d import Face
+                    from modeling.topology_indexing import face_index_of
+
+                    ocp_solid = solid.wrapped if hasattr(solid, "wrapped") else solid
+                    for shape_id in getattr(feature, "face_shape_ids", []) or []:
+                        if not hasattr(shape_id, "uuid"):
+                            continue
+                        try:
+                            resolved_ocp, _method = shape_service.resolve_shape_with_method(
+                                shape_id,
+                                ocp_solid,
+                                log_unresolved=False,
+                            )
+                        except Exception:
+                            continue
+                        if resolved_ocp is None:
+                            continue
+                        try:
+                            face_idx = face_index_of(solid, Face(resolved_ocp))
+                        except Exception:
+                            face_idx = None
+                        if face_idx is None:
+                            continue
+                        _add_mapping(int(face_idx), selected_mappings, seen_face_indices)
+                except Exception:
+                    pass
+
+        # Legacy/Recovery: nur wenn KEINE topologischen Referenzen vorhanden sind.
+        if not selected_mappings and not has_topological_refs:
             for selector in feature.face_selectors:
                 mapping = find_matching_mapping(selector, face_mappings)
                 if mapping is None:
@@ -400,9 +444,13 @@ def apply_textures_to_body(
                 seen_face_indices.add(face_idx)
 
         if not selected_mappings:
+            if has_topological_refs:
+                warning_msg = f"TNP-Referenz nicht auflösbar für Textur '{feature.name}'"
+            else:
+                warning_msg = f"Face nicht gefunden für Textur '{feature.name}'"
             results.append(TextureResult(
                 status=ResultStatus.WARNING,
-                message=f"Face nicht gefunden für Textur '{feature.name}'"
+                message=warning_msg,
             ))
             continue
 

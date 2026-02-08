@@ -567,6 +567,132 @@ def test_texture_exporter_prefers_face_indices_over_legacy_selector_matching(mon
     assert any(r.status == ResultStatus.SUCCESS for r in results)
 
 
+def test_texture_exporter_resolves_face_shape_ids_before_selector_fallback(monkeypatch):
+    import modeling.textured_tessellator as textured_tessellator
+    import modeling.texture_exporter as texture_exporter
+    from build123d import Solid
+    from modeling.texture_exporter import ResultStatus, apply_textures_to_body
+
+    class _FakeExtracted:
+        def __init__(self, n_cells):
+            self.n_cells = n_cells
+
+        def extract_surface(self):
+            return _FakeMesh(self.n_cells)
+
+    class _FakeMesh:
+        def __init__(self, n_cells):
+            self.n_cells = n_cells
+            self.n_points = max(3, n_cells * 3)
+
+        def extract_cells(self, indices):
+            return _FakeExtracted(len(indices))
+
+        def merge(self, other):
+            return _FakeMesh(self.n_cells + getattr(other, "n_cells", 0))
+
+        def compute_normals(self, inplace=True):
+            return self
+
+    class _Mapping:
+        def __init__(self, face_index, triangle_indices):
+            self.face_index = face_index
+            self.triangle_indices = triangle_indices
+            self.center = (0.0, 0.0, 0.0)
+            self.normal = (0.0, 0.0, 1.0)
+            self.area = 1.0
+            self.surface_type = "plane"
+
+    def _fail_selector_match(*_args, **_kwargs):
+        raise AssertionError("Legacy selector matching should not run when face_shape_ids are present")
+
+    monkeypatch.setattr(textured_tessellator, "find_matching_mapping", _fail_selector_match)
+    monkeypatch.setattr(texture_exporter, "_apply_displacement_to_face", lambda face_mesh, *_args: face_mesh)
+
+    doc = Document()
+    body = Body("texture_shapeid_first")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    target_idx = 3
+    target_face = list(solid.faces())[target_idx]
+    fc = target_face.center()
+    sid = doc._shape_naming_service.register_shape(
+        ocp_shape=target_face.wrapped,
+        shape_type=ShapeType.FACE,
+        feature_id="feat_tex",
+        local_index=target_idx,
+        geometry_data=(fc.X, fc.Y, fc.Z, float(target_face.area)),
+    )
+
+    feature = SurfaceTextureFeature(face_shape_ids=[sid], face_selectors=[_face_selector()])
+    body.features = [feature]
+
+    mesh = _FakeMesh(10)
+    mappings = [_Mapping(face_index=target_idx, triangle_indices=[1, 2])]
+
+    final_mesh, results = apply_textures_to_body(mesh, body, mappings)
+
+    assert final_mesh is not None
+    assert results
+    assert any(r.status == ResultStatus.SUCCESS for r in results)
+
+
+def test_texture_exporter_does_not_use_selector_recovery_when_tnp_refs_exist(monkeypatch):
+    import modeling.textured_tessellator as textured_tessellator
+    from modeling.texture_exporter import ResultStatus, apply_textures_to_body
+
+    class _FakeMesh:
+        def __init__(self, n_cells):
+            self.n_cells = n_cells
+            self.n_points = max(3, n_cells * 3)
+
+        def extract_cells(self, indices):
+            class _FakeExtracted:
+                def __init__(self, n_cells):
+                    self.n_cells = n_cells
+
+                def extract_surface(self):
+                    return _FakeMesh(self.n_cells)
+
+            return _FakeExtracted(len(indices))
+
+        def merge(self, other):
+            return _FakeMesh(self.n_cells + getattr(other, "n_cells", 0))
+
+        def compute_normals(self, inplace=True):
+            return self
+
+    class _Mapping:
+        def __init__(self, face_index, triangle_indices):
+            self.face_index = face_index
+            self.triangle_indices = triangle_indices
+            self.center = (0.0, 0.0, 0.0)
+            self.normal = (0.0, 0.0, 1.0)
+            self.area = 1.0
+            self.surface_type = "plane"
+
+    def _fail_selector_match(*_args, **_kwargs):
+        raise AssertionError("Selector recovery must not run when TNP references exist")
+
+    monkeypatch.setattr(textured_tessellator, "find_matching_mapping", _fail_selector_match)
+
+    body = Body("texture_no_selector_recovery")
+    feature = SurfaceTextureFeature(face_indices=[999], face_selectors=[_face_selector()])
+    body.features = [feature]
+
+    mesh = _FakeMesh(10)
+    mappings = [_Mapping(face_index=3, triangle_indices=[1, 2])]
+
+    final_mesh, results = apply_textures_to_body(mesh, body, mappings)
+
+    assert final_mesh is mesh
+    assert results
+    assert any(r.status == ResultStatus.WARNING for r in results)
+    assert any("TNP-Referenz" in r.message for r in results if r.status == ResultStatus.WARNING)
+
+
 def test_tnp_health_report_prefers_face_indices_for_surface_texture(monkeypatch):
     from build123d import Solid
 

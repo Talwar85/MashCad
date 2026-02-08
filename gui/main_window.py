@@ -3059,6 +3059,10 @@ class MainWindow(QMainWindow):
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
         hole_type = self.hole_panel.get_hole_type()
+        has_primary_face_ref = (
+            self._hole_face_shape_id is not None
+            or face_index is not None
+        )
 
         feature = HoleFeature(
             hole_type=hole_type,
@@ -3066,7 +3070,8 @@ class MainWindow(QMainWindow):
             depth=depth,
             position=pos,
             direction=tuple(-n for n in normal),  # drill INTO face
-            face_selectors=[face_selector] if face_selector else [],
+            # Selector nur als Legacy-Recovery behalten, wenn keine TNP-v4 Referenz vorhanden ist.
+            face_selectors=[face_selector] if (face_selector and not has_primary_face_ref) else [],
         )
         
         # TNP v4.0: ShapeID aus ShapeNamingService übernehmen
@@ -3360,7 +3365,12 @@ class MainWindow(QMainWindow):
             direction=direction,
             tolerance_class="custom" if tolerance_offset != 0 else "6g" if thread_type == "external" else "6H",
             tolerance_offset=tolerance_offset,
-            face_selector=getattr(self, "_thread_face_selector", None),
+            # Selector nur als Legacy-Recovery behalten, wenn keine TNP-v4 Referenz vorhanden ist.
+            face_selector=(
+                getattr(self, "_thread_face_selector", None)
+                if (self._thread_face_shape_id is None and getattr(self, "_thread_face_index", None) is None)
+                else None
+            ),
         )
         if self._thread_face_shape_id is not None:
             feature.face_shape_id = self._thread_face_shape_id
