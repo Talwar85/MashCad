@@ -552,7 +552,48 @@ class Sketch:
         before = len(self.constraints)
         self._cleanup_orphan_constraints()
         return before - len(self.constraints)
-    
+
+    def _normalize_parametric_result(self, result) -> SolverResult:
+        """
+        Bringt py-slvs Resultate auf das einheitliche SolverResult-Schema.
+        """
+        dof = int(getattr(result, "dof", -1))
+        message = getattr(result, "message", "")
+        raw_enum = getattr(result, "result", None)
+        raw_name = getattr(raw_enum, "name", "")
+
+        if getattr(result, "success", False):
+            status = ConstraintStatus.FULLY_CONSTRAINED if dof <= 0 else ConstraintStatus.UNDER_CONSTRAINED
+            return SolverResult(
+                success=True,
+                iterations=0,
+                final_error=0.0,
+                status=status,
+                message=message,
+            )
+
+        if raw_name == "TOO_MANY_UNKNOWNS":
+            return SolverResult(
+                success=True,
+                iterations=0,
+                final_error=0.0,
+                status=ConstraintStatus.UNDER_CONSTRAINED,
+                message=message or f"Unterbestimmt: {dof} Freiheitsgrade",
+            )
+
+        if raw_name == "INCONSISTENT":
+            status = ConstraintStatus.OVER_CONSTRAINED
+        else:
+            status = ConstraintStatus.INCONSISTENT
+
+        return SolverResult(
+            success=False,
+            iterations=0,
+            final_error=float("inf"),
+            status=status,
+            message=message or "py-slvs konnte nicht loesen",
+        )
+
     def solve(self) -> SolverResult:
         """Löst alle Constraints"""
         removed_orphans = self._sanitize_for_solver()
@@ -566,11 +607,17 @@ class Sketch:
                 param_solver = ParametricSolver(self)
                 is_supported, reason = param_solver.supports_current_sketch()
                 if is_supported:
-                    res = param_solver.solve()
+                    raw_res = param_solver.solve()
+                    res = self._normalize_parametric_result(raw_res)
                     # Winkel-Update für Arcs ist wichtig nach dem Solve!
                     if res.success:
                         self._update_arc_angles()
                         self.invalidate_profiles()
+                        return res
+                    raw_result_name = getattr(getattr(raw_res, "result", None), "name", "")
+                    # Deterministische py-slvs-Fehler nicht still durch SciPy ueberschreiben.
+                    if raw_result_name in {"INCONSISTENT", "TOO_MANY_UNKNOWNS"}:
+                        logger.debug(f"py-slvs Ergebnis bleibt aktiv: {res.message}")
                         return res
                     logger.debug(f"py-slvs Solve fehlgeschlagen, fallback auf SciPy: {res.message}")
                 else:

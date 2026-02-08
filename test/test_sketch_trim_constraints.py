@@ -2,7 +2,14 @@ import math
 
 from sketcher import Point2D
 from sketcher.constraints import Constraint, ConstraintType, calculate_constraint_error
-from sketcher.geometry import Arc2D, Line2D, Point2D as GeoPoint2D, get_param_on_entity
+from sketcher.geometry import (
+    Arc2D,
+    Circle2D,
+    Line2D,
+    Point2D as GeoPoint2D,
+    circle_line_intersection,
+    get_param_on_entity,
+)
 from sketcher.operations.trim import TrimOperation
 from sketcher.parametric_solver import ParametricSolver
 from sketcher.sketch import Sketch
@@ -25,6 +32,17 @@ def test_get_param_on_entity_supports_arc_angle():
 
     assert 0.0 <= t <= 2.0 * math.pi
     assert math.isclose(t, math.pi / 2.0, rel_tol=1e-6)
+
+
+def test_circle_line_intersection_handles_near_tangent_numeric_noise():
+    circle = Circle2D(center=GeoPoint2D(0.0, 0.0), radius=5.0)
+    line = Line2D(start=GeoPoint2D(-10.0, 5.0 + 1e-10), end=GeoPoint2D(10.0, 5.0 + 1e-10))
+
+    intersections = circle_line_intersection(circle, line, segment_only=True)
+
+    assert len(intersections) == 1
+    assert abs(intersections[0].x) < 1e-3
+    assert abs(intersections[0].y - 5.0) < 1e-3
 
 
 def test_trim_line_keeps_opposite_segment():
@@ -87,6 +105,24 @@ def test_trim_line_reuses_shared_endpoint_object():
     assert len(horizontal) == 1
     remaining = horizontal[0]
     assert remaining.start is shared_point or remaining.end is shared_point
+
+
+def test_trim_line_accepts_click_slightly_outside_segment_range():
+    sketch = Sketch("trim_outside_click_range")
+    target = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_line(5.0, -5.0, 5.0, 5.0)
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(-0.05, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    horizontal = [l for l in sketch.lines if abs(l.start.y - l.end.y) < 1e-9]
+    assert len(horizontal) == 1
+    x_values = sorted([round(horizontal[0].start.x, 6), round(horizontal[0].end.x, 6)])
+    assert x_values == [5.0, 10.0]
 
 
 def test_trim_line_migrates_horizontal_constraint_to_remaining_segment():

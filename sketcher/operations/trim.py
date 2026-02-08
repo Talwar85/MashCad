@@ -551,6 +551,8 @@ class TrimOperation(SketchOperation):
             # Validierung der Punkte
             for p in intersects:
                 t = geometry.get_param_on_entity(p, target)
+                if not math.isfinite(t):
+                    continue
 
                 if isinstance(target, Line2D):
                     # Toleranz: Nicht exakt auf Start/Ende
@@ -581,6 +583,8 @@ class TrimOperation(SketchOperation):
         """Findet das Segment auf einer Linie."""
         geometry = self._get_geometry()
         t_mouse = geometry.get_param_on_entity(click_point, target)
+        if not math.isfinite(t_mouse):
+            t_mouse = 0.5
 
         for i in range(len(cut_points) - 1):
             t_start, p_start = cut_points[i]
@@ -590,6 +594,30 @@ class TrimOperation(SketchOperation):
                     start_point=p_start,
                     end_point=p_end,
                     segment_index=i,
+                    all_cut_points=cut_points,
+                    target_entity=target
+                )
+
+        # Falls der Klick minimal außerhalb liegt (UI-Picking-Toleranz),
+        # trimmen wir das nächste Segment statt hard fail.
+        if len(cut_points) >= 2:
+            best_i = None
+            best_dist = float('inf')
+            for i in range(len(cut_points) - 1):
+                t_start, _ = cut_points[i]
+                t_end, _ = cut_points[i + 1]
+                t_min = min(t_start, t_end)
+                t_max = max(t_start, t_end)
+                clamped = min(max(t_mouse, t_min), t_max)
+                dist = abs(t_mouse - clamped)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_i = i
+            if best_i is not None:
+                return TrimSegment(
+                    start_point=cut_points[best_i][1],
+                    end_point=cut_points[best_i + 1][1],
+                    segment_index=best_i,
                     all_cut_points=cut_points,
                     target_entity=target
                 )

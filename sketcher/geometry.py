@@ -350,19 +350,23 @@ def circle_line_intersection(circle: Circle2D, line: Line2D, segment_only: bool 
     c = fx*fx + fy*fy - circle.radius**2
 
     discriminant = b*b - 4*a*c
-
-    if discriminant < 0:
+    # Relative tolerance keeps near-tangent cases numerically stable.
+    disc_tol = 1e-9 * (abs(b * b) + abs(4.0 * a * c) + 1.0)
+    if discriminant < -disc_tol:
         return []
+    if abs(discriminant) <= disc_tol:
+        discriminant = 0.0
 
     points = []
     # Kleine Toleranz für Segment-Grenzen (um numerische Ungenauigkeiten zu behandeln)
     SEGMENT_TOLERANCE = 1e-6
 
-    if discriminant == 0:
+    if discriminant == 0.0:
         t = -b / (2*a)
         # Nur hinzufügen wenn auf dem Segment (oder segment_only=False)
         if not segment_only or (-SEGMENT_TOLERANCE <= t <= 1 + SEGMENT_TOLERANCE):
-            points.append(line.point_at_parameter(t))
+            t_eval = max(0.0, min(1.0, t)) if segment_only else t
+            points.append(line.point_at_parameter(t_eval))
     else:
         sqrt_disc = math.sqrt(discriminant)
         t1 = (-b - sqrt_disc) / (2*a)
@@ -370,9 +374,11 @@ def circle_line_intersection(circle: Circle2D, line: Line2D, segment_only: bool 
 
         # Nur Punkte hinzufügen die auf dem Segment liegen (oder segment_only=False)
         if not segment_only or (-SEGMENT_TOLERANCE <= t1 <= 1 + SEGMENT_TOLERANCE):
-            points.append(line.point_at_parameter(t1))
+            t1_eval = max(0.0, min(1.0, t1)) if segment_only else t1
+            points.append(line.point_at_parameter(t1_eval))
         if not segment_only or (-SEGMENT_TOLERANCE <= t2 <= 1 + SEGMENT_TOLERANCE):
-            points.append(line.point_at_parameter(t2))
+            t2_eval = max(0.0, min(1.0, t2)) if segment_only else t2
+            points.append(line.point_at_parameter(t2_eval))
 
     return points
 

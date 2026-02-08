@@ -1,4 +1,5 @@
 from sketcher.constraints import Constraint, ConstraintType
+import sketcher.parametric_solver as parametric_solver_module
 import sketcher.solver as solver_module
 from sketcher.sketch import ConstraintStatus, Sketch
 
@@ -114,3 +115,73 @@ def test_solver_reports_non_finite_residuals(monkeypatch):
     assert result.success is False
     assert result.status == ConstraintStatus.INCONSISTENT
     assert "NaN/Inf" in result.message
+
+
+def test_parametric_too_many_unknowns_is_reported_as_under_constrained(monkeypatch):
+    class _FakeParamResult:
+        success = False
+        result = parametric_solver_module.SolveResult.TOO_MANY_UNKNOWNS
+        dof = 3
+        message = "Unterbestimmt: 3 Freiheitsgrade"
+
+    class _FakeParamSolver:
+        def __init__(self, _sketch):
+            pass
+
+        def supports_current_sketch(self):
+            return True, ""
+
+        def solve(self):
+            return _FakeParamResult()
+
+    sketch = Sketch("parametric_under")
+    sketch.add_line(0.0, 0.0, 10.0, 0.0)
+
+    monkeypatch.setattr(parametric_solver_module, "check_solvespace_available", lambda: True)
+    monkeypatch.setattr(parametric_solver_module, "ParametricSolver", _FakeParamSolver)
+    monkeypatch.setattr(
+        sketch._solver,
+        "solve",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("SciPy fallback must not run")),
+    )
+
+    result = sketch.solve()
+
+    assert result.success is True
+    assert result.status == ConstraintStatus.UNDER_CONSTRAINED
+    assert "Unterbestimmt" in result.message
+
+
+def test_parametric_inconsistent_is_not_silently_overridden_by_scipy(monkeypatch):
+    class _FakeParamResult:
+        success = False
+        result = parametric_solver_module.SolveResult.INCONSISTENT
+        dof = -1
+        message = "Widerspruechliche Constraints"
+
+    class _FakeParamSolver:
+        def __init__(self, _sketch):
+            pass
+
+        def supports_current_sketch(self):
+            return True, ""
+
+        def solve(self):
+            return _FakeParamResult()
+
+    sketch = Sketch("parametric_inconsistent")
+    sketch.add_line(0.0, 0.0, 10.0, 0.0)
+
+    monkeypatch.setattr(parametric_solver_module, "check_solvespace_available", lambda: True)
+    monkeypatch.setattr(parametric_solver_module, "ParametricSolver", _FakeParamSolver)
+    monkeypatch.setattr(
+        sketch._solver,
+        "solve",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("SciPy fallback must not run")),
+    )
+
+    result = sketch.solve()
+
+    assert result.success is False
+    assert result.status == ConstraintStatus.OVER_CONSTRAINED
+    assert "Widerspruechlich" in result.message or "Constraints" in result.message
