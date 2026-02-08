@@ -4713,8 +4713,52 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # Für jedes Texture-Feature die Face-Daten sammeln
             # WICHTIG: Jede Face bekommt ihr eigenes Texture-Feature!
             face_data_list = []
+            mesh_face_ids = None
+            try:
+                if hasattr(mesh, "cell_data") and "face_id" in mesh.cell_data:
+                    mesh_face_ids = np.asarray(mesh.cell_data["face_id"]).astype(np.int64)
+            except Exception:
+                mesh_face_ids = None
             for feat in texture_features:
-                for selector in feat.face_selectors:
+                selectors = list(getattr(feat, "face_selectors", []) or [])
+                face_indices = list(getattr(feat, "face_indices", []) or [])
+                added_from_indices = False
+
+                # TNP v4.0 primary: Face-Indizes -> aktuelle Mesh-cell_ids mappen.
+                if face_indices and mesh_face_ids is not None:
+                    seen_indices = set()
+                    for i, raw_idx in enumerate(face_indices):
+                        try:
+                            face_idx = int(raw_idx)
+                        except Exception:
+                            continue
+                        if face_idx in seen_indices:
+                            continue
+                        seen_indices.add(face_idx)
+
+                        try:
+                            cell_ids = np.where(mesh_face_ids == face_idx)[0].astype(np.int64).tolist()
+                        except Exception:
+                            cell_ids = []
+                        if not cell_ids:
+                            continue
+
+                        selector = selectors[i] if i < len(selectors) and isinstance(selectors[i], dict) else {}
+                        face_data_list.append({
+                            'cell_ids': cell_ids,
+                            'normal': selector.get('normal', (0, 0, 1)),
+                            'center': selector.get('center', (0, 0, 0)),
+                            'texture_feature': feat,
+                        })
+                        added_from_indices = True
+
+                if added_from_indices:
+                    continue
+
+                # Legacy/Recovery: bestehende selector-cell_ids verwenden.
+                for selector in selectors:
+                    if not isinstance(selector, dict):
+                        continue
                     face_data = {
                         'cell_ids': selector.get('cell_ids', []),
                         'normal': selector.get('normal', (0, 0, 1)),

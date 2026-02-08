@@ -50,6 +50,7 @@ Thumbs.db
 *.stl
 *.dxf
 *.step
+*.mshcad
 exports/
 temp/
 *.log

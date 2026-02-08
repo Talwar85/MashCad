@@ -483,7 +483,9 @@ class MainWindow(QMainWindow):
         self.hole_panel.confirmed.connect(self._on_hole_confirmed)
         self.hole_panel.cancelled.connect(self._on_hole_cancelled)
         self._hole_mode = False
+        self._hole_face_selector = None
         self._hole_face_shape_id = None
+        self._hole_face_index = None
 
         # Thread Input Panel (für interaktive Gewinde auf zylindrischen Flächen)
         from gui.input_panels import ThreadInputPanel
@@ -500,6 +502,9 @@ class MainWindow(QMainWindow):
         self._thread_direction = None
         self._thread_detected_diameter = None
         self._thread_is_internal = False
+        self._thread_face_selector = None
+        self._thread_face_shape_id = None
+        self._thread_face_index = None
 
         # Draft Input Panel
         from gui.input_panels import DraftInputPanel
@@ -544,6 +549,7 @@ class MainWindow(QMainWindow):
         self._shell_target_body = None
         self._shell_opening_faces = []  # Liste der ausgewählten Öffnungs-Flächen
         self._shell_opening_face_shape_ids = []
+        self._shell_opening_face_indices = []
 
         # Surface Texture Panel (Phase 7)
         self.texture_panel = SurfaceTexturePanel(self)
@@ -2901,6 +2907,7 @@ class MainWindow(QMainWindow):
         self._hole_target_body = None  # wird beim Face-Klick gesetzt
         self._hole_face_selector = None
         self._hole_face_shape_id = None
+        self._hole_face_index = None
         self.viewport_3d.set_hole_mode(True)
         self.hole_panel.reset()
         self.hole_panel.show_at(self.viewport_3d)
@@ -3035,6 +3042,7 @@ class MainWindow(QMainWindow):
         pos = self.viewport_3d._hole_position
         normal = self.viewport_3d._hole_normal
         face_selector = getattr(self, '_hole_face_selector', None)
+        face_index = getattr(self, '_hole_face_index', None)
         if not pos or not normal:
             self.statusBar().showMessage("Keine Fläche ausgewählt!")
             return
@@ -3062,6 +3070,11 @@ class MainWindow(QMainWindow):
             feature.face_shape_ids = [self._hole_face_shape_id]
             if is_enabled("tnp_debug_logging"):
                 logger.debug("TNP v4.0: Hole Face-ShapeID aus ShapeNamingService übernommen")
+        if face_index is not None:
+            try:
+                feature.face_indices = [int(face_index)]
+            except Exception:
+                pass
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -3089,6 +3102,7 @@ class MainWindow(QMainWindow):
         self._hole_target_body = None
         self._hole_face_selector = None
         self._hole_face_shape_id = None
+        self._hole_face_index = None
         self.viewport_3d.set_hole_mode(False)
         self.hole_panel.hide()
 
@@ -3113,7 +3127,7 @@ class MainWindow(QMainWindow):
         try:
             from modeling.geometric_selector import GeometricFaceSelector
 
-            best_face, ocp_face_id = self._resolve_solid_face_from_pick(
+            best_face, resolved_face_id = self._resolve_solid_face_from_pick(
                 body,
                 body.id,
                 cell_id=cell_id,
@@ -3125,8 +3139,13 @@ class MainWindow(QMainWindow):
                 self._hole_face_shape_id = self._find_or_register_face_shape_id(
                     body,
                     best_face,
-                    local_index=ocp_face_id if ocp_face_id is not None else 0,
+                    local_index=(
+                        resolved_face_id
+                        if resolved_face_id is not None
+                        else 0
+                    ),
                 )
+                self._hole_face_index = resolved_face_id
                 logger.debug(f"Hole: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
             else:
                 self._hole_face_selector = {
@@ -3137,11 +3156,13 @@ class MainWindow(QMainWindow):
                     "tolerance": 10.0,
                 }
                 self._hole_face_shape_id = None
+                self._hole_face_index = None
                 logger.warning("Hole: Konnte Face nicht finden, verwende Fallback")
         except Exception as e:
             logger.warning(f"Hole: Konnte GeometricFaceSelector nicht erstellen: {e}")
             self._hole_face_selector = None
             self._hole_face_shape_id = None
+            self._hole_face_index = None
 
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
@@ -3186,6 +3207,9 @@ class MainWindow(QMainWindow):
         self._thread_direction = None
         self._thread_detected_diameter = None
         self._thread_is_internal = False
+        self._thread_face_selector = None
+        self._thread_face_shape_id = None
+        self._thread_face_index = None
         self.viewport_3d.set_thread_mode(True)
         self.thread_panel.reset()
         self.thread_panel.show_at(self.viewport_3d)
@@ -3242,6 +3266,38 @@ class MainWindow(QMainWindow):
         self._thread_position = tuple(position)
         self._thread_direction = tuple(axis_dir)
         self._thread_detected_diameter = diameter
+        self._thread_face_selector = None
+        self._thread_face_shape_id = None
+        self._thread_face_index = None
+
+        try:
+            from modeling.geometric_selector import GeometricFaceSelector
+
+            best_face, resolved_face_id = self._resolve_solid_face_from_pick(
+                body,
+                body.id,
+                cell_id=cell_id,
+                position=position,
+            )
+            if best_face is not None:
+                geo_selector = GeometricFaceSelector.from_face(best_face)
+                self._thread_face_selector = geo_selector.to_dict()
+                self._thread_face_shape_id = self._find_or_register_face_shape_id(
+                    body,
+                    best_face,
+                    local_index=resolved_face_id if resolved_face_id is not None else 0,
+                )
+                self._thread_face_index = int(resolved_face_id) if resolved_face_id is not None else None
+            else:
+                self._thread_face_selector = {
+                    "center": list(position),
+                    "normal": list(axis_dir),
+                    "area": 0.0,
+                    "surface_type": "cylinder",
+                    "tolerance": 10.0,
+                }
+        except Exception as e:
+            logger.warning(f"Thread: Konnte Face-Referenz nicht erstellen: {e}")
 
         # Bestimme ob internal (Loch) oder external (Bolzen)
         # Das wird vom Viewport über die detect-Funktion bestimmt
@@ -3300,7 +3356,12 @@ class MainWindow(QMainWindow):
             direction=direction,
             tolerance_class="custom" if tolerance_offset != 0 else "6g" if thread_type == "external" else "6H",
             tolerance_offset=tolerance_offset,
+            face_selector=getattr(self, "_thread_face_selector", None),
         )
+        if self._thread_face_shape_id is not None:
+            feature.face_shape_id = self._thread_face_shape_id
+        if getattr(self, "_thread_face_index", None) is not None:
+            feature.face_index = int(self._thread_face_index)
 
         cmd = AddFeatureCommand(body, feature, self)
         self.undo_stack.push(cmd)
@@ -3321,6 +3382,9 @@ class MainWindow(QMainWindow):
         self._thread_direction = None
         self._thread_detected_diameter = None
         self._thread_is_internal = False
+        self._thread_face_selector = None
+        self._thread_face_shape_id = None
+        self._thread_face_index = None
         self.viewport_3d.set_thread_mode(False)
         self.thread_panel.hide()
 
@@ -4249,6 +4313,7 @@ class MainWindow(QMainWindow):
         # TNP-ROBUST: Erstelle GeometricFaceSelectors für jedes Face
         face_selectors = []
         face_shape_ids = []
+        face_indices = []
         for idx, face_data in enumerate(faces):
             try:
                 normal = face_data.get("normal", (0, 0, 1))
@@ -4278,6 +4343,8 @@ class MainWindow(QMainWindow):
                     )
                     if shape_id is not None:
                         face_shape_ids.append(shape_id)
+                    if resolved_face_id is not None:
+                        face_indices.append(int(resolved_face_id))
                 else:
                     face_selectors.append(
                         {
@@ -4300,10 +4367,13 @@ class MainWindow(QMainWindow):
         
         if face_shape_ids:
             feature.face_shape_ids = face_shape_ids
+        if face_indices:
+            feature.face_indices = sorted(set(face_indices))
         if is_enabled("tnp_debug_logging"):
             logger.debug(
                 f"TNP v4.0: Draft-Referenzen vorbereitet "
-                f"(selectors={len(face_selectors)}, shape_ids={len(face_shape_ids)})"
+                f"(selectors={len(face_selectors)}, shape_ids={len(face_shape_ids)}, "
+                f"indices={len(feature.face_indices or [])})"
             )
 
         cmd = AddFeatureCommand(body, feature, self)
@@ -8777,6 +8847,7 @@ class MainWindow(QMainWindow):
         self._shell_target_body = body
         self._shell_opening_faces = []
         self._shell_opening_face_shape_ids = []
+        self._shell_opening_face_indices = []
         self._pending_shell_mode = False
 
         # WICHTIG: Face-Detection aktivieren damit Flächen wählbar sind
@@ -8877,6 +8948,8 @@ class MainWindow(QMainWindow):
                 self._shell_opening_faces.pop(i)
                 if i < len(self._shell_opening_face_shape_ids):
                     self._shell_opening_face_shape_ids.pop(i)
+                if i < len(self._shell_opening_face_indices):
+                    self._shell_opening_face_indices.pop(i)
                 already_selected = True
                 logger.info(f"Shell: Fläche entfernt ({len(self._shell_opening_faces)} Öffnungen)")
                 break
@@ -8884,6 +8957,9 @@ class MainWindow(QMainWindow):
         if not already_selected:
             self._shell_opening_faces.append(face_selector)
             self._shell_opening_face_shape_ids.append(face_shape_id)
+            self._shell_opening_face_indices.append(
+                int(resolved_face_id) if resolved_face_id is not None else None
+            )
             self.shell_panel.add_opening_face(face_selector)
             logger.info(f"Shell: Fläche hinzugefügt ({len(self._shell_opening_faces)} Öffnungen)")
 
@@ -8917,9 +8993,15 @@ class MainWindow(QMainWindow):
 
             # TNP-v4: ShapeIDs aus der Face-Auswahl übernehmen (bereits beim Klick aufgelöst).
             face_shape_ids = [sid for sid in self._shell_opening_face_shape_ids if sid is not None]
+            face_indices = [idx for idx in self._shell_opening_face_indices if idx is not None]
             shell_feature.face_shape_ids = face_shape_ids
+            if face_indices:
+                shell_feature.face_indices = sorted(set(int(i) for i in face_indices))
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v4.0: {len(face_shape_ids)}/{len(self._shell_opening_faces)} Face-ShapeIDs für Shell gefunden")
+                logger.debug(
+                    f"TNP v4.0: {len(face_shape_ids)}/{len(self._shell_opening_faces)} Face-ShapeIDs "
+                    f"und {len(shell_feature.face_indices or [])} Face-Indizes für Shell gefunden"
+                )
 
             cmd = AddFeatureCommand(body, shell_feature, self, description=f"Shell ({thickness}mm)")
             self.undo_stack.push(cmd)
@@ -8930,6 +9012,18 @@ class MainWindow(QMainWindow):
                 self.undo_stack.undo()
                 QMessageBox.critical(self, "Fehler", "Shell fehlgeschlagen: Geometrie ungültig")
                 return
+
+            if shell_feature.status == "ERROR":
+                msg = shell_feature.status_message or "Kernel-Operation fehlgeschlagen"
+                self.statusBar().showMessage(f"Shell fehlgeschlagen: {msg}", 8000)
+                logger.error(f"Shell fehlgeschlagen: {msg}")
+                self._stop_shell_mode()
+                self.browser.refresh()
+                return
+            if shell_feature.status == "WARNING":
+                msg = shell_feature.status_message or "Fallback verwendet"
+                self.statusBar().showMessage(f"Shell mit Warnung: {msg}", 6000)
+                logger.warning(f"Shell mit Warnung: {msg}")
 
             # Visualisierung aktualisieren
             CADTessellator.notify_body_changed()
@@ -8966,6 +9060,7 @@ class MainWindow(QMainWindow):
         self._shell_target_body = None
         self._shell_opening_faces = []
         self._shell_opening_face_shape_ids = []
+        self._shell_opening_face_indices = []
         self.shell_panel.hide()
 
         # Face-Detection deaktivieren
@@ -9062,6 +9157,7 @@ class MainWindow(QMainWindow):
             config: Textur-Konfiguration aus SurfaceTexturePanel
         """
         from modeling.cad_tessellator import CADTessellator
+        from modeling.geometric_selector import GeometricFaceSelector
 
         if not self._texture_target_body:
             logger.error("Kein Target-Body für Textur")
@@ -9076,25 +9172,61 @@ class MainWindow(QMainWindow):
             logger.warning("Keine Faces selektiert für Textur")
             return
 
-        # Face-Selectors erstellen (mit cell_ids für Viewport-Overlay)
+        # TNP v4.0: Face-Referenzen erstellen (ShapeID/Index primary, Selector fallback).
         face_selectors = []
-        viewport_face_data = []  # Für visuelles Feedback im Viewport
-        for face_data in selected_faces:
-            selector = {
-                'center': face_data.get('center', (0, 0, 0)),
-                'normal': face_data.get('normal', (0, 0, 1)),
-                'area': face_data.get('area', 1.0),
-                'surface_type': face_data.get('surface_type', 'plane'),
-                'cell_ids': face_data.get('cell_ids', [])  # NEU: Für Preview!
-            }
+        face_shape_ids = []
+        face_indices = []
+        for idx, face_data in enumerate(selected_faces):
+            center = face_data.get("center", (0, 0, 0))
+            normal = face_data.get("normal", (0, 0, 1))
+            cell_ids = face_data.get("cell_ids", []) or []
+
+            candidate_cell_id = int(cell_ids[0]) if cell_ids else None
+            explicit_face_id = face_data.get("face_id")
+            explicit_face_id = int(explicit_face_id) if explicit_face_id is not None else None
+
+            try:
+                best_face, resolved_face_id = self._resolve_solid_face_from_pick(
+                    body,
+                    body.id,
+                    cell_id=candidate_cell_id,
+                    position=center,
+                    ocp_face_id=explicit_face_id,
+                )
+                if best_face is not None:
+                    geo_selector = GeometricFaceSelector.from_face(best_face)
+                    selector = geo_selector.to_dict()
+                    selector["cell_ids"] = list(cell_ids)
+                    shape_id = self._find_or_register_face_shape_id(
+                        body,
+                        best_face,
+                        local_index=resolved_face_id if resolved_face_id is not None else idx,
+                    )
+                    if shape_id is not None:
+                        face_shape_ids.append(shape_id)
+                    if resolved_face_id is not None:
+                        face_indices.append(int(resolved_face_id))
+                else:
+                    selector = {
+                        "center": list(center),
+                        "normal": list(normal),
+                        "area": float(face_data.get("area", 1.0)),
+                        "surface_type": face_data.get("surface_type", "plane"),
+                        "tolerance": 10.0,
+                        "cell_ids": list(cell_ids),
+                    }
+            except Exception as e:
+                logger.warning(f"Texture: Face-Referenz konnte nicht aufgelöst werden: {e}")
+                selector = {
+                    "center": list(center),
+                    "normal": list(normal),
+                    "area": float(face_data.get("area", 1.0)),
+                    "surface_type": face_data.get("surface_type", "plane"),
+                    "tolerance": 10.0,
+                    "cell_ids": list(cell_ids),
+                }
+
             face_selectors.append(selector)
-            # Speichere cell_ids für Viewport-Overlay
-            viewport_face_data.append({
-                'cell_ids': face_data.get('cell_ids', []),
-                'normal': face_data.get('normal', (0, 0, 1)),
-                'center': face_data.get('center', (0, 0, 0)),
-                # texture_feature wird unten gesetzt!
-            })
 
         from gui.commands.feature_commands import AddFeatureCommand
 
@@ -9111,6 +9243,16 @@ class MainWindow(QMainWindow):
             type_params=config.get('type_params', {}),
             export_subdivisions=config.get('export_subdivisions', 4)
         )
+        if face_shape_ids:
+            feature.face_shape_ids = face_shape_ids
+        if face_indices:
+            feature.face_indices = sorted(set(int(i) for i in face_indices))
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(
+                f"TNP v4.0: Texture-Referenzen vorbereitet "
+                f"(selectors={len(face_selectors)}, shape_ids={len(face_shape_ids)}, "
+                f"indices={len(feature.face_indices or [])})"
+            )
 
         # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
         # SurfaceTexture modifiziert den Solid nicht, nur die Feature-Liste

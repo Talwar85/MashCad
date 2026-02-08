@@ -426,6 +426,8 @@ class ShellFeature(Feature):
     
     # TNP v3.0: Persistent ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
+    # TNP v4.0: Stabile Topologie-Indizes (Secondary)
+    face_indices: List = None  # List[int]
     
     # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
     # Enthält: center, normal, area, surface_type, tolerance
@@ -439,6 +441,8 @@ class ShellFeature(Feature):
             self.name = "Shell"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        if self.face_indices is None:
+            self.face_indices = []
 
 
 @dataclass
@@ -457,6 +461,8 @@ class HoleFeature(Feature):
     
     # TNP v4.0: Persistent ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
+    # TNP v4.0: Stabile Topologie-Indizes (Secondary)
+    face_indices: List = None  # List[int]
     
     # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
     # Enthält: center, normal, area, surface_type, tolerance
@@ -475,6 +481,8 @@ class HoleFeature(Feature):
             self.name = f"Hole ({self.hole_type})"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        if self.face_indices is None:
+            self.face_indices = []
 
 
 @dataclass
@@ -490,6 +498,8 @@ class DraftFeature(Feature):
     
     # TNP v4.0: Persistent ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
+    # TNP v4.0: Stabile Topologie-Indizes (Secondary)
+    face_indices: List = None  # List[int]
     
     # TNP-robust: Liste von GeometricFaceSelector.to_dict() Dicts (Fallback)
     # Enthält: center, normal, area, surface_type, tolerance
@@ -501,6 +511,8 @@ class DraftFeature(Feature):
             self.name = f"Draft {self.draft_angle}°"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        if self.face_indices is None:
+            self.face_indices = []
 
 
 @dataclass
@@ -543,7 +555,7 @@ class ThreadFeature(Feature):
     Thread-Standards: M (metrisch), UNC, UNF
     Typ: internal (Mutter) oder external (Schraube)
     
-    TNP v3.0: ShapeID für die zylindrische Face-Referenz.
+    TNP v4.0: ShapeID + Topology-Index für die zylindrische Face-Referenz.
     """
     thread_type: str = "external"  # "external" or "internal"
     standard: str = "M"           # "M", "UNC", "UNF"
@@ -556,14 +568,20 @@ class ThreadFeature(Feature):
     tolerance_offset: float = 0.0 # Diameter offset in mm
     cosmetic: bool = True         # Kosmetisch: nur Helix-Linien im Viewport, echte Geometrie bei Export
 
-    # TNP v3.0: ShapeID für zylindrische Face
+    # TNP v4.0: Face-Referenz (ShapeID primary, Index secondary, Selector fallback)
     face_shape_id: Any = None  # ShapeID
+    face_index: Optional[int] = None
     face_selector: dict = None  # GeometricFaceSelector als Fallback
 
     def __post_init__(self):
         self.type = FeatureType.THREAD
         if not self.name or self.name == "Feature":
             self.name = f"{self.standard}{self.diameter:.0f}x{self.pitch}"
+        if self.face_index is not None:
+            try:
+                self.face_index = int(self.face_index)
+            except Exception:
+                self.face_index = None
 
 
 @dataclass
@@ -582,6 +600,7 @@ class HollowFeature(Feature):
 
     # TNP v4.0: Optional Opening-Faces für partielles Shell
     opening_face_shape_ids: List = None  # List[ShapeID]
+    opening_face_indices: List = None    # List[int]
     opening_face_selectors: List = None  # List[GeometricFaceSelector]
 
     def __post_init__(self):
@@ -590,6 +609,8 @@ class HollowFeature(Feature):
             self.name = "Hollow"
         if self.opening_face_shape_ids is None:
             self.opening_face_shape_ids = []
+        if self.opening_face_indices is None:
+            self.opening_face_indices = []
         if self.opening_face_selectors is None:
             self.opening_face_selectors = []
 
@@ -741,7 +762,7 @@ class SurfaceTextureFeature(Feature):
     Texturen sind ein reiner Metadaten-Layer.
     Die Textur wird erst beim Export als Displacement auf das Mesh angewendet.
 
-    TNP v3.0: ShapeIDs + GeometricFaceSelector für robuste Face-Referenzierung.
+    TNP v4.0: ShapeIDs + Face-Indizes + GeometricFaceSelector.
 
     Textur-Typen:
     - ripple: Wellenförmige Rillen (Grip)
@@ -757,6 +778,9 @@ class SurfaceTextureFeature(Feature):
     # TNP v3.0: ShapeIDs für Faces (Primary)
     face_shape_ids: List = None  # List[ShapeID]
     
+    # TNP v4.0: Topology-Indizes (Secondary)
+    face_indices: List = None  # List[int]
+
     # Face-Selektion (Fallback)
     # Liste von GeometricFaceSelector.to_dict() Dicts
     face_selectors: List[dict] = field(default_factory=list)
@@ -780,6 +804,8 @@ class SurfaceTextureFeature(Feature):
         self.type = FeatureType.SURFACE_TEXTURE
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        if self.face_indices is None:
+            self.face_indices = []
         if not self.name or self.name == "Feature":
             self.name = f"Texture: {self.texture_type.capitalize()}"
 
@@ -794,6 +820,7 @@ class SurfaceTextureFeature(Feature):
             "status": self.status,
             "status_message": self.status_message,
             "texture_type": self.texture_type,
+            "face_indices": self.face_indices,
             "face_selectors": self.face_selectors,
             "scale": self.scale,
             "depth": self.depth,
@@ -815,6 +842,7 @@ class SurfaceTextureFeature(Feature):
             status=data.get("status", "OK"),
             status_message=data.get("status_message", ""),
             texture_type=data.get("texture_type", "ripple"),
+            face_indices=data.get("face_indices", []),
             face_selectors=data.get("face_selectors", []),
             scale=data.get("scale", 1.0),
             depth=data.get("depth", 0.5),
@@ -3264,6 +3292,8 @@ class Body:
         # Übertrage Opening-ShapeIDs auf ShellFeature.face_shape_ids (TNP v4.0)
         if feature.opening_face_shape_ids:
             shell_feat.face_shape_ids = list(feature.opening_face_shape_ids)
+        if feature.opening_face_indices:
+            shell_feat.face_indices = list(feature.opening_face_indices)
 
         hollowed = self._compute_shell(shell_feat, current_solid)
         if hollowed is None:
@@ -3379,11 +3409,12 @@ class Body:
 
         # TNP v4.0: Face-Referenzen auflösen/aktualisieren
         target_faces = self._resolve_feature_faces(feature, current_solid)
-        has_face_refs = bool(feature.face_shape_ids or feature.face_selectors)
+        has_face_refs = bool(feature.face_shape_ids or feature.face_indices or feature.face_selectors)
         if has_face_refs and not target_faces:
             raise ValueError(
                 "Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden "
                 f"(ShapeIDs={len(feature.face_shape_ids or [])}, "
+                f"Indices={len(feature.face_indices or [])}, "
                 f"Selectors={len(feature.face_selectors or [])})"
             )
 
@@ -3578,7 +3609,7 @@ class Body:
         neutral_plane = gp_Pln(gp_Pnt(0, 0, 0), pull_dir)
 
         target_faces = self._resolve_feature_faces(feature, current_solid)
-        has_face_refs = bool(feature.face_shape_ids or feature.face_selectors)
+        has_face_refs = bool(feature.face_shape_ids or feature.face_indices or feature.face_selectors)
 
         if has_face_refs and not target_faces:
             raise ValueError("Draft: Ziel-Faces konnten via TNP v4.0 nicht aufgelöst werden")
@@ -3724,17 +3755,64 @@ class Body:
         3. Sweep Profil entlang Helix → Thread-Solid
         4. Boolean Cut (extern) oder Fuse (intern)
         """
-        import math
         import numpy as np
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+        # TNP v4.0: Face-Referenz auflösen (ShapeID -> Index -> Selector).
+        target_faces = self._resolve_feature_faces(feature, current_solid)
+        has_face_refs = bool(
+            getattr(feature, "face_shape_id", None) is not None
+            or getattr(feature, "face_index", None) is not None
+            or getattr(feature, "face_selector", None)
+        )
+        if has_face_refs and not target_faces:
+            raise ValueError("Thread: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden")
+
         pos = np.array(feature.position, dtype=float)
         direction = np.array(feature.direction, dtype=float)
+
+        if target_faces:
+            target_face = target_faces[0]
+            try:
+                from OCP.BRepAdaptor import BRepAdaptor_Surface
+                from OCP.GeomAbs import GeomAbs_Cylinder
+
+                topo_face = target_face.wrapped if hasattr(target_face, "wrapped") else target_face
+                adaptor = BRepAdaptor_Surface(topo_face)
+                if adaptor.GetType() != GeomAbs_Cylinder:
+                    raise ValueError("ausgewähltes Face ist nicht zylindrisch")
+
+                cyl = adaptor.Cylinder()
+                axis = cyl.Axis()
+                axis_loc = axis.Location()
+                axis_dir = axis.Direction()
+
+                resolved_axis = np.array([axis_dir.X(), axis_dir.Y(), axis_dir.Z()], dtype=float)
+                resolved_axis = resolved_axis / (np.linalg.norm(resolved_axis) + 1e-12)
+                if np.linalg.norm(direction) > 1e-9 and np.dot(resolved_axis, direction) < 0:
+                    resolved_axis = -resolved_axis
+
+                resolved_origin = np.array([axis_loc.X(), axis_loc.Y(), axis_loc.Z()], dtype=float)
+                if np.linalg.norm(pos) > 1e-9:
+                    pos = resolved_origin + np.dot(pos - resolved_origin, resolved_axis) * resolved_axis
+                else:
+                    pos = resolved_origin
+                direction = resolved_axis
+            except Exception as e:
+                logger.warning(f"Thread: Face-Referenz nicht als Zylinder nutzbar ({e}); verwende Feature-Parameter")
+
+        if np.linalg.norm(direction) < 1e-9:
+            raise ValueError("Thread: Ungültige Gewinderichtung (Nullvektor)")
         direction = direction / (np.linalg.norm(direction) + 1e-12)
 
-        r = feature.diameter / 2.0
+        r = max(feature.diameter / 2.0, 1e-6)
         pitch = feature.pitch
         depth = feature.depth
+        if pitch <= 1e-9:
+            raise ValueError("Thread: Pitch muss > 0 sein")
+        if depth <= 0:
+            raise ValueError("Thread: Depth muss > 0 sein")
         n_turns = depth / pitch
 
         # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
@@ -4254,7 +4332,8 @@ class Body:
 
         Reihenfolge:
         1. ShapeIDs via ShapeNamingService
-        2. GeometricFaceSelector-Fallback (Legacy/Recovery)
+        2. Topologie-Indizes via topology_indexing.face_from_index
+        3. GeometricFaceSelector-Fallback (Legacy/Recovery)
         """
         if solid is None or not hasattr(solid, 'faces'):
             return []
@@ -4266,19 +4345,43 @@ class Body:
         from modeling.geometric_selector import GeometricFaceSelector
 
         # Feature-spezifische Felder bestimmen
+        single_shape_attr = None
+        single_index_attr = None
+        single_selector_attr = None
         if isinstance(feature, HollowFeature):
             shape_attr = "opening_face_shape_ids"
+            index_attr = "opening_face_indices"
             selector_attr = "opening_face_selectors"
         elif isinstance(feature, ShellFeature):
             shape_attr = "face_shape_ids"
+            index_attr = "face_indices"
             selector_attr = "opening_face_selectors"
+        elif isinstance(feature, ThreadFeature):
+            # ThreadFeature nutzt singuläre Referenzen.
+            shape_attr = None
+            index_attr = None
+            selector_attr = None
+            single_shape_attr = "face_shape_id"
+            single_index_attr = "face_index"
+            single_selector_attr = "face_selector"
         else:
             shape_attr = "face_shape_ids"
+            index_attr = "face_indices"
             selector_attr = "face_selectors"
 
-        shape_ids = list(getattr(feature, shape_attr, []) or [])
-        selectors = list(getattr(feature, selector_attr, []) or [])
-        if not shape_ids and not selectors:
+        if single_shape_attr:
+            single_shape = getattr(feature, single_shape_attr, None)
+            single_index = getattr(feature, single_index_attr, None)
+            single_selector = getattr(feature, single_selector_attr, None)
+
+            shape_ids = [single_shape] if single_shape is not None else []
+            face_indices = [single_index] if single_index is not None else []
+            selectors = [single_selector] if single_selector else []
+        else:
+            shape_ids = list(getattr(feature, shape_attr, []) or [])
+            face_indices = list(getattr(feature, index_attr, []) or [])
+            selectors = list(getattr(feature, selector_attr, []) or [])
+        if not shape_ids and not face_indices and not selectors:
             return []
 
         service = None
@@ -4287,7 +4390,8 @@ class Body:
 
         resolved_faces = []
         resolved_shape_ids = []
-        resolved_indices = set()
+        resolved_selector_indices = set()
+        resolved_face_indices = []
 
         def _same_face(face_a, face_b) -> bool:
             try:
@@ -4297,7 +4401,13 @@ class Body:
             except Exception:
                 return face_a is face_b
 
-        def _append_face(face_obj, shape_id=None, selector_index=None) -> None:
+        def _face_index(face_obj):
+            for face_idx, candidate in enumerate(all_faces):
+                if _same_face(candidate, face_obj):
+                    return face_idx
+            return None
+
+        def _append_face(face_obj, shape_id=None, selector_index=None, topo_index=None) -> None:
             if face_obj is None:
                 return
             for existing in resolved_faces:
@@ -4307,10 +4417,41 @@ class Body:
             if shape_id is not None:
                 resolved_shape_ids.append(shape_id)
             if selector_index is not None:
-                resolved_indices.add(selector_index)
+                resolved_selector_indices.add(selector_index)
+            if topo_index is None:
+                topo_index = _face_index(face_obj)
+            if topo_index is not None:
+                try:
+                    topo_index = int(topo_index)
+                    if topo_index >= 0 and topo_index not in resolved_face_indices:
+                        resolved_face_indices.append(topo_index)
+                except Exception:
+                    pass
 
-        # 1) ShapeID Resolution (TNP v4.0 primary)
-        if service:
+        valid_face_indices = []
+        for raw_idx in face_indices:
+            try:
+                face_idx = int(raw_idx)
+            except Exception:
+                continue
+            if face_idx >= 0 and face_idx not in valid_face_indices:
+                valid_face_indices.append(face_idx)
+
+        def _resolve_by_indices() -> None:
+            if not valid_face_indices:
+                return
+            try:
+                from modeling.topology_indexing import face_from_index
+
+                for face_idx in valid_face_indices:
+                    resolved_face = face_from_index(solid, face_idx)
+                    _append_face(resolved_face, topo_index=face_idx)
+            except Exception as e:
+                logger.debug(f"{feature.name}: Face-Index Auflösung fehlgeschlagen: {e}")
+
+        def _resolve_by_shape_ids() -> None:
+            if not service:
+                return
             for idx, shape_id in enumerate(shape_ids):
                 if not hasattr(shape_id, 'uuid'):
                     continue
@@ -4319,7 +4460,8 @@ class Body:
                     if resolved_ocp is None:
                         continue
                     from build123d import Face
-                    _append_face(Face(resolved_ocp), shape_id=shape_id, selector_index=idx)
+                    resolved_face = Face(resolved_ocp)
+                    _append_face(resolved_face, shape_id=shape_id, selector_index=idx)
                     if is_enabled("tnp_debug_logging"):
                         logger.debug(
                             f"{feature.name}: Face via ShapeID aufgelöst "
@@ -4328,43 +4470,61 @@ class Body:
                 except Exception as e:
                     logger.debug(f"{feature.name}: Face-ShapeID Auflösung fehlgeschlagen: {e}")
 
-        # 2) Geometric selector fallback (Legacy)
-        for idx, selector_data in enumerate(selectors):
-            if idx in resolved_indices:
-                continue
+        # TNP v4.0: Bei vorhandenen Indizes index-first auflösen.
+        if valid_face_indices:
+            _resolve_by_indices()
+            indices_complete = len(resolved_face_indices) >= len(valid_face_indices)
+            if not indices_complete:
+                _resolve_by_shape_ids()
+        else:
+            _resolve_by_shape_ids()
+            _resolve_by_indices()
 
-            try:
-                if isinstance(selector_data, dict):
-                    geo_sel = GeometricFaceSelector.from_dict(selector_data)
-                elif hasattr(selector_data, 'find_best_match'):
-                    geo_sel = selector_data
-                else:
+        expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
+        need_selector_recovery = (
+            not resolved_faces
+            or (valid_face_indices and len(resolved_face_indices) < len(valid_face_indices))
+            or (expected_shape_refs > 0 and not valid_face_indices and len(resolved_shape_ids) < expected_shape_refs)
+        )
+
+        # 3) Geometric selector fallback (nur Recovery)
+        if need_selector_recovery:
+            for idx, selector_data in enumerate(selectors):
+                if idx in resolved_selector_indices:
                     continue
-            except Exception:
-                continue
 
-            best_face = geo_sel.find_best_match(all_faces)
-            if best_face is None:
-                continue
-
-            shape_id = None
-            if service:
                 try:
-                    shape_id = service.find_shape_id_by_face(best_face)
-                    if shape_id is None and hasattr(best_face, 'wrapped'):
-                        fc = best_face.center()
-                        area = best_face.area if hasattr(best_face, 'area') else 0.0
-                        shape_id = service.register_shape(
-                            ocp_shape=best_face.wrapped,
-                            shape_type=ShapeType.FACE,
-                            feature_id=feature.id,
-                            local_index=idx,
-                            geometry_data=(fc.X, fc.Y, fc.Z, area)
-                        )
-                except Exception as e:
-                    logger.debug(f"{feature.name}: Face-ShapeID Registrierung fehlgeschlagen: {e}")
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    elif hasattr(selector_data, 'find_best_match'):
+                        geo_sel = selector_data
+                    else:
+                        continue
+                except Exception:
+                    continue
 
-            _append_face(best_face, shape_id=shape_id, selector_index=idx)
+                best_face = geo_sel.find_best_match(all_faces)
+                if best_face is None:
+                    continue
+
+                shape_id = None
+                if service:
+                    try:
+                        shape_id = service.find_shape_id_by_face(best_face)
+                        if shape_id is None and hasattr(best_face, 'wrapped'):
+                            fc = best_face.center()
+                            area = best_face.area if hasattr(best_face, 'area') else 0.0
+                            shape_id = service.register_shape(
+                                ocp_shape=best_face.wrapped,
+                                shape_type=ShapeType.FACE,
+                                feature_id=feature.id,
+                                local_index=idx,
+                                geometry_data=(fc.X, fc.Y, fc.Z, area)
+                            )
+                    except Exception as e:
+                        logger.debug(f"{feature.name}: Face-ShapeID Registrierung fehlgeschlagen: {e}")
+
+                _append_face(best_face, shape_id=shape_id, selector_index=idx)
 
         if not resolved_faces:
             return []
@@ -4375,12 +4535,34 @@ class Body:
                 GeometricFaceSelector.from_face(face).to_dict()
                 for face in resolved_faces
             ]
-            setattr(feature, selector_attr, updated_selectors)
+            # Nicht-topologische Zusatzdaten (z. B. cell_ids fürs Overlay) beibehalten.
+            for idx, updated in enumerate(updated_selectors):
+                if idx >= len(selectors):
+                    continue
+                original = selectors[idx]
+                if not isinstance(original, dict):
+                    continue
+                for key, value in original.items():
+                    if key not in updated:
+                        updated[key] = value
+            if single_selector_attr:
+                setattr(feature, single_selector_attr, updated_selectors[0] if updated_selectors else None)
+            else:
+                setattr(feature, selector_attr, updated_selectors)
         except Exception as e:
             logger.debug(f"{feature.name}: Selector-Update fehlgeschlagen: {e}")
 
-        if resolved_shape_ids:
+        if single_shape_attr:
+            if resolved_shape_ids:
+                setattr(feature, single_shape_attr, resolved_shape_ids[0])
+        elif resolved_shape_ids:
             setattr(feature, shape_attr, resolved_shape_ids)
+
+        if single_index_attr:
+            if resolved_face_indices:
+                setattr(feature, single_index_attr, resolved_face_indices[0])
+        elif resolved_face_indices:
+            setattr(feature, index_attr, resolved_face_indices)
 
         return resolved_faces
 
@@ -4864,12 +5046,16 @@ class Body:
         TNP v4.0: Aktualisiert Face-Referenzen eines Features vor Ausführung.
 
         Primary: ShapeIDs via ShapeNamingService
+        Secondary: Face-Indizes via topology_indexing.face_from_index
         Fallback: GeometricFaceSelector (nur Legacy-Recovery)
         """
         if not solid:
             return
 
-        if not isinstance(feature, (ShellFeature, HoleFeature, DraftFeature, HollowFeature)):
+        if not isinstance(
+            feature,
+            (ShellFeature, HoleFeature, DraftFeature, HollowFeature, ThreadFeature, SurfaceTextureFeature),
+        ):
             return
 
         resolved_faces = self._resolve_feature_faces(feature, solid)
@@ -5429,6 +5615,8 @@ class Body:
 
             # ================= THREAD =================
             elif isinstance(feature, ThreadFeature):
+                if current_solid:
+                    self._update_face_selectors_for_feature(feature, current_solid)
                 if feature.cosmetic and is_enabled("cosmetic_threads"):
                     # Kosmetisch: kein BREP-Update, nur Helix-Linien im Viewport
                     status = "COSMETIC"
@@ -5444,6 +5632,8 @@ class Body:
 
             # ================= SURFACE TEXTURE =================
             elif isinstance(feature, SurfaceTextureFeature):
+                if current_solid:
+                    self._update_face_selectors_for_feature(feature, current_solid)
                 # Texturen modifizieren NICHT das BREP — nur Metadaten-Layer.
                 # Displacement wird erst beim STL-Export angewendet.
                 status = "OK"
@@ -7145,6 +7335,8 @@ class Body:
                     "thickness_formula": feat.thickness_formula,
                     "opening_face_selectors": feat.opening_face_selectors,
                 })
+                if feat.face_indices:
+                    feat_dict["face_indices"] = list(feat.face_indices)
                 # TNP v4.0: ShapeIDs vollstaendig serialisieren (inkl. Legacy-Fallback)
                 if feat.face_shape_ids:
                     serialized_face_ids = []
@@ -7182,6 +7374,8 @@ class Body:
                     "counterbore_depth": feat.counterbore_depth,
                     "countersink_angle": feat.countersink_angle,
                 })
+                if feat.face_indices:
+                    feat_dict["face_indices"] = list(feat.face_indices)
                 # TNP v4.0: ShapeIDs vollstaendig serialisieren
                 if feat.face_shape_ids:
                     serialized_face_ids = []
@@ -7214,6 +7408,8 @@ class Body:
                     "drain_position": list(feat.drain_position),
                     "drain_direction": list(feat.drain_direction),
                 })
+                if feat.opening_face_indices:
+                    feat_dict["opening_face_indices"] = list(feat.opening_face_indices)
 
                 # TNP v4.0: Opening-Face ShapeIDs vollständig serialisieren
                 if feat.opening_face_shape_ids:
@@ -7258,6 +7454,7 @@ class Body:
                     "tolerance_class": feat.tolerance_class,
                     "tolerance_offset": feat.tolerance_offset,
                     "cosmetic": feat.cosmetic,
+                    "face_index": feat.face_index,
                     "face_selector": feat.face_selector,
                 })
                 # TNP v4.0: ShapeID serialisieren (inkl. Legacy-Fallback)
@@ -7286,6 +7483,8 @@ class Body:
                     "pull_direction": list(feat.pull_direction),
                     "face_selectors": feat.face_selectors,
                 })
+                if feat.face_indices:
+                    feat_dict["face_indices"] = list(feat.face_indices)
                 # TNP v4.0: ShapeIDs vollstaendig serialisieren
                 if feat.face_shape_ids:
                     serialized_face_ids = []
@@ -7363,6 +7562,8 @@ class Body:
                     "type_params": feat.type_params,
                     "export_subdivisions": feat.export_subdivisions,
                 })
+                if feat.face_indices:
+                    feat_dict["face_indices"] = list(feat.face_indices)
                 # TNP v4.0: ShapeIDs serialisieren (inkl. Legacy-Fallback)
                 if feat.face_shape_ids:
                     serialized_face_ids = []
@@ -7731,6 +7932,7 @@ class Body:
                 feat = ShellFeature(
                     thickness=feat_dict.get("thickness", 2.0),
                     opening_face_selectors=converted_selectors,
+                    face_indices=feat_dict.get("face_indices", []),
                     **base_kwargs
                 )
                 feat.thickness_formula = feat_dict.get("thickness_formula")
@@ -7780,6 +7982,7 @@ class Body:
                     diameter=feat_dict.get("diameter", 8.0),
                     depth=feat_dict.get("depth", 0.0),
                     face_selectors=converted_selectors,
+                    face_indices=feat_dict.get("face_indices", []),
                     position=tuple(feat_dict.get("position", (0, 0, 0))),
                     direction=tuple(feat_dict.get("direction", (0, 0, -1))),
                     counterbore_diameter=feat_dict.get("counterbore_diameter", 12.0),
@@ -7822,6 +8025,7 @@ class Body:
                     drain_diameter=feat_dict.get("drain_diameter", 3.0),
                     drain_position=tuple(feat_dict.get("drain_position", [0, 0, 0])),
                     drain_direction=tuple(feat_dict.get("drain_direction", [0, 0, -1])),
+                    opening_face_indices=feat_dict.get("opening_face_indices", []),
                     **base_kwargs
                 )
 
@@ -7910,6 +8114,7 @@ class Body:
             elif feat_class == "SurfaceTextureFeature":
                 feat = SurfaceTextureFeature(
                     texture_type=feat_dict.get("texture_type", "ripple"),
+                    face_indices=feat_dict.get("face_indices", []),
                     face_selectors=feat_dict.get("face_selectors", []),
                     scale=feat_dict.get("scale", 1.0),
                     depth=feat_dict.get("depth", 0.5),
@@ -7956,6 +8161,7 @@ class Body:
                     tolerance_class=feat_dict.get("tolerance_class", "6g"),
                     tolerance_offset=feat_dict.get("tolerance_offset", 0.0),
                     cosmetic=feat_dict.get("cosmetic", True),
+                    face_index=feat_dict.get("face_index"),
                     face_selector=feat_dict.get("face_selector"),
                     **base_kwargs
                 )
@@ -8003,6 +8209,7 @@ class Body:
                     draft_angle=feat_dict.get("draft_angle", 5.0),
                     pull_direction=tuple(feat_dict.get("pull_direction", (0, 0, 1))),
                     face_selectors=converted_selectors,
+                    face_indices=feat_dict.get("face_indices", []),
                     **base_kwargs
                 )
                 # TNP v4.0: ShapeIDs deserialisieren (inkl. Legacy-Fallback)

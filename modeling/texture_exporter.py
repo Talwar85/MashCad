@@ -358,6 +358,11 @@ def apply_textures_to_body(
     # Sammle alle zu texturierenden Triangle-Indices und deren displaced Meshes
     all_textured_indices = set()
     displaced_face_meshes = []
+    mapping_by_face_index = {
+        int(mapping.face_index): mapping
+        for mapping in face_mappings
+        if hasattr(mapping, "face_index")
+    }
 
     # PHASE 1: Alle Texturen aus dem ORIGINAL-Mesh extrahieren und verarbeiten
     for feature in body.features:
@@ -367,17 +372,41 @@ def apply_textures_to_body(
         if feature.suppressed:
             continue
 
-        # Für jede selektierte Face
-        for selector in feature.face_selectors:
-            # Passende Mapping finden
-            mapping = find_matching_mapping(selector, face_mappings)
+        selected_mappings = []
+        seen_face_indices = set()
 
-            if mapping is None:
-                results.append(TextureResult(
-                    status=ResultStatus.WARNING,
-                    message=f"Face nicht gefunden für Textur '{feature.name}'"
-                ))
+        # TNP v4.0 primary: Face-Indizes direkt auf Mappings auflösen.
+        for raw_idx in getattr(feature, "face_indices", []) or []:
+            try:
+                face_idx = int(raw_idx)
+            except Exception:
                 continue
+            mapping = mapping_by_face_index.get(face_idx)
+            if mapping is None or face_idx in seen_face_indices:
+                continue
+            selected_mappings.append(mapping)
+            seen_face_indices.add(face_idx)
+
+        # Fallback: Geometrischer Selector-Match (Legacy/Recovery).
+        if not selected_mappings:
+            for selector in feature.face_selectors:
+                mapping = find_matching_mapping(selector, face_mappings)
+                if mapping is None:
+                    continue
+                face_idx = int(getattr(mapping, "face_index", -1))
+                if face_idx in seen_face_indices:
+                    continue
+                selected_mappings.append(mapping)
+                seen_face_indices.add(face_idx)
+
+        if not selected_mappings:
+            results.append(TextureResult(
+                status=ResultStatus.WARNING,
+                message=f"Face nicht gefunden für Textur '{feature.name}'"
+            ))
+            continue
+
+        for mapping in selected_mappings:
 
             # Triangle-Indices merken
             triangle_indices = mapping.triangle_indices
