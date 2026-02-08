@@ -183,10 +183,15 @@ class BodyRenderingMixin:
                 if edge_mesh_obj is not None:
                     # PERFORMANCE: Actor Pooling for edges too
                     if can_reuse_edge and ActorPool.needs_update(n_edge, edge_mesh_obj):
-                        # Reuse edge actor
+                        # Reuse edge actor — reset properties in case highlighting changed them
                         edge_actor = self.plotter.renderer.actors[n_edge]
+                        edge_actor.GetProperty().SetRenderLinesAsTubes(False)
+                        edge_actor.GetProperty().SetLineWidth(1.5)
+                        edge_actor.GetProperty().SetColor(0.15, 0.15, 0.17)
                         edge_mapper = edge_actor.GetMapper()
                         edge_mapper.SetInputData(edge_mesh_obj)
+                        edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                        edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
                         edge_mapper.Modified()
                         logger.debug(f"♻️ Edge actor reused for {bid}")
 
