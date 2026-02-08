@@ -36,14 +36,14 @@ class SectionClipCache:
     Lösung: Cache mit quantisierter Position für bessere Hit-Rate.
     """
 
-    # Class-level cache: {(body_id, plane, quantized_pos): clipped_mesh}
-    _cache: Dict[Tuple[int, str, float], 'pv.PolyData'] = {}
+    # Class-level cache: {(body_id, plane, quantized_pos, invert): clipped_mesh}
+    _cache: Dict[tuple, 'pv.PolyData'] = {}
     POSITION_QUANTIZATION = 0.5  # mm - Slider-Positionen auf 0.5mm runden
     MAX_CACHE_ENTRIES = 100
 
     @classmethod
     def get_clipped(cls, body_id: int, mesh, plane: str, position: float,
-                    normal: list, origin: list) -> 'pv.PolyData':
+                    normal: list, origin: list, inverted: bool = False) -> 'pv.PolyData':
         """
         Gibt geclipptes Mesh zurück (cached wenn möglich).
 
@@ -54,13 +54,14 @@ class SectionClipCache:
             position: Slider-Position in mm
             normal: Clipping-Normal
             origin: Clipping-Origin
+            inverted: Ob die Schnittrichtung invertiert ist
 
         Returns:
             Geclipptes Mesh
         """
         # Quantisiere Position für bessere Cache-Hits
         quantized_pos = round(position / cls.POSITION_QUANTIZATION) * cls.POSITION_QUANTIZATION
-        cache_key = (body_id, plane, quantized_pos)
+        cache_key = (body_id, plane, quantized_pos, inverted)
 
         if cache_key in cls._cache:
             logger.debug(f"SectionCache HIT: body={body_id}, plane={plane}, pos={quantized_pos}")
@@ -207,6 +208,7 @@ class SectionViewMixin:
         logger.info("🔪 Section View deaktiviert")
 
         self._section_view_enabled = False
+        self._section_invert = False
 
         # PERFORMANCE Phase 5: Cache leeren (nicht mehr benötigt)
         SectionClipCache.clear()
@@ -243,6 +245,7 @@ class SectionViewMixin:
         logger.debug(f"🔪 Section Invert: {self._section_invert}")
 
         if self._section_view_enabled:
+            SectionClipCache.clear()
             self.enable_section_view(self._section_plane, self._section_position)
 
     def _apply_section_clipping(self, origin, normal):
@@ -256,7 +259,6 @@ class SectionViewMixin:
             normal: Normale der Ebene [nx, ny, nz]
         """
         clipped_count = 0
-        cache_hits = 0
 
         for body_id, actor_names in self._body_actors.items():
             if not actor_names:
@@ -279,25 +281,15 @@ class SectionViewMixin:
                         logger.warning(f"⚠️ Body {body_id} hat kein Mesh in self.bodies")
                         continue
 
-                    # PERFORMANCE Phase 5: Nutze SectionClipCache
-                    # Cache-Key inkludiert Body-ID, Plane und quantisierte Position
-                    cache_key = (body_id, self._section_plane, self._section_position)
-                    was_cached = cache_key in SectionClipCache._cache or \
-                                (body_id, self._section_plane,
-                                 round(self._section_position / SectionClipCache.POSITION_QUANTIZATION) *
-                                 SectionClipCache.POSITION_QUANTIZATION) in SectionClipCache._cache
-
                     clipped_mesh = SectionClipCache.get_clipped(
                         body_id=body_id,
                         mesh=original_mesh,
                         plane=self._section_plane,
                         position=self._section_position,
                         normal=normal,
-                        origin=origin
+                        origin=origin,
+                        inverted=self._section_invert
                     )
-
-                    if was_cached:
-                        cache_hits += 1
 
                     # Update Actor mit geclipptem Mesh
                     mapper = actor.GetMapper()
@@ -307,7 +299,7 @@ class SectionViewMixin:
                 except Exception as e:
                     logger.warning(f"⚠️ Clipping fehlgeschlagen für Body {body_id}: {e}")
 
-        logger.debug(f"✅ Section Clipping: {clipped_count} Bodies, {cache_hits} Cache-Hits")
+        logger.debug(f"✅ Section Clipping: {clipped_count} Bodies")
 
     def _remove_section_clipping(self):
         """Entfernt Clipping von allen Bodies (stellt Original-Mesh wieder her)."""
@@ -323,15 +315,14 @@ class SectionViewMixin:
                 actor = self.plotter.renderer.actors[mesh_actor_name]
 
                 try:
-                    # ✅ FIX: Hole Original-Mesh direkt aus self.bodies (viewport hat kein document!)
                     if body_id in self.bodies:
                         original_mesh = self.bodies[body_id].get('mesh')
                         if original_mesh:
-                            # Reset Mapper mit Original-Mesh
                             mapper = actor.GetMapper()
                             mapper.SetInputData(original_mesh)
+                            mapper.Modified()
+                            actor.SetVisibility(True)
                             restored_count += 1
-                            logger.debug(f"✅ Body {body_id}: Clipping entfernt, Original-Mesh wiederhergestellt")
                         else:
                             logger.warning(f"⚠️ Body {body_id}: Kein Original-Mesh gefunden in bodies dict")
                     else:
@@ -340,10 +331,16 @@ class SectionViewMixin:
                 except Exception as e:
                     logger.warning(f"⚠️ Clipping-Entfernung fehlgeschlagen für Body {body_id}: {e}")
 
+            # Edge-Actor auch wieder sichtbar machen
+            if len(actor_names) > 1:
+                edge_actor_name = actor_names[1]
+                if edge_actor_name in self.plotter.renderer.actors:
+                    self.plotter.renderer.actors[edge_actor_name].SetVisibility(True)
+
         if restored_count > 0:
             logger.info(f"✅ Section Clipping von {restored_count} Bodies entfernt")
         else:
-            logger.error("❌ Kein Body wurde wiederhergestellt!")
+            logger.warning("⚠️ Kein Body wurde wiederhergestellt")
 
     def _highlight_section_faces(self, origin, normal):
         """
