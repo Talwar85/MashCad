@@ -111,6 +111,19 @@ class ShapeRecord:
                 
             except Exception as e:
                 logger.debug(f"Signaturberechnung fehlgeschlagen: {e}")
+        elif self.shape_id.shape_type == ShapeType.FACE:
+            try:
+                from OCP.GProp import GProp_GProps
+                from OCP.BRepGProp import BRepGProp
+
+                props = GProp_GProps()
+                BRepGProp.SurfaceProperties_s(self.ocp_shape, props)
+
+                center = props.CentreOfMass()
+                sig["center"] = (center.X(), center.Y(), center.Z())
+                sig["area"] = props.Mass()
+            except Exception as e:
+                logger.debug(f"Face-Signaturberechnung fehlgeschlagen: {e}")
         
         return sig
 
@@ -202,6 +215,33 @@ class ShapeNamingService:
         if is_enabled("tnp_debug_logging"):
             logger.debug(f"Shape registriert: {shape_id}")
         return shape_id
+
+    def seed_shape(self, shape_id: ShapeID, ocp_shape: TopoDS_Shape) -> None:
+        """
+        Registriert ein bereits existierendes ShapeID->Shape Mapping (z. B. nach Load).
+
+        Anders als register_shape() wird die UUID dabei NICHT neu erzeugt.
+        """
+        if shape_id is None or not getattr(shape_id, "uuid", ""):
+            return
+
+        record = ShapeRecord(shape_id=shape_id, ocp_shape=ocp_shape)
+        record.geometric_signature = record.compute_signature()
+
+        # Vorherige Einträge für dieselbe UUID aus dem räumlichen Index entfernen.
+        for shape_type_key in self._spatial_index:
+            self._spatial_index[shape_type_key] = [
+                (pos, sid) for pos, sid in self._spatial_index[shape_type_key]
+                if sid.uuid != shape_id.uuid
+            ]
+
+        self._shapes[shape_id.uuid] = record
+
+        feature_bucket = self._by_feature.setdefault(shape_id.feature_id, [])
+        if not any(existing.uuid == shape_id.uuid for existing in feature_bucket):
+            feature_bucket.append(shape_id)
+
+        self._update_spatial_index(shape_id, record)
     
     def record_operation(self, operation: OperationRecord) -> None:
         """Speichert eine Operation im Graph"""
@@ -211,13 +251,54 @@ class ShapeNamingService:
                         f"({len(operation.input_shape_ids)} in -> "
                         f"{len(operation.output_shape_ids)} out)")
     
-    def find_shape_id_by_edge(self, edge: Any, tolerance: float = 0.1) -> Optional[ShapeID]:
+    def _find_exact_shape_id(self, shape: Any, shape_type: ShapeType) -> Optional[ShapeID]:
+        """
+        Findet eine ShapeID per exakter Topologie-Identität (IsSame).
+
+        Diese Suche ist robust gegen symmetrische/geometrisch ähnliche Entitäten
+        und sollte für interaktive Selektion bevorzugt werden.
+        """
+        try:
+            target_shape = shape.wrapped if hasattr(shape, "wrapped") else shape
+            if target_shape is None:
+                return None
+
+            # Neueste Records zuerst bevorzugen (Dict ist insertion-ordered).
+            for record in reversed(list(self._shapes.values())):
+                sid = record.shape_id
+                if sid.shape_type != shape_type:
+                    continue
+                rec_shape = record.ocp_shape
+                if rec_shape is None:
+                    continue
+                try:
+                    if rec_shape.IsSame(target_shape):
+                        return sid
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"Exact-ShapeID Lookup fehlgeschlagen: {e}")
+        return None
+
+    def find_shape_id_by_edge(
+        self,
+        edge: Any,
+        tolerance: float = 0.1,
+        *,
+        require_exact: bool = False,
+    ) -> Optional[ShapeID]:
         """
         Findet eine ShapeID für eine gegebene Edge (geometrisches Matching).
         Wird verwendet wenn ein Feature Edges auswählt - wir müssen die
         existierende ShapeID finden, nicht eine neue erstellen.
         """
         try:
+            exact = self._find_exact_shape_id(edge, ShapeType.EDGE)
+            if exact is not None:
+                return exact
+            if require_exact:
+                return None
+
             import numpy as np
             
             center = edge.center()
@@ -254,12 +335,24 @@ class ShapeNamingService:
             logger.debug(f"ShapeID-Lookup für Edge fehlgeschlagen: {e}")
             return None
     
-    def find_shape_id_by_face(self, face: Any, tolerance: float = 0.5) -> Optional[ShapeID]:
+    def find_shape_id_by_face(
+        self,
+        face: Any,
+        tolerance: float = 0.5,
+        *,
+        require_exact: bool = False,
+    ) -> Optional[ShapeID]:
         """
         Findet eine ShapeID für eine gegebene Face (geometrisches Matching).
         Analog zu find_shape_id_by_edge, aber für Faces.
         """
         try:
+            exact = self._find_exact_shape_id(face, ShapeType.FACE)
+            if exact is not None:
+                return exact
+            if require_exact:
+                return None
+
             import numpy as np
 
             center = face.center()
@@ -378,7 +471,11 @@ class ShapeNamingService:
         }
 
     _CONSUMING_FEATURE_TYPES = frozenset([
+        # Fillet/Chamfer und Push/Pull verbrauchen ihre Input-Topologie.
+        # Die Input-Referenzen sind danach im End-Solid nicht mehr zwingend
+        # direkt auflösbar, obwohl der Rebuild korrekt ist.
         'FilletFeature', 'ChamferFeature',
+        'ExtrudeFeature',
     ])
 
     def get_health_report(self, body) -> Dict[str, Any]:
@@ -539,17 +636,40 @@ class ShapeNamingService:
 
             return groups
 
-        def _resolve_index_ref(ref_kind: str, topo_index: Optional[int]) -> bool:
+        def _resolve_index_entity(ref_kind: str, topo_index: Optional[int]) -> Optional[Any]:
             if topo_index is None or current_solid is None:
-                return False
+                return None
             try:
                 if ref_kind == "Face" and face_from_index is not None:
-                    return face_from_index(current_solid, topo_index) is not None
+                    return face_from_index(current_solid, topo_index)
                 if ref_kind == "Edge" and edge_from_index is not None:
-                    return edge_from_index(current_solid, topo_index) is not None
+                    return edge_from_index(current_solid, topo_index)
             except Exception:
+                return None
+            return None
+
+        def _same_topology_entity(entity_a: Any, entity_b: Any) -> bool:
+            if entity_a is None or entity_b is None:
                 return False
-            return False
+            try:
+                wa = entity_a.wrapped if hasattr(entity_a, "wrapped") else entity_a
+                wb = entity_b.wrapped if hasattr(entity_b, "wrapped") else entity_b
+                return wa.IsSame(wb)
+            except Exception:
+                return entity_a is entity_b
+
+        strict_face_feature_types = {
+            "ExtrudeFeature",
+            "ThreadFeature",
+            "HoleFeature",
+            "DraftFeature",
+            "ShellFeature",
+            "HollowFeature",
+        }
+        strict_edge_feature_types = {
+            "FilletFeature",
+            "ChamferFeature",
+        }
 
         for feat in features:
             feat_type_name = type(feat).__name__
@@ -615,10 +735,14 @@ class ShapeNamingService:
                     if ref_count <= 0:
                         continue
 
-                    if rebuild_status in ('OK', 'SUCCESS', 'WARNING'):
+                    if rebuild_status in ('OK', 'SUCCESS'):
                         feat_report['ok'] += ref_count
                         report['ok'] += ref_count
                         ref_status = 'ok'
+                    elif rebuild_status == 'WARNING':
+                        feat_report['fallback'] += ref_count
+                        report['fallback'] += ref_count
+                        ref_status = 'fallback'
                     else:
                         feat_report['broken'] += ref_count
                         report['broken'] += ref_count
@@ -637,19 +761,65 @@ class ShapeNamingService:
                         topo_index = index_refs[ref_idx] if ref_idx < len(index_refs) else None
                         shape_id = shape_ids[ref_idx] if ref_idx < len(shape_ids) else None
 
-                        if _resolve_index_ref(ref_kind, topo_index):
+                        index_entity = _resolve_index_entity(ref_kind, topo_index)
+                        index_ok = index_entity is not None
+
+                        shape_entity = None
+                        method = "unresolved"
+                        has_shape_ref = isinstance(shape_id, ShapeID)
+                        strict_shape_check = (
+                            has_shape_ref
+                            and (
+                                (ref_kind == "Face" and feat_type_name in strict_face_feature_types)
+                                or (ref_kind == "Edge" and feat_type_name in strict_edge_feature_types)
+                            )
+                        )
+                        should_resolve_shape = strict_shape_check or (has_shape_ref and not index_ok)
+                        if should_resolve_shape and ocp_solid is not None:
+                            shape_entity, method = self.resolve_shape_with_method(
+                                shape_id,
+                                ocp_solid,
+                                log_unresolved=False,
+                            )
+
+                        # Für strict TNP-v4 Features:
+                        # Bei ShapeID+Index nicht blind "index=ok" zählen,
+                        # sondern beide Referenzen gegeneinander validieren.
+                        if (
+                            strict_shape_check
+                            and has_shape_ref
+                            and topo_index is not None
+                        ):
+                            if shape_entity is not None:
+                                if index_ok and not _same_topology_entity(index_entity, shape_entity):
+                                    status = "broken"
+                                    method = "index_mismatch"
+                                elif method in ("direct", "history"):
+                                    status = "ok"
+                                    method = "shape"
+                                elif method in ("brepfeat", "geometric"):
+                                    status = "fallback"
+                                else:
+                                    status = "broken"
+                            else:
+                                status = "broken"
+                                method = "shape_unresolved"
+                        elif strict_shape_check and topo_index is None:
+                            if shape_entity is not None:
+                                if method in ("direct", "history"):
+                                    status = "ok"
+                                    method = "shape"
+                                elif method in ("brepfeat", "geometric"):
+                                    status = "fallback"
+                                else:
+                                    status = "broken"
+                            else:
+                                status = "broken"
+                                method = "shape_unresolved"
+                        elif index_ok:
                             status = "ok"
                             method = "index"
-                        elif isinstance(shape_id, ShapeID):
-                            if ocp_solid is not None:
-                                _resolved, method = self.resolve_shape_with_method(
-                                    shape_id,
-                                    ocp_solid,
-                                    log_unresolved=False,
-                                )
-                            else:
-                                method = "unresolved"
-
+                        elif has_shape_ref:
                             if method in ("direct", "history"):
                                 status = "ok"
                             elif method in ("brepfeat", "geometric"):
@@ -986,6 +1156,30 @@ class ShapeNamingService:
                 
                 if best_match:
                     logger.debug(f"Geometric Match Score: {best_score:.3f}mm")
+            elif shape_id.shape_type == ShapeType.FACE:
+                target_area = record.geometric_signature.get('area', 0)
+
+                for face in solid_for_iteration.faces():
+                    center = face.center()
+                    face_center = np.array([center.X, center.Y, center.Z])
+
+                    # Distanz-Score (wichtigster Faktor)
+                    dist = np.linalg.norm(target_center - face_center)
+
+                    # Flächen-Score
+                    area_score = 0
+                    if target_area > 0 and hasattr(face, 'area'):
+                        area_diff = abs(face.area - target_area)
+                        area_score = (area_diff / target_area) * 5
+
+                    score = dist + area_score
+
+                    if score < best_score and dist < 1.0:  # 1mm Distanz-Toleranz
+                        best_score = score
+                        best_match = face.wrapped
+
+                if best_match:
+                    logger.debug(f"Face Geometric Match Score: {best_score:.3f}")
         
         except Exception as e:
             logger.debug(f"Geometrisches Matching fehlgeschlagen: {e}")

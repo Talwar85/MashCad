@@ -651,6 +651,61 @@ def test_resolve_edges_tnp_shapeid_fallback_is_quiet(monkeypatch):
     assert flags == [False]
 
 
+def test_resolve_edges_tnp_fillet_requires_shape_index_consistency(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("fillet_edge_shape_index_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = FilletFeature(radius=1.0, edge_indices=[0])
+    feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_edge_mismatch", 0)]
+
+    mismatch_edge = edge_from_index(solid, 3)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert resolved == []
+
+
+def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("sweep_path_shape_index_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_mismatch", 0)
+
+    mismatch_edge = edge_from_index(solid, 4)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+
+    assert wire is None
+
+
 def test_compute_nsided_patch_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
     from build123d import Solid
     from modeling.geometric_selector import GeometricEdgeSelector
@@ -725,6 +780,36 @@ def test_compute_sweep_blocks_profile_legacy_fallback_when_topology_ref_breaks(m
     monkeypatch.setattr(body, "_profile_data_to_face", _fail_profile_data_fallback)
 
     with pytest.raises(ValueError, match="Profil-Referenz"):
+        body._compute_sweep(feature, solid)
+
+
+def test_compute_sweep_requires_profile_shape_index_consistency(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("sweep_profile_shape_index_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_mismatch", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    with pytest.raises(ValueError, match="inkonsistent"):
         body._compute_sweep(feature, solid)
 
 
@@ -901,6 +986,41 @@ def test_resolve_feature_faces_supports_extrude_face_index(monkeypatch):
     assert extrude.face_selector is not None
 
 
+def test_resolve_feature_faces_extrude_blocks_shape_index_mismatch(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("extrude_shape_first_resolver")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    target_face = face_from_index(solid, 3)
+    assert target_face is not None
+    sid = _make_shape_id(ShapeType.FACE, "extrude_shape_first", 0)
+
+    extrude = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,  # absichtlich stale
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    extrude.face_shape_id = sid
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return target_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_feature_faces(extrude, solid)
+
+    assert resolved == []
+    assert extrude.face_index == 0
+
+
 def test_compute_extrude_part_brepfeat_prefers_face_index_before_selector(monkeypatch):
     from build123d import Solid
     from modeling.geometric_selector import GeometricFaceSelector
@@ -942,6 +1062,280 @@ def test_compute_extrude_part_brepfeat_prefers_face_index_before_selector(monkey
 
     assert result is not None
     assert feature.face_index == 0
+
+
+def test_compute_extrude_part_brepfeat_skips_shape_resolution_when_face_index_exists(monkeypatch):
+    from build123d import Solid
+
+    brepfeat_mod = pytest.importorskip("OCP.BRepFeat")
+
+    class _FakePrism:
+        def Init(self, shape, *_args):
+            self._shape = shape
+
+        def Perform(self, _distance):
+            return None
+
+        def IsDone(self):
+            return True
+
+        def Shape(self):
+            return self._shape
+
+    doc = Document()
+    body = Body("brepfeat_index_authoritative")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=3.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "stale_pushpull_face", 0)
+
+    def _fail_resolve(*_args, **_kwargs):
+        raise AssertionError("shape resolution must not run when face_index resolves")
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fail_resolve)
+    monkeypatch.setattr(body, "_unify_same_domain", lambda shape, _name: shape)
+    monkeypatch.setattr(brepfeat_mod, "BRepFeat_MakePrism", _FakePrism)
+
+    result = body._compute_extrude_part_brepfeat(feature, solid)
+
+    assert result is not None
+    assert feature.face_index == 0
+    assert feature.face_shape_id is not None
+    assert feature.face_shape_id.shape_type == ShapeType.FACE
+
+
+def test_rebuild_pushpull_failure_blocks_downstream_and_skips_legacy_fallback(monkeypatch):
+    body = Body("pushpull_rebuild_guard")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    pushpull = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=999,  # absichtlich ungültig
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    pushpull.face_shape_id = _make_shape_id(ShapeType.FACE, pushpull.id, 0)
+    downstream = ChamferFeature(distance=1.0, edge_indices=[0])
+    body.features = [base, pushpull, downstream]
+
+    legacy_calls = {"count": 0}
+
+    def _legacy_extrude(*_args, **_kwargs):
+        legacy_calls["count"] += 1
+        return None
+
+    def _fail_brepfeat(*_args, **_kwargs):
+        raise ValueError("BRepFeat Push/Pull: Zielfläche nicht gefunden (face_shape_id/face_index prüfen)")
+
+    monkeypatch.setattr(body, "_compute_extrude_part", _legacy_extrude)
+    monkeypatch.setattr(body, "_compute_extrude_part_brepfeat", _fail_brepfeat)
+
+    body._rebuild()
+
+    assert pushpull.status == "ERROR"
+    assert "Zielfläche nicht gefunden" in (pushpull.status_message or "")
+    assert legacy_calls["count"] == 0
+
+    assert downstream.status == "ERROR"
+    assert "Nicht ausgeführt: vorheriges Feature" in (downstream.status_message or "")
+    assert (downstream.status_details or {}).get("code") == "blocked_by_upstream_error"
+
+
+def test_tnp_health_report_extrude_uses_rebuild_status_for_input_refs(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("tnp_health_extrude_index_shape_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    extrude = ExtrudeFeature(
+        sketch=None,
+        distance=4.0,
+        operation="Join",
+        face_index=0,
+        precalculated_polys=[object()],
+    )
+    extrude.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_health_mismatch", 0)
+    body.features = [extrude]
+
+    target_face = face_from_index(solid, 4)
+    assert target_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return target_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    report = doc._shape_naming_service.get_health_report(body)
+
+    assert report["status"] == "ok"
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "ok"
+    assert feature_report["broken"] == 0
+    assert feature_report["ok"] == 1
+    assert feature_report["refs"][0]["method"] == "rebuild"
+
+
+def test_resolve_feature_faces_hole_requires_shape_index_consistency(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("hole_face_shape_index_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    hole = HoleFeature(face_indices=[0], face_selectors=[_face_selector()])
+    hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, "hole_face_mismatch", 0)]
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_feature_faces(hole, solid)
+
+    assert resolved == []
+
+
+def test_tnp_health_report_hole_marks_index_shape_mismatch_as_broken(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("tnp_health_hole_index_shape_mismatch")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    hole = HoleFeature(
+        face_indices=[0],
+        face_selectors=[_face_selector()],
+        position=(0.0, 0.0, 0.0),
+        direction=(0.0, 0.0, -1.0),
+    )
+    hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, "hole_health_mismatch", 0)]
+    body.features = [hole]
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    report = doc._shape_naming_service.get_health_report(body)
+
+    assert report["status"] == "broken"
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "broken"
+    assert feature_report["broken"] == 1
+    assert feature_report["refs"][0]["method"] == "index_mismatch"
+
+
+def test_pushpull_sequence_with_chamfer_reports_stable_health():
+    from modeling.topology_indexing import face_index_of, edge_index_of
+
+    pytest.importorskip("OCP.BRepFeat")
+
+    doc = Document()
+    body = Body("pushpull_chamfer_stable_health")
+    doc.add_body(body)
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=40.0, width=30.0, height=20.0))
+
+    for step in range(5):
+        solid = body._build123d_solid
+        assert solid is not None
+        target_face = max(list(solid.faces()), key=lambda f: f.center().Y)
+        target_idx = face_index_of(solid, target_face)
+        assert target_idx is not None
+
+        fc = target_face.center()
+        sid = doc._shape_naming_service.register_shape(
+            ocp_shape=target_face.wrapped,
+            shape_type=ShapeType.FACE,
+            feature_id=f"pp_seed_{step}",
+            local_index=int(target_idx),
+            geometry_data=(fc.X, fc.Y, fc.Z, float(target_face.area)),
+        )
+
+        pushpull = ExtrudeFeature(
+            sketch=None,
+            distance=3.0,
+            operation="Join",
+            face_index=int(target_idx),
+            face_shape_id=sid,
+            precalculated_polys=[object()],
+            name=f"Push/Pull (Join) {step}",
+        )
+        body.add_feature(pushpull)
+        assert pushpull.status in ("OK", "SUCCESS"), pushpull.status_message
+
+    solid = body._build123d_solid
+    assert solid is not None and solid.volume > 0.0
+
+    top_face = max(list(solid.faces()), key=lambda f: f.center().Z)
+    edge_indices = []
+    for edge in top_face.edges():
+        edge_idx = edge_index_of(solid, edge)
+        if edge_idx is None:
+            continue
+        idx = int(edge_idx)
+        if idx not in edge_indices:
+            edge_indices.append(idx)
+        if len(edge_indices) >= 4:
+            break
+
+    assert edge_indices
+    chamfer = ChamferFeature(distance=0.8, edge_indices=edge_indices[:4])
+    body.add_feature(chamfer)
+    assert chamfer.status in ("OK", "SUCCESS"), chamfer.status_message
+
+    report = doc._shape_naming_service.get_health_report(body)
+    pushpull_reports = [f for f in report["features"] if f.get("type") == "Extrude"]
+    assert pushpull_reports
+    assert all(f.get("broken", 0) == 0 for f in pushpull_reports)
+    assert all(f.get("status") == "ok" for f in pushpull_reports)
+
+
+def test_rebuild_skips_global_unify_when_topology_refs_exist(monkeypatch):
+    shapeupgrade_mod = pytest.importorskip("OCP.ShapeUpgrade")
+
+    def _fail_unify_ctor(*_args, **_kwargs):
+        raise AssertionError("global rebuild unify must be skipped when active topology refs exist")
+
+    monkeypatch.setattr(shapeupgrade_mod, "ShapeUpgrade_UnifySameDomain", _fail_unify_ctor)
+
+    body = Body("skip_global_unify_with_tnp_refs")
+    body.features = [
+        PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0),
+        SurfaceTextureFeature(face_indices=[0], face_selectors=[_face_selector()]),
+    ]
+
+    # Darf nicht crashen; wenn global unify läuft, schlägt der Test fehl.
+    body._rebuild()
+
+    assert body._build123d_solid is not None
+    assert body.features[0].status in ("OK", "SUCCESS")
+    assert body.features[1].status in ("OK", "SUCCESS")
 
 
 def test_texture_exporter_prefers_face_indices_over_legacy_selector_matching(monkeypatch):

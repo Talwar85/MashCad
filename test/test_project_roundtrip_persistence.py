@@ -427,3 +427,68 @@ def test_after_load_assembly_surface_texture_keeps_references_when_adding_extrud
     texture_report = next(feat for feat in report["features"] if feat["type"] == "SurfaceTexture")
     assert texture_report["status"] != "broken"
     assert texture_report["broken"] == 0
+
+
+def test_load_project_migrates_texture_shapeid_selector_refs_to_indices_and_rehydrates_service(tmp_path):
+    doc = Document("assembly_texture_shapeid_only_roundtrip")
+    sub = doc.root_component.add_sub_component("PartTextureMigrate")
+    assert doc.set_active_component(sub)
+
+    sketch = doc.new_sketch("SketchTextureMigrate")
+    sketch.id = "sketch_asm_05"
+    sketch.plane_origin = (0.0, 0.0, 0.0)
+    sketch.plane_normal = (0.0, 0.0, 1.0)
+    sketch.plane_x_dir = (1.0, 0.0, 0.0)
+    sketch.plane_y_dir = (0.0, 1.0, 0.0)
+    sketch.closed_profiles = [_make_square_profile(18.0)]
+
+    body = doc.new_body("BodyTextureMigrate")
+    body.id = "body_asm_05"
+    first_extrude = _add_extrude_from_sketch(body, sketch, distance=9.0, operation="New Body")
+    assert _is_success_status(first_extrude.status)
+    assert body._build123d_solid is not None
+
+    top_face, top_face_index = _top_face_and_index(body._build123d_solid)
+    texture = SurfaceTextureFeature(
+        texture_type="ripple",
+        face_indices=[top_face_index],
+        face_selectors=[GeometricFaceSelector.from_face(top_face).to_dict()],
+        depth=0.6,
+        scale=1.1,
+    )
+    texture.id = "feat_texture_shapeid_only_01"
+    texture.face_shape_ids = [_shape_id(ShapeType.FACE, texture.id, 0)]
+    body.add_feature(texture, rebuild=True)
+    assert _is_success_status(texture.status)
+
+    # Simuliere Legacy/Undo Snapshot: ShapeID + Selector vorhanden, Indizes fehlen.
+    texture.face_indices = []
+
+    save_path = tmp_path / "assembly_texture_shapeid_only_roundtrip.mshcad"
+    assert doc.save_project(str(save_path))
+
+    loaded = Document.load_project(str(save_path))
+    assert loaded is not None
+    loaded_body = loaded.find_body_by_id("body_asm_05")
+    assert loaded_body is not None
+    loaded_sketch = next((s for s in loaded.get_all_sketches() if s.id == "sketch_asm_05"), None)
+    assert loaded_sketch is not None
+
+    loaded_texture = next(feat for feat in loaded_body.features if isinstance(feat, SurfaceTextureFeature))
+    assert loaded_texture.face_indices
+    assert len(loaded_texture.face_shape_ids) == 1
+
+    resolved = loaded._shape_naming_service.resolve_shape(
+        loaded_texture.face_shape_ids[0],
+        loaded_body._build123d_solid,
+    )
+    assert resolved is not None
+
+    second_extrude = _add_extrude_from_sketch(
+        loaded_body,
+        loaded_sketch,
+        distance=1.0,
+        operation="Join",
+    )
+    assert _is_success_status(second_extrude.status)
+    assert "referenz" not in (second_extrude.status_message or "").lower()

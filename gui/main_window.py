@@ -3154,7 +3154,7 @@ class MainWindow(QMainWindow):
 
         service = body._document._shape_naming_service
         try:
-            shape_id = service.find_shape_id_by_face(face)
+            shape_id = service.find_shape_id_by_face(face, require_exact=True)
             if shape_id is not None:
                 return shape_id
         except Exception as e:
@@ -3837,7 +3837,7 @@ class MainWindow(QMainWindow):
         if shape_service:
             for idx, edge in enumerate(selected_edges):
                 try:
-                    shape_id = shape_service.find_shape_id_by_edge(edge)
+                    shape_id = shape_service.find_shape_id_by_edge(edge, require_exact=True)
                     if shape_id is None and hasattr(edge, "wrapped"):
                         ec = edge.center()
                         edge_len = edge.length if hasattr(edge, "length") else 0.0
@@ -8890,7 +8890,7 @@ class MainWindow(QMainWindow):
                 service = body._document._shape_naming_service
                 for edge in edges:
                     # Finde existierende ShapeID für diese Edge
-                    shape_id = service.find_shape_id_by_edge(edge)
+                    shape_id = service.find_shape_id_by_edge(edge, require_exact=True)
                     if shape_id:
                         edge_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
@@ -9745,7 +9745,7 @@ class MainWindow(QMainWindow):
                     if path_edge is None:
                         raise ValueError("Keine gültige Sweep-Pfadkante für ShapeID-Registrierung gefunden")
 
-                    shape_id = shape_service.find_shape_id_by_edge(path_edge)
+                    shape_id = shape_service.find_shape_id_by_edge(path_edge, require_exact=True)
                     if shape_id is None and hasattr(path_edge, "wrapped"):
                         ec = path_edge.center()
                         edge_len = path_edge.length if hasattr(path_edge, "length") else 0.0
