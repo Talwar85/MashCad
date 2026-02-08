@@ -83,6 +83,36 @@ def test_tnp_v4_refs_are_serialized_for_requested_features():
     for entry in nsided_dict["edge_shape_ids"]:
         for key in ("uuid", "shape_type", "feature_id", "local_index", "geometry_hash", "timestamp"):
             assert key in entry
+    assert "edge_selectors" not in nsided_dict
+
+
+def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():
+    body = Body("tnp_v4_sweep_path_sanitize")
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={
+            "type": "body_edge",
+            "edge": object(),
+            "build123d_edges": [object()],
+            "edge_selector": [(1.0, 2.0, 3.0)],
+            "path_geometric_selector": {
+                "center": [1.0, 2.0, 3.0],
+                "direction": [1.0, 0.0, 0.0],
+                "length": 5.0,
+                "curve_type": "line",
+                "tolerance": 10.0,
+            },
+        },
+    )
+    body.features = [sweep]
+
+    data = body.to_dict()
+    sweep_dict = _feature_dict(data, "SweepFeature")
+
+    assert "edge" not in sweep_dict["path_data"]
+    assert "build123d_edges" not in sweep_dict["path_data"]
+    assert "edge_selector" not in sweep_dict["path_data"]
+    assert "path_geometric_selector" not in sweep_dict["path_data"]
 
 
 def test_tnp_v4_refs_roundtrip_for_requested_features():
@@ -164,6 +194,35 @@ def test_tnp_v4_legacy_shape_id_fallback_for_requested_features():
     assert nsided.edge_shape_ids[0].local_index == 4
 
 
+def test_tnp_v4_sweep_deserialize_moves_path_geometric_selector_out_of_path_data():
+    body_data = {
+        "name": "legacy_sweep",
+        "features": [
+            {
+                "feature_class": "SweepFeature",
+                "name": "Sweep",
+                "profile_data": {},
+                "path_data": {
+                    "type": "body_edge",
+                    "path_geometric_selector": {
+                        "center": [0.0, 0.0, 0.0],
+                        "direction": [1.0, 0.0, 0.0],
+                        "length": 10.0,
+                        "curve_type": "line",
+                        "tolerance": 10.0,
+                    },
+                },
+            }
+        ],
+    }
+
+    restored = Body.from_dict(body_data)
+    sweep = next(feat for feat in restored.features if isinstance(feat, SweepFeature))
+
+    assert sweep.path_geometric_selector is not None
+    assert "path_geometric_selector" not in sweep.path_data
+
+
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
     body = Body("resolver_delegate")
     hole = HoleFeature(face_selectors=[_face_selector()])
@@ -182,4 +241,3 @@ def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
 
     body._update_face_selectors_for_feature(hole, solid=object())
     assert calls["count"] == 1
-

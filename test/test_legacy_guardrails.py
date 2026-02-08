@@ -17,6 +17,7 @@ RULES = [
             r"\bdef\s+_load_legacy_format\(",
             r"\b_shape_registry\b",
             r"\btnp_data\b",
+            r"\"path_data\"\s*:\s*feat\.path_data",
         ],
     },
     {
@@ -26,6 +27,8 @@ RULES = [
         ],
         "forbidden": [
             r"if\s+face_idx\s*==\s*ocp_face_id",
+            r"edge_selectors\s*=\s*edge_selectors",
+            r"['\"]edge_selector['\"]\s*:\s*self\.viewport_3d\.get_edge_selectors\(",
         ],
     },
     {

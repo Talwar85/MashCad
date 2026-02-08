@@ -630,7 +630,12 @@ class NSidedPatchFeature(Feature):
     def __post_init__(self):
         self.type = FeatureType.NSIDED_PATCH
         if not self.name or self.name == "Feature":
-            self.name = f"N-Sided Patch ({len(self.edge_selectors)} edges)"
+            edge_count = (
+                len(self.edge_shape_ids or [])
+                or len(self.geometric_selectors or [])
+                or len(self.edge_selectors or [])
+            )
+            self.name = f"N-Sided Patch ({edge_count} edges)"
         if self.edge_shape_ids is None:
             self.edge_shape_ids = []
         if self.geometric_selectors is None:
@@ -2937,6 +2942,7 @@ class Body:
                 logger.debug(f"N-Sided Patch: GeometricSelector-Auflösung fehlgeschlagen: {e}")
 
         # Legacy-Fallback: Punkt-Selektoren (abwärtskompatibel)
+        # Legacy-Migration (einmalig): Punkt-Selektoren -> GeometricSelectors/ShapeIDs
         if len(resolved_edges) < 3 and feature.edge_selectors:
             legacy_tol = 5.0
             try:
@@ -3004,6 +3010,9 @@ class Body:
                     feature.edge_shape_ids = new_shape_ids
                 if new_geo_selectors:
                     feature.geometric_selectors = new_geo_selectors
+                if (feature.edge_shape_ids or feature.geometric_selectors) and feature.edge_selectors:
+                    feature.edge_selectors = []
+                    logger.debug("N-Sided Patch: Legacy edge_selectors nach TNP-v4-Migration entfernt")
             except Exception as e:
                 logger.debug(f"N-Sided Patch: Persistieren von ShapeIDs fehlgeschlagen: {e}")
 
@@ -3849,8 +3858,10 @@ class Body:
                     except Exception as e:
                         logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
 
-                # TNP v4.0 Fallback: GeometricEdgeSelector
+                # TNP v4.0 Fallback: GeometricEdgeSelector (Feature-Feld oder path_data)
                 path_geo_selector = getattr(feature, 'path_geometric_selector', None) if feature else None
+                if path_geo_selector is None:
+                    path_geo_selector = path_data.get('path_geometric_selector')
                 if path_geo_selector and all_edges:
                     try:
                         from modeling.geometric_selector import GeometricEdgeSelector
@@ -3861,6 +3872,13 @@ class Body:
 
                         best_edge = geo_sel.find_best_match(all_edges)
                         if best_edge is not None:
+                            try:
+                                if feature is not None and getattr(feature, 'path_geometric_selector', None) is None:
+                                    feature.path_geometric_selector = (
+                                        geo_sel.to_dict() if hasattr(geo_sel, 'to_dict') else path_geo_selector
+                                    )
+                            except Exception:
+                                pass
                             _persist_path_shape_id(best_edge)
                             return Wire([best_edge])
                     except Exception as e:
@@ -3873,7 +3891,19 @@ class Body:
                     logger.debug(f"Sweep: Verwende {len(build123d_edges)} direkte Build123d Edge(s)")
                     return Wire(build123d_edges)
 
-                # Legacy-Fallback: Edge über Punkt-Selektor finden (abwärtskompatibel)
+                # Sekundär: Direkte Einzel-Edge (Session-basiert)
+                direct_edge = path_data.get('edge')
+                if direct_edge is not None:
+                    _persist_path_shape_id(direct_edge)
+                    try:
+                        if feature and getattr(feature, 'path_geometric_selector', None) is None:
+                            from modeling.geometric_selector import GeometricEdgeSelector
+                            feature.path_geometric_selector = GeometricEdgeSelector.from_edge(direct_edge).to_dict()
+                    except Exception:
+                        pass
+                    return Wire([direct_edge])
+
+                # Legacy-Migration: edge_selector (Punkt-Matching) -> TNP v4 Felder
                 edge_selector = path_data.get('edge_selector')
                 if edge_selector and all_edges:
                     selectors = edge_selector if isinstance(edge_selector, list) else [edge_selector]
@@ -3907,8 +3937,19 @@ class Body:
                         except Exception:
                             pass
                     if found_edges:
+                        try:
+                            from modeling.geometric_selector import GeometricEdgeSelector
+                            migrated_selector = GeometricEdgeSelector.from_edge(found_edges[0]).to_dict()
+                            if feature is not None:
+                                feature.path_geometric_selector = migrated_selector
+                            path_data['path_geometric_selector'] = migrated_selector
+                            path_data.pop('edge_selector', None)
+                        except Exception:
+                            pass
                         _persist_path_shape_id(found_edges[0])
-                        logger.debug(f"Sweep: {len(found_edges)} Edge(s) über Selektor aufgelöst")
+                        logger.debug(
+                            f"Sweep: Legacy edge_selector migriert ({len(found_edges)} Edge(s) aufgelöst)"
+                        )
                         return Wire(found_edges)
 
             return None
@@ -6809,6 +6850,11 @@ class Body:
                             'holes': [list(interior.coords) for interior in poly.interiors]
                         }
                     pd_copy['shapely_poly'] = None  # Remove non-serializable object
+
+                # Session-/Legacy-only Pfadfelder nicht persistieren.
+                path_data_copy = feat.path_data.copy() if feat.path_data else {}
+                for transient_key in ("edge", "build123d_edges", "edge_selector", "path_geometric_selector"):
+                    path_data_copy.pop(transient_key, None)
                 feat_dict.update({
                     "feature_class": "SweepFeature",
                     "is_frenet": feat.is_frenet,
@@ -6817,7 +6863,7 @@ class Body:
                     "scale_start": feat.scale_start,
                     "scale_end": feat.scale_end,
                     "profile_data": pd_copy,
-                    "path_data": feat.path_data,
+                    "path_data": path_data_copy,
                     "contact_mode": feat.contact_mode,
                 })
                 # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
@@ -7035,10 +7081,12 @@ class Body:
             elif isinstance(feat, NSidedPatchFeature):
                 feat_dict.update({
                     "feature_class": "NSidedPatchFeature",
-                    "edge_selectors": feat.edge_selectors,
                     "degree": feat.degree,
                     "tangent": feat.tangent,
                 })
+                # Legacy-only: Nur persistieren wenn noch keine TNP-v4 Referenzen existieren.
+                if feat.edge_selectors and not (feat.edge_shape_ids or feat.geometric_selectors):
+                    feat_dict["edge_selectors"] = feat.edge_selectors
                 # TNP v4.0: ShapeIDs und GeometricSelectors serialisieren
                 if feat.edge_shape_ids:
                     serialized_edge_ids = []
@@ -7409,6 +7457,14 @@ class Body:
                     sel_data = feat_dict["path_geometric_selector"]
                     if isinstance(sel_data, dict):
                         feat.path_geometric_selector = GeometricEdgeSelector(**sel_data)
+                # Legacy/Session-Fallback: Selector evtl. noch in path_data gespeichert.
+                if feat.path_geometric_selector is None and isinstance(feat.path_data, dict):
+                    sel_data = feat.path_data.get("path_geometric_selector")
+                    if isinstance(sel_data, dict):
+                        feat.path_geometric_selector = GeometricEdgeSelector(**sel_data)
+                # Gemischte Strategien vermeiden: alte edge_selector-Felder nur als Legacy-Lesehilfe.
+                if isinstance(feat.path_data, dict) and feat.path_geometric_selector is not None:
+                    feat.path_data.pop("path_geometric_selector", None)
 
             elif feat_class == "ShellFeature":
                 selectors = feat_dict.get("opening_face_selectors", [])

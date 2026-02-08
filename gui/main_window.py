@@ -881,6 +881,8 @@ class MainWindow(QMainWindow):
         
         # Hilfe-Menü
         help_menu = mb.addMenu(tr("Help"))
+        help_menu.addAction(tr("Language") + " / Sprache", self._change_language)
+        help_menu.addSeparator()
         help_menu.addAction(tr("About MashCad"), self._show_about)
 
     def _connect_signals(self):
@@ -3481,29 +3483,57 @@ class MainWindow(QMainWindow):
             logger.warning("N-Sided Patch benötigt mindestens 3 Kanten")
             return
 
-        # Edge-Selektoren für Feature-Persistenz
-        edge_selectors = []
-        for edge in selected_edges:
-            try:
-                ec = edge.center()
-                edge_selectors.append((ec.X, ec.Y, ec.Z))
-            except Exception:
-                continue
-
         degree = self.nsided_patch_panel.get_degree()
         tangent = self.nsided_patch_panel.get_tangent()
 
         from modeling import NSidedPatchFeature
+        from modeling.geometric_selector import GeometricEdgeSelector
+        from modeling.tnp_system import ShapeType
         from gui.commands.feature_commands import AddFeatureCommand
 
+        geometric_selectors = []
+        for edge in selected_edges:
+            try:
+                geometric_selectors.append(GeometricEdgeSelector.from_edge(edge).to_dict())
+            except Exception as e:
+                logger.debug(f"N-Sided Patch: GeometricSelector fehlgeschlagen: {e}")
+
+        if len(geometric_selectors) < 3:
+            logger.warning("N-Sided Patch: Konnte nicht genug TNP-v4 GeometricSelectors erzeugen")
+            return
+
         feat = NSidedPatchFeature(
-            edge_selectors=edge_selectors,
+            edge_selectors=[],
+            geometric_selectors=geometric_selectors,
             degree=degree,
             tangent=tangent,
         )
 
+        # TNP v4.0: ShapeIDs für ausgewählte Edges ermitteln/registrieren
+        edge_shape_ids = []
+        shape_service = getattr(self.document, "_shape_naming_service", None)
+        if shape_service:
+            for idx, edge in enumerate(selected_edges):
+                try:
+                    shape_id = shape_service.find_shape_id_by_edge(edge)
+                    if shape_id is None and hasattr(edge, "wrapped"):
+                        ec = edge.center()
+                        edge_len = edge.length if hasattr(edge, "length") else 0.0
+                        shape_id = shape_service.register_shape(
+                            ocp_shape=edge.wrapped,
+                            shape_type=ShapeType.EDGE,
+                            feature_id=feat.id,
+                            local_index=idx,
+                            geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
+                        )
+                    if shape_id is not None:
+                        edge_shape_ids.append(shape_id)
+                except Exception as e:
+                    logger.debug(f"N-Sided Patch: ShapeID-Auflösung fehlgeschlagen: {e}")
+        feat.edge_shape_ids = edge_shape_ids
+
         # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
-        cmd = AddFeatureCommand(body, feat, self, description=f"N-Sided Patch ({len(edge_selectors)} edges)")
+        cmd = AddFeatureCommand(body, feat, self, description=f"N-Sided Patch ({len(selected_edges)} edges)")
         self.undo_stack.push(cmd)
 
         # Prüfe ob Operation erfolgreich war
@@ -3514,7 +3544,10 @@ class MainWindow(QMainWindow):
         else:
             self._update_body_mesh(body)
             self.browser.refresh()
-            logger.success(f"N-Sided Patch mit {len(edge_selectors)} Kanten angewendet")
+            logger.success(
+                f"N-Sided Patch mit {len(selected_edges)} Kanten angewendet "
+                f"(ShapeIDs: {len(edge_shape_ids)})"
+            )
 
         # Mode beenden
         self._stop_nsided_patch_mode()
@@ -8251,6 +8284,21 @@ class MainWindow(QMainWindow):
                             logger.warning(f"Feature-Formel '{formula}' für {value_attr} fehlgeschlagen: {e}")
         return changed
 
+    def _change_language(self):
+        """Sprache wechseln — speichert und zeigt Restart-Hinweis."""
+        from gui.language_dialog import ask_language_switch
+        from i18n import get_language
+        old_lang = get_language()
+        chosen = ask_language_switch(self)
+        if chosen and chosen != old_lang:
+            QMessageBox.information(
+                self,
+                "Language Changed" if chosen == "en" else "Sprache geändert",
+                "Please restart MashCAD to apply the new language."
+                if chosen == "en" else
+                "Bitte starte MashCAD neu, um die neue Sprache zu übernehmen."
+            )
+
     def _show_about(self):
         """Über-Dialog"""
         QMessageBox.about(self, tr("Über MashCad"),
@@ -9118,13 +9166,19 @@ class MainWindow(QMainWindow):
 
         # Hole echte Build123d Edges für robuste Pfad-Auflösung
         build123d_edges = self.viewport_3d.get_selected_edges()
+        path_geo_selector = None
+        try:
+            from modeling.geometric_selector import GeometricEdgeSelector
+            path_geo_selector = GeometricEdgeSelector.from_edge(edge).to_dict()
+        except Exception as e:
+            logger.debug(f"Sweep: Konnte GeometricEdgeSelector nicht erzeugen: {e}")
 
         # Pfad-Daten speichern
         path_data = {
             'type': 'body_edge',
             'edge': edge,
-            'edge_selector': self.viewport_3d.get_edge_selectors(),
-            'build123d_edges': build123d_edges  # Direkte Edge-Referenzen
+            'build123d_edges': build123d_edges,  # Direkte Edge-Referenzen (Session)
+            'path_geometric_selector': path_geo_selector,
         }
 
         self._sweep_path_data = path_data
@@ -9164,6 +9218,33 @@ class MainWindow(QMainWindow):
                 scale_start=self.sweep_panel.get_scale_start(),
                 scale_end=self.sweep_panel.get_scale_end(),
             )
+
+            # TNP v4.0: Pfad-Referenzen explizit am Feature hinterlegen.
+            path_geo_selector = self._sweep_path_data.get("path_geometric_selector")
+            if path_geo_selector:
+                sweep_feature.path_geometric_selector = path_geo_selector
+
+            path_edges = self._sweep_path_data.get("build123d_edges") or []
+            shape_service = getattr(self.document, "_shape_naming_service", None)
+            if path_edges and shape_service:
+                try:
+                    from modeling.tnp_system import ShapeType
+                    path_edge = path_edges[0]
+                    shape_id = shape_service.find_shape_id_by_edge(path_edge)
+                    if shape_id is None and hasattr(path_edge, "wrapped"):
+                        ec = path_edge.center()
+                        edge_len = path_edge.length if hasattr(path_edge, "length") else 0.0
+                        shape_id = shape_service.register_shape(
+                            ocp_shape=path_edge.wrapped,
+                            shape_type=ShapeType.EDGE,
+                            feature_id=sweep_feature.id,
+                            local_index=0,
+                            geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
+                        )
+                    if shape_id is not None:
+                        sweep_feature.path_shape_id = shape_id
+                except Exception as e:
+                    logger.debug(f"Sweep: Path-ShapeID konnte nicht gesetzt werden: {e}")
 
             # Body finden oder erstellen
             is_new_body = operation == "New Body" or not self.document.bodies
