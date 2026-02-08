@@ -140,6 +140,8 @@ RULES = [
             r"_priority_for_snap_type",
             r"_is_drawing_tool_active",
             r"_line_param",
+            r"_no_snap_diagnostic",
+            r"diagnostic=",
         ],
     },
     {

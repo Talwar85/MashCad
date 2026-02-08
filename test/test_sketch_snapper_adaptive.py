@@ -113,3 +113,31 @@ def test_virtual_intersection_priority_boost_in_drawing_mode():
     p_draw = snapper._priority_for_snap_type(SnapType.VIRTUAL_INTERSECTION)
 
     assert p_draw > p_select
+
+
+def test_snapper_reports_virtual_intersection_near_miss_diagnostic():
+    sketch = Sketch("virtual_diag")
+    sketch.add_line(100.0, 0.0, 200.0, 0.0)
+    sketch.add_line(150.0, 100.0, 150.0, 200.0)
+    editor = _FakeEditor(sketch, snap_radius=5, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(150.0, 12.0))
+
+    assert result.type == SnapType.NONE
+    assert "Virtueller Schnittpunkt" in result.diagnostic
+
+
+def test_snapper_no_diagnostic_in_non_drawing_mode():
+    sketch = Sketch("virtual_diag_select")
+    sketch.add_line(100.0, 0.0, 200.0, 0.0)
+    sketch.add_line(150.0, 100.0, 150.0, 200.0)
+    editor = _FakeEditor(sketch, snap_radius=5, view_scale=1.0)
+    editor.current_tool = SketchTool.SELECT
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(150.0, 12.0))
+
+    assert result.type == SnapType.NONE
+    assert result.diagnostic == ""

@@ -45,6 +45,7 @@ class SnapResult:
     point: QPointF
     type: SnapType
     target_entity: any = None # Das Objekt, das wir getroffen haben
+    diagnostic: str = ""
 
 class SmartSnapper:
     """
@@ -183,11 +184,36 @@ class SmartSnapper:
             priority += 6
         return priority
 
+    @staticmethod
+    def _distance_world(p: Point2D, mouse_world: QPointF) -> float:
+        return math.hypot(float(p.x) - mouse_world.x(), float(p.y) - mouse_world.y())
+
+    def _no_snap_diagnostic(self, snap_radius: float, nearest_virtual_dist: float) -> str:
+        """
+        Explain why snapping did not happen for drawing workflows.
+        """
+        if not self._is_drawing_tool_active():
+            return ""
+
+        if math.isfinite(nearest_virtual_dist):
+            if nearest_virtual_dist <= (snap_radius * 3.0):
+                return (
+                    f"Virtueller Schnittpunkt knapp ausserhalb Fangradius "
+                    f"({nearest_virtual_dist:.2f}mm > {snap_radius:.2f}mm)."
+                )
+            return (
+                f"Virtueller Schnittpunkt erkannt, aber zu weit entfernt "
+                f"({nearest_virtual_dist:.2f}mm)."
+            )
+
+        return "Kein Fangpunkt im aktuellen Radius. Zoom naeher heran oder Radius erhoehen."
+
     def snap(self, mouse_screen_pos: QPointF) -> SnapResult:
         mouse_world = self.editor.screen_to_world(mouse_screen_pos)
         snap_radius = self._compute_snap_radius_world()
         
         candidates = []
+        nearest_virtual_dist = float("inf")
 
         # Performance: Nur Objekte in der Nähe holen
         entities = []
@@ -256,6 +282,11 @@ class SmartSnapper:
                         is_virtual = bool(p[1])
                         entities = p[2] if len(p) > 2 else None
                         snap_type = SnapType.VIRTUAL_INTERSECTION if is_virtual else SnapType.INTERSECTION
+                        if is_virtual and point_obj is not None:
+                            nearest_virtual_dist = min(
+                                nearest_virtual_dist,
+                                self._distance_world(point_obj, mouse_world),
+                            )
                         if entities is not None:
                             target_entity = {
                                 "virtual": is_virtual,
@@ -277,7 +308,11 @@ class SmartSnapper:
 
         # Gewinner ermitteln
         if not candidates:
-            return SnapResult(mouse_world, SnapType.NONE)
+            return SnapResult(
+                mouse_world,
+                SnapType.NONE,
+                diagnostic=self._no_snap_diagnostic(snap_radius, nearest_virtual_dist),
+            )
 
         # Sortieren nach Priorität (hoch -> tief) dann Distanz (nah -> fern)
         candidates.sort(key=lambda c: (-c[1], c[0]))

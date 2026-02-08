@@ -672,6 +672,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._is_solving = False
         self._last_solver_feedback_ms = 0.0
         self._last_solver_feedback_text = ""
+        self.last_snap_diagnostic = ""
+        self._last_snap_feedback_ms = 0.0
+        self._last_snap_feedback_text = ""
 
         self.sketch = Sketch("Sketch1")
         self.view_offset = QPointF(0, 0)
@@ -909,6 +912,45 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._last_solver_feedback_ms = now_ms
             self._last_solver_feedback_text = text
             self.show_message(text, 4000, QColor(255, 90, 90))
+
+    def _emit_snap_diagnostic_feedback(self, snap_type):
+        """
+        Show throttled, actionable diagnostics when snapping does not lock as expected.
+        """
+        drawing_tools = {
+            SketchTool.LINE,
+            SketchTool.RECTANGLE,
+            SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE,
+            SketchTool.CIRCLE_2POINT,
+            SketchTool.CIRCLE_3POINT,
+            SketchTool.POLYGON,
+            SketchTool.ARC_3POINT,
+            SketchTool.SLOT,
+            SketchTool.SPLINE,
+            SketchTool.POINT,
+        }
+        if self.current_tool not in drawing_tools:
+            return
+        if snap_type != SnapType.NONE:
+            return
+        text = (self.last_snap_diagnostic or "").strip()
+        if not text:
+            return
+
+        import time
+
+        now_ms = time.time() * 1000.0
+        repeated = text == self._last_snap_feedback_text and (now_ms - self._last_snap_feedback_ms) < 1500.0
+        if repeated:
+            return
+
+        self._last_snap_feedback_ms = now_ms
+        self._last_snap_feedback_text = text
+        if hasattr(self, "show_message"):
+            self.show_message(text, 2200, QColor(255, 190, 90))
+        else:
+            self.status_message.emit(text)
     
     def _solve_async(self):
         """
@@ -2284,16 +2326,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def snap_point(self, w):
         if not self.snap_enabled: 
+            self.last_snap_diagnostic = ""
             return w, SnapType.NONE, None  # <--- Drittes Element: Entity
             
         if self.snapper:
             if self.index_dirty: self._rebuild_spatial_index()
             screen_pos = self.world_to_screen(w)
             res = self.snapper.snap(screen_pos)
+            self.last_snap_diagnostic = getattr(res, "diagnostic", "") or ""
             # Rückgabe: Punkt, Typ, Getroffenes Entity (für Auto-Constraints)
             return res.point, res.type, res.target_entity
             
         else:
+            self.last_snap_diagnostic = ""
             if self.grid_snap:
                  gx = round(w.x() / self.grid_size) * self.grid_size
                  gy = round(w.y() / self.grid_size) * self.grid_size
@@ -4218,6 +4263,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Snap und Live-Werte müssen trotzdem berechnet werden
             snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
             self.current_snap = (snapped, snap_type, snap_entity) if snap_type != SnapType.NONE else None
+            self._emit_snap_diagnostic_feedback(snap_type)
             self._update_live_values(snapped)
             
             self.request_update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
@@ -4256,6 +4302,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         else:
             # 2. Snapping und Hover-Logik
             snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
+            self._emit_snap_diagnostic_feedback(snap_type)
             
             # Snap-Update Check
             old_snap = self.current_snap
