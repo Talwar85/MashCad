@@ -169,6 +169,37 @@ def edge_from_index(shape_like, index: int):
     return None
 
 
+def _is_same_topo_entity(entity_a, entity_b) -> bool:
+    if entity_a is None or entity_b is None:
+        return False
+    try:
+        wa = entity_a.wrapped if hasattr(entity_a, "wrapped") else entity_a
+        wb = entity_b.wrapped if hasattr(entity_b, "wrapped") else entity_b
+        return wa.IsSame(wb)
+    except Exception:
+        return entity_a is entity_b
+
+
+def face_index_of(shape_like, face_obj) -> Optional[int]:
+    """Resolve the zero-based index of a face object in the current topology."""
+    if face_obj is None:
+        return None
+    for idx, candidate in iter_faces_with_indices(shape_like):
+        if _is_same_topo_entity(candidate, face_obj):
+            return idx
+    return None
+
+
+def edge_index_of(shape_like, edge_obj) -> Optional[int]:
+    """Resolve the zero-based index of an edge object in the current topology."""
+    if edge_obj is None:
+        return None
+    for idx, candidate in iter_edges_with_indices(shape_like):
+        if _is_same_topo_entity(candidate, edge_obj):
+            return idx
+    return None
+
+
 def map_index_to_face(shape_like, index: int):
     """Alias kept for readability in call sites mirroring other CAD APIs."""
     return face_from_index(shape_like, index)

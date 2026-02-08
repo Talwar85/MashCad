@@ -2984,8 +2984,11 @@ class MainWindow(QMainWindow):
         try:
             pos_arr = np.array(position, dtype=float)
             best_face = None
+            best_face_index = None
             best_dist = float("inf")
-            for solid_face in body._build123d_solid.faces():
+            from modeling.topology_indexing import iter_faces_with_indices
+
+            for face_idx, solid_face in iter_faces_with_indices(body._build123d_solid):
                 try:
                     fc = solid_face.center()
                     solid_center = np.array([fc.X, fc.Y, fc.Z], dtype=float)
@@ -2993,10 +2996,11 @@ class MainWindow(QMainWindow):
                     if dist < best_dist:
                         best_dist = dist
                         best_face = solid_face
+                        best_face_index = int(face_idx)
                 except Exception:
                     continue
             if best_face is not None and best_dist < center_fallback_tol:
-                return best_face, ocp_face_id
+                return best_face, best_face_index if best_face_index is not None else ocp_face_id
         except Exception as e:
             logger.debug(f"[main_window] Face-Center Fallback fehlgeschlagen: {e}")
 

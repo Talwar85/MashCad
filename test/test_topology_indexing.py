@@ -7,7 +7,9 @@ from modeling.shape_reference import create_reference_map, find_face_by_id
 from modeling.topology_indexing import (
     dump_topology_edges,
     dump_topology_faces,
+    edge_index_of,
     edge_from_index,
+    face_index_of,
     face_from_index,
     iter_edges_with_indices,
     iter_faces_with_indices,
@@ -55,6 +57,18 @@ def test_edge_from_index_matches_build123d_edges_order():
 
     assert edge_from_index(solid, -1) is None
     assert edge_from_index(solid, len(edges)) is None
+
+
+def test_face_index_of_matches_enumerated_topology_index():
+    solid = _make_box()
+    for idx, face in enumerate(solid.faces()):
+        assert face_index_of(solid, face) == idx
+
+
+def test_edge_index_of_matches_enumerated_topology_index():
+    solid = _make_box()
+    for idx, edge in enumerate(solid.edges()):
+        assert edge_index_of(solid, edge) == idx
 
 
 def test_iter_faces_with_indices_is_dense_zero_based():
@@ -120,3 +134,47 @@ def test_shape_reference_face_id_mapping_matches_topology_indexing():
         mapped = face_from_index(solid, idx)
         assert mapped is not None
         assert mapped.wrapped.IsSame(face_ocp)
+
+
+def test_face_from_index_prefers_direct_face_from_index_hook():
+    sentinel = object()
+
+    class _Shape:
+        def face_from_index(self, index):
+            return sentinel if index == 5 else None
+
+    shape = _Shape()
+    assert face_from_index(shape, 5) is sentinel
+    assert face_from_index(shape, 3) is None
+
+
+def test_edge_from_index_prefers_direct_edge_from_index_hook():
+    sentinel = object()
+
+    class _Shape:
+        def edge_from_index(self, index):
+            return sentinel if index == 2 else None
+
+    shape = _Shape()
+    assert edge_from_index(shape, 2) is sentinel
+    assert edge_from_index(shape, 1) is None
+
+
+def test_map_index_aliases_support_map_index_hooks():
+    sentinel_face = object()
+    sentinel_edge = object()
+
+    class _Shape:
+        def map_index_to_face(self, index):
+            if index == 0:
+                return sentinel_face
+            return None
+
+        def map_index_to_edge(self, index):
+            if index == 0:
+                return sentinel_edge
+            return None
+
+    shape = _Shape()
+    assert map_index_to_face(shape, 0) is sentinel_face
+    assert map_index_to_edge(shape, 0) is sentinel_edge
