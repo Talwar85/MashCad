@@ -4714,59 +4714,121 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # WICHTIG: Jede Face bekommt ihr eigenes Texture-Feature!
             face_data_list = []
             mesh_face_ids = None
+            shape_service = None
+            solid = getattr(body, "_build123d_solid", None)
             try:
                 if hasattr(mesh, "cell_data") and "face_id" in mesh.cell_data:
                     mesh_face_ids = np.asarray(mesh.cell_data["face_id"]).astype(np.int64)
             except Exception:
                 mesh_face_ids = None
+
+            if getattr(body, "_document", None) is not None:
+                shape_service = getattr(body._document, "_shape_naming_service", None)
+
             for feat in texture_features:
                 selectors = list(getattr(feat, "face_selectors", []) or [])
                 face_indices = list(getattr(feat, "face_indices", []) or [])
-                added_from_indices = False
+                face_shape_ids = list(getattr(feat, "face_shape_ids", []) or [])
+                has_topological_refs = bool(face_indices or face_shape_ids)
+                added_from_topology = False
 
-                # TNP v4.0 primary: Face-Indizes -> aktuelle Mesh-cell_ids mappen.
-                if face_indices and mesh_face_ids is not None:
-                    seen_indices = set()
-                    for i, raw_idx in enumerate(face_indices):
-                        try:
-                            face_idx = int(raw_idx)
-                        except Exception:
-                            continue
-                        if face_idx in seen_indices:
-                            continue
-                        seen_indices.add(face_idx)
+                seen_indices = set()
 
-                        try:
-                            cell_ids = np.where(mesh_face_ids == face_idx)[0].astype(np.int64).tolist()
-                        except Exception:
-                            cell_ids = []
-                        if not cell_ids:
-                            continue
+                def _add_face_data(face_idx: int, selector_idx: int = -1) -> bool:
+                    if mesh_face_ids is None:
+                        return False
 
-                        selector = selectors[i] if i < len(selectors) and isinstance(selectors[i], dict) else {}
-                        face_data_list.append({
-                            'cell_ids': cell_ids,
-                            'normal': selector.get('normal', (0, 0, 1)),
-                            'center': selector.get('center', (0, 0, 0)),
-                            'texture_feature': feat,
-                        })
-                        added_from_indices = True
+                    try:
+                        face_idx = int(face_idx)
+                    except Exception:
+                        return False
 
-                if added_from_indices:
-                    continue
+                    if face_idx in seen_indices:
+                        return False
 
-                # Legacy/Recovery: bestehende selector-cell_ids verwenden.
-                for selector in selectors:
-                    if not isinstance(selector, dict):
-                        continue
-                    face_data = {
-                        'cell_ids': selector.get('cell_ids', []),
+                    try:
+                        cell_ids = np.where(mesh_face_ids == face_idx)[0].astype(np.int64).tolist()
+                    except Exception:
+                        cell_ids = []
+
+                    if not cell_ids:
+                        return False
+
+                    seen_indices.add(face_idx)
+                    selector = (
+                        selectors[selector_idx]
+                        if (
+                            selector_idx >= 0
+                            and selector_idx < len(selectors)
+                            and isinstance(selectors[selector_idx], dict)
+                        )
+                        else {}
+                    )
+                    face_data_list.append({
+                        'cell_ids': cell_ids,
                         'normal': selector.get('normal', (0, 0, 1)),
                         'center': selector.get('center', (0, 0, 0)),
-                        'texture_feature': feat,  # WICHTIG: Feature mit Face verknüpfen!
-                    }
-                    if face_data['cell_ids']:
-                        face_data_list.append(face_data)
+                        'texture_feature': feat,
+                    })
+                    return True
+
+                # TNP v4.0 primary: Face-Indizes -> aktuelle Mesh-cell_ids mappen.
+                for i, raw_idx in enumerate(face_indices):
+                    if _add_face_data(raw_idx, i):
+                        added_from_topology = True
+
+                # TNP v4.0 secondary: ShapeIDs -> FaceIndex -> Mesh-cell_ids.
+                if (
+                    not added_from_topology
+                    and face_shape_ids
+                    and shape_service is not None
+                    and solid is not None
+                ):
+                    try:
+                        from build123d import Face
+                        from modeling.topology_indexing import face_index_of
+
+                        ocp_solid = solid.wrapped if hasattr(solid, "wrapped") else solid
+                        for i, shape_id in enumerate(face_shape_ids):
+                            if not hasattr(shape_id, "uuid"):
+                                continue
+                            try:
+                                resolved_ocp, _method = shape_service.resolve_shape_with_method(
+                                    shape_id,
+                                    ocp_solid,
+                                    log_unresolved=False,
+                                )
+                            except Exception:
+                                continue
+                            if resolved_ocp is None:
+                                continue
+                            try:
+                                face_idx = face_index_of(solid, Face(resolved_ocp))
+                            except Exception:
+                                face_idx = None
+                            if face_idx is None:
+                                continue
+                            if _add_face_data(face_idx, i):
+                                added_from_topology = True
+                    except Exception:
+                        pass
+
+                if added_from_topology:
+                    continue
+
+                # Legacy/Recovery nur wenn Feature keine topologischen Refs hat.
+                if not added_from_topology and not has_topological_refs:
+                    for selector in selectors:
+                        if not isinstance(selector, dict):
+                            continue
+                        face_data = {
+                            'cell_ids': selector.get('cell_ids', []),
+                            'normal': selector.get('normal', (0, 0, 1)),
+                            'center': selector.get('center', (0, 0, 0)),
+                            'texture_feature': feat,  # WICHTIG: Feature mit Face verknüpfen!
+                        }
+                        if face_data['cell_ids']:
+                            face_data_list.append(face_data)
 
             if face_data_list:
                 self.show_textured_faces_overlay(bid, face_data_list, 'mixed')

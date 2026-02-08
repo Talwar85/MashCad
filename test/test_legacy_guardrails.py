@@ -85,6 +85,14 @@ RULES = [
         ],
     },
     {
+        "path": "gui/viewport_pyvista.py",
+        "required": [
+            r"has_topological_refs\s*=\s*bool\(",
+            r"face_shape_ids\s*=\s*list\(getattr\(feat,\s*\"face_shape_ids\"",
+            r"if\s+not\s+added_from_topology\s+and\s+not\s+has_topological_refs",
+        ],
+    },
+    {
         "path": "sketcher/operations/trim.py",
         "forbidden": [
             r"\bclass\s+TrimComparisonTest\b",
