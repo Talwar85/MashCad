@@ -4,7 +4,7 @@ MashCad - 3D Modeling
 Robust B-Rep Implementation with Build123d & Smart Failure Recovery
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import tempfile
 from typing import List, Optional, Tuple, Union, Any
 from enum import Enum, auto
