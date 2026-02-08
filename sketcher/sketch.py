@@ -599,6 +599,7 @@ class Sketch:
         removed_orphans = self._sanitize_for_solver()
         if removed_orphans > 0:
             logger.debug(f"Sketch.solve: {removed_orphans} verwaiste Constraints entfernt")
+        fallback_context = ""
         
         # 1. Versuche C++ Solver (falls vorhanden)
         try:
@@ -619,16 +620,24 @@ class Sketch:
                     if raw_result_name in {"INCONSISTENT", "TOO_MANY_UNKNOWNS"}:
                         logger.debug(f"py-slvs Ergebnis bleibt aktiv: {res.message}")
                         return res
+                    fallback_context = f"py-slvs fehlgeschlagen: {res.message}"
                     logger.debug(f"py-slvs Solve fehlgeschlagen, fallback auf SciPy: {res.message}")
                 else:
+                    fallback_context = f"py-slvs übersprungen: {reason}"
                     logger.debug(f"py-slvs übersprungen: {reason}")
         except ImportError:
+            fallback_context = "py-slvs nicht verfügbar"
             logger.info("py-slvs nicht verfügbar, nutze SciPy-Fallback")
 
         # 2. Fallback auf Scipy Solver (NEU)
         res = self._solver.solve(
             self.points, self.lines, self.circles, self.arcs, self.constraints
         )
+
+        if fallback_context and not res.success:
+            base_msg = (res.message or "SciPy-Solver fehlgeschlagen").strip()
+            if fallback_context not in base_msg:
+                res.message = f"{base_msg} | {fallback_context}"
         
         # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
         if res.success:

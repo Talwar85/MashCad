@@ -1,4 +1,8 @@
-from gui.sketch_feedback import format_solver_failure_message, format_trim_failure_message
+from gui.sketch_feedback import (
+    format_solver_failure_message,
+    format_trim_failure_message,
+    format_trim_warning_message,
+)
 
 
 def test_solver_feedback_over_constrained_has_actionable_hint():
@@ -37,3 +41,9 @@ def test_trim_feedback_failed_mentions_rollback():
     msg = format_trim_failure_message("Trim fehlgeschlagen: forced trim failure", target_type="Circle2D")
     assert "Trim (Circle2D):" in msg
     assert "zurueckgesetzt" in msg
+
+
+def test_trim_warning_small_arc_is_explanatory():
+    msg = format_trim_warning_message("Arc zu klein, nicht erstellt", target_type="Arc2D")
+    assert "Trim (Arc2D):" in msg
+    assert "unter Toleranz" in msg

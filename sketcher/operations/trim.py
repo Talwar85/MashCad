@@ -29,10 +29,15 @@ if TYPE_CHECKING:
     from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D
 
 
-# === Fuzzy Intersection Toleranz ===
-# Für Tangent-Constraints und andere numerische Near-Miss-Fälle
-FUZZY_INTERSECTION_TOLERANCE = 1e-4  # 0.1mm - CAD-übliche Toleranz
-TRIM_POINT_MERGE_TOLERANCE = 1e-4    # konservatives Point-Reuse beim Rebuild
+# === Adaptive Tolerances ===
+# Default baseline values are conservative and get scaled by local geometry size.
+FUZZY_INTERSECTION_TOLERANCE = 1e-4
+FUZZY_INTERSECTION_SCALE_FACTOR = 1e-4
+FUZZY_INTERSECTION_TOLERANCE_MAX = 5e-2
+
+TRIM_POINT_MERGE_TOLERANCE = 1e-4
+TRIM_POINT_MERGE_SCALE_FACTOR = 5e-5
+TRIM_POINT_MERGE_TOLERANCE_MAX = 1e-2
 
 
 @dataclass
@@ -83,6 +88,7 @@ class TrimOperation(SketchOperation):
         super().__init__(sketch)
         self._geometry = None  # Lazy import
         self._last_trim_result: Optional[TrimResult] = None
+        self._active_merge_tolerance = TRIM_POINT_MERGE_TOLERANCE
 
     def _get_geometry(self):
         """Lazy import des Geometry-Moduls."""
@@ -107,6 +113,92 @@ class TrimOperation(SketchOperation):
     @staticmethod
     def _points_equal(p1, p2, tol: float = 1e-5) -> bool:
         return abs(p1.x - p2.x) <= tol and abs(p1.y - p2.y) <= tol
+
+    @staticmethod
+    def _entity_bounds(entity) -> Optional[Tuple[float, float, float, float]]:
+        """
+        Returns a conservative 2D AABB for known sketch entities.
+        """
+        if entity is None:
+            return None
+
+        try:
+            if hasattr(entity, "start") and hasattr(entity, "end"):
+                min_x = min(float(entity.start.x), float(entity.end.x))
+                min_y = min(float(entity.start.y), float(entity.end.y))
+                max_x = max(float(entity.start.x), float(entity.end.x))
+                max_y = max(float(entity.start.y), float(entity.end.y))
+                return min_x, min_y, max_x, max_y
+
+            if hasattr(entity, "center") and hasattr(entity, "radius"):
+                cx = float(entity.center.x)
+                cy = float(entity.center.y)
+                r = abs(float(entity.radius))
+                return cx - r, cy - r, cx + r, cy + r
+
+            if hasattr(entity, "x") and hasattr(entity, "y"):
+                px = float(entity.x)
+                py = float(entity.y)
+                return px, py, px, py
+        except Exception:
+            return None
+
+        return None
+
+    def _adaptive_tolerance_from_entities(
+        self,
+        entities: List[Any],
+        base_tolerance: float,
+        scale_factor: float,
+        max_tolerance: float,
+    ) -> float:
+        """
+        Computes a local tolerance based on combined entity bounds.
+        """
+        min_x = float("inf")
+        min_y = float("inf")
+        max_x = float("-inf")
+        max_y = float("-inf")
+        has_bounds = False
+
+        for entity in entities:
+            bounds = self._entity_bounds(entity)
+            if bounds is None:
+                continue
+            bx0, by0, bx1, by1 = bounds
+            if not all(math.isfinite(v) for v in (bx0, by0, bx1, by1)):
+                continue
+            has_bounds = True
+            min_x = min(min_x, bx0)
+            min_y = min(min_y, by0)
+            max_x = max(max_x, bx1)
+            max_y = max(max_y, by1)
+
+        if not has_bounds:
+            return base_tolerance
+
+        diag = math.hypot(max_x - min_x, max_y - min_y)
+        if not math.isfinite(diag) or diag <= 0.0:
+            return base_tolerance
+
+        adaptive = diag * scale_factor
+        return max(base_tolerance, min(max_tolerance, adaptive))
+
+    def _fuzzy_tolerance_for_pair(self, target, other) -> float:
+        return self._adaptive_tolerance_from_entities(
+            [target, other],
+            base_tolerance=FUZZY_INTERSECTION_TOLERANCE,
+            scale_factor=FUZZY_INTERSECTION_SCALE_FACTOR,
+            max_tolerance=FUZZY_INTERSECTION_TOLERANCE_MAX,
+        )
+
+    def _merge_tolerance_for_target(self, target) -> float:
+        return self._adaptive_tolerance_from_entities(
+            [target],
+            base_tolerance=TRIM_POINT_MERGE_TOLERANCE,
+            scale_factor=TRIM_POINT_MERGE_SCALE_FACTOR,
+            max_tolerance=TRIM_POINT_MERGE_TOLERANCE_MAX,
+        )
 
     def _collect_transferable_line_constraints(self, target) -> List[Any]:
         """
@@ -261,8 +353,11 @@ class TrimOperation(SketchOperation):
         elif hasattr(self.sketch, 'arcs') and target in self.sketch.arcs:
             self.sketch.arcs.remove(target)
 
-    def _find_existing_point(self, point: 'Point2D', tolerance: float = TRIM_POINT_MERGE_TOLERANCE):
+    def _find_existing_point(self, point: 'Point2D', tolerance: Optional[float] = None):
         """Findet einen existierenden Punkt in Sketch-Geometrie nahe point."""
+        if tolerance is None:
+            tolerance = self._active_merge_tolerance
+
         for existing in getattr(self.sketch, "points", []):
             if self._points_equal(existing, point, tolerance):
                 return existing
@@ -385,7 +480,7 @@ class TrimOperation(SketchOperation):
 
         return best_dist, best_entity_point, best_line_point
 
-    def _try_fuzzy_intersection(self, target, other) -> List['Point2D']:
+    def _try_fuzzy_intersection(self, target, other, tolerance: Optional[float] = None) -> List['Point2D']:
         """
         Fuzzy-Fallback wenn Standard-Intersection 0 Punkte liefert.
 
@@ -398,30 +493,31 @@ class TrimOperation(SketchOperation):
         from sketcher import Point2D, Line2D, Arc2D, Circle2D
 
         fuzzy_points = []
+        fuzzy_tol = tolerance if tolerance is not None else self._fuzzy_tolerance_for_pair(target, other)
 
         # Arc + Line Kombination (häufigster Tangent-Fall)
         if isinstance(target, Arc2D) and isinstance(other, Line2D):
             dist, arc_pt, line_pt = self._get_min_distance_to_line(target, other)
 
-            if dist < FUZZY_INTERSECTION_TOLERANCE and arc_pt is not None:
+            if dist < fuzzy_tol and arc_pt is not None:
                 # Prüfe ob der Punkt wirklich auf dem sichtbaren Arc liegt
                 if self._point_on_arc(arc_pt, target):
                     logger.warning(
                         f"[TRIM] Fuzzy intersection injected: Arc-Line distance={dist:.6f}mm "
-                        f"at ({arc_pt.x:.2f}, {arc_pt.y:.2f})"
+                        f"tol={fuzzy_tol:.6f} at ({arc_pt.x:.2f}, {arc_pt.y:.2f})"
                     )
                     fuzzy_points.append(arc_pt)
 
         elif isinstance(target, Line2D) and isinstance(other, Arc2D):
             dist, arc_pt, line_pt = self._get_min_distance_to_line(other, target)
 
-            if dist < FUZZY_INTERSECTION_TOLERANCE and line_pt is not None:
+            if dist < fuzzy_tol and line_pt is not None:
                 # Für Line als Target: Prüfe ob Punkt auf Linie liegt
                 t = self._get_geometry().get_param_on_entity(line_pt, target)
                 if 0.0 <= t <= 1.0:
                     logger.warning(
                         f"[TRIM] Fuzzy intersection injected: Line-Arc distance={dist:.6f}mm "
-                        f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
+                        f"tol={fuzzy_tol:.6f} at ({line_pt.x:.2f}, {line_pt.y:.2f})"
                     )
                     fuzzy_points.append(line_pt)
 
@@ -429,22 +525,22 @@ class TrimOperation(SketchOperation):
         elif isinstance(target, Circle2D) and isinstance(other, Line2D):
             dist, circle_pt, line_pt = self._get_min_distance_to_line(target, other)
 
-            if dist < FUZZY_INTERSECTION_TOLERANCE and circle_pt is not None:
+            if dist < fuzzy_tol and circle_pt is not None:
                 logger.warning(
                     f"[TRIM] Fuzzy intersection injected: Circle-Line distance={dist:.6f}mm "
-                    f"at ({circle_pt.x:.2f}, {circle_pt.y:.2f})"
+                    f"tol={fuzzy_tol:.6f} at ({circle_pt.x:.2f}, {circle_pt.y:.2f})"
                 )
                 fuzzy_points.append(circle_pt)
 
         elif isinstance(target, Line2D) and isinstance(other, Circle2D):
             dist, circle_pt, line_pt = self._get_min_distance_to_line(other, target)
 
-            if dist < FUZZY_INTERSECTION_TOLERANCE and line_pt is not None:
+            if dist < fuzzy_tol and line_pt is not None:
                 t = self._get_geometry().get_param_on_entity(line_pt, target)
                 if 0.0 <= t <= 1.0:
                     logger.warning(
                         f"[TRIM] Fuzzy intersection injected: Line-Circle distance={dist:.6f}mm "
-                        f"at ({line_pt.x:.2f}, {line_pt.y:.2f})"
+                        f"tol={fuzzy_tol:.6f} at ({line_pt.x:.2f}, {line_pt.y:.2f})"
                     )
                     fuzzy_points.append(line_pt)
 
@@ -540,7 +636,8 @@ class TrimOperation(SketchOperation):
                 # Wenn keine exakten Schnittpunkte gefunden wurden,
                 # prüfe auf Near-Miss (für Tangent-Constraints etc.)
                 if not intersects:
-                    fuzzy_pts = self._try_fuzzy_intersection(target, other)
+                    fuzzy_tol = self._fuzzy_tolerance_for_pair(target, other)
+                    fuzzy_pts = self._try_fuzzy_intersection(target, other, tolerance=fuzzy_tol)
                     if fuzzy_pts:
                         intersects = fuzzy_pts
 
@@ -825,6 +922,7 @@ class TrimOperation(SketchOperation):
 
         try:
             # 0. Constraints für diese Entity entfernen BEVOR sie gelöscht wird!
+            self._active_merge_tolerance = self._merge_tolerance_for_target(target)
             removed_constraints = 0
             if hasattr(self.sketch, 'remove_constraints_for_entity'):
                 removed_constraints = self.sketch.remove_constraints_for_entity(target)
@@ -917,7 +1015,7 @@ class TrimOperation(SketchOperation):
                     new_line = self.sketch.add_line(
                         start_pt.x, start_pt.y, end_pt.x, end_pt.y,
                         construction=getattr(segment.target_entity, 'construction', False),
-                        tolerance=TRIM_POINT_MERGE_TOLERANCE
+                        tolerance=self._active_merge_tolerance
                     )
                 created_lines.append(new_line)
                 created_count += 1

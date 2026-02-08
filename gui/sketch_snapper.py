@@ -51,6 +51,11 @@ class SmartSnapper:
     """
     
     SNAP_DIST_SCREEN = 15
+    SNAP_DIST_SCREEN_MIN = 6
+    SNAP_DIST_SCREEN_MAX = 80
+    SNAP_WORLD_MIN = 1e-4
+    SNAP_WORLD_MIN_FACTOR = 1e-6
+    SNAP_WORLD_MAX_FACTOR = 3e-1
     
     PRIORITY_MAP = {
         SnapType.ENDPOINT: 20,
@@ -72,6 +77,78 @@ class SmartSnapper:
         self._intersection_cache = {}  # {(entity1_id, entity2_id): [Point2D, ...]}
         self._cache_version = 0
 
+    def _editor_snap_radius_px(self) -> float:
+        """
+        Active snap radius in pixels, honoring editor settings with sane clamps.
+        """
+        raw = getattr(self.editor, "snap_radius", self.SNAP_DIST_SCREEN)
+        try:
+            px = float(raw)
+        except Exception:
+            px = float(self.SNAP_DIST_SCREEN)
+        return max(self.SNAP_DIST_SCREEN_MIN, min(self.SNAP_DIST_SCREEN_MAX, px))
+
+    def _scene_world_diag(self) -> float:
+        """
+        Conservative diagonal of the current 2D sketch extent in world units.
+        """
+        min_x = float("inf")
+        min_y = float("inf")
+        max_x = float("-inf")
+        max_y = float("-inf")
+
+        def include_xy(x, y):
+            nonlocal min_x, min_y, max_x, max_y
+            min_x = min(min_x, float(x))
+            min_y = min(min_y, float(y))
+            max_x = max(max_x, float(x))
+            max_y = max(max_y, float(y))
+
+        try:
+            for line in getattr(self.sketch, "lines", []):
+                include_xy(line.start.x, line.start.y)
+                include_xy(line.end.x, line.end.y)
+
+            for circle in getattr(self.sketch, "circles", []):
+                cx, cy = float(circle.center.x), float(circle.center.y)
+                r = abs(float(circle.radius))
+                include_xy(cx - r, cy - r)
+                include_xy(cx + r, cy + r)
+
+            for arc in getattr(self.sketch, "arcs", []):
+                cx, cy = float(arc.center.x), float(arc.center.y)
+                r = abs(float(arc.radius))
+                include_xy(cx - r, cy - r)
+                include_xy(cx + r, cy + r)
+                include_xy(arc.start_point.x, arc.start_point.y)
+                include_xy(arc.end_point.x, arc.end_point.y)
+
+            for p in getattr(self.sketch, "points", []):
+                include_xy(p.x, p.y)
+        except Exception:
+            return 0.0
+
+        if min_x == float("inf"):
+            return 0.0
+        return math.hypot(max_x - min_x, max_y - min_y)
+
+    def _compute_snap_radius_world(self) -> float:
+        """
+        Converts snap radius from pixels to world units and clamps it against
+        sketch size so zoom extremes do not create over- or under-snapping.
+        """
+        px = self._editor_snap_radius_px()
+        view_scale = max(float(getattr(self.editor, "view_scale", 1.0)), 1e-9)
+        base_world = px / view_scale
+
+        scene_diag = self._scene_world_diag()
+        if scene_diag <= 0.0:
+            return max(self.SNAP_WORLD_MIN, base_world)
+
+        min_world = max(self.SNAP_WORLD_MIN, scene_diag * self.SNAP_WORLD_MIN_FACTOR)
+        max_world = max(min_world * 4.0, scene_diag * self.SNAP_WORLD_MAX_FACTOR)
+        return max(min_world, min(max_world, base_world))
+
     def invalidate_intersection_cache(self):
         """
         Performance Optimization 1.6: Invalidiert Intersection-Cache.
@@ -82,7 +159,7 @@ class SmartSnapper:
 
     def snap(self, mouse_screen_pos: QPointF) -> SnapResult:
         mouse_world = self.editor.screen_to_world(mouse_screen_pos)
-        snap_radius = self.SNAP_DIST_SCREEN / self.editor.view_scale
+        snap_radius = self._compute_snap_radius_world()
         
         candidates = []
 

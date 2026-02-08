@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import re
 
@@ -197,3 +198,33 @@ def test_duplicate_guardrails():
             )
 
     assert not failures, "\n".join(failures)
+
+
+def test_push_pull_has_single_topexp_import():
+    """
+    Regression-Guardrail: doppelte lokale Imports von TopExp_Explorer in
+    _extrude_body_face_build123d verursachen UnboundLocalError durch Shadowing.
+    """
+    content = _read("gui/main_window.py")
+    tree = ast.parse(content)
+    target = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_extrude_body_face_build123d":
+            target = node
+            break
+
+    assert target is not None, "gui/main_window.py: _extrude_body_face_build123d not found"
+
+    import_count = 0
+    for node in ast.walk(target):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "OCP.TopExp":
+            continue
+        for alias in node.names:
+            if alias.name == "TopExp_Explorer":
+                import_count += 1
+
+    assert (
+        import_count == 1
+    ), "gui/main_window.py: _extrude_body_face_build123d must import TopExp_Explorer exactly once"

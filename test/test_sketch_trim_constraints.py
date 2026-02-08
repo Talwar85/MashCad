@@ -107,6 +107,38 @@ def test_trim_line_reuses_shared_endpoint_object():
     assert remaining.start is shared_point or remaining.end is shared_point
 
 
+def test_trim_adaptive_fuzzy_intersection_for_large_scale_near_miss():
+    sketch = Sketch("trim_large_fuzzy")
+    target_arc = sketch.add_arc(0.0, 0.0, 5000.0, 0.0, 180.0)
+    near_line = sketch.add_line(-6000.0, 5000.02, 6000.0, 5000.02)
+
+    op = TrimOperation(sketch)
+    cuts = op._calculate_intersections(target_arc, [near_line])
+
+    assert len(cuts) >= 3  # Arc start/end + injected fuzzy cut
+    assert any(abs(p.y - 5000.0) < 0.05 for _, p in cuts)
+
+
+def test_trim_adaptive_merge_tolerance_reuses_near_point_on_large_model():
+    sketch = Sketch("trim_large_merge_tolerance")
+    target = sketch.add_line(0.0, 0.0, 10000.0, 0.0)
+    sketch.add_line(5000.0, -200.0, 5000.0, 200.0)
+    nearby_branch = sketch.add_line(5000.002, 0.0, 5000.002, 50.0)
+    nearby_point = nearby_branch.start
+
+    op = TrimOperation(sketch)
+    find_result = op.find_segment(target, Point2D(2000.0, 0.0))
+    assert find_result.success
+
+    exec_result = op.execute_trim(find_result.segment)
+    assert exec_result.success
+
+    horizontal = [l for l in sketch.lines if abs(l.start.y - l.end.y) < 1e-9]
+    assert len(horizontal) == 1
+    remaining = horizontal[0]
+    assert remaining.start is nearby_point or remaining.end is nearby_point
+
+
 def test_trim_line_accepts_click_slightly_outside_segment_range():
     sketch = Sketch("trim_outside_click_range")
     target = sketch.add_line(0.0, 0.0, 10.0, 0.0)

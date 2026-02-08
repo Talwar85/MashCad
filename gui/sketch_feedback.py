@@ -60,3 +60,15 @@ def format_trim_failure_message(error: str, target_type: str = "") -> str:
         return f"Trim{target}: {raw}. Aenderung wurde zurueckgesetzt."
     return f"Trim{target}: {raw}"
 
+
+def format_trim_warning_message(message: str, target_type: str = "") -> str:
+    """
+    Builds a consistent, actionable message for trim warnings.
+    """
+    raw = (message or "").strip() or "Trim mit Einschraenkung abgeschlossen"
+    target = f" ({target_type})" if target_type else ""
+    lower = raw.lower()
+
+    if "zu klein" in lower:
+        return f"Trim{target}: Restsegment unter Toleranz und nicht erstellt."
+    return f"Trim{target}: {raw}"

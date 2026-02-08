@@ -17,12 +17,12 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
 try:
-    from gui.sketch_feedback import format_trim_failure_message
+    from gui.sketch_feedback import format_trim_failure_message, format_trim_warning_message
 except ImportError:
     try:
-        from sketch_feedback import format_trim_failure_message
+        from sketch_feedback import format_trim_failure_message, format_trim_warning_message
     except ImportError:
-        from .sketch_feedback import format_trim_failure_message
+        from .sketch_feedback import format_trim_failure_message, format_trim_warning_message
 
 # Importiere SketchTool und SnapType
 try:
@@ -45,6 +45,18 @@ from sketcher.sketch import Sketch
 
 class SketchHandlersMixin:
     """Mixin containing all tool handler methods for SketchEditor"""
+
+    def _adaptive_world_tolerance(self, scale: float = 1.0, min_world: float = 0.05, max_world: float = 2.0) -> float:
+        """
+        Convert screen snap radius to a bounded world tolerance.
+        """
+        try:
+            snap_px = float(getattr(self, "snap_radius", 15))
+            view_scale = max(float(getattr(self, "view_scale", 1.0)), 1e-9)
+            tol = (snap_px / view_scale) * float(scale)
+        except Exception:
+            tol = 1.0
+        return max(min_world, min(max_world, tol))
     
     def _handle_select(self, pos, snap_type):
         hit = self._find_entity_at(pos)
@@ -148,7 +160,7 @@ class SketchHandlersMixin:
 
                 # --- A. Auto-Constraints: Horizontal / Vertikal ---
                 # Wir nutzen hier deine existierenden Methoden add_horizontal/vertical
-                h_tolerance = 3.0
+                h_tolerance = self._adaptive_world_tolerance(scale=0.35, min_world=0.05, max_world=2.0)
                 
                 # Nur prÃ¼fen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
                 if snap_type not in [SnapType.EDGE, SnapType.INTERSECTION]:
@@ -1148,13 +1160,24 @@ class SketchHandlersMixin:
 
         # AusfÃ¼hren bei Klick
         if QApplication.mouseButtons() & Qt.LeftButton:
+            from sketcher.operations.base import ResultStatus
+
             self._save_undo()
             op_result = trim_op.execute_trim(segment)
+            is_warning = getattr(op_result, "status", None) == ResultStatus.WARNING
 
             if op_result.success:
-                ok_msg = f"Trim: {op_result.message}"
-                logger.info(f"[TRIM] Success: {op_result.message}")
-                self.status_message.emit(ok_msg)
+                if is_warning:
+                    target_type = type(target).__name__ if target is not None else ""
+                    warn_msg = format_trim_warning_message(op_result.message, target_type=target_type)
+                    logger.warning(f"[TRIM] Warning: {warn_msg}")
+                    self.status_message.emit(warn_msg)
+                    if hasattr(self, "show_message"):
+                        self.show_message(warn_msg, 3000, QColor(255, 190, 90))
+                else:
+                    ok_msg = f"Trim: {op_result.message}"
+                    logger.info(f"[TRIM] Success: {op_result.message}")
+                    self.status_message.emit(ok_msg)
                 if hasattr(self, "_solve_async"):
                     self._solve_async()
                 else:
@@ -2047,15 +2070,18 @@ class SketchHandlersMixin:
                 self.status_message.emit(tr("Vertical constraint added"))
         else: self.status_message.emit(tr("Select first line"))
     
-    def _ensure_coincident_for_line(self, line, tolerance=1.0):
+    def _ensure_coincident_for_line(self, line, tolerance=None):
         """Alte Funktion - verwende _merge_nearby_endpoints stattdessen"""
         self._merge_nearby_endpoints(line, tolerance)
     
-    def _merge_nearby_endpoints(self, line, tolerance=1.0):
+    def _merge_nearby_endpoints(self, line, tolerance=None):
         """
         Vereint nahe Punkte mit existierenden Punkten (wie Fusion360).
         Ersetzt Linien-Endpunkte durch existierende Punkte wenn sie nah genug sind.
         """
+        if tolerance is None:
+            tolerance = self._adaptive_world_tolerance(scale=0.4, min_world=0.05, max_world=1.5)
+
         for attr in ['start', 'end']:
             pt = getattr(line, attr)
             

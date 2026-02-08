@@ -185,3 +185,28 @@ def test_parametric_inconsistent_is_not_silently_overridden_by_scipy(monkeypatch
     assert result.success is False
     assert result.status == ConstraintStatus.OVER_CONSTRAINED
     assert "Widerspruechlich" in result.message or "Constraints" in result.message
+
+
+def test_scipy_failure_reports_parametric_skip_reason(monkeypatch):
+    sketch = Sketch("fallback_reason")
+    sketch.add_arc(0.0, 0.0, 5.0, 0.0, 90.0)
+
+    monkeypatch.setattr(parametric_solver_module, "check_solvespace_available", lambda: True)
+    monkeypatch.setattr(
+        sketch._solver,
+        "solve",
+        lambda *args, **kwargs: solver_module.SolverResult(
+            success=False,
+            iterations=3,
+            final_error=1.0,
+            status=ConstraintStatus.INCONSISTENT,
+            message="SciPy fehlgeschlagen",
+        ),
+    )
+
+    result = sketch.solve()
+
+    assert result.success is False
+    assert "SciPy fehlgeschlagen" in result.message
+    assert "py-slvs übersprungen" in result.message
+    assert "Arc" in result.message or "Arcs" in result.message
