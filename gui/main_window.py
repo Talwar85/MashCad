@@ -574,6 +574,9 @@ class MainWindow(QMainWindow):
         self._sweep_phase = None  # 'profile' or 'path'
         self._sweep_profile_data = None
         self._sweep_path_data = None
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
 
         # Loft Panel (Phase 6)
         self.loft_panel = LoftInputPanel(self)
@@ -9365,6 +9368,9 @@ class MainWindow(QMainWindow):
         self._sweep_phase = 'profile'
         self._sweep_profile_data = None
         self._sweep_path_data = None
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
 
         # Face-Detection aktivieren
         self.viewport_3d.set_extrude_mode(True)
@@ -9388,9 +9394,14 @@ class MainWindow(QMainWindow):
         if not face:
             return
 
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
+
         # Profil-Daten speichern
         profile_data = {
             'type': face.domain_type,
+            'owner_id': face.owner_id,
             'face_id': face_id,
             'plane_origin': face.plane_origin,
             'plane_normal': face.plane_normal,
@@ -9398,6 +9409,53 @@ class MainWindow(QMainWindow):
             'plane_y': face.plane_y,
             'shapely_poly': face.shapely_poly
         }
+
+        if face.domain_type == "body_face":
+            profile_data["body_id"] = face.owner_id
+            profile_data["ocp_face_id"] = getattr(face, "ocp_face_id", None)
+
+            target_body = self.document.find_body_by_id(face.owner_id)
+            resolved_face = None
+            resolved_face_index = getattr(face, "ocp_face_id", None)
+            if target_body is not None and getattr(target_body, "_build123d_solid", None) is not None:
+                try:
+                    pick_position = getattr(face, "sample_point", None) or face.plane_origin
+                    resolved_face, resolved_face_index = self._resolve_solid_face_from_pick(
+                        target_body,
+                        face.owner_id,
+                        position=pick_position,
+                        ocp_face_id=getattr(face, "ocp_face_id", None),
+                    )
+                except Exception as e:
+                    logger.debug(f"Sweep: Profil-Face Auflösung fehlgeschlagen: {e}")
+
+            if resolved_face_index is not None:
+                try:
+                    resolved_face_index = int(resolved_face_index)
+                    self._sweep_profile_face_index = resolved_face_index
+                    profile_data["face_index"] = resolved_face_index
+                except Exception:
+                    resolved_face_index = None
+
+            if resolved_face is not None and target_body is not None:
+                self._sweep_profile_shape_id = self._find_or_register_face_shape_id(
+                    target_body,
+                    resolved_face,
+                    local_index=max(0, int(resolved_face_index) if resolved_face_index is not None else 0),
+                )
+
+            has_primary_profile_ref = (
+                self._sweep_profile_shape_id is not None
+                or self._sweep_profile_face_index is not None
+            )
+            if resolved_face is not None and not has_primary_profile_ref:
+                try:
+                    from modeling.geometric_selector import GeometricFaceSelector
+
+                    geo_selector = GeometricFaceSelector.from_face(resolved_face)
+                    self._sweep_profile_geometric_selector = geo_selector.to_dict()
+                except Exception as e:
+                    logger.debug(f"Sweep: Konnte Profil-GeometricSelector nicht erzeugen: {e}")
 
         self._sweep_profile_data = profile_data
         self.sweep_panel.set_profile(profile_data)
@@ -9447,11 +9505,12 @@ class MainWindow(QMainWindow):
             edge_indices = self.viewport_3d.get_selected_edge_topology_indices() or []
         path_body_id = getattr(self.viewport_3d, "_edge_selection_body_id", None)
         path_geo_selector = None
-        try:
-            from modeling.geometric_selector import GeometricEdgeSelector
-            path_geo_selector = GeometricEdgeSelector.from_edge(edge).to_dict()
-        except Exception as e:
-            logger.debug(f"Sweep: Konnte GeometricEdgeSelector nicht erzeugen: {e}")
+        if not edge_indices:
+            try:
+                from modeling.geometric_selector import GeometricEdgeSelector
+                path_geo_selector = GeometricEdgeSelector.from_edge(edge).to_dict()
+            except Exception as e:
+                logger.debug(f"Sweep: Konnte GeometricEdgeSelector nicht erzeugen: {e}")
 
         # Pfad-Daten speichern
         path_data = {
@@ -9459,8 +9518,9 @@ class MainWindow(QMainWindow):
             'body_id': path_body_id,
             'edge_indices': edge_indices,
             'build123d_edges': build123d_edges,  # Direkte Edge-Referenzen (Session)
-            'path_geometric_selector': path_geo_selector,
         }
+        if path_geo_selector is not None:
+            path_data['path_geometric_selector'] = path_geo_selector
 
         self._sweep_path_data = path_data
         self.sweep_panel.set_path(path_data)
@@ -9502,14 +9562,22 @@ class MainWindow(QMainWindow):
                 scale_start=self.sweep_panel.get_scale_start(),
                 scale_end=self.sweep_panel.get_scale_end(),
             )
-
-            # TNP v4.0: Pfad-Referenzen explizit am Feature hinterlegen.
-            path_geo_selector = self._sweep_path_data.get("path_geometric_selector")
-            if path_geo_selector:
-                sweep_feature.path_geometric_selector = path_geo_selector
+            if self._sweep_profile_shape_id is not None:
+                sweep_feature.profile_shape_id = self._sweep_profile_shape_id
+            if self._sweep_profile_face_index is not None:
+                sweep_feature.profile_face_index = int(self._sweep_profile_face_index)
+            if (
+                self._sweep_profile_geometric_selector
+                and sweep_feature.profile_shape_id is None
+                and sweep_feature.profile_face_index is None
+            ):
+                sweep_feature.profile_geometric_selector = self._sweep_profile_geometric_selector
 
             path_edges = self._sweep_path_data.get("build123d_edges") or []
             path_edge_indices = self._sweep_path_data.get("edge_indices") or []
+            path_geo_selector = self._sweep_path_data.get("path_geometric_selector")
+            if path_geo_selector and not path_edge_indices:
+                sweep_feature.path_geometric_selector = path_geo_selector
             shape_service = getattr(self.document, "_shape_naming_service", None)
             if (path_edges or path_edge_indices) and shape_service:
                 try:
@@ -9545,6 +9613,8 @@ class MainWindow(QMainWindow):
                         sweep_feature.path_shape_id = shape_id
                 except Exception as e:
                     logger.debug(f"Sweep: Path-ShapeID konnte nicht gesetzt werden: {e}")
+            if path_edge_indices or sweep_feature.path_shape_id is not None:
+                sweep_feature.path_geometric_selector = None
 
             # Body finden oder erstellen
             is_new_body = operation == "New Body" or not self.document.bodies
@@ -9599,6 +9669,9 @@ class MainWindow(QMainWindow):
     def _on_sweep_profile_cleared(self):
         """Handler wenn Profil-Auswahl entfernt wird."""
         self._sweep_profile_data = None
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
         logger.info("Sweep Profil-Auswahl entfernt")
         # Entferne Highlight im Viewport
         self._clear_sweep_highlight('profile')
@@ -10032,6 +10105,9 @@ class MainWindow(QMainWindow):
         self._sweep_phase = None
         self._sweep_profile_data = None
         self._sweep_path_data = None
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
         self.sweep_panel.hide()
 
         # Highlights entfernen

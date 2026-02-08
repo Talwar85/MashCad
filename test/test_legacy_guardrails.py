@@ -13,6 +13,10 @@ RULES = [
             r"\bdef\s+_compute_nsided_patch\(",
             r"if\s+isinstance\(feature,\s*\(ThreadFeature,\s*ExtrudeFeature\)\)",
             r"\"face_index\"\s*:\s*getattr\(feat,\s*\"face_index\"",
+            r"has_topological_path_refs\s*=\s*bool\(",
+            r"profile_face_index:\s*Optional\[int\]\s*=\s*None",
+            r"profile_shape_id/profile_face_index",
+            r"Kein Geometric-Fallback",
         ],
         "forbidden": [
             r"\btnp_shape_reference\b",
@@ -64,6 +68,15 @@ RULES = [
             r"\bdef\s+edge_from_index\(",
             r"\bdef\s+iter_faces_with_indices\(",
             r"\bdef\s+iter_edges_with_indices\(",
+        ],
+    },
+    {
+        "path": "modeling/tnp_system.py",
+        "required": [
+            r"sweep_profile_shape_id\s*=\s*getattr\(feat,\s*\"profile_shape_id\"",
+            r"sweep_profile_index\s*=\s*getattr\(feat,\s*\"profile_face_index\"",
+            r"sweep_path_shape_id\s*=\s*getattr\(feat,\s*\"path_shape_id\"",
+            r"path_data\.get\(\"edge_indices\"",
         ],
     },
     {

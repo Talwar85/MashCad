@@ -464,6 +464,27 @@ class ShapeNamingService:
                     _to_index_list(single_face_index),
                 ))
 
+            sweep_profile_shape_id = getattr(feat, "profile_shape_id", None)
+            sweep_profile_index = getattr(feat, "profile_face_index", None)
+            if sweep_profile_shape_id is not None or sweep_profile_index is not None:
+                groups.append((
+                    "Face",
+                    _to_list(sweep_profile_shape_id),
+                    _to_index_list(sweep_profile_index),
+                ))
+
+            sweep_path_shape_id = getattr(feat, "path_shape_id", None)
+            sweep_path_indices: List[Optional[int]] = []
+            path_data = getattr(feat, "path_data", {})
+            if isinstance(path_data, dict):
+                sweep_path_indices = _to_index_list(path_data.get("edge_indices", []))
+            if sweep_path_shape_id is not None or sweep_path_indices:
+                groups.append((
+                    "Edge",
+                    _to_list(sweep_path_shape_id),
+                    sweep_path_indices,
+                ))
+
             return groups
 
         def _resolve_index_ref(ref_kind: str, topo_index: Optional[int]) -> bool:

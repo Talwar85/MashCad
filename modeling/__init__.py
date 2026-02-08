@@ -391,6 +391,7 @@ class SweepFeature(Feature):
     # TNP v4.0: ShapeIDs für Body-Referenzen (primary)
     profile_shape_id: Any = None  # ShapeID für Body-Face Profile
     path_shape_id: Any = None     # ShapeID für Body-Edge Path
+    profile_face_index: Optional[int] = None  # Topologie-Index für Body-Face Profile
 
     # TNP v4.0: GeometricSelectors als Fallback
     profile_geometric_selector: Any = None  # GeometricFaceSelector
@@ -410,6 +411,11 @@ class SweepFeature(Feature):
         self.type = FeatureType.SWEEP
         if not self.name or self.name == "Feature":
             self.name = "Sweep"
+        if self.profile_face_index is not None:
+            try:
+                self.profile_face_index = int(self.profile_face_index)
+            except Exception:
+                self.profile_face_index = None
 
     def has_scale_or_twist(self) -> bool:
         """Prüft ob Skalierung oder Twist aktiv ist."""
@@ -2408,29 +2414,103 @@ class Body:
         if self._document and hasattr(self._document, '_shape_naming_service'):
             shape_service = self._document._shape_naming_service
 
-        # TNP v4.0: Profil-Face primär über ShapeID auflösen
-        if current_solid is not None and feature.profile_shape_id and shape_service:
+        profile_data = feature.profile_data if isinstance(feature.profile_data, dict) else {}
+        profile_source_solid = current_solid
+        profile_body_id = profile_data.get("body_id")
+        if profile_body_id and self._document and hasattr(self._document, "find_body_by_id"):
+            try:
+                profile_body = self._document.find_body_by_id(profile_body_id)
+                if profile_body is not None and getattr(profile_body, "_build123d_solid", None) is not None:
+                    profile_source_solid = profile_body._build123d_solid
+            except Exception as e:
+                logger.debug(f"Sweep: Konnte Profil-Body '{profile_body_id}' nicht laden: {e}")
+
+        profile_face_index = getattr(feature, "profile_face_index", None)
+        try:
+            profile_face_index = int(profile_face_index) if profile_face_index is not None else None
+        except Exception:
+            profile_face_index = None
+        if profile_face_index is not None and profile_face_index < 0:
+            profile_face_index = None
+        feature.profile_face_index = profile_face_index
+
+        has_topological_profile_refs = bool(feature.profile_shape_id or profile_face_index is not None)
+
+        def _persist_profile_shape_id(face_obj) -> None:
+            if (
+                face_obj is None
+                or not shape_service
+                or feature.profile_shape_id is not None
+                or not hasattr(face_obj, "wrapped")
+            ):
+                return
+            try:
+                shape_id = shape_service.find_shape_id_by_face(face_obj)
+                if shape_id is None:
+                    fc = face_obj.center()
+                    area = face_obj.area if hasattr(face_obj, "area") else 0.0
+                    shape_id = shape_service.register_shape(
+                        ocp_shape=face_obj.wrapped,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature.id,
+                        local_index=max(0, int(profile_face_index) if profile_face_index is not None else 0),
+                        geometry_data=(fc.X, fc.Y, fc.Z, area),
+                    )
+                if shape_id is not None:
+                    feature.profile_shape_id = shape_id
+            except Exception as e:
+                logger.debug(f"Sweep: Konnte Profil-ShapeID nicht persistieren: {e}")
+
+        # TNP v4.0 PRIMARY: Topologie-Index
+        if profile_source_solid is not None and profile_face_index is not None:
+            try:
+                from modeling.topology_indexing import face_from_index
+
+                profile_face = face_from_index(profile_source_solid, profile_face_index)
+                if profile_face is not None:
+                    _persist_profile_shape_id(profile_face)
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"Sweep: Profil via Face-Index aufgelöst (index={profile_face_index})")
+            except Exception as e:
+                logger.debug(f"Sweep: Profil-Index Auflösung fehlgeschlagen: {e}")
+
+        # TNP v4.0 SECONDARY: ShapeID
+        if profile_face is None and profile_source_solid is not None and feature.profile_shape_id and shape_service:
             try:
                 resolved_ocp, method = shape_service.resolve_shape_with_method(
-                    feature.profile_shape_id, current_solid
+                    feature.profile_shape_id, profile_source_solid
                 )
                 if resolved_ocp is not None:
                     from build123d import Face
+                    from modeling.topology_indexing import face_index_of
+
                     profile_face = Face(resolved_ocp)
+                    resolved_idx = face_index_of(profile_source_solid, profile_face)
+                    if resolved_idx is not None:
+                        feature.profile_face_index = int(resolved_idx)
                     if is_enabled("tnp_debug_logging"):
                         logger.debug(f"Sweep: Profil via ShapeID aufgelöst (method={method})")
             except Exception as e:
                 logger.debug(f"Sweep: Profil-ShapeID Auflösung fehlgeschlagen: {e}")
 
-        # TNP v4.0 Fallback: GeometricFaceSelector
-        if profile_face is None and current_solid is not None and feature.profile_geometric_selector:
+        if profile_face is None and has_topological_profile_refs:
+            logger.warning(
+                "Sweep: TNP-Profilreferenz konnte nicht aufgelöst werden "
+                "(profile_shape_id/profile_face_index). Kein Geometric-Fallback."
+            )
+            raise ValueError("Sweep: Profil-Referenz ist ungültig. Bitte Profil neu auswählen.")
+
+        # TNP v4.0 Fallback: GeometricFaceSelector (nur wenn keine topologischen Refs vorhanden)
+        if profile_face is None and profile_source_solid is not None and feature.profile_geometric_selector:
             try:
                 from modeling.geometric_selector import GeometricFaceSelector
+                from modeling.topology_indexing import face_index_of
+
                 selectors = [feature.profile_geometric_selector]
                 if isinstance(feature.profile_geometric_selector, list):
                     selectors = feature.profile_geometric_selector
 
-                all_faces = list(current_solid.faces()) if hasattr(current_solid, 'faces') else []
+                all_faces = list(profile_source_solid.faces()) if hasattr(profile_source_solid, 'faces') else []
                 for selector_data in selectors:
                     if isinstance(selector_data, dict):
                         geo_sel = GeometricFaceSelector.from_dict(selector_data)
@@ -2442,35 +2522,13 @@ class Body:
                     best_face = geo_sel.find_best_match(all_faces)
                     if best_face is not None:
                         profile_face = best_face
+                        feature.profile_face_index = face_index_of(profile_source_solid, profile_face)
+                        _persist_profile_shape_id(profile_face)
                         break
-
-                if profile_face is not None:
-                    if feature.profile_geometric_selector is None:
-                        try:
-                            feature.profile_geometric_selector = (
-                                GeometricFaceSelector.from_face(profile_face).to_dict()
-                            )
-                        except Exception:
-                            pass
-
-                    if shape_service and not feature.profile_shape_id:
-                        shape_id = shape_service.find_shape_id_by_face(profile_face)
-                        if shape_id is None and hasattr(profile_face, 'wrapped'):
-                            fc = profile_face.center()
-                            area = profile_face.area if hasattr(profile_face, 'area') else 0.0
-                            shape_id = shape_service.register_shape(
-                                ocp_shape=profile_face.wrapped,
-                                shape_type=ShapeType.FACE,
-                                feature_id=feature.id,
-                                local_index=0,
-                                geometry_data=(fc.X, fc.Y, fc.Z, area)
-                            )
-                        if shape_id is not None:
-                            feature.profile_shape_id = shape_id
             except Exception as e:
                 logger.debug(f"Sweep: Profil über GeometricSelector fehlgeschlagen: {e}")
 
-        # Legacy-Fallback: Profil aus gespeicherten Geometriedaten
+        # Legacy-Fallback: Profil aus gespeicherten Geometriedaten (Sketch-Profil)
         if profile_face is None:
             profile_face = self._profile_data_to_face(feature.profile_data)
         if profile_face is None:
@@ -4023,6 +4081,10 @@ class Body:
                         source_solid = ref_body._build123d_solid
 
                 all_edges = list(source_solid.edges()) if source_solid and hasattr(source_solid, 'edges') else []
+                edge_indices = list(path_data.get("edge_indices") or [])
+                has_topological_path_refs = bool(edge_indices)
+                if feature and getattr(feature, "path_shape_id", None) is not None:
+                    has_topological_path_refs = True
                 shape_service = None
                 if self._document and hasattr(self._document, '_shape_naming_service'):
                     shape_service = self._document._shape_naming_service
@@ -4031,13 +4093,6 @@ class Body:
                     if not feature or not shape_service or feature.path_shape_id is not None:
                         return
                     try:
-                        if feature.path_geometric_selector is None:
-                            try:
-                                from modeling.geometric_selector import GeometricEdgeSelector
-                                feature.path_geometric_selector = GeometricEdgeSelector.from_edge(edge_obj).to_dict()
-                            except Exception:
-                                pass
-
                         shape_id = shape_service.find_shape_id_by_edge(edge_obj)
                         if shape_id is None and hasattr(edge_obj, 'wrapped'):
                             ec = edge_obj.center()
@@ -4075,7 +4130,6 @@ class Body:
                         logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
 
                 # TNP v4.0 SECONDARY: Topology-Index-basierte Pfad-Auflösung
-                edge_indices = path_data.get("edge_indices") or []
                 if edge_indices and all_edges:
                     try:
                         from modeling.topology_indexing import edge_from_index
@@ -4085,18 +4139,18 @@ class Body:
                             if resolved is not None:
                                 resolved_edges.append(resolved)
                         if resolved_edges:
-                            if feature and getattr(feature, "path_geometric_selector", None) is None:
-                                try:
-                                    from modeling.geometric_selector import GeometricEdgeSelector
-                                    feature.path_geometric_selector = GeometricEdgeSelector.from_edge(
-                                        resolved_edges[0]
-                                    ).to_dict()
-                                except Exception:
-                                    pass
                             _persist_path_shape_id(resolved_edges[0])
                             return Wire(resolved_edges)
                     except Exception as e:
                         logger.debug(f"Sweep: Topology-Index-Pfadauflösung fehlgeschlagen: {e}")
+
+                # Wenn explizite TNP-Referenzen vorhanden sind, kein stilles Recovery über Legacy/Session-Pfade.
+                if has_topological_path_refs:
+                    logger.warning(
+                        "Sweep: TNP-Pfadreferenz konnte nicht aufgelöst werden "
+                        "(ShapeID/edge_indices). Kein Geometric-Fallback."
+                    )
+                    return None
 
                 # TNP v4.0 Fallback: GeometricEdgeSelector (Feature-Feld oder path_data)
                 path_geo_selector = getattr(feature, 'path_geometric_selector', None) if feature else None
@@ -4112,13 +4166,6 @@ class Body:
 
                         best_edge = geo_sel.find_best_match(all_edges)
                         if best_edge is not None:
-                            try:
-                                if feature is not None and getattr(feature, 'path_geometric_selector', None) is None:
-                                    feature.path_geometric_selector = (
-                                        geo_sel.to_dict() if hasattr(geo_sel, 'to_dict') else path_geo_selector
-                                    )
-                            except Exception:
-                                pass
                             _persist_path_shape_id(best_edge)
                             return Wire([best_edge])
                     except Exception as e:
@@ -4135,12 +4182,6 @@ class Body:
                 direct_edge = path_data.get('edge')
                 if direct_edge is not None:
                     _persist_path_shape_id(direct_edge)
-                    try:
-                        if feature and getattr(feature, 'path_geometric_selector', None) is None:
-                            from modeling.geometric_selector import GeometricEdgeSelector
-                            feature.path_geometric_selector = GeometricEdgeSelector.from_edge(direct_edge).to_dict()
-                    except Exception:
-                        pass
                     return Wire([direct_edge])
 
                 if path_data.get("edge_selector") is not None:
@@ -7324,6 +7365,8 @@ class Body:
                 path_data_copy = feat.path_data.copy() if feat.path_data else {}
                 for transient_key in ("edge", "build123d_edges", "edge_selector", "path_geometric_selector"):
                     path_data_copy.pop(transient_key, None)
+                path_edge_indices = list(path_data_copy.get("edge_indices") or [])
+                has_topological_path_refs = bool(feat.path_shape_id or path_edge_indices)
                 feat_dict.update({
                     "feature_class": "SweepFeature",
                     "is_frenet": feat.is_frenet,
@@ -7334,6 +7377,7 @@ class Body:
                     "profile_data": pd_copy,
                     "path_data": path_data_copy,
                     "contact_mode": feat.contact_mode,
+                    "profile_face_index": feat.profile_face_index,
                 })
                 # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
                 if feat.profile_shape_id:
@@ -7362,7 +7406,7 @@ class Body:
                         if hasattr(feat.profile_geometric_selector, '__dataclass_fields__')
                         else feat.profile_geometric_selector
                     )
-                if feat.path_geometric_selector:
+                if feat.path_geometric_selector and not has_topological_path_refs:
                     feat_dict["path_geometric_selector"] = (
                         asdict(feat.path_geometric_selector)
                         if hasattr(feat.path_geometric_selector, '__dataclass_fields__')
@@ -7928,9 +7972,20 @@ class Body:
                     scale_end=feat_dict.get("scale_end", 1.0),
                     profile_data=profile_data,
                     path_data=feat_dict.get("path_data", {}),
+                    profile_face_index=feat_dict.get("profile_face_index"),
                     contact_mode=feat_dict.get("contact_mode", "keep"),
                     **base_kwargs
                 )
+                if feat.profile_face_index is None and isinstance(profile_data, dict):
+                    raw_profile_idx = profile_data.get("face_index")
+                    if raw_profile_idx is None:
+                        raw_profile_idx = profile_data.get("ocp_face_id")
+                    try:
+                        profile_idx = int(raw_profile_idx)
+                        if profile_idx >= 0:
+                            feat.profile_face_index = profile_idx
+                    except Exception:
+                        pass
                 # TNP v4.0: ShapeIDs vollständig deserialisieren (alle 6 Felder)
                 from modeling.tnp_system import ShapeID, ShapeType
                 if "profile_shape_id" in feat_dict:
@@ -7977,6 +8032,17 @@ class Body:
                 if isinstance(feat.path_data, dict):
                     feat.path_data.pop("path_geometric_selector", None)
                     feat.path_data.pop("edge_selector", None)
+                has_topological_profile_refs = bool(
+                    feat.profile_shape_id is not None
+                    or feat.profile_face_index is not None
+                )
+                if has_topological_profile_refs:
+                    feat.profile_geometric_selector = None
+                has_topological_path_refs = bool(feat.path_shape_id)
+                if isinstance(feat.path_data, dict) and feat.path_data.get("edge_indices"):
+                    has_topological_path_refs = True
+                if has_topological_path_refs:
+                    feat.path_geometric_selector = None
 
             elif feat_class == "ShellFeature":
                 selectors = feat_dict.get("opening_face_selectors", [])

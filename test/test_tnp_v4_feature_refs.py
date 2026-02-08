@@ -37,6 +37,16 @@ def _face_selector():
     }
 
 
+def _edge_selector():
+    return {
+        "center": [0.0, 0.0, 0.0],
+        "direction": [1.0, 0.0, 0.0],
+        "length": 1.0,
+        "curve_type": "line",
+        "tolerance": 10.0,
+    }
+
+
 def _feature_dict(body_data: dict, feature_class: str) -> dict:
     for feat in body_data["features"]:
         if feat.get("feature_class") == feature_class:
@@ -47,9 +57,10 @@ def _feature_dict(body_data: dict, feature_class: str) -> dict:
 def test_tnp_v4_refs_are_serialized_for_requested_features():
     body = Body("tnp_v4_serialize")
 
-    sweep = SweepFeature(profile_data={}, path_data={})
+    sweep = SweepFeature(profile_data={}, path_data={"type": "body_edge", "edge_indices": [3]})
     sweep.profile_shape_id = _make_shape_id(ShapeType.FACE, sweep.id, 0)
     sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, sweep.id, 1)
+    sweep.profile_face_index = 16
 
     hole = HoleFeature(face_selectors=[_face_selector()], position=(1.0, 2.0, 3.0), direction=(0.0, 0.0, -1.0))
     hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, hole.id, 0)]
@@ -85,6 +96,7 @@ def test_tnp_v4_refs_are_serialized_for_requested_features():
     for key in ("uuid", "shape_type", "feature_id", "local_index", "geometry_hash", "timestamp"):
         assert key in sweep_dict["profile_shape_id"]
         assert key in sweep_dict["path_shape_id"]
+    assert sweep_dict["profile_face_index"] == 16
 
     hole_dict = _feature_dict(data, "HoleFeature")
     draft_dict = _feature_dict(data, "DraftFeature")
@@ -254,9 +266,10 @@ def test_tnp_v4_sweep_serialization_omits_transient_legacy_path_fields():
 def test_tnp_v4_refs_roundtrip_for_requested_features():
     body = Body("tnp_v4_roundtrip")
 
-    sweep = SweepFeature(profile_data={}, path_data={})
+    sweep = SweepFeature(profile_data={}, path_data={"type": "body_edge", "edge_indices": [4]})
     sweep.profile_shape_id = _make_shape_id(ShapeType.FACE, sweep.id, 0)
     sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, sweep.id, 0)
+    sweep.profile_face_index = 6
 
     hole = HoleFeature(face_selectors=[_face_selector()])
     hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, hole.id, 0)]
@@ -296,6 +309,7 @@ def test_tnp_v4_refs_roundtrip_for_requested_features():
     assert isinstance(restored_sweep.path_shape_id, ShapeID)
     assert restored_sweep.profile_shape_id.uuid
     assert restored_sweep.path_shape_id.uuid
+    assert restored_sweep.profile_face_index == 6
 
     assert restored_hole.face_shape_ids and isinstance(restored_hole.face_shape_ids[0], ShapeID)
     assert restored_draft.face_shape_ids and isinstance(restored_draft.face_shape_ids[0], ShapeID)
@@ -469,6 +483,161 @@ def test_tnp_v4_sweep_deserialize_moves_path_geometric_selector_out_of_path_data
     assert sweep.path_geometric_selector is not None
     assert "path_geometric_selector" not in sweep.path_data
     assert "edge_selector" not in sweep.path_data
+
+
+def test_tnp_v4_sweep_deserialize_drops_profile_selector_when_topological_refs_exist():
+    body_data = {
+        "name": "legacy_sweep_profile_mixed",
+        "features": [
+            {
+                "feature_class": "SweepFeature",
+                "name": "Sweep",
+                "profile_data": {},
+                "path_data": {"type": "sketch_edge", "geometry_type": "line", "start": [0.0, 0.0], "end": [1.0, 0.0]},
+                "profile_face_index": 2,
+                "profile_shape_id": {"feature_id": "feat_sweep", "local_id": 2, "shape_type": "FACE"},
+                "profile_geometric_selector": _face_selector(),
+            }
+        ],
+    }
+
+    restored = Body.from_dict(body_data)
+    sweep = next(feat for feat in restored.features if isinstance(feat, SweepFeature))
+
+    assert sweep.profile_shape_id is not None
+    assert sweep.profile_face_index == 2
+    assert sweep.profile_geometric_selector is None
+
+
+def test_tnp_v4_sweep_deserialize_drops_selector_when_topological_path_refs_exist():
+    body_data = {
+        "name": "legacy_sweep_mixed",
+        "features": [
+            {
+                "feature_class": "SweepFeature",
+                "name": "Sweep",
+                "profile_data": {},
+                "path_data": {
+                    "type": "body_edge",
+                    "edge_indices": [0],
+                },
+                "path_shape_id": {"feature_id": "feat_sweep", "local_id": 0, "shape_type": "EDGE"},
+                "path_geometric_selector": _edge_selector(),
+            }
+        ],
+    }
+
+    restored = Body.from_dict(body_data)
+    sweep = next(feat for feat in restored.features if isinstance(feat, SweepFeature))
+
+    assert sweep.path_shape_id is not None
+    assert sweep.path_geometric_selector is None
+    assert sweep.path_data.get("edge_indices") == [0]
+
+
+def test_sweep_resolve_path_prefers_edge_indices_without_selector_fallback(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("sweep_edge_index_first")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_geometric_selector = _edge_selector()
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("selector fallback should not run when edge_indices resolve")
+
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+
+    assert wire is not None
+
+
+def test_sweep_resolve_path_blocks_legacy_fallback_when_topology_refs_break(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("sweep_no_legacy_fallback_on_tnp_break")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={
+            "type": "body_edge",
+            "edge_indices": [999],
+            "build123d_edges": [list(solid.edges())[0]],
+            "path_geometric_selector": _edge_selector(),
+        },
+    )
+    sweep.path_geometric_selector = _edge_selector()
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("selector fallback must not run when topological path refs exist")
+
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+
+    assert wire is None
+
+
+def test_compute_sweep_prefers_profile_face_index_without_selector_fallback(monkeypatch):
+    import build123d
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    class _SweepResult:
+        def is_valid(self):
+            return True
+
+    body = Body("sweep_profile_index_first")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_geometric_selector = _face_selector()
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("profile selector fallback should not run when profile_face_index resolves")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(body, "_move_profile_to_path_start", lambda profile_face, *_args, **_kwargs: profile_face)
+    monkeypatch.setattr(build123d, "sweep", lambda *_args, **_kwargs: _SweepResult())
+
+    result = body._compute_sweep(feature, solid)
+
+    assert result is not None
+    assert feature.profile_face_index == 0
+
+
+def test_compute_sweep_blocks_profile_legacy_fallback_when_topology_ref_breaks(monkeypatch):
+    from build123d import Solid
+    from modeling.geometric_selector import GeometricFaceSelector
+
+    body = Body("sweep_profile_no_legacy_fallback")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = SweepFeature(
+        profile_data={"type": "sketch_profile"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 999
+    feature.profile_geometric_selector = _face_selector()
+
+    def _fail_from_dict(cls, _data):
+        raise AssertionError("profile selector fallback must not run when topological refs exist")
+
+    def _fail_profile_data_fallback(*_args, **_kwargs):
+        raise AssertionError("profile_data fallback must not run when topological refs exist")
+
+    monkeypatch.setattr(GeometricFaceSelector, "from_dict", classmethod(_fail_from_dict))
+    monkeypatch.setattr(body, "_profile_data_to_face", _fail_profile_data_fallback)
+
+    with pytest.raises(ValueError, match="Profil-Referenz"):
+        body._compute_sweep(feature, solid)
 
 
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
@@ -851,6 +1020,41 @@ def test_tnp_health_report_prefers_edge_indices_before_shape_ids(monkeypatch):
     assert feature_report["status"] == "ok"
     assert len(feature_report["refs"]) == 3
     assert all(ref["kind"] == "Edge" for ref in feature_report["refs"])
+    assert all(ref["method"] == "index" for ref in feature_report["refs"])
+
+
+def test_tnp_health_report_prefers_sweep_profile_and_path_indices(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("tnp_health_sweep_indices")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.profile_face_index = 0
+    sweep.profile_shape_id = _make_shape_id(ShapeType.FACE, "stale_sweep_profile", 0)
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "stale_sweep_path", 0)
+    body.features = [sweep]
+
+    service = doc._shape_naming_service
+
+    def _fail_resolve(*_args, **_kwargs):
+        raise AssertionError("ShapeID resolution should not run when sweep indices resolve")
+
+    monkeypatch.setattr(service, "resolve_shape_with_method", _fail_resolve)
+    report = service.get_health_report(body)
+
+    assert report["status"] == "ok"
+    assert report["ok"] == 2
+    assert report["broken"] == 0
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "ok"
+    assert len(feature_report["refs"]) == 2
+    assert {ref["kind"] for ref in feature_report["refs"]} == {"Face", "Edge"}
     assert all(ref["method"] == "index" for ref in feature_report["refs"])
 
 
