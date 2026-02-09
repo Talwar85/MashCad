@@ -77,13 +77,53 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Cylindrical Face Edit (Fusion360-style Radius Edit)
     "cylindrical_face_edit": False,  # Phase 1: Zylindrische Faces radius-modifizieren (Hole/Pocket/Solid)
+
+    # OCP-First Migration (2026 CAD Kernel Nearness Plan)
+    # ======================================================
+    # WICHTIG: Diese Flags dienen NUR zu Test-/Validierungszwecken!
+    # Kein dauerhafter Fallback zu Build123d!
+    # Nach Validierung werden Flags entfernt und Code vereinfacht.
+    #
+    # TNP Integration ist in beiden Pfaden obligatorisch!
+    
+    # Phase 2: Extrude
+    "ocp_first_extrude": False,  # ExtrudeFeature nutzt direktes OCP
+    
+    # Phase 3: Fillet/Chamfer
+    "ocp_first_fillet": False,  # FilletFeature nutzt direktes OCP
+    "ocp_first_chamfer": False,  # ChamferFeature nutzt direktes OCP
+    "ocp_first_draft": False,    # DraftFeature nutzt direktes OCP
+    
+    # Phase 4: Revolve/Loft/Sweep
+    "ocp_first_revolve": False,  # RevolveFeature nutzt direktes OCP
+    "ocp_first_loft": False,     # LoftFeature nutzt direktes OCP
+    "ocp_first_sweep": False,    # SweepFeature nutzt direktes OCP
+    
+    # Phase 5: Shell/Hollow
+    "ocp_first_shell": False,    # ShellFeature nutzt direktes OCP
+    "ocp_first_hollow": False,  # HollowFeature nutzt direktes OCP
+    
+    # Phase 7: BREP Caching
+    "ocp_brep_cache": False,    # BREP-Caching für Features
+    
+    # Phase 8: Incremental Rebuild
+    "ocp_incremental_rebuild": False,  # Inkrementeller Rebuild mit Dependency Graph
+    
+    # Phase 9: BREP Persistence
+    "ocp_brep_persistence": False,  # Native BREP Persistenz statt Rebuild beim Laden
 }
 
 
 def is_enabled(flag: str) -> bool:
     """
     Prüft ob ein Feature-Flag aktiviert ist.
-
+    
+    WICHTIG: Für OCP-First Flags:
+    - Default = False (alter Build123d Code)
+    - Nach Validierung = True (neuer OCP Code)
+    - Kein dauerhafter Fallback! Flags werden nach Validierung entfernt.
+    - TNP Integration ist in beiden Pfaden obligatorisch!
+    
     Args:
         flag: Name des Feature-Flags
 
