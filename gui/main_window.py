@@ -824,8 +824,15 @@ class MainWindow(QMainWindow):
         self.sketch_editor.solver_finished_signal.connect(self._on_solver_dof_updated)
         # Toolbar entfernt - war nutzlos laut User
      
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._reposition_all_panels)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._reposition_all_panels()
+
+    def _reposition_all_panels(self):
         self._position_extrude_panel()
         self._position_transform_panel()
         self._position_transform_toolbar()

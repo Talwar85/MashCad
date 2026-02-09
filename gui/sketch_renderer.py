@@ -2032,6 +2032,66 @@ class SketchRendererMixin:
         p.setPen(QPen(color, 1))
         p.drawText(rect, Qt.AlignCenter, label)
         p.restore()
+
+    def _draw_snap_feedback_overlay(self, p):
+        """
+        Draws a compact confidence/info overlay close to the cursor while sketching.
+        """
+        drawing_mode = self.current_tool == SketchTool.LINE and self.tool_step >= 1
+        if not drawing_mode:
+            return
+
+        cursor = QPointF(self.mouse_screen.x(), self.mouse_screen.y())
+        x = int(cursor.x()) + 14
+        y = int(cursor.y()) + 10
+
+        if self.current_snap and self.current_snap[1] not in (SnapType.NONE, SnapType.GRID):
+            snap_type = self.current_snap[1]
+            _, label = self._snap_visual_style(snap_type)
+            confidence = max(0.0, min(1.0, float(getattr(self, "last_snap_confidence", 0.0))))
+            confidence_pct = int(round(confidence * 100.0))
+
+            text = f"{label}: {confidence_pct}%"
+            font = QFont("Segoe UI", 8)
+            p.save()
+            p.setFont(font)
+            fm = p.fontMetrics()
+            w = fm.horizontalAdvance(text) + 10
+            h = fm.height() + 6
+            rect = QRectF(x, y, w, h)
+            p.setPen(QPen(QColor(20, 24, 30, 220), 1))
+            p.setBrush(QBrush(QColor(24, 30, 38, 180)))
+            p.drawRoundedRect(rect, 4, 4)
+            p.setPen(QPen(QColor(175, 235, 255), 1))
+            p.drawText(rect, Qt.AlignCenter, text)
+            p.restore()
+            return
+
+        diagnostic = (getattr(self, "last_snap_diagnostic", "") or "").strip()
+        if not diagnostic:
+            return
+
+        text = diagnostic
+        tip_idx = text.find("Tipp:")
+        if tip_idx > 0:
+            text = text[:tip_idx].strip()
+        if len(text) > 86:
+            text = text[:83].rstrip() + "..."
+        if not text:
+            return
+
+        p.save()
+        p.setFont(QFont("Segoe UI", 8))
+        fm = p.fontMetrics()
+        w = min(max(170, fm.horizontalAdvance(text) + 12), 360)
+        h = fm.height() + 8
+        rect = QRectF(x, y, w, h)
+        p.setPen(QPen(QColor(65, 50, 28, 220), 1))
+        p.setBrush(QBrush(QColor(70, 56, 30, 180)))
+        p.drawRoundedRect(rect, 4, 4)
+        p.setPen(QPen(QColor(255, 215, 135), 1))
+        p.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+        p.restore()
     
     def _draw_snap(self, p):
         if not self.current_snap or self.current_snap[1] == SnapType.GRID: return

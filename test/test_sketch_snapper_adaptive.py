@@ -447,3 +447,31 @@ def test_snapper_sticky_lock_keeps_previous_snap_briefly():
     assert first.type == SnapType.ENDPOINT
     assert second.type == SnapType.ENDPOINT
     assert second.target_entity is line
+
+
+def test_snapper_populates_confidence_priority_and_distance():
+    sketch = Sketch("snap_confidence_fields")
+    sketch.add_line(0.0, 0.0, 100.0, 0.0)
+    editor = _FakeEditor(sketch, snap_radius=8, view_scale=1.0)
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(99.5, 0.2))
+
+    assert result.type == SnapType.ENDPOINT
+    assert result.priority > 0
+    assert result.distance >= 0.0
+    assert 0.0 <= result.confidence <= 1.0
+
+
+def test_snapper_confidence_is_higher_when_cursor_is_closer():
+    sketch = Sketch("snap_confidence_distance")
+    sketch.add_line(0.0, 0.0, 100.0, 0.0)
+    editor = _FakeEditor(sketch, snap_radius=10, view_scale=1.0)
+    snapper = SmartSnapper(editor)
+
+    near = snapper.snap(QPointF(99.9, 0.1))
+    far = snapper.snap(QPointF(95.5, 0.1))
+
+    assert near.type == SnapType.ENDPOINT
+    assert far.type == SnapType.ENDPOINT
+    assert near.confidence > far.confidence

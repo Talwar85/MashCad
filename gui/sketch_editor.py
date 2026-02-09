@@ -673,6 +673,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._last_solver_feedback_ms = 0.0
         self._last_solver_feedback_text = ""
         self.last_snap_diagnostic = ""
+        self.last_snap_confidence = 0.0
+        self.last_snap_priority = 0
+        self.last_snap_distance = 0.0
         self._last_snap_feedback_ms = 0.0
         self._last_snap_feedback_text = ""
 
@@ -2327,6 +2330,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def snap_point(self, w):
         if not self.snap_enabled: 
             self.last_snap_diagnostic = ""
+            self.last_snap_confidence = 0.0
+            self.last_snap_priority = 0
+            self.last_snap_distance = 0.0
             return w, SnapType.NONE, None  # <--- Drittes Element: Entity
             
         if self.snapper:
@@ -2334,11 +2340,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             screen_pos = self.world_to_screen(w)
             res = self.snapper.snap(screen_pos)
             self.last_snap_diagnostic = getattr(res, "diagnostic", "") or ""
+            self.last_snap_confidence = float(getattr(res, "confidence", 0.0) or 0.0)
+            self.last_snap_priority = int(getattr(res, "priority", 0) or 0)
+            self.last_snap_distance = float(getattr(res, "distance", 0.0) or 0.0)
             # Rückgabe: Punkt, Typ, Getroffenes Entity (für Auto-Constraints)
             return res.point, res.type, res.target_entity
             
         else:
             self.last_snap_diagnostic = ""
+            self.last_snap_confidence = 0.0
+            self.last_snap_priority = 0
+            self.last_snap_distance = 0.0
             if self.grid_snap:
                  gx = round(w.x() / self.grid_size) * self.grid_size
                  gy = round(w.y() / self.grid_size) * self.grid_size
@@ -5350,6 +5362,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_preview(p)
         self._draw_selection_box(p)
         self._draw_snap(p)
+        self._draw_snap_feedback_overlay(p)
         self._draw_live_dimensions(p)
         self._draw_hud(p)
         

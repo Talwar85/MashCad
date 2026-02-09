@@ -46,6 +46,9 @@ class SnapResult:
     type: SnapType
     target_entity: any = None # Das Objekt, das wir getroffen haben
     diagnostic: str = ""
+    priority: int = 0
+    distance: float = 0.0
+    confidence: float = 0.0
 
 class SmartSnapper:
     """
@@ -549,6 +552,36 @@ class SmartSnapper:
             "Tipp: Mit Mausrad zoomen und Snap-Radius im Toolpanel pruefen."
         )
 
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    def _compute_snap_confidence(
+        self,
+        best_dist: float,
+        best_prio: int,
+        second_dist: Optional[float],
+        second_prio: Optional[int],
+        snap_radius: float,
+    ) -> float:
+        radius = max(float(snap_radius), 1e-9)
+        distance_score = self._clamp01(1.0 - (float(best_dist) / radius))
+        priority_score = self._clamp01(float(best_prio) / 20.0)
+
+        if second_dist is not None and second_prio is not None:
+            prio_gap = max(0.0, float(best_prio - second_prio))
+            dist_gap = max(0.0, float(second_dist - best_dist))
+            separation = self._clamp01((0.55 * (prio_gap / 6.0)) + (0.45 * (dist_gap / radius)))
+        else:
+            separation = 1.0
+
+        confidence = (
+            0.45 * distance_score
+            + 0.35 * priority_score
+            + 0.20 * separation
+        )
+        return self._clamp01(confidence)
+
     def snap(self, mouse_screen_pos: QPointF) -> SnapResult:
         mouse_world = self.editor.screen_to_world(mouse_screen_pos)
         snap_radius = self._compute_snap_radius_world()
@@ -663,11 +696,41 @@ class SmartSnapper:
         winner: Optional[SnapResult] = None
         if candidates:
             candidates.sort(key=lambda c: (-c[1], c[0]))
-            winner = candidates[0][2]
+            best_dist, best_prio, best_result = candidates[0]
+            second_dist = None
+            second_prio = None
+            if len(candidates) > 1:
+                second_dist = float(candidates[1][0])
+                second_prio = int(candidates[1][1])
+            best_result.distance = float(best_dist)
+            best_result.priority = int(best_prio)
+            best_result.confidence = self._compute_snap_confidence(
+                best_dist=best_dist,
+                best_prio=best_prio,
+                second_dist=second_dist,
+                second_prio=second_prio,
+                snap_radius=snap_radius,
+            )
+            winner = best_result
 
         winner = self._maybe_apply_sticky_snap(winner, mouse_world, snap_radius)
         self._update_sticky_snap(winner)
         if winner is not None:
+            if winner.priority <= 0:
+                winner.priority = self._priority_for_snap_type(winner.type)
+            if winner.distance <= 0.0:
+                winner.distance = self._distance_world(
+                    Point2D(winner.point.x(), winner.point.y()),
+                    mouse_world,
+                )
+            if winner.confidence <= 0.0:
+                winner.confidence = self._compute_snap_confidence(
+                    best_dist=winner.distance,
+                    best_prio=winner.priority,
+                    second_dist=None,
+                    second_prio=None,
+                    snap_radius=snap_radius,
+                )
             return winner
 
         return SnapResult(
