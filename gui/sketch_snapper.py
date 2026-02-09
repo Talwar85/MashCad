@@ -58,6 +58,8 @@ class SmartSnapper:
     SNAP_WORLD_MIN = 1e-4
     SNAP_WORLD_MIN_FACTOR = 1e-6
     SNAP_WORLD_MAX_FACTOR = 3e-1
+    STICKY_RELEASE_FACTOR = 1.5
+    STICKY_PREEMPT_PRIORITY_DELTA = 2
     
     PRIORITY_MAP = {
         SnapType.ENDPOINT: 20,
@@ -66,6 +68,11 @@ class SmartSnapper:
         SnapType.QUADRANT: 15,
         SnapType.INTERSECTION: 18, # Schnittpunkte sind wichtig!
         SnapType.VIRTUAL_INTERSECTION: 11,
+        SnapType.PERPENDICULAR: 16,
+        SnapType.TANGENT: 16,
+        SnapType.HORIZONTAL: 14,
+        SnapType.VERTICAL: 14,
+        SnapType.PARALLEL: 13,
         SnapType.ORIGIN: 19,       # Origin hat hohe Priorität (fast wie Endpoint)
         SnapType.EDGE: 5,          # Irgendwo auf der Kante (niedrigste Prio der Geo-Snaps)
         SnapType.GRID: 1,
@@ -79,6 +86,7 @@ class SmartSnapper:
         # Performance Optimization 1.6: Intersection Cache (60-80% Reduktion bei großen Sketches!)
         self._intersection_cache = {}  # {(entity1_id, entity2_id): [Point2D, ...]}
         self._cache_version = 0
+        self._sticky_snap: Optional[SnapResult] = None
 
     def _editor_snap_radius_px(self) -> float:
         """
@@ -159,6 +167,7 @@ class SmartSnapper:
         """
         self._intersection_cache.clear()
         self._cache_version += 1
+        self._sticky_snap = None
 
     def _is_drawing_tool_active(self) -> bool:
         tool = getattr(self.editor, "current_tool", None)
@@ -187,6 +196,266 @@ class SmartSnapper:
     @staticmethod
     def _distance_world(p: Point2D, mouse_world: QPointF) -> float:
         return math.hypot(float(p.x) - mouse_world.x(), float(p.y) - mouse_world.y())
+
+    @staticmethod
+    def _distance_points(p1: Point2D, p2: Point2D) -> float:
+        return math.hypot(float(p1.x) - float(p2.x), float(p1.y) - float(p2.y))
+
+    def _active_line_start_point(self) -> Optional[Point2D]:
+        """
+        Returns the active start point while the LINE tool is drawing segment n->n+1.
+        """
+        if getattr(self.editor, "current_tool", None) != SketchTool.LINE:
+            return None
+        if int(getattr(self.editor, "tool_step", 0)) < 1:
+            return None
+        tool_points = getattr(self.editor, "tool_points", None) or []
+        if not tool_points:
+            return None
+        start = tool_points[-1]
+        try:
+            if hasattr(start, "x") and callable(start.x):
+                return Point2D(float(start.x()), float(start.y()))
+            return Point2D(float(start.x), float(start.y))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _perpendicular_projection_on_segment(point: Point2D, line: Line2D) -> Optional[Point2D]:
+        dx = float(line.end.x - line.start.x)
+        dy = float(line.end.y - line.start.y)
+        denom = dx * dx + dy * dy
+        if denom < 1e-12:
+            return None
+        px = float(point.x - line.start.x)
+        py = float(point.y - line.start.y)
+        t = (px * dx + py * dy) / denom
+        seg_tol = 1e-6
+        if t < -seg_tol or t > 1.0 + seg_tol:
+            return None
+        t = max(0.0, min(1.0, t))
+        return Point2D(line.start.x + t * dx, line.start.y + t * dy)
+
+    @staticmethod
+    def _is_point_on_arc(arc: Arc2D, point: Point2D, tol_deg: float = 1e-5) -> bool:
+        ang = math.degrees(math.atan2(point.y - arc.center.y, point.x - arc.center.x)) % 360.0
+        start = float(arc.start_angle) % 360.0
+        sweep = float(arc.sweep_angle)
+        rel = (ang - start) % 360.0
+        return rel <= (sweep + tol_deg)
+
+    def _tangent_points_from_curve(self, start: Point2D, curve) -> List[Point2D]:
+        """
+        Tangent points from an external point to Circle2D / Arc2D.
+        """
+        if not hasattr(curve, "center") or not hasattr(curve, "radius"):
+            return []
+
+        cx = float(curve.center.x)
+        cy = float(curve.center.y)
+        r = abs(float(curve.radius))
+        dx = float(start.x) - cx
+        dy = float(start.y) - cy
+        d2 = dx * dx + dy * dy
+
+        if r < 1e-12 or d2 <= (r * r + 1e-12):
+            return []
+
+        l = (r * r) / d2
+        m = (r * math.sqrt(max(0.0, d2 - r * r))) / d2
+        p1 = Point2D(cx + l * dx - m * dy, cy + l * dy + m * dx)
+        p2 = Point2D(cx + l * dx + m * dy, cy + l * dy - m * dx)
+
+        points = [p1]
+        if self._distance_points(p1, p2) > 1e-8:
+            points.append(p2)
+
+        if isinstance(curve, Arc2D):
+            points = [p for p in points if self._is_point_on_arc(curve, p)]
+
+        return points
+
+    @staticmethod
+    def _line_unit_direction(line: Line2D) -> Optional[tuple]:
+        dx = float(line.end.x - line.start.x)
+        dy = float(line.end.y - line.start.y)
+        n = math.hypot(dx, dy)
+        if n < 1e-12:
+            return None
+        return (dx / n, dy / n)
+
+    def _add_axis_inference_candidates(
+        self,
+        line_start: Point2D,
+        mouse_world: QPointF,
+        snap_radius: float,
+        candidates,
+    ) -> None:
+        horizontal_pt = Point2D(float(mouse_world.x()), float(line_start.y))
+        vertical_pt = Point2D(float(line_start.x), float(mouse_world.y()))
+
+        dist_h = self._distance_world(horizontal_pt, mouse_world)
+        if dist_h < snap_radius and self._distance_points(line_start, horizontal_pt) > 1e-6:
+            candidates.append(
+                (
+                    dist_h,
+                    self._priority_for_snap_type(SnapType.HORIZONTAL),
+                    SnapResult(QPointF(horizontal_pt.x, horizontal_pt.y), SnapType.HORIZONTAL, None),
+                )
+            )
+
+        dist_v = self._distance_world(vertical_pt, mouse_world)
+        if dist_v < snap_radius and self._distance_points(line_start, vertical_pt) > 1e-6:
+            candidates.append(
+                (
+                    dist_v,
+                    self._priority_for_snap_type(SnapType.VERTICAL),
+                    SnapResult(QPointF(vertical_pt.x, vertical_pt.y), SnapType.VERTICAL, None),
+                )
+            )
+
+    def _add_parallel_inference_candidate(
+        self,
+        line_start: Point2D,
+        mouse_world: QPointF,
+        snap_radius: float,
+        ref_line: Line2D,
+        candidates,
+    ) -> None:
+        u = self._line_unit_direction(ref_line)
+        if u is None:
+            return
+
+        vx = float(mouse_world.x()) - float(line_start.x)
+        vy = float(mouse_world.y()) - float(line_start.y)
+        t = vx * u[0] + vy * u[1]
+        cand = Point2D(float(line_start.x) + t * u[0], float(line_start.y) + t * u[1])
+
+        if self._distance_points(line_start, cand) < 1e-6:
+            return
+        dist = self._distance_world(cand, mouse_world)
+        if dist < snap_radius:
+            candidates.append(
+                (
+                    dist,
+                    self._priority_for_snap_type(SnapType.PARALLEL),
+                    SnapResult(QPointF(cand.x, cand.y), SnapType.PARALLEL, ref_line),
+                )
+            )
+
+    def _collect_line_inference_candidates(
+        self,
+        line_start: Point2D,
+        mouse_world: QPointF,
+        snap_radius: float,
+        entities,
+        candidates,
+    ) -> None:
+        """
+        Adds higher-level inferencing candidates while drawing a line:
+        - horizontal/vertical from current start point
+        - parallel to existing lines
+        - perpendicular to existing lines
+        - tangent to existing circles/arcs
+        """
+        self._add_axis_inference_candidates(
+            line_start=line_start,
+            mouse_world=mouse_world,
+            snap_radius=snap_radius,
+            candidates=candidates,
+        )
+
+        for entity in entities:
+            if isinstance(entity, Line2D):
+                self._add_parallel_inference_candidate(
+                    line_start=line_start,
+                    mouse_world=mouse_world,
+                    snap_radius=snap_radius,
+                    ref_line=entity,
+                    candidates=candidates,
+                )
+
+                proj = self._perpendicular_projection_on_segment(line_start, entity)
+                if proj is None:
+                    continue
+                if self._distance_points(line_start, proj) < 1e-6:
+                    continue
+                dist = self._distance_world(proj, mouse_world)
+                if dist < snap_radius:
+                    candidates.append(
+                        (
+                            dist,
+                            self._priority_for_snap_type(SnapType.PERPENDICULAR),
+                            SnapResult(QPointF(proj.x, proj.y), SnapType.PERPENDICULAR, entity),
+                        )
+                    )
+                continue
+
+            if isinstance(entity, (Circle2D, Arc2D)):
+                for tangent_pt in self._tangent_points_from_curve(line_start, entity):
+                    if self._distance_points(line_start, tangent_pt) < 1e-6:
+                        continue
+                    dist = self._distance_world(tangent_pt, mouse_world)
+                    if dist < snap_radius:
+                        candidates.append(
+                            (
+                                dist,
+                                self._priority_for_snap_type(SnapType.TANGENT),
+                                SnapResult(QPointF(tangent_pt.x, tangent_pt.y), SnapType.TANGENT, entity),
+                            )
+                        )
+
+    def _can_use_sticky(self) -> bool:
+        """
+        Sticky/magnetic lock is only used while actively drawing.
+        """
+        return self._is_drawing_tool_active()
+
+    def _maybe_apply_sticky_snap(
+        self,
+        winner: Optional[SnapResult],
+        mouse_world: QPointF,
+        snap_radius: float,
+    ) -> Optional[SnapResult]:
+        """
+        Keeps the previous snap for small mouse movements to reduce flicker/jitter.
+        """
+        if not self._can_use_sticky():
+            self._sticky_snap = None
+            return winner
+
+        sticky = self._sticky_snap
+        if sticky is None or sticky.type in (SnapType.NONE, SnapType.GRID):
+            return winner
+
+        sticky_pt = Point2D(sticky.point.x(), sticky.point.y())
+        sticky_dist = self._distance_world(sticky_pt, mouse_world)
+        release_radius = max(snap_radius, snap_radius * self.STICKY_RELEASE_FACTOR)
+        if sticky_dist > release_radius:
+            self._sticky_snap = None
+            return winner
+
+        if winner is None:
+            return sticky
+
+        sticky_prio = self._priority_for_snap_type(sticky.type)
+        winner_prio = self._priority_for_snap_type(winner.type)
+        if winner_prio >= (sticky_prio + self.STICKY_PREEMPT_PRIORITY_DELTA):
+            return winner
+
+        winner_dist = self._distance_world(Point2D(winner.point.x(), winner.point.y()), mouse_world)
+        if winner_prio > sticky_prio and winner_dist < (sticky_dist * 0.75):
+            return winner
+
+        if winner_prio == sticky_prio and winner_dist < (sticky_dist * 0.65):
+            return winner
+
+        return sticky
+
+    def _update_sticky_snap(self, winner: Optional[SnapResult]) -> None:
+        if winner is None or winner.type in (SnapType.NONE, SnapType.GRID):
+            return
+        self._sticky_snap = winner
 
     def _no_snap_diagnostic(self, snap_radius: float, nearest_virtual_dist: float) -> str:
         """
@@ -229,6 +498,17 @@ class SmartSnapper:
             entities = self.editor.spatial_index.query(query_rect)
         else:
             entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs
+
+        # 0. Kontext-Inferenz fuer aktiven Linienzug.
+        line_start = self._active_line_start_point()
+        if line_start is not None:
+            self._collect_line_inference_candidates(
+                line_start=line_start,
+                mouse_world=mouse_world,
+                snap_radius=snap_radius,
+                entities=entities,
+                candidates=candidates,
+            )
 
         # 1. Standard Punkte (Endpunkte, Mitte, Zentrum)
         for entity in entities:
@@ -312,17 +592,21 @@ class SmartSnapper:
                 candidates.append((dist, self._priority_for_snap_type(SnapType.GRID), SnapResult(grid_pt, SnapType.GRID)))
 
         # Gewinner ermitteln
-        if not candidates:
-            return SnapResult(
-                mouse_world,
-                SnapType.NONE,
-                diagnostic=self._no_snap_diagnostic(snap_radius, nearest_virtual_dist),
-            )
+        winner: Optional[SnapResult] = None
+        if candidates:
+            candidates.sort(key=lambda c: (-c[1], c[0]))
+            winner = candidates[0][2]
 
-        # Sortieren nach Priorität (hoch -> tief) dann Distanz (nah -> fern)
-        candidates.sort(key=lambda c: (-c[1], c[0]))
-        return candidates[0][2]
+        winner = self._maybe_apply_sticky_snap(winner, mouse_world, snap_radius)
+        self._update_sticky_snap(winner)
+        if winner is not None:
+            return winner
 
+        return SnapResult(
+            mouse_world,
+            SnapType.NONE,
+            diagnostic=self._no_snap_diagnostic(snap_radius, nearest_virtual_dist),
+        )
     # --- Hilfs-Mathematik ---
 
     def _check_point(self, pt_obj, mouse_world, radius, type_enum, entity, candidates_list):
@@ -432,3 +716,4 @@ class SmartSnapper:
         x = round(pos.x() / grid_sz) * grid_sz
         y = round(pos.y() / grid_sz) * grid_sz
         return QPointF(x, y)
+

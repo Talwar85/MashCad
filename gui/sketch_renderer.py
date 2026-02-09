@@ -5,9 +5,11 @@ Extracted from sketch_editor.py for better maintainability
 """
 
 import math
+import time
 from loguru import logger
 from PySide6.QtCore import QPointF, Qt, QRectF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPainterPath, QFont, QPolygonF, QFontMetrics
+from i18n import tr
 
 # Importiere SketchTool und SnapType
 try:
@@ -1810,12 +1812,201 @@ class SketchRendererMixin:
             p.setPen(QPen(self.GEO_SELECTED, 1, Qt.DashLine))
             p.setBrush(QBrush(QColor(0, 150, 255, 30)))
             p.drawRect(rect)
+
+    @staticmethod
+    def _unit_vec(dx: float, dy: float):
+        n = math.hypot(dx, dy)
+        if n < 1e-9:
+            return None
+        return (dx / n, dy / n)
+
+    def _line_tool_start_world(self):
+        if self.current_tool != SketchTool.LINE or self.tool_step < 1:
+            return None
+        if not self.tool_points:
+            return None
+        return self.tool_points[-1]
+
+    def _draw_perpendicular_snap_guides(self, p, snap_screen: QPointF, target_line):
+        if not (target_line and hasattr(target_line, "start") and hasattr(target_line, "end")):
+            return
+        start_world = self._line_tool_start_world()
+        if start_world is None:
+            return
+
+        line_start_screen = self.world_to_screen(start_world)
+        ref_a = self.world_to_screen(QPointF(target_line.start.x, target_line.start.y))
+        ref_b = self.world_to_screen(QPointF(target_line.end.x, target_line.end.y))
+
+        p.save()
+        p.setPen(QPen(QColor(120, 220, 255, 130), 1, Qt.DashLine))
+        p.drawLine(ref_a, ref_b)
+        p.setPen(QPen(QColor(0, 205, 255, 190), 1, Qt.DashLine))
+        p.drawLine(line_start_screen, snap_screen)
+
+        u = self._unit_vec(ref_b.x() - ref_a.x(), ref_b.y() - ref_a.y())
+        v = self._unit_vec(line_start_screen.x() - snap_screen.x(), line_start_screen.y() - snap_screen.y())
+        if u and v:
+            m = 9.0
+            a = QPointF(snap_screen.x() + u[0] * m, snap_screen.y() + u[1] * m)
+            c = QPointF(snap_screen.x() + v[0] * m, snap_screen.y() + v[1] * m)
+            b = QPointF(a.x() + v[0] * m, a.y() + v[1] * m)
+            p.setPen(QPen(QColor(0, 230, 255), 2))
+            p.drawLine(snap_screen, a)
+            p.drawLine(snap_screen, c)
+            p.drawLine(a, b)
+            p.drawLine(c, b)
+        p.restore()
+
+    def _draw_tangent_snap_guides(self, p, snap_screen: QPointF, target_curve):
+        if not (target_curve and hasattr(target_curve, "center") and hasattr(target_curve, "radius")):
+            return
+        start_world = self._line_tool_start_world()
+        if start_world is None:
+            return
+
+        line_start_screen = self.world_to_screen(start_world)
+        center_screen = self.world_to_screen(QPointF(target_curve.center.x, target_curve.center.y))
+
+        p.save()
+        p.setPen(QPen(QColor(255, 200, 120, 150), 1, Qt.DashLine))
+        p.drawLine(center_screen, snap_screen)
+        p.setPen(QPen(QColor(255, 220, 140, 185), 1, Qt.DashLine))
+        p.drawLine(line_start_screen, snap_screen)
+
+        ur = self._unit_vec(center_screen.x() - snap_screen.x(), center_screen.y() - snap_screen.y())
+        ut = self._unit_vec(line_start_screen.x() - snap_screen.x(), line_start_screen.y() - snap_screen.y())
+        if ur and ut:
+            m = 9.0
+            a = QPointF(snap_screen.x() + ur[0] * m, snap_screen.y() + ur[1] * m)
+            c = QPointF(snap_screen.x() + ut[0] * m, snap_screen.y() + ut[1] * m)
+            b = QPointF(a.x() + ut[0] * m, a.y() + ut[1] * m)
+            p.setPen(QPen(QColor(255, 235, 170), 2))
+            p.drawLine(snap_screen, a)
+            p.drawLine(snap_screen, c)
+            p.drawLine(a, b)
+            p.drawLine(c, b)
+        p.restore()
+
+    def _draw_axis_snap_guides(self, p, snap_screen: QPointF, horizontal: bool):
+        start_world = self._line_tool_start_world()
+        if start_world is None:
+            return
+        line_start_screen = self.world_to_screen(start_world)
+
+        p.save()
+        p.setPen(QPen(QColor(120, 220, 255, 110), 1, Qt.DashLine))
+        p.drawLine(line_start_screen, snap_screen)
+        if horizontal:
+            p.drawLine(QPointF(0, snap_screen.y()), QPointF(self.width(), snap_screen.y()))
+        else:
+            p.drawLine(QPointF(snap_screen.x(), 0), QPointF(snap_screen.x(), self.height()))
+        p.restore()
+
+    def _draw_parallel_snap_guides(self, p, snap_screen: QPointF, target_line):
+        if not (target_line and hasattr(target_line, "start") and hasattr(target_line, "end")):
+            return
+        start_world = self._line_tool_start_world()
+        if start_world is None:
+            return
+
+        line_start_screen = self.world_to_screen(start_world)
+        ref_a = self.world_to_screen(QPointF(target_line.start.x, target_line.start.y))
+        ref_b = self.world_to_screen(QPointF(target_line.end.x, target_line.end.y))
+
+        p.save()
+        p.setPen(QPen(QColor(180, 210, 255, 130), 1, Qt.DashLine))
+        p.drawLine(ref_a, ref_b)
+        p.setPen(QPen(QColor(170, 205, 255, 190), 1, Qt.DashLine))
+        p.drawLine(line_start_screen, snap_screen)
+
+        u = self._unit_vec(ref_b.x() - ref_a.x(), ref_b.y() - ref_a.y())
+        if u:
+            n = (-u[1], u[0])
+            mid = QPointF((line_start_screen.x() + snap_screen.x()) * 0.5, (line_start_screen.y() + snap_screen.y()) * 0.5)
+            for off in (-3.0, 3.0):
+                a = QPointF(mid.x() + n[0] * off - u[0] * 4.0, mid.y() + n[1] * off - u[1] * 4.0)
+                b = QPointF(mid.x() + n[0] * off + u[0] * 4.0, mid.y() + n[1] * off + u[1] * 4.0)
+                p.setPen(QPen(QColor(200, 220, 255), 2))
+                p.drawLine(a, b)
+        p.restore()
+
+    def _should_show_snap_label(self, snap_type, pos: QPointF) -> bool:
+        if self.current_tool != SketchTool.LINE or self.tool_step < 1:
+            self._snap_label_key = None
+            self._snap_label_since_ms = 0.0
+            return False
+        if snap_type in (SnapType.NONE, SnapType.GRID, SnapType.EDGE):
+            self._snap_label_key = None
+            self._snap_label_since_ms = 0.0
+            return False
+
+        # Quantized position avoids re-starting the delay on tiny sub-pixel jitter.
+        key = (int(getattr(snap_type, "value", 0)), int(pos.x() / 2.0), int(pos.y() / 2.0))
+        now_ms = time.monotonic() * 1000.0
+        last_key = getattr(self, "_snap_label_key", None)
+        if key != last_key:
+            self._snap_label_key = key
+            self._snap_label_since_ms = now_ms
+            return False
+
+        since_ms = float(getattr(self, "_snap_label_since_ms", now_ms))
+        return (now_ms - since_ms) >= 90.0
+
+    def _snap_visual_style(self, snap_type):
+        """
+        Returns a consistent visual style for snap marker + label.
+        """
+        style_map = {
+            SnapType.ENDPOINT: (QColor(90, 210, 255), tr("Endpoint")),
+            SnapType.MIDPOINT: (QColor(80, 230, 190), tr("Midpoint")),
+            SnapType.CENTER: (QColor(255, 205, 100), tr("Center")),
+            SnapType.QUADRANT: (QColor(200, 210, 255), tr("Quadrant")),
+            SnapType.INTERSECTION: (QColor(255, 255, 255), tr("Intersection")),
+            SnapType.VIRTUAL_INTERSECTION: (QColor(120, 220, 255), tr("Virtual")),
+            SnapType.PERPENDICULAR: (QColor(0, 230, 255), tr("Perpendicular")),
+            SnapType.TANGENT: (QColor(255, 225, 150), tr("Tangent")),
+            SnapType.HORIZONTAL: (QColor(120, 235, 255), tr("Horizontal")),
+            SnapType.VERTICAL: (QColor(140, 240, 255), tr("Vertical")),
+            SnapType.PARALLEL: (QColor(190, 220, 255), tr("Parallel")),
+            SnapType.ORIGIN: (QColor(170, 255, 170), tr("Origin")),
+            SnapType.EDGE: (QColor(160, 170, 190), tr("Edge")),
+        }
+        return style_map.get(snap_type, (self.SNAP_COLOR, "Snap"))
+
+    def _draw_snap_label(self, p, pos: QPointF, snap_type):
+        """
+        Draw short snap text near the cursor for stronger CAD-like feedback.
+        """
+        if not self._should_show_snap_label(snap_type, pos):
+            return
+        color, label = self._snap_visual_style(snap_type)
+        if not label:
+            return
+
+        p.save()
+        font = QFont("Segoe UI", 8)
+        p.setFont(font)
+        fm = p.fontMetrics()
+        w = fm.horizontalAdvance(label) + 8
+        h = fm.height() + 4
+        x = int(pos.x()) + 12
+        y = int(pos.y()) - (h + 10)
+        rect = QRectF(x, y, w, h)
+
+        p.setPen(QPen(QColor(20, 20, 20, 220), 1))
+        p.setBrush(QBrush(QColor(20, 20, 20, 180)))
+        p.drawRoundedRect(rect, 4, 4)
+        p.setPen(QPen(color, 1))
+        p.drawText(rect, Qt.AlignCenter, label)
+        p.restore()
     
     def _draw_snap(self, p):
         if not self.current_snap or self.current_snap[1] == SnapType.GRID: return
         pos = self.world_to_screen(self.current_snap[0])
         st = self.current_snap[1]
-        p.setPen(QPen(self.SNAP_COLOR, 2))
+        snap_color, _ = self._snap_visual_style(st)
+        p.setPen(QPen(snap_color, 2))
         p.setBrush(Qt.NoBrush)
         if st == SnapType.ENDPOINT: p.drawRect(int(pos.x())-5, int(pos.y())-5, 10, 10)
         elif st == SnapType.MIDPOINT:
@@ -1856,11 +2047,45 @@ class SketchRendererMixin:
                     anchor = s if ds <= de else e
                     p.drawLine(anchor, pos)
             p.restore()
+        elif st == SnapType.PERPENDICULAR:
+            self._draw_perpendicular_snap_guides(p, pos, self.current_snap[2] if len(self.current_snap) > 2 else None)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawLine(x - 8, y + 6, x + 2, y + 6)
+            p.drawLine(x + 2, y + 6, x + 2, y - 4)
+            p.drawLine(x - 8, y - 4, x + 2, y - 4)
+        elif st == SnapType.TANGENT:
+            self._draw_tangent_snap_guides(p, pos, self.current_snap[2] if len(self.current_snap) > 2 else None)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawEllipse(pos, 5, 5)
+            p.drawLine(x - 9, y + 7, x + 9, y + 7)
+        elif st == SnapType.HORIZONTAL:
+            self._draw_axis_snap_guides(p, pos, horizontal=True)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawLine(x - 9, y, x + 9, y)
+            p.drawLine(x - 9, y - 3, x - 9, y + 3)
+            p.drawLine(x + 9, y - 3, x + 9, y + 3)
+        elif st == SnapType.VERTICAL:
+            self._draw_axis_snap_guides(p, pos, horizontal=False)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawLine(x, y - 9, x, y + 9)
+            p.drawLine(x - 3, y - 9, x + 3, y - 9)
+            p.drawLine(x - 3, y + 9, x + 3, y + 9)
+        elif st == SnapType.PARALLEL:
+            self._draw_parallel_snap_guides(p, pos, self.current_snap[2] if len(self.current_snap) > 2 else None)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawLine(x - 8, y - 3, x + 8, y - 3)
+            p.drawLine(x - 8, y + 3, x + 8, y + 3)
         elif st == SnapType.ORIGIN:
             # Origin: Kreis mit Kreuz (ähnlich wie Center aber größer/hervorgehoben)
             p.drawEllipse(pos, 6, 6)
             p.drawLine(int(pos.x())-8, int(pos.y()), int(pos.x())+8, int(pos.y()))
             p.drawLine(int(pos.x()), int(pos.y())-8, int(pos.x()), int(pos.y())+8)
+        self._draw_snap_label(p, pos, st)
     
     def _draw_snap_guides(self, p: QPainter):
         """

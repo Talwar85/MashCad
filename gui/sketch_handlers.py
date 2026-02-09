@@ -86,7 +86,12 @@ class SketchHandlersMixin:
             snap_entity: Die gesnappte Entity
             new_line: Die neue Linie (um Selbst-Referenz zu vermeiden)
         """
-        if not snap_entity or snap_type == SnapType.NONE:
+        if snap_type == SnapType.NONE:
+            return
+
+        # Einige Inferenz-Snaps (z.B. Horizontal/Vertical) haben bewusst kein target-entity.
+        entity_optional_types = {SnapType.HORIZONTAL, SnapType.VERTICAL}
+        if snap_entity is None and snap_type not in entity_optional_types:
             return
 
         # ENDPOINT: COINCIDENT Constraint
@@ -133,6 +138,46 @@ class SketchHandlersMixin:
                     self.sketch.add_midpoint(point, snap_entity)
                     logger.debug(f"Auto: MIDPOINT")
 
+        # PERPENDICULAR: Endpunkt auf Referenzlinie + Senkrecht-Constraint
+        elif snap_type == SnapType.PERPENDICULAR:
+            if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
+                if snap_entity != new_line:
+                    if hasattr(self.sketch, 'add_point_on_line'):
+                        self.sketch.add_point_on_line(point, snap_entity)
+                        logger.debug("Auto: POINT_ON_LINE (PERPENDICULAR)")
+                    if hasattr(self.sketch, 'add_perpendicular'):
+                        self.sketch.add_perpendicular(new_line, snap_entity)
+                        logger.debug("Auto: PERPENDICULAR")
+
+        # TANGENT: Endpunkt auf Kreis/Bogen + Tangenten-Constraint
+        elif snap_type == SnapType.TANGENT:
+            if hasattr(snap_entity, 'radius'):
+                if hasattr(self.sketch, 'add_point_on_circle'):
+                    self.sketch.add_point_on_circle(point, snap_entity)
+                    logger.debug("Auto: POINT_ON_CIRCLE (TANGENT)")
+                if hasattr(self.sketch, 'add_tangent'):
+                    self.sketch.add_tangent(new_line, snap_entity)
+                    logger.debug("Auto: TANGENT")
+
+        # HORIZONTAL: Linie als horizontal fixieren
+        elif snap_type == SnapType.HORIZONTAL:
+            if hasattr(self.sketch, 'add_horizontal'):
+                self.sketch.add_horizontal(new_line)
+                logger.debug("Auto: HORIZONTAL")
+
+        # VERTICAL: Linie als vertikal fixieren
+        elif snap_type == SnapType.VERTICAL:
+            if hasattr(self.sketch, 'add_vertical'):
+                self.sketch.add_vertical(new_line)
+                logger.debug("Auto: VERTICAL")
+
+        # PARALLEL: Linie parallel zu Referenzlinie
+        elif snap_type == SnapType.PARALLEL:
+            if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
+                if snap_entity != new_line and hasattr(self.sketch, 'add_parallel'):
+                    self.sketch.add_parallel(new_line, snap_entity)
+                    logger.debug("Auto: PARALLEL")
+
     def _handle_line(self, pos, snap_type, snap_entity=None):
         """
         Erstellt Linien und nutzt die existierenden Constraint-Methoden des Sketch-Objekts.
@@ -163,7 +208,16 @@ class SketchHandlersMixin:
                 h_tolerance = self._adaptive_world_tolerance(scale=0.35, min_world=0.05, max_world=2.0)
                 
                 # Nur prÃ¼fen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
-                if snap_type not in [SnapType.EDGE, SnapType.INTERSECTION, SnapType.VIRTUAL_INTERSECTION]:
+                if snap_type not in [
+                    SnapType.EDGE,
+                    SnapType.INTERSECTION,
+                    SnapType.VIRTUAL_INTERSECTION,
+                    SnapType.PERPENDICULAR,
+                    SnapType.TANGENT,
+                    SnapType.HORIZONTAL,
+                    SnapType.VERTICAL,
+                    SnapType.PARALLEL,
+                ]:
                     if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
                         if hasattr(self.sketch, 'add_horizontal'):
                             self.sketch.add_horizontal(line)

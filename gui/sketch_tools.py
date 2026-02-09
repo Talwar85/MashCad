@@ -61,5 +61,8 @@ class SnapType(Enum):
     GRID = auto()
     PERPENDICULAR = auto()
     TANGENT = auto()
+    HORIZONTAL = auto()
+    VERTICAL = auto()
+    PARALLEL = auto()
     EDGE = auto()
     ORIGIN = auto()  # Sketch-Origin (0,0)
