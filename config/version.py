@@ -8,11 +8,11 @@ Import: from config.version import VERSION, VERSION_STRING, APP_NAME
 
 # Haupt-Versionsnummer (Semantic Versioning: MAJOR.MINOR.PATCH)
 VERSION_MAJOR = 0
-VERSION_MINOR = 2
+VERSION_MINOR = 3
 VERSION_PATCH = 0
 
 # Release-Typ: "alpha", "beta", "rc1", "" (leer für stable release)
-VERSION_SUFFIX = "beta"
+VERSION_SUFFIX = "alpha"
 
 # Build-Datum (optional, kann für CI/CD automatisch gesetzt werden)
 BUILD_DATE = "2026-02"
