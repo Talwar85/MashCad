@@ -1931,6 +1931,37 @@ class SketchRendererMixin:
                 p.drawLine(a, b)
         p.restore()
 
+    def _draw_angle45_snap_guides(self, p, snap_screen: QPointF):
+        start_world = self._line_tool_start_world()
+        if start_world is None:
+            return
+        line_start_screen = self.world_to_screen(start_world)
+
+        p.save()
+        p.setPen(QPen(QColor(150, 225, 255, 120), 1, Qt.DashLine))
+        p.drawLine(line_start_screen, snap_screen)
+
+        u = self._unit_vec(
+            snap_screen.x() - line_start_screen.x(),
+            snap_screen.y() - line_start_screen.y(),
+        )
+        if u:
+            inv_sqrt2 = math.sqrt(0.5)
+            diag_a = (inv_sqrt2, inv_sqrt2)
+            diag_b = (inv_sqrt2, -inv_sqrt2)
+            dot_a = abs(u[0] * diag_a[0] + u[1] * diag_a[1])
+            dot_b = abs(u[0] * diag_b[0] + u[1] * diag_b[1])
+            base = diag_a if dot_a >= dot_b else diag_b
+            sign = 1.0 if (u[0] * base[0] + u[1] * base[1]) >= 0.0 else -1.0
+            ux, uy = base[0] * sign, base[1] * sign
+
+            span = float(max(self.width(), self.height())) * 1.5
+            a = QPointF(snap_screen.x() - ux * span, snap_screen.y() - uy * span)
+            b = QPointF(snap_screen.x() + ux * span, snap_screen.y() + uy * span)
+            p.setPen(QPen(QColor(170, 230, 255, 140), 1, Qt.DashLine))
+            p.drawLine(a, b)
+        p.restore()
+
     def _should_show_snap_label(self, snap_type, pos: QPointF) -> bool:
         if self.current_tool != SketchTool.LINE or self.tool_step < 1:
             self._snap_label_key = None
@@ -1966,6 +1997,7 @@ class SketchRendererMixin:
             SnapType.VIRTUAL_INTERSECTION: (QColor(120, 220, 255), tr("Virtual")),
             SnapType.PERPENDICULAR: (QColor(0, 230, 255), tr("Perpendicular")),
             SnapType.TANGENT: (QColor(255, 225, 150), tr("Tangent")),
+            SnapType.ANGLE_45: (QColor(165, 230, 255), tr("45 deg")),
             SnapType.HORIZONTAL: (QColor(120, 235, 255), tr("Horizontal")),
             SnapType.VERTICAL: (QColor(140, 240, 255), tr("Vertical")),
             SnapType.PARALLEL: (QColor(190, 220, 255), tr("Parallel")),
@@ -2060,6 +2092,12 @@ class SketchRendererMixin:
             y = int(pos.y())
             p.drawEllipse(pos, 5, 5)
             p.drawLine(x - 9, y + 7, x + 9, y + 7)
+        elif st == SnapType.ANGLE_45:
+            self._draw_angle45_snap_guides(p, pos)
+            x = int(pos.x())
+            y = int(pos.y())
+            p.drawLine(x - 8, y + 8, x + 8, y - 8)
+            p.drawLine(x - 8, y + 4, x + 4, y - 8)
         elif st == SnapType.HORIZONTAL:
             self._draw_axis_snap_guides(p, pos, horizontal=True)
             x = int(pos.x())

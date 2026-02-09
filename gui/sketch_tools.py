@@ -61,6 +61,7 @@ class SnapType(Enum):
     GRID = auto()
     PERPENDICULAR = auto()
     TANGENT = auto()
+    ANGLE_45 = auto()
     HORIZONTAL = auto()
     VERTICAL = auto()
     PARALLEL = auto()

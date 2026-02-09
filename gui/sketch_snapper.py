@@ -60,6 +60,9 @@ class SmartSnapper:
     SNAP_WORLD_MAX_FACTOR = 3e-1
     STICKY_RELEASE_FACTOR = 1.5
     STICKY_PREEMPT_PRIORITY_DELTA = 2
+    DENSE_ENTITY_THRESHOLD = 16
+    DENSE_INFERENCE_PENALTY = 2
+    DENSE_EXACT_SNAP_BOOST = 1
     
     PRIORITY_MAP = {
         SnapType.ENDPOINT: 20,
@@ -70,6 +73,7 @@ class SmartSnapper:
         SnapType.VIRTUAL_INTERSECTION: 11,
         SnapType.PERPENDICULAR: 16,
         SnapType.TANGENT: 16,
+        SnapType.ANGLE_45: 13,
         SnapType.HORIZONTAL: 14,
         SnapType.VERTICAL: 14,
         SnapType.PARALLEL: 13,
@@ -87,6 +91,7 @@ class SmartSnapper:
         self._intersection_cache = {}  # {(entity1_id, entity2_id): [Point2D, ...]}
         self._cache_version = 0
         self._sticky_snap: Optional[SnapResult] = None
+        self._is_dense_context = False
 
     def _editor_snap_radius_px(self) -> float:
         """
@@ -191,6 +196,26 @@ class SmartSnapper:
         if snap_type == SnapType.VIRTUAL_INTERSECTION and self._is_drawing_tool_active():
             # In drawing mode prefer virtual intersections over generic edge snaps.
             priority += 6
+        if self._is_dense_context:
+            if snap_type in {
+                SnapType.HORIZONTAL,
+                SnapType.VERTICAL,
+                SnapType.PARALLEL,
+                SnapType.PERPENDICULAR,
+                SnapType.TANGENT,
+                SnapType.ANGLE_45,
+                SnapType.VIRTUAL_INTERSECTION,
+            }:
+                priority = max(0, priority - self.DENSE_INFERENCE_PENALTY)
+            elif snap_type in {
+                SnapType.ENDPOINT,
+                SnapType.MIDPOINT,
+                SnapType.CENTER,
+                SnapType.INTERSECTION,
+                SnapType.QUADRANT,
+                SnapType.ORIGIN,
+            }:
+                priority += self.DENSE_EXACT_SNAP_BOOST
         return priority
 
     @staticmethod
@@ -343,6 +368,42 @@ class SmartSnapper:
                 )
             )
 
+    def _add_45deg_inference_candidates(
+        self,
+        line_start: Point2D,
+        mouse_world: QPointF,
+        snap_radius: float,
+        candidates,
+    ) -> None:
+        vx = float(mouse_world.x()) - float(line_start.x)
+        vy = float(mouse_world.y()) - float(line_start.y)
+        if (vx * vx + vy * vy) < 1e-12:
+            return
+
+        inv_sqrt2 = math.sqrt(0.5)
+        diag_axes = (
+            (inv_sqrt2, inv_sqrt2),
+            (inv_sqrt2, -inv_sqrt2),
+        )
+        for ux, uy in diag_axes:
+            t = vx * ux + vy * uy
+            cand = Point2D(float(line_start.x) + t * ux, float(line_start.y) + t * uy)
+            if self._distance_points(line_start, cand) < 1e-6:
+                continue
+            dist = self._distance_world(cand, mouse_world)
+            if dist < snap_radius:
+                candidates.append(
+                    (
+                        dist,
+                        self._priority_for_snap_type(SnapType.ANGLE_45),
+                        SnapResult(
+                            QPointF(cand.x, cand.y),
+                            SnapType.ANGLE_45,
+                            {"axis": (ux, uy)},
+                        ),
+                    )
+                )
+
     def _collect_line_inference_candidates(
         self,
         line_start: Point2D,
@@ -359,6 +420,12 @@ class SmartSnapper:
         - tangent to existing circles/arcs
         """
         self._add_axis_inference_candidates(
+            line_start=line_start,
+            mouse_world=mouse_world,
+            snap_radius=snap_radius,
+            candidates=candidates,
+        )
+        self._add_45deg_inference_candidates(
             line_start=line_start,
             mouse_world=mouse_world,
             snap_radius=snap_radius,
@@ -498,6 +565,7 @@ class SmartSnapper:
             entities = self.editor.spatial_index.query(query_rect)
         else:
             entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs
+        self._is_dense_context = len(entities) >= self.DENSE_ENTITY_THRESHOLD
 
         # 0. Kontext-Inferenz fuer aktiven Linienzug.
         line_start = self._active_line_start_point()
@@ -565,17 +633,17 @@ class SmartSnapper:
                     if isinstance(p, tuple) and len(p) >= 2 and isinstance(p[1], bool):
                         point_obj = p[0]
                         is_virtual = bool(p[1])
-                        entities = p[2] if len(p) > 2 else None
+                        meta_entities = p[2] if len(p) > 2 else None
                         snap_type = SnapType.VIRTUAL_INTERSECTION if is_virtual else SnapType.INTERSECTION
                         if is_virtual and point_obj is not None:
                             nearest_virtual_dist = min(
                                 nearest_virtual_dist,
                                 self._distance_world(point_obj, mouse_world),
                             )
-                        if entities is not None:
+                        if meta_entities is not None:
                             target_entity = {
                                 "virtual": is_virtual,
-                                "entities": entities,
+                                "entities": meta_entities,
                             }
 
                     self._check_point(point_obj, mouse_world, snap_radius, snap_type, target_entity, candidates)

@@ -1,4 +1,5 @@
 import math
+import random
 
 from PySide6.QtCore import QPointF
 
@@ -243,6 +244,69 @@ def test_snapper_infers_parallel_for_active_line_tool():
     assert result.target_entity is reference
 
 
+def test_snapper_infers_45_degree_for_active_line_tool():
+    sketch = Sketch("angle45_inference")
+    editor = _FakeEditor(sketch, snap_radius=6, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    editor.tool_step = 1
+    editor.tool_points = [QPointF(10.0, 10.0)]
+    snapper = SmartSnapper(editor)
+
+    result = snapper.snap(QPointF(40.0, 37.0))
+
+    assert result.type == SnapType.ANGLE_45
+    assert math.isclose(result.point.x(), result.point.y(), rel_tol=0.0, abs_tol=1e-6)
+
+
+def test_snapper_45_degree_inference_stays_stable_for_random_diagonal_inputs():
+    sketch = Sketch("angle45_random")
+    editor = _FakeEditor(sketch, snap_radius=4, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    editor.tool_step = 1
+    editor.tool_points = [QPointF(0.0, 0.0)]
+    snapper = SmartSnapper(editor)
+
+    rng = random.Random(7)
+    for _ in range(50):
+        x = rng.uniform(20.0, 80.0)
+        y = x + rng.uniform(-1.5, 1.5)
+        result = snapper.snap(QPointF(x, y))
+        assert result.type == SnapType.ANGLE_45
+
+
+def test_snapper_dense_context_rebalances_priorities():
+    sketch = Sketch("dense_priority")
+    editor = _FakeEditor(sketch, snap_radius=10, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    snapper = SmartSnapper(editor)
+
+    sparse_angle = snapper._priority_for_snap_type(SnapType.ANGLE_45)
+    sparse_endpoint = snapper._priority_for_snap_type(SnapType.ENDPOINT)
+
+    snapper._is_dense_context = True
+    dense_angle = snapper._priority_for_snap_type(SnapType.ANGLE_45)
+    dense_endpoint = snapper._priority_for_snap_type(SnapType.ENDPOINT)
+
+    assert dense_angle < sparse_angle
+    assert dense_endpoint > sparse_endpoint
+
+
+def test_snapper_detects_dense_context_from_entity_count():
+    sketch = Sketch("dense_detection")
+    for idx in range(16):
+        y = float(idx)
+        sketch.add_line(0.0, y, 100.0, y)
+    editor = _FakeEditor(sketch, snap_radius=10, view_scale=1.0)
+    editor.current_tool = SketchTool.LINE
+    editor.tool_step = 1
+    editor.tool_points = [QPointF(10.0, 10.0)]
+    snapper = SmartSnapper(editor)
+
+    snapper.snap(QPointF(50.0, 10.2))
+
+    assert snapper._is_dense_context is True
+
+
 def test_line_auto_constraints_add_perpendicular_relation_from_snap_type():
     sketch = Sketch("line_auto_perpendicular")
     reference = sketch.add_line(0.0, 0.0, 40.0, 0.0)
@@ -352,6 +416,22 @@ def test_line_auto_constraints_add_parallel_relation_from_snap_type():
         c.type == ConstraintType.PARALLEL and {e.id for e in c.entities if hasattr(e, "id")} == target_ids
         for c in sketch.constraints
     )
+
+
+def test_line_auto_constraints_accepts_angle45_without_entity():
+    sketch = Sketch("line_auto_angle45")
+    new_line = sketch.add_line(0.0, 0.0, 10.0, 10.0)
+    dummy = _ConstraintDummy(sketch)
+
+    dummy._add_point_constraint(
+        point=new_line.end,
+        pos=QPointF(10.0, 10.0),
+        snap_type=SnapType.ANGLE_45,
+        snap_entity=None,
+        new_line=new_line,
+    )
+
+    assert len(sketch.constraints) == 0
 
 
 def test_snapper_sticky_lock_keeps_previous_snap_briefly():

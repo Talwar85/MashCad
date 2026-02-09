@@ -90,7 +90,7 @@ class SketchHandlersMixin:
             return
 
         # Einige Inferenz-Snaps (z.B. Horizontal/Vertical) haben bewusst kein target-entity.
-        entity_optional_types = {SnapType.HORIZONTAL, SnapType.VERTICAL}
+        entity_optional_types = {SnapType.HORIZONTAL, SnapType.VERTICAL, SnapType.ANGLE_45}
         if snap_entity is None and snap_type not in entity_optional_types:
             return
 
@@ -178,6 +178,10 @@ class SketchHandlersMixin:
                     self.sketch.add_parallel(new_line, snap_entity)
                     logger.debug("Auto: PARALLEL")
 
+        # ANGLE_45: geometrische Inferenz fuer den Endpunkt (kein persistenter Constraint)
+        elif snap_type == SnapType.ANGLE_45:
+            logger.debug("Auto: ANGLE_45")
+
     def _handle_line(self, pos, snap_type, snap_entity=None):
         """
         Erstellt Linien und nutzt die existierenden Constraint-Methoden des Sketch-Objekts.
@@ -214,6 +218,7 @@ class SketchHandlersMixin:
                     SnapType.VIRTUAL_INTERSECTION,
                     SnapType.PERPENDICULAR,
                     SnapType.TANGENT,
+                    SnapType.ANGLE_45,
                     SnapType.HORIZONTAL,
                     SnapType.VERTICAL,
                     SnapType.PARALLEL,
