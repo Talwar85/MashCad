@@ -3,6 +3,7 @@ import sketcher.parametric_solver as parametric_solver_module
 import sketcher.solver as solver_module
 from sketcher.sketch import ConstraintStatus, Sketch
 from types import SimpleNamespace
+import random
 
 
 class _LegacyLikeResult:
@@ -267,3 +268,35 @@ def test_scipy_exception_restores_original_geometry(monkeypatch):
     assert result.success is False
     assert "forced backend failure" in result.message
     assert (line.start.x, line.start.y, line.end.x, line.end.y) == original
+
+
+def test_scipy_inconsistent_random_cases_do_not_drift_geometry():
+    rng = random.Random(20260209)
+
+    for idx in range(25):
+        sketch = Sketch(f"scipy_restore_random_{idx}")
+
+        x0 = rng.uniform(-120.0, 120.0)
+        y0 = rng.uniform(-120.0, 120.0)
+        dx = rng.uniform(15.0, 80.0) * (1.0 if rng.random() > 0.5 else -1.0)
+        dy = rng.uniform(15.0, 80.0) * (1.0 if rng.random() > 0.5 else -1.0)
+        line = sketch.add_line(x0, y0, x0 + dx, y0 + dy)
+
+        original = (line.start.x, line.start.y, line.end.x, line.end.y)
+        original_length = line.length
+
+        sketch.add_fixed(line.start)
+        sketch.add_length(line, original_length)
+        sketch.add_horizontal(line)
+        sketch.add_vertical(line)  # impossible in combination with non-zero length
+
+        result = sketch._solver.solve(
+            sketch.points,
+            sketch.lines,
+            sketch.circles,
+            sketch.arcs,
+            sketch.constraints,
+        )
+
+        assert result.success is False
+        assert (line.start.x, line.start.y, line.end.x, line.end.y) == original
