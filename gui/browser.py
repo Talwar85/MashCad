@@ -537,7 +537,25 @@ class ProjectBrowser(QFrame):
                     color = "#777" if not rolled_back else "#444"
                     if hasattr(f, 'status') and f.status == "ERROR":
                         color = "#cc5555"
-                    fi = QTreeWidgetItem(bi, [f"{prefix} {f.name}"])
+
+                    # Geometry Badge: zeigt Volume-Delta und Edge-Erfolgsrate
+                    badge = ""
+                    gd = getattr(f, '_geometry_delta', None)
+                    if gd and not rolled_back:
+                        vol_pct = gd.get("volume_pct", 0)
+                        if vol_pct != 0:
+                            sign = "+" if vol_pct > 0 else ""
+                            badge = f"  Vol{sign}{vol_pct:.1f}%"
+                        elif gd.get("faces_delta", 0) != 0:
+                            fd = gd["faces_delta"]
+                            badge = f"  {'+' if fd > 0 else ''}{fd}F"
+                        edges_ok = gd.get("edges_ok")
+                        edges_total = gd.get("edges_total")
+                        if edges_total is not None and edges_total > 0:
+                            if edges_ok is not None and edges_ok < edges_total:
+                                badge = f"  ⚠ {edges_ok}/{edges_total}{badge}"
+
+                    fi = QTreeWidgetItem(bi, [f"{prefix} {f.name}{badge}"])
                     fi.setData(0, Qt.UserRole, ('feature', f, b))
                     fi.setForeground(0, QColor(color))
                     status_msg = getattr(f, "status_message", "")

@@ -9,6 +9,21 @@ from PySide6.QtGui import QUndoCommand
 from loguru import logger
 
 
+def _solid_signature_safe(body) -> dict:
+    """Geometry-Fingerprint (volume, faces, edges) oder None."""
+    try:
+        solid = getattr(body, "_build123d_solid", None)
+        if solid is None:
+            return None
+        return {
+            "volume": float(solid.volume),
+            "faces": len(list(solid.faces())),
+            "edges": len(list(solid.edges())),
+        }
+    except Exception:
+        return None
+
+
 def _collect_error_feature_ids(body) -> set:
     """Collect all feature IDs currently marked as ERROR."""
     return {
@@ -195,6 +210,10 @@ class AddFeatureCommand(QUndoCommand):
         from modeling.cad_tessellator import CADTessellator
 
         tx_state = _capture_body_state(self.body)
+
+        # Geometry-Snapshot VOR Operation (für Operation Summary)
+        pre_sig = _solid_signature_safe(self.body)
+
         try:
             if self.feature not in self.body.features:
                 rebuild = not self._skip_rebuild
@@ -208,6 +227,16 @@ class AddFeatureCommand(QUndoCommand):
 
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
+
+            # Operation Summary anzeigen (wenn MainWindow das Widget hat)
+            post_sig = _solid_signature_safe(self.body)
+            if pre_sig and post_sig and hasattr(self.main_window, 'operation_summary'):
+                try:
+                    self.main_window.operation_summary.show_summary(
+                        self.feature.name, pre_sig, post_sig, self.feature, self.main_window
+                    )
+                except Exception:
+                    pass  # Summary ist nice-to-have, nie blockierend
         except Exception as e:
             logger.error(f"Redo failed ({self.feature.name}): {e}")
             _restore_body_state(self.body, tx_state)

@@ -50,7 +50,7 @@ from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 5+
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
-from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel
+from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget, FeatureDetailPanel
 from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
@@ -480,9 +480,12 @@ class MainWindow(QMainWindow):
 
         self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
+        self.feature_detail_panel = FeatureDetailPanel()
+        self.operation_summary = OperationSummaryWidget()
 
         self.left_tabs.addTab(self.browser, "Browser")
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
+        self.left_tabs.addTab(self.feature_detail_panel, tr("Details"))
         self.left_tabs.setCurrentIndex(0)  # Browser default
 
         # Log-Panel als DockWidget (undockbar/frei positionierbar)
@@ -1669,6 +1672,9 @@ class MainWindow(QMainWindow):
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats(body)
+                # Feature Detail Panel aktualisieren
+                doc = getattr(body, '_document', None) or self.document
+                self.feature_detail_panel.show_feature(feature, body, doc)
             else:
                 self.statusBar().showMessage("Ready")
                 self.body_properties.clear()
@@ -7395,7 +7401,12 @@ class MainWindow(QMainWindow):
         body.rollback_index = rebuild_up_to
 
         CADTessellator.notify_body_changed()
-        body._rebuild(rebuild_up_to=rebuild_up_to)
+
+        def _on_rebuild_progress(current, total, name):
+            self.statusBar().showMessage(f"Rebuild {current + 1}/{total}: {name}")
+            QApplication.processEvents()
+
+        body._rebuild(rebuild_up_to=rebuild_up_to, progress_callback=_on_rebuild_progress if n >= 5 else None)
         self._update_body_from_build123d(body, body._build123d_solid)
         self.browser.refresh()
         self.browser.show_rollback_bar(body)
@@ -9016,8 +9027,14 @@ class MainWindow(QMainWindow):
 
             # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
             # Das ruft body.add_feature() auf, was _rebuild() triggert.
+            # Geometry-Snapshot VOR Operation (für Operation Summary)
+            _pre_sig = self._solid_signature_safe(body)
+
             cmd = AddFeatureCommand(body, feature, self, description=f"{mode.capitalize()} R={radius}")
             self.undo_stack.push(cmd)
+
+            # Geometry-Snapshot NACH Operation
+            _post_sig = self._solid_signature_safe(body)
 
             # Prüfe ob Operation erfolgreich war
             if body._build123d_solid is None or (hasattr(body, 'vtk_mesh') and body.vtk_mesh is None):
@@ -9036,7 +9053,14 @@ class MainWindow(QMainWindow):
                 # TNP Statistiken aktualisieren
                 self._update_tnp_stats(body)
 
-                logger.success(f"{mode.capitalize()} R={radius}mm angewendet")
+                # Toast mit Geometry-Delta
+                n_edges = len(selected_edge_indices)
+                vol_info = ""
+                if _pre_sig and _post_sig and _pre_sig["volume"] > 1e-6:
+                    vol_pct = ((_post_sig["volume"] - _pre_sig["volume"]) / _pre_sig["volume"]) * 100
+                    vol_info = f", Vol {vol_pct:+.1f}%"
+                logger.success(f"{mode.capitalize()} R={radius}mm — {n_edges} Kanten{vol_info}")
+                # Operation Summary wird zentral von AddFeatureCommand.redo() angezeigt
 
         except Exception as e:
             logger.error(f"Feature Creation Error: {e}")
@@ -10951,6 +10975,20 @@ class MainWindow(QMainWindow):
         finally:
             if hasattr(self, "tnp_stats_panel"):
                 self.tnp_stats_panel.set_picking_active(False)
+
+    def _solid_signature_safe(self, body) -> dict:
+        """Erzeugt einen Geometry-Fingerprint (volume, faces, edges) oder None."""
+        try:
+            solid = body._build123d_solid if body else None
+            if solid is None:
+                return None
+            return {
+                "volume": float(solid.volume),
+                "faces": len(list(solid.faces())),
+                "edges": len(list(solid.edges())),
+            }
+        except Exception:
+            return None
 
     def _update_tnp_stats(self, body=None):
         """

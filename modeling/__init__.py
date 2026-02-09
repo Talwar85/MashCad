@@ -5606,7 +5606,7 @@ class Body:
             traceback.print_exc()
             return None
 
-    def _rebuild(self, rebuild_up_to=None, changed_feature_id: str = None):
+    def _rebuild(self, rebuild_up_to=None, changed_feature_id: str = None, progress_callback=None):
         """
         Robuster Rebuild-Prozess (History-basiert).
 
@@ -5820,6 +5820,11 @@ class Body:
 
         for i, feature in enumerate(self.features):
             solid_before_feature = current_solid
+            if progress_callback:
+                try:
+                    progress_callback(i, len(self.features), feature.name)
+                except Exception:
+                    pass
             if i >= max_index:
                 feature.status = "ROLLED_BACK"
                 feature.status_message = ""
@@ -6445,6 +6450,43 @@ class Body:
             else:
                 feature.status_message = ""
                 feature.status_details = {}
+
+            # === Geometry Delta (Transparenz für Endanwender) ===
+            # Berechnet den Geometrie-Unterschied vor/nach jeder Feature-Anwendung.
+            # Transient (_geometry_delta wird NICHT gespeichert, nur zur Laufzeit).
+            effective_solid = new_solid if (new_solid is not None and status != "ERROR") else current_solid
+            before_m = _solid_metrics(solid_before_feature) if solid_before_feature is not None else None
+            after_m = _solid_metrics(effective_solid) if effective_solid is not None else None
+            if before_m is not None and after_m is not None and before_m["volume"] is not None and after_m["volume"] is not None:
+                pre_vol = before_m["volume"]
+                post_vol = after_m["volume"]
+                vol_pct = ((post_vol - pre_vol) / pre_vol * 100.0) if pre_vol > 1e-12 else 0.0
+                feature._geometry_delta = {
+                    "volume_before": round(pre_vol, 2),
+                    "volume_after": round(post_vol, 2),
+                    "volume_pct": round(vol_pct, 1),
+                    "faces_before": before_m["faces"],
+                    "faces_after": after_m["faces"],
+                    "faces_delta": after_m["faces"] - before_m["faces"],
+                    "edges_before": before_m["edges"],
+                    "edges_after": after_m["edges"],
+                    "edges_delta": after_m["edges"] - before_m["edges"],
+                }
+            elif after_m is not None and after_m["volume"] is not None:
+                # Erstes Feature (kein solid_before_feature)
+                feature._geometry_delta = {
+                    "volume_before": 0.0,
+                    "volume_after": round(after_m["volume"], 2),
+                    "volume_pct": 0.0,
+                    "faces_before": 0,
+                    "faces_after": after_m["faces"],
+                    "faces_delta": after_m["faces"],
+                    "edges_before": 0,
+                    "edges_after": after_m["edges"],
+                    "edges_delta": after_m["edges"],
+                }
+            else:
+                feature._geometry_delta = None
 
             if status == "ERROR":
                 blocked_by_feature_error = True
