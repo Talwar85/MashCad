@@ -724,6 +724,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selection_box_start = None
         self.selection_box_end = None
         self.current_snap = None
+        self.preview_geometry = []
         
         self.mouse_screen = QPointF(0, 0)
         self.mouse_world = QPointF(0, 0)
@@ -3301,6 +3302,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._last_auto_show_step = -1  # Reset auto-show tracking for next operation
         self.tool_points.clear()
         self.tool_data.clear()
+        self.preview_geometry = []
         self.selection_box_start = None
         self.selection_box_end = None
         self.dim_input.hide()

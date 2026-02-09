@@ -46,6 +46,75 @@ from sketcher.sketch import Sketch
 class SketchHandlersMixin:
     """Mixin containing all tool handler methods for SketchEditor"""
 
+    @staticmethod
+    def _point_to_angle_deg(center: Point2D, point: Point2D) -> float:
+        return math.degrees(math.atan2(point.y - center.y, point.x - center.x))
+
+    def _build_trim_preview_geometry(self, target, segment):
+        """
+        Erstellt eine visuelle Vorschau der zu trimmenden Geometrie.
+        """
+        if (
+            target is None
+            or segment is None
+            or segment.is_full_delete
+            or segment.start_point is None
+            or segment.end_point is None
+        ):
+            return []
+
+        if isinstance(target, Line2D):
+            return [Line2D(segment.start_point, segment.end_point)]
+
+        if isinstance(target, Circle2D):
+            center = Point2D(target.center.x, target.center.y)
+            radius = float(getattr(target, "radius", 0.0))
+            if radius <= 1e-9:
+                return []
+
+            # WICHTIG: Circle-Trim-Segmente koennen ueber 0/360 laufen.
+            # Daher die Winkelrichtung ueber Kernel-Parameter ableiten statt nur atan2.
+            try:
+                start_rad = float(geometry.get_param_on_entity(segment.start_point, target))
+                end_rad = float(geometry.get_param_on_entity(segment.end_point, target))
+                start_angle = math.degrees(start_rad)
+                end_angle = math.degrees(end_rad)
+                if end_angle < start_angle:
+                    end_angle += 360.0
+            except Exception:
+                start_angle = self._point_to_angle_deg(center, segment.start_point)
+                end_angle = self._point_to_angle_deg(center, segment.end_point)
+                if end_angle < start_angle:
+                    end_angle += 360.0
+
+            return [
+                Arc2D(
+                    center=center,
+                    radius=radius,
+                    start_angle=start_angle,
+                    end_angle=end_angle,
+                )
+            ]
+
+        if isinstance(target, Arc2D):
+            center = Point2D(target.center.x, target.center.y)
+            radius = float(getattr(target, "radius", 0.0))
+            if radius <= 1e-9:
+                return []
+
+            start_angle = self._point_to_angle_deg(center, segment.start_point)
+            end_angle = self._point_to_angle_deg(center, segment.end_point)
+            return [
+                Arc2D(
+                    center=center,
+                    radius=radius,
+                    start_angle=start_angle,
+                    end_angle=end_angle,
+                )
+            ]
+
+        return []
+
     def _adaptive_world_tolerance(self, scale: float = 1.0, min_world: float = 0.05, max_world: float = 2.0) -> float:
         """
         Convert screen snap radius to a bounded world tolerance.
@@ -1183,7 +1252,11 @@ class SketchHandlersMixin:
 
         if not target:
             self.preview_geometry = []
-            self.update()
+            msg = format_trim_failure_message("Kein Ziel gefunden")
+            self.status_message.emit(msg)
+            if hasattr(self, "show_message"):
+                self.show_message(msg, 2200, QColor(255, 140, 90))
+            self.request_update()
             return
 
         # TrimOperation nutzen
@@ -1212,8 +1285,7 @@ class SketchHandlersMixin:
 
         # Preview
         segment = result.segment
-        if isinstance(target, Line2D) and segment and not segment.is_full_delete:
-            self.preview_geometry = [Line2D(segment.start_point, segment.end_point)]
+        self.preview_geometry = self._build_trim_preview_geometry(target, segment)
 
         self.status_message.emit("Klicken zum Trimmen")
 

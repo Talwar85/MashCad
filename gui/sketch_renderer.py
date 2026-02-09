@@ -1190,7 +1190,13 @@ class SketchRendererMixin:
     def _draw_preview(self, p):
         # Für Bearbeitungstools auch ohne tool_points zeichnen wenn tool_step > 0
         edit_tools = [SketchTool.MOVE, SketchTool.COPY, SketchTool.ROTATE, SketchTool.MIRROR, SketchTool.SCALE]
-        if not self.tool_points and self.tool_step == 0 and self.current_tool not in edit_tools:
+        has_preview_geometry = bool(getattr(self, "preview_geometry", None))
+        if (
+            not self.tool_points
+            and self.tool_step == 0
+            and self.current_tool not in edit_tools
+            and not has_preview_geometry
+        ):
             return
         
         p.setPen(QPen(self.PREVIEW_COLOR, 2, Qt.DashLine))
@@ -1805,6 +1811,57 @@ class SketchRendererMixin:
             p.drawLine(int(ctr_screen.x()), int(ctr_screen.y()) - 12, int(ctr_screen.x()), int(ctr_screen.y()) + 12)
             p.setFont(QFont("Arial", 10, QFont.Bold))
             p.drawText(int(ctr_screen.x()) + 15, int(ctr_screen.y()) - 15, f"{count}× über {total_angle:.0f}°")
+
+        # Geometrische Preview-Overlays (z.B. Trim)
+        preview_items = getattr(self, "preview_geometry", []) or []
+        if preview_items:
+            p.save()
+            p.setPen(QPen(QColor(255, 170, 80, 220), 2, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            for item in preview_items:
+                if hasattr(item, "start") and hasattr(item, "end"):
+                    p.drawLine(
+                        self.world_to_screen(QPointF(item.start.x, item.start.y)),
+                        self.world_to_screen(QPointF(item.end.x, item.end.y)),
+                    )
+                    continue
+
+                if hasattr(item, "center") and hasattr(item, "radius") and hasattr(item, "start_angle") and hasattr(item, "end_angle"):
+                    r_world = float(item.radius)
+                    if r_world <= 0.0:
+                        continue
+
+                    sweep = float(item.end_angle) - float(item.start_angle)
+                    while sweep < 0.0:
+                        sweep += 360.0
+                    while sweep > 360.0:
+                        sweep -= 360.0
+                    if sweep < 0.1:
+                        continue
+
+                    steps = max(16, int(sweep / 3.0))
+                    path = QPainterPath()
+                    for idx in range(steps + 1):
+                        t = idx / steps
+                        ang = math.radians(float(item.start_angle) + sweep * t)
+                        world_pt = QPointF(
+                            item.center.x + r_world * math.cos(ang),
+                            item.center.y + r_world * math.sin(ang),
+                        )
+                        screen_pt = self.world_to_screen(world_pt)
+                        if idx == 0:
+                            path.moveTo(screen_pt)
+                        else:
+                            path.lineTo(screen_pt)
+                    p.drawPath(path)
+                    continue
+
+                if hasattr(item, "center") and hasattr(item, "radius"):
+                    ctr = self.world_to_screen(QPointF(item.center.x, item.center.y))
+                    r = float(item.radius) * self.view_scale
+                    if r > 0.0:
+                        p.drawEllipse(ctr, r, r)
+            p.restore()
     
     def _draw_selection_box(self, p):
         if self.selection_box_start and self.selection_box_end:
