@@ -6582,6 +6582,21 @@ class MainWindow(QMainWindow):
                         from modeling import ExtrudeFeature
                         from gui.commands.feature_commands import AddFeatureCommand
 
+                        # Boolean-Pfad hat keine face_shape_id (anders als BRepFeat-Pfad)
+                        # Verwende None oder lese aus best_face wenn verfügbar
+                        boolean_face_shape_id = None
+                        if best_face is not None and hasattr(best_face, 'wrapped'):
+                            try:
+                                boolean_face_shape_id = self._find_or_register_face_shape_id(
+                                    target,
+                                    best_face,
+                                    local_index=0,
+                                    feature_id=None,  # Wird später gesetzt
+                                    force_feature_local=True,
+                                )
+                            except Exception:
+                                pass
+
                         feat = ExtrudeFeature(
                             sketch=None,
                             distance=height,
@@ -6592,7 +6607,7 @@ class MainWindow(QMainWindow):
                             plane_normal=plane_normal,
                             plane_x_dir=plane_x_dir if polygon is not None else None,
                             plane_y_dir=plane_y_dir if polygon is not None else None,
-                            face_shape_id=face_shape_id,
+                            face_shape_id=boolean_face_shape_id,
                             face_index=best_face_index,
                             face_selector=face_selector_dict,
                         )
