@@ -4824,13 +4824,32 @@ class Body:
                     logger.debug(f"{feature.name}: Face-ShapeID Auflösung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
+        single_ref_pair = bool(
+            single_shape_attr
+            and expected_shape_refs == 1
+            and len(valid_face_indices) == 1
+        )
+        shape_ids_index_aligned = True
+        if expected_shape_refs > 0 and valid_face_indices and not single_ref_pair:
+            for sid in shape_ids:
+                if not hasattr(sid, "uuid"):
+                    continue
+                local_idx = getattr(sid, "local_index", None)
+                if not isinstance(local_idx, int) or not (0 <= int(local_idx) < len(valid_face_indices)):
+                    shape_ids_index_aligned = False
+                    break
         strict_dual_face_refs = (
             strict_face_feature
             and expected_shape_refs > 0
             and bool(valid_face_indices)
             and len(valid_face_indices) == expected_shape_refs
+            and (shape_ids_index_aligned or single_ref_pair)
         )
-        prefer_shape_first = bool(single_shape_attr and expected_shape_refs > 0)
+        prefer_shape_first = bool(
+            single_shape_attr
+            and expected_shape_refs > 0
+            and (not valid_face_indices or shape_ids_index_aligned or single_ref_pair)
+        )
 
         # TNP v4.0:
         # - Extrude/Thread (single-face): shape-first für semantische Stabilität.
@@ -6647,8 +6666,9 @@ class Body:
                     logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in edge_shape_ids if hasattr(sid, "uuid"))
+        single_ref_pair = bool(expected_shape_refs == 1 and len(valid_edge_indices) == 1)
         shape_ids_index_aligned = True
-        if expected_shape_refs > 0 and valid_edge_indices:
+        if expected_shape_refs > 0 and valid_edge_indices and not single_ref_pair:
             for sid in edge_shape_ids:
                 if not hasattr(sid, "uuid"):
                     continue
@@ -6661,7 +6681,7 @@ class Body:
             and expected_shape_refs > 0
             and bool(valid_edge_indices)
             and len(valid_edge_indices) == expected_shape_refs
-            and shape_ids_index_aligned
+            and (shape_ids_index_aligned or single_ref_pair)
         )
 
         # Bei gesetzten edge_indices: index-first. Sonst ShapeID-first.
@@ -6691,6 +6711,21 @@ class Body:
                         if not any(self._is_same_edge(shape_edge, idx_edge) for idx_edge in resolved_edges_from_index):
                             strict_topology_mismatch = True
                             break
+
+        # Single-Edge UX-Fall: Bei genau einer Index+ShapeID-Referenz kann eine
+        # stale ShapeID (nach Undo/Redo) auf eine andere Edge zeigen, obwohl der
+        # index-konsistente Edge-Pfad korrekt ist. Dann index deterministisch
+        # bevorzugen und ShapeID später auf den tatsächlich verwendeten Edge heilen.
+        if strict_topology_mismatch and single_ref_pair and resolved_edges_from_index:
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(
+                    f"{feature_name}: Single-Edge ShapeID/Index-Mismatch erkannt; "
+                    "verwende edge_index als autoritative Referenz."
+                )
+            resolved_edges = list(resolved_edges_from_index)
+            resolved_edges_from_shape = []
+            resolved_shape_ids = []
+            strict_topology_mismatch = False
 
         has_topological_refs = bool(valid_edge_indices or expected_shape_refs > 0)
         unresolved_topology_refs = (
@@ -7432,6 +7467,16 @@ class Body:
         if self._document and hasattr(self._document, "_shape_naming_service"):
             service = self._document._shape_naming_service
 
+        selector_data = getattr(feature, "face_selector", None)
+        selector_normal_hint = None
+        if isinstance(selector_data, dict):
+            raw_normal = selector_data.get("normal")
+            if isinstance(raw_normal, (list, tuple)) and len(raw_normal) == 3:
+                try:
+                    selector_normal_hint = np.array(raw_normal, dtype=float)
+                except Exception:
+                    selector_normal_hint = None
+
         def _same_face(face_a, face_b) -> bool:
             try:
                 wa = face_a.wrapped if hasattr(face_a, "wrapped") else face_a
@@ -7439,6 +7484,40 @@ class Body:
                 return wa.IsSame(wb)
             except Exception:
                 return face_a is face_b
+
+        def _face_normal_np(face_obj):
+            try:
+                center = face_obj.center()
+                n = face_obj.normal_at(center)
+                n_vec = np.array([n.X, n.Y, n.Z], dtype=float)
+                try:
+                    from OCP.TopAbs import TopAbs_REVERSED
+                    if face_obj.wrapped.Orientation() == TopAbs_REVERSED:
+                        n_vec = -n_vec
+                except Exception:
+                    pass
+                n_len = np.linalg.norm(n_vec)
+                if n_len < 1e-9:
+                    return None
+                return n_vec / n_len
+            except Exception:
+                return None
+
+        def _normal_alignment(face_obj, normal_hint):
+            if face_obj is None or normal_hint is None:
+                return -1.0
+            try:
+                hint = np.array(normal_hint, dtype=float)
+                hint_len = np.linalg.norm(hint)
+                if hint_len < 1e-9:
+                    return -1.0
+                hint = hint / hint_len
+                face_n = _face_normal_np(face_obj)
+                if face_n is None:
+                    return -1.0
+                return abs(float(np.dot(face_n, hint)))
+            except Exception:
+                return -1.0
 
         def _sync_feature_face_refs(face_obj) -> None:
             if face_obj is None:
@@ -7470,7 +7549,8 @@ class Body:
                             ocp_shape=face_obj.wrapped,
                             shape_type=ShapeType.FACE,
                             feature_id=feature.id,
-                            local_index=max(0, int(getattr(feature, "face_index", 0) or 0)),
+                            # Single-face reference slot (face_shape_id) is always 0.
+                            local_index=0,
                             geometry_data=(fc.X, fc.Y, fc.Z, area),
                         )
                     except Exception as sid_err:
@@ -7490,178 +7570,290 @@ class Body:
             except Exception:
                 index_face = None
 
-        best_face = index_face
-        has_topological_refs = bool(
-            getattr(feature, "face_shape_id", None) is not None
-            or getattr(feature, "face_index", None) is not None
-        )
-
-        # Push/Pull-Robustheit: Bei vorhandener face_index ist der Index die
-        # autoritative Referenz. ShapeID wird danach auf die tatsächlich
-        # aufgelöste Face synchronisiert.
-        if best_face is None and service and hasattr(getattr(feature, "face_shape_id", None), "uuid"):
+        shape_face = None
+        shape_method = ""
+        shape_method_l = ""
+        if (
+            service
+            and hasattr(getattr(feature, "face_shape_id", None), "uuid")
+        ):
             try:
-                resolved_ocp, _method = service.resolve_shape_with_method(
+                resolved_ocp, shape_method = service.resolve_shape_with_method(
                     feature.face_shape_id,
                     current_solid,
                     log_unresolved=False,
                 )
                 if resolved_ocp is not None:
                     from build123d import Face
-                    best_face = Face(resolved_ocp)
-                    resolved_idx = face_index_of(current_solid, best_face)
-                    if resolved_idx is not None:
-                        feature.face_index = int(resolved_idx)
+                    shape_face = Face(resolved_ocp)
             except Exception as resolve_err:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"BRepFeat Push/Pull: ShapeID-Auflösung fehlgeschlagen: {resolve_err}")
+        shape_method_l = str(shape_method or "").lower()
 
-        if best_face is None and not has_topological_refs:
-            selector_data = getattr(feature, "face_selector", None)
-            if selector_data:
-                try:
-                    from modeling.geometric_selector import GeometricFaceSelector
-                    if isinstance(selector_data, dict):
-                        selector = GeometricFaceSelector.from_dict(selector_data)
-                    elif hasattr(selector_data, "find_best_match"):
-                        selector = selector_data
-                    else:
-                        selector = None
-                    if selector is not None:
-                        best_face = selector.find_best_match(list(current_solid.faces()))
-                except Exception as selector_err:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"BRepFeat Push/Pull: Selector-Recovery fehlgeschlagen: {selector_err}")
+        face_candidates = []
+        has_topological_refs = bool(
+            getattr(feature, "face_shape_id", None) is not None
+            or getattr(feature, "face_index", None) is not None
+        )
 
-        if best_face is None:
+        def _selector_object():
+            if not selector_data:
+                return None
+            try:
+                from modeling.geometric_selector import GeometricFaceSelector
+                if isinstance(selector_data, dict):
+                    return GeometricFaceSelector.from_dict(selector_data)
+                if hasattr(selector_data, "find_best_match"):
+                    return selector_data
+            except Exception:
+                return None
+            return None
+
+        selector_obj = _selector_object()
+
+        def _selector_match_score(face_obj) -> float:
+            if face_obj is None or selector_obj is None:
+                return -1.0
+            try:
+                if hasattr(selector_obj, "_match_score"):
+                    return float(selector_obj._match_score(face_obj))
+                best = selector_obj.find_best_match([face_obj])
+                return 1.0 if best is not None else 0.0
+            except Exception:
+                return -1.0
+
+        def _append_candidate(face_obj, source_label: str, method_label: str = "") -> None:
+            if face_obj is None:
+                return
+            for existing in face_candidates:
+                if _same_face(existing["face"], face_obj):
+                    return
+            selector_score = _selector_match_score(face_obj)
+            alignment = _normal_alignment(face_obj, selector_normal_hint)
+            reliability = 0.5
+            if source_label.startswith("shape:"):
+                if method_label in {"direct", "history", "brepfeat"}:
+                    reliability = 3.0
+                elif method_label == "geometric":
+                    reliability = 1.6
+                else:
+                    reliability = 1.2
+            elif source_label == "index":
+                reliability = 1.1
+            elif source_label == "selector":
+                reliability = 1.0
+
+            score = reliability
+            if alignment >= 0.0:
+                score += alignment
+            if selector_score >= 0.0:
+                score += (2.0 * selector_score)
+
+            face_candidates.append(
+                {
+                    "face": face_obj,
+                    "source": source_label,
+                    "method": method_label,
+                    "score": score,
+                }
+            )
+
+        if (
+            shape_face is not None
+            and index_face is not None
+            and not _same_face(shape_face, index_face)
+        ):
+            # Geometric Shape-Matching ist als Recovery gedacht und kann bei vielen
+            # historischen Records eine falsche Face liefern. Wenn ein valider
+            # face_index existiert, hat dieser dann Vorrang.
+            if shape_method_l == "geometric":
+                logger.warning(
+                    "BRepFeat Push/Pull: face_shape_id wurde nur geometrisch aufgelöst und "
+                    "widerspricht face_index; verwende face_index als Quelle."
+                )
+                shape_face = None
+            else:
+                logger.warning(
+                    "BRepFeat Push/Pull: face_shape_id und face_index zeigen auf unterschiedliche Faces; "
+                    "verwende ShapeID-Referenz und ignoriere face_index."
+                )
+                index_face = None
+
+        if shape_face is not None:
+            _append_candidate(shape_face, f"shape:{shape_method_l or 'resolved'}", shape_method_l)
+        if index_face is not None:
+            _append_candidate(index_face, "index", "")
+
+        # Self-healing fallback: auch bei vorhandenen topo-Referenzen als letzter Rettungspfad zulassen.
+        if selector_obj is not None and hasattr(current_solid, "faces"):
+            try:
+                selector_face = selector_obj.find_best_match(list(current_solid.faces()))
+                _append_candidate(selector_face, "selector", "")
+            except Exception as selector_err:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"BRepFeat Push/Pull: Selector-Recovery fehlgeschlagen: {selector_err}")
+
+        if not face_candidates:
             raise ValueError("BRepFeat Push/Pull: Zielfläche nicht gefunden (face_shape_id/face_index prüfen)")
 
-        # Falls beide Referenzen existieren und auseinanderlaufen, nutze die
-        # per face_index gefundene Face (kernelstabil) und heile ShapeID/Selector.
-        if index_face is not None and not _same_face(index_face, best_face):
-            if is_enabled("tnp_debug_logging"):
-                logger.warning(
-                    "BRepFeat Push/Pull: ShapeID und face_index zeigen auf unterschiedliche Faces; "
-                    "verwende face_index als Quelle."
-                )
-            best_face = index_face
+        # Stabilität vor Geschwindigkeit: beste Kandidaten zuerst, bei Fehlschlag nächster.
+        face_candidates.sort(key=lambda c: c["score"], reverse=True)
 
-        _sync_feature_face_refs(best_face)
+        def _normal_for_face(face_obj):
+            center_local = face_obj.center()
+            face_normal_local = face_obj.normal_at(center_local)
+            face_n = np.array([face_normal_local.X, face_normal_local.Y, face_normal_local.Z], dtype=float)
+            try:
+                from OCP.TopAbs import TopAbs_REVERSED
+                if face_obj.wrapped.Orientation() == TopAbs_REVERSED:
+                    face_n = -face_n
+            except Exception:
+                pass
+            face_len = np.linalg.norm(face_n)
+            if face_len < 1e-9:
+                raise ValueError("BRepFeat Push/Pull: Face-Normale ist Null")
+            face_n = face_n / face_len
 
-        selector_normal = None
-        selector_data = getattr(feature, "face_selector", None)
-        if isinstance(selector_data, dict):
-            raw_normal = selector_data.get("normal")
-            if isinstance(raw_normal, (list, tuple)) and len(raw_normal) == 3:
-                try:
-                    selector_normal = np.array(raw_normal, dtype=float)
-                except Exception:
-                    selector_normal = None
-
-        center = best_face.center()
-        if selector_normal is None or np.linalg.norm(selector_normal) < 1e-6:
-            face_normal = best_face.normal_at(center)
-            selector_normal = np.array([face_normal.X, face_normal.Y, face_normal.Z], dtype=float)
-
-        try:
-            from OCP.TopAbs import TopAbs_REVERSED
-
-            if best_face.wrapped.Orientation() == TopAbs_REVERSED:
-                selector_normal = -selector_normal
-        except Exception:
-            pass
-
-        norm_len = np.linalg.norm(selector_normal)
-        if norm_len < 1e-6:
-            raise ValueError("BRepFeat Push/Pull: Face-Normale ist Null")
-        normal = selector_normal / norm_len
+            # Verwende Selector-Normale nur wenn sie zu dieser Face plausibel passt.
+            if selector_normal_hint is not None:
+                hint = np.array(selector_normal_hint, dtype=float)
+                hint_len = np.linalg.norm(hint)
+                if hint_len > 1e-9:
+                    hint = hint / hint_len
+                    if abs(float(np.dot(face_n, hint))) >= 0.6:
+                        return hint
+            return face_n
 
         signed_distance = float(getattr(feature, "distance", 0.0) or 0.0) * float(getattr(feature, "direction", 1) or 1)
         abs_dist = abs(signed_distance) if abs(signed_distance) > 1e-9 else abs(float(getattr(feature, "distance", 0.0) or 0.0))
         if abs_dist <= 1e-9:
             raise ValueError("BRepFeat Push/Pull benötigt eine Distanz > 0")
 
-        if operation == "Cut":
-            normal = -normal
-            fuse_mode = 0
-        else:
-            fuse_mode = 1
-            if signed_distance < 0:
-                normal = -normal
+        fuse_mode = 0 if operation == "Cut" else 1
 
-        if is_enabled("tnp_debug_logging"):
-            logger.debug(
-                f"BRepFeat Push/Pull: Face via TNP-v4 aufgelöst "
-                f"(face_index={getattr(feature, 'face_index', None)}, "
-                f"has_shape_id={getattr(feature, 'face_shape_id', None) is not None})"
-            )
+        from OCP.BRepFeat import BRepFeat_MakePrism
+        from OCP.gp import gp_Dir
+        from build123d import Solid
 
-        # BRepFeat_MakePrism ausführen
-        try:
-            from OCP.BRepFeat import BRepFeat_MakePrism
-            from OCP.gp import gp_Dir
-            from build123d import Solid
-            
-            shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
-            face_shape = best_face.wrapped if hasattr(best_face, 'wrapped') else best_face
-            
-            direction = gp_Dir(float(normal[0]), float(normal[1]), float(normal[2]))
-            
-            prism = BRepFeat_MakePrism()
-            prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
-            prism.Perform(abs_dist)
-            
-            if prism.IsDone():
-                result_shape = prism.Shape()
-                result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
-                
-                result = Solid(result_shape)
-                
-                # Validierung
-                is_valid = True
-                if hasattr(result, 'is_valid'):
+        shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+        attempt_errors = []
+
+        for candidate in face_candidates:
+            candidate_face = candidate["face"]
+            face_resolution_source = candidate["source"]
+            candidate_method = candidate["method"]
+            try:
+                normal = _normal_for_face(candidate_face)
+                if operation == "Cut":
+                    normal = -normal
+                elif signed_distance < 0:
+                    normal = -normal
+
+                normal_attempts = [("primary", normal)]
+                flipped = -normal
+                if np.linalg.norm(flipped - normal) > 1e-9:
+                    normal_attempts.append(("flipped", flipped))
+
+                candidate_failures = []
+                for normal_mode, trial_normal in normal_attempts:
                     try:
-                        is_valid = result.is_valid()
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        is_valid = True
-
-                # DEBUG: Check validation criteria
-                has_volume_attr = hasattr(result, 'volume')
-                volume = result.volume if has_volume_attr else 0.0
-                if is_enabled("extrude_debug"):
-                    logger.debug(f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, has_volume={has_volume_attr}, volume={volume:.4f}")
-
-                if is_valid and hasattr(result, 'volume') and result.volume > 0.001:
-                    logger.debug(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
-                    
-                    # === TNP v4.0: BRepFeat-Operation tracken ===
-                    try:
-                        if self._document and hasattr(self._document, '_shape_naming_service'):
-                            service = self._document._shape_naming_service
-                            service.track_brepfeat_operation(
-                                feature_id=feature.id,
-                                source_solid=current_solid,
-                                result_solid=result,
-                                modified_face=best_face,
-                                direction=(float(normal[0]), float(normal[1]), float(normal[2])),
-                                distance=abs_dist
-                            )
-                    except Exception as tnp_e:
                         if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"TNP v4.0 BRepFeat Tracking fehlgeschlagen: {tnp_e}")
-                    
-                    return result
-                else:
-                    logger.warning(f"BRepFeat: Ergebnis ungültig (valid={is_valid}, vol={getattr(result, 'volume', 0):.4f})")
-                    raise ValueError("BRepFeat produzierte ungültiges Ergebnis")
-            else:
-                logger.warning("BRepFeat: IsDone() = False")
-                raise ValueError("BRepFeat Operation fehlgeschlagen")
-                
-        except Exception as e:
-            logger.error(f"BRepFeat Push/Pull fehlgeschlagen: {e}")
-            raise
+                            logger.debug(
+                                f"BRepFeat Push/Pull: Face via TNP-v4 aufgelöst "
+                                f"(face_index={getattr(feature, 'face_index', None)}, "
+                                f"has_shape_id={getattr(feature, 'face_shape_id', None) is not None}, "
+                                f"source={face_resolution_source}, shape_method={candidate_method or '-'}, "
+                                f"rank={candidate['score']:.3f}, normal_mode={normal_mode})"
+                            )
+
+                        face_shape = candidate_face.wrapped if hasattr(candidate_face, 'wrapped') else candidate_face
+                        direction = gp_Dir(float(trial_normal[0]), float(trial_normal[1]), float(trial_normal[2]))
+
+                        prism = BRepFeat_MakePrism()
+                        prism.Init(shape, face_shape, face_shape, direction, fuse_mode, False)
+                        prism.Perform(abs_dist)
+
+                        if not prism.IsDone():
+                            raise ValueError("BRepFeat Operation fehlgeschlagen")
+
+                        result_shape = prism.Shape()
+                        result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
+                        result = Solid(result_shape)
+
+                        is_valid = True
+                        if hasattr(result, 'is_valid'):
+                            try:
+                                is_valid = result.is_valid()
+                            except Exception as e:
+                                logger.debug(f"[__init__.py] Fehler: {e}")
+                                is_valid = True
+
+                        has_volume_attr = hasattr(result, 'volume')
+                        volume = result.volume if has_volume_attr else 0.0
+                        if is_enabled("extrude_debug"):
+                            logger.debug(
+                                f"[TNP DEBUG BRepFeat] Validation: is_valid={is_valid}, "
+                                f"has_volume={has_volume_attr}, volume={volume:.4f}"
+                            )
+
+                        if not (is_valid and has_volume_attr and result.volume > 0.001):
+                            raise ValueError(
+                                f"BRepFeat produzierte ungültiges Ergebnis "
+                                f"(valid={is_valid}, vol={getattr(result, 'volume', 0):.4f})"
+                            )
+
+                        vol_before = float(getattr(current_solid, "volume", 0.0) or 0.0)
+                        vol_after = float(getattr(result, "volume", 0.0) or 0.0)
+                        faces_before = len(list(current_solid.faces())) if hasattr(current_solid, "faces") else 0
+                        faces_after = len(list(result.faces())) if hasattr(result, "faces") else 0
+                        vol_delta = abs(vol_after - vol_before)
+                        if vol_delta <= 1e-6 and faces_before == faces_after:
+                            raise ValueError(
+                                "BRepFeat Push/Pull erzeugte keine Geometrieänderung "
+                                "(möglicherweise stale Face-Referenz)"
+                            )
+
+                        logger.debug(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
+
+                        _sync_feature_face_refs(candidate_face)
+
+                        # === TNP v4.0: BRepFeat-Operation tracken ===
+                        try:
+                            if self._document and hasattr(self._document, '_shape_naming_service'):
+                                service = self._document._shape_naming_service
+                                service.track_brepfeat_operation(
+                                    feature_id=feature.id,
+                                    source_solid=current_solid,
+                                    result_solid=result,
+                                    modified_face=candidate_face,
+                                    direction=(float(trial_normal[0]), float(trial_normal[1]), float(trial_normal[2])),
+                                    distance=abs_dist
+                                )
+                        except Exception as tnp_e:
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP v4.0 BRepFeat Tracking fehlgeschlagen: {tnp_e}")
+
+                        return result
+                    except Exception as normal_err:
+                        candidate_failures.append(f"{normal_mode}:{normal_err}")
+                        continue
+
+                raise ValueError("; ".join(candidate_failures) or "BRepFeat Operation fehlgeschlagen")
+            except Exception as candidate_err:
+                attempt_errors.append((face_resolution_source, str(candidate_err)))
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(
+                        f"BRepFeat Push/Pull: Kandidat fehlgeschlagen "
+                        f"(source={face_resolution_source}, reason={candidate_err})"
+                    )
+                continue
+
+        if attempt_errors:
+            source_info = "; ".join(f"{src}:{msg}" for src, msg in attempt_errors)
+            logger.error(f"BRepFeat Push/Pull fehlgeschlagen nach {len(attempt_errors)} Kandidaten: {source_info}")
+            raise ValueError(f"BRepFeat Push/Pull fehlgeschlagen: {source_info}")
+        raise ValueError("BRepFeat Push/Pull fehlgeschlagen: keine auswertbaren Kandidaten")
 
     def _detect_circle_from_points(self, points, tolerance=0.02):
         """
@@ -10463,6 +10655,128 @@ class Document:
             )
         return migrated_features
 
+    def _migrate_loaded_face_refs_to_shape_ids(self) -> int:
+        """
+        Runtime migration after load:
+        synchronizes face ShapeIDs from stable face indices for metadata-only features.
+
+        Hintergrund:
+        Fuer verbrauchende Features (z. B. Hole/Draft/Push-Pull) zeigen face_indices
+        auf den VOR-Feature-Zustand. Diese koennen aus dem final geladenen BREP
+        nicht sicher rekonstruiert werden. Daher wird hier nur fuer nicht-
+        destruktive SurfaceTexture-Referenzen migriert.
+        """
+        service = getattr(self, "_shape_naming_service", None)
+        if service is None:
+            return 0
+
+        try:
+            from modeling.topology_indexing import face_from_index
+            from modeling.tnp_system import ShapeType
+        except Exception:
+            return 0
+
+        migrated_features = 0
+
+        def _as_indices(raw_values) -> List[int]:
+            valid: List[int] = []
+            for raw_idx in list(raw_values or []):
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    continue
+                if idx < 0:
+                    continue
+                if idx not in valid:
+                    valid.append(idx)
+            return valid
+
+        def _resolve_face_shape_id(feature, solid, face_idx: int, local_idx: int):
+            try:
+                face = face_from_index(solid, int(face_idx))
+            except Exception:
+                face = None
+            if face is None:
+                return None
+
+            try:
+                shape_id = service.find_shape_id_by_face(face, require_exact=True)
+            except Exception:
+                shape_id = None
+
+            local_index = getattr(shape_id, "local_index", None) if shape_id is not None else None
+            shape_slot_matches = (
+                shape_id is not None
+                and getattr(shape_id, "feature_id", None) == feature.id
+                and isinstance(local_index, int)
+                and local_index == int(local_idx)
+            )
+            if not shape_slot_matches:
+                shape_id = None
+
+            if shape_id is None and hasattr(face, "wrapped"):
+                try:
+                    fc = face.center()
+                    area = float(face.area) if hasattr(face, "area") else 0.0
+                    shape_id = service.register_shape(
+                        ocp_shape=face.wrapped,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature.id,
+                        local_index=int(local_idx),
+                        geometry_data=(fc.X, fc.Y, fc.Z, area),
+                    )
+                except Exception:
+                    return None
+            return shape_id
+
+        def _shape_tokens(shape_values: List[Any]) -> List[str]:
+            return [sid.uuid for sid in shape_values if hasattr(sid, "uuid")]
+
+        def _sync_face_list_refs(feature, solid, index_attr: str, shape_attr: str) -> bool:
+            index_values = _as_indices(getattr(feature, index_attr, []))
+            if not index_values:
+                return False
+
+            new_shape_ids = []
+            for local_idx, face_idx in enumerate(index_values):
+                shape_id = _resolve_face_shape_id(feature, solid, face_idx, local_idx)
+                if shape_id is None:
+                    return False
+                new_shape_ids.append(shape_id)
+
+            changed = False
+            old_indices = list(getattr(feature, index_attr, []) or [])
+            if old_indices != index_values:
+                setattr(feature, index_attr, index_values)
+                changed = True
+
+            old_shape_ids = list(getattr(feature, shape_attr, []) or [])
+            if _shape_tokens(old_shape_ids) != _shape_tokens(new_shape_ids):
+                setattr(feature, shape_attr, new_shape_ids)
+                changed = True
+
+            return changed
+
+        for body in self.get_all_bodies():
+            solid = getattr(body, "_build123d_solid", None)
+            if solid is None:
+                continue
+
+            for feature in body.features:
+                changed = False
+                if isinstance(feature, SurfaceTextureFeature):
+                    changed |= _sync_face_list_refs(feature, solid, "face_indices", "face_shape_ids")
+
+                if changed:
+                    migrated_features += 1
+                    body.invalidate_mesh()
+
+        if migrated_features > 0:
+            logger.info(
+                f"[MIGRATION] Face ShapeIDs aus face_indices synchronisiert: {migrated_features}"
+            )
+        return migrated_features
+
     def _rehydrate_shape_naming_service_from_loaded_bodies(self) -> int:
         """
         Seed ShapeNamingService after load from already vorhandenen topology indices.
@@ -10673,13 +10987,19 @@ class Document:
             migrated_nsided = doc._migrate_loaded_nsided_features_to_indices()
             migrated_face_refs = doc._migrate_loaded_face_refs_to_indices()
             seeded_shape_refs = doc._rehydrate_shape_naming_service_from_loaded_bodies()
+            migrated_face_shape_refs = doc._migrate_loaded_face_refs_to_shape_ids()
             migrated_edge_shape_refs = doc._migrate_loaded_edge_refs_to_shape_ids()
             if seeded_shape_refs > 0 and is_enabled("tnp_debug_logging"):
                 logger.debug(
                     f"[MIGRATION] ShapeNamingService Rehydration: {seeded_shape_refs} mappings"
                 )
 
-            migrated_total = migrated_nsided + migrated_face_refs + migrated_edge_shape_refs
+            migrated_total = (
+                migrated_nsided
+                + migrated_face_refs
+                + migrated_face_shape_refs
+                + migrated_edge_shape_refs
+            )
             if migrated_total > 0:
                 import shutil
 
@@ -10695,6 +11015,7 @@ class Document:
                     logger.info(
                         "[MIGRATION] Projektdatei nach Referenz-Migration aktualisiert: "
                         f"{path} (nsided={migrated_nsided}, face_refs={migrated_face_refs}, "
+                        f"face_shape_refs={migrated_face_shape_refs}, "
                         f"edge_shape_refs={migrated_edge_shape_refs})"
                     )
                 else:

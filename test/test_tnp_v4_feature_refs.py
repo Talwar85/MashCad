@@ -677,8 +677,9 @@ def test_resolve_edges_tnp_fillet_requires_shape_index_consistency(monkeypatch):
     assert resolved == []
 
 
-def test_resolve_edges_tnp_uses_indices_when_shapeid_local_index_is_stale(monkeypatch):
+def test_resolve_edges_tnp_uses_shape_probe_for_single_ref_even_with_legacy_local_index(monkeypatch):
     from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
 
     doc = Document()
     body = Body("fillet_edge_shape_local_index_stale")
@@ -689,14 +690,76 @@ def test_resolve_edges_tnp_uses_indices_when_shapeid_local_index_is_stale(monkey
     feature = FilletFeature(radius=1.0, edge_indices=[0])
     feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_edge_stale_local", 999)]
 
-    def _fail_resolve(*_args, **_kwargs):
-        raise AssertionError("ShapeID resolution should not run for stale local_index when edge_indices are valid")
+    calls = {"count": 0}
 
-    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fail_resolve)
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        calls["count"] += 1
+        assert log_unresolved is False
+        target_edge = edge_from_index(solid, 0)
+        assert target_edge is not None
+        return target_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
     resolved = body._resolve_edges_tnp(solid, feature)
 
     assert len(resolved) == 1
+    assert calls["count"] >= 1
     assert feature.edge_indices == [0]
+
+
+def test_resolve_feature_faces_uses_indices_when_shapeid_local_index_is_stale(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("hole_face_shape_local_index_stale")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = HoleFeature(face_indices=[0], face_selectors=[_face_selector()])
+    feature.face_shape_ids = [_make_shape_id(ShapeType.FACE, "hole_face_stale_local", 999)]
+
+    def _fail_resolve(*_args, **_kwargs):
+        raise AssertionError("ShapeID resolution should not run for stale local_index when face_indices are valid")
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fail_resolve)
+    resolved = body._resolve_feature_faces(feature, solid)
+
+    assert len(resolved) == 1
+    assert feature.face_indices == [0]
+
+
+def test_resolve_feature_faces_extrude_blocks_mismatch_even_with_legacy_shape_local_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("extrude_face_shape_local_index_stale")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_face_stale_local", 999)
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_feature_faces(feature, solid)
+
+    assert resolved == []
+    assert feature.face_index == 0
 
 
 def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
@@ -1052,15 +1115,21 @@ def test_compute_extrude_part_brepfeat_prefers_face_index_before_selector(monkey
     class _FakePrism:
         def Init(self, shape, *_args):
             self._shape = shape
+            self._distance = 0.0
 
-        def Perform(self, _distance):
+        def Perform(self, distance):
+            self._distance = float(distance or 0.0)
             return None
 
         def IsDone(self):
             return True
 
         def Shape(self):
-            return self._shape
+            # Liefert absichtlich geänderte Geometrie, damit der No-Op-Guard
+            # nicht triggert und nur die Referenz-Auflösung getestet wird.
+            from build123d import Solid as _Solid
+            delta = 1.0 + max(0.1, abs(self._distance))
+            return _Solid.make_box(10.0 + delta, 20.0, 30.0).wrapped
 
     def _fail_from_dict(cls, _data):
         raise AssertionError("legacy selector matching should not run when face_index resolves")
@@ -1086,23 +1155,28 @@ def test_compute_extrude_part_brepfeat_prefers_face_index_before_selector(monkey
     assert feature.face_index == 0
 
 
-def test_compute_extrude_part_brepfeat_skips_shape_resolution_when_face_index_exists(monkeypatch):
+def test_compute_extrude_part_brepfeat_uses_shape_resolution_even_when_face_index_exists(monkeypatch):
     from build123d import Solid
+    from modeling.topology_indexing import face_from_index
 
     brepfeat_mod = pytest.importorskip("OCP.BRepFeat")
 
     class _FakePrism:
         def Init(self, shape, *_args):
             self._shape = shape
+            self._distance = 0.0
 
-        def Perform(self, _distance):
+        def Perform(self, distance):
+            self._distance = float(distance or 0.0)
             return None
 
         def IsDone(self):
             return True
 
         def Shape(self):
-            return self._shape
+            from build123d import Solid as _Solid
+            delta = 1.0 + max(0.1, abs(self._distance))
+            return _Solid.make_box(10.0 + delta, 20.0, 30.0).wrapped
 
     doc = Document()
     body = Body("brepfeat_index_authoritative")
@@ -1120,19 +1194,85 @@ def test_compute_extrude_part_brepfeat_skips_shape_resolution_when_face_index_ex
     )
     feature.face_shape_id = _make_shape_id(ShapeType.FACE, "stale_pushpull_face", 0)
 
-    def _fail_resolve(*_args, **_kwargs):
-        raise AssertionError("shape resolution must not run when face_index resolves")
+    calls = {"count": 0}
 
-    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _fail_resolve)
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        calls["count"] += 1
+        assert log_unresolved is False
+        target = face_from_index(solid, 0)
+        assert target is not None
+        return target.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
     monkeypatch.setattr(body, "_unify_same_domain", lambda shape, _name: shape)
     monkeypatch.setattr(brepfeat_mod, "BRepFeat_MakePrism", _FakePrism)
 
     result = body._compute_extrude_part_brepfeat(feature, solid)
 
     assert result is not None
+    assert calls["count"] >= 1
     assert feature.face_index == 0
     assert feature.face_shape_id is not None
     assert feature.face_shape_id.shape_type == ShapeType.FACE
+
+
+def test_compute_extrude_part_brepfeat_prefers_shape_face_and_heals_stale_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    brepfeat_mod = pytest.importorskip("OCP.BRepFeat")
+
+    class _FakePrism:
+        def Init(self, shape, face_shape, *_args):
+            self._shape = shape
+            self._face = face_shape
+            self._distance = 0.0
+
+        def Perform(self, distance):
+            self._distance = float(distance or 0.0)
+            return None
+
+        def IsDone(self):
+            return True
+
+        def Shape(self):
+            from build123d import Solid as _Solid
+
+            delta = 1.0 + max(0.1, abs(self._distance))
+            return _Solid.make_box(10.0 + delta, 20.0, 30.0).wrapped
+
+    doc = Document()
+    body = Body("brepfeat_shape_preferred")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=3.0,
+        operation="Join",
+        face_index=0,  # stale index
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "shape_preferred", 999)
+
+    target_face = face_from_index(solid, 4)
+    assert target_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return target_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_unify_same_domain", lambda shape, _name: shape)
+    monkeypatch.setattr(brepfeat_mod, "BRepFeat_MakePrism", _FakePrism)
+
+    result = body._compute_extrude_part_brepfeat(feature, solid)
+
+    assert result is not None
+    # Stale index must be healed to the resolved shape face.
+    assert feature.face_index == 4
 
 
 def test_rebuild_pushpull_failure_blocks_downstream_and_skips_legacy_fallback(monkeypatch):
@@ -1857,6 +1997,67 @@ def test_tnp_health_report_feature_error_status_overrides_reference_probe():
     assert feature_report["status"] == "broken"
     assert feature_report["broken"] >= 1
     assert any(ref.get("method") == "feature_status" for ref in feature_report.get("refs", []))
+
+
+def test_tnp_health_report_uses_shape_probe_for_single_ref_even_with_legacy_local_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("tnp_health_face_stale_local_index")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    hole = HoleFeature(face_indices=[0], face_selectors=[_face_selector()])
+    hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, "hole_health_stale_local", 999)]
+    body.features = [hole]
+
+    calls = {"count": 0}
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        calls["count"] += 1
+        assert log_unresolved is False
+        target_face = face_from_index(body._build123d_solid, 0)
+        assert target_face is not None
+        return target_face.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    report = doc._shape_naming_service.get_health_report(body)
+
+    assert report["status"] == "ok"
+    feature_report = report["features"][0]
+    assert feature_report["status"] == "ok"
+    assert feature_report["broken"] == 0
+    assert feature_report["ok"] == 1
+    assert calls["count"] >= 1
+    assert feature_report["refs"][0]["method"] == "shape"
+
+
+def test_migrate_loaded_face_refs_to_shape_ids_repairs_texture_refs_only():
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("migrate_face_shape_slots")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    hole = HoleFeature(face_indices=[0], face_selectors=[_face_selector()])
+    hole.face_shape_ids = [_make_shape_id(ShapeType.FACE, "hole_stale_slot", 7)]
+
+    texture = SurfaceTextureFeature(face_indices=[1], face_selectors=[_face_selector()])
+    texture.face_shape_ids = [_make_shape_id(ShapeType.FACE, "texture_stale_slot", 9)]
+
+    body.features = [hole, texture]
+
+    migrated = doc._migrate_loaded_face_refs_to_shape_ids()
+
+    assert migrated == 1
+    # Consuming features are intentionally not migrated from final BREP.
+    assert hole.face_shape_ids[0].feature_id == "hole_stale_slot"
+    assert hole.face_shape_ids[0].local_index == 7
+    assert isinstance(texture.face_shape_ids[0], ShapeID)
+    assert texture.face_shape_ids[0].feature_id == texture.id
+    assert texture.face_shape_ids[0].local_index == 0
 
 
 def test_tnp_health_report_texture_indices_stable_after_undo_redo_cycle():

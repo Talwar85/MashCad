@@ -182,17 +182,39 @@ class ShapeNamingService:
         """
         Registriert ein neu erzeugtes Shape.
         """
-        # Erstelle Geometry Data für Hash falls nicht angegeben
+        # Erstelle Geometry Data für Hash falls nicht angegeben.
         if geometry_data is None and HAS_OCP:
             geometry_data = self._extract_geometry_data(ocp_shape, shape_type)
-        
-        # Erstelle ShapeID
-        shape_id = ShapeID.create(
-            shape_type=shape_type,
-            feature_id=feature_id,
-            local_index=local_index,
-            geometry_data=geometry_data or ()
-        )
+
+        # Reuse bestehende Shape-Slots pro (feature_id, shape_type, local_index),
+        # damit Rebuilds dieselben ShapeIDs aktualisieren statt endlos neue UUIDs
+        # anzulegen.
+        feature_bucket = self._by_feature.setdefault(feature_id, [])
+        existing_shape_id: Optional[ShapeID] = None
+        for sid in reversed(feature_bucket):
+            if sid.shape_type != shape_type:
+                continue
+            if int(getattr(sid, "local_index", -1)) == int(local_index):
+                existing_shape_id = sid
+                break
+
+        if existing_shape_id is not None:
+            shape_id = existing_shape_id
+            # Alte Spatial-Index Position entfernen, Record wird unten aktualisiert.
+            for shape_type_key in self._spatial_index:
+                self._spatial_index[shape_type_key] = [
+                    (pos, sid) for pos, sid in self._spatial_index[shape_type_key]
+                    if sid.uuid != shape_id.uuid
+                ]
+        else:
+            # Erstelle ShapeID
+            shape_id = ShapeID.create(
+                shape_type=shape_type,
+                feature_id=feature_id,
+                local_index=local_index,
+                geometry_data=geometry_data or ()
+            )
+            feature_bucket.append(shape_id)
         
         # Erstelle Record
         record = ShapeRecord(
@@ -203,11 +225,6 @@ class ShapeNamingService:
         
         # Speichern
         self._shapes[shape_id.uuid] = record
-        
-        # Feature-Index aktualisieren
-        if feature_id not in self._by_feature:
-            self._by_feature[feature_id] = []
-        self._by_feature[feature_id].append(shape_id)
         
         # Räumlichen Index aktualisieren
         self._update_spatial_index(shape_id, record)
@@ -245,6 +262,15 @@ class ShapeNamingService:
     
     def record_operation(self, operation: OperationRecord) -> None:
         """Speichert eine Operation im Graph"""
+        # Rebuilds führen dasselbe Feature mehrfach aus. Für stabile History
+        # behalten wir je (feature_id, operation_type) nur den neuesten Record.
+        self._operations = [
+            op for op in self._operations
+            if not (
+                op.feature_id == operation.feature_id
+                and op.operation_type == operation.operation_type
+            )
+        ]
         self._operations.append(operation)
         if is_enabled("tnp_debug_logging"):
             logger.debug(f"Operation aufgezeichnet: {operation.operation_type} "
@@ -796,6 +822,30 @@ class ShapeNamingService:
                         })
             else:
                 for ref_kind, shape_ids, index_refs in ref_groups:
+                    strict_kind = (
+                        (ref_kind == "Face" and feat_type_name in strict_face_feature_types)
+                        or (ref_kind == "Edge" and feat_type_name in strict_edge_feature_types)
+                    )
+                    valid_index_refs = [idx for idx in index_refs if idx is not None]
+                    expected_shape_refs = sum(1 for sid in shape_ids if isinstance(sid, ShapeID))
+                    single_ref_pair = bool(expected_shape_refs == 1 and len(valid_index_refs) == 1)
+                    shape_ids_index_aligned = True
+                    if expected_shape_refs > 0 and valid_index_refs and not single_ref_pair:
+                        for sid in shape_ids:
+                            if not isinstance(sid, ShapeID):
+                                continue
+                            local_idx = getattr(sid, "local_index", None)
+                            if not isinstance(local_idx, int) or not (0 <= local_idx < len(valid_index_refs)):
+                                shape_ids_index_aligned = False
+                                break
+                    strict_group_check = (
+                        strict_kind
+                        and expected_shape_refs > 0
+                        and bool(valid_index_refs)
+                        and len(valid_index_refs) == expected_shape_refs
+                        and (shape_ids_index_aligned or single_ref_pair)
+                    )
+
                     ref_count = max(len(shape_ids), len(index_refs))
                     for ref_idx in range(ref_count):
                         topo_index = index_refs[ref_idx] if ref_idx < len(index_refs) else None
@@ -807,13 +857,7 @@ class ShapeNamingService:
                         shape_entity = None
                         method = "unresolved"
                         has_shape_ref = isinstance(shape_id, ShapeID)
-                        strict_shape_check = (
-                            has_shape_ref
-                            and (
-                                (ref_kind == "Face" and feat_type_name in strict_face_feature_types)
-                                or (ref_kind == "Edge" and feat_type_name in strict_edge_feature_types)
-                            )
-                        )
+                        strict_shape_check = has_shape_ref and strict_group_check
                         should_resolve_shape = strict_shape_check or (has_shape_ref and not index_ok)
                         if should_resolve_shape and ocp_solid is not None:
                             shape_entity, method = self.resolve_shape_with_method(
@@ -1301,12 +1345,33 @@ class ShapeNamingService:
                 face_edge_exp.Next()
             
             # Finde ShapeIDs die zu diesen Positionen passen
+            # und dedupe mehrere Records, die auf dieselbe Source-Edge zeigen.
+            source_edge_shapes = []
             for shape_id, record in self._shapes.items():
                 if record.shape_id.shape_type != ShapeType.EDGE:
                     continue
-                    
+                     
                 if 'center' not in record.geometric_signature:
                     continue
+
+                # Nur Edges berücksichtigen, die tatsächlich im Source-Solid der
+                # aktuellen Operation existieren. Sonst werden stale Records aus
+                # früheren Rebuilds fälschlich als "betroffen" gemappt.
+                if not record.ocp_shape or not self._shape_exists_in_solid(record.ocp_shape, source_solid):
+                    continue
+
+                # Dedupe gleiche Source-Edge (mehrere stale ShapeIDs auf derselben Kante).
+                already_seen = False
+                for seen_shape in source_edge_shapes:
+                    try:
+                        if seen_shape.IsSame(record.ocp_shape):
+                            already_seen = True
+                            break
+                    except Exception:
+                        continue
+                if already_seen:
+                    continue
+                source_edge_shapes.append(record.ocp_shape)
                 
                 record_center = np.array(record.geometric_signature['center'])
                 record_length = record.geometric_signature.get('length', 0)
@@ -1332,6 +1397,7 @@ class ShapeNamingService:
             # 4. Erstelle Mappings: Alte Edge → Neue Edge
             manual_mappings = {}  # {old_shape_uuid: [new_shape_uuid, ...]}
             new_shape_ids = []
+            used_new_edge_indices = set()
             
             # Richtung als Vektor
             dir_vec = np.array(direction)
@@ -1350,6 +1416,8 @@ class ShapeNamingService:
                 best_score = float('inf')
                 
                 for i, new_edge in enumerate(new_edges):
+                    if i in used_new_edge_indices:
+                        continue
                     new_center = np.array([
                         new_edge.center().X,
                         new_edge.center().Y,
@@ -1385,6 +1453,7 @@ class ShapeNamingService:
                 
                 if best_match:
                     idx, matched_edge = best_match
+                    used_new_edge_indices.add(idx)
                     
                     # Erstelle neue ShapeID für die gematchte Edge
                     new_shape_id = self.register_shape(
@@ -1424,7 +1493,8 @@ class ShapeNamingService:
             new_edge_count = self._register_unmapped_edges(
                 result_solid=result_solid,
                 feature_id=feature_id,
-                existing_mappings=mappings_for_unmapped
+                existing_mappings=mappings_for_unmapped,
+                start_local_index=len(new_shape_ids),
             )
 
             if is_enabled("tnp_debug_logging"):
@@ -1446,10 +1516,15 @@ class ShapeNamingService:
                 )
                 
                 self.record_operation(op_record)
-                
-                total_edges = len(manual_mappings) + new_edge_count
+                 
+                mapped_unique = len({sid.uuid for sid in new_shape_ids})
+                total_refs = mapped_unique + new_edge_count
                 if is_enabled("tnp_debug_logging"):
-                    logger.success(f"TNP v4.0: BRepFeat Operation getrackt - {len(manual_mappings)} mappings + {new_edge_count} neue Edges = {total_edges} total")
+                    logger.success(
+                        "TNP v4.0: BRepFeat Operation getrackt - "
+                        f"{len(manual_mappings)} mappings ({mapped_unique} unique) + "
+                        f"{new_edge_count} neue Edges = {total_refs} unique refs"
+                    )
                 return op_record
             else:
                 if is_enabled("tnp_debug_logging"):
@@ -1463,7 +1538,13 @@ class ShapeNamingService:
             traceback.print_exc()
             return None
 
-    def _register_unmapped_edges(self, result_solid, feature_id: str, existing_mappings: List) -> int:
+    def _register_unmapped_edges(
+        self,
+        result_solid,
+        feature_id: str,
+        existing_mappings: List,
+        start_local_index: int = 0,
+    ) -> int:
         """
         Registriert alle Edges im Result-Solid die noch kein Mapping haben.
 
@@ -1500,7 +1581,7 @@ class ShapeNamingService:
             # 2. Iterate result solid edges using IndexedMap for dedup
             explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
             new_count = 0
-            local_index = 0
+            local_index = max(0, int(start_local_index or 0))
 
             while explorer.More():
                 edge = TopoDS.Edge_s(explorer.Current())

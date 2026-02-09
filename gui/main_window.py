@@ -3147,16 +3147,37 @@ class MainWindow(QMainWindow):
 
         return None, ocp_face_id
 
-    def _find_or_register_face_shape_id(self, body, face, *, local_index: int = 0):
-        """Sucht eine bestehende Face-ShapeID oder registriert sie im ShapeNamingService."""
+    def _find_or_register_face_shape_id(
+        self,
+        body,
+        face,
+        *,
+        local_index: int = 0,
+        feature_id: str = None,
+        force_feature_local: bool = False,
+    ):
+        """Sucht/registriert eine Face-ShapeID.
+
+        `local_index` ist der Referenz-Slot im Feature (nicht der Topologieindex im Solid).
+        """
         if not body or face is None or not body._document or not hasattr(body._document, "_shape_naming_service"):
             return None
 
         service = body._document._shape_naming_service
+        source_feature_id = body.features[-1].id if getattr(body, "features", None) else body.id
+        target_feature_id = feature_id or source_feature_id
+        target_local_index = max(0, int(local_index))
         try:
             shape_id = service.find_shape_id_by_face(face, require_exact=True)
             if shape_id is not None:
-                return shape_id
+                if not force_feature_local:
+                    return shape_id
+                same_slot = (
+                    getattr(shape_id, "feature_id", None) == target_feature_id
+                    and int(getattr(shape_id, "local_index", -1)) == target_local_index
+                )
+                if same_slot:
+                    return shape_id
         except Exception as e:
             logger.debug(f"[main_window] ShapeID Lookup fehlgeschlagen: {e}")
 
@@ -3165,14 +3186,13 @@ class MainWindow(QMainWindow):
                 return None
             from modeling.tnp_system import ShapeType
 
-            source_feature_id = body.features[-1].id if getattr(body, "features", None) else body.id
             fc = face.center()
             area = float(face.area) if hasattr(face, "area") else 0.0
             return service.register_shape(
                 ocp_shape=face.wrapped,
                 shape_type=ShapeType.FACE,
-                feature_id=source_feature_id,
-                local_index=max(0, int(local_index)),
+                feature_id=target_feature_id,
+                local_index=target_local_index,
                 geometry_data=(fc.X, fc.Y, fc.Z, area),
             )
         except Exception as e:
@@ -3215,11 +3235,29 @@ class MainWindow(QMainWindow):
             face_selectors=[face_selector] if (face_selector and not has_primary_face_ref) else [],
         )
         
-        # TNP v4.0: ShapeID aus ShapeNamingService übernehmen
+        # TNP v4.0: Single-face ShapeID immer feature-lokal in Slot 0 führen.
         if self._hole_face_shape_id is not None:
-            feature.face_shape_ids = [self._hole_face_shape_id]
+            feature_shape_id = None
+            try:
+                if face_index is not None and getattr(body, "_build123d_solid", None) is not None:
+                    from modeling.topology_indexing import face_from_index
+
+                    resolved_face = face_from_index(body._build123d_solid, int(face_index))
+                    if resolved_face is not None:
+                        feature_shape_id = self._find_or_register_face_shape_id(
+                            body,
+                            resolved_face,
+                            local_index=0,
+                            feature_id=feature.id,
+                            force_feature_local=True,
+                        )
+            except Exception as sid_err:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"Hole: Feature-lokale ShapeID konnte nicht registriert werden: {sid_err}")
+
+            feature.face_shape_ids = [feature_shape_id or self._hole_face_shape_id]
             if is_enabled("tnp_debug_logging"):
-                logger.debug("TNP v4.0: Hole Face-ShapeID aus ShapeNamingService übernommen")
+                logger.debug("TNP v4.0: Hole Face-ShapeID übernommen (feature-lokaler Slot 0)")
         if face_index is not None:
             try:
                 feature.face_indices = [int(face_index)]
@@ -3289,11 +3327,8 @@ class MainWindow(QMainWindow):
                 self._hole_face_shape_id = self._find_or_register_face_shape_id(
                     body,
                     best_face,
-                    local_index=(
-                        resolved_face_id
-                        if resolved_face_id is not None
-                        else 0
-                    ),
+                    # Single-face reference: feature-local slot is always 0.
+                    local_index=0,
                 )
                 self._hole_face_index = resolved_face_id
                 logger.debug(f"Hole: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
@@ -3435,7 +3470,8 @@ class MainWindow(QMainWindow):
                 self._thread_face_shape_id = self._find_or_register_face_shape_id(
                     body,
                     best_face,
-                    local_index=resolved_face_id if resolved_face_id is not None else 0,
+                    # Single-face reference: feature-local slot is always 0.
+                    local_index=0,
                 )
                 self._thread_face_index = int(resolved_face_id) if resolved_face_id is not None else None
             else:
@@ -3514,7 +3550,24 @@ class MainWindow(QMainWindow):
             ),
         )
         if self._thread_face_shape_id is not None:
-            feature.face_shape_id = self._thread_face_shape_id
+            feature_shape_id = None
+            try:
+                if getattr(self, "_thread_face_index", None) is not None and getattr(body, "_build123d_solid", None) is not None:
+                    from modeling.topology_indexing import face_from_index
+
+                    resolved_face = face_from_index(body._build123d_solid, int(self._thread_face_index))
+                    if resolved_face is not None:
+                        feature_shape_id = self._find_or_register_face_shape_id(
+                            body,
+                            resolved_face,
+                            local_index=0,
+                            feature_id=feature.id,
+                            force_feature_local=True,
+                        )
+            except Exception as sid_err:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"Thread: Feature-lokale ShapeID konnte nicht registriert werden: {sid_err}")
+            feature.face_shape_id = feature_shape_id or self._thread_face_shape_id
         if getattr(self, "_thread_face_index", None) is not None:
             feature.face_index = int(self._thread_face_index)
 
@@ -4494,7 +4547,8 @@ class MainWindow(QMainWindow):
                     shape_id = self._find_or_register_face_shape_id(
                         body,
                         best_face,
-                        local_index=resolved_face_id if resolved_face_id is not None else idx,
+                        # Multi-face reference: slot index in feature reference list.
+                        local_index=idx,
                     )
                     if shape_id is not None:
                         face_shape_ids.append(shape_id)
@@ -5980,12 +6034,7 @@ class MainWindow(QMainWindow):
             if best_face_index is not None:
                 best_face_index = int(best_face_index)
 
-            face_shape_id = self._find_or_register_face_shape_id(
-                source_body,
-                best_face,
-                local_index=max(0, int(best_face_index) if best_face_index is not None else 0),
-            )
-            has_primary_face_ref = (face_shape_id is not None) or (best_face_index is not None)
+            has_primary_face_ref = best_face_index is not None
 
             # Geometric selector nur als Legacy-Recovery mitschreiben.
             face_selector_dict = None
@@ -6186,10 +6235,21 @@ class MainWindow(QMainWindow):
                                 plane_y_dir=plane_y_dir if polygon is not None else None,
                                 face_brep=face_brep_str,
                                 face_type=face_type_str,
-                                face_shape_id=face_shape_id,
                                 face_index=best_face_index,
                                 face_selector=face_selector_dict,
                             )
+
+                            # Feature-lokale Face-ShapeID registrieren.
+                            feat_face_shape_id = self._find_or_register_face_shape_id(
+                                source_body,
+                                best_face,
+                                # Single-face Push/Pull reference: feature-local slot is 0.
+                                local_index=0,
+                                feature_id=feat.id,
+                                force_feature_local=True,
+                            )
+                            if feat_face_shape_id is not None:
+                                feat.face_shape_id = feat_face_shape_id
 
                             # === TNP v4.0: BRepFeat Operation tracken (mit echter Feature-ID) ===
                             try:
@@ -9100,7 +9160,8 @@ class MainWindow(QMainWindow):
                 face_shape_id = self._find_or_register_face_shape_id(
                     body,
                     best_face,
-                    local_index=resolved_face_id if resolved_face_id is not None else 0,
+                    # Use current opening slot index (not topology index).
+                    local_index=max(0, len(self._shell_opening_face_shape_ids)),
                 )
                 logger.debug(f"Shell: GeometricFaceSelector erstellt (area={geo_selector.area:.1f})")
             else:
@@ -9381,7 +9442,8 @@ class MainWindow(QMainWindow):
                     shape_id = self._find_or_register_face_shape_id(
                         body,
                         best_face,
-                        local_index=resolved_face_id if resolved_face_id is not None else idx,
+                        # Multi-face reference: slot index in feature reference list.
+                        local_index=idx,
                     )
                     if shape_id is not None:
                         face_shape_ids.append(shape_id)
@@ -9588,7 +9650,8 @@ class MainWindow(QMainWindow):
                 self._sweep_profile_shape_id = self._find_or_register_face_shape_id(
                     target_body,
                     resolved_face,
-                    local_index=max(0, int(resolved_face_index) if resolved_face_index is not None else 0),
+                    # Single profile-face reference: feature-local slot is always 0.
+                    local_index=0,
                 )
 
             has_primary_profile_ref = (
