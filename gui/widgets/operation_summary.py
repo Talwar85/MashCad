@@ -174,7 +174,8 @@ class OperationSummaryWidget(QFrame):
                 f"Volume: {pre_vol:.0f} → {post_vol:.0f} mm³ ({sign}{vol_pct:.1f}%)"
             )
         else:
-            warn = "  ⚠" if not is_error else ""
+            # Nur bei WARNING/ERROR das Warndreieck zeigen
+            warn = "  ⚠" if (is_warning or is_error) else ""
             self._volume_label.setText(f"Volume: {tr('unverändert')}{warn}")
         self._volume_label.setStyleSheet(
             f"color: {_COLORS['text_dim'] if not vol_changed else _COLORS['text_value']}; "
@@ -246,6 +247,10 @@ class OperationSummaryWidget(QFrame):
 
         # Positionierung
         self.adjustSize()
+        # Mindesthöhe setzen damit alle Inhalte sichtbar sind
+        if self.height() < 120:
+            self.setMinimumHeight(120)
+            self.adjustSize()
         if parent_widget:
             pw_pos = parent_widget.mapToGlobal(QPoint(0, 0))
             pw_size = parent_widget.size()
@@ -268,8 +273,10 @@ class OperationSummaryWidget(QFrame):
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.start()
 
-        # Auto-Close
-        duration = 6000 if is_error else 4000
+        # Auto-Close (längere Anzeigedauer für bessere Lesbarkeit)
+        # Timer stoppen falls bereits aktiv und neu starten
+        self._timer.stop()
+        duration = 10000 if is_error else 8000
         self._timer.start(duration)
 
     def _close_anim(self):
@@ -281,9 +288,14 @@ class OperationSummaryWidget(QFrame):
         self._anim.setDuration(200)
         self._anim.setStartValue(self.pos())
         self._anim.setEndValue(end)
-        try:
-            self._anim.finished.disconnect()
-        except RuntimeError:
-            pass
+        # Disconnect all existing connections before reconnecting
+        # Suppress Qt RuntimeWarning for disconnect when no connections exist
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                self._anim.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
         self._anim.finished.connect(self.hide)
         self._anim.start()

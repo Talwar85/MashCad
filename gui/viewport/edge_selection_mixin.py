@@ -213,6 +213,99 @@ class EdgeSelectionMixin:
         except Exception as e:
             logger.debug(f"highlight_edges_by_index fehlgeschlagen: {e}")
 
+    def highlight_face_by_index(self, body, face_index: int):
+        """Highlighted eine bestimmte Fläche eines Bodies im Viewport.
+
+        Wird vom Edit-Dialog (z.B. Push/Pull) aufgerufen wenn der User 'Fläche anzeigen' klickt.
+        """
+        self.clear_face_highlight()
+        if body is None or not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+            return
+        try:
+            import pyvista as pv
+            import numpy as np
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.TopLoc import TopLoc_Location
+            from OCP.BRep import BRep_Tool
+
+            solid = body._build123d_solid
+            all_faces = list(solid.faces())
+
+            if not (0 <= face_index < len(all_faces)):
+                logger.debug(f"Face-Index {face_index} außerhalb des Bereichs (0-{len(all_faces)-1})")
+                return
+
+            face = all_faces[face_index]
+
+            # Face mit OCP tessellieren (wie in cad_tessellator.py)
+            quality = 0.05
+            BRepMesh_IncrementalMesh(face.wrapped, quality, False, quality * 5, True)
+
+            # Triangulation holen
+            loc = TopLoc_Location()
+            triangulation = BRep_Tool.Triangulation_s(face.wrapped, loc)
+
+            if triangulation is None:
+                logger.debug(f"Face {face_index} konnte nicht tesselliert werden")
+                return
+
+            # Vertices extrahieren
+            transform = loc.Transformation()
+            vertices = []
+            n_verts = triangulation.NbNodes()
+            for i in range(1, n_verts + 1):
+                p = triangulation.Node(i)
+                if not loc.IsIdentity():
+                    p = p.Transformed(transform)
+                vertices.append([p.X(), p.Y(), p.Z()])
+
+            # Triangles extrahieren
+            triangles = []
+            n_tris = triangulation.NbTriangles()
+            for i in range(1, n_tris + 1):
+                tri = triangulation.Triangle(i)
+                v1, v2, v3 = tri.Get()
+                # OCP ist 1-basiert, PyVista ist 0-basiert
+                triangles.append([v1 - 1, v2 - 1, v3 - 1])
+
+            if len(vertices) < 3 or len(triangles) == 0:
+                return
+
+            # PyVista PolyData erstellen
+            points = np.array(vertices, dtype=np.float32)
+            tris = np.array(triangles, dtype=np.int32)
+            padding = np.full((tris.shape[0], 1), 3, dtype=np.int32)
+            faces_combined = np.hstack((padding, tris)).flatten()
+
+            mesh = pv.PolyData(points, faces_combined)
+
+            # Fläche mit semi-transparentem Orange highlighten
+            self.plotter.add_mesh(
+                mesh,
+                color="#FF8800",  # Orange
+                opacity=0.6,
+                show_edges=True,
+                edge_color="#FFaa00",
+                line_width=3.0,
+                lighting=True,
+                name="edit_face_highlight",
+                pickable=False,
+            )
+            self._set_actor_on_top("edit_face_highlight", 7)
+            request_render(self.plotter)
+            logger.debug(f"Face-Highlight: Face[{face_index}] angezeigt")
+        except Exception as e:
+            logger.debug(f"highlight_face_by_index fehlgeschlagen: {e}")
+
+    def clear_face_highlight(self):
+        """Entfernt passives Face-Highlighting."""
+        try:
+            if "edit_face_highlight" in self.plotter.actors:
+                self.plotter.remove_actor("edit_face_highlight")
+                request_render(self.plotter)
+        except Exception:
+            pass
+
     def clear_edge_highlight(self):
         """Entfernt passives Edge-Highlighting."""
         try:

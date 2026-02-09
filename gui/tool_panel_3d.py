@@ -77,24 +77,22 @@ class ToolPanel3D(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("background: transparent;")
-        
-        # WICHTIG: Horizontalen Scrollbar ausblenden, Widget passt sich Breite an
+
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
+
         content_widget = QWidget()
         content_widget.setStyleSheet("background: transparent;")
-        
+
         self.layout = QVBoxLayout(content_widget)
-        # Etwas kompaktere Ränder
         self.layout.setContentsMargins(6, 6, 6, 6)
-        self.layout.setSpacing(10) # Reduziert von 15
-        
+        self.layout.setSpacing(10)
+
         # --- Primitives (nur Grid-Gruppe) ---
         self._add_group("Primitives", [
             (tr("Box"), tr("Create box primitive"), "primitive_box"),
@@ -111,7 +109,7 @@ class ToolPanel3D(QWidget):
             (tr("Revolve..."), tr("Revolve sketch around axis"), "revolve"),
             (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
             (tr("Loft"), tr("Loft between profiles"), "loft"),
-        ], expanded=True)
+        ], expanded=True, highlight_first=True)
 
         # --- Modify ---
         self._add_group(tr("Modify"), [
@@ -165,7 +163,7 @@ class ToolPanel3D(QWidget):
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
 
-    def _add_group(self, title, buttons, icon=None, grid=False, expanded=False):
+    def _add_group(self, title, buttons, icon=None, grid=False, expanded=False, highlight_first=False):
         section = CollapsibleSection(title, icon=icon, expanded=expanded)
 
         if grid:
@@ -188,8 +186,8 @@ class ToolPanel3D(QWidget):
                 label, action = btn_data
                 tip = None
 
-            # Grid mode: use QToolButton, sonst custom Widget
-            btn = self._create_btn(label, action, shortcut if not grid else None, for_grid=grid)
+            is_highlighted = highlight_first and i == 0
+            btn = self._create_btn(label, action, shortcut if not grid else None, for_grid=grid, highlight=is_highlighted)
             if tip:
                 btn.setToolTip(tip)
 
@@ -215,7 +213,7 @@ class ToolPanel3D(QWidget):
 
         self.layout.addWidget(section)
 
-    def _create_btn(self, text, action_name, shortcut=None, for_grid=False):
+    def _create_btn(self, text, action_name, shortcut=None, for_grid=False, highlight=False):
         """Erstellt Tool-Button mit optionalem Shortcut-Badge."""
         if for_grid:
             # Grid-Buttons: QToolButton mit zentriertem Text
@@ -234,7 +232,20 @@ class ToolPanel3D(QWidget):
             h_layout.setSpacing(8)
 
             label = QLabel(text)
-            label.setStyleSheet("color: #d4d4d4; font-size: 13px;")
+            if highlight:
+                label.setStyleSheet("color: #60a5fa; font-size: 13px; font-weight: 600;")
+                container.setStyleSheet(f"""
+                    QFrame {{
+                        background: #2563eb18;
+                        border-left: 2px solid #2563eb;
+                        border-radius: 4px;
+                    }}
+                    QFrame:hover {{
+                        background: {DesignTokens.COLOR_BG_ELEVATED.name()};
+                    }}
+                """)
+            else:
+                label.setStyleSheet("color: #d4d4d4; font-size: 13px;")
             h_layout.addWidget(label)
 
             h_layout.addStretch()

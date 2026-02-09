@@ -543,6 +543,12 @@ class MainWindow(QMainWindow):
         self.viewport_3d = PyVistaViewport()
         self.viewport_3d.document = self.document
         self.center_stack.addWidget(self.viewport_3d)
+
+        # Getting Started Overlay (zentriert im Viewport)
+        from gui.widgets.getting_started_overlay import GettingStartedOverlay
+        self._getting_started_overlay = GettingStartedOverlay(self.viewport_3d)
+        self._getting_started_overlay.action_triggered.connect(self._on_3d_action)
+        self._getting_started_overlay.action_triggered.connect(lambda: self._getting_started_overlay.hide())
         
         self.sketch_editor = SketchEditor()
         self.center_stack.addWidget(self.sketch_editor)
@@ -838,6 +844,8 @@ class MainWindow(QMainWindow):
         self._position_transform_panel()
         self._position_transform_toolbar()
         self._reposition_notifications()
+        if hasattr(self, '_getting_started_overlay') and self._getting_started_overlay.isVisible():
+            self._getting_started_overlay.center_on_parent()
         if hasattr(self, "measure_panel") and self.measure_panel.isVisible():
             self.measure_panel.show_at(self.viewport_3d)
         if hasattr(self, "p2p_panel") and self.p2p_panel.isVisible():
@@ -1159,7 +1167,15 @@ class MainWindow(QMainWindow):
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
         """Startet den Timer für das Update (Debounce)"""
-        self._update_timer.start() # Reset timer if called again
+        self._update_timer.start()
+        self._update_getting_started()
+
+    def _update_getting_started(self):
+        """Versteckt Getting-Started Overlay wenn Dokument nicht mehr leer ist."""
+        if hasattr(self, '_getting_started_overlay') and self._getting_started_overlay.isVisible():
+            if hasattr(self, 'document'):
+                if self.document.bodies or self.document.sketches:
+                    self._getting_started_overlay.hide()
         
     # In Klasse MainWindow:
     
@@ -1386,6 +1402,8 @@ class MainWindow(QMainWindow):
 
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
+        if hasattr(self, '_getting_started_overlay'):
+            self._getting_started_overlay.hide()
         actions = {
             'new_sketch': self._new_sketch,
             'offset_plane': self._start_offset_plane,
@@ -5670,7 +5688,7 @@ class MainWindow(QMainWindow):
             self.browser.refresh()
             # TNP Statistiken aktualisieren
             self._update_tnp_stats()
-            if msg: logger.success(msg)
+            # Keine logger.success() mehr - Operation Summary Widget zeigt die Info
 
         # ASSEMBLY FIX: Viewport komplett neu rendern damit inactive Components
         # ihre korrekte Transparenz behalten (statt set_all_bodies_opacity(1.0))
@@ -6301,6 +6319,36 @@ class MainWindow(QMainWindow):
                                 if is_enabled("tnp_debug_logging"):
                                     logger.debug(f"TNP BRepFeat Tracking fehlgeschlagen: {tnp_e}")
 
+                            # === Geometry Delta für Operation Summary berechnen (VORHER = old_solid, NACHHER = new_solid) ===
+                            try:
+                                from modeling import _solid_metrics
+                                logger.debug(f"Push/Pull Geometry Delta: old_solid={old_solid is not None}, new_solid={new_solid is not None}")
+                                before_m = _solid_metrics(old_solid) if old_solid is not None else None
+                                after_m = _solid_metrics(new_solid) if new_solid is not None else None
+                                logger.debug(f"Push/Pull Metrics: before={before_m}, after={after_m}")
+                                if before_m and after_m and before_m["volume"] and after_m["volume"]:
+                                    pre_vol = before_m["volume"]
+                                    post_vol = after_m["volume"]
+                                    vol_pct = ((post_vol - pre_vol) / pre_vol * 100.0) if pre_vol > 1e-12 else 0.0
+                                    feat._geometry_delta = {
+                                        "volume_before": round(pre_vol, 2),
+                                        "volume_after": round(post_vol, 2),
+                                        "volume_pct": round(vol_pct, 1),
+                                        "faces_before": before_m["faces"],
+                                        "faces_after": after_m["faces"],
+                                        "faces_delta": after_m["faces"] - before_m["faces"],
+                                        "edges_before": before_m["edges"],
+                                        "edges_after": after_m["edges"],
+                                        "edges_delta": after_m["edges"] - before_m["edges"],
+                                    }
+                                    logger.success(f"Push/Pull Geometry Delta gesetzt: Vol {pre_vol:.0f} → {post_vol:.0f} ({vol_pct:+.1f}%)")
+                                else:
+                                    logger.warning(f"Push/Pull Geometry Delta: Metrics unvollständig (before={before_m is not None}, after={after_m is not None})")
+                            except Exception as e:
+                                logger.error(f"Push/Pull Geometry Delta Fehler: {e}")
+                                import traceback
+                                traceback.print_exc()
+
                             # Body direkt aktualisieren (KEIN Boolean!)
                             source_body._build123d_solid = new_solid
                             source_body.invalidate_mesh()
@@ -6308,6 +6356,23 @@ class MainWindow(QMainWindow):
                             # skip_rebuild=True weil BRepFeat das Solid bereits aktualisiert hat
                             cmd = AddFeatureCommand(source_body, feat, self, description=f"Push/Pull ({operation})", skip_rebuild=True)
                             self.undo_stack.push(cmd)
+
+                            # Operation Summary DIREKT aufrufen mit korrekten Werten aus _geometry_delta
+                            # (AddFeatureCommand kann pre/post nicht mehr unterscheiden bei skip_rebuild=True)
+                            if hasattr(feat, '_geometry_delta') and feat._geometry_delta:
+                                gd = feat._geometry_delta
+                                pre_sig = {
+                                    "volume": gd["volume_before"],
+                                    "faces": gd["faces_before"],
+                                    "edges": gd["edges_before"],
+                                }
+                                post_sig = {
+                                    "volume": gd["volume_after"],
+                                    "faces": gd["faces_after"],
+                                    "edges": gd["edges_after"],
+                                }
+                                if hasattr(self, 'operation_summary'):
+                                    self.operation_summary.show_summary(feat.name, pre_sig, post_sig, feat, self)
 
                             # Face-Zählung für Debug
                             from OCP.TopAbs import TopAbs_FACE
@@ -6385,6 +6450,33 @@ class MainWindow(QMainWindow):
                     plane_x_dir=plane_x_dir if polygon is not None else None,
                     plane_y_dir=plane_y_dir if polygon is not None else None
                 )
+
+                # Geometry Delta für New Body (von 0 zu Volume)
+                try:
+                    from modeling import _solid_metrics
+                    logger.debug(f"Push/Pull New Body: new_geo={new_geo is not None}")
+                    after_m = _solid_metrics(new_geo) if new_geo is not None else None
+                    logger.debug(f"Push/Pull New Body Metrics: {after_m}")
+                    if after_m and after_m["volume"]:
+                        feat._geometry_delta = {
+                            "volume_before": 0.0,
+                            "volume_after": round(after_m["volume"], 2),
+                            "volume_pct": 100.0,  # Neu = 100% Zunahme
+                            "faces_before": 0,
+                            "faces_after": after_m["faces"],
+                            "faces_delta": after_m["faces"],
+                            "edges_before": 0,
+                            "edges_after": after_m["edges"],
+                            "edges_delta": after_m["edges"],
+                        }
+                        logger.success(f"Push/Pull New Body Geometry Delta gesetzt: Vol {after_m['volume']:.0f} mm³")
+                    else:
+                        logger.warning(f"Push/Pull New Body: Metrics unvollständig (after_m={after_m is not None})")
+                except Exception as e:
+                    logger.error(f"Push/Pull New Body Geometry Delta Fehler: {e}")
+                    import traceback
+                    traceback.print_exc()
+
                 new_body.features.append(feat)
                 new_body._build123d_solid = new_geo
                 new_body.invalidate_mesh()
@@ -6392,6 +6484,22 @@ class MainWindow(QMainWindow):
                 # KRITISCH: AddBodyCommand für korrektes Undo/Redo!
                 cmd = AddBodyCommand(self.document, new_body, self, description="Push/Pull (New Body)")
                 self.undo_stack.push(cmd)
+
+                # Operation Summary mit korrekten Werten aus _geometry_delta
+                if hasattr(feat, '_geometry_delta') and feat._geometry_delta:
+                    gd = feat._geometry_delta
+                    pre_sig = {
+                        "volume": gd["volume_before"],
+                        "faces": gd["faces_before"],
+                        "edges": gd["edges_before"],
+                    }
+                    post_sig = {
+                        "volume": gd["volume_after"],
+                        "faces": gd["faces_after"],
+                        "edges": gd["edges_after"],
+                    }
+                    if hasattr(self, 'operation_summary'):
+                        self.operation_summary.show_summary(feat.name, pre_sig, post_sig, feat, self)
 
                 logger.info(f"✅ Push/Pull New Body '{new_body.name}' erstellt")
                 return True
@@ -7206,6 +7314,23 @@ class MainWindow(QMainWindow):
             from gui.dialogs.feature_edit_dialogs import RevolveEditDialog
             old_data = {'angle': feature.angle, 'axis': feature.axis, 'operation': feature.operation}
             dialog = RevolveEditDialog(feature, body, self)
+        elif feature_type == 'loft':
+            from gui.dialogs.feature_edit_dialogs import LoftEditDialog
+            old_data = {
+                'ruled': feature.ruled,
+                'operation': feature.operation,
+                'start_continuity': feature.start_continuity,
+                'end_continuity': feature.end_continuity
+            }
+            dialog = LoftEditDialog(feature, body, self)
+        elif feature_type == 'sweep':
+            from gui.dialogs.feature_edit_dialogs import SweepEditDialog
+            old_data = {
+                'operation': feature.operation,
+                'is_frenet': feature.is_frenet,
+                'twist_angle': feature.twist_angle
+            }
+            dialog = SweepEditDialog(feature, body, self)
         else:
             logger.warning(f"Unbekannter Feature-Typ: {feature_type}")
             return
@@ -7226,6 +7351,19 @@ class MainWindow(QMainWindow):
                 new_data = {'thickness': feature.thickness}
             elif feature_type == 'revolve':
                 new_data = {'angle': feature.angle, 'axis': feature.axis, 'operation': feature.operation}
+            elif feature_type == 'loft':
+                new_data = {
+                    'ruled': feature.ruled,
+                    'operation': feature.operation,
+                    'start_continuity': feature.start_continuity,
+                    'end_continuity': feature.end_continuity
+                }
+            elif feature_type == 'sweep':
+                new_data = {
+                    'operation': feature.operation,
+                    'is_frenet': feature.is_frenet,
+                    'twist_angle': feature.twist_angle
+                }
 
             cmd = EditFeatureCommand(body, feature, old_data, new_data, self)
             self.undo_stack.push(cmd)

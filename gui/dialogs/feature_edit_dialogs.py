@@ -94,7 +94,8 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
     """Fügt Geometry-Delta und Kanten-Info zum Edit-Dialog hinzu."""
     gd = getattr(feature, '_geometry_delta', None)
     edge_indices = getattr(feature, 'edge_indices', None) or []
-    has_content = gd is not None or len(edge_indices) > 0
+    face_index = getattr(feature, 'face_index', None)  # Push/Pull Face
+    has_content = gd is not None or len(edge_indices) > 0 or face_index is not None
 
     if not has_content:
         return
@@ -161,6 +162,35 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
         edge_row.addWidget(show_btn)
         group_layout.addLayout(edge_row)
 
+    # Flächen-Info mit Show-Button (Push/Pull)
+    if face_index is not None:
+        solid = body._build123d_solid if body else None
+        all_faces = list(solid.faces()) if solid else []
+        is_valid = 0 <= face_index < len(all_faces)
+
+        face_summary = f"Face[{face_index}]"
+        if not is_valid:
+            face_summary += f"  ⚠ {tr('ungültig')} (max={len(all_faces) - 1})"
+
+        face_row = QHBoxLayout()
+        face_label = QLabel(face_summary)
+        color = "#22c55e" if is_valid else "#f59e0b"
+        face_label.setStyleSheet(f"color: {color}; font-size: 10px;")
+        face_row.addWidget(face_label)
+
+        if is_valid:
+            show_face_btn = QPushButton(tr("Fläche anzeigen"))
+            show_face_btn.setFixedHeight(20)
+            show_face_btn.setStyleSheet(
+                "QPushButton { background: #333; color: #ccc; border: 1px solid #555; "
+                "border-radius: 3px; font-size: 10px; padding: 1px 8px; }"
+                "QPushButton:hover { background: #444; color: white; }"
+            )
+            show_face_btn.clicked.connect(lambda: _highlight_face_in_viewport(dialog._parent_window, body, face_index))
+            face_row.addWidget(show_face_btn)
+
+        group_layout.addLayout(face_row)
+
     group.setLayout(group_layout)
     layout.addWidget(group)
 
@@ -178,6 +208,19 @@ def _highlight_edges_in_viewport(main_window, body, edge_indices):
         logger.debug(f"Edge-Highlighting fehlgeschlagen: {e}")
 
 
+def _highlight_face_in_viewport(main_window, body, face_index):
+    """Highlighted die angegebene Fläche im Viewport."""
+    if main_window is None:
+        return
+    viewport = getattr(main_window, 'viewport_3d', None)
+    if viewport is None:
+        return
+    try:
+        viewport.highlight_face_by_index(body, face_index)
+    except Exception as e:
+        logger.debug(f"Face-Highlighting fehlgeschlagen: {e}")
+
+
 def _clear_edge_highlight(main_window):
     """Entfernt Edge-Highlighting beim Schließen des Dialogs."""
     if main_window is None:
@@ -187,6 +230,19 @@ def _clear_edge_highlight(main_window):
         return
     try:
         viewport.clear_edge_highlight()
+    except Exception:
+        pass
+
+
+def _clear_face_highlight(main_window):
+    """Entfernt Face-Highlighting beim Schließen des Dialogs."""
+    if main_window is None:
+        return
+    viewport = getattr(main_window, 'viewport_3d', None)
+    if viewport is None:
+        return
+    try:
+        viewport.clear_face_highlight()
     except Exception:
         pass
 
@@ -212,12 +268,13 @@ def _create_buttons(layout, dialog):
 
 
 class ExtrudeEditDialog(QDialog):
-    """Edit-Dialog fuer ExtrudeFeature: Distance, Direction, Operation"""
+    """Edit-Dialog fuer ExtrudeFeature: Distance, Direction, Operation + Geometry-Delta"""
 
     def __init__(self, feature, body, parent=None):
         super().__init__(parent)
         self.feature = feature
         self.body = body
+        self._parent_window = parent
         self.setWindowTitle(f"Edit {feature.name}")
         self.setMinimumWidth(400)
         self.setStyleSheet(DesignTokens.stylesheet_dialog())
@@ -259,6 +316,9 @@ class ExtrudeEditDialog(QDialog):
         group.setLayout(group_layout)
         layout.addWidget(group)
 
+        # Geometry Delta Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
         apply_btn = _create_buttons(layout, self)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -274,6 +334,14 @@ class ExtrudeEditDialog(QDialog):
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe: {e}")
+
+    def closeEvent(self, event):
+        _clear_face_highlight(self._parent_window)
+        super().closeEvent(event)
+
+    def reject(self):
+        _clear_face_highlight(self._parent_window)
+        super().reject()
 
     def get_old_data(self):
         return {
@@ -409,12 +477,13 @@ class ChamferEditDialog(QDialog):
 
 
 class ShellEditDialog(QDialog):
-    """Edit-Dialog fuer ShellFeature: Thickness"""
+    """Edit-Dialog fuer ShellFeature: Thickness + Geometry-Delta"""
 
     def __init__(self, feature, body, parent=None):
         super().__init__(parent)
         self.feature = feature
         self.body = body
+        self._parent_window = parent
         self.setWindowTitle(f"Edit {feature.name}")
         self.setMinimumWidth(350)
         self.setStyleSheet(DesignTokens.stylesheet_dialog())
@@ -439,6 +508,9 @@ class ShellEditDialog(QDialog):
         group.setLayout(group_layout)
         layout.addWidget(group)
 
+        # Geometry Delta Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
         apply_btn = _create_buttons(layout, self)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -455,12 +527,13 @@ class ShellEditDialog(QDialog):
 
 
 class RevolveEditDialog(QDialog):
-    """Edit-Dialog fuer RevolveFeature: Angle, Axis, Operation"""
+    """Edit-Dialog fuer RevolveFeature: Angle, Axis, Operation + Geometry-Delta"""
 
     def __init__(self, feature, body, parent=None):
         super().__init__(parent)
         self.feature = feature
         self.body = body
+        self._parent_window = parent
         self.setWindowTitle(f"Edit {feature.name}")
         self.setMinimumWidth(400)
         self.setStyleSheet(DesignTokens.stylesheet_dialog())
@@ -505,6 +578,9 @@ class RevolveEditDialog(QDialog):
         group.setLayout(group_layout)
         layout.addWidget(group)
 
+        # Geometry Delta Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
         apply_btn = _create_buttons(layout, self)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -522,3 +598,154 @@ class RevolveEditDialog(QDialog):
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe (Revolve): {e}")
+
+
+class LoftEditDialog(QDialog):
+    """Edit-Dialog fuer LoftFeature: Ruled, Operation, Continuity + Geometry-Delta"""
+
+    def __init__(self, feature, body, parent=None):
+        super().__init__(parent)
+        self.feature = feature
+        self.body = body
+        self._parent_window = parent
+        self.setWindowTitle(f"Edit {feature.name}")
+        self.setMinimumWidth(400)
+        self.setStyleSheet(DesignTokens.stylesheet_dialog())
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"<b>{feature.name}</b><br>Body: {body.name}")
+        info.setStyleSheet("color: #ddd; padding: 10px; background: #1e1e1e; border-radius: 4px;")
+        layout.addWidget(info)
+
+        group = QGroupBox(tr("Loft Parameters"))
+        group_layout = QVBoxLayout()
+
+        # Ruled
+        ruled_layout = QHBoxLayout()
+        ruled_layout.addWidget(QLabel(tr("Ruled:")))
+        self.ruled_combo = QComboBox()
+        self.ruled_combo.addItems([tr("Smooth"), tr("Ruled")])
+        self.ruled_combo.setCurrentIndex(1 if feature.ruled else 0)
+        ruled_layout.addWidget(self.ruled_combo)
+        ruled_layout.addStretch()
+        group_layout.addLayout(ruled_layout)
+
+        # Operation
+        op_layout = QHBoxLayout()
+        op_layout.addWidget(QLabel(tr("Operation:")))
+        self.op_combo = QComboBox()
+        self.op_combo.addItems(_get_translated_operations())
+        _set_operation_combo(self.op_combo, feature.operation)
+        op_layout.addWidget(self.op_combo)
+        op_layout.addStretch()
+        group_layout.addLayout(op_layout)
+
+        # Continuity
+        start_cont_layout = QHBoxLayout()
+        start_cont_layout.addWidget(QLabel(tr("Start Continuity:")))
+        self.start_cont_combo = QComboBox()
+        self.start_cont_combo.addItems(["G0", "G1", "G2"])
+        self.start_cont_combo.setCurrentText(feature.start_continuity)
+        start_cont_layout.addWidget(self.start_cont_combo)
+        start_cont_layout.addStretch()
+        group_layout.addLayout(start_cont_layout)
+
+        end_cont_layout = QHBoxLayout()
+        end_cont_layout.addWidget(QLabel(tr("End Continuity:")))
+        self.end_cont_combo = QComboBox()
+        self.end_cont_combo.addItems(["G0", "G1", "G2"])
+        self.end_cont_combo.setCurrentText(feature.end_continuity)
+        end_cont_layout.addWidget(self.end_cont_combo)
+        end_cont_layout.addStretch()
+        group_layout.addLayout(end_cont_layout)
+
+        # Profile count
+        n_profiles = len(feature.profile_data) if feature.profile_data else 0
+        profile_info = QLabel(f"Profiles: {n_profiles}")
+        profile_info.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
+        group_layout.addWidget(profile_info)
+
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+
+        # Geometry Delta Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
+        apply_btn = _create_buttons(layout, self)
+        apply_btn.clicked.connect(self._on_apply)
+
+    def _on_apply(self):
+        try:
+            self.feature.ruled = (self.ruled_combo.currentIndex() == 1)
+            self.feature.operation = _get_operation_key(self.op_combo.currentText())
+            self.feature.start_continuity = self.start_cont_combo.currentText()
+            self.feature.end_continuity = self.end_cont_combo.currentText()
+            self.accept()
+        except Exception as e:
+            logger.error(f"Ungueltige Eingabe (Loft): {e}")
+
+
+class SweepEditDialog(QDialog):
+    """Edit-Dialog fuer SweepFeature: Operation, Frenet, Twist + Geometry-Delta"""
+
+    def __init__(self, feature, body, parent=None):
+        super().__init__(parent)
+        self.feature = feature
+        self.body = body
+        self._parent_window = parent
+        self.setWindowTitle(f"Edit {feature.name}")
+        self.setMinimumWidth(400)
+        self.setStyleSheet(DesignTokens.stylesheet_dialog())
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"<b>{feature.name}</b><br>Body: {body.name}")
+        info.setStyleSheet("color: #ddd; padding: 10px; background: #1e1e1e; border-radius: 4px;")
+        layout.addWidget(info)
+
+        group = QGroupBox(tr("Sweep Parameters"))
+        group_layout = QVBoxLayout()
+
+        # Operation
+        op_layout = QHBoxLayout()
+        op_layout.addWidget(QLabel(tr("Operation:")))
+        self.op_combo = QComboBox()
+        self.op_combo.addItems(_get_translated_operations())
+        _set_operation_combo(self.op_combo, feature.operation)
+        op_layout.addWidget(self.op_combo)
+        op_layout.addStretch()
+        group_layout.addLayout(op_layout)
+
+        # Frenet
+        frenet_layout = QHBoxLayout()
+        frenet_layout.addWidget(QLabel(tr("Frenet Frame:")))
+        self.frenet_combo = QComboBox()
+        self.frenet_combo.addItems([tr("No"), tr("Yes")])
+        self.frenet_combo.setCurrentIndex(1 if getattr(feature, 'is_frenet', False) else 0)
+        frenet_layout.addWidget(self.frenet_combo)
+        frenet_layout.addStretch()
+        group_layout.addLayout(frenet_layout)
+
+        # Twist
+        self.twist_input = _create_number_input(tr("Twist:"), group_layout, "deg")
+        self.twist_input.setText(str(getattr(feature, 'twist_angle', 0.0)))
+
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+
+        # Geometry Delta Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
+        apply_btn = _create_buttons(layout, self)
+        apply_btn.clicked.connect(self._on_apply)
+
+    def _on_apply(self):
+        try:
+            self.feature.operation = _get_operation_key(self.op_combo.currentText())
+            self.feature.is_frenet = (self.frenet_combo.currentIndex() == 1)
+            twist = float(self.twist_input.text() or "0")
+            self.feature.twist_angle = twist
+            self.accept()
+        except ValueError as e:
+            logger.error(f"Ungueltige Eingabe (Sweep): {e}")

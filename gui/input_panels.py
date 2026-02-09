@@ -9,10 +9,22 @@ from PySide6.QtWidgets import (
     QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QTimer
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtGui import QFont, QKeyEvent, QRegion, QPainterPath
 
 from i18n import tr
-from gui.design_tokens import DesignTokens  # NEU: Single Source of Truth für Styling
+from gui.design_tokens import DesignTokens
+
+
+class RoundedPanelFrame(QFrame):
+    """QFrame with a rounded-rect mask so corners don't show black."""
+    _RADIUS = 10
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(),
+                            self._RADIUS, self._RADIUS)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
 # --- Panel positioning helpers ---
 def _panel_area_in_parent(panel: QWidget, pos_widget: QWidget):
@@ -87,7 +99,7 @@ class ActionSpinBox(QDoubleSpinBox):
             return
         super().keyPressEvent(event)
 
-class ExtrudeInputPanel(QFrame):
+class ExtrudeInputPanel(RoundedPanelFrame):
     """Input panel for extrude operation"""
     
     height_changed = Signal(float)
@@ -356,7 +368,7 @@ class ExtrudeInputPanel(QFrame):
         self.height_input.selectAll()
 
 
-class FilletChamferPanel(QFrame):
+class FilletChamferPanel(RoundedPanelFrame):
     """Input panel for Fillet/Chamfer operations"""
     
     radius_changed = Signal(float)
@@ -507,7 +519,7 @@ class FilletChamferPanel(QFrame):
 
 # ==================== PHASE 6: SHELL INPUT PANEL ====================
 
-class ShellInputPanel(QFrame):
+class ShellInputPanel(RoundedPanelFrame):
     """
     Input panel for Shell operation.
 
@@ -680,7 +692,7 @@ class ShellInputPanel(QFrame):
         self.thickness_input.selectAll()
 
 
-class SweepInputPanel(QFrame):
+class SweepInputPanel(RoundedPanelFrame):
     """
     Input panel for Sweep operation.
 
@@ -996,7 +1008,7 @@ class SweepInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class LoftInputPanel(QFrame):
+class LoftInputPanel(RoundedPanelFrame):
     """
     Input panel for Loft operation.
 
@@ -1219,7 +1231,7 @@ class LoftInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class TransformPanel(QFrame):
+class TransformPanel(RoundedPanelFrame):
     """
     Einzeiliges Transform-Panel für Move, Rotate, Scale.
     Design identisch zum ExtrudeInputPanel.
@@ -1239,6 +1251,7 @@ class TransformPanel(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        
         self._mode = "move"
         self._ignore_signals = False
 
@@ -1590,7 +1603,7 @@ class CenterHintWidget(QWidget):
         self.hide()
 
 
-class RevolveInputPanel(QFrame):
+class RevolveInputPanel(RoundedPanelFrame):
     """Input panel for interactive Revolve operation (Fusion-Style)."""
 
     angle_changed = Signal(float)
@@ -1778,7 +1791,7 @@ class RevolveInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class OffsetPlaneInputPanel(QFrame):
+class OffsetPlaneInputPanel(RoundedPanelFrame):
     """Input panel for interactive Offset Plane creation."""
 
     offset_changed = Signal(float)
@@ -1885,7 +1898,7 @@ class OffsetPlaneInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class HoleInputPanel(QFrame):
+class HoleInputPanel(RoundedPanelFrame):
     """Input panel for interactive Hole placement (Fusion-style)."""
 
     diameter_changed = Signal(float)
@@ -2021,7 +2034,7 @@ class HoleInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class DraftInputPanel(QFrame):
+class DraftInputPanel(RoundedPanelFrame):
     """Input panel for interactive Draft (Entformungsschräge) — Fusion-style."""
 
     angle_changed = Signal(float)
@@ -2157,7 +2170,7 @@ class DraftInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class SplitInputPanel(QFrame):
+class SplitInputPanel(RoundedPanelFrame):
     """Input panel for interactive Split Body — PrusaSlicer-style."""
 
     plane_changed = Signal(str)

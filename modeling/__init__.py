@@ -96,6 +96,31 @@ if _project_root not in sys.path:
 
 from sketcher import Sketch
 
+
+# ==================== HELPER FUNCTIONS ====================
+
+def _solid_metrics(solid):
+    """
+    Geometry-Fingerprint (volume, faces, edges) eines Solids.
+
+    Args:
+        solid: Build123d Solid oder None
+
+    Returns:
+        dict mit keys 'volume', 'faces', 'edges' oder None bei Fehler
+    """
+    if solid is None:
+        return None
+    try:
+        return {
+            "volume": float(solid.volume),
+            "faces": len(list(solid.faces())),
+            "edges": len(list(solid.edges())),
+        }
+    except Exception:
+        return None
+
+
 # ==================== DATENSTRUKTUREN ====================
 
 class FeatureType(Enum):
@@ -707,7 +732,11 @@ class PrimitiveFeature(Feature):
             if self.primitive_type == "box":
                 return bd.Box(self.length, self.width, self.height)
             elif self.primitive_type == "cylinder":
-                return bd.Cylinder(self.radius, self.height)
+                # Verwende OCP direkt für "echte" Zylinder (2 Edges statt 3)
+                from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
+                ax = gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))
+                ocp_cyl = BRepPrimAPI_MakeCylinder(ax, self.radius, self.height).Shape()
+                return Solid(ocp_cyl)
             elif self.primitive_type == "sphere":
                 return bd.Sphere(self.radius)
             elif self.primitive_type == "cone":

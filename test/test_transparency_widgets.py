@@ -489,6 +489,258 @@ class TestEditDialogGeometryInfo:
         dialog._on_apply()
         assert chamfer.distance == 2.5
 
+    def test_extrude_dialog_with_delta(self):
+        """ExtrudeEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import ExtrudeEditDialog
+
+        doc, body = _make_doc_body("dialog_extrude")
+        sketch = _create_rectangle_sketch(20, 15)
+        extrude = ExtrudeFeature(sketch=sketch, distance=10.0, operation="NewBody")
+        body.add_feature(extrude, rebuild=True)
+
+        dialog = ExtrudeEditDialog(extrude, body)
+
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        # Extrude mit _geometry_delta sollte Geo-Info haben
+        if getattr(extrude, '_geometry_delta', None):
+            assert any("Geometry" in t or "Geometrie" in t for t in group_titles), \
+                f"Extrude mit Delta sollte Geo-Info haben: {group_titles}"
+
+    def test_shell_dialog_with_delta(self):
+        """ShellEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import ShellEditDialog
+        from modeling import ShellFeature
+
+        doc, body = _make_doc_body("dialog_shell")
+        _add_box_base(body)
+
+        shell = ShellFeature(thickness=2.0, opening_face_selectors=[])
+        body.add_feature(shell, rebuild=True)
+
+        dialog = ShellEditDialog(shell, body)
+
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        if getattr(shell, '_geometry_delta', None):
+            assert any("Geometry" in t or "Geometrie" in t for t in group_titles)
+
+    def test_revolve_dialog_with_delta(self):
+        """RevolveEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import RevolveEditDialog
+        from modeling import RevolveFeature
+
+        doc, body = _make_doc_body("dialog_revolve")
+        sketch = _create_rectangle_sketch(10, 5)
+        revolve = RevolveFeature(sketch=sketch, angle=180.0, axis=(0, 1, 0), operation="NewBody")
+        body.add_feature(revolve, rebuild=True)
+
+        dialog = RevolveEditDialog(revolve, body)
+
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        if getattr(revolve, '_geometry_delta', None):
+            assert any("Geometry" in t or "Geometrie" in t for t in group_titles)
+
+    def test_extrude_dialog_apply(self):
+        """Apply im Extrude-Dialog ändert Distance."""
+        from gui.dialogs.feature_edit_dialogs import ExtrudeEditDialog
+
+        doc, body = _make_doc_body("dialog_extrude_apply")
+        sketch = _create_rectangle_sketch(20, 15)
+        extrude = ExtrudeFeature(sketch=sketch, distance=10.0, operation="NewBody")
+        dialog = ExtrudeEditDialog(extrude, body)
+        dialog.distance_input.setText("25.0")
+        dialog._on_apply()
+        assert extrude.distance == 25.0
+
+    def test_shell_dialog_apply(self):
+        """Apply im Shell-Dialog ändert Thickness."""
+        from gui.dialogs.feature_edit_dialogs import ShellEditDialog
+        from modeling import ShellFeature
+
+        doc, body = _make_doc_body("dialog_shell_apply")
+        shell = ShellFeature(thickness=2.0, opening_face_selectors=[])
+        dialog = ShellEditDialog(shell, body)
+        dialog.thickness_input.setText("5.0")
+        dialog._on_apply()
+        assert shell.thickness == 5.0
+
+    def test_revolve_dialog_apply(self):
+        """Apply im Revolve-Dialog ändert Angle."""
+        from gui.dialogs.feature_edit_dialogs import RevolveEditDialog
+        from modeling import RevolveFeature
+
+        doc, body = _make_doc_body("dialog_revolve_apply")
+        sketch = _create_rectangle_sketch(10, 5)
+        revolve = RevolveFeature(sketch=sketch, angle=180.0, axis=(0, 1, 0), operation="NewBody")
+        dialog = RevolveEditDialog(revolve, body)
+        dialog.angle_input.setText("270.0")
+        dialog._on_apply()
+        assert revolve.angle == 270.0
+
+    def test_loft_dialog_with_delta(self):
+        """LoftEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import LoftEditDialog
+        from modeling import LoftFeature
+
+        doc, body = _make_doc_body("dialog_loft")
+        sketch1 = _create_rectangle_sketch(20, 15)
+        sketch2 = _create_rectangle_sketch(10, 8)
+
+        # Erstelle Profile-Daten für Loft
+        profile1 = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch1.closed_profiles[0],
+            "plane_origin": (0, 0, 0),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+        profile2 = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch2.closed_profiles[0],
+            "plane_origin": (0, 0, 10),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+
+        loft = LoftFeature(
+            profile_data=[profile1, profile2],
+            ruled=False,
+            operation="NewBody",
+            start_continuity="G0",
+            end_continuity="G0"
+        )
+        body.add_feature(loft, rebuild=True)
+
+        dialog = LoftEditDialog(loft, body)
+
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        if getattr(loft, '_geometry_delta', None):
+            assert any("Geometry" in t or "Geometrie" in t for t in group_titles)
+
+    def test_loft_dialog_apply(self):
+        """Apply im Loft-Dialog ändert Parameter."""
+        from gui.dialogs.feature_edit_dialogs import LoftEditDialog
+        from modeling import LoftFeature
+
+        doc, body = _make_doc_body("dialog_loft_apply")
+        sketch1 = _create_rectangle_sketch(20, 15)
+        sketch2 = _create_rectangle_sketch(10, 8)
+
+        profile1 = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch1.closed_profiles[0],
+            "plane_origin": (0, 0, 0),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+        profile2 = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch2.closed_profiles[0],
+            "plane_origin": (0, 0, 10),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+
+        loft = LoftFeature(
+            profile_data=[profile1, profile2],
+            ruled=False,
+            operation="NewBody",
+            start_continuity="G0",
+            end_continuity="G0"
+        )
+        dialog = LoftEditDialog(loft, body)
+
+        # Ändere ruled zu True
+        dialog.ruled_combo.setCurrentIndex(1)  # Index 1 = "Ruled"
+        dialog._on_apply()
+        assert loft.ruled == True
+
+    def test_sweep_dialog_with_delta(self):
+        """SweepEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import SweepEditDialog
+        from modeling import SweepFeature
+
+        doc, body = _make_doc_body("dialog_sweep")
+
+        # Erstelle Profile- und Path-Daten für Sweep
+        sketch = _create_rectangle_sketch(5, 5)
+        profile = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch.closed_profiles[0],
+            "plane_origin": (0, 0, 0),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+
+        # Mock path data
+        path = {
+            "type": "sketch_edge",
+            "edge_indices": [0]
+        }
+
+        sweep = SweepFeature(
+            profile_data=profile,
+            path_data=path,
+            operation="NewBody",
+            is_frenet=False,
+            twist_angle=0.0
+        )
+        body.add_feature(sweep, rebuild=True)
+
+        dialog = SweepEditDialog(sweep, body)
+
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        if getattr(sweep, '_geometry_delta', None):
+            assert any("Geometry" in t or "Geometrie" in t for t in group_titles)
+
+    def test_sweep_dialog_apply(self):
+        """Apply im Sweep-Dialog ändert Parameter."""
+        from gui.dialogs.feature_edit_dialogs import SweepEditDialog
+        from modeling import SweepFeature
+
+        doc, body = _make_doc_body("dialog_sweep_apply")
+        sketch = _create_rectangle_sketch(5, 5)
+        profile = {
+            "type": "sketch_profile",
+            "shapely_poly": sketch.closed_profiles[0],
+            "plane_origin": (0, 0, 0),
+            "plane_normal": (0, 0, 1),
+            "plane_x_dir": (1, 0, 0),
+            "plane_y_dir": (0, 1, 0)
+        }
+        path = {
+            "type": "sketch_edge",
+            "edge_indices": [0]
+        }
+
+        sweep = SweepFeature(
+            profile_data=profile,
+            path_data=path,
+            operation="NewBody",
+            is_frenet=False,
+            twist_angle=0.0
+        )
+        dialog = SweepEditDialog(sweep, body)
+
+        # Ändere twist_angle
+        dialog.twist_input.setText("45.0")
+        dialog._on_apply()
+        assert sweep.twist_angle == 45.0
+
 
 @pytest.mark.unit
 class TestEdgeHighlighting:
