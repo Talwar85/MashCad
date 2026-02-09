@@ -568,7 +568,12 @@ class ShapeNamingService:
             code = str(details.get("code", "") or "").strip().lower()
             if code in {"fallback_used"}:
                 return "fallback"
-            if code in {"operation_failed", "fallback_failed", "no_result_solid"}:
+            if code in {
+                "operation_failed",
+                "fallback_failed",
+                "no_result_solid",
+                "self_heal_rollback_geometry_drift",
+            }:
                 return "broken"
 
             feat_status = str(getattr(feat, "status", "") or "").strip().upper()
@@ -1089,50 +1094,237 @@ class ShapeNamingService:
         except Exception:
             return False
     
-    def _trace_via_history(self, shape_id: ShapeID, 
+    def _iter_history_shapes(self, shape_list_obj: Any) -> List[Any]:
+        """Konvertiert OCCT ListOfShape robust in eine Python-Liste."""
+        if shape_list_obj is None:
+            return []
+        try:
+            return [s for s in shape_list_obj]
+        except Exception:
+            pass
+
+        try:
+            it = shape_list_obj.Iterator()
+            out = []
+            while it.More():
+                out.append(it.Value())
+                it.Next()
+            return out
+        except Exception:
+            return []
+
+    def _history_outputs_for_shape(self, occt_history: Any, source_shape: Any) -> List[Any]:
+        """
+        Liefert History-Outputs für ein Source-Shape.
+        Bevorzugt Modified vor Generated.
+        """
+        if occt_history is None or source_shape is None:
+            return []
+
+        outputs: List[Any] = []
+        seen: List[Any] = []
+        for query_name in ("Modified", "Generated"):
+            try:
+                query_fn = getattr(occt_history, query_name, None)
+                if query_fn is None:
+                    continue
+                mapped = self._iter_history_shapes(query_fn(source_shape))
+            except Exception:
+                mapped = []
+
+            for mapped_shape in mapped:
+                if mapped_shape is None:
+                    continue
+                duplicate = False
+                for known in seen:
+                    try:
+                        if known.IsSame(mapped_shape):
+                            duplicate = True
+                            break
+                    except Exception:
+                        continue
+                if duplicate:
+                    continue
+                seen.append(mapped_shape)
+                outputs.append(mapped_shape)
+
+        return outputs
+
+    def _trace_via_history(self, shape_id: ShapeID,
                           current_solid: Any) -> Optional[Any]:
         """
         Level 2: Versucht Shape via Operation-Graph zu tracen.
-        Folgt der Kette: ShapeID → Operation → Mapped Shapes
+        Folgt der Kette: ShapeID -> Operation -> Mapped Shapes.
         """
-        if not self._operations:
+        if not self._operations or shape_id.uuid not in self._shapes:
             return None
-        
+
         try:
-            # Finde die Operation, die dieses Shape erzeugt hat
-            for op in reversed(self._operations):
-                if shape_id in op.output_shape_ids:
-                    # Prüfe ob OCCT History verfügbar
-                    if op.occt_history and HAS_OCP:
-                        try:
-                            from OCP.BRepTools import BRepTools_History
-                            from OCP.TopAbs import TopAbs_EDGE
-                            
-                            if isinstance(op.occt_history, BRepTools_History):
-                                # Query the history
-                                generated = op.occt_history.Generated(shape_id)
-                                modified = op.occt_history.Modified(shape_id)
-                                
-                                if generated and generated.Size() > 0:
-                                    return generated.First()
-                                elif modified and modified.Size() > 0:
-                                    return modified.First()
-                        except Exception as e:
-                            logger.debug(f"OCCT History Query fehlgeschlagen: {e}")
-                    
-                    # Prüfe manual_mappings (für BRepFeat)
-                    if op.manual_mappings and shape_id.uuid in op.manual_mappings:
-                        mapped_ids = op.manual_mappings[shape_id.uuid]
-                        if mapped_ids:
-                            # Nimm erstes gemapptes Shape
-                            mapped_record = self._shapes.get(mapped_ids[0])
-                            if mapped_record and mapped_record.ocp_shape:
-                                return mapped_record.ocp_shape
-        
+            base_record = self._shapes.get(shape_id.uuid)
+            candidate_shape = base_record.ocp_shape if base_record is not None else None
+            candidate_uuid = shape_id.uuid
+
+            if candidate_shape is None:
+                return None
+
+            # Chronologisch durchlaufen: wir folgen derselben Evolutionsrichtung
+            # wie die Feature-Historie.
+            for op in self._operations:
+                had_mapping = False
+                next_shape = None
+                next_uuid = None
+
+                if op.manual_mappings and candidate_uuid in op.manual_mappings:
+                    had_mapping = True
+                    for mapped_uuid in op.manual_mappings.get(candidate_uuid, []):
+                        mapped_record = self._shapes.get(mapped_uuid)
+                        if mapped_record is None or mapped_record.ocp_shape is None:
+                            continue
+                        mapped_shape = mapped_record.ocp_shape
+                        if self._shape_exists_in_solid(mapped_shape, current_solid):
+                            return mapped_shape
+                        if next_shape is None:
+                            next_shape = mapped_shape
+                            next_uuid = mapped_uuid
+
+                if op.occt_history is not None and HAS_OCP and candidate_shape is not None:
+                    history_outputs = self._history_outputs_for_shape(op.occt_history, candidate_shape)
+                    if history_outputs:
+                        had_mapping = True
+                        for mapped_shape in history_outputs:
+                            if self._shape_exists_in_solid(mapped_shape, current_solid):
+                                # Selbstheilend: aktualisiere Record auf die zuletzt
+                                # aufgelöste Geometrie.
+                                if base_record is not None:
+                                    base_record.ocp_shape = mapped_shape
+                                    base_record.is_valid = True
+                                    base_record.geometric_signature = base_record.compute_signature()
+                                return mapped_shape
+                        if next_shape is None:
+                            next_shape = history_outputs[0]
+
+                if had_mapping and next_shape is not None:
+                    candidate_shape = next_shape
+                    if next_uuid is not None:
+                        candidate_uuid = next_uuid
+
         except Exception as e:
             logger.debug(f"History Tracing fehlgeschlagen: {e}")
-        
+
         return None
+
+    def _collect_brepfeat_history_inputs(
+        self,
+        source_solid: Any,
+        modified_face: Any,
+    ) -> List[Tuple[ShapeID, Any]]:
+        """
+        Sammelt Source-ShapeIDs (Face + Boundary-Edges) für kernel-first BRepFeat Mapping.
+        """
+        if not HAS_OCP or modified_face is None:
+            return []
+
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS
+
+        inputs: List[Tuple[ShapeID, Any]] = []
+        seen_uuids: Set[str] = set()
+
+        def _append_candidate(shape_id: Optional[ShapeID], shape_obj: Any) -> None:
+            if shape_id is None or shape_obj is None:
+                return
+            if shape_id.uuid in seen_uuids:
+                return
+            record = self._shapes.get(shape_id.uuid)
+            candidate_shape = record.ocp_shape if (record and record.ocp_shape is not None) else shape_obj
+            if candidate_shape is None:
+                return
+            if not self._shape_exists_in_solid(candidate_shape, source_solid):
+                return
+            seen_uuids.add(shape_id.uuid)
+            inputs.append((shape_id, candidate_shape))
+
+        face_shape = modified_face.wrapped if hasattr(modified_face, "wrapped") else modified_face
+        face_shape_id = self.find_shape_id_by_face(face_shape, require_exact=True)
+        _append_candidate(face_shape_id, face_shape)
+
+        edge_exp = TopExp_Explorer(face_shape, TopAbs_EDGE)
+        while edge_exp.More():
+            edge_shape = TopoDS.Edge_s(edge_exp.Current())
+            edge_shape_id = self.find_shape_id_by_edge(edge_shape, require_exact=True)
+            _append_candidate(edge_shape_id, edge_shape)
+            edge_exp.Next()
+
+        return inputs
+
+    def _build_brepfeat_history_mappings(
+        self,
+        feature_id: str,
+        source_items: List[Tuple[ShapeID, Any]],
+        result_solid: Any,
+        occt_history: Any,
+        *,
+        start_local_index: int = 0,
+    ) -> Tuple[Dict[str, List[str]], List[ShapeID]]:
+        """
+        Erstellt Input->Output Mappings per OCCT History für BRepFeat.
+        """
+        from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+
+        shape_type_to_topabs = {
+            ShapeType.EDGE: TopAbs_EDGE,
+            ShapeType.FACE: TopAbs_FACE,
+            ShapeType.VERTEX: TopAbs_VERTEX,
+        }
+
+        local_index = max(0, int(start_local_index or 0))
+        manual_mappings: Dict[str, List[str]] = {}
+        new_shape_ids: List[ShapeID] = []
+        registered_outputs: List[Tuple[Any, ShapeID]] = []
+
+        for source_shape_id, source_shape in source_items:
+            expected_topabs = shape_type_to_topabs.get(source_shape_id.shape_type)
+            history_outputs = self._history_outputs_for_shape(occt_history, source_shape)
+            if not history_outputs:
+                continue
+
+            for mapped_shape in history_outputs:
+                if mapped_shape is None:
+                    continue
+                try:
+                    if expected_topabs is not None and mapped_shape.ShapeType() != expected_topabs:
+                        continue
+                except Exception:
+                    continue
+                if not self._shape_exists_in_solid(mapped_shape, result_solid):
+                    continue
+
+                mapped_shape_id: Optional[ShapeID] = None
+                for known_shape, known_shape_id in registered_outputs:
+                    try:
+                        if known_shape.IsSame(mapped_shape):
+                            mapped_shape_id = known_shape_id
+                            break
+                    except Exception:
+                        continue
+
+                if mapped_shape_id is None:
+                    mapped_shape_id = self.register_shape(
+                        ocp_shape=mapped_shape,
+                        shape_type=source_shape_id.shape_type,
+                        feature_id=feature_id,
+                        local_index=local_index,
+                    )
+                    registered_outputs.append((mapped_shape, mapped_shape_id))
+                    new_shape_ids.append(mapped_shape_id)
+                    local_index += 1
+
+                bucket = manual_mappings.setdefault(source_shape_id.uuid, [])
+                if mapped_shape_id.uuid not in bucket:
+                    bucket.append(mapped_shape_id.uuid)
+
+        return manual_mappings, new_shape_ids
     
     def _lookup_brepfeat_mapping(self, shape_id: ShapeID,
                                  current_solid: Any) -> Optional[Any]:
@@ -1271,12 +1463,13 @@ class ShapeNamingService:
         
         return best_match
 
-    def track_brepfeat_operation(self, feature_id: str, 
+    def track_brepfeat_operation(self, feature_id: str,
                                   source_solid: Any,
                                   result_solid: Any,
                                   modified_face: Any,
                                   direction: Tuple[float, float, float],
-                                  distance: float) -> Optional[OperationRecord]:
+                                  distance: float,
+                                  occt_history: Optional[Any] = None) -> Optional[OperationRecord]:
         """
         TNP v4.0: Trackt eine BRepFeat_MakePrism Operation.
         
@@ -1291,6 +1484,8 @@ class ShapeNamingService:
             modified_face: Die Face die gepusht/pulled wurde
             direction: Extrusionsrichtung
             distance: Extrusionsdistanz
+            occt_history: Optionales BRepTools_History aus BRepFeat_MakePrism.
+                Wenn gesetzt, wird kernel-first History-Mapping verwendet.
             
         Returns:
             OperationRecord mit Mappings, oder None
@@ -1307,6 +1502,68 @@ class ShapeNamingService:
             if is_enabled("tnp_debug_logging"):
                 logger.info(f"TNP v4.0: Tracke BRepFeat Operation '{feature_id}'")
             
+            # Kernel-first Pfad: Wenn OCCT History vorhanden ist, zuerst echte
+            # Source->Result Mappings daraus ableiten.
+            if occt_history is not None:
+                source_items = self._collect_brepfeat_history_inputs(source_solid, modified_face)
+                if source_items:
+                    manual_mappings, new_shape_ids = self._build_brepfeat_history_mappings(
+                        feature_id=feature_id,
+                        source_items=source_items,
+                        result_solid=result_solid,
+                        occt_history=occt_history,
+                        start_local_index=0,
+                    )
+
+                    edge_output_ids = [sid for sid in new_shape_ids if sid.shape_type == ShapeType.EDGE]
+                    max_edge_local_index = max(
+                        (int(sid.local_index) for sid in edge_output_ids),
+                        default=-1,
+                    )
+
+                    mappings_for_unmapped = []
+                    for new_shape_id in edge_output_ids:
+                        mappings_for_unmapped.append(
+                            type("Mapping", (), {"new_shape_uuid": new_shape_id.uuid})()
+                        )
+
+                    new_edge_count = self._register_unmapped_edges(
+                        result_solid=result_solid,
+                        feature_id=feature_id,
+                        existing_mappings=mappings_for_unmapped,
+                        start_local_index=max_edge_local_index + 1,
+                    )
+
+                    input_shape_ids = [sid for sid, _shape in source_items]
+                    op_record = OperationRecord(
+                        operation_type="BREPFEAT_PRISM",
+                        feature_id=feature_id,
+                        input_shape_ids=input_shape_ids,
+                        output_shape_ids=new_shape_ids,
+                        occt_history=occt_history,
+                        manual_mappings=manual_mappings,
+                        metadata={
+                            "direction": direction,
+                            "distance": distance,
+                            "mappings_count": len(manual_mappings),
+                            "new_edges_registered": int(new_edge_count),
+                            "mapping_mode": "history",
+                        },
+                    )
+                    self.record_operation(op_record)
+
+                    if is_enabled("tnp_debug_logging"):
+                        logger.success(
+                            "TNP v4.0: BRepFeat kernel-history getrackt - "
+                            f"{len(manual_mappings)} mappings + {new_edge_count} neue Edges"
+                        )
+                    return op_record
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(
+                        "TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, "
+                        "falle auf Heuristik zurück"
+                    )
+
             # 1. Finde alle Edges der modified_face vor der Operation
             old_face_edges = set()
             face_edge_exp = TopExp_Explorer(modified_face.wrapped, TopAbs_EDGE)
@@ -1511,7 +1768,8 @@ class ShapeNamingService:
                     metadata={
                         'direction': direction,
                         'distance': distance,
-                        'mappings_count': len(manual_mappings)
+                        'mappings_count': len(manual_mappings),
+                        'mapping_mode': 'heuristic',
                     }
                 )
                 
@@ -1570,6 +1828,20 @@ class ShapeNamingService:
             for record in self._shapes.values():
                 if record.shape_id.shape_type == ShapeType.EDGE and record.ocp_shape:
                     known_edges_map.Add(record.ocp_shape)
+
+            # Ergänze explizit bereits gemappte Output-Edges.
+            # (Defensiv: verhindert Doppel-Registrierung bei partiellen Registry-States.)
+            for mapping in existing_mappings or []:
+                new_uuid = getattr(mapping, "new_shape_uuid", None)
+                if not new_uuid:
+                    continue
+                record = self._shapes.get(str(new_uuid))
+                if not record or record.shape_id.shape_type != ShapeType.EDGE or not record.ocp_shape:
+                    continue
+                try:
+                    known_edges_map.Add(record.ocp_shape)
+                except Exception:
+                    continue
 
             if is_enabled("tnp_debug_logging"):
                 # Count edges in result

@@ -6271,13 +6271,23 @@ class MainWindow(QMainWindow):
                             try:
                                 if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
                                     service = self.document._shape_naming_service
+                                    brepfeat_history = None
+                                    try:
+                                        brepfeat_history = source_body._build_history_from_make_shape(
+                                            prism,
+                                            old_solid.wrapped if hasattr(old_solid, "wrapped") else old_solid,
+                                        )
+                                    except Exception as hist_err:
+                                        if is_enabled("tnp_debug_logging"):
+                                            logger.debug(f"TNP BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                     service.track_brepfeat_operation(
                                         feature_id=feat.id,
                                         source_solid=old_solid,
                                         result_solid=new_solid,
                                         modified_face=best_face,
                                         direction=(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2])),
-                                        distance=abs_height
+                                        distance=abs_height,
+                                        occt_history=brepfeat_history,
                                     )
                             except Exception as tnp_e:
                                 if is_enabled("tnp_debug_logging"):

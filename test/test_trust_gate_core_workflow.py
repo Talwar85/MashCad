@@ -377,6 +377,71 @@ def _assert_no_broken_feature_refs(report: dict, include_types: set[str]):
         assert int(feat.get("broken", 0)) == 0, f"Broken refs for feature: {feat}"
 
 
+def test_trust_gate_brepfeat_uses_kernel_history_tracking():
+    pytest.importorskip("OCP.BRepFeat")
+
+    doc = Document("trust_gate_brepfeat_history")
+    body = Body("BodyHistory", document=doc)
+    doc.add_body(body, set_active=True)
+
+    base = PrimitiveFeature(primitive_type="box", length=42.0, width=28.0, height=18.0, name="Base Box")
+    body.add_feature(base, rebuild=True)
+    assert _is_success_status(base.status), base.status_message
+
+    feat = _add_pushpull_join_live_skip_rebuild(
+        doc,
+        body,
+        step=0,
+        direction=(1.0, 0.0, 0.0),
+        distance=2.2,
+    )
+    assert _is_success_status(feat.status), feat.status_message
+
+    op = doc._shape_naming_service.get_last_operation()
+    assert op is not None
+    assert op.operation_type == "BREPFEAT_PRISM"
+    assert op.feature_id == feat.id
+    assert op.occt_history is not None
+    assert str(op.metadata.get("mapping_mode", "")).lower() == "history"
+
+
+def test_trust_gate_health_report_marks_geometry_drift_code_as_broken():
+    doc = Document("trust_gate_drift_code")
+    body = Body("BodyDrift", document=doc)
+    doc.add_body(body, set_active=True)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=16.0, height=10.0, name="Base Box")
+    body.add_feature(base, rebuild=True)
+    assert _is_success_status(base.status), base.status_message
+
+    # Simuliert einen strikt verworfenen lokalen Modifier.
+    fake = ChamferFeature(distance=0.4, edge_indices=[0])
+    fake.name = "Chamfer Drift"
+    fake.status = "ERROR"
+    fake.status_message = "Strict Self-Heal rollback due to geometry drift"
+    fake.status_details = {
+        "code": "self_heal_rollback_geometry_drift",
+        "refs": {"edge_indices": [0]},
+    }
+    body.features.append(fake)
+
+    report = doc._shape_naming_service.get_health_report(body)
+    chamfer_reports = [f for f in report.get("features", []) if f.get("name") == "Chamfer Drift"]
+    assert chamfer_reports, report
+    chamfer_report = chamfer_reports[0]
+    assert chamfer_report.get("status") == "broken", chamfer_report
+    assert int(chamfer_report.get("broken", 0)) > 0, chamfer_report
+
+
+def test_trust_gate_panel_maps_geometry_drift_code_to_broken():
+    panel_mod = pytest.importorskip("gui.widgets.tnp_stats_panel")
+    feat = {
+        "status": "ok",
+        "status_details": {"code": "self_heal_rollback_geometry_drift"},
+    }
+    assert panel_mod.TNPStatsPanel._feature_display_status(feat) == "broken"
+
+
 def test_trust_gate_rect_pushpull_chamfer_undo_redo_save_load_and_continue(tmp_path):
     pytest.importorskip("OCP.BRepFeat")
 

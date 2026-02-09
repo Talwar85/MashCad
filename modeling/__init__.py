@@ -5623,7 +5623,14 @@ class Body:
 
         def _solid_metrics(solid_obj) -> dict:
             if solid_obj is None:
-                return {"volume": None, "faces": 0, "edges": 0}
+                return {
+                    "volume": None,
+                    "faces": 0,
+                    "edges": 0,
+                    "bbox_lengths": None,
+                    "bbox_center": None,
+                    "bbox_diag": None,
+                }
             try:
                 volume = float(getattr(solid_obj, "volume", 0.0))
             except Exception:
@@ -5636,7 +5643,37 @@ class Body:
                 edges = len(list(solid_obj.edges()))
             except Exception:
                 edges = 0
-            return {"volume": volume, "faces": faces, "edges": edges}
+            bbox_lengths = None
+            bbox_center = None
+            bbox_diag = None
+            try:
+                bb = solid_obj.bounding_box()
+                min_x = float(bb.min.X)
+                min_y = float(bb.min.Y)
+                min_z = float(bb.min.Z)
+                max_x = float(bb.max.X)
+                max_y = float(bb.max.Y)
+                max_z = float(bb.max.Z)
+                lx = max_x - min_x
+                ly = max_y - min_y
+                lz = max_z - min_z
+                bbox_lengths = (lx, ly, lz)
+                bbox_center = (
+                    0.5 * (min_x + max_x),
+                    0.5 * (min_y + max_y),
+                    0.5 * (min_z + max_z),
+                )
+                bbox_diag = float((lx * lx + ly * ly + lz * lz) ** 0.5)
+            except Exception:
+                pass
+            return {
+                "volume": volume,
+                "faces": faces,
+                "edges": edges,
+                "bbox_lengths": bbox_lengths,
+                "bbox_center": bbox_center,
+                "bbox_diag": bbox_diag,
+            }
 
         def _format_metrics(metrics: dict) -> str:
             volume = metrics.get("volume")
@@ -5644,11 +5681,102 @@ class Body:
                 vol_text = "n/a"
             else:
                 vol_text = f"{volume:.3f}"
+            diag = metrics.get("bbox_diag")
+            diag_text = "n/a" if diag is None else f"{float(diag):.3f}"
             return (
                 f"vol={vol_text}mm³, "
                 f"faces={metrics.get('faces', 0)}, "
-                f"edges={metrics.get('edges', 0)}"
+                f"edges={metrics.get('edges', 0)}, "
+                f"diag={diag_text}mm"
             )
+
+        def _is_local_modifier_feature(feat) -> bool:
+            return isinstance(feat, (ChamferFeature, FilletFeature))
+
+        def _local_modifier_drift_details(feat, before_metrics: dict, after_metrics: dict) -> Optional[dict]:
+            if before_metrics is None or after_metrics is None:
+                return None
+
+            before_lengths = before_metrics.get("bbox_lengths")
+            after_lengths = after_metrics.get("bbox_lengths")
+            before_center = before_metrics.get("bbox_center")
+            after_center = after_metrics.get("bbox_center")
+            before_diag = before_metrics.get("bbox_diag")
+            after_diag = after_metrics.get("bbox_diag")
+            if (
+                before_lengths is None or after_lengths is None
+                or before_center is None or after_center is None
+                or before_diag is None or after_diag is None
+            ):
+                return None
+
+            if isinstance(feat, ChamferFeature):
+                magnitude = abs(float(getattr(feat, "distance", 0.0) or 0.0))
+                op_label = "Chamfer"
+            else:
+                magnitude = abs(float(getattr(feat, "radius", 0.0) or 0.0))
+                op_label = "Fillet"
+
+            max_axis_grow = max(0.25, 0.60 * magnitude)
+            max_axis_shrink = max(1.60, 6.50 * magnitude)
+            max_diag_grow = max(0.35, 0.95 * magnitude)
+            max_diag_shrink = max(2.20, 8.00 * magnitude)
+            max_center_shift = max(1.50, 6.00 * magnitude)
+
+            drift_reasons = []
+            max_axis_grow_seen = 0.0
+            max_axis_shrink_seen = 0.0
+            for axis_idx, (before_len, after_len) in enumerate(zip(before_lengths, after_lengths)):
+                grow = float(after_len - before_len)
+                shrink = float(before_len - after_len)
+                max_axis_grow_seen = max(max_axis_grow_seen, grow)
+                max_axis_shrink_seen = max(max_axis_shrink_seen, shrink)
+                if grow > max_axis_grow:
+                    drift_reasons.append(f"axis{axis_idx}_grow={grow:.3f}mm")
+                if shrink > max_axis_shrink:
+                    drift_reasons.append(f"axis{axis_idx}_shrink={shrink:.3f}mm")
+
+            diag_grow = float(after_diag - before_diag)
+            diag_shrink = float(before_diag - after_diag)
+            if diag_grow > max_diag_grow:
+                drift_reasons.append(f"diag_grow={diag_grow:.3f}mm")
+            if diag_shrink > max_diag_shrink:
+                drift_reasons.append(f"diag_shrink={diag_shrink:.3f}mm")
+
+            center_shift = float(
+                (
+                    (after_center[0] - before_center[0]) ** 2
+                    + (after_center[1] - before_center[1]) ** 2
+                    + (after_center[2] - before_center[2]) ** 2
+                ) ** 0.5
+            )
+            if center_shift > max_center_shift:
+                drift_reasons.append(f"center_shift={center_shift:.3f}mm")
+
+            if not drift_reasons:
+                return None
+
+            return {
+                "feature": op_label,
+                "magnitude": magnitude,
+                "before": before_metrics,
+                "after": after_metrics,
+                "limits": {
+                    "max_axis_grow": max_axis_grow,
+                    "max_axis_shrink": max_axis_shrink,
+                    "max_diag_grow": max_diag_grow,
+                    "max_diag_shrink": max_diag_shrink,
+                    "max_center_shift": max_center_shift,
+                },
+                "observed": {
+                    "max_axis_grow": max_axis_grow_seen,
+                    "max_axis_shrink": max_axis_shrink_seen,
+                    "diag_grow": diag_grow,
+                    "diag_shrink": diag_shrink,
+                    "center_shift": center_shift,
+                },
+                "reasons": drift_reasons,
+            }
 
         # === PHASE 7: Inkrementeller Rebuild mit Checkpoints ===
         start_index = 0
@@ -6272,6 +6400,42 @@ class Body:
                     logger.error(
                         f"Strict Self-Heal Rollback ({feature.name}): "
                         f"{_format_metrics(rollback_from)} -> {_format_metrics(rollback_to)}"
+                    )
+
+            if (
+                strict_self_heal
+                and new_solid is not None
+                and status != "ERROR"
+                and solid_before_feature is not None
+                and _is_local_modifier_feature(feature)
+            ):
+                before_metrics = _solid_metrics(solid_before_feature)
+                after_metrics = _solid_metrics(new_solid)
+                drift_details = _local_modifier_drift_details(feature, before_metrics, after_metrics)
+                if drift_details is not None:
+                    status = "ERROR"
+                    new_solid = solid_before_feature
+                    self._last_operation_error = (
+                        f"Strict Self-Heal: Feature '{feature.name}' verworfen "
+                        f"(unerwartete globale Geometrie-Drift bei lokalem Modifier)."
+                    )
+                    self._last_operation_error_details = self._build_operation_error_details(
+                        op_name=f"StrictSelfHeal_{i}",
+                        code="self_heal_rollback_geometry_drift",
+                        message=self._last_operation_error,
+                        feature=feature,
+                        hint="Chamfer/Fillet hat den Body global verändert. Auswahl/Parameter prüfen.",
+                    )
+                    self._last_operation_error_details["rollback"] = {
+                        "from": after_metrics,
+                        "to": before_metrics,
+                    }
+                    self._last_operation_error_details["geometry_drift"] = drift_details
+                    logger.error(self._last_operation_error)
+                    logger.error(
+                        f"Strict Self-Heal Rollback ({feature.name}, drift): "
+                        f"{_format_metrics(after_metrics)} -> {_format_metrics(before_metrics)} | "
+                        f"reasons={', '.join(drift_details.get('reasons', []))}"
                     )
 
             feature.status = status
@@ -7822,13 +7986,20 @@ class Body:
                         try:
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 service = self._document._shape_naming_service
+                                brepfeat_history = None
+                                try:
+                                    brepfeat_history = self._build_history_from_make_shape(prism, shape)
+                                except Exception as hist_err:
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(f"TNP v4.0 BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                 service.track_brepfeat_operation(
                                     feature_id=feature.id,
                                     source_solid=current_solid,
                                     result_solid=result,
                                     modified_face=candidate_face,
                                     direction=(float(trial_normal[0]), float(trial_normal[1]), float(trial_normal[2])),
-                                    distance=abs_dist
+                                    distance=abs_dist,
+                                    occt_history=brepfeat_history,
                                 )
                         except Exception as tnp_e:
                             if is_enabled("tnp_debug_logging"):

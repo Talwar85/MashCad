@@ -239,7 +239,12 @@ class TNPStatsPanel(QWidget):
         code = str(details.get("code", "") or "").strip().lower()
         if code in {"fallback_used"}:
             return "fallback"
-        if code in {"operation_failed", "fallback_failed", "no_result_solid"}:
+        if code in {
+            "operation_failed",
+            "fallback_failed",
+            "no_result_solid",
+            "self_heal_rollback_geometry_drift",
+        }:
             return "broken"
         return base_status
 
