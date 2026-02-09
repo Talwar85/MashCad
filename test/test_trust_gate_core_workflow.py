@@ -442,6 +442,112 @@ def test_trust_gate_panel_maps_geometry_drift_code_to_broken():
     assert panel_mod.TNPStatsPanel._feature_display_status(feat) == "broken"
 
 
+@pytest.mark.parametrize("seed", [11, 37, 59, 83, 107, 131, 173])
+def test_trust_gate_ui_workflow_five_pushpull_chamfer_panel_consistency(seed):
+    """
+    Reproduziert den realen GUI-Flow:
+    5x Push/Pull -> Chamfer -> Undo/Redo.
+
+    Ziel:
+    - Kein stilles "alles grün", wenn Geometrie driftet.
+    - Bei Erfolg: lokale Modifier bleiben lokal.
+    - Bei Fehler: harter Rollback + Panel zeigt broken.
+    """
+    pytest.importorskip("OCP.BRepFeat")
+    panel_mod = pytest.importorskip("gui.widgets.tnp_stats_panel")
+
+    from gui.commands.feature_commands import AddFeatureCommand
+
+    rng = random.Random(seed)
+    doc = Document(f"trust_gate_ui_flow_{seed}")
+    body = Body(f"BodyUI{seed}", document=doc)
+    doc.add_body(body, set_active=True)
+    ui = _DummyMainWindow()
+
+    base = PrimitiveFeature(
+        primitive_type="box",
+        length=30.0 + rng.uniform(0.0, 20.0),
+        width=20.0 + rng.uniform(0.0, 20.0),
+        height=12.0 + rng.uniform(0.0, 18.0),
+        name="Base Box",
+    )
+    body.add_feature(base, rebuild=True)
+    assert _is_success_status(base.status), f"seed={seed}: {base.status_message}"
+
+    for step in range(5):
+        direction = rng.choice(_AXIS_DIRECTIONS)
+        distance = round(rng.uniform(0.8, 3.4), 3)
+        feat, _cmd = _add_pushpull_join_live_via_command(
+            doc,
+            body,
+            ui,
+            step,
+            direction,
+            distance=distance,
+        )
+        assert _is_success_status(feat.status), (
+            f"seed={seed}, step={step}, dir={direction}, dist={distance}: {feat.status_message}"
+        )
+
+    pre_sig = _solid_signature(body._build123d_solid)
+    chamfer_edges = _random_chamfer_edges_from_face_loop(body._build123d_solid, rng)
+    chamfer_distance = 2.0
+
+    chamfer = ChamferFeature(distance=chamfer_distance, edge_indices=chamfer_edges)
+    cmd = AddFeatureCommand(body, chamfer, ui, description=f"Chamfer UI seed={seed}")
+    cmd.redo()
+    post_sig = _solid_signature(body._build123d_solid)
+
+    report_after = doc._shape_naming_service.get_health_report(body)
+    feature_reports = [
+        f for f in report_after.get("features", [])
+        if f.get("type") in {"Extrude", "Chamfer"}
+    ]
+    assert feature_reports, f"seed={seed}: expected Extrude/Chamfer entries in TNP report"
+
+    if _is_success_status(chamfer.status):
+        _assert_local_modifier_keeps_body_scale(
+            pre_sig,
+            post_sig,
+            magnitude=chamfer_distance,
+            context=f"ui_seed_{seed}_chamfer_scale_guard",
+        )
+        # Kein Push/Pull darf als broken angezeigt werden.
+        for feat_report in feature_reports:
+            if feat_report.get("type") != "Extrude":
+                continue
+            disp = panel_mod.TNPStatsPanel._feature_display_status(feat_report)
+            assert disp != "broken", (
+                f"seed={seed}: panel marks Push/Pull broken despite successful workflow: {feat_report}"
+            )
+
+        cmd.undo()
+        undo_sig = _solid_signature(body._build123d_solid)
+        _assert_signature_close(undo_sig, pre_sig, context=f"ui_seed_{seed}_undo")
+
+        cmd.redo()
+        redo_sig = _solid_signature(body._build123d_solid)
+        _assert_signature_close(redo_sig, post_sig, context=f"ui_seed_{seed}_redo")
+    else:
+        # Fehlerpfad: Geometrie darf nicht mutieren + Panel muss broken anzeigen.
+        _assert_signature_close(post_sig, pre_sig, context=f"ui_seed_{seed}_error_rollback")
+
+        chamfer_reports = [f for f in feature_reports if f.get("type") == "Chamfer"]
+        assert chamfer_reports, f"seed={seed}: missing chamfer report after error"
+        disp = panel_mod.TNPStatsPanel._feature_display_status(chamfer_reports[-1])
+        assert disp == "broken", (
+            f"seed={seed}: panel must show broken when chamfer fails: {chamfer_reports[-1]}"
+        )
+
+        cmd.undo()
+        undo_sig = _solid_signature(body._build123d_solid)
+        _assert_signature_close(undo_sig, pre_sig, context=f"ui_seed_{seed}_undo_after_error")
+
+        cmd.redo()
+        redo_sig = _solid_signature(body._build123d_solid)
+        _assert_signature_close(redo_sig, pre_sig, context=f"ui_seed_{seed}_redo_after_error")
+
+
 def test_trust_gate_rect_pushpull_chamfer_undo_redo_save_load_and_continue(tmp_path):
     pytest.importorskip("OCP.BRepFeat")
 
