@@ -17,12 +17,24 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
 from sketcher import Point2D, Line2D, Circle2D, Arc2D
 from i18n import tr
 try:
-    from gui.sketch_feedback import format_trim_failure_message, format_trim_warning_message
+    from gui.sketch_feedback import (
+        format_solver_failure_message,
+        format_trim_failure_message,
+        format_trim_warning_message,
+    )
 except ImportError:
     try:
-        from sketch_feedback import format_trim_failure_message, format_trim_warning_message
+        from sketch_feedback import (
+            format_solver_failure_message,
+            format_trim_failure_message,
+            format_trim_warning_message,
+        )
     except ImportError:
-        from .sketch_feedback import format_trim_failure_message, format_trim_warning_message
+        from .sketch_feedback import (
+            format_solver_failure_message,
+            format_trim_failure_message,
+            format_trim_warning_message,
+        )
 
 # Importiere SketchTool und SnapType
 try:
@@ -126,6 +138,143 @@ class SketchHandlersMixin:
         except Exception:
             tol = 1.0
         return max(min_world, min(max_world, tol))
+
+    def _begin_constraint_transaction(self):
+        """
+        Sichert den Sketch-Zustand vor einer Constraint-Operation.
+        """
+        snapshot = self.sketch.to_dict()
+        undo_len_before = len(self.undo_stack) if hasattr(self, "undo_stack") else None
+        redo_backup = list(self.redo_stack) if hasattr(self, "redo_stack") else None
+        if hasattr(self, "_save_undo"):
+            self._save_undo()
+        return {
+            "snapshot": snapshot,
+            "undo_len_before": undo_len_before,
+            "redo_backup": redo_backup,
+        }
+
+    def _rollback_constraint_transaction(self, tx_state):
+        """
+        Rollback auf den exakten Vorzustand inkl. Undo/Redo-Konsistenz.
+        """
+        self.sketch = Sketch.from_dict(tx_state["snapshot"])
+        if hasattr(self, "_clear_selection"):
+            self._clear_selection()
+
+        undo_len_before = tx_state.get("undo_len_before", None)
+        if undo_len_before is not None and hasattr(self, "undo_stack"):
+            while len(self.undo_stack) > undo_len_before:
+                self.undo_stack.pop()
+
+        redo_backup = tx_state.get("redo_backup", None)
+        if redo_backup is not None and hasattr(self, "redo_stack"):
+            self.redo_stack = redo_backup
+
+        if hasattr(self, "snapper") and self.snapper and hasattr(self.snapper, "invalidate_intersection_cache"):
+            self.snapper.invalidate_intersection_cache()
+
+    def _constraint_result_dof(self, result):
+        dof = getattr(result, "dof", None)
+        if dof is not None:
+            return dof
+        try:
+            _, _, dof_calc = self.sketch.calculate_dof()
+            return dof_calc
+        except Exception:
+            return 0
+
+    def _emit_constraint_failure(self, result, context: str):
+        """
+        Einheitliche, erklärbare Fehlerrückmeldung für Constraint-Apply.
+        """
+        msg = getattr(result, "message", "Constraint-Solver fehlgeschlagen")
+        status_name = ""
+        if hasattr(self, "_solver_status_name"):
+            status_name = self._solver_status_name(result)
+        else:
+            status_obj = getattr(result, "status", "")
+            status_name = getattr(status_obj, "name", status_obj) or ""
+        dof = self._constraint_result_dof(result)
+
+        if hasattr(self, "_emit_solver_feedback"):
+            self._emit_solver_feedback(
+                success=False,
+                message=msg,
+                dof=float(dof),
+                status_name=status_name,
+                context=context,
+                show_hud=True,
+            )
+        else:
+            text = format_solver_failure_message(status_name, msg, dof=dof, context=context)
+            if hasattr(self, "status_message"):
+                self.status_message.emit(text)
+            if hasattr(self, "show_message"):
+                self.show_message(text, 4000, QColor(255, 90, 90))
+
+    def _after_constraint_change(self):
+        if hasattr(self, "_find_closed_profiles"):
+            self._find_closed_profiles()
+        if hasattr(self, "sketched_changed"):
+            self.sketched_changed.emit()
+        if hasattr(self, "request_update"):
+            self.request_update()
+        elif hasattr(self, "update"):
+            self.update()
+
+    def _execute_constraint_transaction(
+        self,
+        mutate_fn,
+        *,
+        context: str,
+        success_status: str = "",
+        success_hud: str = "",
+        duplicate_message: str = "",
+    ):
+        """
+        Führt Constraint-Mutation + Solve atomar aus:
+        - Erfolg: Änderung bleibt bestehen
+        - Fehler/No-op: vollständiger Rollback
+        """
+        tx_state = self._begin_constraint_transaction()
+
+        try:
+            applied = mutate_fn()
+        except Exception as exc:
+            self._rollback_constraint_transaction(tx_state)
+            text = f"{context}: {exc}"
+            if hasattr(self, "status_message"):
+                self.status_message.emit(text)
+            if hasattr(self, "show_message"):
+                self.show_message(text, 3500, QColor(255, 90, 90))
+            logger.error(text)
+            self._after_constraint_change()
+            return False, None
+
+        if applied is None or applied is False:
+            self._rollback_constraint_transaction(tx_state)
+            if duplicate_message:
+                if hasattr(self, "status_message"):
+                    self.status_message.emit(duplicate_message)
+                if hasattr(self, "show_message"):
+                    self.show_message(duplicate_message, 2200, QColor(255, 190, 90))
+            self._after_constraint_change()
+            return False, None
+
+        result = self.sketch.solve()
+        if not bool(getattr(result, "success", False)):
+            self._rollback_constraint_transaction(tx_state)
+            self._emit_constraint_failure(result, context=context)
+            self._after_constraint_change()
+            return False, result
+
+        self._after_constraint_change()
+        if success_status and hasattr(self, "status_message"):
+            self.status_message.emit(success_status)
+        if success_hud and hasattr(self, "show_message"):
+            self.show_message(success_hud, 2000, QColor(100, 255, 100))
+        return True, result
     
     def _handle_select(self, pos, snap_type):
         hit = self._find_entity_at(pos)

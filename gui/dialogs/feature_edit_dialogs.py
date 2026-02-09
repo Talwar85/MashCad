@@ -90,6 +90,107 @@ def _create_number_input(label_text, parent_layout, suffix=""):
     return line_edit
 
 
+def _add_geometry_delta_section(layout, feature, body, dialog):
+    """Fügt Geometry-Delta und Kanten-Info zum Edit-Dialog hinzu."""
+    gd = getattr(feature, '_geometry_delta', None)
+    edge_indices = getattr(feature, 'edge_indices', None) or []
+    has_content = gd is not None or len(edge_indices) > 0
+
+    if not has_content:
+        return
+
+    group = QGroupBox(tr("Geometry Info"))
+    group_layout = QVBoxLayout()
+    group_layout.setSpacing(2)
+
+    # Volume Delta
+    if gd:
+        vol_before = gd.get("volume_before", 0)
+        vol_after = gd.get("volume_after", 0)
+        vol_pct = gd.get("volume_pct", 0)
+
+        if vol_before > 0 and vol_pct != 0:
+            sign = "+" if vol_pct > 0 else ""
+            vol_text = f"Volume: {vol_before:.0f} → {vol_after:.0f} mm³ ({sign}{vol_pct:.1f}%)"
+        elif vol_before == 0 and vol_after > 0:
+            vol_text = f"Volume: {vol_after:.0f} mm³"
+        else:
+            vol_text = f"Volume: {tr('unverändert')}"
+        vol_label = QLabel(vol_text)
+        vol_label.setStyleSheet("color: #ccc; font-size: 10px;")
+        group_layout.addWidget(vol_label)
+
+        fd = gd.get("faces_delta", 0)
+        ed = gd.get("edges_delta", 0)
+        topo_text = (
+            f"{tr('Flächen')}: {gd.get('faces_before', '?')} → {gd.get('faces_after', '?')} "
+            f"({'+' if fd > 0 else ''}{fd})  |  "
+            f"{tr('Kanten')}: {gd.get('edges_before', '?')} → {gd.get('edges_after', '?')} "
+            f"({'+' if ed > 0 else ''}{ed})"
+        )
+        topo_label = QLabel(topo_text)
+        topo_label.setStyleSheet("color: #999; font-size: 10px;")
+        topo_label.setWordWrap(True)
+        group_layout.addWidget(topo_label)
+
+    # Kanten-Liste mit Show-Button
+    if edge_indices:
+        solid = body._build123d_solid if body else None
+        all_edges = list(solid.edges()) if solid else []
+        valid_count = sum(1 for idx in edge_indices if 0 <= idx < len(all_edges))
+        invalid_count = len(edge_indices) - valid_count
+
+        edge_summary = f"{valid_count}/{len(edge_indices)} {tr('Kanten gültig')}"
+        if invalid_count > 0:
+            edge_summary += f"  ⚠ {invalid_count} {tr('ungültig')}"
+
+        edge_row = QHBoxLayout()
+        edge_label = QLabel(edge_summary)
+        color = "#22c55e" if invalid_count == 0 else "#f59e0b"
+        edge_label.setStyleSheet(f"color: {color}; font-size: 10px;")
+        edge_row.addWidget(edge_label)
+
+        show_btn = QPushButton(tr("Kanten anzeigen"))
+        show_btn.setFixedHeight(20)
+        show_btn.setStyleSheet(
+            "QPushButton { background: #333; color: #ccc; border: 1px solid #555; "
+            "border-radius: 3px; font-size: 10px; padding: 1px 8px; }"
+            "QPushButton:hover { background: #444; color: white; }"
+        )
+        show_btn.clicked.connect(lambda: _highlight_edges_in_viewport(dialog._parent_window, body, edge_indices))
+        edge_row.addWidget(show_btn)
+        group_layout.addLayout(edge_row)
+
+    group.setLayout(group_layout)
+    layout.addWidget(group)
+
+
+def _highlight_edges_in_viewport(main_window, body, edge_indices):
+    """Highlighted die angegebenen Kanten im Viewport."""
+    if main_window is None:
+        return
+    viewport = getattr(main_window, 'viewport_3d', None)
+    if viewport is None:
+        return
+    try:
+        viewport.highlight_edges_by_index(body, edge_indices)
+    except Exception as e:
+        logger.debug(f"Edge-Highlighting fehlgeschlagen: {e}")
+
+
+def _clear_edge_highlight(main_window):
+    """Entfernt Edge-Highlighting beim Schließen des Dialogs."""
+    if main_window is None:
+        return
+    viewport = getattr(main_window, 'viewport_3d', None)
+    if viewport is None:
+        return
+    try:
+        viewport.clear_edge_highlight()
+    except Exception:
+        pass
+
+
 def _create_buttons(layout, dialog):
     """Helper: Cancel + Apply buttons"""
     button_layout = QHBoxLayout()
@@ -183,14 +284,15 @@ class ExtrudeEditDialog(QDialog):
 
 
 class FilletEditDialog(QDialog):
-    """Edit-Dialog fuer FilletFeature: Radius"""
+    """Edit-Dialog fuer FilletFeature: Radius + Geometry-Delta + Kanten-Info"""
 
     def __init__(self, feature, body, parent=None):
         super().__init__(parent)
         self.feature = feature
         self.body = body
+        self._parent_window = parent
         self.setWindowTitle(f"Edit {feature.name}")
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(380)
         self.setStyleSheet(DesignTokens.stylesheet_dialog())
 
         layout = QVBoxLayout(self)
@@ -218,6 +320,9 @@ class FilletEditDialog(QDialog):
         group.setLayout(group_layout)
         layout.addWidget(group)
 
+        # Geometry Delta + Kanten-Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
         apply_btn = _create_buttons(layout, self)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -232,16 +337,25 @@ class FilletEditDialog(QDialog):
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe: {e}")
 
+    def closeEvent(self, event):
+        _clear_edge_highlight(self._parent_window)
+        super().closeEvent(event)
+
+    def reject(self):
+        _clear_edge_highlight(self._parent_window)
+        super().reject()
+
 
 class ChamferEditDialog(QDialog):
-    """Edit-Dialog fuer ChamferFeature: Distance"""
+    """Edit-Dialog fuer ChamferFeature: Distance + Geometry-Delta + Kanten-Info"""
 
     def __init__(self, feature, body, parent=None):
         super().__init__(parent)
         self.feature = feature
         self.body = body
+        self._parent_window = parent
         self.setWindowTitle(f"Edit {feature.name}")
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(380)
         self.setStyleSheet(DesignTokens.stylesheet_dialog())
 
         layout = QVBoxLayout(self)
@@ -268,6 +382,9 @@ class ChamferEditDialog(QDialog):
         group.setLayout(group_layout)
         layout.addWidget(group)
 
+        # Geometry Delta + Kanten-Sektion
+        _add_geometry_delta_section(layout, feature, body, self)
+
         apply_btn = _create_buttons(layout, self)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -281,6 +398,14 @@ class ChamferEditDialog(QDialog):
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe: {e}")
+
+    def closeEvent(self, event):
+        _clear_edge_highlight(self._parent_window)
+        super().closeEvent(event)
+
+    def reject(self):
+        _clear_edge_highlight(self._parent_window)
+        super().reject()
 
 
 class ShellEditDialog(QDialog):

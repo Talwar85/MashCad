@@ -167,6 +167,61 @@ class EdgeSelectionMixin:
         
         if hasattr(self, 'plotter'): request_render(self.plotter)
 
+    # ==================== Passive Edge Highlighting ====================
+
+    def highlight_edges_by_index(self, body, edge_indices: list):
+        """Highlighted bestimmte Kanten eines Bodies im Viewport (ohne Selection-Mode).
+
+        Wird vom Edit-Dialog aufgerufen wenn der User 'Kanten anzeigen' klickt.
+        """
+        self.clear_edge_highlight()
+        if body is None or not hasattr(body, '_build123d_solid') or body._build123d_solid is None:
+            return
+        try:
+            import pyvista as pv
+            solid = body._build123d_solid
+            all_edges = list(solid.edges())
+            meshes = []
+            for idx in edge_indices:
+                if 0 <= idx < len(all_edges):
+                    edge = all_edges[idx]
+                    points = self._extract_edge_points_from_ocp(edge)
+                    if points is not None and len(points) >= 2:
+                        mesh = pv.lines_from_points(points)
+                        meshes.append(mesh)
+
+            if not meshes:
+                return
+
+            batch = meshes[0].copy()
+            for m in meshes[1:]:
+                batch = batch.merge(m)
+
+            self.plotter.add_mesh(
+                batch,
+                color="#FFaa00",   # Orange/Gold — konsistent mit EDGE_COLORS["selected"]
+                opacity=1.0,
+                line_width=6.0,
+                render_lines_as_tubes=True,
+                lighting=False,
+                name="edit_edge_highlight",
+                pickable=False,
+            )
+            self._set_actor_on_top("edit_edge_highlight", 8)
+            request_render(self.plotter)
+            logger.debug(f"Edge-Highlight: {len(meshes)}/{len(edge_indices)} Kanten angezeigt")
+        except Exception as e:
+            logger.debug(f"highlight_edges_by_index fehlgeschlagen: {e}")
+
+    def clear_edge_highlight(self):
+        """Entfernt passives Edge-Highlighting."""
+        try:
+            if hasattr(self, 'plotter') and self.plotter is not None:
+                self.plotter.remove_actor("edit_edge_highlight")
+                request_render(self.plotter)
+        except Exception:
+            pass
+
     # ==================== Extraction ====================
 
     def _extract_edges_from_body(self, body_id: str):

@@ -526,22 +526,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         try: self.plotter.hide_axes()
         except: pass
         
-        # ViewCube Widget
-        try:
-            widget = self.plotter.add_camera_orientation_widget()
-            if widget:
-                try:
-                    rep = widget.GetRepresentation()
-                    if hasattr(rep, 'SetLabelText'):
-                        # Beschriftungen setzen
-                        labels = ["RECHTS", "LINKS", "HINTEN", "VORNE", "OBEN", "UNTEN"]
-                        for i, text in enumerate(labels):
-                            rep.SetLabelText(i, text)
-                except Exception as e:
-                    logger.debug(f"[viewport] Fehler beim SetLabelText: {e}")
-                self._cam_widget = widget
-        except Exception as e:
-            logger.warning(f"ViewCube creation warning: {e}")
+        # ViewCube Widget — wird verzögert erstellt (siehe _create_cam_widget)
+        self._cam_widget = None
+        self._cam_widget_initialized = False
         
         # Home Button Overlay
         self.btn_home = OverlayHomeButton(self)
@@ -563,13 +550,43 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.plotter.reset_camera()
         self.view_changed.emit()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, self._deferred_init_cam_widget)
+
+    def _deferred_init_cam_widget(self):
+        """Erstellt das Camera Orientation Widget erst nach dem ersten Layout-Pass."""
+        if self._cam_widget_initialized:
+            return
+        self._cam_widget_initialized = True
+        self._create_cam_widget()
+        self._refresh_widget_layout()
+
+    def _create_cam_widget(self):
+        """Erstellt das VTK Camera Orientation Widget mit korrekter Viewport-Größe."""
+        try:
+            if self._cam_widget:
+                self.plotter.remove_actor(self._cam_widget)
+                self._cam_widget = None
+        except Exception:
+            pass
+
+        try:
+            widget = self.plotter.add_camera_orientation_widget()
+            if widget:
+                self._cam_widget = widget
+        except Exception as e:
+            logger.warning(f"ViewCube creation failed: {e}")
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Home-Button immer oben links halten
+        self._refresh_widget_layout()
+
+    def _refresh_widget_layout(self):
         if hasattr(self, 'btn_home'):
             self.btn_home.move(20, 20)
             self.btn_home.raise_()
-        # Selection filter bar oben mittig
         if hasattr(self, '_filter_bar'):
             self._filter_bar.move((self.width() - self._filter_bar.width()) // 2, 10)
             self._filter_bar.raise_()

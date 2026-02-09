@@ -50,7 +50,7 @@ from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 5+
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
-from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget, FeatureDetailPanel
+from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget
 from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
@@ -480,12 +480,10 @@ class MainWindow(QMainWindow):
 
         self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
-        self.feature_detail_panel = FeatureDetailPanel()
         self.operation_summary = OperationSummaryWidget()
 
         self.left_tabs.addTab(self.browser, "Browser")
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
-        self.left_tabs.addTab(self.feature_detail_panel, tr("Details"))
         self.left_tabs.setCurrentIndex(0)  # Browser default
 
         # Log-Panel als DockWidget (undockbar/frei positionierbar)
@@ -1672,9 +1670,6 @@ class MainWindow(QMainWindow):
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats(body)
-                # Feature Detail Panel aktualisieren
-                doc = getattr(body, '_document', None) or self.document
-                self.feature_detail_panel.show_feature(feature, body, doc)
             else:
                 self.statusBar().showMessage("Ready")
                 self.body_properties.clear()

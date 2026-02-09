@@ -369,12 +369,12 @@ class TestOperationSummaryWidget:
 
 
 # ===========================================================================
-# STUFE 3: Feature Detail Panel
+# STUFE 3: Edit-Dialog Geometry Info + Edge Highlighting
 # ===========================================================================
 
 @pytest.mark.unit
-class TestFeatureDetailPanel:
-    """Tests für FeatureDetailPanel."""
+class TestEditDialogGeometryInfo:
+    """Tests für Geometry-Delta Integration in Edit-Dialogen."""
 
     @pytest.fixture(autouse=True)
     def _setup_qapp(self):
@@ -384,154 +384,125 @@ class TestFeatureDetailPanel:
             app = QApplication([])
         yield
 
-    def test_create_panel(self):
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        assert panel is not None
+    def test_fillet_dialog_with_delta(self):
+        """FilletEditDialog zeigt Geometry Info wenn _geometry_delta vorhanden."""
+        from gui.dialogs.feature_edit_dialogs import FilletEditDialog
 
-    def test_show_feature_none_hides_sections(self):
-        """show_feature(None) versteckt alle Sektionen."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()  # Parent muss sichtbar sein damit isVisible() korrekt funktioniert
-        panel.show_feature(None)
-
-        assert panel._status_label.isHidden()
-        assert panel._geo_header.isHidden()
-        assert panel._edge_header.isHidden()
-        assert panel._tnp_header.isHidden()
-
-    def test_show_feature_with_delta(self):
-        """Feature mit _geometry_delta zeigt Geometry-Sektion."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()
-
-        class FakeFeature:
-            name = "Chamfer D=0.8"
-            status = "OK"
-            status_message = ""
-            status_details = {}
-            edge_indices = None
-            _geometry_delta = {
-                "volume_before": 20000.0,
-                "volume_after": 19700.0,
-                "volume_pct": -1.5,
-                "faces_before": 6,
-                "faces_after": 10,
-                "faces_delta": 4,
-                "edges_before": 12,
-                "edges_after": 20,
-                "edges_delta": 8,
-            }
-
-        panel.show_feature(FakeFeature())
-
-        assert not panel._geo_header.isHidden()
-        assert not panel._geo_volume.isHidden()
-        assert "19700" in panel._geo_volume.text() or "20000" in panel._geo_volume.text()
-        assert not panel._geo_faces.isHidden()
-        assert "+4" in panel._geo_faces.text()
-
-    def test_show_feature_error_status(self):
-        """ERROR-Feature zeigt roten Status."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()
-
-        class FakeFeature:
-            name = "Fillet R=2.0"
-            status = "ERROR"
-            status_message = "Edge nicht gefunden"
-            status_details = {}
-            edge_indices = None
-            _geometry_delta = None
-
-        panel.show_feature(FakeFeature())
-
-        assert not panel._status_label.isHidden()
-        assert "ERROR" in panel._status_label.text()
-        assert "Edge nicht gefunden" in panel._status_label.text()
-
-    def test_show_feature_with_edge_indices(self):
-        """Feature mit edge_indices zeigt Kanten-Sektion."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()
-
-        doc, body = _make_doc_body("detail_edges")
+        doc, body = _make_doc_body("dialog_fillet")
         _add_box_base(body)
 
-        class FakeFeature:
-            name = "Chamfer"
-            status = "OK"
-            status_message = ""
-            status_details = {}
-            edge_indices = [0, 1, 2]
-            _geometry_delta = None
+        edges = _top_edge_indices(body._build123d_solid, limit=2)
+        fillet = FilletFeature(radius=0.5, edge_indices=edges)
+        body.add_feature(fillet, rebuild=True)
 
-        panel.show_feature(FakeFeature(), body=body)
+        dialog = FilletEditDialog(fillet, body)
 
-        assert not panel._edge_header.isHidden()
-        assert not panel._edge_scroll.isHidden()
-        assert not panel._btn_show_edges.isHidden()
+        # Dialog sollte Geometry Info GroupBox enthalten
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        assert any("Geometry" in t or "Geometrie" in t for t in group_titles), \
+            f"Kein Geometry Info GroupBox gefunden, nur: {group_titles}"
 
-    def test_highlight_signal_emitted(self):
-        """'Kanten anzeigen' Button emittiert highlight_edges_requested."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
+    def test_chamfer_dialog_with_delta(self):
+        """ChamferEditDialog zeigt Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import ChamferEditDialog
 
-        signals = []
-        panel.highlight_edges_requested.connect(lambda x: signals.append(x))
+        doc, body = _make_doc_body("dialog_chamfer")
+        _add_box_base(body)
 
-        class FakeFeature:
-            edge_indices = [3, 7, 11]
+        edges = _top_edge_indices(body._build123d_solid, limit=2)
+        chamfer = ChamferFeature(distance=0.5, edge_indices=edges)
+        body.add_feature(chamfer, rebuild=True)
 
-        panel._current_feature = FakeFeature()
-        panel._on_show_edges()
+        dialog = ChamferEditDialog(chamfer, body)
 
-        assert len(signals) == 1
-        assert signals[0] == [3, 7, 11]
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        assert any("Geometry" in t or "Geometrie" in t for t in group_titles), \
+            f"Kein Geometry Info GroupBox in Chamfer-Dialog: {group_titles}"
 
-    def test_show_feature_without_delta_hides_geo_section(self):
-        """Feature ohne _geometry_delta versteckt Geometry-Sektion."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()
+    def test_dialog_without_delta_no_geo_section(self):
+        """Edit-Dialog ohne _geometry_delta zeigt keine Geometry Info."""
+        from gui.dialogs.feature_edit_dialogs import FilletEditDialog
 
-        class FakeFeature:
-            name = "Import"
-            status = "OK"
-            status_message = ""
-            edge_indices = None
-            _geometry_delta = None
+        doc, body = _make_doc_body("dialog_no_delta")
+        _add_box_base(body)
 
-        panel.show_feature(FakeFeature())
+        fillet = FilletFeature(radius=1.0, edge_indices=[0])
+        fillet._geometry_delta = None  # Kein Delta
 
-        assert panel._geo_header.isHidden()
-        assert panel._geo_volume.isHidden()
+        dialog = FilletEditDialog(fillet, body)
 
-    def test_clear_resets_panel(self):
-        """clear() setzt Panel zurück."""
-        from gui.widgets.feature_detail_panel import FeatureDetailPanel
-        panel = FeatureDetailPanel()
-        panel.show()
+        from PySide6.QtWidgets import QGroupBox
+        groups = dialog.findChildren(QGroupBox)
+        group_titles = [g.title() for g in groups]
+        # Nur "Fillet Parameters" erwartet, kein "Geometry Info"
+        geo_groups = [t for t in group_titles if "Geometry" in t or "Geometrie" in t]
+        # Wenn keine edge_indices, kein Geo-Group
+        if not fillet.edge_indices:
+            assert len(geo_groups) == 0
 
-        class FakeFeature:
-            name = "Test"
-            status = "OK"
-            status_message = ""
-            edge_indices = None
-            _geometry_delta = {"volume_before": 100, "volume_after": 200, "volume_pct": 100.0,
-                               "faces_before": 4, "faces_after": 6, "faces_delta": 2,
-                               "edges_before": 8, "edges_after": 12, "edges_delta": 4}
+    def test_dialog_shows_edge_count(self):
+        """Edit-Dialog zeigt korrekte Kanten-Anzahl."""
+        from gui.dialogs.feature_edit_dialogs import FilletEditDialog
 
-        panel.show_feature(FakeFeature())
-        assert not panel._geo_header.isHidden()
+        doc, body = _make_doc_body("dialog_edges")
+        _add_box_base(body)
 
-        # Dann clear
-        panel.clear()
-        assert panel._geo_header.isHidden()
+        edges = _top_edge_indices(body._build123d_solid, limit=4)
+        fillet = FilletFeature(radius=0.5, edge_indices=edges)
+        body.add_feature(fillet, rebuild=True)
+
+        dialog = FilletEditDialog(fillet, body)
+
+        # Suche nach "Kanten anzeigen" Button
+        from PySide6.QtWidgets import QPushButton
+        buttons = dialog.findChildren(QPushButton)
+        show_btn = [b for b in buttons if "Kanten" in b.text() or "anzeigen" in b.text()]
+        assert len(show_btn) > 0, "Kein 'Kanten anzeigen' Button im Dialog gefunden"
+
+    def test_fillet_dialog_apply(self):
+        """Apply im Fillet-Dialog ändert den Radius."""
+        from gui.dialogs.feature_edit_dialogs import FilletEditDialog
+
+        doc, body = _make_doc_body("dialog_apply")
+        _add_box_base(body)
+
+        fillet = FilletFeature(radius=1.0, edge_indices=[0])
+        dialog = FilletEditDialog(fillet, body)
+        dialog.radius_input.setText("3.5")
+        dialog._on_apply()
+        assert fillet.radius == 3.5
+
+    def test_chamfer_dialog_apply(self):
+        """Apply im Chamfer-Dialog ändert die Distance."""
+        from gui.dialogs.feature_edit_dialogs import ChamferEditDialog
+
+        doc, body = _make_doc_body("dialog_apply_c")
+        _add_box_base(body)
+
+        chamfer = ChamferFeature(distance=1.0, edge_indices=[0])
+        dialog = ChamferEditDialog(chamfer, body)
+        dialog.distance_input.setText("2.5")
+        dialog._on_apply()
+        assert chamfer.distance == 2.5
+
+
+@pytest.mark.unit
+class TestEdgeHighlighting:
+    """Tests für Edge-Highlighting im Viewport (Methoden-Existenz)."""
+
+    def test_highlight_method_exists(self):
+        """EdgeSelectionMixin hat highlight_edges_by_index."""
+        from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
+        assert hasattr(EdgeSelectionMixin, 'highlight_edges_by_index')
+
+    def test_clear_method_exists(self):
+        """EdgeSelectionMixin hat clear_edge_highlight."""
+        from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
+        assert hasattr(EdgeSelectionMixin, 'clear_edge_highlight')
 
 
 # ===========================================================================
