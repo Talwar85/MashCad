@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QApplication, QDialog, QFormLayout,
     QDoubleSpinBox, QDialogButtonBox, QSpinBox, QLineEdit,
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QComboBox,
-    QScrollArea, QGraphicsOpacityEffect, QSizePolicy
+    QScrollArea, QGraphicsOpacityEffect, QSizePolicy, QDockWidget
 )
 
 from PySide6.QtCore import Qt, Signal, QSize, QTimer, QPointF, QEvent, QPropertyAnimation, QEasingCurve, QObject, QPoint
@@ -482,9 +482,23 @@ class MainWindow(QMainWindow):
         self.tnp_stats_panel = TNPStatsPanel()
 
         self.left_tabs.addTab(self.browser, "Browser")
-        self.left_tabs.addTab(self.log_panel, "Log")
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
         self.left_tabs.setCurrentIndex(0)  # Browser default
+
+        # Log-Panel als DockWidget (undockbar/frei positionierbar)
+        self.log_dock = QDockWidget(tr("Log"), self)
+        self.log_dock.setWidget(self.log_panel)
+        self.log_dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.log_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+        self.log_dock.setStyleSheet("""
+            QDockWidget { color: #ccc; font-size: 11px; }
+            QDockWidget::title {
+                background: #252526; padding: 4px 8px;
+                border-bottom: 1px solid #333;
+            }
+        """)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        self.log_dock.hide()
 
         self.tnp_stats_panel.body_pick_requested.connect(self._on_tnp_body_pick_requested)
 
@@ -1021,7 +1035,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(tr("Top"), lambda: self.viewport_3d.set_view('top'))
         view_menu.addAction(tr("Front"), lambda: self.viewport_3d.set_view('front'))
         view_menu.addAction(tr("Right"), lambda: self.viewport_3d.set_view('right'))
-        
+        view_menu.addSeparator()
+        view_menu.addAction(self.log_dock.toggleViewAction())
+
         # Hilfe-Menü
         help_menu = mb.addMenu(tr("Help"))
         help_menu.addAction(tr("Language") + " / Sprache", self._change_language)
