@@ -220,6 +220,17 @@ class AddFeatureCommand(QUndoCommand):
         tx_state = _capture_body_state(self.body)
         try:
             if self.feature in self.body.features:
+                # Edge ShapeIDs can go stale after undo-rebuild cycles. Keep stable
+                # edge_indices as authority so redo can deterministically heal IDs.
+                try:
+                    from modeling import ChamferFeature, FilletFeature
+
+                    if isinstance(self.feature, (FilletFeature, ChamferFeature)):
+                        if getattr(self.feature, "edge_shape_ids", None):
+                            self.feature.edge_shape_ids = []
+                except Exception:
+                    pass
+
                 self.body.features.remove(self.feature)
                 logger.debug(f"Undo: Removed {self.feature.name} from {self.body.name}")
                 CADTessellator.notify_body_changed()

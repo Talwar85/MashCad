@@ -920,6 +920,15 @@ def test_trust_gate_randomized_pushpull_and_chamfer_workflow(seed):
     )
 
 
+def test_trust_gate_regression_seed_chamfer_redo_3657887():
+    """
+    Regression for stress-run failure:
+    Chamfer succeeded on first redo, failed on second redo after undo because
+    stale edge_shape_ids conflicted with still-valid edge_indices.
+    """
+    test_trust_gate_randomized_pushpull_and_chamfer_workflow(3657887)
+
+
 @pytest.mark.parametrize("seed", [13, 31, 59, 79, 103])
 def test_trust_gate_randomized_pushpull_and_fillet_workflow(seed):
     pytest.importorskip("OCP.BRepFeat")
