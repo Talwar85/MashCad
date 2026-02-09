@@ -2,6 +2,7 @@ from sketcher.constraints import Constraint, ConstraintType
 import sketcher.parametric_solver as parametric_solver_module
 import sketcher.solver as solver_module
 from sketcher.sketch import ConstraintStatus, Sketch
+from types import SimpleNamespace
 
 
 class _LegacyLikeResult:
@@ -210,3 +211,59 @@ def test_scipy_failure_reports_parametric_skip_reason(monkeypatch):
     assert "SciPy fehlgeschlagen" in result.message
     assert "py-slvs übersprungen" in result.message
     assert "Arc" in result.message or "Arcs" in result.message
+
+
+def test_scipy_non_convergence_restores_original_geometry(monkeypatch):
+    sketch = Sketch("scipy_restore_non_converged")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_length(line, 10.0)
+
+    original = (line.start.x, line.start.y, line.end.x, line.end.y)
+
+    def _fake_least_squares(fun, x0, **_kwargs):
+        mutated = x0.copy()
+        mutated[:] = mutated + 1.234
+        fun(mutated)  # simulates internal solver iterations mutating refs
+        return SimpleNamespace(x=mutated, nfev=5, success=False, status=5)
+
+    monkeypatch.setattr(solver_module, "least_squares", _fake_least_squares)
+
+    result = sketch._solver.solve(
+        sketch.points,
+        sketch.lines,
+        sketch.circles,
+        sketch.arcs,
+        sketch.constraints,
+    )
+
+    assert result.success is False
+    assert (line.start.x, line.start.y, line.end.x, line.end.y) == original
+
+
+def test_scipy_exception_restores_original_geometry(monkeypatch):
+    sketch = Sketch("scipy_restore_exception")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_length(line, 10.0)
+
+    original = (line.start.x, line.start.y, line.end.x, line.end.y)
+
+    def _raising_least_squares(fun, x0, **_kwargs):
+        mutated = x0.copy()
+        mutated[0] += 42.0
+        mutated[1] -= 17.0
+        fun(mutated)  # simulates mutation before backend crash
+        raise RuntimeError("forced backend failure")
+
+    monkeypatch.setattr(solver_module, "least_squares", _raising_least_squares)
+
+    result = sketch._solver.solve(
+        sketch.points,
+        sketch.lines,
+        sketch.circles,
+        sketch.arcs,
+        sketch.constraints,
+    )
+
+    assert result.success is False
+    assert "forced backend failure" in result.message
+    assert (line.start.x, line.start.y, line.end.x, line.end.y) == original

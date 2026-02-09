@@ -150,6 +150,14 @@ class ConstraintSolver:
         x0 = np.array(x0_vals, dtype=np.float64)
         n_vars = len(x0)
 
+        def restore_initial_values() -> None:
+            """Stellt Geometrie auf den Solver-Eingangszustand zurück."""
+            for i, (obj, attr) in enumerate(refs):
+                try:
+                    setattr(obj, attr, float(x0[i]))
+                except Exception:
+                    setattr(obj, attr, x0[i])
+
         if not np.all(np.isfinite(x0)):
             return SolverResult(
                 False,
@@ -260,6 +268,7 @@ class ConstraintSolver:
             )
 
             if not np.all(np.isfinite(result.x)):
+                restore_initial_values()
                 return SolverResult(
                     False,
                     int(result.nfev),
@@ -281,6 +290,7 @@ class ConstraintSolver:
                 dtype=np.float64,
             )
             if final_errors.size != len(active_constraints):
+                restore_initial_values()
                 return SolverResult(
                     False,
                     int(result.nfev),
@@ -289,6 +299,7 @@ class ConstraintSolver:
                     "Ungültige Residuen (Längenfehler)"
                 )
             if not np.all(np.isfinite(final_errors)):
+                restore_initial_values()
                 return SolverResult(
                     False,
                     int(result.nfev),
@@ -336,6 +347,9 @@ class ConstraintSolver:
                 else:
                     message = f"Maximaler Einzelfehler zu groß ({max_error:.2e})"
 
+            if not success:
+                restore_initial_values()
+
             return SolverResult(
                 success=bool(success),           # numpy.bool_ -> bool
                 iterations=int(result.nfev),     # numpy.int32 -> int
@@ -345,6 +359,7 @@ class ConstraintSolver:
             )
 
         except Exception as e:
+            restore_initial_values()
             return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, f"Solver-Fehler: {e}")
 
 
