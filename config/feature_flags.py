@@ -74,6 +74,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Thread/Helix (Native OCP)
     "native_ocp_helix": True,  # Native Geom_CylindricalSurface Helix statt build123d BSpline-Approximation
+
+    # Cylindrical Face Edit (Fusion360-style Radius Edit)
+    "cylindrical_face_edit": False,  # Phase 1: Zylindrische Faces radius-modifizieren (Hole/Pocket/Solid)
 }
 
 
