@@ -21,11 +21,13 @@ import build123d as bd
 from build123d import Solid, Face, Edge, Location, Vector, Rotation
 from modeling import (
     Body, Document,
-    ExtrudeFeature, PushPullFeature,
+    ExtrudeFeature,
     FilletFeature, ChamferFeature,
-    BooleanFeature, BooleanOperationType,
     DraftFeature, HollowFeature,
-    RevolveFeature
+    RevolveFeature,
+    ShellFeature, HoleFeature
+    # Nicht existierende Features (TODO):
+    # PushPullFeature, BooleanFeature, BooleanOperationType
 )
 from modeling.result_types import ResultStatus
 from modeling.body_transaction import BodyTransaction

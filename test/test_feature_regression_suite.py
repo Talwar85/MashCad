@@ -27,14 +27,16 @@ import build123d as bd
 from build123d import Solid, Face, Edge, Location, Vector, Rotation, Plane
 from modeling import (
     Body, Document,
-    ExtrudeFeature, PushPullFeature,
+    ExtrudeFeature,
     FilletFeature, ChamferFeature,
-    BooleanFeature, BooleanOperationType,
     SweepFeature, LoftFeature,
     DraftFeature, HollowFeature,
-    RevolveFeature, PatternFeature,
-    MirrorFeature, ScaleFeature,
-    HelixFeature
+    RevolveFeature,
+    ShellFeature, HoleFeature,
+    SplitFeature, ThreadFeature
+    # Nicht existierende Features (TODO):
+    # PushPullFeature, BooleanFeature, BooleanOperationType,
+    # PatternFeature, MirrorFeature, ScaleFeature, HelixFeature
 )
 from modeling.result_types import ResultStatus
 

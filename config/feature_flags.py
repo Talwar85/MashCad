@@ -104,13 +104,13 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "ocp_first_hollow": True,    # HollowFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
     
     # Phase 7: BREP Caching
-    "ocp_brep_cache": False,    # BREP-Caching für Features
-    
+    "ocp_brep_cache": True,     # BREP-Caching für Features (aktiviert nach Phase 7 Migration)
+
     # Phase 8: Incremental Rebuild
-    "ocp_incremental_rebuild": False,  # Inkrementeller Rebuild mit Dependency Graph
-    
+    "ocp_incremental_rebuild": True,  # Inkrementeller Rebuild mit Dependency Graph (aktiviert nach Phase 8 Migration)
+
     # Phase 9: BREP Persistence
-    "ocp_brep_persistence": False,  # Native BREP Persistenz statt Rebuild beim Laden
+    "ocp_brep_persistence": True,  # Native BREP Persistenz statt Rebuild beim Laden (aktiviert nach Phase 9 Migration)
 }
 
 

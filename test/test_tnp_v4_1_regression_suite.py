@@ -22,12 +22,14 @@ import pytest
 import build123d as bd
 from build123d import Solid, Face, Edge, Location, Vector, Rotation
 from modeling import (
-    Body, Document, ExtrudeFeature, PushPullFeature,
+    Body, Document, ExtrudeFeature,
     FilletFeature, ChamferFeature,
-    BooleanFeature, BooleanOperationType,
     SweepFeature, LoftFeature,
     DraftFeature, HollowFeature,
-    ShapeID, ShapeType, TNPShapeReference
+    ShellFeature, HoleFeature,
+    ShapeID, ShapeType
+    # Nicht existierende Klassen (TODO):
+    # TNPShapeReference, PushPullFeature, BooleanFeature, BooleanOperationType
 )
 from modeling.body_transaction import BodyTransaction
 from modeling.result_types import ResultStatus, OperationResult

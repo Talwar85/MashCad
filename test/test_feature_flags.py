@@ -63,51 +63,54 @@ class TestFeatureFlagsBasic:
 
 
 class TestOCPFirstFeatureFlags:
-    """Tests für OCP-First Migration Feature Flags."""
-    
-    def test_ocp_first_extrude_default_false(self):
-        """Test: ocp_first_extrude ist standardmäßig False."""
-        assert is_enabled("ocp_first_extrude") is False
-    
-    def test_ocp_first_fillet_default_false(self):
-        """Test: ocp_first_fillet ist standardmäßig False."""
-        assert is_enabled("ocp_first_fillet") is False
-    
-    def test_ocp_first_chamfer_default_false(self):
-        """Test: ocp_first_chamfer ist standardmäßig False."""
-        assert is_enabled("ocp_first_chamfer") is False
-    
-    def test_ocp_first_revolve_default_false(self):
-        """Test: ocp_first_revolve ist standardmäßig False."""
-        assert is_enabled("ocp_first_revolve") is False
-    
-    def test_ocp_first_loft_default_false(self):
-        """Test: ocp_first_loft ist standardmäßig False."""
-        assert is_enabled("ocp_first_loft") is False
-    
-    def test_ocp_first_sweep_default_false(self):
-        """Test: ocp_first_sweep ist standardmäßig False."""
-        assert is_enabled("ocp_first_sweep") is False
-    
-    def test_ocp_first_shell_default_false(self):
-        """Test: ocp_first_shell ist standardmäßig False."""
-        assert is_enabled("ocp_first_shell") is False
-    
-    def test_ocp_first_hollow_default_false(self):
-        """Test: ocp_first_hollow ist standardmäßig False."""
-        assert is_enabled("ocp_first_hollow") is False
-    
-    def test_ocp_brep_cache_default_false(self):
-        """Test: ocp_brep_cache ist standardmäßig False."""
-        assert is_enabled("ocp_brep_cache") is False
-    
-    def test_ocp_incremental_rebuild_default_false(self):
-        """Test: ocp_incremental_rebuild ist standardmäßig False."""
-        assert is_enabled("ocp_incremental_rebuild") is False
-    
-    def test_ocp_brep_persistence_default_false(self):
-        """Test: ocp_brep_persistence ist standardmäßig False."""
-        assert is_enabled("ocp_brep_persistence") is False
+    """Tests für OCP-First Migration Feature Flags.
+
+    Nach Phase 2-9 sind die OCP-First Flags auf True gesetzt.
+    """
+
+    def test_ocp_first_extrude_enabled(self):
+        """Test: ocp_first_extrude ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_extrude") is True
+
+    def test_ocp_first_fillet_enabled(self):
+        """Test: ocp_first_fillet ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_fillet") is True
+
+    def test_ocp_first_chamfer_enabled(self):
+        """Test: ocp_first_chamfer ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_chamfer") is True
+
+    def test_ocp_first_revolve_enabled(self):
+        """Test: ocp_first_revolve ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_revolve") is True
+
+    def test_ocp_first_loft_enabled(self):
+        """Test: ocp_first_loft ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_loft") is True
+
+    def test_ocp_first_sweep_enabled(self):
+        """Test: ocp_first_sweep ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_sweep") is True
+
+    def test_ocp_first_shell_enabled(self):
+        """Test: ocp_first_shell ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_shell") is True
+
+    def test_ocp_first_hollow_enabled(self):
+        """Test: ocp_first_hollow ist nach Migration aktiviert."""
+        assert is_enabled("ocp_first_hollow") is True
+
+    def test_ocp_brep_cache_enabled(self):
+        """Test: ocp_brep_cache ist nach Migration aktiviert."""
+        assert is_enabled("ocp_brep_cache") is True
+
+    def test_ocp_incremental_rebuild_enabled(self):
+        """Test: ocp_incremental_rebuild ist nach Migration aktiviert."""
+        assert is_enabled("ocp_incremental_rebuild") is True
+
+    def test_ocp_brep_persistence_enabled(self):
+        """Test: ocp_brep_persistence ist nach Migration aktiviert."""
+        assert is_enabled("ocp_brep_persistence") is True
     
     def test_all_ocp_first_flags_exist(self):
         """Test: Alle OCP-First Flags existieren."""
