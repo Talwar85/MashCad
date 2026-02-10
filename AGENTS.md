@@ -6,10 +6,10 @@ Dieses Dokument enthält die aktuellen und geplanten Architektur-Änderungen fü
 
 # OCP-First Migration Plan
 
-> **Status:** Phase 1-5,7,9 Completed ✅ | Tests: 95/95 Passing ✅
+> **Status:** Phase 1-9 Completed ✅ | Tests: 130/130 Passing ✅
 > **Startdatum:** 10.02.2026
 > **Ziel:** Vollständige Migration von Build123d zu direktem OCP (OpenCASCADE)
-> **Aktualisiert:** 10.02.2026 (Phase 9 abgeschlossen - BREP Persistenz)
+> **Aktualisiert:** 10.02.2026 (Phase 8 abgeschlossen - Dependency Graph + Incremental Rebuild)
 > **Aktiver Git Branch:** `feature/ocp-first-migration`
 
 ---
@@ -42,7 +42,7 @@ Dieses Dokument enthält die aktuellen und geplanten Architektur-Änderungen fü
 | 5 | Shell/Hollow Integration | ✅ 100% | 15/15 ✅ | `feature/ocp-first-migration` |
 | 6 | Boolean V4 (Done) | ✅ 100% | - | Separate Implementation |
 | 7 | BREP Caching | ✅ 100% | 22/22 ✅ | `feature/ocp-first-migration` |
-| 8 | Incremental Rebuild + Dependency Graph | ⚠️ Partial | TBD | Existing code |
+| 8 | Incremental Rebuild + Dependency Graph | ✅ 100% | 35/35 ✅ | `feature/ocp-first-migration` |
 | 9 | Native BREP Persistenz | ✅ 100% | 24/24 ✅ | `feature/ocp-first-migration` |
 
 **Gesamtaufwand:** ~27 Stunden (Phase 5-9 verbleibend)
@@ -1589,12 +1589,42 @@ if len(cache._cache) > cache.max_size * 1.5:
 
 ---
 
-## Phase 8: Incremental Rebuild + Dependency Graph ⏳ PENDING
+## Phase 8: Incremental Rebuild + Dependency Graph ✅ COMPLETED
 
 ### Ziel
 Dependency Graph für Features und inkrementelles Rebuild nur geänderter Features.
 
-### Detaillierter Implementierungsplan
+### Implementierung (abgeschlossen 10.02.2026)
+
+**Datei:** `modeling/feature_dependency.py` (erweitert)
+
+Neue Methoden zur `FeatureDependencyGraph` Klasse hinzugefügt:
+- `get_build_order()` - Topologische Sortierung mit Kahn's Algorithm
+- `get_incremental_rebuild_order()` - Inkrementelles Rebuild mit Dirty-Tracking
+- `detect_cycles()` - Zyklus-Detection per DFS
+- `get_dependencies()` / `get_dependents()` - Abhängigkeits-Abfragen
+- `get_all_transitive_dependencies()` / `get_all_transitive_dependents()` - Transitive Abhängigkeiten
+- `validate()` - Graph-Validierung
+- `visualize()` - Debug-Darstellung
+- `get_dirty_features()` - Dirty-Features abfragen
+- `clear_global_dependency_graph()` - Global-Reset
+
+**Datei:** `test/test_phase8_dependency_graph.py` (neu, 35 Tests)
+
+Test-Klassen:
+- `TestDependencyGraphBasic` - Basis-Operationen
+- `TestTopologicalSort` - Kahn's Algorithm
+- `TestCycleDetection` - Zyklus-Detection
+- `TestDirtyTracking` - Dirty-Propagation
+- `TestIncrementalRebuild` - Inkrementelles Rebuild
+- `TestDependencyQueries` - Abhängigkeits-Abfragen
+- `TestVisualize` - Visualisierung
+- `TestGlobalGraph` - Singleton-Pattern
+- `TestStatistics` - Statistiken
+
+**Test-Ergebnisse:** 35/35 ✅
+
+### Detaillierter Implementierungsplan (historisch)
 
 #### Schritt 1: FeatureDependency Klasse erstellen
 **Datei:** `modeling/feature_dependency.py` (neu)

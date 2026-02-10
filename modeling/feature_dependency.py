@@ -345,6 +345,10 @@ class FeatureDependencyGraph:
         """Löscht alle dirty-Markierungen nach erfolgreichem Rebuild."""
         self._dirty_features.clear()
 
+    def get_dirty_features(self) -> Set[str]:
+        """Gibt alle als dirty markierten Features zurück."""
+        return self._dirty_features.copy()
+
     def rebuild_feature_index(self, features: List['Feature']):
         """
         Baut den Index aus einer Feature-Liste neu auf.
@@ -408,6 +412,283 @@ class FeatureDependencyGraph:
             'total_checkpoints': len(self._checkpoints),
         }
 
+    # ========================================================================
+    # Phase 8: Topological Sort & Incremental Rebuild
+    # ========================================================================
+
+    def get_build_order(self, feature_ids: Optional[Set[str]] = None) -> List[str]:
+        """
+        Topologische Sortierung für Build Order (Kahn's Algorithm).
+
+        Args:
+            feature_ids: Optional subset (default: alle)
+
+        Returns:
+            Liste von Feature IDs in Build Order
+
+        Raises:
+            ValueError: Wenn zyklische Abhängigkeiten existieren
+        """
+        if feature_ids is None:
+            feature_ids = set(self._feature_index.keys())
+        else:
+            # Nur Nodes die im Graphen existieren
+            feature_ids = feature_ids & set(self._feature_index.keys())
+
+        if not feature_ids:
+            return []
+
+        # Topological Sort (Kahn's Algorithm)
+        in_degree: Dict[str, int] = {fid: 0 for fid in feature_ids}
+        adjacency: Dict[str, List[str]] = {fid: [] for fid in feature_ids}
+
+        for fid in feature_ids:
+            # Extrahiere Abhängigkeiten aus den Dependency-Objekten
+            for dep in self._dependencies.get(fid, []):
+                dep_id = dep.target_id
+                if dep_id in feature_ids:
+                    in_degree[fid] += 1
+                    adjacency[dep_id].append(fid)
+
+        # Queue mit 0 in-degree
+        queue = [fid for fid, degree in in_degree.items() if degree == 0]
+        build_order = []
+
+        while queue:
+            # FIFO-Ordnung für deterministische Ergebnisse
+            queue = sorted(queue)  # Sortieren für deterministische Reihenfolge
+            fid = queue.pop(0)
+            build_order.append(fid)
+
+            for neighbor in adjacency.get(fid, []):
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        # Zyklus-Check
+        if len(build_order) != len(feature_ids):
+            missing = feature_ids - set(build_order)
+            raise ValueError(
+                f"Zyklische Abhängigkeiten detected. Features nicht in Build Order: {missing}"
+            )
+
+        return build_order
+
+    def get_incremental_rebuild_order(self, changed_features: Set[str]) -> List[str]:
+        """
+        Build Order für inkrementelles Rebuild.
+
+        Gibt die Build-Order für alle geänderten Features und deren
+        abhängige Features zurück.
+
+        Args:
+            changed_features: Set von geänderten Feature IDs
+
+        Returns:
+            Liste von Features die rebuilded werden müssen (in Build Order)
+        """
+        # Alle geänderten + ihre Abhängigen als dirty markieren
+        for fid in changed_features:
+            self.mark_dirty(fid)
+
+        # Sortiere dirty Features nach Index
+        dirty_in_graph = self._dirty_features & set(self._feature_index.keys())
+        build_order = sorted(
+            dirty_in_graph,
+            key=lambda fid: self._feature_index.get(fid, 999)
+        )
+
+        # Dirty Status zurücksetzen
+        self.clear_dirty()
+
+        return build_order
+
+    def detect_cycles(self) -> List[List[str]]:
+        """
+        Zyklus-Detection (für Debugging).
+
+        Returns:
+            Liste von Zyklen (jeder Zyklus ist eine Liste von Feature IDs)
+        """
+        visited: Set[str] = set()
+        recursion_stack: Set[str] = set()
+        cycles: List[List[str]] = []
+
+        def dfs(fid: str, path: List[str]) -> None:
+            if fid in recursion_stack:
+                # Zyklus gefunden
+                cycle_start = path.index(fid)
+                cycle = path[cycle_start:] + [fid]
+                if cycle not in cycles:  # Duplikate vermeiden
+                    cycles.append(cycle)
+                return
+
+            if fid in visited:
+                return
+
+            visited.add(fid)
+            recursion_stack.add(fid)
+
+            for dep in self._dependencies.get(fid, []):
+                dfs(dep.target_id, path + [fid])
+
+            recursion_stack.remove(fid)
+
+        for fid in self._feature_index:
+            dfs(fid, [])
+
+        return cycles
+
+    def get_dependencies(self, feature_id: str) -> Set[str]:
+        """
+        Gibt direkte Abhängigkeiten eines Features zurück.
+
+        Args:
+            feature_id: Feature ID
+
+        Returns:
+            Set von Feature IDs die dieses Feature benötigt
+        """
+        if feature_id not in self._dependencies:
+            return set()
+        return {dep.target_id for dep in self._dependencies[feature_id]}
+
+    def get_dependents(self, feature_id: str) -> Set[str]:
+        """
+        Gibt Features zurück die von diesem Feature abhängen.
+
+        Args:
+            feature_id: Feature ID
+
+        Returns:
+            Set von Feature IDs die dieses Feature benutzen
+        """
+        return self._dependents.get(feature_id, set()).copy()
+
+    def get_all_transitive_dependencies(self, feature_id: str) -> Set[str]:
+        """
+        Gibt alle transitiven Abhängigkeiten eines Features zurück.
+
+        Args:
+            feature_id: Feature ID
+
+        Returns:
+            Set von allen Feature IDs die direkt oder indirekt benötigt werden
+        """
+        if feature_id not in self._feature_index:
+            return set()
+
+        result: Set[str] = set()
+        to_visit: List[str] = [feature_id]
+        visited: Set[str] = set()
+
+        while to_visit:
+            fid = to_visit.pop(0)
+            if fid in visited:
+                continue
+            visited.add(fid)
+
+            for dep in self._dependencies.get(fid, []):
+                dep_id = dep.target_id
+                if dep_id not in result:
+                    result.add(dep_id)
+                    to_visit.append(dep_id)
+
+        return result
+
+    def get_all_transitive_dependents(self, feature_id: str) -> Set[str]:
+        """
+        Gibt alle transitiven abhängigen Features zurück.
+
+        Args:
+            feature_id: Feature ID
+
+        Returns:
+            Set von allen Feature IDs die direkt oder indirekt dieses Feature benutzen
+        """
+        if feature_id not in self._feature_index:
+            return set()
+
+        result: Set[str] = set()
+        to_visit: List[str] = [feature_id]
+        visited: Set[str] = set()
+
+        while to_visit:
+            fid = to_visit.pop(0)
+            if fid in visited:
+                continue
+            visited.add(fid)
+
+            for user_id in self._dependents.get(fid, set()):
+                if user_id not in result:
+                    result.add(user_id)
+                    to_visit.append(user_id)
+
+        return result
+
+    def validate(self) -> Tuple[bool, List[str]]:
+        """
+        Validiert den Dependency Graphen.
+
+        Returns:
+            Tuple von (is_valid, list_of_errors)
+        """
+        errors: List[str] = []
+
+        # Zyklus-Check
+        cycles = self.detect_cycles()
+        if cycles:
+            errors.append(f"Zyklische Abhängigkeiten gefunden: {cycles}")
+
+        # Broken Dependencies (Features die von nicht-existenten Features abhängen)
+        for fid, deps in self._dependencies.items():
+            for dep in deps:
+                if dep.target_id not in self._feature_index:
+                    errors.append(f"Feature {fid} hängt von nicht-existentem Feature {dep.target_id} ab")
+
+        return (len(errors) == 0, errors)
+
+    def visualize(self) -> str:
+        """
+        Gibt eine Text-Darstellung des Graphen zurück (für Debugging).
+
+        Returns:
+            Multi-line String mit Graph-Darstellung
+        """
+        lines: List[str] = ["Dependency Graph:", ""]
+
+        if not self._feature_index:
+            lines.append("(empty)")
+            return "\n".join(lines)
+
+        try:
+            build_order = self.get_build_order()
+            lines.append(f"Build Order: {' -> '.join(build_order)}")
+        except ValueError as e:
+            lines.append(f"Build Order: ERROR - {e}")
+
+        lines.append("")
+        lines.append(f"Features: {len(self._feature_index)}, Dirty: {len(self._dirty_features)}")
+        lines.append("")
+
+        for fid in sorted(self._feature_index.keys(), key=lambda x: self._feature_index[x]):
+            index = self._feature_index[fid]
+            deps = self._dependencies.get(fid, [])
+            dirty_mark = " [DIRTY]" if fid in self._dirty_features else ""
+            dep_types = [f"{dep.target_id}({dep.dependency_type.name})" for dep in deps]
+
+            lines.append(f"  [{index}] {fid}{dirty_mark}")
+            if dep_types:
+                lines.append(f"    depends: {', '.join(dep_types)}")
+
+            # Checkpoint info
+            cp = self._checkpoints.get(index)
+            if cp:
+                status = "valid" if cp.is_valid else "invalid"
+                lines.append(f"    checkpoint: {status}")
+
+        return "\n".join(lines)
+
 
 # Singleton-Instance für globalen Zugriff
 _global_dependency_graph: Optional[FeatureDependencyGraph] = None
@@ -419,3 +700,9 @@ def get_dependency_graph() -> FeatureDependencyGraph:
     if _global_dependency_graph is None:
         _global_dependency_graph = FeatureDependencyGraph()
     return _global_dependency_graph
+
+
+def clear_global_dependency_graph() -> None:
+    """Setzt globale Dependency Graph Instance zurück."""
+    global _global_dependency_graph
+    _global_dependency_graph = None
