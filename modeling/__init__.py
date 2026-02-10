@@ -7784,12 +7784,23 @@ class Body:
                     logger.info(f"[OCP-FIRST] Face aus BREP (Push/Pull auf {feature.face_type})")
                     return self._extrude_from_face_brep(feature)
 
+            # === TNP v4.1: Native Circle Path (VOR Polygon-Verarbeitung) ===
+            # Prüfe ob der Sketch Kreise mit native_ocp_data hat
+            # Wenn ja, erstelle direkt native OCP Circle Faces (3 Faces statt 14+)
+            faces_to_extrude = []
+            if has_sketch and hasattr(sketch, 'circles') and sketch.circles:
+                native_circle_faces = self._create_faces_from_native_circles(sketch, plane, profile_selector)
+                if native_circle_faces:
+                    logger.info(f"[TNP v4.1] {len(native_circle_faces)} native Circle Faces erstellt (3 Faces statt 14+)")
+                    faces_to_extrude = native_circle_faces
+                    # Native Faces direkt extrudieren (Polygon-Processing überspringen)
+                    polys_to_extrude = []  # Polygon-Path überspringen
+
             # === Faces erstellen und mit OCPExtrudeHelper extrudieren ===
             if polys_to_extrude:
                 if is_enabled("extrude_debug"):
                     logger.info(f"[OCP-FIRST] Verarbeite {len(polys_to_extrude)} Profile.")
 
-                faces_to_extrude = []
                 for idx, poly in enumerate(polys_to_extrude):
                     try:
                         # VALIDIERUNG: Degenerierte Polygone überspringen
@@ -7815,6 +7826,8 @@ class Body:
                         import traceback
                         traceback.print_exc()
 
+            # === TNP v4.1: Alle Faces extrudieren (Native Circles UND Polygone) ===
+            if faces_to_extrude:
                 # Mit OCPExtrudeHelper extrudieren
                 amount = feature.distance * feature.direction
                 direction_vec = plane.z_dir * amount
@@ -8646,6 +8659,73 @@ class Body:
             return (float(cx), float(cy), float(radius))
 
         return None
+
+    def _create_faces_from_native_circles(self, sketch, plane, profile_selector=None):
+        """
+        TNP v4.1: Erstellt native OCP Circle Faces aus Sketch-Kreisen.
+
+        Wenn Kreise native_ocp_data haben, werden direkt native OCP Circle Faces
+        erstellt (3 Faces statt 14+ durch Polygon-Approximation).
+
+        Args:
+            sketch: Sketch-Objekt mit circles Liste
+            plane: Build123d Plane für 3D-Konvertierung
+            profile_selector: Optional selector for filtering circles
+
+        Returns:
+            Liste von build123d Faces aus nativen OCP Circles
+        """
+        from build123d import Plane as B3DPlane, Wire, make_face, Vector
+
+        faces = []
+        circles_with_native_data = [
+            c for c in sketch.circles
+            if hasattr(c, 'native_ocp_data') and c.native_ocp_data
+        ]
+
+        if not circles_with_native_data:
+            return []
+
+        logger.info(f"[TNP v4.1] {len(circles_with_native_data)} Kreise mit native_ocp_data gefunden")
+
+        for circle in circles_with_native_data:
+            if circle.construction:
+                continue  # Konstruktions-Kreise nicht extrudieren
+
+            ocp_data = circle.native_ocp_data
+            cx, cy = ocp_data['center']
+            radius = ocp_data['radius']
+            plane_data = ocp_data.get('plane', {})
+
+            # Profiler-Selektor Matching (für selektive Extrusion)
+            if profile_selector:
+                # Selektor enthält Centroids der gewählten Profile
+                circle_centroid = (cx, cy)
+                if not any(
+                    abs(circle_centroid[0] - sel[0]) < 0.1 and
+                    abs(circle_centroid[1] - sel[1]) < 0.1
+                    for sel in profile_selector
+                ):
+                    continue  # Circle nicht selektiert
+
+            # 3D-Center berechnen
+            origin = Vector(*plane_data.get('origin', sketch.plane_origin))
+            z_dir = Vector(*plane_data.get('normal', sketch.plane_normal))
+            x_dir = Vector(*plane_data.get('x_dir', sketch.plane_x_dir))
+            y_dir = Vector(*plane_data.get('y_dir', sketch.plane_y_dir))
+
+            # Circle-Center in 3D
+            center_3d = origin + x_dir * cx + y_dir * cy
+
+            # Native OCP Circle erstellen
+            circle_plane = B3DPlane(origin=center_3d, z_dir=z_dir)
+            circle_wire = Wire.make_circle(radius, circle_plane)
+            face = make_face(circle_wire)
+
+            faces.append(face)
+            logger.debug(f"[TNP v4.1] Native Circle Face erstellt: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+
+        return faces
 
     def _detect_matching_native_spline(self, coords, sketch, tolerance=0.5):
         """

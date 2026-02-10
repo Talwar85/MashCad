@@ -132,9 +132,25 @@ class Sketch:
     
     def add_circle(self, cx: float, cy: float, radius: float,
                    construction: bool = False) -> Circle2D:
-        """Fügt einen Kreis hinzu"""
+        """Fügt einen Kreis hinzu
+
+        TNP v4.1: Speichert native OCP Daten für optimale Extrusion (3 Faces statt 14+).
+        """
         center = Point2D(cx, cy)
         circle = Circle2D(center, radius, construction=construction)
+
+        # TNP v4.1: Native OCP Daten für optimierte Extrusion speichern
+        circle.native_ocp_data = {
+            'center': (cx, cy),
+            'radius': radius,
+            'plane': {
+                'origin': self.plane_origin,
+                'normal': self.plane_normal,
+                'x_dir': self.plane_x_dir,
+                'y_dir': self.plane_y_dir,
+            }
+        }
+
         self.points.append(center)
         self.circles.append(circle)
         return circle
