@@ -205,13 +205,20 @@ class Circle2D:
 
 @dataclass
 class Arc2D:
-    """2D-Kreisbogen"""
+    """2D-Kreisbogen
+
+    TNP v4.1: Native OCP Daten für optimale Extrusion.
+    Wenn native_ocp_data gesetzt ist, wird der Arc direkt als
+    nativer OCP Arc extrudiert (wenige Faces statt Polygon-Approximation).
+    """
     center: Point2D
     radius: float = 10.0
     start_angle: float = 0.0    # Startwinkel in Grad
     end_angle: float = 90.0     # Endwinkel in Grad
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     construction: bool = False
+    # TNP v4.1: Native OCP Daten für optimierte Extrusion
+    native_ocp_data: Optional[dict] = None  # {center, radius, start_angle, end_angle, plane}
     
     @property
     def start_point(self) -> Point2D:
@@ -264,6 +271,7 @@ class Arc2D:
             "end_angle": self.end_angle,
             "id": self.id,
             "construction": self.construction,
+            "native_ocp_data": self.native_ocp_data,
         }
 
     def __repr__(self):

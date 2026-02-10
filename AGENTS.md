@@ -2551,4 +2551,41 @@ if new_shape_id in existing_shape_ids:
 
 ---
 
+## Offene Bugs & TODOs
+
+### 🔴 Sketch Plane Bug: `plane_y_dir` wird zu (0, 0, 0)
+
+**Status:** Workaround implementiert, Root Cause muss noch gefunden werden
+
+**Symptom:**
+- `sketch.plane_y_dir` ist manchmal `(0, 0, 0)` - ein Nullvektor
+- Dadurch verlieren Kreise/Arcs ihre Y-Koordinate bei der Extrusion
+- Nur Circle- und Arc-Extrusion betroffen, Rechtecke funktionieren
+
+**Workaround (implementiert):**
+```python
+# modeling/__init__.py Zeile 8813-8816 (Circle) + 8900-8903 (Arc)
+if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
+    y_dir = z_dir.cross(x_dir)  # Fallback-Berechnung
+```
+
+**Root Cause Analyse TODO:**
+- [ ] Wo/`warum wird `plane_y_dir` auf `(0, 0, 0)` gesetzt?
+- [ ] Ist es beim Sketch-Erstellen oder beim Serialisieren/Deserialisieren?
+- [ ] Warum passiert es nur manchmal (nicht bei jedem Sketch)?
+- [ ] Zusammenhang mit GUI Plane-Rotation nach Sketch-Bestätigung?
+
+**Relevante Dateien:**
+- `sketcher/sketch.py` - Sketch dataclass defaults: `plane_y_dir = (0, 1, 0)`
+- `gui/main_window.py:2684-2708` - `_create_sketch_at()` setzt plane Parameter
+- `modeling/__init__.py:1526-1527` - Laden aus JSON mit Truthy-Check (Problem!)
+- `modeling/__init__.py:11409` - to_dict mit `and sketch.plane_y_dir` (Problem!)
+
+**Analyse-Hypothesen:**
+1. JSON Truthy-Check: Wenn `plane_y_dir` im JSON `(0,0,0)` ist, wird es nicht geladen
+2. to_dict speichert `None` statt `(0,0,0)` wenn der Check fehlschlägt
+3. GUI überschreibt die Plane-Werte nach der Bestätigung
+
+---
+
 **Ende der OCP-First Migration Plan Dokumentation**

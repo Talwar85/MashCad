@@ -173,27 +173,48 @@ class OCPFilletHelper:
         
         if feature_id is None:
             raise ValueError("feature_id ist Pflicht für OCP-First Fillet")
-        
+
         if not edges:
             raise ValueError("Keine Edges für Fillet angegeben")
-        
+
         # Fillet-Operation
         fillet_op = BRepFilletAPI_MakeFillet(solid.wrapped)
-        
+
         for edge in edges:
-            fillet_op.Add(radius, edge.wrapped)
-        
+            # Edge kann build123d Edge (mit .wrapped) oder direkter OCP TopoDS_Edge sein
+            edge_ocp = edge.wrapped if hasattr(edge, 'wrapped') else edge
+            fillet_op.Add(radius, edge_ocp)
+
         fillet_op.Build()
-        
+
         if not fillet_op.IsDone():
             raise ValueError("Fillet OCP-Operation fehlgeschlagen")
-        
+
         result_shape = fillet_op.Shape()
-        
+
+        # TNP mit OCCT-History!
+        # Die History von BRepFilletAPI_MakeFillet trackt welche Edges neu erstellt wurden
+        occt_history = None
+        try:
+            occt_history = fillet_op.History()
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"[TNP] Fillet OCCT-History extrahiert: {occt_history is not None}")
+        except Exception as e:
+            logger.warning(f"[TNP] Konnte Fillet-History nicht extrahieren: {e}")
+
         # TNP: Alle Shapes registrieren (OBLIGATORISCH!)
         try:
             from modeling.tnp_system import ShapeType
-            
+
+            # ZUERST: History im ShapeNamingService speichern!
+            if occt_history is not None and naming_service is not None:
+                naming_service.track_fillet_operation(
+                    source_solid=solid.wrapped,
+                    result_solid=result_shape,
+                    occt_history=occt_history,
+                    feature_id=feature_id
+                )
+
             # Alle Faces registrieren (inkl. neue Fillet-Faces)
             explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
             face_idx = 0
@@ -207,13 +228,13 @@ class OCPFilletHelper:
                 )
                 face_idx += 1
                 explorer.Next()
-            
+
             # Alle Edges registrieren
             naming_service.register_solid_edges(
                 Solid(result_shape),
                 feature_id
             )
-            
+
             if is_enabled("tnp_debug_logging"):
                 logger.success(
                     f"OCP Fillet TNP: {face_idx} Faces, "
@@ -268,25 +289,45 @@ class OCPChamferHelper:
         
         if not edges:
             raise ValueError("Keine Edges für Chamfer angegeben")
-        
+
         # Chamfer-Operation
         chamfer_op = BRepFilletAPI_MakeChamfer(solid.wrapped)
-        
+
         for edge in edges:
+            # Edge kann build123d Edge (mit .wrapped) oder direkter OCP TopoDS_Edge sein
+            edge_ocp = edge.wrapped if hasattr(edge, 'wrapped') else edge
             # Symmetrischer Chamfer (gleiche Distanz auf beiden Seiten)
-            chamfer_op.Add(distance, edge.wrapped)
-        
+            chamfer_op.Add(distance, edge_ocp)
+
         chamfer_op.Build()
-        
+
         if not chamfer_op.IsDone():
             raise ValueError("Chamfer OCP-Operation fehlgeschlagen")
-        
+
         result_shape = chamfer_op.Shape()
-        
+
+        # TNP mit OCCT-History!
+        occt_history = None
+        try:
+            occt_history = chamfer_op.History()
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"[TNP] Chamfer OCCT-History extrahiert: {occt_history is not None}")
+        except Exception as e:
+            logger.warning(f"[TNP] Konnte Chamfer-History nicht extrahieren: {e}")
+
         # TNP: Alle Shapes registrieren
         try:
             from modeling.tnp_system import ShapeType
-            
+
+            # ZUERST: History im ShapeNamingService speichern!
+            if occt_history is not None and naming_service is not None:
+                naming_service.track_chamfer_operation(
+                    source_solid=solid.wrapped,
+                    result_solid=result_shape,
+                    occt_history=occt_history,
+                    feature_id=feature_id
+                )
+
             # Alle Faces registrieren
             explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
             face_idx = 0
@@ -300,13 +341,13 @@ class OCPChamferHelper:
                 )
                 face_idx += 1
                 explorer.Next()
-            
+
             # Alle Edges registrieren
             naming_service.register_solid_edges(
                 Solid(result_shape),
                 feature_id
             )
-            
+
             if is_enabled("tnp_debug_logging"):
                 logger.success(
                     f"OCP Chamfer TNP: {face_idx} Faces, "
