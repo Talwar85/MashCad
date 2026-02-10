@@ -5544,18 +5544,27 @@ class Body:
         """
         Berechnet adaptive Toleranz für Edge-Matching basierend auf Solid-Größe.
 
-        Bei Parameter-Änderungen (z.B. Extrude-Höhe) können Edge-Center um die
-        gesamte Modell-Dimension wandern. Die Toleranz wird auf die BBox-Diagonale
-        gesetzt, damit die Direction/Type-Gewichtung den richtigen Match bestimmt.
+        BESSER LÖSUNG: Statt das adaptive Toleranz-Ansatz zu verwenden, verlassen wir uns
+        auf verbessertes TNP-Tracking (face_id-basierte Gruppierung, .wrapped Fix, etc.).
+
+        Die adaptive Toleranz wird nur als letzten Fallback verwendet und ist STRENG begrenzt
+        um falsche Edge-Matches zu vermeiden.
+
+        Max: 15mm (statt 50mm) - verhindert dass völlig falsche Edges gematcht werden.
         """
         try:
             bbox = solid.bounding_box()
-            diag = ((bbox.max.X - bbox.min.X)**2 +
-                    (bbox.max.Y - bbox.min.Y)**2 +
-                    (bbox.max.Z - bbox.min.Z)**2)**0.5
-            return max(diag, 10.0)
+            max_dim = max(
+                bbox.max.X - bbox.min.X,
+                bbox.max.Y - bbox.min.Y,
+                bbox.max.Z - bbox.min.Z
+            )
+            # Adaptive Toleranz = 5% der größten Dimension, min 5mm, max 15mm
+            # (früher: 10% max 50mm - zu groß für präzise Fillets!)
+            tolerance = max_dim / 20.0
+            return max(5.0, min(tolerance, 15.0))
         except Exception:
-            return 50.0
+            return 10.0
 
     def _update_shape_naming_record(self, shape_id, edge) -> None:
         """
@@ -6336,7 +6345,7 @@ class Body:
 
                             try:
                                 result = OCPFilletHelper.fillet(
-                                    shape=current_solid.wrapped,
+                                    solid=current_solid,  # FIX: solid= statt shape=
                                     edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges_to_fillet],
                                     radius=rad,
                                     naming_service=naming_service,
@@ -6414,7 +6423,7 @@ class Body:
 
                             try:
                                 result = OCPChamferHelper.chamfer(
-                                    shape=current_solid.wrapped,
+                                    solid=current_solid,  # FIX: solid= statt shape=
                                     edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges],
                                     distance=dist,
                                     naming_service=naming_service,
@@ -7692,9 +7701,16 @@ class Body:
         1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
         2. Ohne Sketch (Push/Pull): BRepFeat_MakePrism (MANDATORY OCP-First)
         3. Ohne Sketch (Face aus BREP): OCP MakePrism direkte Extrusion
+
+        FALLBACK: Wenn OCP-First None zurückgibt, wird automatisch Legacy versucht.
         """
         if is_enabled("ocp_first_extrude"):
-            return self._compute_extrude_part_ocp_first(feature)
+            result = self._compute_extrude_part_ocp_first(feature)
+            # Fallback: Wenn OCP-First fehlschlägt, versuche Legacy
+            if result is None:
+                logger.warning("[OCP-FIRST] Fehlgeschlagen, versuche Legacy-Fallback...")
+                return self._compute_extrude_part_legacy(feature)
+            return result
         else:
             return self._compute_extrude_part_legacy(feature)
 
@@ -7769,19 +7785,22 @@ class Body:
 
                 if sketch_profiles and profile_selector:
                     # Selektor-Match (CAD KERNEL FIRST - KEINE FALLBACKS!)
+                    # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Shapely braucht Polygons
+                    shapely_profiles = self._convert_line_profiles_to_polygons(sketch_profiles)
                     polys_to_extrude = self._filter_profiles_by_selector(
-                        sketch_profiles, profile_selector
+                        shapely_profiles, profile_selector
                     )
                     if polys_to_extrude:
                         logger.info(f"[OCP-FIRST] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
                         # OCP-First: Selektor hat nicht gematcht → ERROR, kein Fallback!
                         logger.error(f"[OCP-FIRST] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        logger.error(f"[OCP-FIRST] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        logger.error(f"[OCP-FIRST] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
                         raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
                 elif sketch_profiles:
                     # Kein Selektor → alle Profile verwenden (Legacy/Import)
-                    polys_to_extrude = list(sketch_profiles)
+                    # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Shapely braucht Polygons
+                    polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
                     logger.info(f"[OCP-FIRST] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
                 else:
                     # Sketch hat keine closed_profiles
@@ -7804,9 +7823,20 @@ class Body:
                 native_circle_faces = self._create_faces_from_native_circles(sketch, plane, profile_selector)
                 if native_circle_faces:
                     logger.info(f"[TNP v4.1] {len(native_circle_faces)} native Circle Faces erstellt (3 Faces statt 14+)")
-                    faces_to_extrude = native_circle_faces
-                    # Native Faces direkt extrudieren (Polygon-Processing überspringen)
-                    polys_to_extrude = []  # Polygon-Path überspringen
+                    faces_to_extrude.extend(native_circle_faces)
+
+            # === TNP v4.1: Native Arc Path (wenige Faces statt Polygon) ===
+            # Prüfe ob der Sketch Arcs mit native_ocp_data hat
+            if has_sketch and hasattr(sketch, 'arcs') and sketch.arcs:
+                native_arc_faces = self._create_faces_from_native_arcs(sketch, plane, profile_selector)
+                if native_arc_faces:
+                    logger.info(f"[TNP v4.1] {len(native_arc_faces)} native Arc Faces erstellt (wenige Faces statt vielen)")
+                    faces_to_extrude.extend(native_arc_faces)
+
+            # Wenn native Faces erstellt wurden, diese direkt extrudieren
+            if faces_to_extrude:
+                polys_to_extrude = []  # Polygon-Path überspringen
+                logger.info(f"[TNP v4.1] {len(faces_to_extrude)} native Faces direkt extrudieren")
 
             # === Faces erstellen und mit OCPExtrudeHelper extrudieren ===
             if polys_to_extrude:
@@ -7929,19 +7959,22 @@ class Body:
 
                 if sketch_profiles and profile_selector:
                     # Selektor-Match (CAD KERNEL FIRST - KEINE FALLBACKS!)
+                    # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Shapely braucht Polygons
+                    shapely_profiles = self._convert_line_profiles_to_polygons(sketch_profiles)
                     polys_to_extrude = self._filter_profiles_by_selector(
-                        sketch_profiles, profile_selector
+                        shapely_profiles, profile_selector
                     )
                     if polys_to_extrude:
                         logger.info(f"[LEGACY] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
                         # Phase 2: Selektor hat nicht gematcht → ERROR, kein Fallback!
                         logger.error(f"[LEGACY] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        logger.error(f"[LEGACY] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        logger.error(f"[LEGACY] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
                         raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
                 elif sketch_profiles:
                     # Kein Selektor → alle Profile verwenden (Legacy/Import)
-                    polys_to_extrude = list(sketch_profiles)
+                    # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Legacy braucht Shapely-Polygons
+                    polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
                     logger.info(f"[LEGACY] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
                 else:
                     # Sketch hat keine closed_profiles
@@ -8128,6 +8161,57 @@ class Body:
         except Exception as e:
             logger.error(f"[LEGACY] Extrude Fehler: {e}")
             return None
+
+    def _convert_line_profiles_to_polygons(self, line_profiles: list) -> list:
+        """
+        Konvertiert Profile zu Shapely Polygons für Legacy-Code.
+
+        Unterstützt zwei Formate:
+        1. List[List[Line2D]] - vom Sketch _find_closed_profiles()
+        2. List[ShapelyPolygon] - bereits vom UI vorkonvertiert
+
+        Args:
+            line_profiles: Liste von Profilen (List[Line2D] oder ShapelyPolygon)
+
+        Returns:
+            Liste von Shapely Polygon Objekten
+        """
+        from shapely.geometry import Polygon as ShapelyPoly
+
+        polygons = []
+        for profile in line_profiles:
+            if not profile:
+                continue
+
+            # Fall 1: Bereits ein Shapely Polygon (vom UI)
+            if hasattr(profile, 'exterior') and hasattr(profile, 'area'):
+                if profile.is_valid and profile.area > 0:
+                    polygons.append(profile)
+                continue
+
+            # Fall 2: List[Line2D] - vom Sketch _find_closed_profiles()
+            coords = []
+            try:
+                for line in profile:
+                    if hasattr(line, 'start') and hasattr(line.start, 'x'):
+                        coords.append((line.start.x, line.start.y))
+                    elif isinstance(line, tuple) and len(line) == 2:
+                        coords.append(line)
+            except Exception:
+                continue
+
+            # Shapely Polygon erstellen
+            if len(coords) >= 3:
+                try:
+                    poly = ShapelyPoly(coords)
+                    if poly.is_valid and poly.area > 0:
+                        polygons.append(poly)
+                    else:
+                        logger.warning(f"[PROFILE] Ungültiges/degeneriertes Polygon mit {len(coords)} Punkten")
+                except Exception as e:
+                    logger.warning(f"[PROFILE] Polygon-Erstellung fehlgeschlagen: {e}")
+
+        return polygons
 
     def _filter_profiles_by_selector(self, profiles: list, selector: list, tolerance: float = 5.0) -> list:
         """
@@ -8707,7 +8791,6 @@ class Body:
             ocp_data = circle.native_ocp_data
             cx, cy = ocp_data['center']
             radius = ocp_data['radius']
-            plane_data = ocp_data.get('plane', {})
 
             # Profiler-Selektor Matching (für selektive Extrusion)
             if profile_selector:
@@ -8720,22 +8803,167 @@ class Body:
                 ):
                     continue  # Circle nicht selektiert
 
-            # 3D-Center berechnen
-            origin = Vector(*plane_data.get('origin', sketch.plane_origin))
-            z_dir = Vector(*plane_data.get('normal', sketch.plane_normal))
-            x_dir = Vector(*plane_data.get('x_dir', sketch.plane_x_dir))
-            y_dir = Vector(*plane_data.get('y_dir', sketch.plane_y_dir))
+            # WICHTIG: AKTUELLE Plane-Orientation vom Sketch verwenden!
+            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem Hinzufügen)
+            origin = Vector(*sketch.plane_origin)
+            z_dir = Vector(*sketch.plane_normal)
+            x_dir = Vector(*sketch.plane_x_dir)
+            y_dir = Vector(*sketch.plane_y_dir)
 
-            # Circle-Center in 3D
+            # FIX: Wenn y_dir Nullvektor ist (Bug), aus z_dir und x_dir berechnen
+            if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
+                y_dir = z_dir.cross(x_dir)
+                logger.debug(f"[TNP v4.1] y_dir aus z_dir × x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
+
+            # DEBUG: Plane-Werte loggen
+            logger.debug(f"[TNP v4.1] Circle plane: origin=({origin.X:.1f}, {origin.Y:.1f}, {origin.Z:.1f}), "
+                        f"x_dir=({x_dir.X:.1f}, {x_dir.Y:.1f}, {x_dir.Z:.1f}), "
+                        f"y_dir=({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
+            logger.debug(f"[TNP v4.1] Circle 2D center: ({cx:.2f}, {cy:.2f})")
+
+            # Circle-Center in 3D: Origin + (cx, cy) Offset in der Plane
             center_3d = origin + x_dir * cx + y_dir * cy
+            logger.debug(f"[TNP v4.1] Circle 3D center: ({center_3d.X:.2f}, {center_3d.Y:.2f}, {center_3d.Z:.2f})")
 
             # Native OCP Circle erstellen
-            circle_plane = B3DPlane(origin=center_3d, z_dir=z_dir)
+            # Wire.make_circle() erstellt Circle MIT Center am Plane-Origin
+            circle_plane = B3DPlane(origin=center_3d, x_dir=x_dir, z_dir=z_dir)
             circle_wire = Wire.make_circle(radius, circle_plane)
             face = make_face(circle_wire)
 
             faces.append(face)
             logger.debug(f"[TNP v4.1] Native Circle Face erstellt: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+
+        return faces
+
+    def _create_faces_from_native_arcs(self, sketch, plane, profile_selector=None):
+        """
+        TNP v4.1: Erstellt native OCP Arc Faces aus Sketch-Arcs.
+
+        Arcs benötigen eine besondere Behandlung: Da ein Arc kein geschlossener
+        Wire ist, erstellen wir eine planare Face aus Arc + Sehne (chord).
+        Bei Extrusion entsteht so ein korrekter Zylinder-Abschnitt.
+
+        Args:
+            sketch: Sketch-Objekt mit arcs Liste
+            plane: Build123d Plane für 3D-Konvertierung
+            profile_selector: Optional selector for filtering arcs
+
+        Returns:
+            Liste von build123d Faces aus nativen OCP Arcs
+        """
+        from build123d import Wire, make_face, Face, Vector
+        from OCP.GC import GC_MakeArcOfCircle
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace
+        from OCP.gp import gp_Pnt
+        from OCP.TopoDS import TopoDS_Edge, TopoDS_Wire, TopoDS_Face
+
+        faces = []
+        arcs_with_native_data = [
+            a for a in sketch.arcs
+            if hasattr(a, 'native_ocp_data') and a.native_ocp_data
+        ]
+
+        if not arcs_with_native_data:
+            return []
+
+        logger.info(f"[TNP v4.1] {len(arcs_with_native_data)} Arcs mit native_ocp_data gefunden")
+
+        for arc in arcs_with_native_data:
+            if arc.construction:
+                continue  # Konstruktions-Arcs nicht extrudieren
+
+            ocp_data = arc.native_ocp_data
+            cx, cy = ocp_data['center']
+            radius = ocp_data['radius']
+            start_angle = ocp_data['start_angle']
+            end_angle = ocp_data['end_angle']
+            plane_data = ocp_data.get('plane', {})
+
+            # Profiler-Selektor Matching
+            if profile_selector:
+                arc_centroid = (cx, cy)
+                if not any(
+                    abs(arc_centroid[0] - sel[0]) < 0.1 and
+                    abs(arc_centroid[1] - sel[1]) < 0.1
+                    for sel in profile_selector
+                ):
+                    continue
+
+            # WICHTIG: AKTUELLE Plane-Orientation vom Sketch verwenden!
+            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem Hinzufügen)
+            origin = Vector(*sketch.plane_origin)
+            z_dir = Vector(*sketch.plane_normal)
+            x_dir = Vector(*sketch.plane_x_dir)
+            y_dir = Vector(*sketch.plane_y_dir)
+
+            # FIX: Wenn y_dir Nullvektor ist (Bug), aus z_dir und x_dir berechnen
+            if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
+                y_dir = z_dir.cross(x_dir)
+                logger.debug(f"[TNP v4.1] Arc y_dir aus z_dir × x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
+
+            # Arc-Center in 3D
+            center_3d = origin + x_dir * cx + y_dir * cy
+
+            # Arc-Parameter in 3D konvertieren
+            start_rad = math.radians(start_angle)
+            end_rad = math.radians(end_angle)
+
+            # Start- und Endpunkte des Arcs in 3D
+            start_3d = center_3d + x_dir * (radius * math.cos(start_rad)) + y_dir * (radius * math.sin(start_rad))
+            end_3d = center_3d + x_dir * (radius * math.cos(end_rad)) + y_dir * (radius * math.sin(end_rad))
+
+            # Mittelpunkt für den Arc
+            mid_rad = (start_rad + end_rad) / 2
+            mid_3d = center_3d + x_dir * (radius * math.cos(mid_rad)) + y_dir * (radius * math.sin(mid_rad))
+
+            # Native OCP Arc Edge erstellen mit GC_MakeArcOfCircle (3 Punkte)
+            gp_start = gp_Pnt(start_3d.X, start_3d.Y, start_3d.Z)
+            gp_mid = gp_Pnt(mid_3d.X, mid_3d.Y, mid_3d.Z)
+            gp_end = gp_Pnt(end_3d.X, end_3d.Y, end_3d.Z)
+
+            arc_maker = GC_MakeArcOfCircle(gp_start, gp_mid, gp_end)
+            if arc_maker.IsDone():
+                # GC_MakeArcOfCircle.Value() gibt Geom_TrimmedCurve zurück
+                # Wir müssen es in TopoDS_Edge wrappen
+                arc_geom = arc_maker.Value()
+                arc_edge_maker = BRepBuilderAPI_MakeEdge(arc_geom)
+                if not arc_edge_maker.IsDone():
+                    logger.warning("[TNP v4.1] Arc Edge Maker fehlgeschlagen")
+                    continue
+                arc_edge = arc_edge_maker.Edge()
+
+                # Sehne (chord) mit OCP direkt erstellen
+                chord_maker = BRepBuilderAPI_MakeEdge(gp_start, gp_end)
+                if chord_maker.IsDone():
+                    chord_edge = chord_maker.Edge()
+
+                    # Wire aus Arc + Sehne mit OCP erstellen
+                    wire_maker = BRepBuilderAPI_MakeWire()
+                    wire_maker.Add(arc_edge)
+                    wire_maker.Add(chord_edge)
+                    wire_maker.Build()
+
+                    if wire_maker.IsDone():
+                        ocp_wire = wire_maker.Wire()
+
+                        # Face aus Wire erstellen
+                        face_maker = BRepBuilderAPI_MakeFace(ocp_wire)
+                        if face_maker.IsDone():
+                            ocp_face = face_maker.Face()
+
+                            # Zu build123d Face konvertieren (direkt aus TopoDS_Face)
+                            face = Face(ocp_face)
+                            faces.append(face)
+                            logger.debug(f"[TNP v4.1] Native Arc Face erstellt: r={radius:.2f}, {start_angle:.1f}°-{end_angle:.1f}°")
+                        else:
+                            logger.warning("[TNP v4.1] Face Maker fehlgeschlagen")
+                    else:
+                        logger.warning("[TNP v4.1] Wire Maker fehlgeschlagen")
+                else:
+                    logger.warning("[TNP v4.1] Chord Edge Maker fehlgeschlagen")
+            else:
+                logger.warning(f"[TNP v4.1] Arc Maker fehlgeschlagen für {arc}")
 
         return faces
 

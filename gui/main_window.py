@@ -48,6 +48,7 @@ from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from gui.workers.export_worker import STLExportWorker, STEPExportWorker  # Phase 6: Async Export
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 5+
+from config.recent_files import get_recent_files, add_recent_file
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget
@@ -533,8 +534,7 @@ class MainWindow(QMainWindow):
         
         left_layout.addWidget(self.tool_stack)
         
-        # === FIX: left_container statt left_widget ===
-        self.main_splitter.addWidget(left_container) 
+        self.main_splitter.addWidget(left_container)
         
         # === MITTE: Viewport / Sketch Editor ===
         self.center_stack = QStackedWidget()
@@ -549,6 +549,7 @@ class MainWindow(QMainWindow):
         self._getting_started_overlay = GettingStartedOverlay(self.viewport_3d)
         self._getting_started_overlay.action_triggered.connect(self._on_3d_action)
         self._getting_started_overlay.action_triggered.connect(lambda: self._getting_started_overlay.hide())
+        self._getting_started_overlay.recent_file_requested.connect(self._open_recent_file)
         
         self.sketch_editor = SketchEditor()
         self.center_stack.addWidget(self.sketch_editor)
@@ -1023,6 +1024,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(tr("Save..."), self._save_project, QKeySequence.Save)
         file_menu.addAction(tr("Save As..."), self._save_project_as)
         file_menu.addSeparator()
+        self._recent_menu = file_menu.addMenu(tr("Recent Files"))
+        self._update_recent_files_menu()
+        file_menu.addSeparator()
         file_menu.addAction(tr("Export STL..."), self._export_stl)
         file_menu.addAction(tr("Export STEP..."), self._export_step)
         file_menu.addAction(tr("Import STEP..."), self._import_step)
@@ -1304,7 +1308,7 @@ class MainWindow(QMainWindow):
                                 inactive_component=inactive_ref
                             )
                             if hasattr(self.viewport_3d, 'plotter'):
-                                from gui.viewport.render_utils import request_render
+                                from gui.viewport.render_queue import request_render
                                 request_render(self.viewport_3d.plotter, immediate=True)
                         return _on_ready
 
@@ -1400,10 +1404,33 @@ class MainWindow(QMainWindow):
 
         return search(self.document.root_component)
 
+    _TOOL_HINTS = {
+        'new_sketch': ("Sketch", tr("Select a plane or face · Esc: cancel")),
+        'extrude': ("Extrude", tr("Select closed profile, set height · Enter: confirm · Esc: cancel")),
+        'revolve': ("Revolve", tr("Select profile + axis · Enter: confirm · Esc: cancel")),
+        'sweep': ("Sweep", tr("Select profile, then path · Esc: cancel")),
+        'loft': ("Loft", tr("Select 2+ profiles · Esc: cancel")),
+        'fillet': ("Fillet", tr("Select edges, set radius · Enter: confirm · Esc: cancel")),
+        'chamfer': ("Chamfer", tr("Select edges, set distance · Enter: confirm · Esc: cancel")),
+        'shell': ("Shell", tr("Select face to open, set thickness · Esc: cancel")),
+        'hole': ("Hole", tr("Select planar face · Esc: cancel")),
+        'draft': ("Draft", tr("Select faces, set angle · Esc: cancel")),
+        'measure': ("Measure", tr("Click two points or edges to measure")),
+        'split_body': ("Split", tr("Select body, choose plane · Esc: cancel")),
+        'pattern': ("Pattern", tr("Select body, set count/spacing · Esc: cancel")),
+        'thread': ("Thread", tr("Select cylindrical face · Esc: cancel")),
+        'surface_texture': ("Texture", tr("Select body, choose texture type")),
+    }
+
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
         if hasattr(self, '_getting_started_overlay'):
             self._getting_started_overlay.hide()
+
+        hint = self._TOOL_HINTS.get(action)
+        if hint and hasattr(self, 'mashcad_status_bar'):
+            self.mashcad_status_bar.set_tool_hint(hint[0], hint[1])
+
         actions = {
             'new_sketch': self._new_sketch,
             'offset_plane': self._start_offset_plane,
@@ -7607,6 +7634,8 @@ class MainWindow(QMainWindow):
             if self.document.save_project(path):
                 self._current_project_path = path
                 self.setWindowTitle(f"MashCAD - {os.path.basename(path)}")
+                add_recent_file(path)
+                self._update_recent_files_menu()
                 logger.success(f"Projekt gespeichert: {path}")
             else:
                 QMessageBox.critical(self, "Fehler", "Projekt konnte nicht gespeichert werden.")
@@ -7656,12 +7685,56 @@ class MainWindow(QMainWindow):
                 # TNP Stats aktualisieren
                 self._update_tnp_stats()
 
+                add_recent_file(path)
+                self._update_recent_files_menu()
                 logger.success(f"Projekt geladen: {path}")
             else:
                 QMessageBox.critical(self, "Fehler", "Projekt konnte nicht geladen werden.")
         except Exception as e:
             logger.error(f"Fehler beim Laden: {e}")
             QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
+
+    def _update_recent_files_menu(self):
+        """Updates the recent files submenu."""
+        self._recent_menu.clear()
+        recent = get_recent_files()
+        if not recent:
+            action = self._recent_menu.addAction(tr("No recent files"))
+            action.setEnabled(False)
+            return
+        for path in recent:
+            display = os.path.basename(path)
+            action = self._recent_menu.addAction(display)
+            action.setToolTip(path)
+            action.triggered.connect(lambda checked=False, p=path: self._open_recent_file(p))
+
+    def _open_recent_file(self, path: str):
+        """Opens a recent project file."""
+        if not os.path.exists(path):
+            logger.warning(f"Datei nicht gefunden: {path}")
+            self._update_recent_files_menu()
+            return
+        try:
+            doc = Document.load_project(path)
+            if doc:
+                self.document = doc
+                self._setup_tnp_debug_callback()
+                self._current_project_path = path
+                self.browser.set_document(doc)
+                self.browser.refresh()
+                self._update_viewport_all_impl()
+                self.viewport_3d.set_sketches(self.browser.get_visible_sketches())
+                if doc.active_sketch:
+                    self.active_sketch = doc.active_sketch
+                    self.sketch_editor.sketch = doc.active_sketch
+                self.setWindowTitle(f"MashCAD - {os.path.basename(path)}")
+                self._render_construction_planes()
+                self._update_tnp_stats()
+                add_recent_file(path)
+                self._update_recent_files_menu()
+                logger.success(f"Projekt geladen: {path}")
+        except Exception as e:
+            logger.error(f"Fehler beim Öffnen: {e}")
 
     def _export_stl(self):
         """STL Export mit Quality-Dialog und Surface Texture Support.

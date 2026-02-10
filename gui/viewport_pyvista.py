@@ -3989,7 +3989,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         logger.success(f"✓ B-Rep Faces geladen: {len(self.detected_faces)} Faces mit korrekten cell_ids")
 
     def _detect_body_faces(self):
-        """Erkennt planare Flächen von 3D-Bodies und fügt sie zu detected_faces hinzu.
+        """Erkennt Flächen von 3D-Bodies und fügt sie zu detected_faces hinzu.
+
+        FIX: Nutzt face_id aus Tessellator für korrekte Zylinder-Face-Erkennung.
+        Bei Zylindern haben alle Mantel-Dreiecke die gleiche face_id, aber
+        unterschiedliche Normalen. Nach face_id zu gruppieren sorgt dafür, dass
+        der ganze Zylinder-Mantel als eine Face erkannt wird (wie in Fusion 360).
 
         OPTIMIERT: Verwendet cell_centers() und numpy für 10x schnellere Detection.
         """
@@ -4012,6 +4017,57 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     logger.debug(f"Body {bid} hat keine Zellen (Faces).")
                     continue
 
+                # FIX: ZUERST face_id-basierte Gruppierung versuchen (für Zylinder!)
+                if 'face_id' in mesh.cell_data:
+                    face_ids = np.asarray(mesh.cell_data['face_id']).astype(np.int64)
+                    all_cell_centers = mesh.cell_centers().points
+
+                    # Normalen für Highlight berechnen
+                    if 'Normals' not in mesh.cell_data:
+                        mesh.compute_normals(cell_normals=True, inplace=True)
+                    cell_normals = mesh.cell_data.get('Normals')
+
+                    # Gruppiere Zellen nach face_id
+                    unique_face_ids = np.unique(face_ids)
+
+                    logger.debug(f"Body {bid}: {len(unique_face_ids)} unique face_ids")
+
+                    for face_id in unique_face_ids:
+                        # Finde alle Zellen mit dieser face_id
+                        cell_mask = (face_ids == face_id)
+                        cell_ids = np.where(cell_mask)[0]
+
+                        if len(cell_ids) == 0:
+                            continue
+
+                        # Berechne durchschnittliche Normale und Center für diese Face
+                        group_normals = cell_normals[cell_mask]
+                        group_centers = all_cell_centers[cell_mask]
+                        center_3d = np.mean(group_centers, axis=0)
+                        avg_normal = np.mean(group_normals, axis=0)
+                        norm_length = np.linalg.norm(avg_normal)
+                        if norm_length > 1e-10:
+                            avg_normal = avg_normal / norm_length
+                        normal_key = tuple(avg_normal)
+
+                        # Face registrieren
+                        self.detected_faces.append({
+                            'type': 'body_face',
+                            'body_id': bid,
+                            'cell_ids': cell_ids.tolist(),
+                            'normal': normal_key,
+                            'center_3d': tuple(center_3d),
+                            'sample_point': tuple(group_centers[0]),
+                            'center_2d': (center_3d[0], center_3d[1]),
+                            'origin': tuple(center_3d),
+                            'mesh': mesh,
+                            'face_id': int(face_id)  # Für Debug/Reference
+                        })
+
+                    logger.debug(f"Body {bid}: {len(unique_face_ids)} Faces via face_id detected")
+                    continue  # Nächsten Body verarbeiten
+
+                # FALLBACK: Normalen-basierte Gruppierung (wenn kein face_id verfügbar)
                 # Normalen berechnen falls nötig
                 if 'Normals' not in mesh.cell_data:
                     mesh.compute_normals(cell_normals=True, inplace=True)
@@ -4578,7 +4634,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                         inactive_component=inactive_component
                     )
                     if hasattr(self, 'plotter'):
-                        from gui.viewport.render_utils import request_render
+                        from gui.viewport.render_queue import request_render
                         request_render(self.plotter, immediate=True)
 
                 body.request_async_tessellation(on_ready=_on_async_mesh_ready)

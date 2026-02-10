@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, Signal, QRect, QRectF, QPointF
 from PySide6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QPainterPath, QPolygonF
 
 from i18n import tr
+from config.recent_files import get_recent_files
 
 
 class _IconWidget(QWidget):
@@ -82,12 +83,15 @@ class _IconWidget(QWidget):
 class GettingStartedOverlay(QWidget):
     """Transparent overlay centered in the viewport with quick-start actions."""
     action_triggered = Signal(str)
+    recent_file_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(320, 280)
+        recent_count = min(len(get_recent_files()), 3)
+        height = 280 + (recent_count * 28 + 40 if recent_count > 0 else 0)
+        self.setFixedSize(320, height)
         self._build_ui()
 
     def _build_ui(self):
@@ -224,6 +228,40 @@ class GettingStartedOverlay(QWidget):
 
             card_lay.addWidget(row)
 
+        # Recent files section
+        recent = get_recent_files()
+        if recent:
+            import os
+            sep = QLabel()
+            sep.setFixedHeight(1)
+            sep.setStyleSheet("background: rgba(255, 255, 255, 8); border: none; margin: 4px 0;")
+            card_lay.addWidget(sep)
+
+            recent_label = QLabel(tr("Recent"))
+            recent_label.setStyleSheet("color: #4a5060; font-size: 10px; font-weight: 600; background: transparent; border: none; margin-top: 2px;")
+            card_lay.addWidget(recent_label)
+
+            for file_path in recent[:3]:
+                fname = os.path.basename(file_path)
+                btn = QPushButton(fname)
+                btn.setCursor(Qt.PointingHandCursor)
+                btn.setToolTip(file_path)
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: transparent;
+                        border: none;
+                        color: #6a7080;
+                        font-size: 11px;
+                        text-align: left;
+                        padding: 3px 10px;
+                    }
+                    QPushButton:hover {
+                        color: #a0a8b8;
+                    }
+                """)
+                btn.clicked.connect(lambda checked=False, p=file_path: self._on_recent_click(p))
+                card_lay.addWidget(btn)
+
         lay.addWidget(card)
 
     def resizeEvent(self, event):
@@ -235,6 +273,10 @@ class GettingStartedOverlay(QWidget):
 
     def _on_click(self, action_id):
         self.action_triggered.emit(action_id)
+        self.hide()
+
+    def _on_recent_click(self, path):
+        self.recent_file_requested.emit(path)
         self.hide()
 
     def center_on_parent(self):

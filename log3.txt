@@ -1,0 +1,486 @@
+(cad_env) C:\LiteCad>python main.py
+2026-02-10 22:50:08.311 | SUCCESS  | modeling:<module>:81 - ✓ OCP (OpenCASCADE) geladen.
+2026-02-10 22:50:08.311 | SUCCESS  | modeling:<module>:100 - ✓ build123d geladen (High-Level API).
+2026-02-10 22:50:08.396 | SUCCESS  | gui.sketch_editor:<module>:48 - QuadTree Module loaded.
+2026-02-10 22:50:08.401 | SUCCESS  | gui.sketch_editor:<module>:93 - Build123d erfolgreich geladen für Sketch-Editor
+2026-02-10 22:50:08.988 | SUCCESS  | gui.viewport_pyvista:<module>:38 - PyVista & VTK erfolgreich geladen.
+22:50:09 | INFO     | TNP v4.0 ShapeNamingService initialisiert
+22:50:09 | DEBUG    | TNP v4.0: ShapeNamingService initialisiert für 'Projekt1'
+22:50:09 | DEBUG    | Component erstellt: Root (id=39f63572)
+22:50:09 | INFO     | [ASSEMBLY] Component-System aktiviert für 'Projekt1'
+22:50:10 | INFO     | Ready
+22:50:23 | INFO     | Ready. PyVista & Build123d active.
+22:50:29 | INFO     | Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche
+22:50:29 | DEBUG    | RenderQueue initialisiert
+22:50:29 | DEBUG    | [Orientation] Plane origin: (0, 0, 0), normal: (0, 0, 1)
+22:50:29 | DEBUG    | [Orientation] Plane X-dir: (np.float64(1.0), np.float64(0.0), np.float64(0.0)), Y-dir: (np.float64(0.0), np.float64(1.0), np.float64(0.0))
+22:50:29 | DEBUG    | [Orientation] Projected world origin: (0.0, 0.0)
+22:50:29 | DEBUG    | [Auto-Align] 90° (screen Y-dir, dot=0.52)
+22:50:29 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
+22:50:29 | DEBUG    | Sketch-Pfad-Modus beendet
+22:50:31 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(203, 241, 175, 49), click at PySide6.QtCore.QPoint(503, 466), in_panel=False
+22:50:31 | INFO     | [CLICK] Left-click outside panel → confirming dim_input
+22:50:31 | INFO     | [PROFILE] Lines: 4 non-construction / 4 total
+22:50:31 | DEBUG    | [PROFILE] Line 0: (8.00,-27.00)→(45.00,-27.00) welded to (8.0, -27.0)→(45.0, -27.0)
+22:50:31 | DEBUG    | [PROFILE] Line 1: (45.00,-27.00)→(45.00,37.00) welded to (45.0, -27.0)→(45.0, 37.0)
+22:50:31 | DEBUG    | [PROFILE] Line 2: (45.00,37.00)→(8.00,37.00) welded to (45.0, 37.0)→(8.0, 37.0)
+22:50:31 | DEBUG    | [PROFILE] Line 3: (8.00,37.00)→(8.00,-27.00) welded to (8.0, 37.0)→(8.0, -27.0)
+22:50:31 | INFO     | [PROFILE] Arcs: 0 non-construction / 0 total
+22:50:31 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+22:50:31 | DEBUG    | Stored geometry map for profile: (8.0, -27.0, 45.0, 37.0, 2368.0)
+22:50:31 | DEBUG    | [CAD Kernel First] Synced 1 profiles to sketch (inkl. Holes)
+22:50:31 | DEBUG    | [DIM] Fallthrough hide at end of _on_dim_confirmed (tool=RECTANGLE, step=1)
+22:50:35 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(612, 66, 175, 49), click at PySide6.QtCore.QPoint(595, 181), in_panel=False
+22:50:35 | INFO     | [CLICK] Right-click outside panel → canceling
+22:50:37 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(567, 80, 120, 49), click at PySide6.QtCore.QPoint(604, 174), in_panel=False
+22:50:37 | INFO     | [CLICK] Left-click outside panel → confirming dim_input
+22:50:37 | INFO     | [PROFILE] Lines: 4 non-construction / 4 total
+22:50:37 | DEBUG    | [PROFILE] Line 0: (8.00,-27.00)→(45.00,-27.00) welded to (8.0, -27.0)→(45.0, -27.0)
+22:50:37 | DEBUG    | [PROFILE] Line 1: (45.00,-27.00)→(45.00,37.00) welded to (45.0, -27.0)→(45.0, 37.0)
+22:50:37 | DEBUG    | [PROFILE] Line 2: (45.00,37.00)→(8.00,37.00) welded to (45.0, 37.0)→(8.0, 37.0)
+22:50:37 | DEBUG    | [PROFILE] Line 3: (8.00,37.00)→(8.00,-27.00) welded to (8.0, 37.0)→(8.0, -27.0)
+22:50:37 | INFO     | [PROFILE] Arcs: 0 non-construction / 0 total
+22:50:37 | DEBUG    | Verarbeite 1 Kreise für Profil-Erkennung
+22:50:37 | DEBUG    |   Kreis: center=(-24.00, 45.00), r=16.28, area=831.31
+22:50:37 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (-24.00, 45.00)
+22:50:37 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+22:50:37 | DEBUG    | Stored geometry map for profile: (8.0, -27.0, 45.0, 37.0, 2368.0)
+22:50:37 | DEBUG    | Stored geometry map for profile: (-40.28, 28.72, -7.72, 61.28, 831.31)
+22:50:37 | DEBUG    | [CAD Kernel First] Synced 2 profiles to sketch (inkl. Holes)
+22:50:37 | DEBUG    | [DIM] Fallthrough hide at end of _on_dim_confirmed (tool=CIRCLE, step=1)
+22:50:39 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(302, 190, 120, 49), click at PySide6.QtCore.QPoint(349, 289), in_panel=False
+22:50:39 | INFO     | [CLICK] Left-click outside panel → confirming dim_input
+22:50:39 | INFO     | [PROFILE] Lines: 4 non-construction / 4 total
+22:50:39 | DEBUG    | [PROFILE] Line 0: (8.00,-27.00)→(45.00,-27.00) welded to (8.0, -27.0)→(45.0, -27.0)
+22:50:39 | DEBUG    | [PROFILE] Line 1: (45.00,-27.00)→(45.00,37.00) welded to (45.0, -27.0)→(45.0, 37.0)
+22:50:39 | DEBUG    | [PROFILE] Line 2: (45.00,37.00)→(8.00,37.00) welded to (45.0, 37.0)→(8.0, 37.0)
+22:50:39 | DEBUG    | [PROFILE] Line 3: (8.00,37.00)→(8.00,-27.00) welded to (8.0, 37.0)→(8.0, -27.0)
+22:50:39 | INFO     | [PROFILE] Arcs: 0 non-construction / 0 total
+22:50:39 | DEBUG    | Verarbeite 2 Kreise für Profil-Erkennung
+22:50:39 | DEBUG    |   Kreis: center=(-24.00, 45.00), r=16.28, area=831.31
+22:50:39 | DEBUG    |   Kreis: center=(-32.00, -72.00), r=17.03, area=909.66
+22:50:39 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (-24.00, 45.00)
+22:50:39 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=909.66 @ (-32.00, -72.00)
+22:50:39 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+22:50:39 | DEBUG    | Stored geometry map for profile: (8.0, -27.0, 45.0, 37.0, 2368.0)
+22:50:39 | DEBUG    | Stored geometry map for profile: (-49.03, -89.03, -14.97, -54.97, 909.66)
+22:50:39 | DEBUG    | Stored geometry map for profile: (-40.28, 28.72, -7.72, 61.28, 831.31)
+22:50:39 | DEBUG    | [CAD Kernel First] Synced 3 profiles to sketch (inkl. Holes)
+22:50:39 | DEBUG    | [DIM] Fallthrough hide at end of _on_dim_confirmed (tool=CIRCLE, step=1)
+22:50:41 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(500, 514, 120, 49), click at PySide6.QtCore.QPoint(544, 613), in_panel=False
+22:50:41 | INFO     | [CLICK] Left-click outside panel → confirming dim_input
+22:50:41 | INFO     | [PROFILE] Lines: 4 non-construction / 4 total
+22:50:41 | DEBUG    | [PROFILE] Line 0: (8.00,-27.00)→(45.00,-27.00) welded to (8.0, -27.0)→(45.0, -27.0)
+22:50:41 | DEBUG    | [PROFILE] Line 1: (45.00,-27.00)→(45.00,37.00) welded to (45.0, -27.0)→(45.0, 37.0)
+22:50:41 | DEBUG    | [PROFILE] Line 2: (45.00,37.00)→(8.00,37.00) welded to (45.0, 37.0)→(8.0, 37.0)
+22:50:41 | DEBUG    | [PROFILE] Line 3: (8.00,37.00)→(8.00,-27.00) welded to (8.0, 37.0)→(8.0, -27.0)
+22:50:41 | INFO     | [PROFILE] Arcs: 0 non-construction / 0 total
+22:50:41 | DEBUG    | Verarbeite 3 Kreise für Profil-Erkennung
+22:50:41 | DEBUG    |   Kreis: center=(-24.00, 45.00), r=16.28, area=831.31
+22:50:41 | DEBUG    |   Kreis: center=(-32.00, -72.00), r=17.03, area=909.66
+22:50:41 | DEBUG    |   Kreis: center=(75.00, 32.00), r=16.28, area=831.31
+22:50:41 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (-24.00, 45.00)
+22:50:41 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=909.66 @ (-32.00, -72.00)
+22:50:41 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (75.00, 32.00)
+22:50:41 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+22:50:41 | DEBUG    | Stored geometry map for profile: (8.0, -27.0, 45.0, 37.0, 2368.0)
+22:50:41 | DEBUG    | Stored geometry map for profile: (-49.03, -89.03, -14.97, -54.97, 909.66)
+22:50:41 | DEBUG    | Stored geometry map for profile: (-40.28, 28.72, -7.72, 61.28, 831.31)
+22:50:41 | DEBUG    | Stored geometry map for profile: (58.72, 15.72, 91.28, 48.28, 831.31)
+22:50:41 | DEBUG    | [CAD Kernel First] Synced 4 profiles to sketch (inkl. Holes)
+22:50:41 | DEBUG    | [DIM] Fallthrough hide at end of _on_dim_confirmed (tool=CIRCLE, step=1)
+22:50:41 | DEBUG    | [Orientation] Plane origin: (0, 0, 0), normal: (0, 0, 1)
+22:50:41 | DEBUG    | [Orientation] Plane X-dir: (np.float64(0.0), np.float64(1.0), np.float64(0.0)), Y-dir: (np.float64(-1.0), np.float64(0.0), np.float64(0.0))
+22:50:41 | DEBUG    | [Orientation] Projected world origin: (0.0, 0.0)
+22:50:41 | DEBUG    | [preview] clear transient previews: mode:sketch->3d
+22:50:41 | DEBUG    | Sketch-Pfad-Modus beendet
+22:50:42 | DEBUG    | Parent Polygon 0: area=2368.0, holes_found=0
+22:50:42 | INFO     |   → Shell nach difference: area=2368.0, interiors=0
+22:50:42 | DEBUG    | Parent Polygon 1: area=910.8, holes_found=0
+22:50:42 | INFO     |   → Shell nach difference: area=910.8, interiors=0
+22:50:42 | DEBUG    | Parent Polygon 2: area=832.3, holes_found=0
+22:50:42 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:42 | DEBUG    | Parent Polygon 3: area=832.3, holes_found=0
+22:50:42 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:42 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+22:50:44 | DEBUG    | FeatureDependencyGraph initialisiert
+22:50:44 | DEBUG    | [EXTRUDE] Matched selection (-24.00, 45.00) → sketch (-24.00, 45.00)
+22:50:44 | DEBUG    | Feature 'da4c4247' hinzugefügt (Index 0)
+22:50:44 | INFO     | Rebuilding Body 'Body1' (Features 0-0/1)...
+22:50:44 | DEBUG    | [OCP-FIRST] has_sketch=True, has_polys=[<POLYGON ((-7.72 45, -7.74 44.201, -7.798 43.404, -7.896 42.611, -8.033 41.8...>], has_face_brep=None, has_face_refs=False
+22:50:44 | DEBUG    | [SELECTOR] 4 Profile verfügbar, 1 Selektoren
+22:50:44 | DEBUG    |   Profile 0: centroid=(26.50, 5.00), area=2368.0
+22:50:44 | DEBUG    |   Profile 1: centroid=(-32.00, -72.00), area=909.7
+22:50:44 | DEBUG    |   Profile 2: centroid=(-24.00, 45.00), area=831.3
+22:50:44 | DEBUG    |   Profile 3: centroid=(75.00, 32.00), area=831.3
+22:50:44 | DEBUG    | [SELECTOR] Selektoren: [(-23.999999999999993, 45.000000000000014)]
+22:50:44 | DEBUG    | [SELECTOR] BEST MATCH: (-24.00, 45.00) ≈ (-24.00, 45.00), dist=0.00
+22:50:44 | INFO     | [OCP-FIRST] 1/4 Profile via Selektor
+22:50:44 | INFO     | [TNP v4.1] 3 Kreise mit native_ocp_data gefunden
+22:50:44 | DEBUG    | [TNP v4.1] Circle plane: origin=(0.0, 0.0, 0.0), x_dir=(1.0, 0.0, 0.0), y_dir=(0.0, 0.0, 0.0)
+22:50:44 | DEBUG    | [TNP v4.1] Circle 2D center: (-24.00, 45.00)
+22:50:44 | DEBUG    | [TNP v4.1] Circle 3D center: (-24.00, 0.00, 0.00)
+22:50:44 | DEBUG    | [TNP v4.1] Native Circle Face erstellt: r=16.28 at (-24.00, 45.00)
+22:50:44 | INFO     | [TNP v4.1] 1 native Circle Faces erstellt (3 Faces statt 14+)
+22:50:44 | INFO     | [TNP v4.1] 1 native Faces direkt extrudieren
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='159c3340-0042-4429-982a-a4b2cc67bab0', shape_type=<ShapeType.FACE: 2>, feature_id='da4c4247', local_index=0, geometry_hash='b1c25d69cfd12316', timestamp=1770760244.7635968)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='32049d0e-b568-47ef-b54e-0c843ede9c52', shape_type=<ShapeType.FACE: 2>, feature_id='da4c4247', local_index=1, geometry_hash='10a1712b65ac4c0a', timestamp=1770760244.764597)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='a179d225-f1ca-422a-a87d-ba1459e8e6f1', shape_type=<ShapeType.FACE: 2>, feature_id='da4c4247', local_index=2, geometry_hash='e63164700e4c26c5', timestamp=1770760244.764597)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='cdf4458d-071f-4108-99e5-306a7c1acc00', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=0, geometry_hash='01a63e50667a674c', timestamp=1770760244.7655969)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='f2578d7a-037e-4cf0-af89-82c02a07b37f', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=1, geometry_hash='93f920f8cded1b98', timestamp=1770760244.7665966)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='ad24fab5-fe35-42d3-ac94-b9ded30a0a75', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=2, geometry_hash='a935e7b1818c04bb', timestamp=1770760244.7665966)
+22:50:44 | INFO     | TNP: 3 Edges für Feature 'da4c4247' registriert
+22:50:44 | SUCCESS  | OCP Extrude TNP: 3 Faces, 3 Edges registriert
+22:50:44 | DEBUG    | [OCP-FIRST] Extrudiert: da4c4247
+22:50:44 | DEBUG    | TNP DEBUG: Extrude New Body - kein Boolean
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='cdf4458d-071f-4108-99e5-306a7c1acc00', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=0, geometry_hash='01a63e50667a674c', timestamp=1770760244.7655969)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='f2578d7a-037e-4cf0-af89-82c02a07b37f', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=1, geometry_hash='93f920f8cded1b98', timestamp=1770760244.7665966)
+22:50:44 | DEBUG    | Shape registriert: ShapeID(uuid='ad24fab5-fe35-42d3-ac94-b9ded30a0a75', shape_type=<ShapeType.EDGE: 1>, feature_id='da4c4247', local_index=2, geometry_hash='a935e7b1818c04bb', timestamp=1770760244.7665966)
+22:50:44 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 3 out)
+22:50:44 | INFO     | TNP v4.0: 3 Edges für Extrude 'Extrude' registriert
+22:50:44 | DEBUG    | ✓ Body1: BREP Valid (3 Faces)
+22:50:44 | DEBUG    | Redo: Added Extrude to Body1 (rebuild=True)
+22:50:44 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=a4fcd7a4)
+22:50:44 | DEBUG    | Adaptive Tessellation: BBox-Diag=83.9mm → Deflection=0.0839mm
+22:50:44 | INFO     | Tessellated with face IDs: 172 triangles, 3 faces
+22:50:44 | DEBUG    | B-Rep Edges extrahiert: 116 Feature-Kanten
+22:50:44 | DEBUG    | Mesh regenerated for 'Body1': 178 pts, 116 edges, 3 B-Rep faces
+22:50:44 | DEBUG    | Verwende vtk_mesh: 178 Punkte, vtk_edges: 116
+22:50:44 | DEBUG    | Füge Mesh hinzu: body_a4fcd7a4_m, 178 Punkte
+22:50:44 | DEBUG    |   Mesh bounds: X(-40.3 to -7.7), Y(-16.3 to 16.3), Z(0.0 to 70.2)
+22:50:44 | DEBUG    |   Mesh center: (-24.0, 0.0, 35.1)
+22:50:44 | DEBUG    | Actor 'body_a4fcd7a4_m' sichtbar gesetzt
+22:50:44 | DEBUG    | Füge Edges hinzu: body_a4fcd7a4_e, 116 Linien
+22:50:44 | DEBUG    | Texture-Previews aktualisiert für 1 Bodies
+22:50:44 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:45 | DEBUG    | Parent Polygon 0: area=2368.0, holes_found=0
+22:50:45 | INFO     |   → Shell nach difference: area=2368.0, interiors=0
+22:50:45 | DEBUG    | Parent Polygon 1: area=910.8, holes_found=0
+22:50:45 | INFO     |   → Shell nach difference: area=910.8, interiors=0
+22:50:45 | DEBUG    | Parent Polygon 2: area=832.3, holes_found=0
+22:50:45 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:45 | DEBUG    | Parent Polygon 3: area=832.3, holes_found=0
+22:50:45 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:45 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:45 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+22:50:46 | DEBUG    | FeatureDependencyGraph initialisiert
+22:50:46 | DEBUG    | [EXTRUDE] Matched selection (75.00, 32.00) → sketch (75.00, 32.00)
+22:50:46 | DEBUG    | Feature '94118755' hinzugefügt (Index 0)
+22:50:46 | INFO     | Rebuilding Body 'Body2' (Features 0-0/1)...
+22:50:46 | DEBUG    | [OCP-FIRST] has_sketch=True, has_polys=[<POLYGON ((91.28 32, 91.26 31.201, 91.202 30.404, 91.104 29.611, 90.967 28.8...>], has_face_brep=None, has_face_refs=False
+22:50:46 | DEBUG    | [SELECTOR] 4 Profile verfügbar, 1 Selektoren
+22:50:46 | DEBUG    |   Profile 0: centroid=(26.50, 5.00), area=2368.0
+22:50:46 | DEBUG    |   Profile 1: centroid=(-32.00, -72.00), area=909.7
+22:50:46 | DEBUG    |   Profile 2: centroid=(-24.00, 45.00), area=831.3
+22:50:46 | DEBUG    |   Profile 3: centroid=(75.00, 32.00), area=831.3
+22:50:46 | DEBUG    | [SELECTOR] Selektoren: [(75.0, 32.00000000000001)]
+22:50:46 | DEBUG    | [SELECTOR] BEST MATCH: (75.00, 32.00) ≈ (75.00, 32.00), dist=0.00
+22:50:46 | INFO     | [OCP-FIRST] 1/4 Profile via Selektor
+22:50:46 | INFO     | [TNP v4.1] 3 Kreise mit native_ocp_data gefunden
+22:50:46 | DEBUG    | [TNP v4.1] Circle plane: origin=(0.0, 0.0, 0.0), x_dir=(1.0, 0.0, 0.0), y_dir=(0.0, 0.0, 0.0)
+22:50:46 | DEBUG    | [TNP v4.1] Circle 2D center: (75.00, 32.00)
+22:50:46 | DEBUG    | [TNP v4.1] Circle 3D center: (75.00, 0.00, 0.00)
+22:50:46 | DEBUG    | [TNP v4.1] Native Circle Face erstellt: r=16.28 at (75.00, 32.00)
+22:50:46 | INFO     | [TNP v4.1] 1 native Circle Faces erstellt (3 Faces statt 14+)
+22:50:46 | INFO     | [TNP v4.1] 1 native Faces direkt extrudieren
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='a19376b1-2db0-4a75-803a-3d60b4a18be9', shape_type=<ShapeType.FACE: 2>, feature_id='94118755', local_index=0, geometry_hash='f2185bf1b0a352aa', timestamp=1770760246.583345)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='d6a84d3f-efa7-4141-8867-2667a3bd09ea', shape_type=<ShapeType.FACE: 2>, feature_id='94118755', local_index=1, geometry_hash='8fcda6a528101ca7', timestamp=1770760246.583345)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='49bea931-e582-4c80-a1d7-d9bfaee314c4', shape_type=<ShapeType.FACE: 2>, feature_id='94118755', local_index=2, geometry_hash='13fa6f79b7f284ac', timestamp=1770760246.5843182)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='b90e42b8-4019-47ca-90cf-31da77bf7234', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=0, geometry_hash='befb94061c86d517', timestamp=1770760246.5843182)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='281d38e4-979a-43b6-94a2-f67a5bcf24d3', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=1, geometry_hash='06c3b86e87fef877', timestamp=1770760246.5853198)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='7cbb4fbe-148b-4e1d-b8c6-18c9f2aec5da', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=2, geometry_hash='e840d061fd0627e5', timestamp=1770760246.5883434)
+22:50:46 | INFO     | TNP: 3 Edges für Feature '94118755' registriert
+22:50:46 | SUCCESS  | OCP Extrude TNP: 3 Faces, 6 Edges registriert
+22:50:46 | DEBUG    | [OCP-FIRST] Extrudiert: 94118755
+22:50:46 | DEBUG    | TNP DEBUG: Extrude New Body - kein Boolean
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='b90e42b8-4019-47ca-90cf-31da77bf7234', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=0, geometry_hash='befb94061c86d517', timestamp=1770760246.5843182)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='281d38e4-979a-43b6-94a2-f67a5bcf24d3', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=1, geometry_hash='06c3b86e87fef877', timestamp=1770760246.5853198)
+22:50:46 | DEBUG    | Shape registriert: ShapeID(uuid='7cbb4fbe-148b-4e1d-b8c6-18c9f2aec5da', shape_type=<ShapeType.EDGE: 1>, feature_id='94118755', local_index=2, geometry_hash='e840d061fd0627e5', timestamp=1770760246.5883434)
+22:50:46 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 3 out)
+22:50:46 | INFO     | TNP v4.0: 3 Edges für Extrude 'Extrude' registriert
+22:50:46 | DEBUG    | ✓ Body2: BREP Valid (3 Faces)
+22:50:46 | DEBUG    | Redo: Added Extrude to Body2 (rebuild=True)
+22:50:46 | DEBUG    | _update_body_mesh aufgerufen für 'Body2' (id=fff069d1)
+22:50:46 | DEBUG    | Adaptive Tessellation: BBox-Diag=70.4mm → Deflection=0.0704mm
+22:50:46 | INFO     | Tessellated with face IDs: 188 triangles, 3 faces
+22:50:46 | DEBUG    | B-Rep Edges extrahiert: 116 Feature-Kanten
+22:50:46 | DEBUG    | Mesh regenerated for 'Body2': 194 pts, 116 edges, 3 B-Rep faces
+22:50:46 | DEBUG    | Verwende vtk_mesh: 194 Punkte, vtk_edges: 116
+22:50:46 | DEBUG    | Füge Mesh hinzu: body_fff069d1_m, 194 Punkte
+22:50:46 | DEBUG    |   Mesh bounds: X(58.7 to 91.3), Y(-16.3 to 16.3), Z(0.0 to 53.2)
+22:50:46 | DEBUG    |   Mesh center: (75.0, 0.0, 26.6)
+22:50:46 | DEBUG    | Actor 'body_fff069d1_m' sichtbar gesetzt
+22:50:46 | DEBUG    | Füge Edges hinzu: body_fff069d1_e, 116 Linien
+22:50:46 | DEBUG    | Texture-Previews aktualisiert für 1 Bodies
+22:50:46 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:46 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:47 | DEBUG    | Parent Polygon 0: area=2368.0, holes_found=0
+22:50:47 | INFO     |   → Shell nach difference: area=2368.0, interiors=0
+22:50:47 | DEBUG    | Parent Polygon 1: area=910.8, holes_found=0
+22:50:47 | INFO     |   → Shell nach difference: area=910.8, interiors=0
+22:50:47 | DEBUG    | Parent Polygon 2: area=832.3, holes_found=0
+22:50:47 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:47 | DEBUG    | Parent Polygon 3: area=832.3, holes_found=0
+22:50:47 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:47 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:47 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:47 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+22:50:48 | DEBUG    | FeatureDependencyGraph initialisiert
+22:50:48 | DEBUG    | [EXTRUDE] Matched selection (26.50, 5.00) → sketch (26.50, 5.00)
+22:50:48 | DEBUG    | Feature 'ca8a9615' hinzugefügt (Index 0)
+22:50:48 | INFO     | Rebuilding Body 'Body3' (Features 0-0/1)...
+22:50:48 | DEBUG    | [OCP-FIRST] has_sketch=True, has_polys=[<POLYGON ((45 -27, 8 -27, 8 37, 45 37, 45 -27))>], has_face_brep=None, has_face_refs=False
+22:50:48 | DEBUG    | [SELECTOR] 4 Profile verfügbar, 1 Selektoren
+22:50:48 | DEBUG    |   Profile 0: centroid=(26.50, 5.00), area=2368.0
+22:50:48 | DEBUG    |   Profile 1: centroid=(-32.00, -72.00), area=909.7
+22:50:48 | DEBUG    |   Profile 2: centroid=(-24.00, 45.00), area=831.3
+22:50:48 | DEBUG    |   Profile 3: centroid=(75.00, 32.00), area=831.3
+22:50:48 | DEBUG    | [SELECTOR] Selektoren: [(26.5, 5.0)]
+22:50:48 | DEBUG    | [SELECTOR] BEST MATCH: (26.50, 5.00) ≈ (26.50, 5.00), dist=0.00
+22:50:48 | INFO     | [OCP-FIRST] 1/4 Profile via Selektor
+22:50:48 | INFO     | [TNP v4.1] 3 Kreise mit native_ocp_data gefunden
+22:50:48 | INFO     | [OCP-FIRST] Verarbeite 1 Profile.
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='a66a71ea-c13d-4cf0-b9c0-8807698560ce', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=0, geometry_hash='82f35d93daa296a2', timestamp=1770760248.388997)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='35e78257-3ad4-4fab-847b-9827747541ec', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=1, geometry_hash='bf26af745b1062be', timestamp=1770760248.389961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='be973531-9faf-4d29-ba81-5f73c45c9864', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=2, geometry_hash='6908842f892f2b27', timestamp=1770760248.392961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='c188c752-9147-4d2e-9384-0401b856598c', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=3, geometry_hash='0a7aa9cf74fb4e02', timestamp=1770760248.392961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='8d12b5fd-bbdf-41aa-8745-41157cab9e8d', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=4, geometry_hash='b5c59affd34bbfe6', timestamp=1770760248.3939607)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='ccc33368-e2eb-4c16-8f41-a33eff935067', shape_type=<ShapeType.FACE: 2>, feature_id='ca8a9615', local_index=5, geometry_hash='6c79e2181073c6e8', timestamp=1770760248.3939607)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='03e3471f-2325-4b01-ac21-c1f9011fe466', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=0, geometry_hash='de90b65b253b162f', timestamp=1770760248.3949962)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='0289a918-1b65-40ff-904b-a3abf14b9364', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=1, geometry_hash='9d176d303731386d', timestamp=1770760248.3949962)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='9da51ba8-6d84-4cf8-866e-2b001218c95e', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=2, geometry_hash='880335a9af3d5229', timestamp=1770760248.395961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='55713f73-86c6-46cf-87b9-6e59e5f0409d', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=3, geometry_hash='bc9500cfb64a4f86', timestamp=1770760248.396961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='e31fba3e-0c16-4bda-87f7-e07a6b1820f2', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=4, geometry_hash='2673853660550258', timestamp=1770760248.396961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='3e265cdb-b4b3-483a-96eb-29f320b7d86e', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=5, geometry_hash='75878d4e216915d5', timestamp=1770760248.3981302)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='224901d8-7f3a-4a7c-976f-36b768de532f', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=6, geometry_hash='82f7d3256bee29cb', timestamp=1770760248.398466)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='039fb9f5-54c7-49da-9a97-ac6eb50595cc', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=7, geometry_hash='7e01e5f346661331', timestamp=1770760248.398466)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='15a9d1c1-c98b-46cf-880c-3422e9d507ac', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=8, geometry_hash='b6ef7d3525669527', timestamp=1770760248.3994744)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='ed405944-b005-4e15-90f3-00907f54eff5', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=9, geometry_hash='aa41f8fe7d1b5d8f', timestamp=1770760248.3994744)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='47e78250-4339-4cdb-9810-f806a1cfa984', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=10, geometry_hash='a321a1fb6b524f99', timestamp=1770760248.4004738)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='bc1871a4-24b5-4837-9ff6-9cf110b2ced5', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=11, geometry_hash='9553945f0ef6b1d1', timestamp=1770760248.4014823)
+22:50:48 | INFO     | TNP: 12 Edges für Feature 'ca8a9615' registriert
+22:50:48 | SUCCESS  | OCP Extrude TNP: 6 Faces, 18 Edges registriert
+22:50:48 | DEBUG    | [OCP-FIRST] Extrudiert: ca8a9615
+22:50:48 | DEBUG    | TNP DEBUG: Extrude New Body - kein Boolean
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='03e3471f-2325-4b01-ac21-c1f9011fe466', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=0, geometry_hash='de90b65b253b162f', timestamp=1770760248.3949962)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='0289a918-1b65-40ff-904b-a3abf14b9364', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=1, geometry_hash='9d176d303731386d', timestamp=1770760248.3949962)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='9da51ba8-6d84-4cf8-866e-2b001218c95e', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=2, geometry_hash='880335a9af3d5229', timestamp=1770760248.395961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='55713f73-86c6-46cf-87b9-6e59e5f0409d', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=3, geometry_hash='bc9500cfb64a4f86', timestamp=1770760248.396961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='e31fba3e-0c16-4bda-87f7-e07a6b1820f2', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=4, geometry_hash='2673853660550258', timestamp=1770760248.396961)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='3e265cdb-b4b3-483a-96eb-29f320b7d86e', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=5, geometry_hash='75878d4e216915d5', timestamp=1770760248.3981302)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='224901d8-7f3a-4a7c-976f-36b768de532f', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=6, geometry_hash='82f7d3256bee29cb', timestamp=1770760248.398466)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='039fb9f5-54c7-49da-9a97-ac6eb50595cc', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=7, geometry_hash='7e01e5f346661331', timestamp=1770760248.398466)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='15a9d1c1-c98b-46cf-880c-3422e9d507ac', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=8, geometry_hash='b6ef7d3525669527', timestamp=1770760248.3994744)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='ed405944-b005-4e15-90f3-00907f54eff5', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=9, geometry_hash='aa41f8fe7d1b5d8f', timestamp=1770760248.3994744)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='47e78250-4339-4cdb-9810-f806a1cfa984', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=10, geometry_hash='a321a1fb6b524f99', timestamp=1770760248.4004738)
+22:50:48 | DEBUG    | Shape registriert: ShapeID(uuid='bc1871a4-24b5-4837-9ff6-9cf110b2ced5', shape_type=<ShapeType.EDGE: 1>, feature_id='ca8a9615', local_index=11, geometry_hash='9553945f0ef6b1d1', timestamp=1770760248.4014823)
+22:50:48 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
+22:50:48 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
+22:50:48 | DEBUG    | ✓ Body3: BREP Valid (6 Faces)
+22:50:48 | DEBUG    | Redo: Added Extrude to Body3 (rebuild=True)
+22:50:48 | DEBUG    | _update_body_mesh aufgerufen für 'Body3' (id=9ad21785)
+22:50:48 | DEBUG    | Adaptive Tessellation: BBox-Diag=79.9mm → Deflection=0.0799mm
+22:50:48 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
+22:50:48 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
+22:50:48 | DEBUG    | Mesh regenerated for 'Body3': 24 pts, 24 edges, 6 B-Rep faces
+22:50:48 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
+22:50:48 | DEBUG    | Füge Mesh hinzu: body_9ad21785_m, 24 Punkte
+22:50:48 | DEBUG    |   Mesh bounds: X(8.0 to 45.0), Y(-27.0 to 37.0), Z(0.0 to 30.4)
+22:50:48 | DEBUG    |   Mesh center: (26.5, 5.0, 15.2)
+22:50:48 | DEBUG    | Actor 'body_9ad21785_m' sichtbar gesetzt
+22:50:48 | DEBUG    | Füge Edges hinzu: body_9ad21785_e, 24 Linien
+22:50:48 | DEBUG    | Texture-Previews aktualisiert für 1 Bodies
+22:50:48 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:48 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:48 | DEBUG    | Body 9ad21785: Bypassing cache, using B-Rep face_info (6 faces)
+22:50:48 | DEBUG    | Parent Polygon 0: area=2368.0, holes_found=0
+22:50:48 | INFO     |   → Shell nach difference: area=2368.0, interiors=0
+22:50:48 | DEBUG    | Parent Polygon 1: area=910.8, holes_found=0
+22:50:48 | INFO     |   → Shell nach difference: area=910.8, interiors=0
+22:50:48 | DEBUG    | Parent Polygon 2: area=832.3, holes_found=0
+22:50:48 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:48 | DEBUG    | Parent Polygon 3: area=832.3, holes_found=0
+22:50:48 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:50:48 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:48 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:48 | DEBUG    | Body 9ad21785: Bypassing cache, using B-Rep face_info (6 faces)
+22:50:48 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+22:50:50 | DEBUG    | FeatureDependencyGraph initialisiert
+22:50:50 | DEBUG    | [EXTRUDE] Matched selection (-32.00, -72.00) → sketch (-32.00, -72.00)
+22:50:50 | DEBUG    | Feature '93e2422d' hinzugefügt (Index 0)
+22:50:50 | INFO     | Rebuilding Body 'Body4' (Features 0-0/1)...
+22:50:50 | DEBUG    | [OCP-FIRST] has_sketch=True, has_polys=[<POLYGON ((-14.97 -72, -14.991 -72.836, -15.052 -73.669, -15.154 -74.499, -1...>], has_face_brep=None, has_face_refs=False
+22:50:50 | DEBUG    | [SELECTOR] 4 Profile verfügbar, 1 Selektoren
+22:50:50 | DEBUG    |   Profile 0: centroid=(26.50, 5.00), area=2368.0
+22:50:50 | DEBUG    |   Profile 1: centroid=(-32.00, -72.00), area=909.7
+22:50:50 | DEBUG    |   Profile 2: centroid=(-24.00, 45.00), area=831.3
+22:50:50 | DEBUG    |   Profile 3: centroid=(75.00, 32.00), area=831.3
+22:50:50 | DEBUG    | [SELECTOR] Selektoren: [(-32.00000000000001, -71.99999999999999)]
+22:50:50 | DEBUG    | [SELECTOR] BEST MATCH: (-32.00, -72.00) ≈ (-32.00, -72.00), dist=0.00
+22:50:50 | INFO     | [OCP-FIRST] 1/4 Profile via Selektor
+22:50:50 | INFO     | [TNP v4.1] 3 Kreise mit native_ocp_data gefunden
+22:50:50 | DEBUG    | [TNP v4.1] Circle plane: origin=(0.0, 0.0, 0.0), x_dir=(1.0, 0.0, 0.0), y_dir=(0.0, 0.0, 0.0)
+22:50:50 | DEBUG    | [TNP v4.1] Circle 2D center: (-32.00, -72.00)
+22:50:50 | DEBUG    | [TNP v4.1] Circle 3D center: (-32.00, 0.00, 0.00)
+22:50:50 | DEBUG    | [TNP v4.1] Native Circle Face erstellt: r=17.03 at (-32.00, -72.00)
+22:50:50 | INFO     | [TNP v4.1] 1 native Circle Faces erstellt (3 Faces statt 14+)
+22:50:50 | INFO     | [TNP v4.1] 1 native Faces direkt extrudieren
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='48e25e24-e710-47ce-9542-8e081e06d129', shape_type=<ShapeType.FACE: 2>, feature_id='93e2422d', local_index=0, geometry_hash='9f878013cf0ea418', timestamp=1770760250.170834)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='708b1c7c-8ce4-479d-949f-7d6ed4cc1618', shape_type=<ShapeType.FACE: 2>, feature_id='93e2422d', local_index=1, geometry_hash='192e20c32ad38659', timestamp=1770760250.1718066)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='ebc45392-8de6-4dee-b062-4697fcac3ba4', shape_type=<ShapeType.FACE: 2>, feature_id='93e2422d', local_index=2, geometry_hash='a46ff83262ed37b1', timestamp=1770760250.1718066)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='bcf701b8-7a32-48ec-afc7-7b4056263390', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=0, geometry_hash='57114d26f1de8983', timestamp=1770760250.1728358)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='28a34540-f559-4515-ad2c-979e312515dd', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=1, geometry_hash='8c58c2221c19b730', timestamp=1770760250.1728358)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='dcac6422-8581-41cc-a8ba-97b1452161c9', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=2, geometry_hash='e7c92c9f97de7d35', timestamp=1770760250.173856)
+22:50:50 | INFO     | TNP: 3 Edges für Feature '93e2422d' registriert
+22:50:50 | SUCCESS  | OCP Extrude TNP: 3 Faces, 21 Edges registriert
+22:50:50 | DEBUG    | [OCP-FIRST] Extrudiert: 93e2422d
+22:50:50 | DEBUG    | TNP DEBUG: Extrude New Body - kein Boolean
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='bcf701b8-7a32-48ec-afc7-7b4056263390', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=0, geometry_hash='57114d26f1de8983', timestamp=1770760250.1728358)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='28a34540-f559-4515-ad2c-979e312515dd', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=1, geometry_hash='8c58c2221c19b730', timestamp=1770760250.1728358)
+22:50:50 | DEBUG    | Shape registriert: ShapeID(uuid='dcac6422-8581-41cc-a8ba-97b1452161c9', shape_type=<ShapeType.EDGE: 1>, feature_id='93e2422d', local_index=2, geometry_hash='e7c92c9f97de7d35', timestamp=1770760250.173856)
+22:50:50 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 3 out)
+22:50:50 | INFO     | TNP v4.0: 3 Edges für Extrude 'Extrude' registriert
+22:50:50 | DEBUG    | ✓ Body4: BREP Valid (3 Faces)
+22:50:50 | DEBUG    | Redo: Added Extrude to Body4 (rebuild=True)
+22:50:50 | DEBUG    | _update_body_mesh aufgerufen für 'Body4' (id=130afef2)
+22:50:50 | DEBUG    | Adaptive Tessellation: BBox-Diag=61.0mm → Deflection=0.0610mm
+22:50:50 | INFO     | Tessellated with face IDs: 208 triangles, 3 faces
+22:50:50 | DEBUG    | B-Rep Edges extrahiert: 116 Feature-Kanten
+22:50:50 | DEBUG    | Mesh regenerated for 'Body4': 214 pts, 116 edges, 3 B-Rep faces
+22:50:50 | DEBUG    | Verwende vtk_mesh: 214 Punkte, vtk_edges: 116
+22:50:50 | DEBUG    | Füge Mesh hinzu: body_130afef2_m, 214 Punkte
+22:50:50 | DEBUG    |   Mesh bounds: X(-49.0 to -15.0), Y(-17.0 to 17.0), Z(0.0 to 37.5)
+22:50:50 | DEBUG    |   Mesh center: (-32.0, 0.0, 18.8)
+22:50:50 | DEBUG    | Actor 'body_130afef2_m' sichtbar gesetzt
+22:50:50 | DEBUG    | Füge Edges hinzu: body_130afef2_e, 116 Linien
+22:50:50 | DEBUG    | Texture-Previews aktualisiert für 1 Bodies
+22:50:50 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:50 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:50 | DEBUG    | Body 9ad21785: Bypassing cache, using B-Rep face_info (6 faces)
+22:50:50 | DEBUG    | Body 130afef2: Bypassing cache, using B-Rep face_info (3 faces)
+22:50:55 | DEBUG    | [Orientation] Plane origin: (0, 0, 0), normal: (0, 0, 1)
+22:50:55 | DEBUG    | [Orientation] Plane X-dir: (np.float64(1.0), np.float64(0.0), np.float64(0.0)), Y-dir: (np.float64(0.0), np.float64(1.0), np.float64(0.0))
+22:50:55 | DEBUG    | [Orientation] Projected world origin: (0.0, 0.0)
+22:50:55 | DEBUG    | [Auto-Align] 180° (screen Y-dir, dot=0.28)
+22:50:55 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
+22:50:55 | DEBUG    | Sketch-Pfad-Modus beendet
+22:50:55 | SUCCESS  | Bearbeite Skizze: Sketch1
+22:50:57 | DEBUG    | [CLICK] dim_input_active=True, panel at PySide6.QtCore.QRect(220, 624, 175, 49), click at PySide6.QtCore.QPoint(355, 750), in_panel=False
+22:50:57 | INFO     | [CLICK] Left-click outside panel → confirming dim_input
+22:50:57 | INFO     | [PROFILE] Lines: 8 non-construction / 8 total
+22:50:57 | DEBUG    | [PROFILE] Line 0: (8.00,-27.00)→(45.00,-27.00) welded to (8.0, -27.0)→(45.0, -27.0)
+22:50:57 | DEBUG    | [PROFILE] Line 1: (45.00,-27.00)→(45.00,37.00) welded to (45.0, -27.0)→(45.0, 37.0)
+22:50:57 | DEBUG    | [PROFILE] Line 2: (45.00,37.00)→(8.00,37.00) welded to (45.0, 37.0)→(8.0, 37.0)
+22:50:57 | DEBUG    | [PROFILE] Line 3: (8.00,37.00)→(8.00,-27.00) welded to (8.0, 37.0)→(8.0, -27.0)
+22:50:57 | DEBUG    | [PROFILE] Line 4: (-7.00,97.00)→(24.00,97.00) welded to (-7.0, 97.0)→(24.0, 97.0)
+22:50:57 | DEBUG    | [PROFILE] Line 5: (24.00,97.00)→(24.00,114.00) welded to (24.0, 97.0)→(24.0, 114.0)
+22:50:57 | DEBUG    | [PROFILE] Line 6: (24.00,114.00)→(-7.00,114.00) welded to (24.0, 114.0)→(-7.0, 114.0)
+22:50:57 | DEBUG    | [PROFILE] Line 7: (-7.00,114.00)→(-7.00,97.00) welded to (-7.0, 114.0)→(-7.0, 97.0)
+22:50:57 | INFO     | [PROFILE] Arcs: 0 non-construction / 0 total
+22:50:57 | DEBUG    | Verarbeite 3 Kreise für Profil-Erkennung
+22:50:57 | DEBUG    |   Kreis: center=(-24.00, 45.00), r=16.28, area=831.31
+22:50:57 | DEBUG    |   Kreis: center=(-32.00, -72.00), r=17.03, area=909.66
+22:50:57 | DEBUG    |   Kreis: center=(75.00, 32.00), r=16.28, area=831.31
+22:50:57 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (-24.00, 45.00)
+22:50:57 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=909.66 @ (-32.00, -72.00)
+22:50:57 | DEBUG    | Eigenständiger Kreis hinzugefügt: area=831.31 @ (75.00, 32.00)
+22:50:57 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+22:50:57 | DEBUG    | Profile 4: 4 geometry segments: {'line'}
+22:50:57 | DEBUG    | Stored geometry map for profile: (8.0, -27.0, 45.0, 37.0, 2368.0)
+22:50:57 | DEBUG    | Stored geometry map for profile: (-49.03, -89.03, -14.97, -54.97, 909.66)
+22:50:57 | DEBUG    | Stored geometry map for profile: (-40.28, 28.72, -7.72, 61.28, 831.31)
+22:50:57 | DEBUG    | Stored geometry map for profile: (58.72, 15.72, 91.28, 48.28, 831.31)
+22:50:57 | DEBUG    | Stored geometry map for profile: (-7.0, 97.0, 24.0, 114.0, 527.0)
+22:50:57 | DEBUG    | [CAD Kernel First] Synced 5 profiles to sketch (inkl. Holes)
+22:50:57 | DEBUG    | [DIM] Fallthrough hide at end of _on_dim_confirmed (tool=RECTANGLE, step=1)
+22:50:58 | DEBUG    | [Orientation] Plane origin: (0, 0, 0), normal: (0, 0, 1)
+22:50:58 | DEBUG    | [Orientation] Plane X-dir: (np.float64(0.0), np.float64(1.0), np.float64(0.0)), Y-dir: (np.float64(-1.0), np.float64(0.0), np.float64(0.0))
+22:50:58 | DEBUG    | [Orientation] Projected world origin: (0.0, 0.0)
+22:50:58 | DEBUG    | [preview] clear transient previews: mode:sketch->3d
+22:50:58 | DEBUG    | Sketch-Pfad-Modus beendet
+22:51:00 | DEBUG    | Parent Polygon 0: area=2368.0, holes_found=0
+22:51:00 | INFO     |   → Shell nach difference: area=2368.0, interiors=0
+22:51:00 | DEBUG    | Parent Polygon 1: area=910.8, holes_found=0
+22:51:00 | INFO     |   → Shell nach difference: area=910.8, interiors=0
+22:51:00 | DEBUG    | Parent Polygon 2: area=832.3, holes_found=0
+22:51:00 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:51:00 | DEBUG    | Parent Polygon 3: area=832.3, holes_found=0
+22:51:00 | INFO     |   → Shell nach difference: area=832.3, interiors=0
+22:51:00 | DEBUG    | Parent Polygon 4: area=527.0, holes_found=0
+22:51:00 | INFO     |   → Shell nach difference: area=527.0, interiors=0
+22:51:00 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:00 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:00 | DEBUG    | Body 9ad21785: Bypassing cache, using B-Rep face_info (6 faces)
+22:51:00 | DEBUG    | Body 130afef2: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:00 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+22:51:01 | DEBUG    | FeatureDependencyGraph initialisiert
+22:51:01 | DEBUG    | [EXTRUDE] Matched selection (8.50, 105.50) → sketch (8.50, 105.50)
+22:51:01 | DEBUG    | Feature '34f5c2a4' hinzugefügt (Index 0)
+22:51:01 | INFO     | Rebuilding Body 'Body5' (Features 0-0/1)...
+22:51:01 | DEBUG    | [OCP-FIRST] has_sketch=True, has_polys=[<POLYGON ((24 97, -7 97, -7 114, 24 114, 24 97))>], has_face_brep=None, has_face_refs=False
+22:51:01 | DEBUG    | [SELECTOR] 5 Profile verfügbar, 1 Selektoren
+22:51:01 | DEBUG    |   Profile 0: centroid=(26.50, 5.00), area=2368.0
+22:51:01 | DEBUG    |   Profile 1: centroid=(-32.00, -72.00), area=909.7
+22:51:01 | DEBUG    |   Profile 2: centroid=(-24.00, 45.00), area=831.3
+22:51:01 | DEBUG    |   Profile 3: centroid=(75.00, 32.00), area=831.3
+22:51:01 | DEBUG    |   Profile 4: centroid=(8.50, 105.50), area=527.0
+22:51:01 | DEBUG    | [SELECTOR] Selektoren: [(8.5, 105.5)]
+22:51:01 | DEBUG    | [SELECTOR] BEST MATCH: (8.50, 105.50) ≈ (8.50, 105.50), dist=0.00
+22:51:01 | INFO     | [OCP-FIRST] 1/5 Profile via Selektor
+22:51:01 | INFO     | [TNP v4.1] 3 Kreise mit native_ocp_data gefunden
+22:51:01 | INFO     | [OCP-FIRST] Verarbeite 1 Profile.
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='999a58a6-a45f-441a-842b-5529c160e194', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=0, geometry_hash='a113d7a7c67d24ac', timestamp=1770760261.6457703)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='4ee5b7ad-2889-4167-ad1b-c863355bc8d5', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=1, geometry_hash='72fed5c5ce350580', timestamp=1770760261.6457703)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='7e237557-ae4f-45c1-b221-845c2f8f5a72', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=2, geometry_hash='96892e49669df914', timestamp=1770760261.6467702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='8d1a71d1-737d-40ce-aa31-ed6c54f8d3f2', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=3, geometry_hash='d75fb3ca14f2bdda', timestamp=1770760261.6467702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='2692af67-34bd-4ac8-ae0d-a069530dffd3', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=4, geometry_hash='4dc85a1774e83b52', timestamp=1770760261.6477702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='2da5640d-6731-4cd4-9038-d6b4f44f3ab1', shape_type=<ShapeType.FACE: 2>, feature_id='34f5c2a4', local_index=5, geometry_hash='0727613d015eec52', timestamp=1770760261.6477702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='6fc0671f-6666-4d6f-96d0-4b911bc11ad9', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=0, geometry_hash='8935f450bea11eb8', timestamp=1770760261.648771)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='b06883ec-857e-40fe-9ef4-141cac4c5e2e', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=1, geometry_hash='3aebfcad4a8d3879', timestamp=1770760261.648771)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='f3c0868d-fa3f-4ed9-b11a-98953dedff83', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=2, geometry_hash='02707e55c1a9a943', timestamp=1770760261.64977)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='1cc532ce-abd7-4eac-a0b1-d70e6183a80b', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=3, geometry_hash='a00334af779b27a1', timestamp=1770760261.6557977)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='db8528cd-d70c-4f66-80f0-c6b4c3807802', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=4, geometry_hash='7c5cfe4ae3f17c22', timestamp=1770760261.6567702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='48d10f3f-9267-474b-b6cc-b5511217c548', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=5, geometry_hash='4f7f03f3fb5ed99e', timestamp=1770760261.6567702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='143598ba-1900-45e5-8360-1438d819e302', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=6, geometry_hash='ede802722c25dbf3', timestamp=1770760261.65777)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='92a537db-a4da-4636-99b7-cf1f37bd00fe', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=7, geometry_hash='3ab91ea529058ca1', timestamp=1770760261.6587727)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='94c2f767-8917-4481-a964-e2bbe3477299', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=8, geometry_hash='2373fb8fb55d6c88', timestamp=1770760261.6587727)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='692e9fa6-6b9f-409d-9f74-59806d71f7ac', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=9, geometry_hash='e9c2586f25522b16', timestamp=1770760261.6597698)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='83d0f12d-ab85-4106-963b-8c2d40a57601', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=10, geometry_hash='4d6cc34c4779d26f', timestamp=1770760261.6597698)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='ae6fbb83-e3f0-42b6-ad5f-c3f20ece5005', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=11, geometry_hash='3bf41d01e1559966', timestamp=1770760261.6607697)
+22:51:01 | INFO     | TNP: 12 Edges für Feature '34f5c2a4' registriert
+22:51:01 | SUCCESS  | OCP Extrude TNP: 6 Faces, 33 Edges registriert
+22:51:01 | DEBUG    | [OCP-FIRST] Extrudiert: 34f5c2a4
+22:51:01 | DEBUG    | TNP DEBUG: Extrude New Body - kein Boolean
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='6fc0671f-6666-4d6f-96d0-4b911bc11ad9', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=0, geometry_hash='8935f450bea11eb8', timestamp=1770760261.648771)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='b06883ec-857e-40fe-9ef4-141cac4c5e2e', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=1, geometry_hash='3aebfcad4a8d3879', timestamp=1770760261.648771)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='f3c0868d-fa3f-4ed9-b11a-98953dedff83', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=2, geometry_hash='02707e55c1a9a943', timestamp=1770760261.64977)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='1cc532ce-abd7-4eac-a0b1-d70e6183a80b', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=3, geometry_hash='a00334af779b27a1', timestamp=1770760261.6557977)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='db8528cd-d70c-4f66-80f0-c6b4c3807802', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=4, geometry_hash='7c5cfe4ae3f17c22', timestamp=1770760261.6567702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='48d10f3f-9267-474b-b6cc-b5511217c548', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=5, geometry_hash='4f7f03f3fb5ed99e', timestamp=1770760261.6567702)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='143598ba-1900-45e5-8360-1438d819e302', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=6, geometry_hash='ede802722c25dbf3', timestamp=1770760261.65777)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='92a537db-a4da-4636-99b7-cf1f37bd00fe', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=7, geometry_hash='3ab91ea529058ca1', timestamp=1770760261.6587727)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='94c2f767-8917-4481-a964-e2bbe3477299', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=8, geometry_hash='2373fb8fb55d6c88', timestamp=1770760261.6587727)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='692e9fa6-6b9f-409d-9f74-59806d71f7ac', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=9, geometry_hash='e9c2586f25522b16', timestamp=1770760261.6597698)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='83d0f12d-ab85-4106-963b-8c2d40a57601', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=10, geometry_hash='4d6cc34c4779d26f', timestamp=1770760261.6597698)
+22:51:01 | DEBUG    | Shape registriert: ShapeID(uuid='ae6fbb83-e3f0-42b6-ad5f-c3f20ece5005', shape_type=<ShapeType.EDGE: 1>, feature_id='34f5c2a4', local_index=11, geometry_hash='3bf41d01e1559966', timestamp=1770760261.6607697)
+22:51:01 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
+22:51:01 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
+22:51:01 | DEBUG    | ✓ Body5: BREP Valid (6 Faces)
+22:51:01 | DEBUG    | Redo: Added Extrude to Body5 (rebuild=True)
+22:51:01 | DEBUG    | _update_body_mesh aufgerufen für 'Body5' (id=1ad459e3)
+22:51:01 | DEBUG    | Adaptive Tessellation: BBox-Diag=58.5mm → Deflection=0.0585mm
+22:51:01 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
+22:51:01 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
+22:51:01 | DEBUG    | Mesh regenerated for 'Body5': 24 pts, 24 edges, 6 B-Rep faces
+22:51:01 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
+22:51:01 | DEBUG    | Füge Mesh hinzu: body_1ad459e3_m, 24 Punkte
+22:51:01 | DEBUG    |   Mesh bounds: X(-7.0 to 24.0), Y(97.0 to 114.0), Z(0.0 to 46.7)
+22:51:01 | DEBUG    |   Mesh center: (8.5, 105.5, 23.3)
+22:51:01 | DEBUG    | Actor 'body_1ad459e3_m' sichtbar gesetzt
+22:51:01 | DEBUG    | Füge Edges hinzu: body_1ad459e3_e, 24 Linien
+22:51:01 | DEBUG    | Texture-Previews aktualisiert für 1 Bodies
+22:51:01 | DEBUG    | Body a4fcd7a4: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:01 | DEBUG    | Body fff069d1: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:01 | DEBUG    | Body 9ad21785: Bypassing cache, using B-Rep face_info (6 faces)
+22:51:01 | DEBUG    | Body 130afef2: Bypassing cache, using B-Rep face_info (3 faces)
+22:51:01 | DEBUG    | Body 1ad459e3: Bypassing cache, using B-Rep face_info (6 faces)

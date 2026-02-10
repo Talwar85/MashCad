@@ -40,9 +40,28 @@ class ClickableHoverWidget(QFrame):
 class ToolPanel3D(QWidget):
     action_triggered = Signal(str)
 
+    _SYNONYMS = {
+        "round": "fillet", "abrunden": "fillet", "radius": "fillet",
+        "bevel": "chamfer", "fase": "chamfer",
+        "hollow": "shell", "aushöhlen": "shell",
+        "taper": "draft", "schräge": "draft",
+        "duplicate": "copy", "duplizieren": "copy", "kopieren": "copy",
+        "schneiden": "cut", "subtract": "cut",
+        "vereinen": "union", "combine": "union",
+        "messen": "measure", "distance": "measure", "abstand": "measure",
+        "drehen": "revolve", "rotate": "revolve",
+        "importieren": "import", "laden": "import",
+        "exportieren": "export", "speichern": "export",
+        "drucken": "export stl", "printing": "export stl",
+        "gewinde": "thread", "screw": "thread",
+        "bohrung": "hole", "bohren": "hole",
+        "spiegel": "mirror", "spiegeln": "mirror",
+        "muster": "pattern",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(300)  # Breiter für bessere Lesbarkeit
+        self.setMinimumWidth(180)
         bg = DesignTokens.COLOR_BG_PANEL.name()
         elevated = DesignTokens.COLOR_BG_ELEVATED.name()
         txt = DesignTokens.COLOR_TEXT_PRIMARY.name()
@@ -71,12 +90,73 @@ class ToolPanel3D(QWidget):
                 color: white;
             }}
         """)
+        self._all_sections = []
+        self._all_tool_widgets = []
+        self._beginner_mode = False
+        self._advanced_section_titles = {"Advanced", "Inspect"}
         self._setup_ui()
         
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        # --- Filter + Beginner (like ToolPanel finish button style) ---
+        from PySide6.QtWidgets import QLineEdit
+        top_container = QWidget()
+        top_container.setStyleSheet(f"background: {DesignTokens.COLOR_BG_PANEL.name()};")
+        top_lay = QVBoxLayout(top_container)
+        top_lay.setContentsMargins(8, 6, 8, 6)
+        top_lay.setSpacing(4)
+
+        self._search_field = QLineEdit()
+        self._search_field.setFocusPolicy(Qt.ClickFocus)
+        self._search_field.setPlaceholderText(tr("Filter..."))
+        self._search_field.setClearButtonEnabled(True)
+        self._search_field.setStyleSheet(f"""
+            QLineEdit {{
+                background: {DesignTokens.COLOR_BG_INPUT.name()};
+                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }}
+            QLineEdit:focus {{
+                border-color: {DesignTokens.COLOR_PRIMARY.name()};
+            }}
+        """)
+        self._search_field.textChanged.connect(self._on_search_changed)
+        top_lay.addWidget(self._search_field)
+
+        self._btn_beginner = QToolButton()
+        self._btn_beginner.setText(tr("☆ Beginner"))
+        self._btn_beginner.setCheckable(True)
+        self._btn_beginner.setChecked(False)
+        self._btn_beginner.setCursor(Qt.PointingHandCursor)
+        self._btn_beginner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._btn_beginner.setStyleSheet(f"""
+            QToolButton {{
+                background: {DesignTokens.COLOR_BG_ELEVATED.name()};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
+                border-radius: 4px;
+                color: {DesignTokens.COLOR_TEXT_MUTED.name()};
+                padding: 4px 8px;
+                font-size: 11px;
+            }}
+            QToolButton:checked {{
+                background: {DesignTokens.COLOR_PRIMARY.name()};
+                color: white;
+                border-color: {DesignTokens.COLOR_PRIMARY.name()};
+            }}
+            QToolButton:hover:!checked {{
+                background: #525252;
+            }}
+        """)
+        self._btn_beginner.clicked.connect(lambda checked: self._set_mode(checked))
+        top_lay.addWidget(self._btn_beginner)
+
+        main_layout.addWidget(top_container)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -93,75 +173,190 @@ class ToolPanel3D(QWidget):
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(10)
 
-        # --- Primitives (nur Grid-Gruppe) ---
+        # --- Primitives ---
         self._add_group("Primitives", [
-            (tr("Box"), tr("Create box primitive"), "primitive_box"),
-            (tr("Cylinder"), tr("Create cylinder primitive"), "primitive_cylinder"),
-            (tr("Sphere"), tr("Create sphere primitive"), "primitive_sphere"),
-            (tr("Cone"), tr("Create cone primitive"), "primitive_cone"),
+            (tr("Box"), tr("Create a parametric box\nDefine dimensions in dialog\nConfirm: OK"), "primitive_box"),
+            (tr("Cylinder"), tr("Create a parametric cylinder\nDefine radius and height\nConfirm: OK"), "primitive_cylinder"),
+            (tr("Sphere"), tr("Create a parametric sphere\nDefine radius\nConfirm: OK"), "primitive_sphere"),
+            (tr("Cone"), tr("Create a parametric cone\nDefine radii and height\nConfirm: OK"), "primitive_cone"),
         ],  expanded=False)
 
         # --- Modeling ---
         self._add_group("Modeling", [
-            (tr("New Sketch"), tr("New Sketch"), "new_sketch", "N"),
-            (tr("Offset Plane..."), tr("Create offset construction plane"), "offset_plane"),
-            (tr("Extrude..."), tr("Extrude"), "extrude", "E"),
-            (tr("Revolve..."), tr("Revolve sketch around axis"), "revolve"),
-            (tr("Sweep"), tr("Sweep profile along path"), "sweep"),
-            (tr("Loft"), tr("Loft between profiles"), "loft"),
-        ], expanded=True, highlight_first=True)
+            (tr("New Sketch"), tr("Start a new 2D sketch\nSelect a plane or face\nDraw profiles, then extrude to 3D"), "new_sketch", "N"),
+            (tr("Offset Plane..."), tr("Create an offset construction plane\nSelect reference plane, set distance\nConfirm: OK"), "offset_plane"),
+            (tr("Extrude..."), tr("Extrude a closed sketch profile to 3D\nSelect: closed profile\nConfirm: Enter or Finish button"), "extrude", "E"),
+            (tr("Revolve..."), tr("Revolve profile around an axis\nSelect: profile + axis edge\nConfirm: Finish button"), "revolve"),
+            (tr("Sweep"), tr("Sweep a profile along a path\nSelect: profile face + path edge\nConfirm: Finish button"), "sweep"),
+            (tr("Loft"), tr("Create shape between multiple profiles\nSelect: 2+ profile faces\nConfirm: Finish button"), "loft"),
+        ], expanded=True)
 
         # --- Modify ---
         self._add_group(tr("Modify"), [
-            (tr("Fillet"), tr("Round edges"), "fillet"),
-            (tr("Chamfer"), tr("Bevel edges"), "chamfer"),
-            (tr("Hole..."), tr("Create hole (simple/counterbore/countersink)"), "hole"),
-            (tr("Draft..."), tr("Add draft/taper angle to faces"), "draft"),
-            (tr("Split Body..."), tr("Split body along a plane"), "split_body"),
-            (tr("Shell"), tr("Hollow out solid"), "shell"),            
-            (tr("Surface Texture"), tr("Apply texture to faces (3D print)"), "surface_texture"),
-            (tr("N-Sided Patch"), tr("Fill N-sided boundary with smooth surface"), "nsided_patch"),
-            (tr("Lattice"), tr("Generate lattice structure for lightweight parts"), "lattice"),
-            (tr("Mirror"), tr("Mirror body"), "mirror_body", "M"),
-            (tr("Copy"), tr("Duplicate body"), "copy_body", "D"),
-            (tr("Pattern"), tr("Create linear or circular pattern"), "pattern"),
+            (tr("Fillet"), tr("Round edges with a radius\nSelect: one or more edges\nConfirm: Enter or Finish · Esc: cancel"), "fillet"),
+            (tr("Chamfer"), tr("Bevel edges at a distance\nSelect: one or more edges\nConfirm: Enter or Finish · Esc: cancel"), "chamfer"),
+            (tr("Hole..."), tr("Create hole in a face\nSelect: planar face, set diameter/depth\nConfirm: OK"), "hole"),
+            (tr("Draft..."), tr("Add draft/taper angle to faces\nSelect: faces to draft\nConfirm: OK"), "draft"),
+            (tr("Split Body..."), tr("Split a body along a plane\nSelect: body, choose plane\nConfirm: OK"), "split_body"),
+            (tr("Shell"), tr("Hollow out a solid body\nSelect: face to open, set wall thickness\nConfirm: Finish"), "shell"),
+            (tr("Surface Texture"), tr("Apply texture to faces for 3D printing\nSelect: body, choose texture type\nConfirm: Apply"), "surface_texture"),
+            (tr("N-Sided Patch"), tr("Fill boundary with smooth surface\nSelect: boundary edges\nConfirm: OK"), "nsided_patch"),
+            (tr("Lattice"), tr("Generate lattice structure\nSelect: body to lattice\nConfirm: OK"), "lattice"),
+            (tr("Mirror"), tr("Mirror a body across a plane\nSelect: body (auto-mirrors)\nShortcut: M"), "mirror_body", "M"),
+            (tr("Copy"), tr("Duplicate the selected body\nSelect: body to copy\nShortcut: D"), "copy_body", "D"),
+            (tr("Pattern"), tr("Create linear or circular pattern\nSelect: body, set count/spacing\nConfirm: Finish"), "pattern"),
         ])
 
-     
         # --- Boolean ---
         self._add_group("Boolean", [
-            (tr("Union"), tr("Combine bodies"), "boolean_union"),
-            (tr("Cut"), tr("Subtract bodies"), "boolean_cut"),
-            (tr("Intersect"), tr("Intersection of bodies"), "boolean_intersect"),
+            (tr("Union"), tr("Combine two bodies into one\nSelect: two bodies in dialog\nConfirm: OK"), "boolean_union"),
+            (tr("Cut"), tr("Subtract one body from another\nSelect: target + tool body\nConfirm: OK"), "boolean_cut"),
+            (tr("Intersect"), tr("Keep only overlapping volume\nSelect: two bodies\nConfirm: OK"), "boolean_intersect"),
         ])
 
         # --- Inspect ---
         self._add_group("Inspect", [
-            (tr("Section View"), tr("Cut through body to see internal structure"), "section_view"),
-            (tr("Check Geometry"), tr("Find and fix invalid topology (open shells, bad faces)"), "geometry_check"),
-            (tr("Surface Analysis"), tr("Visualize curvature, draft angles for moldability, zebra stripes for continuity"), "surface_analysis"),
-            (tr("Mesh Repair"), tr("Fix mesh errors: gaps, self-intersections, degenerate faces"), "mesh_repair"),
-            (tr("Wall Thickness"), tr("Check minimum wall thickness for 3D printing strength"), "wall_thickness"),
-            (tr("Measure"), tr("Measure distances, angles, areas"), "measure"),
-            (tr("BREP Cleanup"), tr("Merge faces after mesh→BREP conversion (holes, fillets, pockets)"), "brep_cleanup"),
+            (tr("Section View"), tr("Cut through body to inspect inside\nAdjust position with slider\nToggle: click again to close"), "section_view"),
+            (tr("Check Geometry"), tr("Find invalid topology\nSelect: body to check\nShows: errors + repair options"), "geometry_check"),
+            (tr("Surface Analysis"), tr("Visualize curvature and draft angles\nSelect: body to analyze\nModes: curvature, zebra, draft"), "surface_analysis"),
+            (tr("Mesh Repair"), tr("Fix mesh errors and gaps\nSelect: mesh body\nAuto-repair + manual tools"), "mesh_repair"),
+            (tr("Wall Thickness"), tr("Check wall thickness for 3D printing\nSelect: body\nShows: thin areas in red"), "wall_thickness"),
+            (tr("Measure"), tr("Measure distances, angles, areas\nClick: two points or edges\nResult shown in panel"), "measure"),
+            (tr("BREP Cleanup"), tr("Cleanup after mesh→BREP conversion\nMerge co-planar faces\nImproves fillet/chamfer quality"), "brep_cleanup"),
         ])
 
         # --- File ---
         self._add_group(tr("File"), [
-            (tr("Import Mesh"), tr("Load STL/OBJ file"), "import_mesh"),
-            (tr("Convert Mesh to CAD"), tr("Convert mesh to solid (BREP)"), "convert_to_brep"),
-            (tr("Export STL..."), tr("Export as STL"), "export_stl"),
-            (tr("Export STEP..."), tr("Export as STEP"), "export_step"),
+            (tr("Import Mesh"), tr("Load STL, OBJ, PLY file\nSelect file in dialog\nMesh appears in viewport"), "import_mesh"),
+            (tr("Convert Mesh to CAD"), tr("Convert mesh to parametric solid\nSelect: mesh body\nEnables CAD operations on imported meshes"), "convert_to_brep"),
+            (tr("Export STL..."), tr("Export body as STL for 3D printing\nSelect: body or export all\nChoose resolution in dialog"), "export_stl"),
+            (tr("Export STEP..."), tr("Export as STEP for CAD exchange\nIndustry-standard format\nPreserves parametric data"), "export_step"),
         ])
 
         # --- Advanced ---
         self._add_group("Advanced", [
-            (tr("Thread..."), tr("Create thread (metric/UNC)"), "thread"),
+            (tr("Thread..."), tr("Create thread on cylindrical face\nSelect: cylindrical face\nSet: metric/UNC, pitch, depth"), "thread"),
         ])
         
         self.layout.addStretch()
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
+
+    def _add_quick_actions(self):
+        """Non-collapsible Quick Actions section for common tasks."""
+        qa_frame = QWidget()
+        qa_frame.setObjectName("quickActions")
+        qa_frame.setStyleSheet("background: transparent;")
+        qa_lay = QVBoxLayout(qa_frame)
+        qa_lay.setContentsMargins(8, 2, 8, 8)
+        qa_lay.setSpacing(4)
+
+        header = QLabel(tr("Quick Actions"))
+        header.setStyleSheet(f"""
+            color: {DesignTokens.COLOR_TEXT_MUTED.name()};
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            padding: 4px 8px;
+        """)
+        qa_lay.addWidget(header)
+
+        grid_widget = QWidget()
+        grid_lay = QGridLayout(grid_widget)
+        grid_lay.setSpacing(4)
+        grid_lay.setContentsMargins(0, 0, 0, 0)
+
+        qa_items = [
+            (tr("New Sketch"), "new_sketch"),
+            (tr("Extrude"), "extrude"),
+            (tr("Fillet"), "fillet"),
+            (tr("Measure"), "measure"),
+            (tr("Export STL"), "export_stl"),
+            (tr("Import Mesh"), "import_mesh"),
+        ]
+
+        p = DesignTokens.COLOR_PRIMARY.name()
+        for i, (label, action) in enumerate(qa_items):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    text-align: center;
+                    font-weight: 500;
+                    font-size: 12px;
+                    background: rgba(37, 99, 235, 0.08);
+                    border: 1px solid rgba(37, 99, 235, 0.15);
+                    border-radius: 4px;
+                    padding: 7px 4px;
+                    color: #d4d4d4;
+                }}
+                QToolButton:hover {{
+                    background: rgba(37, 99, 235, 0.18);
+                    border-color: {p};
+                    color: white;
+                }}
+                QToolButton:pressed {{
+                    background: {p};
+                    color: white;
+                }}
+            """)
+            btn.clicked.connect(lambda checked=False, a=action: self.action_triggered.emit(a))
+            grid_lay.addWidget(btn, i // 2, i % 2)
+
+        qa_lay.addWidget(grid_widget)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background: {DesignTokens.COLOR_BORDER.name()};")
+        qa_lay.addWidget(sep)
+
+        self.layout.addWidget(qa_frame)
+        self._quick_actions_frame = qa_frame
+
+    def _on_search_changed(self, text: str):
+        """Filter tools across all sections by search text."""
+        query = text.strip().lower()
+
+        resolved = self._SYNONYMS.get(query, "") if query else ""
+
+        for section, tool_widgets in zip(self._all_sections, self._all_tool_widgets):
+            visible_count = 0
+            for widget, search_text in tool_widgets:
+                if not query:
+                    widget.setVisible(True)
+                    visible_count += 1
+                else:
+                    match = (query in search_text) or (resolved != "" and resolved in search_text)
+                    widget.setVisible(bool(match))
+                    if match:
+                        visible_count += 1
+
+            if query:
+                section.setVisible(visible_count > 0)
+                if visible_count > 0:
+                    section.set_expanded(True)
+            else:
+                section.setVisible(True)
+                self._apply_mode_filter()
+
+    def _set_mode(self, beginner: bool):
+        """Switch between Beginner and All mode."""
+        self._beginner_mode = beginner
+        self._btn_beginner.setChecked(beginner)
+        self._apply_mode_filter()
+
+    def _apply_mode_filter(self):
+        """Show/hide sections based on beginner mode."""
+        if not self._search_field.text().strip():
+            for section in self._all_sections:
+                if self._beginner_mode and section._title in self._advanced_section_titles:
+                    section.setVisible(False)
+                else:
+                    section.setVisible(True)
 
     def _add_group(self, title, buttons, icon=None, grid=False, expanded=False, highlight_first=False):
         section = CollapsibleSection(title, icon=icon, expanded=expanded)
@@ -175,8 +370,9 @@ class ToolPanel3D(QWidget):
         else:
             lay = None
 
+        section_tools = []
+
         for i, btn_data in enumerate(buttons):
-            # Support: (label, action), (label, tip, action), (label, tip, action, shortcut)
             shortcut = None
             if len(btn_data) == 4:
                 label, tip, action, shortcut = btn_data
@@ -191,8 +387,10 @@ class ToolPanel3D(QWidget):
             if tip:
                 btn.setToolTip(tip)
 
+            search_text = f"{label} {action} {tip or ''}".lower()
+            section_tools.append((btn, search_text))
+
             if grid:
-                # Grid buttons styling
                 btn.setStyleSheet("""
                     QToolButton {
                         text-align: center;
@@ -211,6 +409,8 @@ class ToolPanel3D(QWidget):
         if grid:
             section.content_layout.addWidget(grid_widget)
 
+        self._all_sections.append(section)
+        self._all_tool_widgets.append(section_tools)
         self.layout.addWidget(section)
 
     def _create_btn(self, text, action_name, shortcut=None, for_grid=False, highlight=False):

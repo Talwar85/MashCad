@@ -55,6 +55,11 @@ class MashCadStatusBar(QWidget):
         self.tool_label = QLabel("")
         layout.addWidget(self.tool_label)
 
+        self.hint_label = QLabel("")
+        self.hint_label.setStyleSheet(f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; font-size: 11px; font-style: italic;")
+        self.hint_label.setVisible(False)
+        layout.addWidget(self.hint_label)
+
         layout.addStretch()
 
         # === Center: Coordinates ===
@@ -122,6 +127,21 @@ class MashCadStatusBar(QWidget):
         else:
             self.tool_label.setText("")
             self.tool_label.setVisible(False)
+        self.hint_label.setText("")
+        self.hint_label.setVisible(False)
+
+    def set_tool_hint(self, tool_name: str, hint: str = ""):
+        """Sets tool name with contextual guidance hint."""
+        if tool_name:
+            self.tool_label.setText(tool_name)
+            self.tool_label.setVisible(True)
+            self.hint_label.setText(f"— {hint}" if hint else "")
+            self.hint_label.setVisible(bool(hint))
+        else:
+            self.tool_label.setText("")
+            self.tool_label.setVisible(False)
+            self.hint_label.setText("")
+            self.hint_label.setVisible(False)
 
     def set_mode(self, mode: str):
         """Setzt den aktuellen Modus (2D/3D)."""

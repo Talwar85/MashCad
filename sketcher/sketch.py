@@ -75,10 +75,6 @@ class Sketch:
     _cached_profiles: list = field(default_factory=list, repr=False)
     _adjacency: dict = field(default_factory=dict, repr=False)  # {(rx,ry): [line, ...]}
 
-    # CAD Kernel First: Aktuelle geschlossene Profile (Shapely Polygons)
-    # Wird vom SketchEditor synchronisiert, genutzt von _compute_extrude_part/_compute_revolve
-    closed_profiles: list = field(default_factory=list, repr=False)
-    
     # === Geometrie-Erstellung ===
     
     def add_point(self, x: float, y: float, construction: bool = False) -> Point2D:
@@ -158,9 +154,29 @@ class Sketch:
     def add_arc(self, cx: float, cy: float, radius: float,
                 start_angle: float, end_angle: float,
                 construction: bool = False) -> Arc2D:
-        """Fügt einen Bogen hinzu"""
+        """Fügt einen Bogen hinzu
+
+        TNP v4.1: Speichert native OCP Daten für optimierte Extrusion.
+        Arcs werden direkt als native OCP Arc Faces extrudiert
+        statt als Polygon-Approximation.
+        """
         center = Point2D(cx, cy)
         arc = Arc2D(center, radius, start_angle, end_angle, construction=construction)
+
+        # TNP v4.1: Native OCP Daten für optimierte Extrusion speichern
+        arc.native_ocp_data = {
+            'center': (cx, cy),
+            'radius': radius,
+            'start_angle': start_angle,
+            'end_angle': end_angle,
+            'plane': {
+                'origin': self.plane_origin,
+                'normal': self.plane_normal,
+                'x_dir': self.plane_x_dir,
+                'y_dir': self.plane_y_dir,
+            }
+        }
+
         self.points.append(center)
         self.arcs.append(arc)
         return arc
@@ -1073,6 +1089,17 @@ class Sketch:
         return None
     
     # === Profil-Erkennung (Optimiert: Adjacency-Map + Caching) ===
+
+    @property
+    def closed_profiles(self):
+        """Gibt geschlossene Profile zurück (lazy + cached)."""
+        return self._find_closed_profiles()
+
+    @closed_profiles.setter
+    def closed_profiles(self, value):
+        """Setter für GUI-Sync. Setzt _cached_profiles direkt."""
+        self._cached_profiles = value
+        self._profiles_valid = True
 
     def invalidate_profiles(self):
         """Nach Geometrie-Änderung aufrufen — Profil-Cache wird lazy neu berechnet."""
