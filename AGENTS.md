@@ -6,10 +6,10 @@ Dieses Dokument enthält die aktuellen und geplanten Architektur-Änderungen fü
 
 # OCP-First Migration Plan
 
-> **Status:** Phase 1-5,7 Completed ✅ | Tests: 71/71 Passing ✅
+> **Status:** Phase 1-5,7,9 Completed ✅ | Tests: 95/95 Passing ✅
 > **Startdatum:** 10.02.2026
 > **Ziel:** Vollständige Migration von Build123d zu direktem OCP (OpenCASCADE)
-> **Aktualisiert:** 10.02.2026 (Phase 7 abgeschlossen - BREP Caching)
+> **Aktualisiert:** 10.02.2026 (Phase 9 abgeschlossen - BREP Persistenz)
 > **Aktiver Git Branch:** `feature/ocp-first-migration`
 
 ---
@@ -43,7 +43,7 @@ Dieses Dokument enthält die aktuellen und geplanten Architektur-Änderungen fü
 | 6 | Boolean V4 (Done) | ✅ 100% | - | Separate Implementation |
 | 7 | BREP Caching | ✅ 100% | 22/22 ✅ | `feature/ocp-first-migration` |
 | 8 | Incremental Rebuild + Dependency Graph | ⚠️ Partial | TBD | Existing code |
-| 9 | Native BREP Persistenz | ❌ 0% | TBD | TBD |
+| 9 | Native BREP Persistenz | ✅ 100% | 24/24 ✅ | `feature/ocp-first-migration` |
 
 **Gesamtaufwand:** ~27 Stunden (Phase 5-9 verbleibend)
 
@@ -2005,10 +2005,53 @@ if missing_deps := node.depends_on - set(self._nodes.keys()):
 
 ---
 
-## Phase 9: Native BREP Persistenz ⏳ PENDING
+## Phase 9: Native BREP Persistenz ✅ COMPLETED
 
-### Ziel
-Speichern/Laden von BREP-Geometrie (.brep Format) mit TNP v4.1 ShapeID Persistenz.
+### Implementiert (10.02.2026)
+
+**Erstellte Dateien:**
+
+1. ✅ `modeling/brep_persistence.py` (neu)
+   - `BREPMetadata`: Dataclass für BREP-Metadaten
+     - shape_id, feature_id, operation_type, shape_type
+     - Timestamp und Parameter-Tracking
+     - to_dict() / from_dict() für JSON Serialisierung
+
+   - `BREPPersistence`: Native BREP Persistenz mit OCP
+     - `save_shape()`: Speichert als .brep mit BRepTools.Write_s()
+     - `load_shape()`: Lädt mit BRepTools.Read_s() + BRep_Builder
+     - `load_metadata()`: Lädt .meta.json
+     - `delete_shape()`: Löscht beide Dateien
+     - `list_shapes()`: Listet alle gespeicherten Shapes
+     - `cleanup_expired()`: Löscht alte BREPs (TTL)
+     - `get_stats()`: Statistiken über gespeicherte BREPs
+     - `export_shapes()`: Exportiert Metadaten als JSON
+   - `get_global_persistence()`: Singleton für globale Instance
+
+2. ✅ `test/test_phase9_brep_persistence.py` (neu)
+   - 24 comprehensive Tests:
+     - Metadata Tests (Creation, to_dict, from_dict)
+     - Save Shape Tests (File creation, Metadata content, Overwrite)
+     - Load Shape Tests (After save, Volume preserved, Nonexistent)
+     - Delete Shape Tests
+     - List Shapes Tests
+     - Stats Tests
+     - Cleanup Tests (TTL, Expired)
+     - Export Tests (JSON)
+     - Global Persistence Singleton Tests
+
+**Testergebnis:** 24/24 bestanden ✅
+
+**Features:**
+- Native .brep Format (OpenCASCADE Binary Format)
+- Metadaten als JSON (shape_id, feature_id, operation_type, parameters)
+- TTL-basierte Cleanup-Funktion
+- Statistiken (count, size_bytes, operation_types)
+- Shape-Typ-Erkennung (Solid vs Shape)
+
+**OCP API:**
+- `BRepTools.Write_s(shape, path)` für Speichern
+- `BRepTools.Read_s(target_shape, path, builder)` für Laden
 
 ### Detaillierter Implementierungsplan
 
