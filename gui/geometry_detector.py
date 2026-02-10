@@ -773,7 +773,7 @@ class GeometryDetector:
 
         unique_face_ids = np.unique(face_ids)
         face_info = getattr(self, '_current_face_info', None)
-        logger.trace(f"Body {body_id}: {len(unique_face_ids)} Faces (EXAKT via face_id)")
+        logger.debug(f"Body {body_id}: {len(unique_face_ids)} unique face_ids (EXAKT via face_id)")
 
         for ocp_face_id in unique_face_ids:
             cell_mask = (face_ids == ocp_face_id)
@@ -781,6 +781,13 @@ class GeometryDetector:
 
             if len(cell_ids) < 1:
                 continue
+
+            # DEBUG: Zylinder-Face-Info loggen
+            surface_type = "unknown"
+            if face_info and int(ocp_face_id) in face_info:
+                surface_type = face_info[int(ocp_face_id)].get("surface_type", "unknown")
+
+            logger.debug(f"  Face {ocp_face_id}: {len(cell_ids)} triangles, surface={surface_type}")
 
             # === FIX: B-Rep Normale aus face_info verwenden wenn verfügbar ===
             # Die Mesh-Normale kann invertiert sein (VTK Tessellation Bug)

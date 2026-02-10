@@ -3683,13 +3683,31 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if face.display_mesh:
                 name = f"det_face_{face.id}"
 
-                # Erhöhter Offset gegen Z-Fighting (UX-Improvement: 0.05 → 0.5)
-                # User-Problem: "selektierte fläche nicht immer sichtbar"
-                offset = np.array(face.plane_normal) * 0.5
-                shifted = face.display_mesh.translate(offset, inplace=False)
+                # FIX: Zylinder/Flächen mit variierender Normale
+                # Bei gekrümmten Flächen (Zylinder) würde ein einheitlicher Offset
+                # nur einen Teil korrekt platzieren. Stattdessen skalieren wir.
+                # Erkennung: Wenn die Mesh-Normalen stark variieren, ist es gekrümmt.
+                display_mesh = face.display_mesh
+                if 'Normals' in display_mesh.cell_data and display_mesh.n_cells > 1:
+                    normals = display_mesh.cell_data['Normals']
+                    # Varianz der Normalen prüfen
+                    normal_variance = np.std(normals, axis=0).sum()
+                    if normal_variance > 0.1:  # Gekrümmte Fläche (Zylinder, Kugel)
+                        # Skalierung statt Translation (dehnt mesh leicht nach aussen)
+                        center = display_mesh.center_of_mass()
+                        scaled = display_mesh.scale((1.02, 1.02, 1.02), center=center, inplace=False)
+                        highlight_mesh = scaled
+                    else:
+                        # Ebene Fläche - Offset funktioniert
+                        offset = np.array(face.plane_normal) * 0.5
+                        highlight_mesh = display_mesh.translate(offset, inplace=False)
+                else:
+                    # Keine Normalen-Infos - Fallback zu Offset
+                    offset = np.array(face.plane_normal) * 0.5
+                    highlight_mesh = display_mesh.translate(offset, inplace=False)
 
                 self.plotter.add_mesh(
-                    shifted,
+                    highlight_mesh,
                     color=color,
                     opacity=opacity,
                     name=name,
