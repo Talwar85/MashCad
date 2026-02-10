@@ -143,6 +143,7 @@ class FeatureType(Enum):
     CHAMFER = auto()
     TRANSFORM = auto()  # Für Move/Rotate/Scale/Mirror
     BOOLEAN = auto()    # Boolean-Operationen (Join, Cut, Common/Intersect)
+    PUSHPULL = auto()   # Push/Pull auf Faces (Extrusion von existierenden Flächen)
     LOFT = auto()       # Phase 6: Loft zwischen Profilen
     SWEEP = auto()      # Phase 6: Sweep entlang Pfad
     SHELL = auto()      # Phase 6: Körper aushöhlen
@@ -410,6 +411,98 @@ class BooleanFeature(Feature):
 
         if self.tool_body_id is None and self.tool_solid_data is None:
             return False, "BooleanFeature needs tool_body_id or tool_solid_data"
+
+        return True, ""
+
+
+@dataclass
+class PushPullFeature(Feature):
+    """
+    PushPull Feature - Interaktive Extrusion von existierenden Body-Faces.
+
+    PushPull ermöglicht:
+    - "Pull" (+distance): Material zur Face hinzufügen (Extrusion)
+    - "Push" (-distance): Material von der Face entfernen (Cut)
+
+    Arbeitet direkt auf Body-Faces ohne Sketch:
+    - Face wird über face_shape_id, face_index oder face_selector referenziert
+    - Face-Geometrie wird als Extrusions-Profil verwendet
+    - Unterstützt planare und gekrümmte Faces (Zylinder, Kegel, etc.)
+
+    Beispiel:
+        feat = PushPullFeature(
+            face_index=0,        # Obere Fläche einer Box
+            distance=5.0,        # 5mm nach oben ziehen (Pull)
+            direction=1          # Normalenrichtung der Face
+        )
+    """
+    # Face-Referenz (welche Face wird extrudiert?)
+    face_shape_id: Any = None           # TNP v4.0: Primäre Face-Referenz
+    face_index: Optional[int] = None    # Fallback: Face-Index im Solid
+    face_selector: dict = None          # GeometricFaceSelector als Legacy-Fallback
+
+    # Extrusions-Parameter
+    distance: float = 10.0              # Extrusions-Distanz (+ = Pull, - = Push)
+    distance_formula: Optional[str] = None  # Formel für parametrische Distanz
+    direction: int = 1                  # 1 = entlang Normal, -1 = entgegen Normal
+
+    # Operation-Typ
+    operation: str = "Join"             # "Join" (Pull/Add) oder "Cut" (Push/Remove)
+
+    # Face-Geometrie für Rebuild (wenn Face nach Boolean nicht mehr auffindbar)
+    face_brep: Optional[str] = None     # Serialisierte OCP TopoDS_Face
+    face_type: Optional[str] = None     # "plane", "cylinder", "cone", etc.
+
+    # Plane-Info für gekrümmte Faces (für Rekonstruktion der Extrusionsrichtung)
+    plane_origin: tuple = field(default_factory=lambda: (0, 0, 0))
+    plane_normal: tuple = field(default_factory=lambda: (0, 0, 1))
+    plane_x_dir: tuple = None
+    plane_y_dir: tuple = None
+
+    # Profile als Fallback (wenn Face-BREP nicht verfügbar)
+    precalculated_polys: list = field(default_factory=list)
+
+    def __post_init__(self):
+        self.type = FeatureType.PUSHPULL
+        if not self.name or self.name == "Feature":
+            op_name = "Pull" if self.distance >= 0 else "Push"
+            self.name = f"PushPull: {op_name}"
+        if self.face_index is not None:
+            try:
+                self.face_index = int(self.face_index)
+            except Exception:
+                self.face_index = None
+
+    def get_effective_distance(self) -> float:
+        """Gibt die effektive Distanz mit Richtung zurück."""
+        return self.distance * self.direction
+
+    def is_push(self) -> bool:
+        """True wenn Push-Operation (Material entfernen)."""
+        return self.get_effective_distance() < 0
+
+    def is_pull(self) -> bool:
+        """True wenn Pull-Operation (Material hinzufügen)."""
+        return self.get_effective_distance() > 0
+
+    def validate(self) -> tuple[bool, str]:
+        """
+        Validiert das PushPull-Feature vor Ausführung.
+
+        Returns:
+            (is_valid, error_message)
+        """
+        has_face_ref = (
+            self.face_shape_id is not None or
+            self.face_index is not None or
+            self.face_selector is not None
+        )
+
+        if not has_face_ref:
+            return False, "PushPullFeature needs face_shape_id, face_index, or face_selector"
+
+        if self.distance == 0:
+            return False, "PushPull distance cannot be zero"
 
         return True, ""
 
@@ -9357,6 +9450,45 @@ class Body:
                         for sid in feat.modified_shape_ids
                     ]
 
+            elif isinstance(feat, PushPullFeature):
+                feat_dict.update({
+                    "feature_class": "PushPullFeature",
+                    "distance": feat.distance,
+                    "distance_formula": feat.distance_formula,
+                    "direction": feat.direction,
+                    "operation": feat.operation,
+                    "face_index": feat.face_index,
+                    "face_selector": feat.face_selector,
+                    "plane_origin": list(feat.plane_origin) if feat.plane_origin else None,
+                    "plane_normal": list(feat.plane_normal) if feat.plane_normal else None,
+                    "plane_x_dir": list(feat.plane_x_dir) if feat.plane_x_dir else None,
+                    "plane_y_dir": list(feat.plane_y_dir) if feat.plane_y_dir else None,
+                })
+                # Face-BREP für nicht-planare Faces
+                if feat.face_brep:
+                    feat_dict["face_brep"] = feat.face_brep
+                    feat_dict["face_type"] = feat.face_type
+                # Precalculated Polygons (Fallback)
+                if feat.precalculated_polys:
+                    try:
+                        feat_dict["precalculated_polys_wkt"] = [
+                            p.wkt if hasattr(p, 'wkt') else str(p)
+                            for p in feat.precalculated_polys
+                        ]
+                    except Exception:
+                        pass
+                # TNP v4.0: ShapeID serialisieren
+                if feat.face_shape_id and hasattr(feat.face_shape_id, "uuid"):
+                    sid = feat.face_shape_id
+                    feat_dict["face_shape_id"] = {
+                        "uuid": sid.uuid,
+                        "shape_type": sid.shape_type.name,
+                        "feature_id": sid.feature_id,
+                        "local_index": sid.local_index,
+                        "geometry_hash": sid.geometry_hash,
+                        "timestamp": sid.timestamp
+                    }
+
             elif isinstance(feat, PrimitiveFeature):
                 feat_dict.update({
                     "feature_class": "PrimitiveFeature",
@@ -9877,10 +10009,55 @@ class Body:
                 )
 
             elif feat_class == "PushPullFeature":
-                # PushPullFeature wurde entfernt (redundant mit Extrude Push/Pull).
-                # Alte Dateien die PushPullFeature enthalten werden übersprungen.
-                logger.warning(f"PushPullFeature '{base_kwargs.get('name', '')}' übersprungen (Feature entfernt, Extrude Push/Pull verwenden)")
-                continue
+                feat = PushPullFeature(
+                    distance=feat_dict.get("distance", 10.0),
+                    distance_formula=feat_dict.get("distance_formula"),
+                    direction=feat_dict.get("direction", 1),
+                    operation=feat_dict.get("operation", "Join"),
+                    face_index=feat_dict.get("face_index"),
+                    face_selector=feat_dict.get("face_selector"),
+                    plane_origin=tuple(feat_dict.get("plane_origin", (0, 0, 0))) if feat_dict.get("plane_origin") else (0, 0, 0),
+                    plane_normal=tuple(feat_dict.get("plane_normal", (0, 0, 1))) if feat_dict.get("plane_normal") else (0, 0, 1),
+                    plane_x_dir=tuple(feat_dict["plane_x_dir"]) if feat_dict.get("plane_x_dir") else None,
+                    plane_y_dir=tuple(feat_dict["plane_y_dir"]) if feat_dict.get("plane_y_dir") else None,
+                    **base_kwargs
+                )
+                # Face-BREP für nicht-planare Faces
+                if "face_brep" in feat_dict:
+                    feat.face_brep = feat_dict["face_brep"]
+                    feat.face_type = feat_dict.get("face_type")
+                # Precalculated Polygons (Fallback)
+                if "precalculated_polys_wkt" in feat_dict:
+                    try:
+                        from shapely import wkt
+                        feat.precalculated_polys = [
+                            wkt.loads(w) for w in feat_dict["precalculated_polys_wkt"]
+                        ]
+                    except Exception:
+                        pass
+                # TNP v4.0: ShapeID deserialisieren
+                if "face_shape_id" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    sid_data = feat_dict["face_shape_id"]
+                    if isinstance(sid_data, dict):
+                        shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                        local_index = int(sid_data.get("local_index", sid_data.get("local_id", 0)))
+                        if sid_data.get("uuid"):
+                            feat.face_shape_id = ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=local_index,
+                                geometry_hash=sid_data.get("geometry_hash", f"legacy_pushpull_face_{local_index}"),
+                                timestamp=sid_data.get("timestamp", 0.0),
+                            )
+                        else:
+                            feat.face_shape_id = ShapeID.create(
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", feat_dict.get("id", feat.id)),
+                                local_index=local_index,
+                                geometry_data=("legacy_pushpull_face", feat_dict.get("id", feat.id), local_index),
+                            )
 
             elif feat_class == "NSidedPatchFeature":
                 legacy_edge_selectors = feat_dict.get("edge_selectors", [])
