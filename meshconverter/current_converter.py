@@ -300,8 +300,8 @@ class CurrentConverter(AsyncMeshConverter):
         }
         status = status_map.get(v10_result.status, ConversionStatus.FAILED)
 
-        # Face-Count aus Stats extrahieren
-        face_count = v10_result.stats.get('faces_converted', 0)
+        # Face-Count aus Stats extrahieren (V10 verwendet 'faces_created')
+        face_count = v10_result.stats.get('faces_created', 0)
 
         return ConversionResult(
             success=status == ConversionStatus.SUCCESS,
