@@ -48,6 +48,14 @@ from meshconverter.simple_converter import (
     convert_simple,
 )
 
+from meshconverter.current_converter import (
+    CurrentConverter,
+    CurrentMode,
+    convert_with_current,
+    convert_v10,
+    convert_final,
+)
+
 # ============================================================================
 # Legacy Converter (bestehend)
 # ============================================================================
@@ -97,6 +105,11 @@ __all__ = [
     # Async Converter
     'SimpleConverter',
     'convert_simple',
+    'CurrentConverter',
+    'CurrentMode',
+    'convert_with_current',
+    'convert_v10',
+    'convert_final',
 
     # Legacy Converter
     'MeshToBREPConverterV10',
