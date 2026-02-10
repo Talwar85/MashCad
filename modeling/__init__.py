@@ -220,6 +220,8 @@ class RevolveFeature(Feature):
 
     Profile werden IMMER aus dem Sketch abgeleitet (wenn sketch vorhanden).
     profile_selector identifiziert welche Profile gewählt wurden (via Centroid).
+
+    TNP v4.0: Face-Referenz für Push/Pull auf 3D-Faces (konsistent zu ExtrudeFeature).
     """
     sketch: Sketch = None
     angle: float = 360.0
@@ -231,6 +233,12 @@ class RevolveFeature(Feature):
     profile_selector: list = field(default_factory=list)  # [(cx, cy), ...] Centroids
     # Legacy: Nur für sketchlose Operationen
     precalculated_polys: list = None
+
+    # TNP v4.0: Face-Referenz für Revolve-Push/Pull (konsistent zu ExtrudeFeature)
+    # Ermöglicht Rebuild-Tracking von Faces nach Boolean-Operationen
+    face_shape_id: Any = None
+    face_index: Optional[int] = None
+    face_selector: dict = None  # GeometricFaceSelector als Legacy-Recovery
 
     def __post_init__(self):
         self.type = FeatureType.REVOLVE
@@ -9146,7 +9154,28 @@ class Body:
                     "sketch_id": feat.sketch.id if feat.sketch else None,
                     # CAD Kernel First: Profile-Selektor (Centroids)
                     "profile_selector": feat.profile_selector if feat.profile_selector else None,
+                    # TNP v4.0: Face-Referenz für Revolve-Push/Pull
+                    "face_index": feat.face_index,
+                    "face_selector": feat.face_selector,
                 })
+                # TNP v4.0: ShapeID serialisieren (singular)
+                if feat.face_shape_id:
+                    if hasattr(feat.face_shape_id, "uuid"):
+                        feat_dict["face_shape_id"] = {
+                            "uuid": feat.face_shape_id.uuid,
+                            "shape_type": feat.face_shape_id.shape_type.name,
+                            "feature_id": feat.face_shape_id.feature_id,
+                            "local_index": feat.face_shape_id.local_index,
+                            "geometry_hash": feat.face_shape_id.geometry_hash,
+                            "timestamp": feat.face_shape_id.timestamp
+                        }
+                    elif hasattr(feat.face_shape_id, "feature_id"):
+                        # Legacy-Compatibility
+                        feat_dict["face_shape_id"] = {
+                            "feature_id": feat.face_shape_id.feature_id,
+                            "local_id": getattr(feat.face_shape_id, "local_id", None),
+                            "shape_type": feat.face_shape_id.shape_type.name
+                        }
 
             elif isinstance(feat, LoftFeature):
                 # Serialize profile_data with shapely_poly conversion
@@ -9823,6 +9852,30 @@ class Body:
                 # CAD Kernel First: Profile-Selektor laden
                 if "profile_selector" in feat_dict and feat_dict["profile_selector"]:
                     feat.profile_selector = [tuple(p) for p in feat_dict["profile_selector"]]
+                # TNP v4.0: Face-Referenz laden
+                feat.face_index = feat_dict.get("face_index")
+                feat.face_selector = feat_dict.get("face_selector")
+                if "face_shape_id" in feat_dict and feat_dict["face_shape_id"]:
+                    sid_data = feat_dict["face_shape_id"]
+                    # ShapeID aus dict rekonstruieren
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    if "uuid" in sid_data:
+                        feat.face_shape_id = ShapeID(
+                            uuid=sid_data["uuid"],
+                            shape_type=ShapeType[sid_data["shape_type"]],
+                            feature_id=sid_data["feature_id"],
+                            local_index=sid_data["local_index"],
+                            geometry_hash=sid_data.get("geometry_hash"),
+                            timestamp=sid_data.get("timestamp")
+                        )
+                    else:
+                        # Legacy-Format
+                        feat.face_shape_id = ShapeID(
+                            shape_type=ShapeType[sid_data["shape_type"]],
+                            feature_id=sid_data["feature_id"],
+                            local_index=sid_data.get("local_id", sid_data.get("local_index", 0)),
+                            geometry_data=None
+                        )
 
             elif feat_class == "LoftFeature":
                 # Restore shapely_poly from coordinates
