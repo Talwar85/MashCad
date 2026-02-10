@@ -13,38 +13,36 @@ from typing import List, Optional, Any
 from loguru import logger
 
 from build123d import (
-    Solid, Face, Edge, Wire, Vector,
-    Plane, Sketch, Rectangle, Circle
+    Solid, Face, Edge, Wire, Vector
+    # Plane, Sketch, Rectangle werden nicht mehr verwendet
 )
-from modeling.tnp_system import ShapeNamingService, ShapeType, TNPManager
+from modeling.tnp_system import ShapeNamingService, ShapeType
 from config.feature_flags import set_flag, is_enabled
 
 
 class OCPTestContext:
     """
     Test-Kontext für OCP-First Tests.
-    
+
     Stellt einen vollständigen Kontext mit:
-    - T Naming Service
-    - TNP Manager
+    - ShapeNamingService
     - Test-Dokument (optional)
     """
-    
+
     def __init__(self):
         """Initialisiert den Test-Kontext."""
         self.naming_service = ShapeNamingService()
-        self.tnp_manager = TNPManager()
         self.feature_counter = 0
         self.created_solids: List[Solid] = []
         self.created_features: dict = {}
-        
+
     def create_feature_id(self, feature_type: str = "test") -> str:
         """
         Erstellt eine eindeutige Feature-ID für Tests.
-        
+
         Args:
             feature_type: Typ des Features (z.B. "extrude", "fillet")
-            
+
         Returns:
             Feature-ID String
         """
@@ -90,7 +88,6 @@ class OCPTestContext:
         Bereinigt den Test-Kontext.
         """
         self.naming_service = ShapeNamingService()
-        self.tnp_manager = TNPManager()
         self.created_solids.clear()
         self.created_features.clear()
         self.feature_counter = 0
@@ -156,17 +153,26 @@ def create_test_sketch_face(
 ) -> Face:
     """
     Erstellt eine Test-Sketch-Face (Rechteck auf XY-Plane).
-    
+
     Args:
         width: Rechteck-Breite
         height: Rechteck-Höhe
-        
+
     Returns:
         Build123d Face
     """
-    sketch = Sketch(Plane.XY)
-    sketch.add(Rectangle(width, height))
-    face = sketch.face()
+    # Direkt über Build123d erstellen
+    from build123d import make_face, Wire
+
+    # Rechteck als Wire erstellen
+    pts = [
+        Vector(0, 0, 0),
+        Vector(width, 0, 0),
+        Vector(width, height, 0),
+        Vector(0, height, 0)
+    ]
+    wire = Wire.make_polygon(pts)
+    face = make_face(wire)
     return face
 
 
@@ -210,8 +216,8 @@ def assert_solid_valid(solid: Solid) -> None:
     """
     # Basic validity checks
     assert solid is not None, "Solid is None"
-    assert solid.volume() > 0, "Solid has zero or negative volume"
-    assert solid.area() > 0, "Solid has zero or negative area"
+    assert solid.volume > 0, "Solid has zero or negative volume"
+    assert solid.area > 0, "Solid has zero or negative area"
     
     # Check for faces
     faces = list(solid.faces())

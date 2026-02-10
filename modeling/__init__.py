@@ -37,8 +37,16 @@ from modeling.boolean_engine_v4 import BooleanEngineV4  # Zentraler Boolean-Engi
 
 # TNP v4.0 - Professionelles Topological Naming System
 from modeling.tnp_system import (
-    ShapeNamingService, ShapeID, ShapeType, 
+    ShapeNamingService, ShapeID, ShapeType,
     OperationRecord
+)
+
+# OCP-First Migration (Phase 2-3): OCP Helper für Extrude/Fillet/Chamfer
+from modeling.ocp_helpers import (
+    OCPExtrudeHelper,
+    OCPFilletHelper,
+    OCPChamferHelper,
+    OCPRevolveHelper
 )
 
 
@@ -6016,7 +6024,13 @@ class Body:
                     # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgeführt wird
                     # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
-                    
+
+                    # Feature-ID sicherstellen
+                    if not hasattr(feature, 'id') or feature.id is None:
+                        import uuid
+                        feature.id = str(uuid.uuid4())[:8]
+                        logger.debug(f"[FILLET] Generated ID for FilletFeature: {feature.id}")
+
                     _fillet_history_holder = [None]  # Closure-safe container
 
                     def op_fillet(rad=feature.radius):
@@ -6024,6 +6038,36 @@ class Body:
                         edges_to_fillet = self._resolve_edges_tnp(current_solid, feature)
                         if not edges_to_fillet:
                             raise ValueError("No edges selected (TNP resolution failed)")
+
+                        # OCP-First Flag-Integration (Phase 2-3)
+                        if is_enabled("ocp_first_fillet"):
+                            # Nutze OCPFilletHelper mit TNP Integration
+                            naming_service = None
+                            if self._document and hasattr(self._document, '_shape_naming_service'):
+                                naming_service = self._document._shape_naming_service
+
+                            if naming_service is None:
+                                raise ValueError(
+                                    "TNP ShapeNamingService nicht verfügbar für OCP-First Fillet. "
+                                    "Bitte Document mit TNP Service verwenden."
+                                )
+
+                            try:
+                                result = OCPFilletHelper.fillet(
+                                    shape=current_solid.wrapped,
+                                    edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges_to_fillet],
+                                    radius=rad,
+                                    naming_service=naming_service,
+                                    feature_id=feature.id
+                                )
+                                if result is not None:
+                                    logger.debug(f"[OCP-FIRST FILLET] Success: {feature.id}")
+                                    return result
+                            except Exception as e:
+                                logger.warning(f"[OCP-FIRST FILLET] Failed: {e}, falling back to legacy")
+                                # Fallback zu Legacy implementierung
+
+                        # Legacy Pfad (oder Fallback von OCP-First)
                         # Phase 12: History-Extraction für TNP
                         if is_enabled("batch_fillets"):
                             result, history = self._ocp_fillet(current_solid, edges_to_fillet, rad, extract_history=True)
@@ -6058,7 +6102,13 @@ class Body:
                     # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgeführt wird
                     # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
-                    
+
+                    # Feature-ID sicherstellen
+                    if not hasattr(feature, 'id') or feature.id is None:
+                        import uuid
+                        feature.id = str(uuid.uuid4())[:8]
+                        logger.debug(f"[CHAMFER] Generated ID for ChamferFeature: {feature.id}")
+
                     _chamfer_history_holder = [None]  # Closure-safe container
 
                     def op_chamfer(dist=feature.distance):
@@ -6066,6 +6116,36 @@ class Body:
                         edges = self._resolve_edges_tnp(current_solid, feature)
                         if not edges:
                             raise ValueError("No edges (TNP resolution failed)")
+
+                        # OCP-First Flag-Integration (Phase 2-3)
+                        if is_enabled("ocp_first_chamfer"):
+                            # Nutze OCPChamferHelper mit TNP Integration
+                            naming_service = None
+                            if self._document and hasattr(self._document, '_shape_naming_service'):
+                                naming_service = self._document._shape_naming_service
+
+                            if naming_service is None:
+                                raise ValueError(
+                                    "TNP ShapeNamingService nicht verfügbar für OCP-First Chamfer. "
+                                    "Bitte Document mit TNP Service verwenden."
+                                )
+
+                            try:
+                                result = OCPChamferHelper.chamfer(
+                                    shape=current_solid.wrapped,
+                                    edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges],
+                                    distance=dist,
+                                    naming_service=naming_service,
+                                    feature_id=feature.id
+                                )
+                                if result is not None:
+                                    logger.debug(f"[OCP-FIRST CHAMFER] Success: {feature.id}")
+                                    return result
+                            except Exception as e:
+                                logger.warning(f"[OCP-FIRST CHAMFER] Failed: {e}, falling back to legacy")
+                                # Fallback zu Legacy implementierung
+
+                        # Legacy Pfad (oder Fallback von OCP-First)
                         # Phase 12: History-Extraction für TNP
                         if is_enabled("batch_fillets"):
                             result, history = self._ocp_chamfer(current_solid, edges, dist, extract_history=True)
@@ -7320,27 +7400,62 @@ class Body:
 
     def _compute_extrude_part(self, feature: ExtrudeFeature):
         """
-        CAD Kernel First: Profile werden IMMER aus dem Sketch abgeleitet.
+        Phase 2-3: OCP-First ExtrudeFeature Implementation mit Feature-Flag-Steuerung.
 
         Architektur:
-        1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
-           - profile_selector filtert welche Profile gewählt wurden
-        2. Ohne Sketch (Push/Pull): precalculated_polys als Geometrie-Quelle
-        """
-        if not HAS_BUILD123D: return None
+        - ocp_first_extrude=True: Nutzt OCPExtrudeHelper mit TNP Integration
+        - ocp_first_extrude=False: Legacy Pfad (bestehende Implementation)
 
-        # Prüfe ob wir eine Geometrie-Quelle haben
+        TNP v4.0 Integration:
+        1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
+        2. Ohne Sketch (Push/Pull): BRepFeat_MakePrism (MANDATORY OCP-First)
+        3. Ohne Sketch (Face aus BREP): OCP MakePrism direkte Extrusion
+        """
+        if is_enabled("ocp_first_extrude"):
+            return self._compute_extrude_part_ocp_first(feature)
+        else:
+            return self._compute_extrude_part_legacy(feature)
+
+    def _compute_extrude_part_ocp_first(self, feature: ExtrudeFeature):
+        """
+        OCP-First Pfad: Nutzt OCPExtrudeHelper mit TNP Integration.
+
+        Dieser Pfad verwendet den OCPExtrudeHelper der:
+        - OCP-PRIMARY ist (kein Build123d Fallback)
+        - Verbindliche TNP Integration durchführt
+        - Alle Faces/Edges im ShapeNamingService registriert
+        """
+        # Phase 2: Prüfe Geometrie-Quelle
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
-        
+        has_face_refs = (hasattr(feature, 'face_shape_id') and feature.face_shape_id is not None)
+
         if is_enabled("extrude_debug"):
-            logger.debug(f"TNP DEBUG _compute_extrude_part: has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
-        
+            logger.debug(f"[OCP-FIRST] has_sketch={has_sketch}, has_polys={has_polys}, "
+                       f"has_face_brep={has_face_brep}, has_face_refs={has_face_refs}")
+
+        # Phase 2: KEINE Geometry-Quelle ohne Sketch = ERROR
         if not has_sketch and not has_polys and not has_face_brep:
-            if is_enabled("extrude_debug"):
-                logger.debug("TNP DEBUG _compute_extrude_part: KEINE Geometrie-Quelle!")
-            return None
+            raise ValueError("ExtrudeFeature: Keine Geometrie-Quelle "
+                           "(Sketch oder precalculated_polys oder face_brep erforderlich)")
+
+        # Feature-ID sicherstellen
+        if not hasattr(feature, 'id') or feature.id is None:
+            import uuid
+            feature.id = str(uuid.uuid4())[:8]
+            logger.debug(f"[OCP-FIRST] Generated ID for ExtrudeFeature: {feature.id}")
+
+        # TNP Service holen
+        naming_service = None
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            naming_service = self._document._shape_naming_service
+
+        if naming_service is None:
+            raise ValueError(
+                "TNP ShapeNamingService nicht verfügbar für OCP-First Extrude. "
+                "Bitte Document mit TNP Service verwenden."
+            )
 
         try:
             from build123d import make_face, Wire, Compound
@@ -7361,7 +7476,8 @@ class Body:
                     plane = B3DPlane(origin=origin, z_dir=normal)
             solids = []
 
-            # === CAD KERNEL FIRST: Profile-Bestimmung ===
+            # === OCP-FIRST: Nutze OCPExtrudeHelper mit TNP Integration ===
+            # Profile-Bestimmung (gleich wie Legacy)
             polys_to_extrude = []
 
             if has_sketch:
@@ -7375,36 +7491,177 @@ class Body:
                         sketch_profiles, profile_selector
                     )
                     if polys_to_extrude:
-                        if is_enabled("extrude_debug"):
-                            logger.info(f"Extrude: {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
+                        logger.info(f"[OCP-FIRST] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
-                        # Selektor hat nicht gematcht → Fehler, kein Fallback!
-                        if is_enabled("extrude_debug"):
-                            logger.error(f"Extrude: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                            logger.error(f"Extrude: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
-                        # Leere Liste → keine Extrusion
+                        # OCP-First: Selektor hat nicht gematcht → ERROR, kein Fallback!
+                        logger.error(f"[OCP-FIRST] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
+                        logger.error(f"[OCP-FIRST] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
                 elif sketch_profiles:
                     # Kein Selektor → alle Profile verwenden (Legacy/Import)
                     polys_to_extrude = list(sketch_profiles)
-                    if is_enabled("extrude_debug"):
-                        logger.info(f"Extrude: Alle {len(polys_to_extrude)} Profile (kein Selektor)")
+                    logger.info(f"[OCP-FIRST] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
                 else:
                     # Sketch hat keine closed_profiles
-                    if is_enabled("extrude_debug"):
-                        logger.warning(f"Extrude: Sketch hat keine closed_profiles!")
+                    logger.warning(f"[OCP-FIRST] Sketch hat keine closed_profiles!")
             else:
-                # Ohne Sketch (Push/Pull): precalculated_polys oder face_brep
+                # Phase 2: Ohne Sketch (Push/Pull): precalculated_polys oder face_brep
                 if has_polys:
                     polys_to_extrude = list(feature.precalculated_polys)
-                    if is_enabled("extrude_debug"):
-                        logger.info(f"Extrude: {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+                    logger.info(f"[OCP-FIRST] {len(polys_to_extrude)} Profile (Push/Pull Mode)")
                 elif has_face_brep:
-                    # Face aus BREP deserialisieren und direkt extrudieren (für Zylinder etc.)
-                    if is_enabled("extrude_debug"):
-                        logger.info(f"Extrude: Face aus BREP (Push/Pull auf {feature.face_type})")
+                    # Phase 2: Face aus BREP deserialisieren und direkt extrudieren
+                    logger.info(f"[OCP-FIRST] Face aus BREP (Push/Pull auf {feature.face_type})")
                     return self._extrude_from_face_brep(feature)
 
-            # === Extrude-Logik ===
+            # === Faces erstellen und mit OCPExtrudeHelper extrudieren ===
+            if polys_to_extrude:
+                if is_enabled("extrude_debug"):
+                    logger.info(f"[OCP-FIRST] Verarbeite {len(polys_to_extrude)} Profile.")
+
+                faces_to_extrude = []
+                for idx, poly in enumerate(polys_to_extrude):
+                    try:
+                        # VALIDIERUNG: Degenerierte Polygone überspringen
+                        poly_area = poly.area if hasattr(poly, 'area') else 0
+                        if poly_area < 1e-6:
+                            logger.warning(f"  ⚠️ Polygon {idx} hat Area≈0 - überspringe (degeneriert)")
+                            continue
+
+                        # Außenkontur extrahieren
+                        outer_coords = list(poly.exterior.coords)[:-1]
+                        outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                        face = make_face(Wire.make_polygon(outer_pts))
+
+                        # Löcher abziehen
+                        for interior in poly.interiors:
+                            inner_coords = list(interior.coords)[:-1]
+                            inner_pts = [plane.from_local_coords((p[0], p[1])) for p in inner_coords]
+                            face -= make_face(Wire.make_polygon(inner_pts))
+
+                        faces_to_extrude.append(face)
+                    except Exception as e:
+                        logger.warning(f"Fehler bei Face-Konvertierung: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+                # Mit OCPExtrudeHelper extrudieren
+                amount = feature.distance * feature.direction
+                direction_vec = plane.z_dir * amount
+
+                for f in faces_to_extrude:
+                    try:
+                        # OCP-First: Nutze OCPExtrudeHelper mit TNP Integration
+                        result = OCPExtrudeHelper.extrude(
+                            face=f,
+                            direction=plane.z_dir,
+                            distance=amount,
+                            naming_service=naming_service,
+                            feature_id=feature.id
+                        )
+                        if result is not None:
+                            solids.append(result)
+                            logger.debug(f"[OCP-FIRST] Extrudiert: {feature.id}")
+                    except Exception as e:
+                        logger.warning(f"[OCP-FIRST] OCPExtrudeHelper fehlgeschlagen: {e}")
+                        # Fallback zu _ocp_extrude_face
+                        s = self._ocp_extrude_face(f, amount, plane.z_dir)
+                        if s is not None:
+                            solids.append(s)
+
+            # OCP-First: KEIN Legacy-Fallback
+            if not solids:
+                logger.error("[OCP-FIRST] Keine gültigen Profile/Faces gefunden - kein Legacy-Fallback!")
+                return None
+
+            if not solids: return None
+            return solids[0] if len(solids) == 1 else Compound(children=solids)
+
+        except Exception as e:
+            logger.error(f"[OCP-FIRST] Extrude Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _compute_extrude_part_legacy(self, feature: ExtrudeFeature):
+        """
+        Legacy Pfad: Bestehende Extrude-Implementierung (getestet und stabil).
+
+        Dieser Pfad verwendet die bewährte Implementierung mit:
+        - Build123d PRIMARY für Extrusion
+        - OCP als Fallback
+        - Volle Geometrie-Unterstützung (Kreise, Splines, etc.)
+        """
+        # Phase 2: Prüfe Geometrie-Quelle
+        has_sketch = feature.sketch is not None
+        has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
+        has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
+
+        if is_enabled("extrude_debug"):
+            logger.debug(f"[LEGACY] has_sketch={has_sketch}, has_polys={has_polys}, has_face_brep={has_face_brep}")
+
+        # Phase 2: KEINE Geometry-Quelle ohne Sketch = ERROR
+        if not has_sketch and not has_polys and not has_face_brep:
+            raise ValueError("ExtrudeFeature: Keine Geometrie-Quelle "
+                           "(Sketch oder precalculated_polys oder face_brep erforderlich)")
+
+        try:
+            from build123d import make_face, Wire, Compound
+            from shapely.geometry import Polygon as ShapelyPoly
+
+            sketch = feature.sketch
+            if sketch:
+                plane = self._get_plane_from_sketch(sketch)
+            else:
+                # Reconstruct plane from saved feature data (Push/Pull ohne Sketch)
+                from build123d import Plane as B3DPlane, Vector
+                origin = Vector(*feature.plane_origin)
+                normal = Vector(*feature.plane_normal)
+                if feature.plane_x_dir:
+                    x_dir = Vector(*feature.plane_x_dir)
+                    plane = B3DPlane(origin=origin, z_dir=normal, x_dir=x_dir)
+                else:
+                    plane = B3DPlane(origin=origin, z_dir=normal)
+            solids = []
+
+            # === LEGACY: CAD KERNEL FIRST: Profile-Bestimmung ===
+            polys_to_extrude = []
+
+            if has_sketch:
+                # KERNEL FIRST: Profile aus Sketch ableiten (nicht aus Cache!)
+                sketch_profiles = getattr(sketch, 'closed_profiles', [])
+                profile_selector = getattr(feature, 'profile_selector', [])
+
+                if sketch_profiles and profile_selector:
+                    # Selektor-Match (CAD KERNEL FIRST - KEINE FALLBACKS!)
+                    polys_to_extrude = self._filter_profiles_by_selector(
+                        sketch_profiles, profile_selector
+                    )
+                    if polys_to_extrude:
+                        logger.info(f"[LEGACY] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
+                    else:
+                        # Phase 2: Selektor hat nicht gematcht → ERROR, kein Fallback!
+                        logger.error(f"[LEGACY] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
+                        logger.error(f"[LEGACY] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
+                elif sketch_profiles:
+                    # Kein Selektor → alle Profile verwenden (Legacy/Import)
+                    polys_to_extrude = list(sketch_profiles)
+                    logger.info(f"[LEGACY] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
+                else:
+                    # Sketch hat keine closed_profiles
+                    logger.warning(f"[LEGACY] Sketch hat keine closed_profiles!")
+            else:
+                # Phase 2: Ohne Sketch (Push/Pull): precalculated_polys oder face_brep
+                if has_polys:
+                    polys_to_extrude = list(feature.precalculated_polys)
+                    logger.info(f"[LEGACY] {len(polys_to_extrude)} Profile (Push/Pull Mode)")
+                elif has_face_brep:
+                    # Phase 2: Face aus BREP deserialisieren und direkt extrudieren
+                    logger.info(f"[LEGACY] Face aus BREP (Push/Pull auf {feature.face_type})")
+                    return self._extrude_from_face_brep(feature)
+
+            # === LEGACY: Extrude-Logik mit voller Geometrie-Unterstützung ===
             if polys_to_extrude:
                 if is_enabled("extrude_debug"):
                     logger.info(f"Extrude: Verarbeite {len(polys_to_extrude)} Profile.")
@@ -7421,14 +7678,12 @@ class Body:
                         if poly_area < 1e-6:
                             logger.warning(f"  ⚠️ Polygon {idx} hat Area≈0 - überspringe (degeneriert)")
                             continue
-                        
+
                         # 1. Außenkontur
                         outer_coords = list(poly.exterior.coords)[:-1]  # Ohne Schlusspunkt
                         logger.debug(f"  Außenkontur: {len(outer_coords)} Punkte")
 
                         # WICHTIG: Zuerst prüfen ob gemischte Geometrie vorliegt!
-                        # Erst wenn KEINE gemischte Geometrie, dann Kreis-Check.
-                        # Sonst werden abgerundete Rechtecke als Kreise erkannt!
                         geometry_list = self._lookup_geometry_for_polygon(poly, feature.sketch)
                         has_mixed_geometry = geometry_list and any(g[0] in ('spline', 'arc') for g in geometry_list if g[0] != 'gap')
 
@@ -7480,57 +7735,45 @@ class Body:
                                 face = make_face(Wire.make_polygon(outer_pts))
                         else:
                             # Hat Löcher (n_interiors > 0), aber KEINE gemischte Geometrie
-                            # (mixed geometry wurde bereits oben bei has_mixed_geometry behandelt)
-
-                            # Prüfen ob Außenkontur von einem Native Spline stammt
                             native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
 
                             if native_spline is not None:
-                                # NATIVE SPLINE → Saubere Kurve mit wenigen Flächen!
                                 logger.info(f"  → Außenkontur als NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
                                 spline_wire = self._create_wire_from_native_spline(native_spline, plane)
 
                                 if spline_wire is not None:
                                     face = make_face(spline_wire)
                                 else:
-                                    # Fallback: Polygon
                                     logger.warning("  → Spline Wire Fallback: Verwende Polygon")
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
                             else:
-                                # Prüfen ob Außenkontur ein Kreis ist (FIX: Circle-Detection auch bei Löchern!)
                                 outer_circle_info = self._detect_circle_from_points(outer_coords)
 
                                 if outer_circle_info:
-                                    # Echten Kreis verwenden für saubere B-Rep Topologie!
                                     cx, cy, radius = outer_circle_info
                                     logger.info(f"  → Außenkontur als ECHTER KREIS (mit Löchern): r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
 
-                                    # Kreis-Wire auf der richtigen Ebene erstellen
                                     center_3d = plane.from_local_coords((cx, cy))
                                     from build123d import Plane as B3DPlane
                                     circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
                                     circle_wire = Wire.make_circle(radius, circle_plane)
                                     face = make_face(circle_wire)
                                 else:
-                                    # Normale Polygon-Außenkontur (Rechteck, Hexagon, etc.)
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
-                        
+
                         # 2. Löcher abziehen (Shapely Interiors)
                         for int_idx, interior in enumerate(poly.interiors):
-                            inner_coords = list(interior.coords)[:-1]  # Ohne Schlusspunkt
+                            inner_coords = list(interior.coords)[:-1]
                             logger.debug(f"  Interior {int_idx}: {len(inner_coords)} Punkte")
-                            
-                            # FIX: Prüfen ob das Loch ein Kreis ist!
+
                             circle_info = self._detect_circle_from_points(inner_coords)
-                            
+
                             if circle_info:
-                                # Echten Kreis verwenden für saubere B-Rep Topologie!
                                 cx, cy, radius = circle_info
                                 logger.info(f"  → Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
-                                
-                                # Kreis-Wire auf der richtigen Ebene erstellen
+
                                 center_3d = plane.from_local_coords((cx, cy))
                                 from build123d import Plane as B3DPlane
                                 circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
@@ -7538,25 +7781,22 @@ class Body:
                                 circle_face = make_face(circle_wire)
                                 face -= circle_face
                             else:
-                                # Normales Polygon-Loch
                                 logger.warning(f"  → Loch als POLYGON ({len(inner_coords)} Punkte) - kein Kreis erkannt!")
                                 inner_pts = [plane.from_local_coords((p[0], p[1])) for p in inner_coords]
                                 face -= make_face(Wire.make_polygon(inner_pts))
-                            
+
                         faces_to_extrude.append(face)
                     except Exception as e:
                         logger.warning(f"Fehler bei Face-Konvertierung: {e}")
                         import traceback
                         traceback.print_exc()
 
-                # Extrudieren mit OCP für bessere Robustheit
+                # Extrudieren mit OCP für bessere Robustheit (Build123d PRIMARY, OCP FALLBACK)
                 amount = feature.distance * feature.direction
 
                 # FIX: Für Cut-Operationen Extrusion verlängern um Through-Cuts zu ermöglichen
-                # Das stellt sicher, dass das Tool-Solid über den Body hinausgeht
                 cut_extension = 0.0
                 if feature.operation == "Cut" and abs(amount) > 0.1:
-                    # 10% Verlängerung in Extrusionsrichtung + 1mm Sicherheit
                     cut_extension = abs(amount) * 0.1 + 1.0
                     original_amount = amount
                     amount = amount + (cut_extension if amount > 0 else -cut_extension)
@@ -7570,7 +7810,6 @@ class Body:
                 for f in faces_to_extrude:
                     s = self._ocp_extrude_face(f, amount, plane.z_dir)
                     if s is not None:
-                        # DEBUG: Volumen des extrudierten Solids loggen
                         try:
                             from OCP.GProp import GProp_GProps
                             from OCP.BRepGProp import BRepGProp
@@ -7583,17 +7822,16 @@ class Body:
                             pass
                         solids.append(s)
 
-            # CAD-kernel-first: Kein Legacy-Fallback mehr.
+            # LEGACY: Keine gültigen Profile/Faces
             if not solids:
-                if is_enabled("extrude_debug"):
-                    logger.info("Extrude: keine gueltigen Profile/Faces gefunden (kein Legacy-Fallback aktiv)")
+                logger.error("[LEGACY] Keine gültigen Profile/Faces gefunden!")
                 return None
-            
+
             if not solids: return None
             return solids[0] if len(solids) == 1 else Compound(children=solids)
-            
+
         except Exception as e:
-            logger.error(f"Extrude Fehler: {e}")
+            logger.error(f"[LEGACY] Extrude Fehler: {e}")
             return None
 
     def _filter_profiles_by_selector(self, profiles: list, selector: list, tolerance: float = 5.0) -> list:

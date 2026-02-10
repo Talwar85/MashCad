@@ -87,11 +87,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # TNP Integration ist in beiden Pfaden obligatorisch!
     
     # Phase 2: Extrude
-    "ocp_first_extrude": False,  # ExtrudeFeature nutzt direktes OCP
-    
+    "ocp_first_extrude": True,   # ExtrudeFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+
     # Phase 3: Fillet/Chamfer
-    "ocp_first_fillet": False,  # FilletFeature nutzt direktes OCP
-    "ocp_first_chamfer": False,  # ChamferFeature nutzt direktes OCP
+    "ocp_first_fillet": True,   # FilletFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+    "ocp_first_chamfer": True,  # ChamferFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
     "ocp_first_draft": False,    # DraftFeature nutzt direktes OCP
     
     # Phase 4: Revolve/Loft/Sweep
