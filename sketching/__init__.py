@@ -26,7 +26,13 @@ from sketching.core.result_types import (
     PatternInfo
 )
 
-__version__ = "0.1.0"
+# New exports
+from sketching.test_runner import TestRunner, run_quick_test
+from sketching.patterns.design_library import DesignLibrary, create_design_library, DESIGN_PATTERNS
+from sketching.analysis.mesh_analyzer import MeshAnalyzer
+from sketching.analysis.reconstruction_agent import ReconstructionAgent
+
+__version__ = "0.2.0"
 __all__ = [
     "SketchAgent",
     "create_agent",
@@ -38,4 +44,14 @@ __all__ = [
     "PrimitiveInfo",
     "FeatureInfo",
     "PatternInfo",
+    # Phase 9
+    "TestRunner",
+    "run_quick_test",
+    # Phase 4
+    "DesignLibrary",
+    "create_design_library",
+    "DESIGN_PATTERNS",
+    # Phase 10
+    "MeshAnalyzer",
+    "ReconstructionAgent",
 ]
