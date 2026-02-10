@@ -46,11 +46,14 @@ class SketchAgent:
         if seed is not None:
             random.seed(seed)
 
-        # Komponenten (werden später implementiert)
-        self.generator = None  # SketchGenerator
-        self.operations = None  # OperationAgent
-        self.feedback = None    # FeedbackLoop
-        self.assembly = None    # AssemblyAgent
+        # Komponenten importieren
+        from sketching.generators.sketch_generator import SketchGenerator
+        from sketching.operations.operation_agent import OperationAgent
+
+        self.generator = SketchGenerator(seed=seed)
+        self.operations = OperationAgent(seed=seed)
+        self.feedback = None    # FeedbackLoop (TODO)
+        self.assembly = None    # AssemblyAgent (TODO)
 
         # Statistiken
         self._parts_generated = 0
@@ -75,30 +78,58 @@ class SketchAgent:
         try:
             logger.info(f"[SketchAgent] Generiere Part (complexity={complexity})")
 
-            # TODO: Implementiere Generierung
-            # 1. Sketch erstellen
-            # 2. Extrudieren
-            # 3. Optional: Fillets, Bohrungen, etc.
-
+            # 1. Sketch generieren
+            sketch = self.generator.generate_random_profile()
+            if sketch is None:
+                return PartResult(
+                    success=False,
+                    solid=None,
+                    operations=["generate_sketch"],
+                    duration_ms=(time.time() - start_time) * 1000,
+                    error="SketchGenerator returned None"
+                )
             operations.append(f"generate_sketch({complexity})")
+
+            # 2. Extrusions-Distanz wählen
+            # Schätze Sketch-Grösse für adaptive Distanz
+            distance = self.operations.select_extrude_distance(
+                sketch_area=1000,  # Schätzung
+                mode=self.mode
+            )
+            operations.append(f"select_distance({distance:.1f})")
+
+            # 3. Extrudieren
+            solid = self.operations.extrude(sketch, distance)
             operations.append("extrude")
 
-            # Placeholder - wird später implementiert
-            logger.warning("[SketchAgent] generate_part noch nicht vollständig implementiert")
+            if solid is None:
+                return PartResult(
+                    success=False,
+                    solid=None,
+                    operations=operations,
+                    duration_ms=(time.time() - start_time) * 1000,
+                    error="Extrusion failed"
+                )
 
             duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"[SketchAgent] Part generiert: {duration_ms:.2f}ms")
 
             return PartResult(
-                success=False,
-                solid=None,
+                success=True,
+                solid=solid,
                 operations=operations,
                 duration_ms=duration_ms,
-                error="Not yet implemented"
+                metadata={
+                    "complexity": complexity,
+                    "distance": distance
+                }
             )
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(f"[SketchAgent] Fehler: {e}")
+            import traceback
+            traceback.print_exc()
             return PartResult(
                 success=False,
                 solid=None,
