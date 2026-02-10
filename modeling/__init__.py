@@ -1004,23 +1004,35 @@ class PrimitiveFeature(Feature):
             self.name = f"Primitive ({self.primitive_type.capitalize()})"
 
     def create_solid(self):
-        """Erstellt das Build123d Solid aus den Parametern."""
+        """
+        Erstellt das Build123d Solid aus den Parametern.
+
+        TNP v4.1: Alle build123d Primitive sind native OCP (keine Approximation).
+        - Box: 6 Faces
+        - Cylinder: 3 Faces (Mantel + 2 Deckflächen)
+        - Sphere: 1 Face (Kugelfläche)
+        - Cone: 2 Faces (Mantel + Deckfläche)
+        """
         try:
             import build123d as bd
             if self.primitive_type == "box":
+                # Box: native OCP (6 Faces)
                 return bd.Box(self.length, self.width, self.height)
             elif self.primitive_type == "cylinder":
-                # Verwende OCP direkt für "echte" Zylinder (2 Edges statt 3)
-                from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
-                ax = gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))
-                ocp_cyl = BRepPrimAPI_MakeCylinder(ax, self.radius, self.height).Shape()
-                return Solid(ocp_cyl)
+                # Cylinder: native OCP mit build123d (3 Faces)
+                # TNP v4.1: bd.Solid.make_cylinder() ist native OCP
+                return bd.Solid.make_cylinder(self.radius, self.height)
             elif self.primitive_type == "sphere":
-                return bd.Sphere(self.radius)
+                # Sphere: native OCP (1 Face)
+                return bd.Solid.make_sphere(self.radius)
             elif self.primitive_type == "cone":
-                return bd.Cone(self.bottom_radius, self.top_radius, self.height)
+                # Cone: native OCP (2 Faces)
+                # build123d make_cone: (base_radius, top_radius, height)
+                return bd.Solid.make_cone(self.bottom_radius, self.top_radius, self.height)
         except Exception as e:
             logger.error(f"PrimitiveFeature.create_solid() failed: {e}")
+            import traceback
+            traceback.print_exc()
         return None
 
 

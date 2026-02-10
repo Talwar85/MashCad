@@ -6,12 +6,20 @@ cyl = bd.Solid.make_cylinder(10, 20)
 print(f'Native Zylinder Faces: {len(list(cyl.faces()))}')
 print(f'Face-Types:')
 for i, f in enumerate(cyl.faces()):
-    geom = f.geom_type()
+    geom = f.geom_type  # property, not method
     print(f'  Face {i}: {geom}')
 
-# OCP nativer Cone
-cone = bd.Solid.make_cylinder(10, 5, 20)  # radius_top, radius_bottom, height
-print(f'\nNative Cone Faces: {len(list(cone.faces()))}')
+# OCP nativer Cone (Frustum - mit Deckel oben und unten)
+cone_frustum = bd.Solid.make_cone(10, 5, 20)  # base_radius, top_radius, height
+print(f'\nNative Cone (Frustum, r_top=5) Faces: {len(list(cone_frustum.faces()))}')
+for i, f in enumerate(cone_frustum.faces()):
+    print(f'  Face {i}: {f.geom_type}')
+
+# OCP nativer Cone (Pointed - spitzer Kegel)
+cone_pointed = bd.Solid.make_cone(10, 0, 20)  # base_radius, top_radius=0, height
+print(f'\nNative Cone (Pointed, r_top=0) Faces: {len(list(cone_pointed.faces()))}')
+for i, f in enumerate(cone_pointed.faces()):
+    print(f'  Face {i}: {f.geom_type}')
 
 # OCP nativer Torus
 torus = bd.Solid.make_torus(10, 2)
