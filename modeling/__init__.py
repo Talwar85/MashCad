@@ -41,12 +41,16 @@ from modeling.tnp_system import (
     OperationRecord
 )
 
-# OCP-First Migration (Phase 2-3): OCP Helper für Extrude/Fillet/Chamfer
+# OCP-First Migration (Phase 2-5): OCP Helper für Extrude/Fillet/Chamfer/Revolve/Loft/Sweep/Shell/Hollow
 from modeling.ocp_helpers import (
     OCPExtrudeHelper,
     OCPFilletHelper,
     OCPChamferHelper,
-    OCPRevolveHelper
+    OCPRevolveHelper,
+    OCPLoftHelper,
+    OCPSweepHelper,
+    OCPShellHelper,
+    OCPHollowHelper
 )
 
 

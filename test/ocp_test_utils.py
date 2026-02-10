@@ -13,7 +13,7 @@ from typing import List, Optional, Any
 from loguru import logger
 
 from build123d import (
-    Solid, Face, Edge, Wire, Vector
+    Solid, Face, Edge, Wire, Vector, Box
     # Plane, Sketch, Rectangle werden nicht mehr verwendet
 )
 from modeling.tnp_system import ShapeNamingService, ShapeType
@@ -112,10 +112,10 @@ def create_test_box(
         offset_x = -size[0] / 2
         offset_y = -size[1] / 2
         offset_z = -size[2] / 2
-        box = Solid.make_box(*size)
+        box = Box(*size)
         box.move(Vector(offset_x, offset_y, offset_z))
     else:
-        box = Solid.make_box(*size)
+        box = Box(*size)
     
     return box
 

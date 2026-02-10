@@ -11,7 +11,7 @@ Date: 2026-02-10
 import pytest
 from loguru import logger
 
-from build123d import Solid, Edge, Vector, make_box, make_cylinder
+from build123d import Solid, Edge, Vector, Box
 from modeling import Body, FilletFeature, ChamferFeature
 from modeling.ocp_helpers import OCPFilletHelper, OCPChamferHelper, HAS_OCP
 
@@ -56,7 +56,7 @@ def box_body(document_with_tnp):
     """Body mit einer Box für Fillet/Chamfer Tests."""
     body = Body("Box", document=document_with_tnp)
     # Erstelle eine einfache Box
-    box = make_box(10, 10, 10)
+    box = Box(10, 10, 10)
     body._build123d_solid = box
     return body
 
@@ -215,7 +215,7 @@ class TestOCPHelpersDirect:
     def test_ocp_fillet_helper_direct(self, document_with_tnp):
         """Test: OCPFilletHelper direkt aufrufen."""
         # Arrange
-        box = create_test_box(document_with_tnp)
+        box = Box(10, 10, 10)
         edges = list(box.edges())
         if len(edges) < 1:
             pytest.skip("Keine Kanten gefunden")
@@ -224,8 +224,8 @@ class TestOCPHelpersDirect:
 
         # Act
         result = OCPFilletHelper.fillet(
-            shape=box.wrapped,
-            edges=[edges[0].wrapped],
+            solid=box,
+            edges=[edges[0]],
             radius=1.0,
             naming_service=document_with_tnp._shape_naming_service,
             feature_id=feature_id
@@ -238,7 +238,7 @@ class TestOCPHelpersDirect:
     def test_ocp_chamfer_helper_direct(self, document_with_tnp):
         """Test: OCPChamferHelper direkt aufrufen."""
         # Arrange
-        box = create_test_box(document_with_tnp)
+        box = Box(10, 10, 10)
         edges = list(box.edges())
         if len(edges) < 1:
             pytest.skip("Keine Kanten gefunden")
@@ -247,8 +247,8 @@ class TestOCPHelpersDirect:
 
         # Act
         result = OCPChamferHelper.chamfer(
-            shape=box.wrapped,
-            edges=[edges[0].wrapped],
+            solid=box,
+            edges=[edges[0]],
             distance=1.0,
             naming_service=document_with_tnp._shape_naming_service,
             feature_id=feature_id

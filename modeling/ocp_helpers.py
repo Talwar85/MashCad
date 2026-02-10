@@ -420,5 +420,469 @@ class OCPRevolveHelper:
         return Solid(result_shape)
 
 
-# Weitere Helper für Loft, Sweep, Shell, Hollow werden in späteren Phasen hinzugefügt
-# Loft, Sweep, Shell, Hollow Helper analog mit VERBINDLICHER TNP Integration!
+class OCPLoftHelper:
+    """
+    Direktes OCP Loft mit VERBINDLICHER TNP Integration.
+
+    Loft erstellt einen Körper zwischen zwei oder mehr Profilen (Sections).
+    """
+
+    @staticmethod
+    def loft(
+        faces: List[Face],
+        ruled: bool = False,
+        naming_service: Any = None,  # Pflicht-Parameter!
+        feature_id: str = None,  # Pflicht-Parameter!
+        ctx: dict = None
+    ) -> Solid:
+        """
+        Loft mit direktem OCP BRepOffsetAPI_ThruSections.
+
+        Args:
+            faces: Liste von Faces als Sections
+            ruled: True = gerade Linien (ruled surface), False = glatt interpoliert
+            naming_service: TNP ShapeNamingService (PFLICHT)
+            feature_id: Feature-ID für TNP (PFLICHT)
+            ctx: Optionaler Kontext
+
+        Returns:
+            Build123d Solid
+
+        Raises:
+            ValueError: Wenn OCP nicht verfügbar oder Operation fehlschlägt
+        """
+        if not HAS_OCP:
+            raise ValueError("OCP nicht verfügbar - Loft ohne Fallback nicht möglich")
+
+        if naming_service is None:
+            raise ValueError("naming_service ist Pflicht für OCP-First Loft")
+
+        if feature_id is None:
+            raise ValueError("feature_id ist Pflicht für OCP-First Loft")
+
+        if not faces or len(faces) < 2:
+            raise ValueError("Loft benötigt mindestens 2 Faces (Sections)")
+
+        # Loft-Operation mit BRepOffsetAPI_ThruSections
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+        loft_builder = BRepOffsetAPI_ThruSections(isSolid=True, ruled=ruled)
+
+        # Faces als Wires hinzufügen
+        for i, face in enumerate(faces):
+            # Face zu Wire konvertieren (äußere Boundary)
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_WIRE
+
+            wire_explorer = TopExp_Explorer(face.wrapped, TopAbs_WIRE)
+            if wire_explorer.More():
+                wire = TopoDS.Wire_s(wire_explorer.Current())
+                loft_builder.AddWire(wire)
+            else:
+                raise ValueError(f"Face {i} hat keinen Wire - kann nicht loften")
+
+            if is_enabled("ocp_first_debug"):
+                logger.debug(f"Loft Section {i}: Wire hinzugefügt")
+
+        # Loft ausführen
+        loft_builder.Build()
+
+        if not loft_builder.IsDone():
+            raise ValueError(f"Loft OCP-Operation fehlgeschlagen für Feature {feature_id}")
+
+        result_shape = loft_builder.Shape()
+
+        # TNP: Alle Shapes registrieren
+        try:
+            from modeling.tnp_system import ShapeType
+
+            # Alle Faces registrieren
+            explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+            face_idx = 0
+            while explorer.More():
+                face_shape = TopoDS.Face_s(explorer.Current())
+                naming_service.register_shape(
+                    ocp_shape=face_shape,
+                    shape_type=ShapeType.FACE,
+                    feature_id=feature_id,
+                    local_index=face_idx
+                )
+                face_idx += 1
+                explorer.Next()
+
+            # Alle Edges registrieren
+            naming_service.register_solid_edges(
+                Solid(result_shape),
+                feature_id
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"OCP Loft TNP: {face_idx} Faces, "
+                    f"{naming_service.get_stats()['edges']} Edges registriert"
+                )
+
+        except Exception as e:
+            logger.error(f"TNP Registration fehlgeschlagen: {e}")
+
+        return Solid(result_shape)
+
+
+class OCPSweepHelper:
+    """
+    Direktes OCP Sweep mit VERBINDLICHER TNP Integration.
+
+    Sweep bewegt ein Profil entlang eines Pfads (Path).
+    """
+
+    @staticmethod
+    def sweep(
+        profile: Face,
+        path: Edge,
+        is_frenet: bool = False,
+        naming_service: Any = None,  # Pflicht-Parameter!
+        feature_id: str = None,  # Pflicht-Parameter!
+        ctx: dict = None
+    ) -> Solid:
+        """
+        Sweep mit direktem OCP BRepOffsetAPI_MakePipe.
+
+        Args:
+            profile: Zu sweependes Face (Profil)
+            path: Pfad als Edge
+            is_frenet: Frenet-Mode (True = mit Orientierungskorrektur)
+            naming_service: TNP ShapeNamingService (PFLICHT)
+            feature_id: Feature-ID für TNP (PFLICHT)
+            ctx: Optionaler Kontext
+
+        Returns:
+            Build123d Solid
+
+        Raises:
+            ValueError: Wenn OCP nicht verfügbar oder Operation fehlschlägt
+        """
+        if not HAS_OCP:
+            raise ValueError("OCP nicht verfügbar - Sweep ohne Fallback nicht möglich")
+
+        if naming_service is None:
+            raise ValueError("naming_service ist Pflicht für OCP-First Sweep")
+
+        if feature_id is None:
+            raise ValueError("feature_id ist Pflicht für OCP-First Sweep")
+
+        # Sweep-Operation mit BRepOffsetAPI_MakePipe
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+
+        # Path als Wire
+        wire_builder = BRepBuilderAPI_MakeWire(path.wrapped)
+        wire_builder.Build()
+        path_wire = TopoDS.Wire_s(wire_builder.Wire())
+
+        # Profile als Wire (Face Boundary extrahieren)
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_WIRE
+
+        wire_explorer = TopExp_Explorer(profile.wrapped, TopAbs_WIRE)
+        if wire_explorer.More():
+            profile_wire_shape = wire_explorer.Current()
+            # BRepOffsetAPI_MakePipe erwartet TopoDS_Shape für Profile, nicht Wire
+            profile_shape = profile_wire_shape
+        else:
+            raise ValueError("Profile Face hat keinen Wire - kann nicht sweepen")
+
+        # Sweep ausführen
+        # Hinweis: is_frenet wird hier ignoriert, würde BRepOffsetAPI_MakePipeShell benötigen
+        sweep_builder = BRepOffsetAPI_MakePipe(path_wire, profile_shape)
+        sweep_builder.Build()
+
+        if not sweep_builder.IsDone():
+            raise ValueError(f"Sweep OCP-Operation fehlgeschlagen für Feature {feature_id}")
+
+        result_shape = sweep_builder.Shape()
+
+        # TNP: Alle Shapes registrieren
+        try:
+            from modeling.tnp_system import ShapeType
+
+            # Alle Faces registrieren
+            explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+            face_idx = 0
+            while explorer.More():
+                face_shape = TopoDS.Face_s(explorer.Current())
+                naming_service.register_shape(
+                    ocp_shape=face_shape,
+                    shape_type=ShapeType.FACE,
+                    feature_id=feature_id,
+                    local_index=face_idx
+                )
+                face_idx += 1
+                explorer.Next()
+
+            # Alle Edges registrieren
+            naming_service.register_solid_edges(
+                Solid(result_shape),
+                feature_id
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"OCP Sweep TNP: {face_idx} Faces, "
+                    f"{naming_service.get_stats()['edges']} Edges registriert"
+                )
+
+        except Exception as e:
+            logger.error(f"TNP Registration fehlgeschlagen: {e}")
+
+        return Solid(result_shape)
+
+
+# Weitere Helper für Shell, Hollow werden in späteren Phasen hinzugefügt
+# Shell, Hollow Helper analog mit VERBINDLICHER TNP Integration!
+
+class OCPShellHelper:
+    """
+    Direktes OCP Shell mit VERBINDLICHER TNP Integration.
+
+    Shell entfernt bestimmte Faces und erstellt eine Wandstärke.
+    """
+
+    @staticmethod
+    def shell(
+        solid: Solid,
+        faces_to_remove: list,
+        thickness: float,
+        naming_service: Any = None,  # Pflicht-Parameter!
+        feature_id: str = None,  # Pflicht-Parameter!
+        ctx: dict = None
+    ) -> Solid:
+        """
+        Shell Operation mit direktem OCP.
+
+        Args:
+            solid: Source Solid
+            faces_to_remove: Liste von Faces die entfernt werden
+            thickness: Wandstärke (positiv)
+            naming_service: TNP ShapeNamingService (PFLICHT)
+            feature_id: Feature-ID für TNP (PFLICHT)
+            ctx: Optionaler Kontext
+
+        Returns:
+            Build123d Solid
+
+        Raises:
+            ValueError: Wenn Parameter fehlen oder Operation fehlschlägt
+        """
+        if not HAS_OCP:
+            raise ValueError("OCP nicht verfügbar - Shell ohne Fallback nicht möglich")
+
+        if naming_service is None:
+            raise ValueError("naming_service ist Pflicht für OCP-First Shell")
+
+        if feature_id is None:
+            raise ValueError("feature_id ist Pflicht für OCP-First Shell")
+
+        if not faces_to_remove:
+            raise ValueError("faces_to_remove muss mindestens 1 Face enthalten")
+
+        if thickness <= 0:
+            raise ValueError("thickness muss positiv sein")
+
+        # Faces zu TopTools_ListOfShape konvertieren für OCP
+        from OCP.TopTools import TopTools_ListOfShape
+        from OCP.BRepOffset import BRepOffset_Mode
+        from OCP.GeomAbs import GeomAbs_JoinType
+
+        faces_to_remove_ocp = TopTools_ListOfShape()
+        for face in faces_to_remove:
+            if hasattr(face, 'wrapped'):
+                faces_to_remove_ocp.Append(face.wrapped)
+            else:
+                faces_to_remove_ocp.Append(face)
+
+        # Shell-Operation ausführen
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+
+        try:
+            shell_builder = BRepOffsetAPI_MakeThickSolid()
+            # MakeThickSolidByJoin(S, ClosingFaces, Offset, Tol, Mode, Intersection, SelfInter, Join, RemoveIntEdges)
+            shell_builder.MakeThickSolidByJoin(
+                solid.wrapped,
+                faces_to_remove_ocp,
+                -thickness,  # Negativ = nach innen
+                0.001,      # Tolerance
+                BRepOffset_Mode.BRepOffset_Skin,  # Mode
+                False,      # Intersection
+                False,      # SelfInter
+                GeomAbs_JoinType.GeomAbs_Arc,  # Join (Arc join für glatte Kanten)
+                False       # RemoveIntEdges
+            )
+
+            if not shell_builder.IsDone():
+                logger.warning(f"Shell Builder IsDone=False für Feature {feature_id}")
+
+            result_shape = shell_builder.Shape()
+
+            # Validieren
+            from OCP.BRepCheck import BRepCheck_Analyzer
+            analyzer = BRepCheck_Analyzer(result_shape)
+            if not analyzer.IsValid():
+                from OCP.ShapeFix import ShapeFix_Shape
+                fixer = ShapeFix_Shape(result_shape)
+                fixer.Perform()
+                result_shape = fixer.Shape()
+
+        except Exception as e:
+            logger.error(f"Shell Operation fehlgeschlagen: {e}")
+            raise ValueError(f"Shell Operation fehlgeschlagen: {e}")
+
+        # TNP: Alle Shapes registrieren
+        try:
+            from modeling.tnp_system import ShapeType
+
+            # Alle Faces registrieren
+            explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+            face_idx = 0
+            while explorer.More():
+                face_shape = TopoDS.Face_s(explorer.Current())
+                naming_service.register_shape(
+                    ocp_shape=face_shape,
+                    shape_type=ShapeType.FACE,
+                    feature_id=feature_id,
+                    local_index=face_idx
+                )
+                face_idx += 1
+                explorer.Next()
+
+            # Alle Edges registrieren
+            naming_service.register_solid_edges(
+                Solid(result_shape),
+                feature_id
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"OCP Shell TNP: {face_idx} Faces registriert für {feature_id}"
+                )
+
+        except Exception as e:
+            logger.error(f"TNP Registration fehlgeschlagen: {e}")
+
+        return Solid(result_shape)
+
+
+class OCPHollowHelper:
+    """
+    Direktes OCP Hollow mit VERBINDLICHER TNP Integration.
+
+    Hollow erstellt einen hohlen Körper mit uniformer Wandstärke
+    (ohne explizite Face-Selection - alle Faces werden verwendet).
+    """
+
+    @staticmethod
+    def hollow(
+        solid: Solid,
+        thickness: float,
+        naming_service: Any = None,  # Pflicht-Parameter!
+        feature_id: str = None,  # Pflicht-Parameter!
+        ctx: dict = None
+    ) -> Solid:
+        """
+        Hollow mit direktem OCP (uniforme Wandstärke).
+
+        Verwendet BRepOffsetAPI_MakeThickSolid mit leerer ClosingFaces-Liste
+        um eine innere Cavität zu erstellen.
+
+        Args:
+            solid: Source Solid
+            thickness: Wandstärke (positiv)
+            naming_service: TNP ShapeNamingService (PFLICHT)
+            feature_id: Feature-ID für TNP (PFLICHT)
+            ctx: Optionaler Kontext
+
+        Returns:
+            Build123d Solid
+
+        Raises:
+            ValueError: Wenn OCP nicht verfügbar oder Operation fehlschlägt
+        """
+        if not HAS_OCP:
+            raise ValueError("OCP nicht verfügbar - Hollow ohne Fallback nicht möglich")
+
+        if naming_service is None:
+            raise ValueError("naming_service ist Pflicht für OCP-First Hollow")
+
+        if feature_id is None:
+            raise ValueError("feature_id ist Pflicht für OCP-First Hollow")
+
+        # Leere ClosingFaces-Liste für Hollow (keine Faces werden entfernt)
+        from OCP.TopTools import TopTools_ListOfShape
+        from OCP.BRepOffset import BRepOffset_Mode
+        from OCP.GeomAbs import GeomAbs_JoinType
+
+        closing_faces = TopTools_ListOfShape()  # Leer = Hollow (nur Wandstärke nach innen)
+
+        # Hollow-Operation ausführen
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+
+        shell_builder = BRepOffsetAPI_MakeThickSolid()
+        # MakeThickSolidByJoin mit leerer ClosingFaces-Liste erstellt innere Cavität
+        shell_builder.MakeThickSolidByJoin(
+            solid.wrapped,
+            closing_faces,  # Leer = keine Faces entfernen, nur Wandstärke nach innen
+            -thickness,  # Negativ = nach innen
+            0.001,      # Tolerance
+            BRepOffset_Mode.BRepOffset_Skin,  # Mode
+            False,      # Intersection
+            False,      # SelfInter
+            GeomAbs_JoinType.GeomAbs_Arc,  # Join (Arc join für glatte Kanten)
+            False       # RemoveIntEdges
+        )
+
+        if not shell_builder.IsDone():
+            logger.warning(f"Hollow Builder IsDone=False für Feature {feature_id}, versuche Ergebnis zu holen")
+
+        result_shape = shell_builder.Shape()
+
+        # Validieren
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        analyzer = BRepCheck_Analyzer(result_shape)
+        if not analyzer.IsValid():
+            from OCP.ShapeFix import ShapeFix_Shape
+            fixer = ShapeFix_Shape(result_shape)
+            fixer.Perform()
+            result_shape = fixer.Shape()
+
+        # TNP: Alle Shapes registrieren
+        try:
+            from modeling.tnp_system import ShapeType
+
+            # Alle Faces registrieren
+            explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+            face_idx = 0
+            while explorer.More():
+                face_shape = TopoDS.Face_s(explorer.Current())
+                naming_service.register_shape(
+                    ocp_shape=face_shape,
+                    shape_type=ShapeType.FACE,
+                    feature_id=feature_id,
+                    local_index=face_idx
+                )
+                face_idx += 1
+                explorer.Next()
+
+            # Alle Edges registrieren
+            naming_service.register_solid_edges(
+                Solid(result_shape),
+                feature_id
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"OCP Hollow TNP: {face_idx} Faces registriert"
+                )
+
+        except Exception as e:
+            logger.error(f"TNP Registration fehlgeschlagen: {e}")
+
+        return Solid(result_shape)

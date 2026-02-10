@@ -258,9 +258,9 @@ class TestExtrudeParameters:
     """Tests für verschiedene Extrude-Parameter."""
 
     @pytest.mark.parametrize("distance,expected_volume", [
-        (5.0, 250.0),   # 10x10x5 = 500
-        (10.0, 500.0),  # 10x10x10 = 1000
-        (20.0, 1000.0), # 10x10x20 = 2000
+        (5.0, 500.0),   # 10x10x5 = 500
+        (10.0, 1000.0), # 10x10x10 = 1000
+        (20.0, 2000.0), # 10x10x20 = 2000
     ])
     def test_different_distances(self, document_with_tnp, distance, expected_volume):
         """Test: Verschiedene Extrusions-Distanzen."""

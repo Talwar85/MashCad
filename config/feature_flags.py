@@ -95,13 +95,13 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "ocp_first_draft": False,    # DraftFeature nutzt direktes OCP
     
     # Phase 4: Revolve/Loft/Sweep
-    "ocp_first_revolve": False,  # RevolveFeature nutzt direktes OCP
-    "ocp_first_loft": False,     # LoftFeature nutzt direktes OCP
-    "ocp_first_sweep": False,    # SweepFeature nutzt direktes OCP
+    "ocp_first_revolve": True,   # RevolveFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
+    "ocp_first_loft": True,      # LoftFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
+    "ocp_first_sweep": True,     # SweepFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
     
     # Phase 5: Shell/Hollow
-    "ocp_first_shell": False,    # ShellFeature nutzt direktes OCP
-    "ocp_first_hollow": False,  # HollowFeature nutzt direktes OCP
+    "ocp_first_shell": True,     # ShellFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
+    "ocp_first_hollow": True,    # HollowFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
     
     # Phase 7: BREP Caching
     "ocp_brep_cache": False,    # BREP-Caching für Features
