@@ -6607,7 +6607,7 @@ class MainWindow(QMainWindow):
                             plane_normal=plane_normal,
                             plane_x_dir=plane_x_dir if polygon is not None else None,
                             plane_y_dir=plane_y_dir if polygon is not None else None,
-                            face_shape_id=boolean_face_shape_id,
+                            face_shape_id=boolean_face_shape_id,  # TNP v4: face_shape_id=face_shape_id
                             face_index=best_face_index,
                             face_selector=face_selector_dict,
                         )

@@ -142,6 +142,7 @@ class FeatureType(Enum):
     FILLET = auto()
     CHAMFER = auto()
     TRANSFORM = auto()  # Für Move/Rotate/Scale/Mirror
+    BOOLEAN = auto()    # Boolean-Operationen (Join, Cut, Common/Intersect)
     LOFT = auto()       # Phase 6: Loft zwischen Profilen
     SWEEP = auto()      # Phase 6: Sweep entlang Pfad
     SHELL = auto()      # Phase 6: Körper aushöhlen
@@ -340,6 +341,77 @@ class TransformFeature(Feature):
         self.type = FeatureType.TRANSFORM
         if not self.name or self.name == "Feature":
             self.name = f"Transform: {self.mode.capitalize()}"
+
+
+@dataclass
+class BooleanFeature(Feature):
+    """
+    Boolean-Feature für professionelle CAD-Operationen.
+
+    Unterützt Union (Join), Cut und Common (Intersect) mit:
+    - BooleanEngineV4 Integration (Transaction Safety, Fail-Fast)
+    - TNP v4.0 Shape-Tracking für verlässliche Referenzen
+    - Tool-Body Referenz (für parametrische Updates)
+    - Konfigurierbare Toleranzen
+
+    Beispiel:
+        feat = BooleanFeature(
+            operation="Cut",
+            tool_body_id=cutter_body.id,
+            fuzzy_tolerance=0.0001
+        )
+    """
+    # Boolean-Operation-Typ
+    operation: str = "Cut"  # "Join" (Union), "Cut" (Subtract), "Common" (Intersect)
+
+    # Tool-Referenz (Body oder direkter Solid)
+    tool_body_id: Optional[str] = None  # ID des Tool-Body (für parametrische Updates)
+    tool_solid_data: Optional[str] = None  # Serialisierter OCP Solid als Fallback
+
+    # TNP v4.0: Shape-Referenzen für modifizierte Faces/Edges
+    modified_shape_ids: List = None  # List[ShapeID] - vom Boolean veränderte Shapes
+
+    # Boolean-Einstellungen
+    fuzzy_tolerance: Optional[float] = None  # Custom Toleranz (None = Default)
+
+    # Geometrie-Info für Validation
+    expected_volume_change: Optional[float] = None  # Erwartete Volumenänderung
+
+    def __post_init__(self):
+        self.type = FeatureType.BOOLEAN
+        if not self.name or self.name == "Feature":
+            self.name = f"Boolean: {self.operation}"
+        if self.modified_shape_ids is None:
+            self.modified_shape_ids = []
+
+    def get_operation_type(self) -> str:
+        """Gibt den standardisierten Operation-Typ zurück."""
+        op_map = {
+            "Union": "Join",
+            "Fuse": "Join",
+            "Add": "Join",
+            "Subtract": "Cut",
+            "Difference": "Cut",
+            "Intersect": "Common",
+            "Common": "Common",
+            "Intersection": "Common",
+        }
+        return op_map.get(self.operation, self.operation)
+
+    def validate(self) -> tuple[bool, str]:
+        """
+        Validiert das Boolean-Feature vor Ausführung.
+
+        Returns:
+            (is_valid, error_message)
+        """
+        if self.operation not in ["Join", "Cut", "Common"]:
+            return False, f"Unknown operation: {self.operation}"
+
+        if self.tool_body_id is None and self.tool_solid_data is None:
+            return False, "BooleanFeature needs tool_body_id or tool_solid_data"
+
+        return True, ""
 
 
 # ==================== PHASE 6: ADVANCED FEATURES ====================
@@ -9262,6 +9334,29 @@ class Body:
                     "data": feat.data,
                 })
 
+            elif isinstance(feat, BooleanFeature):
+                feat_dict.update({
+                    "feature_class": "BooleanFeature",
+                    "operation": feat.operation,
+                    "tool_body_id": feat.tool_body_id,
+                    "tool_solid_data": feat.tool_solid_data,
+                    "fuzzy_tolerance": feat.fuzzy_tolerance,
+                    "expected_volume_change": feat.expected_volume_change,
+                })
+                # TNP v4.0: ShapeIDs serialisieren
+                if feat.modified_shape_ids:
+                    feat_dict["modified_shape_ids"] = [
+                        {
+                            "uuid": sid.uuid,
+                            "shape_type": sid.shape_type.name,
+                            "feature_id": sid.feature_id,
+                            "local_index": sid.local_index,
+                            "geometry_hash": sid.geometry_hash,
+                            "timestamp": sid.timestamp
+                        }
+                        for sid in feat.modified_shape_ids
+                    ]
+
             elif isinstance(feat, PrimitiveFeature):
                 feat_dict.update({
                     "feature_class": "PrimitiveFeature",
@@ -9968,6 +10063,31 @@ class Body:
                     data=feat_dict.get("data", {}),
                     **base_kwargs
                 )
+
+            elif feat_class == "BooleanFeature":
+                feat = BooleanFeature(
+                    operation=feat_dict.get("operation", "Cut"),
+                    tool_body_id=feat_dict.get("tool_body_id"),
+                    tool_solid_data=feat_dict.get("tool_solid_data"),
+                    fuzzy_tolerance=feat_dict.get("fuzzy_tolerance"),
+                    expected_volume_change=feat_dict.get("expected_volume_change"),
+                    **base_kwargs
+                )
+                # TNP v4.0: ShapeIDs deserialisieren
+                if "modified_shape_ids" in feat_dict:
+                    from modeling.tnp_system import ShapeID, ShapeType
+                    feat.modified_shape_ids = []
+                    for sid_data in feat_dict["modified_shape_ids"]:
+                        if isinstance(sid_data, dict):
+                            shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
+                            feat.modified_shape_ids.append(ShapeID(
+                                uuid=sid_data.get("uuid", ""),
+                                shape_type=shape_type,
+                                feature_id=sid_data.get("feature_id", ""),
+                                local_index=sid_data.get("local_index", 0),
+                                geometry_hash=sid_data.get("geometry_hash", ""),
+                                timestamp=sid_data.get("timestamp", 0.0)
+                            ))
 
             elif feat_class == "PrimitiveFeature":
                 feat = PrimitiveFeature(
