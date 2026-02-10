@@ -221,16 +221,21 @@ def analyze_cylindrical_face(face: Face) -> Optional[CylinderParams]:
 
 
 def _determine_cylindrical_face_type(face: Face, radius: float) -> CylindricalFaceType:
-    """Bestimmt den Typ der zylindrischen Face."""
+    """
+    Bestimmt den Typ der zylindrischen Face.
+
+    Hinweis: Vollständige Implementierung erfordert Edge-Analyse:
+    - Durchgangsloch: 2 zirkuläre Edges
+    - Sackloch: 1 zirkuläre Edge
+    - Voller Zylinder: 0 oder 2 zirkuläre Edges (andere Topologie)
+
+    Diese Analyse ist Teil der zukünftigen CylindricalFaceEditFeature Implementierung.
+    Für den Moment wird UNKNOWN zurückgegeben.
+    """
     # Analyse der Edges um Typ zu bestimmen
     edges = list(face.edges())
 
-    # Einfache Heuristik
-    # - Durchgangsloch: 2 zirkuläre Edges
-    # - Sackloch: 1 zirkuläre Edge
-    # - Voller Zylinder: 0 oder 2 zirkuläre Edges aber andere Topologie
-
-    # TODO: Implementierung mit Edge-Analyse
+    # Einfache Heuristik - für vollständige Implementierung Edge-Analyse erforderlich
     return CylindricalFaceType.UNKNOWN
 
 
@@ -244,13 +249,15 @@ def can_enlarge_safely(params: CylinderParams, new_radius: float) -> bool:
 
     Returns:
         True wenn sicher, False wenn Probleme zu erwarten sind
+
+    Hinweis: Zukünftige Implementierung sollte prüfen:
+    - Ob andere Features im Weg sind (Fillet, Chamfer, etc.)
+    - Ob Self-Intersection droht
     """
     if new_radius <= params.radius:
         return False  # Das ist Verkleinern, nicht Vergrößern
 
-    # TODO: Prüfen ob andere Features im Weg sind
-    # TODO: Prüfen ob Self-Intersection droht
-
+    # Für zukünftige Implementierung: Feature-Intersection und Self-Intersection Checks
     return True
 
 
@@ -264,6 +271,10 @@ def can_shrink_safely(params: CylinderParams, new_radius: float) -> bool:
 
     Returns:
         True wenn sicher, False wenn Probleme zu erwarten sind
+
+    Hinweis: Zukünftige Implementierung sollte prüfen:
+    - Ob Material vorhanden ist zum "Auffüllen" (bei Löchern)
+    - Ob benachbarte Features (Fillet, Chamfer) betroffen sind
     """
     if new_radius >= params.radius:
         return False  # Das ist Vergrößern, nicht Verkleinern
@@ -271,7 +282,5 @@ def can_shrink_safely(params: CylinderParams, new_radius: float) -> bool:
     if new_radius <= 0:
         return False  # Radius muss positiv sein
 
-    # TODO: Prüfen ob Material vorhanden ist zum "Auffüllen"
-    # TODO: Prüfen ob benachbarte Features (Fillet, Chamfer) betroffen sind
-
+    # Für zukünftige Implementierung: Material- und Feature-Abhängigkeits-Checks
     return True

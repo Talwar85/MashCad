@@ -2341,7 +2341,7 @@ class SplitInputPanel(RoundedPanelFrame):
 
 
 
-class PatternInputPanel(QFrame):
+class PatternInputPanel(RoundedPanelFrame):
     """
     Input panel for Pattern/Array operations (CAD-Style).
 
@@ -2589,7 +2589,7 @@ class PatternInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class NSidedPatchInputPanel(QFrame):
+class NSidedPatchInputPanel(RoundedPanelFrame):
     """
     Input panel for N-Sided Patch operations.
     Uses edge selection mode (like Fillet/Chamfer) to select boundary edges.
@@ -2719,7 +2719,7 @@ class NSidedPatchInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class LatticeInputPanel(QFrame):
+class LatticeInputPanel(RoundedPanelFrame):
     """
     Input panel for Lattice/Gitterstruktur operations.
     Allows body selection from viewport and inline parameter editing.
@@ -2857,7 +2857,7 @@ METRIC_THREADS_PANEL = {
 }
 
 
-class ThreadInputPanel(QFrame):
+class ThreadInputPanel(RoundedPanelFrame):
     """Input panel for interactive Thread placement on cylindrical faces (Fusion-style)."""
 
     diameter_changed = Signal(float)
@@ -3092,7 +3092,7 @@ class ThreadInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class MeasureInputPanel(QFrame):
+class MeasureInputPanel(RoundedPanelFrame):
     """Input panel for Measure tool (inspect)."""
 
     pick_point_requested = Signal(int)  # 1 or 2
@@ -3196,7 +3196,7 @@ class MeasureInputPanel(QFrame):
         _position_panel_right_mid(self, pos_widget)
 
 
-class PointToPointMovePanel(QFrame):
+class PointToPointMovePanel(RoundedPanelFrame):
     """Input panel for Point-to-Point Move."""
 
     pick_body_requested = Signal()

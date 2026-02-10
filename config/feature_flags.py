@@ -77,13 +77,53 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Cylindrical Face Edit (Fusion360-style Radius Edit)
     "cylindrical_face_edit": False,  # Phase 1: Zylindrische Faces radius-modifizieren (Hole/Pocket/Solid)
+
+    # OCP-First Migration (2026 CAD Kernel Nearness Plan)
+    # ======================================================
+    # WICHTIG: Diese Flags dienen NUR zu Test-/Validierungszwecken!
+    # Kein dauerhafter Fallback zu Build123d!
+    # Nach Validierung werden Flags entfernt und Code vereinfacht.
+    #
+    # TNP Integration ist in beiden Pfaden obligatorisch!
+    
+    # Phase 2: Extrude
+    "ocp_first_extrude": True,   # ExtrudeFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+
+    # Phase 3: Fillet/Chamfer
+    "ocp_first_fillet": True,   # FilletFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+    "ocp_first_chamfer": True,  # ChamferFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+    "ocp_first_draft": False,    # DraftFeature nutzt direktes OCP
+    
+    # Phase 4: Revolve/Loft/Sweep
+    "ocp_first_revolve": True,   # RevolveFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
+    "ocp_first_loft": True,      # LoftFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
+    "ocp_first_sweep": True,     # SweepFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
+    
+    # Phase 5: Shell/Hollow
+    "ocp_first_shell": True,     # ShellFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
+    "ocp_first_hollow": True,    # HollowFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
+    
+    # Phase 7: BREP Caching
+    "ocp_brep_cache": True,     # BREP-Caching für Features (aktiviert nach Phase 7 Migration)
+
+    # Phase 8: Incremental Rebuild
+    "ocp_incremental_rebuild": True,  # Inkrementeller Rebuild mit Dependency Graph (aktiviert nach Phase 8 Migration)
+
+    # Phase 9: BREP Persistence
+    "ocp_brep_persistence": True,  # Native BREP Persistenz statt Rebuild beim Laden (aktiviert nach Phase 9 Migration)
 }
 
 
 def is_enabled(flag: str) -> bool:
     """
     Prüft ob ein Feature-Flag aktiviert ist.
-
+    
+    WICHTIG: Für OCP-First Flags:
+    - Default = False (alter Build123d Code)
+    - Nach Validierung = True (neuer OCP Code)
+    - Kein dauerhafter Fallback! Flags werden nach Validierung entfernt.
+    - TNP Integration ist in beiden Pfaden obligatorisch!
+    
     Args:
         flag: Name des Feature-Flags
 

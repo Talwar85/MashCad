@@ -150,31 +150,38 @@ class Line2D:
 
 @dataclass
 class Circle2D:
-    """2D-Kreis"""
+    """2D-Kreis
+
+    TNP v4.1: Native OCP Daten für optimale Extrusion.
+    Wenn native_ocp_data gesetzt ist, wird der Circle direkt als
+    nativer OCP Circle extrudiert (3 Faces statt 14+).
+    """
     center: Point2D
     radius: float = 10.0
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     construction: bool = False
-    
+    # TNP v4.1: Native OCP Daten für optimierte Extrusion
+    native_ocp_data: Optional[dict] = None  # {center, radius, plane}
+
     @property
     def diameter(self) -> float:
         return self.radius * 2
-    
+
     @property
     def circumference(self) -> float:
         return 2 * math.pi * self.radius
-    
+
     @property
     def area(self) -> float:
         return math.pi * self.radius ** 2
-    
+
     def point_at_angle(self, angle_deg: float) -> Point2D:
         """Punkt auf dem Kreis bei gegebenem Winkel"""
         rad = math.radians(angle_deg)
         x = self.center.x + self.radius * math.cos(rad)
         y = self.center.y + self.radius * math.sin(rad)
         return Point2D(x, y)
-    
+
     def contains_point(self, p: Point2D, tolerance: float = 1e-6) -> bool:
         """Prüft ob Punkt auf dem Kreis liegt"""
         dist = self.center.distance_to(p)
@@ -189,6 +196,7 @@ class Circle2D:
             "radius": self.radius,
             "id": self.id,
             "construction": self.construction,
+            "native_ocp_data": self.native_ocp_data,
         }
 
     def __repr__(self):
