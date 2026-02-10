@@ -245,39 +245,33 @@ class SketchAgent:
         Returns:
             ReconstructionResult
         """
-        start_time = time.time()
+        # Erstelle ReconstructionAgent für diesen Aufruf
+        recon_agent = ReconstructionAgent(
+            viewport=getattr(self, 'viewport', None),
+            slow_mode=interactive,
+            step_delay=0.5 if interactive else 0.0
+        )
 
-        try:
-            logger.info(f"[SketchAgent] Rekonstruiere Mesh: {mesh_path}")
+        # Callbacks für UI-Updates registrieren
+        if self.viewport:
+            recon_agent.on_step_start = self._on_reconstruction_step_start
+            recon_agent.on_step_complete = self._on_reconstruction_step_complete
+            recon_agent.on_progress = self._on_reconstruction_progress
 
-            # TODO: Implementiere Rekonstruktion
-            # 1. Mesh analysieren
-            # 2. Primitives erkennen
-            # 3. Features erkennen
-            # 4. Schritte planen
-            # 5. Schritt-für-Schritt ausführen
+        # Rekonstruktion ausführen
+        return recon_agent.reconstruct_from_mesh(mesh_path, interactive)
 
-            duration_ms = (time.time() - start_time) * 1000
+    def _on_reconstruction_step_start(self, step):
+        """Callback: Rekonstruktions-Schritt gestartet."""
+        logger.info(f"[Reconstruction] Schritt {step.step_id}: {step.description}")
 
-            return ReconstructionResult(
-                success=False,
-                solid=None,
-                analysis=MeshAnalysis([], [], {}, {}, duration_ms),
-                executed_steps=[],
-                duration_ms=duration_ms,
-                error="Not yet implemented"
-            )
+    def _on_reconstruction_step_complete(self, step, result):
+        """Callback: Rekonstruktions-Schritt abgeschlossen."""
+        logger.info(f"[Reconstruction] Schritt {step.step_id} abgeschlossen")
 
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            return ReconstructionResult(
-                success=False,
-                solid=None,
-                analysis=MeshAnalysis([], [], {}, {}, duration_ms),
-                executed_steps=[],
-                duration_ms=duration_ms,
-                error=str(e)
-            )
+    def _on_reconstruction_progress(self, progress, message):
+        """Callback: Fortschritt aktualisieren."""
+        logger.info(f"[Reconstruction] {progress*100:.0f}%: {message}")
 
     @property
     def success_rate(self) -> float:
