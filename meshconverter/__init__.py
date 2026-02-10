@@ -56,6 +56,18 @@ from meshconverter.current_converter import (
     convert_final,
 )
 
+try:
+    from meshconverter.perfect_converter import (
+        PerfectConverter,
+        convert_perfect,
+    )
+    HAS_PERFECT_CONVERTER = True
+except ImportError:
+    # sklearn or other dependencies might not be installed
+    PerfectConverter = None
+    convert_perfect = None
+    HAS_PERFECT_CONVERTER = False
+
 # ============================================================================
 # Legacy Converter (bestehend)
 # ============================================================================
@@ -110,6 +122,9 @@ __all__ = [
     'convert_with_current',
     'convert_v10',
     'convert_final',
+    'PerfectConverter',
+    'convert_perfect',
+    'HAS_PERFECT_CONVERTER',
 
     # Legacy Converter
     'MeshToBREPConverterV10',
