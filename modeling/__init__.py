@@ -7380,29 +7380,27 @@ class Body:
         if strict_dual_edge_refs and strict_topology_mismatch:
             unresolved_topology_refs = True
 
+        # TNP v4.1: Bei Topology-Mismatch zuerst Geometric-Fallback probieren
+        # (statt sofort aufzugeben wie in v4.0)
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
             logger.warning(
-                f"{feature_name}: Edge-Referenz ist ungültig (ShapeID/edge_indices). "
-                f"Kein Geometric-Fallback.{mismatch_hint}"
+                f"{feature_name}: Topologie-Referenzen ungültig{mismatch_hint}. "
+                f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
             )
-            self._last_tnp_debug_data = {
-                'resolved': [],
-                'unresolved': unresolved_shape_ids,
-                'body_id': self.id,
-            }
-            if hasattr(self._document, '_tnp_debug_callback') and self._document._tnp_debug_callback:
-                try:
-                    self._document._tnp_debug_callback([], unresolved_shape_ids, self.id)
-                except Exception as e:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP Debug Callback fehlgeschlagen: {e}")
-            return []
+            # Don't return here - try geometric recovery first!
 
-        need_selector_recovery = (not has_topological_refs) and (not resolved_edges)
+        # TNP v4.1: Geometric-Fallback wenn:
+        # 1. Keine Topologie-Referenzen vorhanden (original)
+        # 2. ODER Topologie-Referenzen sind aufgelöst/inkonsistent (unresolved_topology_refs)
+        need_selector_recovery = (
+            ((not has_topological_refs) and (not resolved_edges))
+            or (unresolved_topology_refs and geometric_selectors)
+        )
 
-        # GeometricSelector-Auflösung nur ohne Topologie-Referenzen (Recovery)
+        # GeometricSelector-Auflösung ohne Topologie-Referenzen oder bei Mismatch (Recovery)
         if need_selector_recovery and geometric_selectors:
+            edges_before_geo = len(resolved_edges)
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
 
@@ -7417,6 +7415,11 @@ class Body:
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP v4.0: GeometricEdgeSelector-Auflösung fehlgeschlagen: {e}")
+
+            edges_after_geo = len(resolved_edges)
+            if edges_after_geo > edges_before_geo:
+                recovered = edges_after_geo - edges_before_geo
+                logger.success(f"  Geometric-Fallback: {recovered}/{len(geometric_selectors)} Edges wiederhergestellt")
 
         # 4) Referenzen konsolidieren (indices + optional ShapeIDs)
         resolved_indices = []
