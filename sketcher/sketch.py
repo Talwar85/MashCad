@@ -37,16 +37,25 @@ class SketchState(Enum):
 class Sketch:
     """
     2D-Sketch mit Geometrie und Constraints
-    
+
     Ein Sketch liegt auf einer Ebene und enthält:
     - 2D-Geometrie (Punkte, Linien, Kreise, Bögen, Splines)
     - Constraints (geometrische Beziehungen)
     - Kann zu einem geschlossenen Profil werden für 3D-Operationen
+
+    TNP v4.1: Jede Geometrie-Komponente hat eine eindeutige shape_uuid
+    für persistente Referenzierung über Sketch-Modifikationen hinweg.
     """
-    
+
     name: str = "Sketch"
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    
+
+    # TNP v4.1: ShapeUUIDs für Sketch-Geometrie (persistent über Sketch-Änderungen)
+    _point_shape_uuids: Dict[str, str] = field(default_factory=dict)  # point.id -> shape_uuid
+    _line_shape_uuids: Dict[str, str] = field(default_factory=dict)  # line.id -> shape_uuid
+    _circle_shape_uuids: Dict[str, str] = field(default_factory=dict)  # circle.id -> shape_uuid
+    _arc_shape_uuids: Dict[str, str] = field(default_factory=dict)     # arc.id -> shape_uuid
+
     # Geometrie
     points: List[Point2D] = field(default_factory=list)
     lines: List[Line2D] = field(default_factory=list)
@@ -54,10 +63,10 @@ class Sketch:
     arcs: List[Arc2D] = field(default_factory=list)
     splines: List['BezierSpline'] = field(default_factory=list)  # Bézier-Splines (interaktiv)
     native_splines: List['Spline2D'] = field(default_factory=list)  # B-Splines aus DXF (exakt)
-    
+
     # Constraints
     constraints: List[Constraint] = field(default_factory=list)
-    
+
     # Status
     state: SketchState = SketchState.EDITING
     
@@ -73,24 +82,132 @@ class Sketch:
     # Performance: Profil-Cache + Adjacency-Map
     _profiles_valid: bool = field(default=False, repr=False)
     _cached_profiles: list = field(default_factory=list, repr=False)
-    _adjacency: dict = field(default_factory=dict, repr=False)  # {(rx,ry): [line, ...]}
+    _adjacency: dict = field(default_factory=dict, repr=False) # {(rx,ry): [line, ...]}
+
+    # === TNP v4.1: Sketch-ShapeUUID Verwaltung ===
+
+    def get_all_shape_uuids(self) -> Dict[str, str]:
+        """
+        Gibt alle ShapeUUIDs der Sketch-Geometrie zurück.
+
+        Returns:
+            Dict mit Komponente-Typ als Key und Liste von UUIDs
+        """
+        uuids = {
+            'points': [sid for sid in self._point_shape_uuids.values()],
+            'lines': [sid for sid in self._line_shape_uuids.values()],
+            'circles': [sid for sid in self._circle_shape_uuids.values()],
+            'arcs': [sid for sid in self._arc_shape_uuids.values()],
+        }
+        return uuids
+
+    def get_shape_uuid_for_element(self, element_type: str, element_id: str) -> Optional[str]:
+        """
+        Sucht die ShapeUUID für ein spezifisches Sketch-Element.
+
+        Args:
+            element_type: 'point', 'line', 'circle', 'arc', 'spline'
+            element_id: Die ID des Elements (point.id, line.id, etc.)
+
+        Returns:
+            ShapeUUID als String oder None
+        """
+        type_to_map = {
+            'point': self._point_shape_uuids,
+            'line': self._line_shape_uuids,
+            'circle': self._circle_shape_uuids,
+            'arc': self._arc_shape_uuids,
+            'spline': self._spline_shape_uuids,
+        }
+
+        uuid_map = type_to_map.get(element_type, {})
+        return uuid_map.get(element_id)
+
+    def update_shape_uuid_after_rebuild(self, feature_id: str,
+                                  point_uuids: Dict[str, str] = None,
+                                  line_uuids: Dict[str, str] = None,
+                                  circle_uuids: Dict[str, str] = None,
+                                  arc_uuids: Dict[str, str] = None) -> bool:
+        """
+        Aktualisiert die ShapeUUIDs nach einem Sketch-Rebuild.
+        Wird vom Feature/Body aufgerufen wenn sich der Sketch geändert hat.
+
+        Args:
+            feature_id: ID des Features das den Sketch verwendet
+            point_uuids: Neue UUIDs für Points
+            line_uuids: Neue UUIDs für Lines
+            circle_uuids: Neue UUIDs für Circles
+            arc_uuids: Neue UUIDs für Arcs
+
+        Returns:
+            True wenn mindestens eine UUID aktualisiert wurde
+        """
+        updated = False
+
+        if point_uuids:
+            self._point_shape_uuids.update(point_uuids)
+            updated = True
+        if line_uuids:
+            self._line_shape_uuids.update(line_uuids)
+            updated = True
+        if circle_uuids:
+            self._circle_shape_uuids.update(circle_uuids)
+            updated = True
+        if arc_uuids:
+            self._arc_shape_uuids.update(arc_uuids)
+            updated = True
+
+        return updated
 
     # === Geometrie-Erstellung ===
     
     def add_point(self, x: float, y: float, construction: bool = False) -> Point2D:
         """Fügt einen standalone Punkt hinzu"""
+        from modeling.tnp_system import ShapeID, ShapeType
+        import uuid
+
         point = Point2D(x, y, construction=construction, standalone=True)
+
+        # TNP v4.1: ShapeUUID für diesen Punkt generieren
+        if not hasattr(self, '_point_shape_uuids'):
+            self._point_shape_uuids = {}
+        point_shape_id = ShapeID(
+            uuid=str(uuid.uuid4())[:8],
+            shape_type=ShapeType.VERTEX,
+            feature_id=f"{self.id}_point",
+            local_index=len(self.points),
+            geometry_hash=(x, y)  # 2D-Punkt als Hash
+        )
+        self._point_shape_uuids[point.id] = point_shape_id.uuid
+
         self.points.append(point)
         return point
     
-    def add_line(self, x1: float, y1: float, x2: float, y2: float, 
+    def add_line(self, x1: float, y1: float, x2: float, y2: float,
                  construction: bool = False, tolerance: float = 1.0) -> Line2D:
         """Fügt eine Linie hinzu. Verwendet existierende Punkte wenn möglich."""
+        from modeling.tnp_system import ShapeID, ShapeType
+        import uuid
+
         # Prüfe ob es schon Punkte an diesen Positionen gibt
         start = self._find_or_create_point(x1, y1, tolerance)
         end = self._find_or_create_point(x2, y2, tolerance)
-        
+
         line = Line2D(start, end, construction=construction)
+
+        # TNP v4.1: ShapeUUID für diese Linie generieren
+        if not hasattr(self, '_line_shape_uuids'):
+            self._line_shape_uuids = {}
+
+        line_shape_id = ShapeID(
+            uuid=str(uuid.uuid4())[:8],
+            shape_type=ShapeType.EDGE,
+            feature_id=f"{self.id}_line",
+            local_index=len(self.lines),
+            geometry_hash=(x1, y1, x2, y2)  # 4x float für Hash
+        )
+        self._line_shape_uuids[line.id] = line_shape_id.uuid
+
         self.lines.append(line)
         self.invalidate_profiles()
         return line
@@ -132,6 +249,9 @@ class Sketch:
 
         TNP v4.1: Speichert native OCP Daten für optimale Extrusion (3 Faces statt 14+).
         """
+        from modeling.tnp_system import ShapeID, ShapeType
+        import uuid
+
         center = Point2D(cx, cy)
         circle = Circle2D(center, radius, construction=construction)
 
@@ -147,6 +267,19 @@ class Sketch:
             }
         }
 
+        # TNP v4.1: ShapeUUID für diesen Kreis generieren
+        if not hasattr(self, '_circle_shape_uuids'):
+            self._circle_shape_uuids = {}
+
+        circle_shape_id = ShapeID(
+            uuid=str(uuid.uuid4())[:8],
+            shape_type=ShapeType.EDGE,  # Kreis ist eine geschlossene Edge
+            feature_id=f"{self.id}_circle",
+            local_index=len(self.circles),
+            geometry_hash=(cx, cy, radius)  # Center + Radius als Hash
+        )
+        self._circle_shape_uuids[circle.id] = circle_shape_id.uuid
+
         self.points.append(center)
         self.circles.append(circle)
         return circle
@@ -160,6 +293,9 @@ class Sketch:
         Arcs werden direkt als native OCP Arc Faces extrudiert
         statt als Polygon-Approximation.
         """
+        from modeling.tnp_system import ShapeID, ShapeType
+        import uuid
+
         center = Point2D(cx, cy)
         arc = Arc2D(center, radius, start_angle, end_angle, construction=construction)
 
@@ -176,6 +312,19 @@ class Sketch:
                 'y_dir': self.plane_y_dir,
             }
         }
+
+        # TNP v4.1: ShapeUUID für diesen Bogen generieren
+        if not hasattr(self, '_arc_shape_uuids'):
+            self._arc_shape_uuids = {}
+
+        arc_shape_id = ShapeID(
+            uuid=str(uuid.uuid4())[:8],
+            shape_type=ShapeType.EDGE,  # Arc ist eine Edge
+            feature_id=f"{self.id}_arc",
+            local_index=len(self.arcs),
+            geometry_hash=(cx, cy, radius, start_angle, end_angle)  # Vollständige Signatur
+        )
+        self._arc_shape_uuids[arc.id] = arc_shape_id.uuid
 
         self.points.append(center)
         self.arcs.append(arc)

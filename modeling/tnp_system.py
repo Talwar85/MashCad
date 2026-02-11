@@ -2487,6 +2487,172 @@ class ShapeNamingService:
             traceback.print_exc()
             return None
 
+    def track_sketch_extrude(
+        self,
+        feature_id: str,
+        sketch: Any,
+        result_solid: Any,
+        distance: float,
+        direction: Tuple[float, float, float] = (0, 0, 1),
+        plane_origin: Tuple[float, float, float] = (0, 0, 0),
+        plane_normal: Tuple[float, float, float] = (0, 0, 1),
+    ) -> Optional[OperationRecord]:
+        """
+        TNP v4.1: Trackt eine Sketch-Extrusion und erstellt Mappings von
+        Sketch-Elementen zu den generierten 3D-Edges.
+
+        Args:
+            feature_id: ID des ExtrudeFeature
+            sketch: Der Sketch der extrudiert wurde
+            result_solid: Das resultierende Solid nach Extrusion
+            distance: Extrusionsdistanz
+            direction: Extrusionsrichtung (Vektor)
+            plane_origin: Ursprung der Sketch-Ebene
+            plane_normal: Normale der Sketch-Ebene
+
+        Returns:
+            OperationRecord mit Edge-Mappings, oder None
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_EDGE
+            from OCP.TopoDS import TopoDS
+            import numpy as np
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.1: Tracke Sketch-Extrusion '{feature_id}'")
+
+            # Mapping-Dictionary: Sketch-Element-ID -> 3D-Edge-ShapeUUID
+            sketch_edge_mappings: Dict[str, str] = {}
+            new_shape_ids: List[ShapeID] = []
+
+            # Sketch-ShapeUUIDs sammeln
+            sketch_uuids = sketch.get_all_shape_uuids() if hasattr(sketch, 'get_all_shape_uuids') else {}
+
+            # Alle Edges im result Solid sammeln
+            result_shape = result_solid.wrapped if hasattr(result_solid, 'wrapped') else result_solid
+            edge_map = {}
+            try:
+                from OCP.TopTools import TopTools_IndexedMapOfShape
+                from OCP.TopExp import TopExp
+                e_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(result_shape, TopAbs_EDGE, e_map)
+                for i in range(e_map.Extent()):
+                    edge = e_map.FindKey(i + 1)
+                    edge_map[id(edge)] = edge
+            except Exception:
+                # Fallback: direct iteration
+                for edge in result_solid.edges():
+                    edge_map[id(edge)] = edge.wrapped
+
+            # Für jedes Sketch-Element (Line, Circle, Arc) die passende 3D-Edge finden
+            element_types = ['line', 'circle', 'arc']
+
+            for elem_type in element_types:
+                uuids_attr = f'_{elem_type}_shape_uuids'
+                if not hasattr(sketch, uuids_attr):
+                    continue
+
+                element_uuids = getattr(sketch, uuids_attr, {})
+                if not element_uuids:
+                    continue
+
+                # Jedes Sketch-Element durchgehen
+                for elem_id, elem_uuid in element_uuids.items():
+                    # Finde die Edge im result Solid die diesem Element entspricht
+                    # Strategie: Die Edge muss in der Extrusionsrichtung liegen
+                    best_match_edge = None
+                    best_score = float('inf')
+
+                    for edge_id, ocp_edge in edge_map.items():
+                        try:
+                            # Build123d Edge für Center-Berechnung
+                            from build123d import Edge as B123Edge
+                            b123_edge = B123Edge(ocp_edge)
+                            center = b123_edge.center()
+                            edge_center = np.array([center.X, center.Y, center.Z])
+                            edge_length = b123_edge.length if hasattr(b123_edge, 'length') else 0
+
+                            # Erwartete Position basierend auf Sketch-Element
+                            # Lines/Circles/Arcs haben 2D-Position + plane transform
+                            # Wir suchen die Edge die in Extrusionsrichtung "oben" liegt
+                            # Distance von plane_origin + distance in direction
+                            expected_tip = np.array(plane_origin) + np.array(direction) * distance
+
+                            # Score basierend auf Nähe zur erwarteten Position
+                            dist_to_tip = np.linalg.norm(edge_center - expected_tip)
+
+                            # Sketch-Elemente sind typischerweise am "unteren" Ende der Extrusion
+                            # und laufen in direction distance hoch
+                            dist_score = dist_to_tip
+
+                            # Länge-Score: Kürzere Distanz ist besser
+                            if dist_score < best_score:
+                                best_score = dist_score
+                                best_match_edge = ocp_edge
+
+                        except Exception:
+                            continue
+
+                    if best_match_edge is not None:
+                        # ShapeID für die gefundene Edge registrieren
+                        edge_shape_id = self.register_shape(
+                            ocp_shape=best_match_edge,
+                            shape_type=ShapeType.EDGE,
+                            feature_id=feature_id,
+                            local_index=len(new_shape_ids),
+                            geometry_data=None,  # Wird von register_shape berechnet
+                        )
+                        new_shape_ids.append(edge_shape_id)
+
+                        # Mapping speichern: Sketch-Element-ID -> Edge-ShapeUUID
+                        sketch_edge_mappings[elem_id] = edge_shape_id.uuid
+
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(
+                                f"TNP v4.1: Sketch {elem_type} '{elem_id}' -> "
+                                f"Edge {edge_shape_id.uuid[:8]}..."
+                            )
+
+            # OperationRecord erstellen
+            op_record = OperationRecord(
+                operation_type="SKETCH_EXTRUDE",
+                feature_id=feature_id,
+                input_shape_ids=[],  # Sketch-Elemente haben keine 3D-Shapes vor Extrusion
+                output_shape_ids=new_shape_ids,
+                occt_history=None,
+                manual_mappings={},  # Direct mappings stored in sketch_edge_mappings
+                metadata={
+                    "distance": distance,
+                    "direction": direction,
+                    "plane_origin": plane_origin,
+                    "plane_normal": plane_normal,
+                    "sketch_elements_mapped": len(sketch_edge_mappings),
+                    "mapping_mode": "sketch_to_3d",
+                }
+            )
+
+            self.record_operation(op_record)
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"TNP v4.1: Sketch-Extrusion getrackt - "
+                    f"{len(sketch_edge_mappings)} Elemente -> 3D Edges"
+                )
+
+            # Rückgabe auch des Mapping-Dictionaries für ExtrudeFeature
+            return op_record
+
+        except Exception as e:
+            if is_enabled("tnp_debug_logging"):
+                logger.error(f"TNP v4.1: Sketch-Extrusion Tracking fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _find_exact_shape_id_by_ocp_shape(self, ocp_shape: Any) -> Optional[ShapeID]:
         """
         Findet eine ShapeID per exakter OCP-Topologie-Identität (IsSame).

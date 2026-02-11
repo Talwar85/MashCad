@@ -204,6 +204,12 @@ class ExtrudeFeature(Feature):
     face_index: Optional[int] = None
     face_selector: dict = None  # GeometricFaceSelector als Legacy-Recovery
 
+    # TNP v4.1: Sketch-Edge-Mapping nach Extrusion
+    # Mapping von Sketch-Element-IDs zu den generierten 3D-Edge-ShapeIDs
+    # Format: {sketch_element_id: edge_shape_uuid, ...}
+    # Dies ermöglicht die Rückverfolgung von Sketch-Kanten zu 3D-Edges
+    sketch_edge_mappings: dict = field(default_factory=dict)
+
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
         if not self.name or self.name == "Feature": self.name = "Extrude"
