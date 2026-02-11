@@ -297,7 +297,9 @@ class STEPReader:
     @staticmethod
     def import_file(filename: str,
                     auto_heal: bool = True,
-                    extract_metadata: bool = True) -> STEPImportResult:
+                    extract_metadata: bool = True,
+                    document_id: Optional[str] = None,
+                    naming_service: Optional[Any] = None) -> STEPImportResult:
         """
         Importiert STEP-Datei.
 
@@ -305,6 +307,8 @@ class STEPReader:
             filename: Pfad zur STEP-Datei
             auto_heal: Automatisches Healing für importierte Geometrie
             extract_metadata: Versuche Metadata zu extrahieren
+            document_id: Optional Document ID für TNP Service-Registration
+            naming_service: Optional ShapeNamingService für TNP-Integration
 
         Returns:
             STEPImportResult mit Solids und Shapes
@@ -397,6 +401,50 @@ class STEPReader:
                 except Exception as e:
                     logger.debug(f"[step_io.py] Fehler: {e}")
                     pass
+
+            # TNP v4.0: ShapeID-Registrierung für importierte Solids
+            if naming_service is not None and result.solids:
+                try:
+                    from modeling.tnp_system import ShapeType
+
+                    registered_count = 0
+                    for i, solid in enumerate(result.solids):
+                        # Feature-ID basierend auf Dateiname
+                        feature_id = f"import_{path.stem}_{i}"
+
+                        # Alle Edges registrieren
+                        count = naming_service.register_solid_edges(solid, feature_id)
+                        registered_count += count
+
+                        # Alle Faces registrieren
+                        try:
+                            from OCP.TopExp import TopExp_Explorer
+                            from OCP.TopAbs import TopAbs_FACE
+
+                            face_idx = 0
+                            explorer = TopExp_Explorer(
+                                solid.wrapped if hasattr(solid, 'wrapped') else solid,
+                                TopAbs_FACE
+                            )
+                            while explorer.More():
+                                face_shape = explorer.Current()
+                                naming_service.register_shape(
+                                    ocp_shape=face_shape,
+                                    shape_type=ShapeType.FACE,
+                                    feature_id=feature_id,
+                                    local_index=face_idx
+                                )
+                                face_idx += 1
+                                explorer.Next()
+                        except Exception as e:
+                            logger.debug(f"[TNP] Face-Registrierung fehlgeschlagen: {e}")
+
+                    logger.success(f"[TNP] Import: {registered_count} Edges, {face_idx * len(result.solids)} Faces registriert")
+                    result.metadata["tnp_registered"] = True
+
+                except Exception as e:
+                    logger.warning(f"[TNP] Registrierung fehlgeschlagen: {e}")
+                    result.metadata["tnp_registered"] = False
 
             logger.success(f"STEP importiert: {len(result.solids)} Solid(s), {len(result.shapes)} Shape(s)")
 
@@ -517,14 +565,25 @@ def export_step(solid, filename: str, **kwargs) -> bool:
     return result.success
 
 
-def import_step(filename: str, **kwargs) -> List:
+def import_step(filename: str, document_id: Optional[str] = None,
+                naming_service: Optional[Any] = None, **kwargs) -> List:
     """
     Shortcut für STEPReader.import_file()
+
+    Args:
+        filename: Pfad zur STEP-Datei
+        document_id: Optional Document ID für TNP Service-Registration
+        naming_service: Optional ShapeNamingService für TNP-Integration
 
     Returns:
         Liste von Build123d Solids (leer bei Fehler)
     """
-    result = STEPReader.import_file(filename, **kwargs)
+    result = STEPReader.import_file(
+        filename,
+        document_id=document_id,
+        naming_service=naming_service,
+        **kwargs
+    )
     return result.solids if result.success else []
 
 

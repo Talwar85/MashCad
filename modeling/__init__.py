@@ -2015,6 +2015,41 @@ class Body:
                 self._build123d_solid = solid
                 self.shape = solid.wrapped
 
+                # TNP v4.0: ShapeID-Registrierung für konvertierte Geometrie
+                try:
+                    if self._document and hasattr(self._document, '_shape_naming_service'):
+                        service = self._document._shape_naming_service
+                        if service is not None:
+                            feature_id = f"mesh_convert_{self.id}"
+
+                            # Alle Edges registrieren
+                            edge_count = service.register_solid_edges(solid, feature_id)
+
+                            # Alle Faces registrieren
+                            try:
+                                from OCP.TopExp import TopExp_Explorer
+                                from OCP.TopAbs import TopAbs_FACE
+                                from modeling.tnp_system import ShapeType
+
+                                face_idx = 0
+                                explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
+                                while explorer.More():
+                                    face_shape = explorer.Current()
+                                    service.register_shape(
+                                        ocp_shape=face_shape,
+                                        shape_type=ShapeType.FACE,
+                                        feature_id=feature_id,
+                                        local_index=face_idx
+                                    )
+                                    face_idx += 1
+                                    explorer.Next()
+
+                                logger.info(f"  [TNP] {edge_count} Edges, {face_idx} Faces registriert")
+                            except Exception as e:
+                                logger.debug(f"[TNP] Face-Registrierung fehlgeschlagen: {e}")
+                except Exception as e:
+                    logger.debug(f"[TNP] Registrierung fehlgeschlagen: {e}")
+
                 # === NEU: ImportFeature erstellen für Rebuild-Support ===
                 # BREP serialisieren (via BytesIO Stream)
                 try:

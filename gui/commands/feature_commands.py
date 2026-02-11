@@ -215,6 +215,18 @@ class AddFeatureCommand(QUndoCommand):
         pre_sig = _solid_signature_safe(self.body)
 
         try:
+            # TNP v4.0: Vorherige ShapeIDs für dieses Feature invalidieren
+            # Falls ein Redo nach Undo erfolgt, müssen alte ShapeIDs entfernt werden
+            try:
+                if hasattr(self.body, '_document') and self.body._document:
+                    if hasattr(self.body._document, '_shape_naming_service'):
+                        service = self.body._document._shape_naming_service
+                        if service and hasattr(self.feature, 'id'):
+                            service.invalidate_feature(self.feature.id)
+                            logger.debug(f"[TNP] Feature {self.feature.id} invalidiert vor Redo")
+            except Exception as e:
+                logger.debug(f"[TNP] Invalidierung fehlgeschlagen: {e}")
+
             if self.feature not in self.body.features:
                 rebuild = not self._skip_rebuild
                 self.body.add_feature(self.feature, rebuild=rebuild)
@@ -249,8 +261,19 @@ class AddFeatureCommand(QUndoCommand):
         tx_state = _capture_body_state(self.body)
         try:
             if self.feature in self.body.features:
-                # Edge ShapeIDs can go stale after undo-rebuild cycles. Keep stable
-                # edge_indices as authority so redo can deterministically heal IDs.
+                # TNP v4.0: Feature-ShapeIDs sauber aus dem Service entfernen
+                # statt einfach zu leeren
+                try:
+                    if hasattr(self.body, '_document') and self.body._document:
+                        if hasattr(self.body._document, '_shape_naming_service'):
+                            service = self.body._document._shape_naming_service
+                            if service and hasattr(self.feature, 'id'):
+                                service.invalidate_feature(self.feature.id)
+                                logger.debug(f"[TNP] Feature {self.feature.id} bei Undo entfernt")
+                except Exception as e:
+                    logger.debug(f"[TNP] Feature-Entfernung fehlgeschlagen: {e}")
+
+                # Legacy: ShapeIDs leeren für Features die TNP nicht nutzen
                 try:
                     from modeling import ChamferFeature, FilletFeature
 

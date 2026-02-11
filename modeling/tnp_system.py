@@ -1883,6 +1883,335 @@ class ShapeNamingService:
             logger.warning(f"_register_unmapped_edges fehlgeschlagen: {e}")
             return 0
 
+    def track_fillet_operation(
+        self,
+        feature_id: str,
+        source_solid: Any,
+        result_solid: Any,
+        occt_history: Optional[Any] = None,
+        edge_shapes: Optional[List[Any]] = None,
+        radius: float = 0.0,
+    ) -> Optional[OperationRecord]:
+        """
+        TNP v4.0: Trackt eine BRepFilletAPI_MakeFillet Operation.
+
+        Fillet/Chamfer modifizieren Edges zu Faces. Die OCCT History
+        trackt welche Edges modifiziert wurden und welche neuen Faces/Edges
+        entstanden sind.
+
+        Args:
+            feature_id: ID des Fillet Features
+            source_solid: Das Solid vor der Operation
+            result_solid: Das Solid nach der Operation
+            occt_history: BRepTools_History aus BRepFilletAPI_MakeFillet
+            edge_shapes: Optional: Die filletenden Edges (für Fallback)
+            radius: Fillet-Radius (für Metadaten)
+
+        Returns:
+            OperationRecord mit Mappings, oder None
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp, TopExp_Explorer
+            from OCP.TopoDS import TopoDS
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Tracke Fillet Operation '{feature_id}'")
+
+            # Kernel-first: OCCT History auswerten wenn vorhanden
+            if occt_history is not None:
+                manual_mappings: Dict[str, List[str]] = {}
+                new_shape_ids: List[ShapeID] = []
+
+                # Alle Source-Edges finden die im Service registriert sind
+                source_edge_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(source_solid, TopAbs_EDGE, source_edge_map)
+
+                # Für jede registrierte Edge, die Modifications hat
+                for uuid, record in list(self._shapes.items()):
+                    if record.shape_id.shape_type != ShapeType.EDGE:
+                        continue
+                    if record.ocp_shape is None:
+                        continue
+
+                    # Prüfe ob diese Edge im Source-Solid existiert
+                    if not self._shape_exists_in_solid(record.ocp_shape, source_solid):
+                        continue
+
+                    # History-Abfrage: Was ist aus dieser Edge geworden?
+                    modified_shapes = self._history_outputs_for_shape(occt_history, record.ocp_shape)
+
+                    if modified_shapes:
+                        input_shape_id = record.shape_id
+                        output_uuids = []
+
+                        for modified_shape in modified_shapes:
+                            # Registrierte neue Shapes (Faces oder Edges)
+                            shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
+
+                            # Prüfen ob Shape bereits registriert (Dedup)
+                            existing_id = self._find_exact_shape_id_by_ocp_shape(modified_shape)
+                            if existing_id:
+                                output_uuids.append(existing_id.uuid)
+                                if existing_id not in new_shape_ids:
+                                    new_shape_ids.append(existing_id)
+                            else:
+                                # Neue ShapeID erstellen
+                                new_id = self.register_shape(
+                                    ocp_shape=modified_shape,
+                                    shape_type=shape_type,
+                                    feature_id=feature_id,
+                                    local_index=len(new_shape_ids)
+                                )
+                                new_shape_ids.append(new_id)
+                                output_uuids.append(new_id.uuid)
+
+                        if output_uuids:
+                            manual_mappings[input_shape_id.uuid] = output_uuids
+
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(
+                                    f"TNP Fillet: {input_shape_id.uuid[:8]} → "
+                                    f"{len(output_uuids)} Shapes gemappt"
+                                )
+
+                # OperationRecord erstellen
+                if manual_mappings or new_shape_ids:
+                    op_record = OperationRecord(
+                        operation_type="FILLET",
+                        feature_id=feature_id,
+                        input_shape_ids=[sid for sid in self._shapes.values()
+                                        if sid.shape_id.uuid in manual_mappings],
+                        output_shape_ids=new_shape_ids,
+                        occt_history=occt_history,
+                        manual_mappings=manual_mappings,
+                        metadata={
+                            "radius": radius,
+                            "mappings_count": len(manual_mappings),
+                            "new_shapes": len(new_shape_ids),
+                        }
+                    )
+                    self.record_operation(op_record)
+
+                    if is_enabled("tnp_debug_logging"):
+                        logger.success(
+                            f"TNP v4.0: Fillet History getrackt - "
+                            f"{len(manual_mappings)} mappings, {len(new_shape_ids)} neue Shapes"
+                        )
+                    return op_record
+
+            # Fallback: Alle neuen Edges im Result-Solid registrieren
+            new_edge_count = self._register_unmapped_edges(
+                result_solid=result_solid,
+                feature_id=feature_id,
+                existing_mappings=[],
+                start_local_index=0,
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP Fillet Fallback: {new_edge_count} neue Edges registriert")
+
+            # Minimaler OperationRecord für Fallback
+            op_record = OperationRecord(
+                operation_type="FILLET",
+                feature_id=feature_id,
+                input_shape_ids=[],
+                output_shape_ids=[],
+                occt_history=occt_history,
+                manual_mappings={},
+                metadata={
+                    "radius": radius,
+                    "fallback_mode": True,
+                    "new_edges": new_edge_count,
+                }
+            )
+            self.record_operation(op_record)
+            return op_record
+
+        except Exception as e:
+            if is_enabled("tnp_debug_logging"):
+                logger.error(f"TNP v4.0: Fillet Tracking fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def track_chamfer_operation(
+        self,
+        feature_id: str,
+        source_solid: Any,
+        result_solid: Any,
+        occt_history: Optional[Any] = None,
+        edge_shapes: Optional[List[Any]] = None,
+        distance: float = 0.0,
+    ) -> Optional[OperationRecord]:
+        """
+        TNP v4.0: Trackt eine BRepChamferAPI_MakeChamfer Operation.
+
+        Chamfer ist ähnlich zu Fillet, erstellt aber planare Faces
+        anstatt gekrümmter.
+
+        Args:
+            feature_id: ID des Chamfer Features
+            source_solid: Das Solid vor der Operation
+            result_solid: Das Solid nach der Operation
+            occt_history: BRepTools_History aus BRepChamferAPI_MakeChamfer
+            edge_shapes: Optional: Die chamferenden Edges (für Fallback)
+            distance: Chamfer-Abstand (für Metadaten)
+
+        Returns:
+            OperationRecord mit Mappings, oder None
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp, TopExp_Explorer
+            from OCP.TopoDS import TopoDS
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Tracke Chamfer Operation '{feature_id}'")
+
+            # Kernel-first: OCCT History auswerten wenn vorhanden
+            if occt_history is not None:
+                manual_mappings: Dict[str, List[str]] = {}
+                new_shape_ids: List[ShapeID] = []
+
+                # Alle Source-Edges finden die im Service registriert sind
+                source_edge_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(source_solid, TopAbs_EDGE, source_edge_map)
+
+                # Für jede registrierte Edge, die Modifications hat
+                for uuid, record in list(self._shapes.items()):
+                    if record.shape_id.shape_type != ShapeType.EDGE:
+                        continue
+                    if record.ocp_shape is None:
+                        continue
+
+                    # Prüfe ob diese Edge im Source-Solid existiert
+                    if not self._shape_exists_in_solid(record.ocp_shape, source_solid):
+                        continue
+
+                    # History-Abfrage: Was ist aus dieser Edge geworden?
+                    modified_shapes = self._history_outputs_for_shape(occt_history, record.ocp_shape)
+
+                    if modified_shapes:
+                        input_shape_id = record.shape_id
+                        output_uuids = []
+
+                        for modified_shape in modified_shapes:
+                            # Registrierte neue Shapes (Faces oder Edges)
+                            shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
+
+                            # Prüfen ob Shape bereits registriert (Dedup)
+                            existing_id = self._find_exact_shape_id_by_ocp_shape(modified_shape)
+                            if existing_id:
+                                output_uuids.append(existing_id.uuid)
+                                if existing_id not in new_shape_ids:
+                                    new_shape_ids.append(existing_id)
+                            else:
+                                # Neue ShapeID erstellen
+                                new_id = self.register_shape(
+                                    ocp_shape=modified_shape,
+                                    shape_type=shape_type,
+                                    feature_id=feature_id,
+                                    local_index=len(new_shape_ids)
+                                )
+                                new_shape_ids.append(new_id)
+                                output_uuids.append(new_id.uuid)
+
+                        if output_uuids:
+                            manual_mappings[input_shape_id.uuid] = output_uuids
+
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(
+                                    f"TNP Chamfer: {input_shape_id.uuid[:8]} → "
+                                    f"{len(output_uuids)} Shapes gemappt"
+                                )
+
+                # OperationRecord erstellen
+                if manual_mappings or new_shape_ids:
+                    op_record = OperationRecord(
+                        operation_type="CHAMFER",
+                        feature_id=feature_id,
+                        input_shape_ids=[sid for sid in self._shapes.values()
+                                        if sid.shape_id.uuid in manual_mappings],
+                        output_shape_ids=new_shape_ids,
+                        occt_history=occt_history,
+                        manual_mappings=manual_mappings,
+                        metadata={
+                            "distance": distance,
+                            "mappings_count": len(manual_mappings),
+                            "new_shapes": len(new_shape_ids),
+                        }
+                    )
+                    self.record_operation(op_record)
+
+                    if is_enabled("tnp_debug_logging"):
+                        logger.success(
+                            f"TNP v4.0: Chamfer History getrackt - "
+                            f"{len(manual_mappings)} mappings, {len(new_shape_ids)} neue Shapes"
+                        )
+                    return op_record
+
+            # Fallback: Alle neuen Edges im Result-Solid registrieren
+            new_edge_count = self._register_unmapped_edges(
+                result_solid=result_solid,
+                feature_id=feature_id,
+                existing_mappings=[],
+                start_local_index=0,
+            )
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP Chamfer Fallback: {new_edge_count} neue Edges registriert")
+
+            # Minimaler OperationRecord für Fallback
+            op_record = OperationRecord(
+                operation_type="CHAMFER",
+                feature_id=feature_id,
+                input_shape_ids=[],
+                output_shape_ids=[],
+                occt_history=occt_history,
+                manual_mappings={},
+                metadata={
+                    "distance": distance,
+                    "fallback_mode": True,
+                    "new_edges": new_edge_count,
+                }
+            )
+            self.record_operation(op_record)
+            return op_record
+
+        except Exception as e:
+            if is_enabled("tnp_debug_logging"):
+                logger.error(f"TNP v4.0: Chamfer Tracking fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _find_exact_shape_id_by_ocp_shape(self, ocp_shape: Any) -> Optional[ShapeID]:
+        """
+        Findet eine ShapeID per exakter OCP-Topologie-Identität (IsSame).
+        Hilfsmethode für History-Tracking Deduplizierung.
+        """
+        try:
+            for record in reversed(list(self._shapes.values())):
+                if record.ocp_shape is None:
+                    continue
+                try:
+                    if record.ocp_shape.IsSame(ocp_shape):
+                        return record.shape_id
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
 
 # Globaler Service für Document
 # Wird in Document.__init__ erstellt

@@ -1,204 +1,188 @@
-# Sketch-Agent - Architektur Plan
+# Sketch Agent - Entwicklungsphasen
 
-## Idee
+> **Status:** Phase 1-2 abgeschlossen (100% Success Rate im 100x Test)
+> **Stand:** Februar 2026
 
-Ein Agent der wie ein Mensch CAD-Sketches zeichnet und OCP-Operationen durchführt.
+---
 
-**Use Cases:**
-- 🧪 Automatisches Testing des CAD-Systems
-- 🐛 Bug-Discovery (zufällige Operationen finden Edge-Cases)
-- 📊 Training-Data-Generation für ML-Modelle
-- 🎨 Design-Exploration (zufällige Designs generieren)
-- 📈 Performance-Testing (Stress-Test mit komplexen Modellen)
+## Übersicht
+
+Der Sketch Agent ist ein generativer CAD-Agent, der parametrische Bauteile automatisch erstellt.
+
+### Aktuelle Fähigkeiten (v1.0)
+
+- **Document-Integration:** Sketches erscheinen im Browser
+- **n-Sketches Support:** simple (1), medium (1), complex (2 Sketches)
+- **Seed-Reproduzierbarkeit:** Random/Checkbox für reproduzierbare Ergebnisse
+- **Komplexitätsstufen:** simple, medium, complex
+- **100% Stability:** 100x Test ohne Fehler durchlaufen
+
+---
+
+## Phase 1: Basisfunktionen ✅
+
+### 1.1 Viewport Update korrigiert ✅
+
+**Datei:** `gui/dialogs/sketch_agent_dialog.py`
+
+```python
+# KORREKT:
+if hasattr(self.viewport, 'plotter'):
+    from gui.viewport.render_queue import request_render
+    request_render(self.viewport.plotter, immediate=True)
+elif hasattr(self.viewport, 'update'):
+    self.viewport.update()
+```
+
+### 1.2 Sketch im Browser anzeigen ✅
+
+**Datei:** `sketching/core/sketch_agent.py`
+
+```python
+# Sketch zum Document hinzufügen (erscheint im Browser!)
+self.document.sketches.append(sketch)
+```
+
+### 1.3 n-Sketches implementiert ✅
+
+| Komplexität | Sketches | Features |
+|-------------|----------|----------|
+| **simple**  | 1        | Base Sketch → Extrude |
+| **medium**  | 1        | Base + Fillet |
+| **complex** | 2        | Base + Fillet + Hole (Cut) |
+
+---
+
+## Phase 2: Document-Integration ✅
+
+### 2.1 SketchAgent mit Document ✅
+
+```python
+class SketchAgent:
+    def __init__(self, document=None, mode="adaptive", headless=True, seed=None):
+        self.document = document  # ← Document für Sketch/Body
+        # ...
+```
+
+### 2.2 Dialog mit Document ✅
+
+```python
+# gui/dialogs/sketch_agent_dialog.py
+
+def show_sketch_agent_dialog(document, viewport, parent=None):
+    dialog = SketchAgentDialog(document, viewport, parent)
+    dialog.exec()
+    return dialog
+```
+
+---
+
+## Phase 3: Test & UI-Integration ⏳
+
+### 3.1 Integrationstest GUI
+
+| Aufgabe | Status |
+|---------|--------|
+| Dialog ausführen | Offen |
+| Sketch im Browser sichtbar? | Offen |
+| Body im Browser sichtbar? | Offen |
+| Feature korrekt? | Offen |
+
+### 3.2 Bekannte Issues
+
+| Issue | Priorität | Workaround |
+|-------|-----------|------------|
+| Body nur beim ersten Mal sichtbar | Hoch | Viewport Refresh verbessern |
+
+---
+
+## Phase 4: Fancy UI Features (Prototyp-Level) ⏳
+
+| Feature | Beschreibung | Status |
+|---------|--------------|--------|
+| **Floating Panel** | Nicht-Modaler Dialog, währenddessen im Viewport arbeiten | Offen |
+| **Live Preview** | Real-time Vorschau während der Generierung | Offen |
+| **Toast-Notifications** | Success/Error Meldungen im Viewport | Offen |
+| **Design Tokens** | Konsistentes Styling | Teilweise implementiert |
+
+---
+
+## Phase 5: Mesh Reconstruction ⏳
+
+| Feature | Beschreibung | Status |
+|---------|--------------|--------|
+| **STL/OBJ Import** | Mesh laden | Offen |
+| **Primitive Detection** | Ebenen, Zylinder, Kugeln erkennen | Offen |
+| **Feature Recognition** | Fillets, Chamfers, Holes finden | Offen |
+| **CAD Rekonstruktion** | Parametrisches Modell aus Mesh erstellen | Offen |
+
+---
 
 ## Architektur
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    SketchAgent                              │
-│  - Zufällige Sketch-Generierung (mensch-like)              │
-│  - OCP-Operationen (Extrude, Fillet, Chamfer, Boolean)     │
-│  - Feedback-Learning (was funktioniert, was nicht)         │
-└─────────────────────────────────────────────────────────────┘
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  SketchGenerator│  │  OperationAgent │  │  FeedbackLoop   │
-│                 │  │                 │  │                 │
-│ - Linien        │  │ - Extrude       │  │ - Erfolge       │
-│ - Kreise        │  │ - Fillet        │  │ - Fehler        │
-│ - Bögen         │  │ - Chamfer       │  │ - Optimierung   │
-│ - Constraints   │  │ - Boolean       │  │                 │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                  SKETCH AGENT                       │
+├─────────────────────────────────────────────────────┤
+│  SketchAgent (sketching/core/sketch_agent.py)      │
+│    ├── SketchGenerator (generators/)               │
+│    ├── OperationAgent (operations/)                │
+│    ├── AssemblyAgent (core/assembly_agent.py)      │
+│    └── VisualAgent (visual/visual_agent.py)        │
+├─────────────────────────────────────────────────────┤
+│  UI (gui/dialogs/sketch_agent_dialog.py)           │
+│    ├── SketchAgentWorker (QThread)                 │
+│    └── SketchAgentDialog (QDialog)                 │
+└─────────────────────────────────────────────────────┘
 ```
 
-## Komponenten
+---
 
-### 1. SketchGenerator
+## Test-Ergebnisse
 
-Erstellt "menschliche" Sketches mit zufälligen aber sinnvollen Formen.
+### 100x Stress Test (2026-02-11)
 
-```python
-class SketchGenerator:
-    """Generiert zufällige aber plausible Sketches."""
+| Metrik | Wert |
+|--------|------|
+| **Gesamt** | 100 Durchläufe |
+| **Erfolgreich** | 100 (100.0%) |
+| **Fehlgeschlagen** | 0 |
+| **Dauer gesamt** | 2.8s |
+| **Durchschnitt** | 28.1ms/part |
+| **Min/Max** | 5.0ms / 111.0ms |
+| **∅ Sketches/Part** | 1.3 |
 
-    def generate_random_profile(self) -> Sketch:
-        """
-        Generiert ein zufälliges Profil für Extrusion.
+### Nach Komplexität:
 
-        Strategien:
-        - Rechteck mit Variationen
-        - Polygon (3-8 Seiten)
-        - Kreis + Abgeschnitte
-        - Mehrere geschlossene Konturen
-        """
+| Komplexität | Erfolgsrate |
+|-------------|-------------|
+| **simple**  | 34/34 (100%) |
+| **medium**  | 33/33 (100%) |
+| **complex** | 33/33 (100%) |
 
-    def generate_mechanical_part(self) -> Sketch:
-        """
-        Generiert mechanische Bauteile.
+---
 
-        Beispiele:
-        - Welle mit Bohrung
-        - Flansch mit Schraubenlöchern
-        - Bracket mit Mounting-Holes
-        """
-```
+## Dateien
 
-### 2. OperationAgent
+| Datei | Zweck |
+|-------|-------|
+| `sketching/core/sketch_agent.py` | Haupt-Klasse |
+| `sketching/core/result_types.py` | PartResult, AssemblyResult, etc. |
+| `sketching/generators/sketch_generator.py` | Sketch-Generierung |
+| `sketching/operations/operation_agent.py` | Operationen (Extrude, Fillet, etc.) |
+| `gui/dialogs/sketch_agent_dialog.py` | UI-Dialog |
+| `test/test_sketch_agent_basic.py` | Basis-Tests |
+| `test/test_sketch_agent_100x.py` | Stress-Test |
 
-Führt OCP-Operationen auf Sketches aus.
+---
 
-```python
-class OperationAgent:
-    """Führt CAD-Operationen aus."""
+## Nächste Schritte (TODO)
 
-    def extrude(self, sketch, distance) -> Solid:
-        """Extrudiert Sketch zu Solid."""
+1. **Phase 3:** Integrationstest GUI durchführen
+2. **Fix:** Viewport Refresh Problem lösen
+3. **Phase 4:** Fancy UI Features (optional)
+4. **Phase 5:** Mesh Reconstruction (später)
 
-    def fillet(self, solid, edges, radius) -> Solid:
-        """Rundet Kanten ab."""
+---
 
-    def chamfer(self, solid, edges, distance) -> Solid:
-        """Kante abschrägen."""
-
-    def boolean_cut(self, solid, tool) -> Solid:
-        """Subtrahiert Tool von Solid."""
-
-    def shell(self, solid, faces, thickness) -> Solid:
-        """Erstellt Hohlkörper."""
-```
-
-### 3. DesignPatterns
-
-Vordefinierte Design-Patterns für realistische Bauteile.
-
-```python
-DESIGN_PATTERNS = {
-    "shaft": {
-        "base": "circle",
-        "operations": ["extrude", "fillet_edges"],
-        "parameters": {"diameter": (10, 50), "length": (50, 200)}
-    },
-    "flange": {
-        "base": "circle",
-        "operations": ["extrude", "add_holes", "fillet"],
-        "parameters": {"diameter": (50, 150), "holes": (4, 8)}
-    },
-    "bracket": {
-        "base": "rectangle",
-        "operations": ["extrude", "cut_slot", "add_holes"],
-        "parameters": {"width": (30, 100), "height": (50, 150)}
-    },
-    "housing": {
-        "base": "rectangle",
-        "operations": ["extrude", "shell", "cut_opening"],
-        "parameters": {"width": (50, 200), "wall_thickness": (2, 10)}
-    }
-}
-```
-
-### 4. FeedbackLoop
-
-Lernt aus Ergebnissen und optimiert Strategien.
-
-```python
-class FeedbackLoop:
-    """Sammelt Feedback und lernt daraus."""
-
-    def record_success(self, operation, params, time, result):
-        """Zeichnet erfolgreiche Operation auf."""
-
-    def record_failure(self, operation, params, error):
-        """Zeichnet fehlgeschlagene Operation auf."""
-
-    def get_success_rate(self, operation) -> float:
-        """Gibt Erfolgsrate zurück."""
-
-    def suggest_parameters(self, operation) -> dict:
-        """Schlägt erfolgreiche Parameter vor."""
-```
-
-## Implementation Plan
-
-### Phase 1: Grundlagen (1-2 Tage)
-- [ ] `sketch_agent.py` - Basis-Klasse
-- [ ] `sketch_generator.py` - Zufällige Sketches
-- [ ] `operation_agent.py` - OCP-Operation Wrapper
-
-### Phase 2: Design Patterns (1 Tag)
-- [ ] `design_patterns.py` - Vordefinierte Bauteile
-- [ ] Parameter-Ranges für verschiedene Typen
-
-### Phase 3: Feedback & Learning (1-2 Tage)
-- [ ] `feedback_loop.py` - Ergebnis-Sammlung
-- [ ] Statistiken und Reporting
-- [ ] Parameter-Optimierung
-
-### Phase 4: Automated Testing (1 Tag)
-- [ ] `test_runner.py` - Führt Agenten aus
-- [ ] Error-Reporting
-- [ ] Performance-Metriken
-
-## Test-Scenario
-
-```python
-# Einfacher Test
-agent = SketchAgent()
-
-# 100 zufällige Teile generieren
-for i in range(100):
-    # Sketch generieren
-    sketch = agent.generate_random_profile()
-
-    # Extrudieren
-    solid = agent.extrude(sketch, distance=random(10, 50))
-
-    # Zufällige Fillets
-    edges = agent.select_random_edges(solid, count=random(1, 5))
-    solid = agent.fillet(solid, edges, radius=random(1, 5))
-
-    # Bohrungen hinzufügen
-    if random() > 0.5:
-        solid = agent.add_random_holes(solid, count=random(1, 4))
-
-    # Speichern
-    solid.export_step(f"test_output/part_{i}.step")
-
-    # Feedback aufzeichnen
-    agent.record_success(...)
-```
-
-## Benefits
-
-1. **Testing:** Findet Bugs die manuelle Tests übersehen
-2. **Coverage:** Testet Kombinationen die ein Mensch nicht probieren würde
-3. **Regression:** Neue Releases werden gegen getestet
-4. **Performance:** Stresstest für grosse Modelle
-5. **ML Training:** Generiert Trainingsdaten für CAD-ML-Modelle
-
-## nächste Schritte
-
-1. Erstelle `sketching/sketch_agent.py`
-2. Implementiere `SketchGenerator` mit zufälligen Profilen
-3. Implementiere `OperationAgent` für Extrude/Fillet/Chamfer
-4. Erste Tests mit 100 zufälligen Teilen
+*Stand: Februar 2026 - Version 1.0*

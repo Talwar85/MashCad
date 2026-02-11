@@ -38,10 +38,181 @@ class BodySnapshot:
     vtk_edges: Optional[Any] = None
     vtk_normals: Optional[Any] = None
 
+    # TNP v4.0: Topological Naming System state
+    tnp_service_state: Optional[Dict[str, Any]] = None  # ShapeNamingService snapshot
+    tnp_document_id: Optional[str] = None  # Document ID for TNP service lookup
+
     def __post_init__(self):
         """Ensure features are deep copied"""
         if self.features is not None:
             self.features = copy.deepcopy(self.features)
+
+    def create_tnp_snapshot(self, body: 'Body') -> None:
+        """
+        Erstellt einen Snapshot des TNP-Service-Zustands.
+
+        Wird in __enter__ von BodyTransaction aufgerufen um sicherzustellen,
+        dass bei Rollback auch die ShapeIDs wiederhergestellt werden.
+        """
+        try:
+            if hasattr(body, '_document') and body._document is not None:
+                if hasattr(body._document, '_shape_naming_service'):
+                    service = body._document._shape_naming_service
+                    if service is not None:
+                        # Erstelle serialisierbaren Snapshot des Service
+                        self.tnp_service_state = {
+                            '_shapes': {},  # ShapeID uuid -> ShapeRecord (als dict)
+                            '_by_feature': dict(service._by_feature),
+                            '_operations': [],
+                            '_spatial_index_counts': {
+                                str(k): len(v) for k, v in service._spatial_index.items()
+                            }
+                        }
+
+                        # ShapeRecords serialisieren
+                        for uuid, record in service._shapes.items():
+                            self.tnp_service_state['_shapes'][uuid] = {
+                                'shape_id': {
+                                    'uuid': record.shape_id.uuid,
+                                    'shape_type': record.shape_id.shape_type.name,
+                                    'feature_id': record.shape_id.feature_id,
+                                    'local_index': record.shape_id.local_index,
+                                    'geometry_hash': record.shape_id.geometry_hash,
+                                    'timestamp': record.shape_id.timestamp,
+                                },
+                                'is_valid': record.is_valid,
+                                # ocp_shape kann nicht serialisiert werden - wird bei Restore neu aufgelöst
+                                'geometric_signature': record.geometric_signature,
+                            }
+
+                        # OperationRecords serialisieren
+                        for op in service._operations:
+                            self.tnp_service_state['_operations'].append({
+                                'operation_id': op.operation_id,
+                                'operation_type': op.operation_type,
+                                'feature_id': op.feature_id,
+                                'input_shape_ids': [
+                                    {
+                                        'uuid': sid.uuid,
+                                        'shape_type': sid.shape_type.name,
+                                        'feature_id': sid.feature_id,
+                                        'local_index': sid.local_index,
+                                        'geometry_hash': sid.geometry_hash,
+                                    }
+                                    for sid in op.input_shape_ids
+                                ],
+                                'output_shape_ids': [
+                                    {
+                                        'uuid': sid.uuid,
+                                        'shape_type': sid.shape_type.name,
+                                        'feature_id': sid.feature_id,
+                                        'local_index': sid.local_index,
+                                        'geometry_hash': sid.geometry_hash,
+                                    }
+                                    for sid in op.output_shape_ids
+                                ],
+                                'manual_mappings': op.manual_mappings,
+                                'metadata': op.metadata,
+                                'timestamp': op.timestamp,
+                            })
+
+                        self.tnp_document_id = getattr(body._document, 'id', None) or getattr(body._document, 'document_id', None)
+
+                        from loguru import logger
+                        logger.debug(f"[TNP] Snapshot erstellt: {len(self.tnp_service_state['_shapes'])} Shapes, "
+                                   f"{len(self.tnp_service_state['_operations'])} Operations")
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"[TNP] Konnte Snapshot nicht erstellen: {e}")
+
+    def restore_tnp_state(self, body: 'Body') -> bool:
+        """
+        Stellt den TNP-Service-Zustand aus dem Snapshot wieder her.
+
+        Returns:
+            True wenn Wiederherstellung erfolgreich, False sonst
+        """
+        if self.tnp_service_state is None:
+            return False
+
+        try:
+            if hasattr(body, '_document') and body._document is not None:
+                if hasattr(body._document, '_shape_naming_service'):
+                    service = body._document._shape_naming_service
+                    if service is None:
+                        return False
+
+                    from modeling.tnp_system import ShapeID, ShapeType, OperationRecord
+                    from loguru import logger
+
+                    # Service leeren
+                    service._shapes.clear()
+                    service._by_feature.clear()
+                    service._operations.clear()
+                    for shape_type_key in service._spatial_index:
+                        service._spatial_index[shape_type_key].clear()
+
+                    # ShapeRecords wiederherstellen
+                    for uuid, record_dict in self.tnp_service_state['_shapes'].items():
+                        sid_data = record_dict['shape_id']
+                        shape_id = ShapeID(
+                            uuid=sid_data['uuid'],
+                            shape_type=ShapeType[sid_data['shape_type']],
+                            feature_id=sid_data['feature_id'],
+                            local_index=sid_data['local_index'],
+                            geometry_hash=sid_data['geometry_hash'],
+                            timestamp=sid_data['timestamp'],
+                        )
+                        from modeling.tnp_system import ShapeRecord
+                        record = ShapeRecord(
+                            shape_id=shape_id,
+                            ocp_shape=None,  # Wird bei Bedarf neu aufgelöst
+                            geometric_signature=record_dict['geometric_signature'],
+                            is_valid=record_dict['is_valid'],
+                        )
+                        service._shapes[uuid] = record
+
+                    # by_feature wiederherstellen
+                    for feat_id, shape_ids in self.tnp_service_state['_by_feature'].items():
+                        service._by_feature[feat_id] = []
+                        for sid_data in shape_ids:
+                            if sid_data.uuid in service._shapes:
+                                service._by_feature[feat_id].append(service._shapes[sid_data.uuid].shape_id)
+
+                    # OperationRecords wiederherstellen
+                    for op_dict in self.tnp_service_state['_operations']:
+                        input_ids = []
+                        for sid_data in op_dict['input_shape_ids']:
+                            if sid_data['uuid'] in service._shapes:
+                                input_ids.append(service._shapes[sid_data['uuid']].shape_id)
+
+                        output_ids = []
+                        for sid_data in op_dict['output_shape_ids']:
+                            if sid_data['uuid'] in service._shapes:
+                                output_ids.append(service._shapes[sid_data['uuid']].shape_id)
+
+                        op_record = OperationRecord(
+                            operation_id=op_dict['operation_id'],
+                            operation_type=op_dict['operation_type'],
+                            feature_id=op_dict['feature_id'],
+                            input_shape_ids=input_ids,
+                            output_shape_ids=output_ids,
+                            manual_mappings=op_dict['manual_mappings'],
+                            metadata=op_dict['metadata'],
+                        )
+                        service._operations.append(op_record)
+
+                    logger.debug(f"[TNP] State wiederhergestellt: {len(service._shapes)} Shapes, "
+                               f"{len(service._operations)} Operations")
+                    return True
+
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"[TNP] Wiederherstellung fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return False
 
 
 class BodyTransaction:
@@ -100,6 +271,9 @@ class BodyTransaction:
             vtk_edges=getattr(self._body, 'vtk_edges', None),
             vtk_normals=getattr(self._body, 'vtk_normals', None)
         )
+
+        # TNP v4.0: Snapshot des ShapeNamingService erstellen
+        self._snapshot.create_tnp_snapshot(self._body)
 
         logger.debug(f"📸 Transaction started: {self._operation_name}")
         return self
@@ -160,6 +334,11 @@ class BodyTransaction:
             return
 
         try:
+            # TNP v4.0: ShapeNamingService State wiederherstellen (VOR Body-Update!)
+            tnp_restored = self._snapshot.restore_tnp_state(self._body)
+            if tnp_restored:
+                logger.debug("[TNP] ShapeNamingService State bei Rollback wiederhergestellt")
+
             # Restore CAD kernel state (CRITICAL)
             self._body._build123d_solid = self._snapshot.solid
 
@@ -193,7 +372,7 @@ class BodyTransaction:
         except Exception as rollback_error:
             # Critical: Rollback itself failed!
             logger.critical(f"❌❌❌ ROLLBACK FAILED: {rollback_error}")
-            logger.critical(f"Body '{self._body.name}' may be in corrupt state!")
+            logger.critical(f"Body '{getattr(self._body, 'name', 'Body')}' may be in corrupt state!")
             # Don't suppress this - it's a critical error
             raise
 
