@@ -2543,170 +2543,9 @@ class Body:
             logger.warning(f"Shape-Reparatur Fehler: {e}")
             return shape  # Gib Original zurück
 
-    def _ocp_fillet(self, solid, edges, radius, extract_history=False):
-        """
-        OCP-basiertes Fillet (robuster als Build123d).
-
-        Args:
-            solid: Build123d Solid
-            edges: Liste von Edges
-            radius: Fillet-Radius
-            extract_history: True → gibt (Solid, History) Tuple zurück für TNP
-
-        Returns:
-            Build123d Solid oder None (oder (Solid, History) wenn extract_history=True)
-        """
-        if not HAS_OCP:
-            return (None, None) if extract_history else None
-
-        try:
-            from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-            from OCP.BRepCheck import BRepCheck_Analyzer
-
-            # Extrahiere TopoDS_Shape
-            shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
-
-            # Erstelle Fillet-Operator
-            fillet_op = BRepFilletAPI_MakeFillet(shape)
-
-            # Füge Edges hinzu
-            for edge in edges:
-                edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
-                fillet_op.Add(radius, edge_shape)
-
-            # Build
-            fillet_op.Build()
-
-            if not fillet_op.IsDone():
-                logger.warning("OCP Fillet IsDone() = False")
-                return (None, None) if extract_history else None
-
-            result_shape = fillet_op.Shape()
-
-            # History extrahieren (Phase 12: Batch Fillets TNP-Integration)
-            history = None
-            if extract_history:
-                try:
-                    history = self._build_history_from_make_shape(fillet_op, shape)
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"Fillet History extrahiert: Gen={history.HasGenerated()}, Mod={history.HasModified()}, Rem={history.HasRemoved()}")
-                except Exception as h_e:
-                    logger.debug(f"Fillet History-Extraktion fehlgeschlagen: {h_e}")
-
-            # Validiere
-            analyzer = BRepCheck_Analyzer(result_shape)
-            if not analyzer.IsValid():
-                logger.warning("OCP Fillet produzierte ungültiges Shape, versuche Reparatur...")
-                result_shape = self._fix_shape_ocp(result_shape)
-
-            # Wrap zu Build123d
-            try:
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    result = Shape(result_shape)
-
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug("OCP Fillet erfolgreich")
-                    return (result, history) if extract_history else result
-                else:
-                    return (None, None) if extract_history else None
-            except Exception as e:
-                logger.debug(f"[__init__.py] Fehler: {e}")
-                return (None, None) if extract_history else None
-
-        except Exception as e:
-            logger.debug(f"OCP Fillet Fehler: {e}")
-            return (None, None) if extract_history else None
-
-    def _ocp_chamfer(self, solid, edges, distance, extract_history=False):
-        """
-        OCP-basiertes Chamfer (robuster als Build123d).
-
-        Args:
-            solid: Build123d Solid
-            edges: Liste von Edges
-            distance: Chamfer-Distanz
-            extract_history: True → gibt (Solid, History) Tuple zurück für TNP
-
-        Returns:
-            Build123d Solid oder None (oder (Solid, History) wenn extract_history=True)
-        """
-        if not HAS_OCP:
-            return (None, None) if extract_history else None
-
-        try:
-            from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer
-            from OCP.BRepCheck import BRepCheck_Analyzer
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_FACE
-
-            # Extrahiere TopoDS_Shape
-            shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
-
-            # Erstelle Chamfer-Operator
-            chamfer_op = BRepFilletAPI_MakeChamfer(shape)
-
-            # FIX: Nutze 2-Parameter Version (symmetrische Fase)
-            # OCP/Cascade errechnet die Fasen-Richtung automatisch
-            for edge in edges:
-                edge_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
-
-                try:
-                    # Nur Distanz und Edge - kein Face nötig!
-                    chamfer_op.Add(distance, edge_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Chamfer.Add fehlgeschlagen: {e}")
-                    continue
-
-            # Build
-            chamfer_op.Build()
-
-            if not chamfer_op.IsDone():
-                logger.warning("OCP Chamfer IsDone() = False")
-                return (None, None) if extract_history else None
-
-            result_shape = chamfer_op.Shape()
-
-            # History extrahieren (Phase 12: Batch Fillets TNP-Integration)
-            history = None
-            if extract_history:
-                try:
-                    history = self._build_history_from_make_shape(chamfer_op, shape)
-                    if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"Chamfer History extrahiert: Gen={history.HasGenerated()}, Mod={history.HasModified()}, Rem={history.HasRemoved()}")
-                except Exception as h_e:
-                    logger.debug(f"Chamfer History-Extraktion fehlgeschlagen: {h_e}")
-
-            # Validiere
-            analyzer = BRepCheck_Analyzer(result_shape)
-            if not analyzer.IsValid():
-                logger.warning("OCP Chamfer produzierte ungültiges Shape")
-                result_shape = self._fix_shape_ocp(result_shape)
-
-            # Wrap zu Build123d
-            try:
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    result = Shape(result_shape)
-
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug("OCP Chamfer erfolgreich")
-                    return (result, history) if extract_history else result
-                else:
-                    return (None, None) if extract_history else None
-            except Exception as e:
-                logger.debug(f"[__init__.py] Fehler: {e}")
-                return (None, None) if extract_history else None
-
-        except Exception as e:
-            logger.debug(f"OCP Chamfer Fehler: {e}")
-            return (None, None) if extract_history else None
+    # ==================== PHASE 6: COMPUTE METHODS ====================
+    # NOTE: _ocp_fillet und _ocp_chamfer wurden in OCP-AMP2 entfernt
+    # (Doppelte Implementierungen, werden durch OCPFilletHelper/OCPChamferHelper ersetzt)
 
     # ==================== PHASE 6: COMPUTE METHODS ====================
 
@@ -2988,11 +2827,10 @@ class Body:
         """
         Berechnet Sweep eines Profils entlang eines Pfads.
 
-        Strategy:
-        1. Profil zu Face konvertieren
-        2. Pfad auflösen
-        3. Build123d sweep() versuchen
-        4. Fallback zu OCP BRepOffsetAPI_MakePipe
+        OCP-First Strategy:
+        1. Profil zu Face konvertieren + Pfad auflösen
+        2. Voranalyse: Pfad-Komplexität → MakePipe oder MakePipeShell
+        3. Kein Fallback - bei Fehler ValueError
 
         Phase 8: Unterstützt Twist und Skalierung
         """

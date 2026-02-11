@@ -107,7 +107,8 @@
       "Bash(C:/Users/User/miniforge3/envs/cad_env/python.exe:*)",
       "Bash(PATH=\"/c/Users/User/miniforge3/envs/cad_env:/c/Users/User/miniforge3/envs/cad_env/Library/bin:$PATH\" python:*)",
       "Bash(if not exist \"c:\\\\LiteCad\\\\docs\" mkdir \"c:\\\\LiteCad\\\\docs\")",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(rg:*)"
     ]
   }
 }

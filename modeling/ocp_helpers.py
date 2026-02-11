@@ -190,13 +190,10 @@ class OCPFilletHelper:
 
         # TNP mit OCCT-History!
         # Die History von BRepFilletAPI_MakeFillet trackt welche Edges neu erstellt wurden
-        occt_history = None
-        try:
-            occt_history = fillet_op.History()
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"[TNP] Fillet OCCT-History extrahiert: {occt_history is not None}")
-        except Exception as e:
-            logger.warning(f"[TNP] Konnte Fillet-History nicht extrahieren: {e}")
+        # BRepFilletAPI_MakeFillet hat .Modified()/.Generated() direkt (kein separates .History()-Objekt in OCP Python-Bindings)
+        occt_history = fillet_op
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"[TNP] Fillet-Operator als OCCT-History verwendet")
 
         # TNP: Alle Shapes registrieren (OBLIGATORISCH!)
         try:
@@ -303,13 +300,10 @@ class OCPChamferHelper:
         result_shape = chamfer_op.Shape()
 
         # TNP mit OCCT-History!
-        occt_history = None
-        try:
-            occt_history = chamfer_op.History()
-            if is_enabled("tnp_debug_logging"):
-                logger.debug(f"[TNP] Chamfer OCCT-History extrahiert: {occt_history is not None}")
-        except Exception as e:
-            logger.warning(f"[TNP] Konnte Chamfer-History nicht extrahieren: {e}")
+        # BRepFilletAPI_MakeChamfer hat .Modified()/.Generated() direkt (kein separates .History()-Objekt in OCP Python-Bindings)
+        occt_history = chamfer_op
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(f"[TNP] Chamfer-Operator als OCCT-History verwendet")
 
         # TNP: Alle Shapes registrieren
         try:

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from uuid import uuid4
 import hashlib
+import time
 import numpy as np
 from loguru import logger
 from config.feature_flags import is_enabled
@@ -93,8 +94,16 @@ class ShapeRecord:
                 from OCP.BRepAdaptor import BRepAdaptor_Curve
                 from OCP.GProp import GProp_GProps
                 from OCP.BRepGProp import BRepGProp
-                
-                adaptor = BRepAdaptor_Curve(self.ocp_shape)
+                from OCP.TopoDS import TopoDS
+                from OCP.TopAbs import TopAbs_EDGE
+
+                # Cast zu TopoDS_Edge (self.ocp_shape ist TopoDS_Shape)
+                if self.ocp_shape.ShapeType() == TopAbs_EDGE:
+                    edge = TopoDS.Edge_s(self.ocp_shape)
+                else:
+                    return {}
+
+                adaptor = BRepAdaptor_Curve(edge)
                 
                 # Mittelpunkt
                 u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
@@ -103,7 +112,7 @@ class ShapeRecord:
                 
                 # Länge
                 props = GProp_GProps()
-                BRepGProp.LinearProperties_s(self.ocp_shape, props)
+                BRepGProp.LinearProperties_s(edge, props)
                 sig['length'] = props.Mass()
                 
                 # Kurven-Typ
@@ -1126,13 +1135,8 @@ class ShapeNamingService:
                 return False
 
             # Neue Geometrie-Daten berechnen
-            from OCP.BRepGProp import BRepGProp
-            from OCP.GeomAbs import GeomAbs_Curve
-            from OCP.BRepAdaptor import BRepAdaptor_Curve
-            from OCP.GProp import GProp_GProps
-
-            geo_data = self._compute_geometry_data(new_shape)
-            if geo_data is None:
+            geo_data = self._extract_geometry_data(new_shape, old_shape_id.shape_type)
+            if not geo_data:  # Leeres Tuple bedeutet Fehler
                 logger.warning(f"TNP: Konnte Geometrie-Daten nicht berechnen für {old_shape_id.uuid[:8]}")
                 return False
 
@@ -1150,9 +1154,9 @@ class ShapeNamingService:
             new_record = ShapeRecord(
                 shape_id=updated_shape_id,
                 ocp_shape=new_shape,
-                is_valid=True,
-                geometric_signature=self._compute_geometric_signature(new_shape)
+                is_valid=True
             )
+            new_record.geometric_signature = new_record.compute_signature()
 
             # Alten Record ersetzen
             self._shapes[old_shape_id.uuid] = new_record
@@ -1297,14 +1301,22 @@ class ShapeNamingService:
                 from OCP.BRepAdaptor import BRepAdaptor_Curve
                 from OCP.GProp import GProp_GProps
                 from OCP.BRepGProp import BRepGProp
-                
-                adaptor = BRepAdaptor_Curve(ocp_shape)
+                from OCP.TopoDS import TopoDS
+                from OCP.TopAbs import TopAbs_EDGE
+
+                # Cast zu TopoDS_Edge (ocp_shape ist TopoDS_Shape)
+                if ocp_shape.ShapeType() == TopAbs_EDGE:
+                    edge = TopoDS.Edge_s(ocp_shape)
+                else:
+                    return ()
+
+                adaptor = BRepAdaptor_Curve(edge)
                 u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
                 pnt = adaptor.Value(u_mid)
-                
+
                 props = GProp_GProps()
-                BRepGProp.LinearProperties_s(ocp_shape, props)
-                
+                BRepGProp.LinearProperties_s(edge, props)
+
                 return (pnt.X(), pnt.Y(), pnt.Z(), props.Mass())
             
             elif shape_type == ShapeType.FACE:

@@ -509,7 +509,7 @@ class MainWindow(QMainWindow):
         
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
-        self.tool_stack.setMinimumWidth(180)
+        self.tool_stack.setMinimumWidth(220)
         self.tool_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
 
         # PERFORMANCE: TransformPanel wird später bei line 466 erstellt

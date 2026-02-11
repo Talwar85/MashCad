@@ -3695,8 +3695,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     if normal_variance > 0.1:  # Gekrümmte Fläche (Zylinder, Kugel)
                         # Skalierung statt Translation (dehnt mesh leicht nach aussen)
                         center = display_mesh.center_of_mass()
-                        scaled = display_mesh.scale((1.02, 1.02, 1.02), center=center, inplace=False)
-                        highlight_mesh = scaled
+                        # PyVista scale() hat kein center-Argument - manueller Workaround
+                        translated = display_mesh.translate(-center, inplace=False)
+                        scaled = translated.scale((1.02, 1.02, 1.02), inplace=False)
+                        highlight_mesh = scaled.translate(center, inplace=False)
                     else:
                         # Ebene Fläche - Offset funktioniert
                         offset = np.array(face.plane_normal) * 0.5
