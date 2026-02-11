@@ -412,6 +412,63 @@ class ShapeNamingService:
             logger.debug(f"ShapeID-Lookup für Face fehlgeschlagen: {e}")
             return None
 
+    def find_shape_id_by_shape(
+        self,
+        ocp_shape: Any,
+        tolerance: float = 0.5,
+        *,
+        require_exact: bool = False,
+    ) -> Optional[ShapeID]:
+        """
+        Generische Methode zum Finden einer ShapeID für ein beliebiges Shape.
+
+        Erkennt automatisch den Shape-Typ (Edge/Face/Vertex) und ruft
+        die spezialisierte Methode auf.
+
+        Args:
+            ocp_shape: OCP Shape (TopoDS_Edge, TopoDS_Face, etc.)
+            tolerance: Toleranz für geometrisches Matching
+            require_exact: Wenn True, nur exakte Matches zurückgeben
+
+        Returns:
+            ShapeID oder None
+        """
+        if not HAS_OCP or ocp_shape is None:
+            return None
+
+        try:
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+            from OCP.TopoDS import TopoDS_Edge, TopoDS_Face, TopoDS_Vertex
+
+            # Shape-Typ erkennen
+            shape_type = ocp_shape.ShapeType()
+
+            if shape_type == TopAbs_EDGE:
+                # Wrapper zu build123d Edge
+                from build123d import Edge
+                b123d_edge = Edge(ocp_shape)
+                return self.find_shape_id_by_edge(b123d_edge, tolerance=tolerance, require_exact=require_exact)
+
+            elif shape_type == TopAbs_FACE:
+                # Wrapper zu build123d Face
+                from build123d import Face
+                b123d_face = Face(ocp_shape)
+                return self.find_shape_id_by_face(b123d_face, tolerance=tolerance, require_exact=require_exact)
+
+            elif shape_type == TopAbs_VERTEX:
+                # TODO: Vertex-Support wenn benötigt
+                if require_exact:
+                    return self._find_exact_shape_id(ocp_shape, ShapeType.VERTEX)
+                return None
+
+            else:
+                logger.debug(f"[TNP] Unsupported shape type for ShapeID lookup: {shape_type}")
+                return None
+
+        except Exception as e:
+            logger.debug(f"[TNP] find_shape_id_by_shape failed: {e}")
+            return None
+
     def resolve_shape(self, shape_id: ShapeID,
                       current_solid: Any,
                       *,
@@ -481,7 +538,41 @@ class ShapeNamingService:
     def get_shapes_by_feature(self, feature_id: str) -> List[ShapeID]:
         """Gibt alle Shapes zurück, die ein Feature erzeugt hat"""
         return self._by_feature.get(feature_id, [])
-    
+
+    def resolve_shape_id(
+        self,
+        shape_uuid: str,
+        current_solid: Any,
+        *,
+        log_unresolved: bool = True,
+    ) -> Optional[Any]:
+        """
+        Löst eine ShapeID (per UUID) zur aktuellen Geometrie auf.
+
+        Convenience-Methode für UUID-basierte Auflösung (TNP v4.0 GUI Integration).
+
+        Args:
+            shape_uuid: Die UUID der ShapeID (als String)
+            current_solid: Der aktuelle build123d Solid
+            log_unresolved: Ob ungelöste Shapes geloggt werden sollen
+
+        Returns:
+            Aufgelöstes OCP Shape oder None
+        """
+        # ShapeID aus UUID finden
+        shape_record = self._shapes.get(shape_uuid)
+        if shape_record is None:
+            if log_unresolved:
+                logger.debug(f"[TNP] ShapeID {shape_uuid[:8]}... nicht in Registry")
+            return None
+
+        # ShapeID auflösen
+        return self.resolve_shape(
+            shape_record.shape_id,
+            current_solid,
+            log_unresolved=log_unresolved,
+        )
+
     def get_last_operation(self) -> Optional[OperationRecord]:
         """Gibt die letzte Operation zurück"""
         return self._operations[-1] if self._operations else None

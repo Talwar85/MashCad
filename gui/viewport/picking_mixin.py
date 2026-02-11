@@ -1,6 +1,11 @@
 """
 MashCad - Viewport Picking Mixin
 Selection und Picking Methoden für den 3D Viewport
+
+TNP v4.0 Integration:
+- Verbindet Viewport-Picking mit ShapeNamingService
+- Verwaltet SelectionItems statt nur Integer-IDs
+- Ermöglicht persistente Shape-Referenzen über Operationen hinweg
 """
 
 import numpy as np
@@ -21,7 +26,21 @@ except ImportError:
 
 
 class PickingMixin:
-    """Mixin mit allen Picking/Selection Methoden"""
+    """
+    Mixin mit allen Picking/Selection Methoden.
+
+    TNP v4.0: Selektionen werden als SelectionItems verwaltet,
+    die TNP-ShapeIDs enthalten können. Dies ermöglicht persistente
+    Referenzen auf Shapes über Boolean-Operationen hinweg.
+    """
+
+    def __init__(self):
+        # Unified Selection Manager (TNP v4.0)
+        from gui.selection_manager import get_selection_manager
+        self.selection_manager = get_selection_manager()
+
+        # Legacy: Selektierte Face-IDs für Abwärtskompatibilität
+        self.selected_face_ids: set = set()
     
     def pick(self, x, y, selection_filter=None):
         """
@@ -261,22 +280,53 @@ class PickingMixin:
         return False
 
     def _handle_selection_click(self, x, y, is_multi):
-        """Verarbeitet einen Klick im Selektionsmodus"""
+        """
+        Verarbeitet einen Klick im Selektionsmodus.
+
+        TNP v4.0: Erzeugt SelectionItems mit ShapeID-Referenzen
+        statt nur Integer-IDs zu speichern.
+        """
         # Picker mit aktivem Filter aufrufen
         face_id = self.pick(x, y, selection_filter=self.active_selection_filter)
-        
+
         if face_id != -1:
+            # Face-Daten holen für TNP-Lookup
+            face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
+            if face is None:
+                return False
+
+            # TNP v4.0: ShapeID für dieses Face suchen
+            shape_uuid = self._get_shape_uuid_for_face(face)
+
+            # Body-ID bestimmen
+            body_id = face.owner_id if hasattr(face, 'owner_id') else None
+            domain_type = face.domain_type if hasattr(face, 'domain_type') else 'unknown'
+
             if is_multi:
                 # Toggle selection
-                if face_id in self.selected_face_ids:
-                    self.selected_face_ids.remove(face_id)
-                else:
+                is_selected = self.selection_manager.toggle_selection(
+                    face_id=face_id,
+                    body_id=body_id,
+                    domain_type=domain_type,
+                    shape_uuid=shape_uuid,
+                )
+                # Legacy-Set synchronisieren
+                if is_selected:
                     self.selected_face_ids.add(face_id)
+                else:
+                    self.selected_face_ids.discard(face_id)
             else:
                 # Single selection
+                self.selection_manager.set_single_selection(
+                    face_id=face_id,
+                    body_id=body_id,
+                    domain_type=domain_type,
+                    shape_uuid=shape_uuid,
+                )
+                # Legacy-Set synchronisieren
                 self.selected_face_ids.clear()
                 self.selected_face_ids.add(face_id)
-            
+
             # Cache drag direction und Face-Daten für die erste selektierte Fläche
             if self.selected_face_ids:
                 first_id = next(iter(self.selected_face_ids))
@@ -286,9 +336,54 @@ class PickingMixin:
                     # Face-Daten für Offset Plane und andere Face-basierte Features
                     self._last_picked_face_center = face.plane_origin
                     self._last_picked_face_normal = face.plane_normal
-            
+
             self._draw_selectable_faces_from_detector()
             self.face_selected.emit(face_id)
             return True
-        
+
         return False
+
+    def _get_shape_uuid_for_face(self, face) -> str:
+        """
+        TNP v4.0: Sucht die ShapeID.uuid für eine SelectionFace.
+
+        Args:
+            face: SelectionFace mit ocp_face_id Attribute
+
+        Returns:
+            ShapeID.uuid als String oder None
+        """
+        if not hasattr(self, 'document') or self.document is None:
+            return None
+
+        service = getattr(self.document, '_shape_naming_service', None)
+        if service is None:
+            return None
+
+        # OCP Face ID aus SelectionFace
+        ocp_face_id = getattr(face, 'ocp_face_id', None)
+        if ocp_face_id is None:
+            return None
+
+        # ShapeID für diese Face suchen
+        try:
+            # Über Bodies iterieren um die richtige zu finden
+            if hasattr(self, 'bodies'):
+                body_data = self.bodies.get(face.owner_id)
+                if body_data and 'body' in body_data:
+                    body = body_data['body']
+                    if hasattr(body, '_build123d_solid'):
+                        solid = body._build123d_solid
+                        # Face per Index holen
+                        faces = list(solid.faces())
+                        if 0 <= ocp_face_id < len(faces):
+                            target_face = faces[ocp_face_id]
+                            # ShapeID für diesen Face suchen
+                            shape_id = service.find_shape_id_by_shape(target_face.wrapped)
+                            if shape_id:
+                                logger.debug(f"[TNP] Found ShapeID {shape_id.uuid[:8]}... for face {face.id}")
+                                return shape_id.uuid
+        except Exception as e:
+            logger.debug(f"[TNP] ShapeID lookup failed: {e}")
+
+        return None

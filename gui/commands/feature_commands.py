@@ -262,26 +262,30 @@ class AddFeatureCommand(QUndoCommand):
         try:
             if self.feature in self.body.features:
                 # TNP v4.0: Feature-ShapeIDs sauber aus dem Service entfernen
-                # statt einfach zu leeren
+                tnp_invalidated = False
                 try:
                     if hasattr(self.body, '_document') and self.body._document:
                         if hasattr(self.body._document, '_shape_naming_service'):
                             service = self.body._document._shape_naming_service
                             if service and hasattr(self.feature, 'id'):
                                 service.invalidate_feature(self.feature.id)
+                                tnp_invalidated = True
                                 logger.debug(f"[TNP] Feature {self.feature.id} bei Undo entfernt")
                 except Exception as e:
                     logger.debug(f"[TNP] Feature-Entfernung fehlgeschlagen: {e}")
 
-                # Legacy: ShapeIDs leeren für Features die TNP nicht nutzen
-                try:
-                    from modeling import ChamferFeature, FilletFeature
+                # Legacy: ShapeIDs leeren NUR wenn TNP nicht verfügbar/erfolgreich
+                # Dies verhindert doppeltes Leeren und hält Konsistenz
+                if not tnp_invalidated:
+                    try:
+                        from modeling import ChamferFeature, FilletFeature
 
-                    if isinstance(self.feature, (FilletFeature, ChamferFeature)):
-                        if getattr(self.feature, "edge_shape_ids", None):
-                            self.feature.edge_shape_ids = []
-                except Exception:
-                    pass
+                        if isinstance(self.feature, (FilletFeature, ChamferFeature)):
+                            if getattr(self.feature, "edge_shape_ids", None):
+                                self.feature.edge_shape_ids = []
+                                logger.debug(f"[Legacy] edge_shape_ids geleert für {self.feature.id}")
+                    except Exception:
+                        pass
 
                 self.body.features.remove(self.feature)
                 logger.debug(f"Undo: Removed {self.feature.name} from {self.body.name}")
