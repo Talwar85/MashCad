@@ -2116,25 +2116,43 @@ class ShapeNamingService:
                         output_uuids = []
 
                         for modified_shape in modified_shapes:
-                            # Registrierte neue Shapes (Faces oder Edges)
-                            shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
-
-                            # Prüfen ob Shape bereits registriert (Dedup)
+                            # TNP v4.1: Zuerst versuchen, die BESTEHENDE ShapeID zu aktualisieren
+                            # statt immer neue Shapes zu registrieren
                             existing_id = self._find_exact_shape_id_by_ocp_shape(modified_shape)
+
                             if existing_id:
+                                # Shape ist bereits registriert - weiter zur nächsten
                                 output_uuids.append(existing_id.uuid)
                                 if existing_id not in new_shape_ids:
                                     new_shape_ids.append(existing_id)
                             else:
-                                # Neue ShapeID erstellen
-                                new_id = self.register_shape(
-                                    ocp_shape=modified_shape,
-                                    shape_type=shape_type,
+                                # TNP v4.1: Versuche die ShapeID mit neuer Geometrie zu aktualisieren
+                                # (bevor neue ShapeID erstellt wird)
+                                if self.update_shape_id_after_operation(
+                                    old_shape=record.ocp_shape,
+                                    new_shape=modified_shape,
                                     feature_id=feature_id,
-                                    local_index=len(new_shape_ids)
-                                )
-                                new_shape_ids.append(new_id)
-                                output_uuids.append(new_id.uuid)
+                                    operation_type=f"fillet_{feature_id}"
+                                ):
+                                    # Erfolgreich aktualisiert - gleiche UUID bleibt erhalten
+                                    output_uuids.append(record.shape_id.uuid)
+                                    if record.shape_id not in new_shape_ids:
+                                        new_shape_ids.append(record.shape_id)
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(
+                                            f"TNP Fillet: {input_shape_id.uuid[:8]} aktualisiert (ShapeID behalten)"
+                                        )
+                                else:
+                                    # Update fehlgeschlagen - neue ShapeID erstellen
+                                    shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
+                                    new_id = self.register_shape(
+                                        ocp_shape=modified_shape,
+                                        shape_type=shape_type,
+                                        feature_id=feature_id,
+                                        local_index=len(new_shape_ids)
+                                    )
+                                    new_shape_ids.append(new_id)
+                                    output_uuids.append(new_id.uuid)
 
                         if output_uuids:
                             manual_mappings[input_shape_id.uuid] = output_uuids
@@ -2271,25 +2289,43 @@ class ShapeNamingService:
                         output_uuids = []
 
                         for modified_shape in modified_shapes:
-                            # Registrierte neue Shapes (Faces oder Edges)
-                            shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
-
-                            # Prüfen ob Shape bereits registriert (Dedup)
+                            # TNP v4.1: Zuerst versuchen, die BESTEHENDE ShapeID zu aktualisieren
+                            # statt immer neue Shapes zu registrieren
                             existing_id = self._find_exact_shape_id_by_ocp_shape(modified_shape)
+
                             if existing_id:
+                                # Shape ist bereits registriert - weiter zur nächsten
                                 output_uuids.append(existing_id.uuid)
                                 if existing_id not in new_shape_ids:
                                     new_shape_ids.append(existing_id)
                             else:
-                                # Neue ShapeID erstellen
-                                new_id = self.register_shape(
-                                    ocp_shape=modified_shape,
-                                    shape_type=shape_type,
+                                # TNP v4.1: Versuche die ShapeID mit neuer Geometrie zu aktualisieren
+                                # (bevor neue ShapeID erstellt wird)
+                                if self.update_shape_id_after_operation(
+                                    old_shape=record.ocp_shape,
+                                    new_shape=modified_shape,
                                     feature_id=feature_id,
-                                    local_index=len(new_shape_ids)
-                                )
-                                new_shape_ids.append(new_id)
-                                output_uuids.append(new_id.uuid)
+                                    operation_type=f"chamfer_{feature_id}"
+                                ):
+                                    # Erfolgreich aktualisiert - gleiche UUID bleibt erhalten
+                                    output_uuids.append(record.shape_id.uuid)
+                                    if record.shape_id not in new_shape_ids:
+                                        new_shape_ids.append(record.shape_id)
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(
+                                            f"TNP Chamfer: {input_shape_id.uuid[:8]} aktualisiert (ShapeID behalten)"
+                                        )
+                                else:
+                                    # Update fehlgeschlagen - neue ShapeID erstellen
+                                    shape_type = ShapeType.FACE if modified_shape.ShapeType() == TopAbs_FACE else ShapeType.EDGE
+                                    new_id = self.register_shape(
+                                        ocp_shape=modified_shape,
+                                        shape_type=shape_type,
+                                        feature_id=feature_id,
+                                        local_index=len(new_shape_ids)
+                                    )
+                                    new_shape_ids.append(new_id)
+                                    output_uuids.append(new_id.uuid)
 
                         if output_uuids:
                             manual_mappings[input_shape_id.uuid] = output_uuids

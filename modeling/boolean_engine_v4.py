@@ -179,7 +179,9 @@ class BooleanEngineV4:
         solid1: Any,
         solid2: Any,
         operation: str,
-        fuzzy_tolerance: Optional[float] = None
+        fuzzy_tolerance: Optional[float] = None,
+        naming_service: Any = None,
+        feature_id: Optional[str] = None
     ) -> BooleanResult:
         """
         Execute Boolean operation on two solids (shape-level API).
@@ -192,12 +194,15 @@ class BooleanEngineV4:
         - Argument Analysis
         - Post-Boolean Validation + Auto-Healing
         - Tolerance Monitoring
+        - TNP v4.1: History-basierte ShapeID-Aktualisierung
 
         Args:
             solid1: Erstes Solid (Build123d Solid oder OCP TopoDS_Shape)
             solid2: Zweites Solid (Build123d Solid oder OCP TopoDS_Shape)
             operation: "Join", "Cut", or "Intersect"
             fuzzy_tolerance: Override default tolerance
+            naming_service: Optional ShapeNamingService für TNP-Update
+            feature_id: Optional Feature ID für TNP-Update
 
         Returns:
             BooleanResult mit Build123d Solid als value und History
@@ -339,6 +344,21 @@ class BooleanEngineV4:
             except Exception:
                 pass
 
+            # TNP v4.1: History-basierte ShapeID-Aktualisierung
+            if naming_service is not None and history is not None and feature_id:
+                try:
+                    updated = naming_service.update_shape_ids_from_history(
+                        source_solid=shape1,
+                        result_solid=result_shape,
+                        occt_history=history,
+                        feature_id=feature_id,
+                        operation_type=f"boolean_{op_type}"
+                    )
+                    if is_enabled("tnp_debug_logging") and updated > 0:
+                        logger.success(f"  TNP: {updated} ShapeIDs nach {operation} aktualisiert")
+                except Exception as tnp_err:
+                    logger.warning(f"  TNP-Update fehlgeschlagen: {tnp_err}")
+
             logger.success(f"✅ Boolean {operation} successful")
 
             return BooleanResult(
@@ -364,7 +384,8 @@ class BooleanEngineV4:
         body: 'Body',
         tool_solid: Any,
         operation: str,
-        fuzzy_tolerance: Optional[float] = None
+        fuzzy_tolerance: Optional[float] = None,
+        feature_id: Optional[str] = None
     ) -> BooleanResult:
         """
         Execute Boolean operation with transaction safety on a Body object.
@@ -372,12 +393,14 @@ class BooleanEngineV4:
         Wrapper um execute_boolean_on_shapes() mit:
         - BodyTransaction (Rollback bei Fehler)
         - Body-Update (solid + mesh invalidation)
+        - TNP v4.1: History-basierte ShapeID-Aktualisierung
 
         Args:
             body: Target body (will be modified in transaction)
             tool_solid: Tool solid for Boolean operation
             operation: "Join", "Cut", or "Intersect"
             fuzzy_tolerance: Override default tolerance
+            feature_id: Optional Feature ID für TNP-Update
 
         Returns:
             BooleanResult with SUCCESS, ERROR, or EMPTY status
@@ -389,9 +412,23 @@ class BooleanEngineV4:
                 operation_type=operation.lower()
             )
 
+        # TNP v4.1: NamingService und Feature ID aus Body holen
+        naming_service = None
+        if hasattr(body, '_document') and body._document is not None:
+            naming_service = getattr(body._document, '_shape_naming_service', None)
+
+        # Feature ID: Falls nicht angegeben, versuchen aus Body zu holen
+        if feature_id is None and hasattr(body, 'features') and body.features:
+            # Letzte Feature ID verwenden
+            last_feat = body.features[-1] if body.features else None
+            if last_feat and hasattr(last_feat, 'id'):
+                feature_id = f"{last_feat.id}_result"
+
         with BodyTransaction(body, f"Boolean {operation}") as txn:
             result = BooleanEngineV4.execute_boolean_on_shapes(
-                body._build123d_solid, tool_solid, operation, fuzzy_tolerance
+                body._build123d_solid, tool_solid, operation, fuzzy_tolerance,
+                naming_service=naming_service,
+                feature_id=feature_id
             )
 
             if result.is_success and result.value is not None:

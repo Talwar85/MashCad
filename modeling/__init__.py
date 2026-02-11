@@ -7175,12 +7175,16 @@ class Body:
 
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
-        TNP v4.0 Edge-Auflösung.
+        TNP v4.1 Edge-Auflösung mit History-First Strategie.
 
-        Reihenfolge:
-        1. edge_indices (Topology-Index)
-        2. edge_shape_ids (ShapeNamingService)
-        3. geometric_selectors nur, wenn keine Topologie-Referenzen existieren.
+        Reihenfolge (STRICT):
+        1. OperationRecord-Mappings (History-basiert)
+        2. edge_shape_ids mit direkter Auflösung
+        3. edge_indices (Topology-Index)
+        4. geometric_selectors (NUR LETZTE OPTION)
+
+        WICHTIG: Wenn History-First versagt und keine andere Methode funktioniert,
+        soll das Feature fehlschlagen statt auf Geometric-Fallback zurückzufallen.
         """
         all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
         if not all_edges:
@@ -7261,6 +7265,37 @@ class Body:
                 except Exception:
                     pass
 
+        def _resolve_by_operation_records() -> int:
+            """TNP v4.1: Zuerst OperationRecords nach Mappings durchsuchen."""
+            if not service or not edge_shape_ids:
+                return 0
+
+            resolved_count = 0
+            for op in service._operations:
+                if op.manual_mappings and op.feature_id == getattr(feature, 'id', ''):
+                    # Prüfe ob ShapeIDs in den Mappings vorhanden sind
+                    for input_uuid, output_uuids in op.manual_mappings.items():
+                        # Input-ShapeID finden
+                        for shape_id in edge_shape_ids:
+                            if hasattr(shape_id, 'uuid') and shape_id.uuid == input_uuid:
+                                # Output-ShapeIDs finden
+                                for output_uuid in output_uuids:
+                                    if output_uuid in service._shapes:
+                                        output_record = service._shapes[output_uuid]
+                                        if output_record.ocp_shape:
+                                            matching_edge = self._find_matching_edge_in_solid(
+                                                output_record.ocp_shape, all_edges
+                                            )
+                                            if matching_edge is not None:
+                                                _append_unique(matching_edge, shape_id=shape_id, source="shape")
+                                                resolved_count += 1
+                                                if is_enabled("tnp_debug_logging"):
+                                                    logger.debug(
+                                                        f"TNP v4.1: Edge via OperationRecord-Mapping aufgelöst: "
+                                                        f"{input_uuid[:8]} → {output_uuid[:8]}"
+                                                    )
+            return resolved_count
+
         def _resolve_by_shape_ids() -> None:
             if not edge_shape_ids or service is None:
                 return
@@ -7325,14 +7360,18 @@ class Body:
             and (shape_ids_index_aligned or single_ref_pair)
         )
 
-        # Bei gesetzten edge_indices: index-first. Sonst ShapeID-first.
-        if valid_edge_indices:
-            _resolve_by_indices()
-            indices_complete = len(resolved_edge_indices) >= len(valid_edge_indices)
-            if strict_dual_edge_refs or not indices_complete:
-                _resolve_by_shape_ids()
-        else:
+        # TNP v4.1: History-First Strategie
+        # 1. Zuerst OperationRecords (History-basiert)
+        op_resolved = _resolve_by_operation_records()
+        if op_resolved > 0 and is_enabled("tnp_debug_logging"):
+            logger.debug(f"TNP v4.1: {op_resolved} Edges via OperationRecords aufgelöst")
+
+        # 2. Dann ShapeIDs mit direkter Auflösung
+        if op_resolved < len(edge_shape_ids):
             _resolve_by_shape_ids()
+
+        # 3. Dann Index-basierte Auflösung
+        if len(resolved_edges) < len(edge_shape_ids) or valid_edge_indices:
             _resolve_by_indices()
 
         strict_topology_mismatch = False
