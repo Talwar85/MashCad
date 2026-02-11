@@ -158,7 +158,10 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
             "border-radius: 3px; font-size: 10px; padding: 1px 8px; }"
             "QPushButton:hover { background: #444; color: white; }"
         )
-        show_btn.clicked.connect(lambda: _highlight_edges_in_viewport(dialog._parent_window, body, edge_indices))
+        show_btn.clicked.connect(lambda: _highlight_edges_in_viewport(
+            dialog._parent_window, body, edge_indices,
+            getattr(feature, 'edge_shape_ids', None)
+        ))
         edge_row.addWidget(show_btn)
         group_layout.addLayout(edge_row)
 
@@ -195,14 +198,35 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
     layout.addWidget(group)
 
 
-def _highlight_edges_in_viewport(main_window, body, edge_indices):
-    """Highlighted die angegebenen Kanten im Viewport."""
+def _highlight_edges_in_viewport(main_window, body, edge_indices, edge_shape_ids=None):
+    """Highlighted die angegebenen Kanten im Viewport.
+
+    Args:
+        edge_indices: Legacy topologische Indizes (Fallback)
+        edge_shape_ids: TNP ShapeIDs - bevorzugt, falls verfügbar
+    """
     if main_window is None:
         return
     viewport = getattr(main_window, 'viewport_3d', None)
     if viewport is None:
         return
     try:
+        # TNP-First: Versuche edge_shape_ids aufzulösen
+        if edge_shape_ids and body and hasattr(body, '_document'):
+            service = getattr(body._document, '_shape_naming_service', None)
+            if service and body._build123d_solid:
+                resolved_edges = []
+                solid = body._build123d_solid
+                for shape_id in edge_shape_ids:
+                    resolved = service.resolve_shape(shape_id, solid, log_unresolved=False)
+                    if resolved is not None:
+                        resolved_edges.append(resolved)
+                if resolved_edges:
+                    viewport.highlight_edges_by_ocp_shapes(resolved_edges)
+                    logger.debug(f"TNP-Edge-Highlight: {len(resolved_edges)}/{len(edge_shape_ids)} Kanten via ShapeIDs")
+                    return
+
+        # Fallback: Legacy topologische Indizes
         viewport.highlight_edges_by_index(body, edge_indices)
     except Exception as e:
         logger.debug(f"Edge-Highlighting fehlgeschlagen: {e}")

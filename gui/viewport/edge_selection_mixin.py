@@ -169,6 +169,50 @@ class EdgeSelectionMixin:
 
     # ==================== Passive Edge Highlighting ====================
 
+    def highlight_edges_by_ocp_shapes(self, ocp_edges: list):
+        """Highlighted Kanten direkt über OCP-Shapes (TNP-aware).
+
+        Wird vom Edit-Dialog aufgerufen wenn der User 'Kanten anzeigen' klickt
+        und TNP-Shape-IDs aufgelöst wurden.
+
+        Args:
+            ocp_edges: Liste von OCP TopoDS_Edge Shapes
+        """
+        self.clear_edge_highlight()
+        if not ocp_edges:
+            return
+        try:
+            import pyvista as pv
+            meshes = []
+            for edge in ocp_edges:
+                points = self._extract_edge_points_from_ocp(edge)
+                if points is not None and len(points) >= 2:
+                    mesh = pv.lines_from_points(points)
+                    meshes.append(mesh)
+
+            if not meshes:
+                return
+
+            batch = meshes[0].copy()
+            for m in meshes[1:]:
+                batch = batch.merge(m)
+
+            self.plotter.add_mesh(
+                batch,
+                color="#FFaa00",
+                opacity=1.0,
+                line_width=6.0,
+                render_lines_as_tubes=True,
+                lighting=False,
+                name="edit_edge_highlight",
+                pickable=False,
+            )
+            self._set_actor_on_top("edit_edge_highlight", 8)
+            request_render(self.plotter)
+            logger.debug(f"TNP-Edge-Highlight: {len(meshes)}/{len(ocp_edges)} Kanten via ShapeIDs angezeigt")
+        except Exception as e:
+            logger.debug(f"highlight_edges_by_ocp_shapes fehlgeschlagen: {e}")
+
     def highlight_edges_by_index(self, body, edge_indices: list):
         """Highlighted bestimmte Kanten eines Bodies im Viewport (ohne Selection-Mode).
 
