@@ -22,6 +22,7 @@ class PartResult:
     duration_ms: float
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    sketch_count: int = 0  # Anzahl der erstellten Sketches
 
     def __post_init__(self):
         if not self.metadata:
@@ -57,6 +58,7 @@ class AssemblyResult:
     constraints: List[Dict[str, Any]]
     duration_ms: float
     error: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def part_count(self) -> int:

@@ -17,6 +17,7 @@ from sketching.core.result_types import (
     PartResult, AssemblyResult, BatchResult,
     MeshAnalysis, ReconstructionResult
 )
+from modeling import Body, ExtrudeFeature, FilletFeature
 
 
 class SketchAgent:
@@ -35,12 +36,14 @@ class SketchAgent:
 
     def __init__(
         self,
+        document=None,
         mode: str = "adaptive",
         headless: bool = True,
         seed: Optional[int] = None
     ):
         self.mode = mode  # "random", "adaptive", "guided"
         self.headless = headless
+        self.document = document  # ← Document für Sketch/Body Integration
 
         # Random Seed für Reproduzierbarkeit
         if seed is not None:
@@ -64,7 +67,7 @@ class SketchAgent:
         complexity: str = "medium"
     ) -> PartResult:
         """
-        Generiert ein komplettes Bauteil.
+        Generiert ein komplettes Bauteil mit Sketch im Browser.
 
         Args:
             complexity: "simple", "medium", oder "complex"
@@ -74,9 +77,15 @@ class SketchAgent:
         """
         start_time = time.time()
         operations = []
+        sketches_created = []
 
         try:
             logger.info(f"[SketchAgent] Generiere Part (complexity={complexity})")
+
+            # Prüfe ob Document verfügbar
+            if self.document is None:
+                # Fallback: Kein Document → Solid direkt (headless mode)
+                return self._generate_part_headless(complexity, start_time)
 
             # 1. Sketch generieren
             sketch = self.generator.generate_random_profile()
@@ -88,17 +97,237 @@ class SketchAgent:
                     duration_ms=(time.time() - start_time) * 1000,
                     error="SketchGenerator returned None"
                 )
-            operations.append(f"generate_sketch({complexity})")
+            operations.append("generate_sketch")
 
-            # 2. Extrusions-Distanz wählen
-            # Schätze Sketch-Grösse für adaptive Distanz
+            # Sketch benennen und zum Document hinzufügen
+            import uuid
+            sketch_name = f"Agent_Sketch_{uuid.uuid4().hex[:8]}"
+            sketch.name = sketch_name
+
+            # Sketch zum Document hinzufügen (erscheint im Browser!)
+            self.document.sketches.append(sketch)
+            self.document.active_sketch = sketch  # Optional: als aktiv setzen
+            sketches_created.append(sketch_name)
+            logger.info(f"[SketchAgent] Sketch '{sketch_name}' zum Document hinzugefügt")
+
+            # 2. Body erstellen
+            body_name = f"AgentBody_{uuid.uuid4().hex[:8]}"
+            body = Body(body_name, document=self.document)
+            self.document.add_body(body)
+            logger.info(f"[SketchAgent] Body '{body_name}' erstellt")
+
+            # 3. Extrusions-Distanz wählen
             distance = self.operations.select_extrude_distance(
                 sketch_area=1000,  # Schätzung
                 mode=self.mode
             )
-            operations.append(f"select_distance({distance:.1f})")
 
-            # 3. Extrudieren
+            # 4. ExtrudeFeature mit Sketch-Quelle erstellen
+            from modeling import ExtrudeFeature
+            extrude_feat = ExtrudeFeature(
+                sketch=sketch,
+                distance=distance,
+                operation="New Body"
+            )
+            body.add_feature(extrude_feat)
+            operations.append(f"extrude({distance:.1f}mm)")
+
+            # 5. Zusätzliche Features je nach Komplexität
+            self._add_additional_features(
+                body=body,
+                base_sketch=sketch,
+                complexity=complexity,
+                sketches_created=sketches_created,
+                operations=operations
+            )
+
+            # 6. Rebuild → erstellt Solid aus Sketch!
+
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"[SketchAgent] Part generiert: {duration_ms:.2f}ms")
+
+            # Stats aktualisieren
+            self._parts_generated += 1
+            self._parts_successful += 1
+
+            return PartResult(
+                success=True,
+                solid=body._build123d_solid,
+                operations=operations,
+                duration_ms=duration_ms,
+                sketch_count=len(sketches_created),
+                metadata={
+                    "complexity": complexity,
+                    "distance": distance,
+                    "sketch_name": sketch_name,
+                    "body_name": body_name
+                }
+            )
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"[SketchAgent] Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return PartResult(
+                success=False,
+                solid=None,
+                operations=operations,
+                duration_ms=duration_ms,
+                error=str(e)
+            )
+
+    def _add_additional_features(
+        self,
+        body: Body,
+        base_sketch,
+        complexity: str,
+        sketches_created: list,
+        operations: list
+    ) -> bool:
+        """
+        Fügt zusätzliche Features je nach Komplexität hinzu.
+
+        Args:
+            body: Der Body mit Features
+            base_sketch: Der Basis-Sketch
+            complexity: "simple", "medium", "complex"
+            sketches_created: Liste der Sketch-Namen
+            operations: Liste der Operationen
+
+        Returns:
+            True bei Erfolg, False bei Fehler
+        """
+        import uuid
+        from modeling import FilletFeature
+
+        if complexity == "simple":
+            # Simple: Keine zusätzlichen Features
+            return True
+
+        elif complexity == "medium":
+            # Medium: Fillet auf ausgewählten Edges
+            try:
+                # Edges vom Solid auswählen (z.B. alle vertikalen Edges)
+                solid = body._build123d_solid
+                if solid is None:
+                    return False
+
+                # Finde Kanten für Fillet (z.B. die Seitenkanten)
+                edges = list(solid.edges())
+                if len(edges) >= 4:
+                    # Nimm die ersten 4 Edges für Fillet
+                    fillet_edges = edges[:4]
+                    fillet_radius = random.uniform(2, 5)
+
+                    # Extrahiere OCP Shapes für FilletFeature
+                    ocp_edges = [e.wrapped for e in fillet_edges]
+
+                    fillet_feat = FilletFeature(
+                        ocp_edge_shapes=ocp_edges,
+                        radius=fillet_radius
+                    )
+                    body.add_feature(fillet_feat)
+                    operations.append(f"fillet({len(fillet_edges)} edges, r={fillet_radius:.1f})")
+                    logger.info(f"[SketchAgent] Fillet hinzugefügt: {len(fillet_edges)} edges")
+
+            except Exception as e:
+                logger.warning(f"[SketchAgent] Fillet fehlgeschlagen: {e}")
+
+            return True
+
+        elif complexity == "complex":
+            # Complex: Mehrere Features
+            try:
+                solid = body._build123d_solid
+                if solid is None:
+                    return False
+
+                edges = list(solid.edges())
+
+                # 1. Fillet
+                if len(edges) >= 4:
+                    fillet_edges = edges[:4]
+                    fillet_radius = random.uniform(2, 5)
+
+                    # Extrahiere OCP Shapes für FilletFeature
+                    ocp_edges = [e.wrapped for e in fillet_edges]
+
+                    fillet_feat = FilletFeature(
+                        ocp_edge_shapes=ocp_edges,
+                        radius=fillet_radius
+                    )
+                    body.add_feature(fillet_feat)
+                    operations.append(f"fillet({len(fillet_edges)} edges, r={fillet_radius:.1f})")
+
+                # 2. Zweiter Sketch für zusätzliches Feature (z.B. Bohrung)
+                # Erstelle einen neuen Sketch auf einer Face
+                faces = list(solid.faces())
+                if len(faces) > 0:
+                    # Nimm die obere Fläche
+                    top_face = faces[0]
+
+                    # Erstelle Sketch für Bohrung mit Sketch.add_circle()
+                    from sketcher import Sketch
+                    hole_sketch = Sketch(f"Agent_Sketch_{uuid.uuid4().hex[:8]}")
+
+                    # Kreis in der Mitte - add_circle nimmt cx, cy, radius
+                    radius = random.uniform(5, 15)
+                    hole_sketch.add_circle(0, 0, radius)  # cx, cy, radius
+                    hole_sketch.add_fixed(hole_sketch.points[0])  # Center fixieren
+
+                    # Sketch zum Document hinzufügen
+                    self.document.sketches.append(hole_sketch)
+                    sketches_created.append(hole_sketch.name)
+                    operations.append("hole_sketch")
+
+                    logger.info(f"[SketchAgent] Hole-Sketch '{hole_sketch.name}' erstellt")
+
+                    # Cut Feature für Bohrung
+                    from modeling import ExtrudeFeature
+                    distance = 50  # Tiefe genug zum Cutten
+                    cut_feat = ExtrudeFeature(
+                        sketch=hole_sketch,
+                        distance=distance,
+                        operation="Cut"
+                    )
+                    body.add_feature(cut_feat)
+                    operations.append(f"cut_hole(d={distance}mm)")
+
+            except Exception as e:
+                logger.warning(f"[SketchAgent] Complex features fehlgeschlagen: {e}")
+
+            return True
+
+        return True
+
+    def _generate_part_headless(self, complexity: str, start_time: float) -> PartResult:
+        """
+        Fallback: Headless-Modus ohne Document.
+        Erstellt Solid direkt ohne Sketch im Browser.
+        """
+        operations = []
+
+        try:
+            # 1. Sketch generieren
+            sketch = self.generator.generate_random_profile()
+            if sketch is None:
+                return PartResult(
+                    success=False,
+                    solid=None,
+                    operations=["generate_sketch"],
+                    duration_ms=(time.time() - start_time) * 1000,
+                    error="SketchGenerator returned None"
+                )
+            operations.append("generate_sketch")
+
+            # 2. Extrusions-Distanz wählen
+            distance = self.operations.select_extrude_distance(
+                sketch_area=1000,
+                mode=self.mode
+            )
+
+            # 3. Extrudieren (Solid direkt)
             solid = self.operations.extrude(sketch, distance)
             operations.append("extrude")
 
@@ -112,7 +341,7 @@ class SketchAgent:
                 )
 
             duration_ms = (time.time() - start_time) * 1000
-            logger.info(f"[SketchAgent] Part generiert: {duration_ms:.2f}ms")
+            logger.info(f"[SketchAgent] Part generiert (headless): {duration_ms:.2f}ms")
 
             return PartResult(
                 success=True,
@@ -127,7 +356,7 @@ class SketchAgent:
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.error(f"[SketchAgent] Fehler: {e}")
+            logger.error(f"[SketchAgent] Fehler (headless): {e}")
             import traceback
             traceback.print_exc()
             return PartResult(
@@ -293,6 +522,7 @@ class SketchAgent:
 
 # Factory für kompatible Creation
 def create_agent(
+    document=None,
     mode: str = "adaptive",
     headless: bool = True,
     seed: Optional[int] = None
@@ -301,6 +531,7 @@ def create_agent(
     Factory-Funktion zum Erstellen eines SketchAgent.
 
     Args:
+        document: Document für Sketch/Body Integration (optional)
         mode: "random", "adaptive", oder "guided"
         headless: Ob ohne UI laufen
         seed: Random Seed für Reproduzierbarkeit
@@ -308,4 +539,4 @@ def create_agent(
     Returns:
         SketchAgent Instanz
     """
-    return SketchAgent(mode=mode, headless=headless, seed=seed)
+    return SketchAgent(document=document, mode=mode, headless=headless, seed=seed)

@@ -3712,9 +3712,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                     opacity=opacity,
                     name=name,
                     pickable=False,
-                    show_edges=True,  # FIX: Kanten für bessere Sichtbarkeit
-                    edge_color=edge_color,
-                    line_width=2
+                    show_edges=False,  # Keine Dreieckskanten - glatte Fläche
                 )
                 self._face_actors.append(name)
 

@@ -284,9 +284,7 @@ class EdgeSelectionMixin:
                 mesh,
                 color="#FF8800",  # Orange
                 opacity=0.6,
-                show_edges=True,
-                edge_color="#FFaa00",
-                line_width=3.0,
+                show_edges=False,  # Keine Dreieckskanten - glatte Fläche
                 lighting=True,
                 name="edit_face_highlight",
                 pickable=False,

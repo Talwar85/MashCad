@@ -189,7 +189,7 @@ class ToolPanel3D(QWidget):
             (tr("Revolve..."), tr("Revolve profile around an axis\nSelect: profile + axis edge\nConfirm: Finish button"), "revolve"),
             (tr("Sweep"), tr("Sweep a profile along a path\nSelect: profile face + path edge\nConfirm: Finish button"), "sweep"),
             (tr("Loft"), tr("Create shape between multiple profiles\nSelect: 2+ profile faces\nConfirm: Finish button"), "loft"),
-        ], expanded=True)
+        ], expanded=True, highlight_first=True)
 
         # --- Modify ---
         self._add_group(tr("Modify"), [
@@ -235,6 +235,7 @@ class ToolPanel3D(QWidget):
 
         # --- Advanced ---
         self._add_group("Advanced", [
+            (tr("Sketch Agent"), tr("Generate parts with AI\nChoose complexity and seed\nGenerates parametric CAD parts"), "sketch_agent"),
             (tr("Thread..."), tr("Create thread on cylindrical face\nSelect: cylindrical face\nSet: metric/UNC, pitch, depth"), "thread"),
         ])
         

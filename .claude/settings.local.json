@@ -105,7 +105,8 @@
       "Bash(C:/Users/User/miniforge3/envs/cad_env/python.exe test/test_meshconverter_visual.py stl/V1.stl)",
       "Bash(C:/Users/User/miniforge3/envs/cad_env/python.exe -c \"\nimport sys\nsys.path.insert\\(0, ''c:/LiteCad''\\)\n\n# Import\nfrom test.test_meshconverter_visual import VisualComparator\n\n# Run\nc = VisualComparator\\(''stl/V1.stl''\\)\nc.load_mesh\\(\\)\nc.run_all_converters\\(\\)\nc.print_summary\\(\\)\n\")",
       "Bash(C:/Users/User/miniforge3/envs/cad_env/python.exe:*)",
-      "Bash(PATH=\"/c/Users/User/miniforge3/envs/cad_env:/c/Users/User/miniforge3/envs/cad_env/Library/bin:$PATH\" python:*)"
+      "Bash(PATH=\"/c/Users/User/miniforge3/envs/cad_env:/c/Users/User/miniforge3/envs/cad_env/Library/bin:$PATH\" python:*)",
+      "Bash(if not exist \"c:\\\\LiteCad\\\\docs\" mkdir \"c:\\\\LiteCad\\\\docs\")"
     ]
   }
 }

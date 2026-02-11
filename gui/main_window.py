@@ -444,13 +444,11 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter.setStyleSheet("QSplitter { background: #262626; }")
         
-        # === LINKE SEITE: Browser + Tools horizontal ===
-        left_container = QWidget()  # <--- Hier heißt die Variable "left_container"
-        left_layout = QHBoxLayout(left_container)
-        left_layout.setContentsMargins(0,0,0,0)
-        left_layout.setSpacing(0)
+        # === LINKE SEITE: Browser + Tools (innerer Splitter) ===
+        left_splitter = QSplitter(Qt.Horizontal)
+        left_splitter.setHandleWidth(3)
 
-        # 1. Spalte: Tabs [Browser | Log | TNP]
+        # 1. Spalte: Tabs [Browser | TNP]
         from PySide6.QtWidgets import QTabWidget
         self.left_tabs = QTabWidget()
         self.left_tabs.setStyleSheet(f"""
@@ -507,11 +505,11 @@ class MainWindow(QMainWindow):
         # Backwards-compatible alias
         self.bottom_tabs = self.left_tabs
 
-        left_layout.addWidget(self.left_tabs)
+        left_splitter.addWidget(self.left_tabs)
         
         # Tool-Panel Stack (3D oder 2D)
         self.tool_stack = QStackedWidget()
-        self.tool_stack.setMinimumWidth(220)
+        self.tool_stack.setMinimumWidth(180)
         self.tool_stack.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
 
         # PERFORMANCE: TransformPanel wird später bei line 466 erstellt
@@ -532,9 +530,14 @@ class MainWindow(QMainWindow):
         self.tool_panel = ToolPanel()
         self.tool_stack.addWidget(self.tool_panel)
         
-        left_layout.addWidget(self.tool_stack)
+        left_splitter.addWidget(self.tool_stack)
         
-        self.main_splitter.addWidget(left_container)
+        # Browser/TNP Tabs kollabierbar, ToolPanel bleibt
+        left_splitter.setCollapsible(0, True)
+        left_splitter.setCollapsible(1, False)
+        left_splitter.setSizes([140, 200])
+        
+        self.main_splitter.addWidget(left_splitter)
         
         # === MITTE: Viewport / Sketch Editor ===
         self.center_stack = QStackedWidget()
@@ -1474,6 +1477,7 @@ class MainWindow(QMainWindow):
             'draft': self._draft_dialog,
             'split_body': self._split_body_dialog,
             'thread': self._thread_dialog,
+            'sketch_agent': self._sketch_agent_dialog,
 
             'measure': self._start_measure_mode,
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
@@ -3443,6 +3447,12 @@ class MainWindow(QMainWindow):
 
         elif mode == "nut":
             self._generate_nut(dialog)
+
+    def _sketch_agent_dialog(self):
+        """Sketch Agent Dialog: Generative CAD-Part-Erstellung mit AI."""
+        from gui.dialogs.sketch_agent_dialog import show_sketch_agent_dialog
+
+        show_sketch_agent_dialog(self.document, self.viewport_3d, self)
 
     def _start_interactive_thread_mode(self):
         """Startet interaktiven Thread-Workflow (Fusion-style).

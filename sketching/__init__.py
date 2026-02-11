@@ -11,7 +11,7 @@ Use Cases:
 - 🔧 Mesh-to-CAD (STL → Editierbares CAD mit User-Interaction)
 
 Author: Claude (Sketch Agent)
-Date: 2026-02-10
+Date: 2026-02-11
 """
 
 from sketching.core.sketch_agent import SketchAgent, create_agent
@@ -26,13 +26,32 @@ from sketching.core.result_types import (
     PatternInfo
 )
 
-# New exports
+# Phase 9: Test Runner
 from sketching.test_runner import TestRunner, run_quick_test
+
+# Phase 4: Design Library
 from sketching.patterns.design_library import DesignLibrary, create_design_library, DESIGN_PATTERNS
+
+# Phase 10: Mesh Analysis & Reconstruction
 from sketching.analysis.mesh_analyzer import MeshAnalyzer
 from sketching.analysis.reconstruction_agent import ReconstructionAgent
 
-__version__ = "0.2.0"
+# Phase 5: Feedback Loop
+from sketching.learning.feedback_loop import FeedbackLoop, create_feedback_loop, OperationRecord
+
+# Phase 6: Assembly Agent
+from sketching.core.assembly_agent import AssemblyAgent, create_assembly_agent
+
+# Phase 7: Export & Reporting
+from sketching.export.exporter import (
+    PartExporter, BatchExporter,
+    create_part_exporter, create_batch_exporter
+)
+
+# Phase 8: Visual Mode
+from sketching.visual.visual_agent import VisualSketchAgent, create_visual_agent
+
+__version__ = "1.0.0"
 __all__ = [
     "SketchAgent",
     "create_agent",
@@ -54,4 +73,19 @@ __all__ = [
     # Phase 10
     "MeshAnalyzer",
     "ReconstructionAgent",
+    # Phase 5
+    "FeedbackLoop",
+    "create_feedback_loop",
+    "OperationRecord",
+    # Phase 6
+    "AssemblyAgent",
+    "create_assembly_agent",
+    # Phase 7
+    "PartExporter",
+    "BatchExporter",
+    "create_part_exporter",
+    "create_batch_exporter",
+    # Phase 8
+    "VisualSketchAgent",
+    "create_visual_agent",
 ]
