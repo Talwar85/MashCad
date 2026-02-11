@@ -1000,6 +1000,172 @@ class ShapeNamingService:
             logger.info(f"TNP compact: {len(to_remove)} stale Shapes entfernt")
         return len(to_remove)
 
+    def update_shape_id_after_operation(
+        self,
+        old_shape: Any,
+        new_shape: Any,
+        feature_id: str,
+        operation_type: str = "unknown"
+    ) -> bool:
+        """
+        TNP v4.1: Aktualisiert eine ShapeID mit neuer Geometrie nach einer Operation.
+
+        Dies ist die KERN-METHODE für History-basiertes TNP. Anstatt auf
+        Geometric-Fallback zurückzufallen, werden ShapeIDs direkt mit der
+        neuen Geometrie aktualisiert.
+
+        Args:
+            old_shape: Die OCP-Shape VOR der Operation
+            new_shape: Die OCP-Shape NACH der Operation
+            feature_id: ID des Features das die Operation ausführt
+            operation_type: Art der Operation (für Logging)
+
+        Returns:
+            True wenn ShapeID gefunden und aktualisiert wurde, False sonst
+        """
+        if not HAS_OCP:
+            return False
+
+        try:
+            # Alte ShapeID finden
+            old_shape_id = self._find_exact_shape_id_by_ocp_shape(old_shape)
+            if old_shape_id is None:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP: Alte Shape nicht gefunden für Update")
+                return False
+
+            # Neue Geometrie-Daten berechnen
+            from OCP.BRepGProp import BRepGProp
+            from OCP.GeomAbs import GeomAbs_Curve
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GProp import GProp_GProps
+
+            geo_data = self._compute_geometry_data(new_shape)
+            if geo_data is None:
+                logger.warning(f"TNP: Konnte Geometrie-Daten nicht berechnen für {old_shape_id.uuid[:8]}")
+                return False
+
+            # ShapeID aktualisieren - neue Geometrie, gleiche UUID
+            updated_shape_id = ShapeID(
+                uuid=old_shape_id.uuid,
+                shape_type=old_shape_id.shape_type,
+                feature_id=feature_id,
+                local_index=old_shape_id.local_index,
+                geometry_hash=geo_data,
+                timestamp=time.time()
+            )
+
+            # ShapeRecord aktualisieren
+            new_record = ShapeRecord(
+                shape_id=updated_shape_id,
+                ocp_shape=new_shape,
+                is_valid=True,
+                geometric_signature=self._compute_geometric_signature(new_shape)
+            )
+
+            # Alten Record ersetzen
+            self._shapes[old_shape_id.uuid] = new_record
+
+            # Spatial Index aktualisieren
+            shape_type_key = updated_shape_id.shape_type.name
+            if shape_type_key in self._spatial_index:
+                # Alten Eintrag entfernen
+                self._spatial_index[shape_type_key] = [
+                    (pos, sid) for pos, sid in self._spatial_index[shape_type_key]
+                    if sid.uuid != old_shape_id.uuid
+                ]
+                # Neuen Eintrag hinzufügen
+                center = self._get_shape_center(new_shape)
+                if center:
+                    self._spatial_index[shape_type_key].append((center, updated_shape_id))
+
+            if is_enabled("tnp_debug_logging"):
+                logger.success(
+                    f"TNP v4.1: ShapeID {old_shape_id.uuid[:8]} aktualisiert "
+                    f"nach {operation_type}"
+                )
+            return True
+
+        except Exception as e:
+            logger.warning(f"TNP: update_shape_id_after_operation fehlgeschlagen: {e}")
+            return False
+
+    def update_shape_ids_from_history(
+        self,
+        source_solid: Any,
+        result_solid: Any,
+        occt_history: Any,
+        feature_id: str,
+        operation_type: str = "unknown"
+    ) -> int:
+        """
+        TNP v4.1: Aktualisiert ALLE ShapeIDs basierend auf OCCT History.
+
+        Dies ist die bevorzugte Methode um ShapeIDs nach Boolean/Extrude/etc.
+        Operationen zu aktualisieren.
+
+        Args:
+            source_solid: Solid VOR der Operation
+            result_solid: Solid NACH der Operation
+            occt_history: BRepTools_History Objekt
+            feature_id: ID des Features
+            operation_type: Art der Operation
+
+        Returns:
+            Anzahl der aktualisierten ShapeIDs
+        """
+        if not HAS_OCP or occt_history is None:
+            return 0
+
+        try:
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+
+            updated_count = 0
+
+            # Alle Shapes im Source-Solid durchgehen
+            for shape_type in (TopAbs_EDGE, TopAbs_FACE):
+                source_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(source_solid, shape_type, source_map)
+
+                for i in range(1, source_map.Extent() + 1):
+                    old_shape = source_map.FindKey(i)
+
+                    # Prüfen ob diese Shape eine ShapeID hat
+                    old_shape_id = self._find_exact_shape_id_by_ocp_shape(old_shape)
+                    if old_shape_id is None:
+                        continue
+
+                    # History abfragen: Was ist aus dieser Shape geworden?
+                    modified = self._history_outputs_for_shape(occt_history, old_shape)
+                    if not modified:
+                        # Shape wurde nicht modifiziert (existiert noch)
+                        continue
+
+                    # Die modifizierte Shape nehmen (erste)
+                    new_shape = modified[0]
+
+                    # ShapeID aktualisieren
+                    if self.update_shape_id_after_operation(
+                        old_shape, new_shape, feature_id, f"{operation_type}_history"
+                    ):
+                        updated_count += 1
+
+            if is_enabled("tnp_debug_logging") and updated_count > 0:
+                logger.success(
+                    f"TNP v4.1: {updated_count} ShapeIDs nach {operation_type} "
+                    f"über History aktualisiert"
+                )
+
+            return updated_count
+
+        except Exception as e:
+            logger.warning(f"TNP: update_shape_ids_from_history fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+
     def register_solid_edges(self, solid: Any, feature_id: str) -> int:
         """Register ALL edges from a solid. Uses IndexedMap for dedup."""
         if not HAS_OCP:
