@@ -80,37 +80,31 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # OCP-First Migration (2026 CAD Kernel Nearness Plan)
     # ======================================================
-    # WICHTIG: Diese Flags dienen NUR zu Test-/Validierungszwecken!
-    # Kein dauerhafter Fallback zu Build123d!
-    # Nach Validierung werden Flags entfernt und Code vereinfacht.
+    # Phase A-E (Feb 2026): OCP-First komplett abgeschlossen
+    # - Revolve: Direktes OCP BRepPrimAPI_MakeRevol (Phase C)
+    # - Loft: Direktes OCP BRepOffsetAPI_ThruSections (Phase D)
+    # - Sweep: Direktes OCP BRepOffsetAPI_MakePipe/MakePipeShell (Phase E)
+    # - Shell/Hollow: Direktes OCP BRepOffsetAPI_MakeThickSolid (Phase F)
+    # - Fillet, Chamfer: OCP-First Helper ohne Fallback-Kaskade (Phase B)
+    # - ocp_first_revolve, loft, sweep, shell, hollow entfernt (Phase A)
+    # - ocp_first_fillet, chamfer entfernt (Phase B)
     #
-    # TNP Integration ist in beiden Pfaden obligatorisch!
-    
-    # Phase 2: Extrude
-    "ocp_first_extrude": True,   # ExtrudeFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
+    # Verbleibendes Flag:
+    # - ocp_first_extrude: OCPExtrudeHelper (mit TNP)
+    #
+    # Nach Abschluss aller Phasen wird auch ocp_first_extrude entfernt.
 
-    # Phase 3: Fillet/Chamfer
-    "ocp_first_fillet": True,   # FilletFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
-    "ocp_first_chamfer": True,  # ChamferFeature nutzt direktes OCP (aktiviert nach Phase 2-3 Migration)
-    "ocp_first_draft": False,    # DraftFeature nutzt direktes OCP
-    
-    # Phase 4: Revolve/Loft/Sweep
-    "ocp_first_revolve": True,   # RevolveFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
-    "ocp_first_loft": True,      # LoftFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
-    "ocp_first_sweep": True,     # SweepFeature nutzt direktes OCP (aktiviert nach Phase 4 Migration)
-    
-    # Phase 5: Shell/Hollow
-    "ocp_first_shell": True,     # ShellFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
-    "ocp_first_hollow": True,    # HollowFeature nutzt direktes OCP (aktiviert nach Phase 5 Migration)
-    
+    # Phase 2-3: Extrude (OCP-First mit Helper-Klasse)
+    "ocp_first_extrude": True,
+
     # Phase 7: BREP Caching
-    "ocp_brep_cache": True,     # BREP-Caching für Features (aktiviert nach Phase 7 Migration)
+    "ocp_brep_cache": True,
 
     # Phase 8: Incremental Rebuild
-    "ocp_incremental_rebuild": True,  # Inkrementeller Rebuild mit Dependency Graph (aktiviert nach Phase 8 Migration)
+    "ocp_incremental_rebuild": True,
 
     # Phase 9: BREP Persistence
-    "ocp_brep_persistence": True,  # Native BREP Persistenz statt Rebuild beim Laden (aktiviert nach Phase 9 Migration)
+    "ocp_brep_persistence": True,
 }
 
 

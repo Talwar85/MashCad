@@ -41,16 +41,12 @@ from modeling.tnp_system import (
     OperationRecord
 )
 
-# OCP-First Migration (Phase 2-5): OCP Helper für Extrude/Fillet/Chamfer/Revolve/Loft/Sweep/Shell/Hollow
+# OCP-First Migration (Phase 2-3): OCP Helper für Extrude/Fillet/Chamfer
+# Revolve/Loft/Sweep/Shell/Hollow nutzen jetzt direktes OCP in _compute_* Methoden
 from modeling.ocp_helpers import (
     OCPExtrudeHelper,
     OCPFilletHelper,
-    OCPChamferHelper,
-    OCPRevolveHelper,
-    OCPLoftHelper,
-    OCPSweepHelper,
-    OCPShellHelper,
-    OCPHollowHelper
+    OCPChamferHelper
 )
 
 
@@ -2716,6 +2712,8 @@ class Body:
 
     def _compute_revolve(self, feature: 'RevolveFeature'):
         """
+        OCP-First Revolve mit direktem OpenCASCADE BRepPrimAPI_MakeRevol.
+
         CAD Kernel First: Profile werden IMMER aus dem Sketch abgeleitet.
 
         Architektur:
@@ -2723,10 +2721,10 @@ class Body:
            - profile_selector filtert welche Profile gewählt wurden
         2. Ohne Sketch: precalculated_polys als Geometrie-Quelle (Legacy)
         """
-        from build123d import (
-            BuildPart, Plane, Axis, revolve as bd_revolve,
-            make_face, Wire, Vector
-        )
+        import math
+        from build123d import Plane, make_face, Wire, Vector, Solid
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
+        from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt
 
         sketch = feature.sketch
         if not sketch:
@@ -2738,7 +2736,6 @@ class Body:
         x_dir = getattr(sketch, 'plane_x_dir', None)
 
         # Validate plane_normal is not zero
-        import math
         norm_len = math.sqrt(sum(c*c for c in plane_normal))
         if norm_len < 1e-9:
             logger.warning("Revolve: plane_normal ist Null-Vektor, Fallback auf (0,0,1)")
@@ -2768,14 +2765,14 @@ class Body:
                 # Selektor hat nicht gematcht → Fehler, kein Fallback!
                 logger.error(f"Revolve: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
                 logger.error(f"Revolve: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
-                # Leere Liste → keine Revolve
+                raise ValueError("Revolve: Selektor-Match fehlgeschlagen")
         elif sketch_profiles:
             # Kein Selektor → alle Profile verwenden (Legacy/Import)
             polys_to_revolve = list(sketch_profiles)
             logger.info(f"Revolve: Alle {len(polys_to_revolve)} Profile (kein Selektor)")
         else:
             # Sketch hat keine closed_profiles
-            logger.warning(f"Revolve: Sketch hat keine closed_profiles!")
+            raise ValueError("Revolve: Sketch hat keine closed_profiles")
 
         # Profile zu Build123d Faces konvertieren
         faces_to_revolve = []
@@ -2793,42 +2790,80 @@ class Body:
         if not faces_to_revolve:
             raise ValueError("Revolve: Keine gültigen Profile gefunden")
 
-        # Achse bestimmen
+        # Achse bestimmen (OCP gp_Ax1)
         axis_vec = feature.axis
-        axis_origin_vec = Vector(*feature.axis_origin) if feature.axis_origin else Vector(0, 0, 0)
+        axis_origin_vec = feature.axis_origin if feature.axis_origin else (0, 0, 0)
 
-        if tuple(axis_vec) == (1, 0, 0) and tuple(feature.axis_origin) == (0, 0, 0):
-            axis = Axis.X
-        elif tuple(axis_vec) == (0, 1, 0) and tuple(feature.axis_origin) == (0, 0, 0):
-            axis = Axis.Y
-        elif tuple(axis_vec) == (0, 0, 1) and tuple(feature.axis_origin) == (0, 0, 0):
-            axis = Axis.Z
-        else:
-            # Custom axis
-            axis = Axis(axis_origin_vec, Vector(*axis_vec))
+        # OCP Achse erstellen
+        ocp_origin = gp_Pnt(axis_origin_vec[0], axis_origin_vec[1], axis_origin_vec[2])
+        ocp_direction = gp_Dir(axis_vec[0], axis_vec[1], axis_vec[2])
+        ocp_axis = gp_Ax1(ocp_origin, ocp_direction)
 
-        # Revolve ausführen (erstes Profil)
-        with BuildPart() as part:
-            for face in faces_to_revolve:
-                bd_revolve(face, axis=axis, revolution_arc=feature.angle)
+        # Winkel in Bogenmaß
+        angle_rad = math.radians(feature.angle)
 
-        result = part.part
-        if result is None or (hasattr(result, 'is_null') and result.is_null()):
+        # OCP-First Revolve (alle Faces revolve und Union)
+        result_solid = None
+        for i, face in enumerate(faces_to_revolve):
+            revolve_op = BRepPrimAPI_MakeRevol(face.wrapped, ocp_axis, angle_rad)
+            revolve_op.Build()
+
+            if not revolve_op.IsDone():
+                raise ValueError(f"Revolve fehlgeschlagen für Face {i+1}/{len(faces_to_revolve)}")
+
+            revolved_shape = revolve_op.Shape()
+            revolved = Solid(revolved_shape)
+
+            if result_solid is None:
+                result_solid = revolved
+            else:
+                # Union mehrerer Revolve-Ergebnisse
+                result_solid = result_solid.fuse(revolved)
+
+        if result_solid is None or result_solid.is_null():
             raise ValueError("Revolve erzeugte keine Geometrie")
 
+        # TNP-Registration wenn naming_service verfügbar
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                naming_service = self._document._shape_naming_service
+                feature_id = getattr(feature, 'id', None) or str(id(feature))
+
+                # Alle Faces registrieren
+                from modeling.tnp_system import ShapeType
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopAbs import TopAbs_FACE
+
+                explorer = TopExp_Explorer(result_solid.wrapped, TopAbs_FACE)
+                face_idx = 0
+                while explorer.More():
+                    face_shape = explorer.Current()
+                    naming_service.register_shape(
+                        ocp_shape=face_shape,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature_id,
+                        local_index=face_idx
+                    )
+                    face_idx += 1
+                    explorer.Next()
+
+                # Alle Edges registrieren
+                naming_service.register_solid_edges(result_solid, feature_id)
+
+                if is_enabled("tnp_debug_logging"):
+                    logger.success(f"Revolve TNP: {face_idx} Faces registriert")
+
+            except Exception as e:
+                logger.error(f"Revolve TNP Registration fehlgeschlagen: {e}")
+
         logger.info(f"Revolve: {feature.angle}° um {feature.axis}")
-        return result
+        return result_solid
 
     def _compute_loft(self, feature: 'LoftFeature'):
         """
-        Berechnet Loft aus mehreren Profilen.
+        OCP-First Loft mit direktem OpenCASCADE BRepOffsetAPI_ThruSections.
 
-        Strategy:
-        1. Profile zu Build123d Faces konvertieren
-        2. Build123d loft() versuchen
-        3. Fallback zu OCP BRepOffsetAPI_ThruSections
-
-        Phase 8: Unterstützt G0/G1/G2 Kontinuität
+        Phase 8: Unterstützt G0/G1/G2 Kontinuität.
         """
         if len(feature.profile_data) < 2:
             raise ValueError("Loft benötigt mindestens 2 Profile")
@@ -2843,177 +2878,111 @@ class Body:
         if len(sections) < 2:
             raise ValueError(f"Konnte nur {len(sections)} gültige Faces erstellen")
 
-        # Phase 8: Kontinuitäts-Info
+        # Kontinuitäts-Info
         start_cont = getattr(feature, 'start_continuity', 'G0')
         end_cont = getattr(feature, 'end_continuity', 'G0')
-        has_continuity = (start_cont != 'G0' or end_cont != 'G0')
 
         logger.info(f"Loft mit {len(sections)} Profilen (ruled={feature.ruled}, start={start_cont}, end={end_cont})")
 
-        # PRIMARY: Build123d loft (ohne Kontinuitäts-Kontrolle)
-        if not has_continuity:
+        # OCP-First Loft
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.Approx import Approx_ParametrizationType
+        from build123d import Solid
+
+        # ThruSections: (isSolid, isRuled)
+        is_ruled = feature.ruled
+        loft_builder = BRepOffsetAPI_ThruSections(True, is_ruled)
+
+        # Smoothing für G1/G2 Kontinuität
+        if not is_ruled and (start_cont != 'G0' or end_cont != 'G0'):
+            loft_builder.SetSmoothing(True)
+            # Parametrisierung für bessere Kontinuität
+            if start_cont == 'G2' or end_cont == 'G2':
+                loft_builder.SetParType(Approx_ParametrizationType.Approx_Centripetal)
+            else:
+                loft_builder.SetParType(Approx_ParametrizationType.Approx_ChordLength)
+
+        # Loft Hardening - Grad und Gewichtung begrenzen
+        if is_enabled("loft_sweep_hardening"):
+            loft_builder.SetMaxDegree(8)
             try:
-                from build123d import loft
-                result = loft(sections, ruled=feature.ruled)
-                if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug("Build123d Loft erfolgreich")
-                    return result
+                loft_builder.SetCriteriumWeight(0.4, 0.2, 0.4)
+            except Exception:
+                pass  # Nicht alle OCP-Versionen unterstützen SetCriteriumWeight
+
+        # Profile hinzufügen (Wires extrahieren)
+        for i, face in enumerate(sections):
+            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
+
+            explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
+            wire_builder = BRepBuilderAPI_MakeWire()
+
+            while explorer.More():
+                edge = explorer.Current()
+                try:
+                    wire_builder.Add(edge)
+                except Exception as e:
+                    logger.debug(f"Loft Wire-Builder Fehler: {e}")
+                explorer.Next()
+
+            if wire_builder.IsDone():
+                wire = wire_builder.Wire()
+                loft_builder.AddWire(wire)
+            else:
+                raise ValueError(f"Loft: Face {i+1} hat keinen gültigen Wire")
+
+        # Loft ausführen
+        loft_builder.Build()
+
+        if not loft_builder.IsDone():
+            raise ValueError("Loft OCP-Operation fehlgeschlagen: IsDone()=False")
+
+        result_shape = loft_builder.Shape()
+        result_shape = self._fix_shape_ocp(result_shape)
+
+        # Zu Build123d Solid wrappen
+        result = Solid(result_shape)
+
+        if not result.is_valid():
+            raise ValueError("Loft erzeugte keinen gültigen Solid")
+
+        # TNP-Registration wenn naming_service verfügbar
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                naming_service = self._document._shape_naming_service
+                feature_id = getattr(feature, 'id', None) or str(id(feature))
+
+                # Alle Faces registrieren
+                from modeling.tnp_system import ShapeType
+                from OCP.TopAbs import TopAbs_FACE
+
+                explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+                face_idx = 0
+                while explorer.More():
+                    face_shape = explorer.Current()
+                    naming_service.register_shape(
+                        ocp_shape=face_shape,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature_id,
+                        local_index=face_idx
+                    )
+                    face_idx += 1
+                    explorer.Next()
+
+                # Alle Edges registrieren
+                naming_service.register_solid_edges(result, feature_id)
+
+                if is_enabled("tnp_debug_logging"):
+                    logger.success(f"Loft TNP: {face_idx} Faces registriert")
+
             except Exception as e:
-                logger.debug(f"Build123d loft fehlgeschlagen: {e}")
+                logger.error(f"Loft TNP Registration fehlgeschlagen: {e}")
 
-        # FALLBACK/ERWEITERT: OCP ThruSections mit Kontinuität
-        return self._ocp_loft_with_continuity(sections, feature)
-
-    def _ocp_loft(self, faces, ruled: bool):
-        """OCP-basierter Loft mit BRepOffsetAPI_ThruSections."""
-        if not HAS_OCP:
-            return None
-
-        try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_EDGE
-
-            # ThruSections: (isSolid, isRuled)
-            loft_builder = BRepOffsetAPI_ThruSections(True, ruled)
-
-            for face in faces:
-                # Outer Wire von jedem Face extrahieren
-                face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-
-                # Wire vom Face holen
-                wire = None
-                explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
-                wire_builder = BRepBuilderAPI_MakeWire()
-
-                while explorer.More():
-                    edge = explorer.Current()
-                    try:
-                        wire_builder.Add(edge)
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-                    explorer.Next()
-
-                if wire_builder.IsDone():
-                    wire = wire_builder.Wire()
-                    loft_builder.AddWire(wire)
-
-            loft_builder.Build()
-
-            if loft_builder.IsDone():
-                result_shape = loft_builder.Shape()
-                result_shape = self._fix_shape_ocp(result_shape)
-
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                    if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.debug("OCP Loft erfolgreich")
-                        return result
-                except Exception as e_solid:
-                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
-                    try:
-                        return Shape(result_shape)
-                    except Exception as e_shape:
-                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
-
-            logger.warning("OCP Loft IsDone() = False")
-            return None
-
-        except Exception as e:
-            logger.error(f"OCP Loft Fehler: {e}")
-            return None
-
-    def _ocp_loft_with_continuity(self, faces, feature: 'LoftFeature'):
-        """
-        Phase 8: OCP-basierter Loft mit Kontinuitäts-Kontrolle.
-
-        Unterstützt G0/G1/G2 Übergänge durch BRepOffsetAPI_ThruSections
-        mit Smoothing und Approximation.
-        """
-        if not HAS_OCP:
-            return self._ocp_loft(faces, feature.ruled)
-
-        try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_EDGE
-            from OCP.Approx import Approx_ParametrizationType
-
-            # ThruSections: (isSolid, isRuled)
-            is_ruled = feature.ruled
-            loft_builder = BRepOffsetAPI_ThruSections(True, is_ruled)
-
-            # Phase 8: Smoothing für G1/G2 Kontinuität
-            start_cont = getattr(feature, 'start_continuity', 'G0')
-            end_cont = getattr(feature, 'end_continuity', 'G0')
-
-            if not is_ruled and (start_cont != 'G0' or end_cont != 'G0'):
-                loft_builder.SetSmoothing(True)
-
-                # Parametrisierung für bessere Kontinuität
-                # 0 = ChordLength, 1 = Centripetal, 2 = IsoParametric
-                if start_cont == 'G2' or end_cont == 'G2':
-                    loft_builder.SetParType(Approx_ParametrizationType.Approx_Centripetal)
-                else:
-                    loft_builder.SetParType(Approx_ParametrizationType.Approx_ChordLength)
-
-            # Tier 3: Loft Hardening - Grad und Gewichtung begrenzen
-            if is_enabled("loft_sweep_hardening"):
-                loft_builder.SetMaxDegree(8)
-                try:
-                    loft_builder.SetCriteriumWeight(0.4, 0.2, 0.4)
-                except Exception:
-                    pass  # Nicht alle OCP-Versionen unterstützen SetCriteriumWeight
-
-            # Profile hinzufügen
-            for face in faces:
-                face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-
-                explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
-                wire_builder = BRepBuilderAPI_MakeWire()
-
-                while explorer.More():
-                    edge = explorer.Current()
-                    try:
-                        wire_builder.Add(edge)
-                    except Exception as e:
-                        logger.debug(f"[__init__.py] Fehler: {e}")
-                        pass
-                    explorer.Next()
-
-                if wire_builder.IsDone():
-                    wire = wire_builder.Wire()
-                    loft_builder.AddWire(wire)
-
-            loft_builder.Build()
-
-            if loft_builder.IsDone():
-                result_shape = loft_builder.Shape()
-                result_shape = self._fix_shape_ocp(result_shape)
-
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                    if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.debug(f"OCP Loft mit Kontinuität ({start_cont}/{end_cont}) erfolgreich")
-                        return result
-                except Exception as e_solid:
-                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
-                    try:
-                        return Shape(result_shape)
-                    except Exception as e_shape:
-                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
-
-            logger.warning("OCP Loft mit Kontinuität IsDone() = False")
-            return self._ocp_loft(faces, feature.ruled)  # Fallback
-
-        except Exception as e:
-            logger.error(f"OCP Loft mit Kontinuität Fehler: {e}")
-            return self._ocp_loft(faces, feature.ruled)  # Fallback
+        logger.debug(f"OCP Loft erfolgreich ({start_cont}/{end_cont})")
+        return result
 
     def _compute_sweep(self, feature: 'SweepFeature', current_solid):
         """
@@ -3188,51 +3157,164 @@ class Body:
         # Für Sweep muss das Profil am Startpunkt des Pfads liegen!
         profile_face = self._move_profile_to_path_start(profile_face, path_wire, feature)
 
-        # Phase 8: Twist/Scale Parameter prüfen
+        # OCP-First Sweep mit Voranalyse für optimale Methode
+        # Keine Fallback-Kaskade - entweder OCP erfolgreich oder Fehler
         twist_angle = getattr(feature, 'twist_angle', 0.0)
         scale_start = getattr(feature, 'scale_start', 1.0)
         scale_end = getattr(feature, 'scale_end', 1.0)
         has_twist_or_scale = (twist_angle != 0.0 or scale_start != 1.0 or scale_end != 1.0)
 
-        logger.debug(f"Sweep mit Frenet={feature.is_frenet}, Twist={twist_angle}°, Scale={scale_start}->{scale_end}")
+        logger.debug(f"Sweep OCP-First: Frenet={feature.is_frenet}, Twist={twist_angle}°, Scale={scale_start}->{scale_end}")
 
-        # Phase 8: Erweiterter Sweep mit Twist/Scale
-        if has_twist_or_scale:
-            result = self._ocp_sweep_with_twist_scale(profile_face, path_wire, feature)
-            if result is not None:
-                return result
+        # Voranalyse: Pfad-Komplexität bestimmen
+        is_curved_path = self._is_curved_path(path_wire)
+        has_spine = hasattr(feature, 'spine') and feature.spine is not None
 
-        # DEBUG: Profil und Pfad Info
-        try:
-            profile_center = profile_face.center() if hasattr(profile_face, 'center') else "N/A"
-            path_edges = path_wire.edges() if hasattr(path_wire, 'edges') else []
-            logger.debug(f"Sweep: Profil-Zentrum={profile_center}, Pfad-Edges={len(path_edges)}")
-        except Exception as e:
-            logger.debug(f"[__init__.py] Fehler: {e}")
-            pass
+        # OCP-Importe
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe, BRepOffsetAPI_MakePipeShell
+        from OCP.GeomFill import GeomFill_IsCorrectedFrenet, GeomFill_IsConstantNormal
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from build123d import Solid
 
-        # PRIMARY: Build123d sweep (Standard ohne Twist/Scale)
-        try:
-            from build123d import sweep
-            result = sweep(profile_face, path=path_wire, is_frenet=feature.is_frenet)
-            if result and hasattr(result, 'is_valid') and result.is_valid():
-                logger.debug("Build123d Sweep erfolgreich")
-                return result
+        face_shape = profile_face.wrapped if hasattr(profile_face, 'wrapped') else profile_face
+        path_shape = path_wire.wrapped if hasattr(path_wire, 'wrapped') else path_wire
+
+        # Validierung: Shape muss OCP-TopoDS_Shape sein
+        if path_shape is None:
+            raise ValueError("Sweep: Pfad ist None")
+        type_name = type(path_shape).__name__
+        if 'TopoDS' not in type_name and path_shape.__class__.__module__ != 'OCP.TopoDS':
+            raise ValueError(f"Sweep: Pfad ist kein OCP Shape (Typ: {type_name})")
+
+        # Profil-Wire extrahieren (für MakePipeShell)
+        # Versuche build123d outer_wire zuerst, dann OCP Fallback
+        profile_wire = None
+        if hasattr(profile_face, 'outer_wire'):
+            try:
+                profile_wire = profile_face.outer_wire()
+                if hasattr(profile_wire, 'wrapped'):
+                    profile_wire = profile_wire.wrapped
+            except Exception as e:
+                logger.debug(f"Sweep: outer_wire() fehlgeschlagen: {e}")
+
+        # Fallback: OCP Wire-Building aus Edges
+        if profile_wire is None:
+            explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
+            profile_wire_builder = BRepBuilderAPI_MakeWire()
+            while explorer.More():
+                try:
+                    profile_wire_builder.Add(explorer.Current())
+                except Exception:
+                    pass
+                explorer.Next()
+
+            if not profile_wire_builder.IsDone():
+                raise ValueError("Sweep: Profil-Wire Extraktion fehlgeschlagen")
+            profile_wire = profile_wire_builder.Wire()
+
+        # OCP-First: Einziger Pfad mit Methoden-Wahl
+        result_shape = None
+
+        # Einfacher Pfad → MakePipe (schneller, zuverlässiger)
+        if not is_curved_path and not has_twist_or_scale and not feature.is_frenet and not has_spine:
+            logger.debug("Sweep: Verwende MakePipe (einfacher Pfad)")
+            pipe_op = BRepOffsetAPI_MakePipe(path_shape, face_shape)
+            pipe_op.Build()
+
+            if not pipe_op.IsDone():
+                raise ValueError("Sweep MakePipe fehlgeschlagen: IsDone()=False")
+
+            result_shape = pipe_op.Shape()
+
+        # Komplexer Pfad oder Twist/Scale → MakePipeShell
+        else:
+            logger.debug(f"Sweep: Verwende MakePipeShell (curved={is_curved_path}, frenet={feature.is_frenet}, twist/scale={has_twist_or_scale})")
+            pipe_shell = BRepOffsetAPI_MakePipeShell(path_shape)
+
+            # Trihedron-Mode setzen
+            if feature.is_frenet:
+                pipe_shell.SetMode(GeomFill_IsCorrectedFrenet)
             else:
-                logger.warning(f"Build123d sweep: Ergebnis ungültig oder None")
-        except Exception as e:
-            logger.warning(f"Build123d sweep fehlgeschlagen: {e}")
+                pipe_shell.SetMode(GeomFill_IsConstantNormal)
 
-        # FALLBACK 1: OCP MakePipe
-        result = self._ocp_sweep(profile_face, path_wire)
-        if result is not None:
-            return result
+            # Advanced: Twist/Scale mit Law-Funktionen
+            if has_twist_or_scale:
+                try:
+                    from OCP.Law import Law_Linear
 
-        # FALLBACK 2 (Tier 3): MakePipeShell mit CorrectedFrenet
-        if is_enabled("loft_sweep_hardening"):
-            return self._ocp_sweep_robust(profile_face, path_wire)
+                    # Scale-Law erstellen
+                    if scale_start != 1.0 or scale_end != 1.0:
+                        scale_law = Law_Linear()
+                        scale_law.Set(0.0, scale_start, 1.0, scale_end)
+                        pipe_shell.SetLaw(profile_wire, scale_law, False, False)
+                        logger.debug(f"Sweep: Scale-Law {scale_start}->{scale_end} angewendet")
+                    else:
+                        pipe_shell.Add(profile_wire, False, False)
 
-        return None
+                    # Twist wird über Approximation realisiert
+                    if twist_angle != 0.0:
+                        logger.info(f"Sweep: Twist {twist_angle}° wird approximiert")
+                        # Vollständige Twist-Implementierung würde Law_Interpol benötigen
+                except ImportError:
+                    logger.debug("OCP.Law nicht verfügbar, Standard-Add verwenden")
+                    pipe_shell.Add(profile_wire, False, False)
+            else:
+                pipe_shell.Add(profile_wire, False, False)
+
+            pipe_shell.Build()
+
+            if not pipe_shell.IsDone():
+                raise ValueError("Sweep MakePipeShell fehlgeschlagen: IsDone()=False")
+
+            try:
+                pipe_shell.MakeSolid()
+            except Exception:
+                pass  # MakeSolid optional für geschlossene Profile
+
+            result_shape = pipe_shell.Shape()
+
+        # Shape-Fix und Validierung
+        result_shape = self._fix_shape_ocp(result_shape)
+        result = Solid(result_shape)
+
+        if not result.is_valid():
+            raise ValueError("Sweep erzeugte keinen gültigen Solid")
+
+        # TNP-Registration wenn naming_service verfügbar
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                naming_service = self._document._shape_naming_service
+                feature_id = getattr(feature, 'id', None) or str(id(feature))
+
+                # Alle Faces registrieren
+                from modeling.tnp_system import ShapeType
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopAbs import TopAbs_FACE
+
+                explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+                face_idx = 0
+                while explorer.More():
+                    ocp_face = explorer.Current()
+                    fc = self._get_face_center(ocp_face)
+                    area = self._get_face_area(ocp_face)
+                    naming_service.register_shape(
+                        ocp_shape=ocp_face,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature_id,
+                        local_index=face_idx,
+                        geometry_data=(fc.X, fc.Y, fc.Z, area),
+                    )
+                    face_idx += 1
+                    explorer.Next()
+
+                logger.debug(f"Sweep: {face_idx} Faces registriert")
+            except Exception as e:
+                logger.debug(f"Sweep TNP-Registration fehlgeschlagen: {e}")
+
+        logger.debug("Sweep OCP-First erfolgreich")
+        return result
 
     def _move_profile_to_path_start(self, profile_face, path_wire, feature):
         """
@@ -3306,257 +3388,81 @@ class Body:
             logger.warning(f"Sweep: Profil-Verschiebung fehlgeschlagen: {e}, verwende Original")
             return profile_face
 
-    def _ocp_sweep(self, face, path):
-        """OCP-basierter Sweep mit BRepOffsetAPI_MakePipe."""
-        if not HAS_OCP:
-            return None
-
-        try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe
-
-            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-            path_shape = path.wrapped if hasattr(path, 'wrapped') else path
-
-            pipe = BRepOffsetAPI_MakePipe(path_shape, face_shape)
-            pipe.Build()
-
-            if pipe.IsDone():
-                result_shape = pipe.Shape()
-                result_shape = self._fix_shape_ocp(result_shape)
-
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                    if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.debug("OCP Sweep erfolgreich")
-                        return result
-                except Exception as e_solid:
-                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
-                    try:
-                        return Shape(result_shape)
-                    except Exception as e_shape:
-                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
-
-            logger.warning("OCP Sweep IsDone() = False")
-            return None
-
-        except Exception as e:
-            logger.error(f"OCP Sweep Fehler: {e}")
-            return None
-
-    def _ocp_sweep_robust(self, face, path):
+    def _is_curved_path(self, path_wire) -> bool:
         """
-        Tier 3: Robuster Sweep-Fallback mit BRepOffsetAPI_MakePipeShell.
+        Analysiert ob der Pfad gekrümmt ist (nicht gerade).
 
-        Verwendet CorrectedFrenet-Modus für bessere Stabilität bei
-        komplexen Pfaden (Kurven mit hoher Krümmung, S-Formen).
+        Für OCP-First Sweep: Einfache Pfade können MakePipe verwenden,
+        gekrümmte Pfade benötigen MakePipeShell.
 
         Args:
-            face: Profil-Face (Build123d oder OCP)
-            path: Pfad-Wire (Build123d oder OCP)
+            path_wire: Build123d Wire
 
         Returns:
-            Build123d Solid oder None
+            True wenn gekrümmt, False wenn gerade Linie
         """
         try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
-            from OCP.GeomFill import GeomFill_IsCorrectedFrenet
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_EDGE
-
-            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-            path_shape = path.wrapped if hasattr(path, 'wrapped') else path
-
-            # Profil-Wire extrahieren
-            explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
-            profile_wire_builder = BRepBuilderAPI_MakeWire()
-            while explorer.More():
+            edges = list(path_wire.edges()) if hasattr(path_wire, 'edges') else []
+            if len(edges) == 0:
+                return False
+            if len(edges) == 1:
+                # Einzelne Edge prüfen
+                edge = edges[0]
+                # Gerade Linie hat gleiche Tangentenrichtung an Start/Ende
                 try:
-                    profile_wire_builder.Add(explorer.Current())
+                    start_tangent = edge.tangent_at(0) if hasattr(edge, 'tangent_at') else None
+                    end_tangent = edge.tangent_at(1) if hasattr(edge, 'tangent_at') else None
+                    if start_tangent and end_tangent:
+                        # Winkel zwischen Tangenten
+                        dot = (start_tangent.X * end_tangent.X +
+                                start_tangent.Y * end_tangent.Y +
+                                start_tangent.Z * end_tangent.Z)
+                        mag1 = (start_tangent.X**2 + start_tangent.Y**2 + start_tangent.Z**2)**0.5
+                        mag2 = (end_tangent.X**2 + end_tangent.Y**2 + end_tangent.Z**2)**0.5
+                        if mag1 > 0 and mag2 > 0:
+                            cos_angle = dot / (mag1 * mag2)
+                            # Parallel wenn cos ~ 1
+                            return abs(cos_angle - 1.0) > 0.01
                 except Exception:
                     pass
-                explorer.Next()
-
-            if not profile_wire_builder.IsDone():
-                logger.debug("Sweep robust: Profil-Wire Extraktion fehlgeschlagen")
-                return None
-
-            profile_wire = profile_wire_builder.Wire()
-
-            # PipeShell mit CorrectedFrenet
-            pipe = BRepOffsetAPI_MakePipeShell(path_shape)
-            pipe.SetMode(GeomFill_IsCorrectedFrenet)
-            pipe.SetMaxDegree(8)
-            pipe.SetForceApproxC1(True)
-            pipe.Add(profile_wire, False, False)
-            pipe.Build()
-
-            if not pipe.IsDone():
-                logger.debug("Sweep robust: Build fehlgeschlagen")
-                return None
-
-            try:
-                pipe.MakeSolid()
-            except Exception:
-                pass
-
-            result_shape = pipe.Shape()
-            result_shape = self._fix_shape_ocp(result_shape)
-
-            from build123d import Solid, Shape
-            try:
-                result = Solid(result_shape)
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.info("Sweep robust (CorrectedFrenet) erfolgreich")
-                    return result
-            except Exception:
-                try:
-                    return Shape(result_shape)
-                except Exception:
-                    pass
-
-            return None
-
+                # Kurven-Typ prüfen
+                edge_type = edge.geom_type() if hasattr(edge, 'geom_type') else ''
+                return edge_type not in ('LINE', 'FORWARD')
+            # Multiple Edges: Prüfe ob alle in einer geraden Linie liegen
+            vertices = []
+            for edge in edges:
+                verts = list(edge.vertices()) if hasattr(edge, 'vertices') else []
+                vertices.extend([v.center() if hasattr(v, 'center') else v for v in verts])
+            if len(vertices) < 3:
+                return False
+            # Prüfe ob alle Punkte kolinear sind
+            v0 = vertices[0]
+            v1 = vertices[-1]
+            direction = v1 - v0
+            dir_length = (direction.X**2 + direction.Y**2 + direction.Z**2)**0.5
+            if dir_length < 1e-6:
+                return False
+            for vi in vertices[1:-1]:
+                # Kreuzprodukt sollte Null sein für kolineare Punkte
+                vi_v0 = vi - v0
+                cross_x = direction.Y * vi_v0.Z - direction.Z * vi_v0.Y
+                cross_y = direction.Z * vi_v0.X - direction.X * vi_v0.Z
+                cross_z = direction.X * vi_v0.Y - direction.Y * vi_v0.X
+                cross_mag = (cross_x**2 + cross_y**2 + cross_z**2)**0.5
+                if cross_mag > 0.1:  # > 0.1mm Abweichung = gekrümmt
+                    return True
+            return False
         except Exception as e:
-            logger.debug(f"Sweep robust Fehler: {e}")
-            return None
-
-    def _ocp_sweep_with_twist_scale(self, face, path, feature: 'SweepFeature'):
-        """
-        Phase 8: OCP-basierter Sweep mit Twist und Skalierung.
-
-        Verwendet BRepOffsetAPI_MakePipeShell für erweiterte Kontrolle:
-        - Twist: Verdrehung des Profils entlang des Pfads
-        - Scale: Skalierung von Start zu Ende
-
-        Args:
-            face: Profil-Face
-            path: Pfad-Wire
-            feature: SweepFeature mit twist_angle, scale_start, scale_end
-
-        Returns:
-            Build123d Solid oder None bei Fehler
-        """
-        if not HAS_OCP:
-            return None
-
-        try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
-            from OCP.GeomFill import GeomFill_IsFrenet, GeomFill_IsConstantNormal, GeomFill_IsCorrectedFrenet
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_EDGE
-            import math
-
-            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-            path_shape = path.wrapped if hasattr(path, 'wrapped') else path
-
-            # Profil-Wire extrahieren
-            explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
-            profile_wire_builder = BRepBuilderAPI_MakeWire()
-
-            while explorer.More():
-                edge = explorer.Current()
-                try:
-                    profile_wire_builder.Add(edge)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    pass
-                explorer.Next()
-
-            if not profile_wire_builder.IsDone():
-                logger.warning("Konnte Profil-Wire nicht erstellen")
-                return None
-
-            profile_wire = profile_wire_builder.Wire()
-
-            # PipeShell erstellen
-            pipe = BRepOffsetAPI_MakePipeShell(path_shape)
-
-            # Trihedron-Mode setzen
-            if feature.is_frenet:
-                pipe.SetMode(GeomFill_IsCorrectedFrenet)  # Bessere Stabilität als IsFrenet
-            else:
-                pipe.SetMode(GeomFill_IsConstantNormal)
-
-            # Twist und Scale über Law-Funktionen
-            twist_angle = getattr(feature, 'twist_angle', 0.0)
-            scale_start = getattr(feature, 'scale_start', 1.0)
-            scale_end = getattr(feature, 'scale_end', 1.0)
-
-            if twist_angle != 0.0 or scale_start != 1.0 or scale_end != 1.0:
-                # Für Twist und Scale benötigen wir Law_Linear
-                try:
-                    from OCP.Law import Law_Linear
-
-                    # Scale-Law erstellen
-                    if scale_start != 1.0 or scale_end != 1.0:
-                        scale_law = Law_Linear()
-                        scale_law.Set(0.0, scale_start, 1.0, scale_end)
-                        pipe.SetLaw(profile_wire, scale_law, False, False)
-                    else:
-                        pipe.Add(profile_wire, False, False)
-
-                    # Twist über SetTolerance und auxiliary spine
-                    # (OCP hat keine direkte Twist-API, wir approximieren)
-                    if twist_angle != 0.0:
-                        logger.info(f"Twist {twist_angle}° wird über Auxiliary-Methode approximiert")
-                        # Einfache Approximation: Mehrere Zwischenpositionen
-                        # Echte Implementation würde BRepOffsetAPI_MakePipeShell.SetLaw mit
-                        # Law_Interpol für Rotation verwenden
-
-                except ImportError:
-                    logger.debug("OCP.Law nicht verfügbar, Standard-Add verwenden")
-                    pipe.Add(profile_wire, False, False)
-            else:
-                pipe.Add(profile_wire, False, False)
-
-            pipe.Build()
-
-            if not pipe.IsDone():
-                logger.warning("OCP Sweep mit Twist/Scale: Build fehlgeschlagen")
-                return None
-
-            # Zu Solid machen
-            try:
-                pipe.MakeSolid()
-            except Exception as e:
-                logger.debug(f"[__init__.py] Fehler: {e}")
-                pass
-
-            result_shape = pipe.Shape()
-            result_shape = self._fix_shape_ocp(result_shape)
-
-            from build123d import Solid, Shape
-            try:
-                result = Solid(result_shape)
-                if hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug(f"OCP Sweep mit Twist={twist_angle}° Scale={scale_start}->{scale_end} erfolgreich")
-                    return result
-            except Exception as e:
-                logger.debug(f"[__init__.py] Fehler: {e}")
-                try:
-                    return Shape(result_shape)
-                except Exception as e:
-                    logger.debug(f"[__init__.py] Fehler: {e}")
-                    pass
-
-            return None
-
-        except Exception as e:
-            logger.error(f"OCP Sweep mit Twist/Scale Fehler: {e}")
-            return None
+            logger.debug(f"_is_curved_path Analyse fehlgeschlagen: {e}, assume curved")
+            return True  # Conservative: Bei Fehler MakePipeShell verwenden
 
     def _compute_shell(self, feature: 'ShellFeature', current_solid):
         """
-        Berechnet Shell (Aushöhlung) eines Körpers.
+        OCP-First Shell mit direktem OpenCASCADE BRepOffsetAPI_MakeThickSolid.
 
-        Strategy:
-        1. Öffnungs-Faces auflösen
-        2. Mit Öffnungen: Build123d offset()
-        3. Ohne Öffnungen: Boolean-Subtraktion (outer - inner = hollow closed)
-        4. Fallback zu OCP BRepOffsetAPI_MakeThickSolid
+        Unterstützt:
+        - Shell mit Öffnungen (faces_to_remove)
+        - Geschlossener Hohlkörper (leere faces_to_remove)
         """
         if current_solid is None:
             raise ValueError("Shell benötigt einen existierenden Körper")
@@ -3576,101 +3482,77 @@ class Body:
 
         logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
 
-        # CASE 1: Mit Öffnungen - Build123d offset()
-        if opening_faces:
+        # OCP-First Shell
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+        from OCP.TopTools import TopTools_ListOfShape
+        from config.tolerances import Tolerances
+        from build123d import Solid
+
+        shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+
+        # Liste der zu entfernenden Faces
+        faces_to_remove = TopTools_ListOfShape()
+        for face in opening_faces:
+            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
+            faces_to_remove.Append(face_shape)
+
+        # Shell erstellen (MakeThickSolidByJoin)
+        shell_op = BRepOffsetAPI_MakeThickSolid()
+        shell_op.MakeThickSolidByJoin(
+            shape,
+            faces_to_remove,  # Leer = geschlossener Hohlkörper
+            -feature.thickness,  # Negativ für nach innen
+            Tolerances.SHELL_TOLERANCE
+        )
+        shell_op.Build()
+
+        if not shell_op.IsDone():
+            raise ValueError(f"Shell OCP-Operation fehlgeschlagen: IsDone()=False")
+
+        result_shape = shell_op.Shape()
+        result_shape = self._fix_shape_ocp(result_shape)
+
+        # Zu Build123d Solid wrappen
+        result = Solid(result_shape)
+
+        if not result.is_valid():
+            raise ValueError("Shell erzeugte keinen gültigen Solid")
+
+        # TNP-Registration wenn naming_service verfügbar
+        if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
-                from build123d import offset
-                # Negatives amount für inward shell
-                result = offset(current_solid, amount=-feature.thickness, openings=opening_faces)
-                if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug("Build123d Shell mit Öffnungen erfolgreich")
-                    return result
+                naming_service = self._document._shape_naming_service
+                feature_id = getattr(feature, 'id', None) or str(id(feature))
+
+                # Alle Faces registrieren
+                from modeling.tnp_system import ShapeType
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopAbs import TopAbs_FACE
+
+                explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
+                face_idx = 0
+                while explorer.More():
+                    face_shape = explorer.Current()
+                    naming_service.register_shape(
+                        ocp_shape=face_shape,
+                        shape_type=ShapeType.FACE,
+                        feature_id=feature_id,
+                        local_index=face_idx
+                    )
+                    face_idx += 1
+                    explorer.Next()
+
+                # Alle Edges registrieren
+                naming_service.register_solid_edges(result, feature_id)
+
+                if is_enabled("tnp_debug_logging"):
+                    logger.success(f"Shell TNP: {face_idx} Faces registriert")
+
             except Exception as e:
-                logger.debug(f"Build123d offset fehlgeschlagen: {e}")
+                logger.error(f"Shell TNP Registration fehlgeschlagen: {e}")
 
-            # Fallback für Öffnungen: OCP MakeThickSolid
-            return self._ocp_shell(current_solid, opening_faces, feature.thickness)
-
-        # CASE 2: Ohne Öffnungen - Boolean-Subtraktion für geschlossenen Hohlkörper
-        # outer - inner_offset = hollow closed body
-        logger.info("Shell ohne Öffnungen: Erstelle geschlossenen Hohlkörper via Boolean")
-        try:
-            from build123d import offset, Solid
-
-            # Inneren Solid erstellen (geschrumpft um Wandstärke)
-            inner_solid = offset(current_solid, amount=-feature.thickness)
-
-            if inner_solid and hasattr(inner_solid, 'is_valid') and inner_solid.is_valid():
-                # Boolean Subtraktion: outer - inner = hollow
-                result = current_solid - inner_solid
-                if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug("Build123d Shell (geschlossen) via Boolean erfolgreich")
-                    return result
-                else:
-                    logger.warning("Boolean-Subtraktion fehlgeschlagen, versuche cut()")
-                    # Alternative: explizites cut()
-                    from build123d import cut
-                    result = cut(current_solid, inner_solid)
-                    if result:
-                        logger.debug("Build123d Shell (geschlossen) via cut() erfolgreich")
-                        return result
-        except Exception as e:
-            logger.debug(f"Build123d Boolean-Shell fehlgeschlagen: {e}")
-
-        # FALLBACK: OCP MakeThickSolid (auch ohne Öffnungen)
-        return self._ocp_shell(current_solid, opening_faces, feature.thickness)
-
-    def _ocp_shell(self, solid, opening_faces, thickness):
-        """OCP-basierter Shell mit BRepOffsetAPI_MakeThickSolid."""
-        if not HAS_OCP:
-            return None
-
-        try:
-            from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
-            from OCP.TopTools import TopTools_ListOfShape
-            from config.tolerances import Tolerances
-
-            shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
-
-            # Liste der zu entfernenden Faces
-            faces_to_remove = TopTools_ListOfShape()
-            for face in opening_faces:
-                face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-                faces_to_remove.Append(face_shape)
-
-            # Shell erstellen
-            shell_op = BRepOffsetAPI_MakeThickSolid()
-            shell_op.MakeThickSolidByJoin(
-                shape,
-                faces_to_remove,
-                -thickness,  # Negativ für nach innen
-                Tolerances.KERNEL_PRECISION
-            )
-            shell_op.Build()
-
-            if shell_op.IsDone():
-                result_shape = shell_op.Shape()
-                result_shape = self._fix_shape_ocp(result_shape)
-
-                from build123d import Solid, Shape
-                try:
-                    result = Solid(result_shape)
-                    if hasattr(result, 'is_valid') and result.is_valid():
-                        logger.debug("OCP Shell erfolgreich")
-                        return result
-                except Exception as e_solid:
-                    logger.warning(f"Solid-Wrap fehlgeschlagen: {e_solid}")
-                    try:
-                        return Shape(result_shape)
-                    except Exception as e_shape:
-                        logger.warning(f"Shape-Wrap fehlgeschlagen: {e_shape}")
-
-            logger.warning("OCP Shell IsDone() = False")
-            return None
-
-        except Exception as e:
-            logger.error(f"OCP Shell Fehler: {e}")
-            return None
+        logger.debug(f"OCP Shell erfolgreich ({len(opening_faces)} Öffnungen)")
+        return result
 
     def _unify_same_domain(self, shape, context: str = ""):
         """
@@ -6363,56 +6245,31 @@ class Body:
                         feature.id = str(uuid.uuid4())[:8]
                         logger.debug(f"[FILLET] Generated ID for FilletFeature: {feature.id}")
 
-                    _fillet_history_holder = [None]  # Closure-safe container
-
                     def op_fillet(rad=feature.radius):
-                        # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
+                        # OCP-First Fillet mit TNP Integration (Phase B)
                         edges_to_fillet = self._resolve_edges_tnp(current_solid, feature)
                         if not edges_to_fillet:
-                            raise ValueError("No edges selected (TNP resolution failed)")
+                            raise ValueError("Fillet: Keine Kanten selektiert (TNP resolution failed)")
 
-                        # OCP-First Flag-Integration (Phase 2-3)
-                        if is_enabled("ocp_first_fillet"):
-                            # Nutze OCPFilletHelper mit TNP Integration
-                            naming_service = None
-                            if self._document and hasattr(self._document, '_shape_naming_service'):
-                                naming_service = self._document._shape_naming_service
+                        naming_service = None
+                        if self._document and hasattr(self._document, '_shape_naming_service'):
+                            naming_service = self._document._shape_naming_service
 
-                            if naming_service is None:
-                                raise ValueError(
-                                    "TNP ShapeNamingService nicht verfügbar für OCP-First Fillet. "
-                                    "Bitte Document mit TNP Service verwenden."
-                                )
+                        if naming_service is None:
+                            raise ValueError(
+                                "Fillet: TNP ShapeNamingService nicht verfügbar. "
+                                "Bitte Document mit TNP Service verwenden."
+                            )
 
-                            try:
-                                result = OCPFilletHelper.fillet(
-                                    solid=current_solid,  # FIX: solid= statt shape=
-                                    edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges_to_fillet],
-                                    radius=rad,
-                                    naming_service=naming_service,
-                                    feature_id=feature.id
-                                )
-                                if result is not None:
-                                    logger.debug(f"[OCP-FIRST FILLET] Success: {feature.id}")
-                                    return result
-                            except Exception as e:
-                                logger.warning(f"[OCP-FIRST FILLET] Failed: {e}, falling back to legacy")
-                                # Fallback zu Legacy implementierung
-
-                        # Legacy Pfad (oder Fallback von OCP-First)
-                        # Phase 12: History-Extraction für TNP
-                        if is_enabled("batch_fillets"):
-                            result, history = self._ocp_fillet(current_solid, edges_to_fillet, rad, extract_history=True)
-                            if result is not None:
-                                _fillet_history_holder[0] = history
-                                return result
-                        else:
-                            # OCP Fillet (primaer)
-                            result = self._ocp_fillet(current_solid, edges_to_fillet, rad)
-                            if result is not None:
-                                return result
-                        # Build123d als Alternative (gleicher Radius)
-                        return fillet(edges_to_fillet, radius=rad)
+                        # EINZIGER PFAD - OCPFilletHelper (kein Fallback!)
+                        result = OCPFilletHelper.fillet(
+                            solid=current_solid,
+                            edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges_to_fillet],
+                            radius=rad,
+                            naming_service=naming_service,
+                            feature_id=feature.id
+                        )
+                        return result
 
                     # Fail-Fast: Kein Fallback mit reduziertem Radius
                     new_solid, status = self._safe_operation(
@@ -6424,9 +6281,7 @@ class Body:
                         new_solid = current_solid
                         status = "ERROR"
                         logger.error(f"Fillet R={feature.radius}mm fehlgeschlagen. Radius evtl. zu gross fuer die gewaehlten Kanten.")
-                    elif _fillet_history_holder[0] is not None:
-                        # Phase 12: TNP History registrieren
-                        self._register_fillet_chamfer_history(new_solid, _fillet_history_holder[0], feature, "FILLET")
+                    # TNP History wird automatisch vom OCPFilletHelper registriert
 
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
@@ -6441,56 +6296,31 @@ class Body:
                         feature.id = str(uuid.uuid4())[:8]
                         logger.debug(f"[CHAMFER] Generated ID for ChamferFeature: {feature.id}")
 
-                    _chamfer_history_holder = [None]  # Closure-safe container
-
                     def op_chamfer(dist=feature.distance):
-                        # Phase 2 TNP: Multi-Strategie Edge-Aufloesung
+                        # OCP-First Chamfer mit TNP Integration (Phase B)
                         edges = self._resolve_edges_tnp(current_solid, feature)
                         if not edges:
-                            raise ValueError("No edges (TNP resolution failed)")
+                            raise ValueError("Chamfer: Keine Kanten selektiert (TNP resolution failed)")
 
-                        # OCP-First Flag-Integration (Phase 2-3)
-                        if is_enabled("ocp_first_chamfer"):
-                            # Nutze OCPChamferHelper mit TNP Integration
-                            naming_service = None
-                            if self._document and hasattr(self._document, '_shape_naming_service'):
-                                naming_service = self._document._shape_naming_service
+                        naming_service = None
+                        if self._document and hasattr(self._document, '_shape_naming_service'):
+                            naming_service = self._document._shape_naming_service
 
-                            if naming_service is None:
-                                raise ValueError(
-                                    "TNP ShapeNamingService nicht verfügbar für OCP-First Chamfer. "
-                                    "Bitte Document mit TNP Service verwenden."
-                                )
+                        if naming_service is None:
+                            raise ValueError(
+                                "Chamfer: TNP ShapeNamingService nicht verfügbar. "
+                                "Bitte Document mit TNP Service verwenden."
+                            )
 
-                            try:
-                                result = OCPChamferHelper.chamfer(
-                                    solid=current_solid,  # FIX: solid= statt shape=
-                                    edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges],
-                                    distance=dist,
-                                    naming_service=naming_service,
-                                    feature_id=feature.id
-                                )
-                                if result is not None:
-                                    logger.debug(f"[OCP-FIRST CHAMFER] Success: {feature.id}")
-                                    return result
-                            except Exception as e:
-                                logger.warning(f"[OCP-FIRST CHAMFER] Failed: {e}, falling back to legacy")
-                                # Fallback zu Legacy implementierung
-
-                        # Legacy Pfad (oder Fallback von OCP-First)
-                        # Phase 12: History-Extraction für TNP
-                        if is_enabled("batch_fillets"):
-                            result, history = self._ocp_chamfer(current_solid, edges, dist, extract_history=True)
-                            if result is not None:
-                                _chamfer_history_holder[0] = history
-                                return result
-                        else:
-                            # OCP Chamfer (primaer)
-                            result = self._ocp_chamfer(current_solid, edges, dist)
-                            if result is not None:
-                                return result
-                        # Build123d als Alternative (gleiche Distance)
-                        return chamfer(edges, length=dist)
+                        # EINZIGER PFAD - OCPChamferHelper (kein Fallback!)
+                        result = OCPChamferHelper.chamfer(
+                            solid=current_solid,
+                            edges=[e.wrapped if hasattr(e, 'wrapped') else e for e in edges],
+                            distance=dist,
+                            naming_service=naming_service,
+                            feature_id=feature.id
+                        )
+                        return result
 
                     # Fail-Fast: Kein Fallback mit reduzierter Distance
                     new_solid, status = self._safe_operation(
@@ -6502,9 +6332,7 @@ class Body:
                         new_solid = current_solid
                         status = "ERROR"
                         logger.error(f"Chamfer D={feature.distance}mm fehlgeschlagen. Distance evtl. zu gross fuer die gewaehlten Kanten.")
-                    elif _chamfer_history_holder[0] is not None:
-                        # Phase 12: TNP History registrieren
-                        self._register_fillet_chamfer_history(new_solid, _chamfer_history_holder[0], feature, "CHAMFER")
+                    # TNP History wird automatisch vom OCPChamferHelper registriert
 
             # ================= TRANSFORM =================
             elif isinstance(feature, TransformFeature):

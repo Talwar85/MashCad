@@ -278,15 +278,8 @@ def test_shell_simple():
 
     shell = ShellFeature(thickness=1.0, face_indices=[face_index])
 
-    # Shell verwenden direkt OCP
-    from modeling.ocp_helpers import OCPShellHelper
-    result = OCPShellHelper.shell(
-        solid=body._build123d_solid,
-        faces_to_remove=[top_face],
-        thickness=1.0,
-        naming_service=doc._shape_naming_service,
-        feature_id="shell_test"
-    )
+    # Shell verwenden direkt OCP-First (_compute_shell)
+    result = body._compute_shell(shell, body._build123d_solid)
 
     assert result is not None
     assert result.is_valid()

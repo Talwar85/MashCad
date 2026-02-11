@@ -65,40 +65,48 @@ class TestFeatureFlagsBasic:
 class TestOCPFirstFeatureFlags:
     """Tests für OCP-First Migration Feature Flags.
 
-    Nach Phase 2-9 sind die OCP-First Flags auf True gesetzt.
+    Nach Phase A-F (Feb 2026) sind die meisten OCP-First Flags entfernt,
+    da die Operationen jetzt direkt OCP verwenden (kein Fallback mehr nötig).
     """
 
     def test_ocp_first_extrude_enabled(self):
         """Test: ocp_first_extrude ist nach Migration aktiviert."""
         assert is_enabled("ocp_first_extrude") is True
 
-    def test_ocp_first_fillet_enabled(self):
-        """Test: ocp_first_fillet ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_fillet") is True
+    def test_ocp_first_revolve_removed(self):
+        """Test: ocp_first_revolve wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Revolve verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_revolve") is False
 
-    def test_ocp_first_chamfer_enabled(self):
-        """Test: ocp_first_chamfer ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_chamfer") is True
+    def test_ocp_first_loft_removed(self):
+        """Test: ocp_first_loft wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Loft verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_loft") is False
 
-    def test_ocp_first_revolve_enabled(self):
-        """Test: ocp_first_revolve ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_revolve") is True
+    def test_ocp_first_sweep_removed(self):
+        """Test: ocp_first_sweep wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Sweep verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_sweep") is False
 
-    def test_ocp_first_loft_enabled(self):
-        """Test: ocp_first_loft ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_loft") is True
+    def test_ocp_first_shell_removed(self):
+        """Test: ocp_first_shell wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Shell verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_shell") is False
 
-    def test_ocp_first_sweep_enabled(self):
-        """Test: ocp_first_sweep ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_sweep") is True
+    def test_ocp_first_hollow_removed(self):
+        """Test: ocp_first_hollow wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Hollow verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_hollow") is False
 
-    def test_ocp_first_shell_enabled(self):
-        """Test: ocp_first_shell ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_shell") is True
+    def test_ocp_first_fillet_removed(self):
+        """Test: ocp_first_fillet wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Fillet verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_fillet") is False
 
-    def test_ocp_first_hollow_enabled(self):
-        """Test: ocp_first_hollow ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_hollow") is True
+    def test_ocp_first_chamfer_removed(self):
+        """Test: ocp_first_chamfer wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Chamfer verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_chamfer") is False
 
     def test_ocp_brep_cache_enabled(self):
         """Test: ocp_brep_cache ist nach Migration aktiviert."""
@@ -111,26 +119,36 @@ class TestOCPFirstFeatureFlags:
     def test_ocp_brep_persistence_enabled(self):
         """Test: ocp_brep_persistence ist nach Migration aktiviert."""
         assert is_enabled("ocp_brep_persistence") is True
-    
+
     def test_all_ocp_first_flags_exist(self):
-        """Test: Alle OCP-First Flags existieren."""
-        expected_ocp_flags = [
+        """Test: Alle OCP-First Flags existieren oder entfernt wurden."""
+        # Nach Phase A-F (Feb 2026): Nur ocp_first_extrude bleibt
+        remaining_flags = [
             "ocp_first_extrude",
+            "ocp_brep_cache",
+            "ocp_incremental_rebuild",
+            "ocp_brep_persistence"
+        ]
+
+        removed_flags = [
             "ocp_first_fillet",
             "ocp_first_chamfer",
             "ocp_first_revolve",
             "ocp_first_loft",
             "ocp_first_sweep",
             "ocp_first_shell",
-            "ocp_first_hollow",
-            "ocp_brep_cache",
-            "ocp_incremental_rebuild",
-            "ocp_brep_persistence"
+            "ocp_first_hollow"
         ]
-        
+
         flags = get_all_flags()
-        for flag in expected_ocp_flags:
+
+        # Verbleibende Flags sollten existieren
+        for flag in remaining_flags:
             assert flag in flags, f"OCP-First Flag {flag} fehlt"
+
+        # Entfernte Flags sollten NICHT mehr existieren
+        for flag in removed_flags:
+            assert flag not in flags, f"OCP-First Flag {flag} wurde entfernt, sollte nicht mehr existieren"
 
 
 class TestPerformanceFeatureFlags:

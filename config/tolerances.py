@@ -80,6 +80,9 @@ class Tolerances:
     # WICHTIG: 1e-6 ist zu streng für 3D-Druck-Modelle!
     MESH_CLEAN = 1e-4  # 0.1mm
 
+    # Shell-Operation Toleranz
+    SHELL_TOLERANCE = 1e-4  # 0.1mm
+
     # STL/STEP Export Toleranz
     MESH_EXPORT = 1e-3  # 1mm (gröber für kleinere Dateien)
 

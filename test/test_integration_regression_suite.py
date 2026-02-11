@@ -105,20 +105,16 @@ def test_workflow_shell():
     solid = bd.Solid.make_box(20, 20, 20)
     body._build123d_solid = solid
 
-    # Shell mit OCPShellHelper
-    from modeling.ocp_helpers import OCPShellHelper
+    # Shell OCP-First (_compute_shell)
+    from modeling.topology_indexing import face_index_of
 
     # Top Face finden
     faces = list(body._build123d_solid.faces())
     top_face = max(faces, key=lambda f: f.center().Z)
+    face_index = face_index_of(body._build123d_solid, top_face)
 
-    result = OCPShellHelper.shell(
-        solid=body._build123d_solid,
-        faces_to_remove=[top_face],
-        thickness=2.0,
-        naming_service=doc._shape_naming_service,
-        feature_id="shell_test"
-    )
+    shell = ShellFeature(thickness=2.0, face_indices=[face_index])
+    result = body._compute_shell(shell, body._build123d_solid)
 
     assert result is not None
     assert result.is_valid()

@@ -11,12 +11,11 @@ Date: 2026-02-10
 import pytest
 from loguru import logger
 
-from build123d import Solid, Face, Edge, Vector, Location
+from build123d import Solid, Face, Edge, Vector
 from modeling.ocp_helpers import (
     OCPExtrudeHelper,
     OCPFilletHelper,
     OCPChamferHelper,
-    OCPRevolveHelper,
     HAS_OCP
 )
 
@@ -365,118 +364,12 @@ class TestOCPChamferHelper:
 
 
 # ============================================================================
-# OCPRevolveHelper Tests
+# OCPRevolveHelper Tests - ENTFERNT (OCP-First Migration Phase C)
 # ============================================================================
-
-class TestOCPRevolveHelper:
-    """Tests für OCPRevolveHelper."""
-    
-    def test_revolve_rectangle_full_360(self, test_context):
-        """Test: Rechteck 360° revolven - Ergebnis prüfen (Shell oder Solid)."""
-        # Arrange - Face mit Abstand zur Achse
-        face = create_test_sketch_face(width=2.0, height=10.0)
-        # Abstand von der Z-Achse für Revolve
-        face = face.moved(Location(Vector(10, 0, 0)))
-
-        axis_origin = Vector(0, 0, 0)
-        axis_direction = Vector(0, 0, 1)
-        angle_deg = 360.0
-        feature_id = test_context.create_feature_id("revolve")
-
-        # Act
-        result = OCPRevolveHelper.revolve(
-            face=face,
-            axis_origin=axis_origin,
-            axis_direction=axis_direction,
-            angle_deg=angle_deg,
-            naming_service=test_context.naming_service,
-            feature_id=feature_id
-        )
-
-        # Assert - Ergebnis sollte nicht None sein und Shapes haben
-        assert result is not None
-        assert result.area > 0, "Ergebnis sollte Oberfläche haben"
-
-        # TNP Assertion - Faces sollten registriert sein
-        stats = test_context.naming_service.get_stats()
-        assert stats["faces"] > 0, "TNP: Faces sollten registriert sein"
-    
-    def test_revolve_rectangle_half_180(self, test_context):
-        """Test: Rechteck 180° revolven - Ergebnis prüfen."""
-        # Arrange - Face mit Abstand zur Achse
-        face = create_test_sketch_face(width=3.0, height=10.0)
-        # Abstand von der Z-Achse
-        face = face.moved(Location(Vector(8, 0, 0)))
-
-        axis_origin = Vector(0, 0, 0)
-        axis_direction = Vector(0, 0, 1)
-        angle_deg = 180.0
-        feature_id = test_context.create_feature_id("revolve")
-
-        # Act
-        result = OCPRevolveHelper.revolve(
-            face=face,
-            axis_origin=axis_origin,
-            axis_direction=axis_direction,
-            angle_deg=angle_deg,
-            naming_service=test_context.naming_service,
-            feature_id=feature_id
-        )
-
-        # Assert - Ergebnis sollte valide sein
-        assert result is not None
-        assert result.area > 0, "Ergebnis sollte Oberfläche haben"
-
-        # TNP Assertion
-        stats = test_context.naming_service.get_stats()
-        assert stats["faces"] > 0, "TNP: Faces sollten registriert sein"
-    
-    def test_revolve_with_tnp_registration(self, test_context):
-        """Test: TNP Registration bei Revolve."""
-        # Arrange
-        face = create_test_sketch_face(width=1.0, height=5.0)
-        face = face.moved(Location(Vector(5, 0, 0)))
-        
-        axis_origin = Vector(0, 0, 0)
-        axis_direction = Vector(0, 0, 1)
-        angle_deg = 270.0
-        feature_id = test_context.create_feature_id("revolve")
-        
-        # Act
-        result = OCPRevolveHelper.revolve(
-            face=face,
-            axis_origin=axis_origin,
-            axis_direction=axis_direction,
-            angle_deg=angle_deg,
-            naming_service=test_context.naming_service,
-            feature_id=feature_id
-        )
-        
-        # Assert - TNP muss registrieren
-        stats = test_context.naming_service.get_stats()
-        assert stats["faces"] > 0
-        assert stats["edges"] > 0
-    
-    def test_revolve_without_naming_service_raises(self, test_context):
-        """Test: Ohne naming_service → ValueError."""
-        # Arrange
-        face = create_test_sketch_face()
-        axis_origin = Vector(0, 0, 0)
-        axis_direction = Vector(0, 0, 1)
-        angle_deg = 360.0
-        feature_id = test_context.create_feature_id("revolve")
-        
-        # Act & Assert
-        with pytest.raises(ValueError, match="naming_service ist Pflicht"):
-            OCPRevolveHelper.revolve(
-                face=face,
-                axis_origin=axis_origin,
-                axis_direction=axis_direction,
-                angle_deg=angle_deg,
-                naming_service=None,
-                feature_id=feature_id
-            )
-
+# Die OCPRevolveHelper-Klasse wurde entfernt (Feb 2026).
+# Revolve verwendet jetzt direkt BRepPrimAPI_MakeRevol in _compute_revolve.
+# Tests für Revolve sollten jetzt als Integration-Tests der Body-Klasse geschrieben werden.
+# ============================================================================
 
 # ============================================================================
 # INTEGRATION TESTS - Mehrere Features hintereinander
