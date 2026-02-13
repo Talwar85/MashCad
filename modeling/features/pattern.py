@@ -68,7 +68,7 @@ class PatternFeature(Feature):
             return 2  # Original + gespiegelt
         return 1
 
-    def validate(self) -> tuple[bool, str]:
+    def validate(self) -> Tuple[bool, str]:
         """
         Validiert das Pattern-Feature vor Ausführung.
 

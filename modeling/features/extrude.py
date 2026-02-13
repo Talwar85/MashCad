@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 from .base import Feature, FeatureType
 import sketcher
 from sketcher import Sketch
@@ -123,7 +123,7 @@ class PushPullFeature(Feature):
         """True wenn Pull-Operation (Material hinzufügen)."""
         return self.get_effective_distance() > 0
 
-    def validate(self) -> tuple[bool, str]:
+    def validate(self) -> Tuple[bool, str]:
         """
         Validiert das PushPull-Feature vor Ausführung.
 

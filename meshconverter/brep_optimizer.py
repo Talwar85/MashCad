@@ -23,7 +23,12 @@ except ImportError:
     HAS_SCIPY = False
     logger.warning("Scipy nicht verfügbar (Optimierung eingeschränkt)")
 
-from sklearn.decomposition import PCA
+try:
+    from sklearn.decomposition import PCA
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+    logger.warning("Sklearn nicht verfügbar (PCA eingeschränkt)")
 
 try:
     from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Face, TopoDS_Edge, TopoDS_Solid, TopoDS_Shell, TopoDS_Compound, TopoDS_Wire
@@ -167,6 +172,9 @@ class PrimitiveDetector:
             CylinderFit oder None wenn kein Zylinder erkannt
         """
         if len(points) < 10:
+            return None
+
+        if not HAS_SKLEARN:
             return None
 
         try:
@@ -457,6 +465,9 @@ class NURBSFitter:
 
         Verwendet PCA für lokales Koordinatensystem.
         """
+        if not HAS_SKLEARN:
+            return None
+
         try:
             # PCA für lokales 2D Koordinatensystem
             pca = PCA(n_components=2)
@@ -1217,6 +1228,9 @@ class BRepOptimizer:
         Bei Mesh-Daten sind Normalen oft ungenau, daher lockere Normalen-Checks.
         """
         if len(centroids) < 5:
+            return None
+
+        if not HAS_SKLEARN:
             return None
 
         try:

@@ -1,13 +1,13 @@
 
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from .base import Feature, FeatureType
 
 @dataclass
 class BooleanFeature(Feature):
     """
     Boolean-Feature für professionelle CAD-Operationen.
-
+    
     Unterützt Union (Join), Cut und Common (Intersect) mit:
     - BooleanEngineV4 Integration (Transaction Safety, Fail-Fast)
     - TNP v4.0 Shape-Tracking für verlässliche Referenzen
@@ -58,7 +58,7 @@ class BooleanFeature(Feature):
         }
         return op_map.get(self.operation, self.operation)
 
-    def validate(self) -> tuple[bool, str]:
+    def validate(self) -> Tuple[bool, str]:
         """
         Validiert das Boolean-Feature vor Ausführung.
 
