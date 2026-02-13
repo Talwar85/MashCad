@@ -310,7 +310,11 @@ class TextureGenerator:
             from PIL import Image
 
             img = Image.open(path).convert('L')  # Graustufen
-            img = img.resize((size, size), Image.BILINEAR)
+            try:
+                resampling = Image.Resampling.BILINEAR
+            except AttributeError:
+                resampling = Image.BILINEAR  # Fallback für ältere Pillow Versionen
+            img = img.resize((size, size), resampling)
             height = np.array(img, dtype=np.float32) / 255.0
 
             return height

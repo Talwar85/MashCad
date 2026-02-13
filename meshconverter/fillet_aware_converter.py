@@ -56,9 +56,14 @@ try:
 except ImportError:
     HAS_BUILD123D = False
 
-from scipy.sparse import lil_matrix
-from scipy.sparse.csgraph import connected_components
-from sklearn.cluster import AgglomerativeClustering
+try:
+    from scipy.sparse import lil_matrix
+    from scipy.sparse.csgraph import connected_components
+    from sklearn.cluster import AgglomerativeClustering
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+    logger.warning("Scipy/Sklearn nicht verfügbar (Mesh-Analyse eingeschränkt)")
 
 # Import from same package or fallback to direct import
 try:
@@ -296,6 +301,9 @@ class FilletAwareConverter:
 
     def _cluster_by_normal(self, cell_normals: np.ndarray, threshold_deg: float) -> dict:
         """Cluster faces by normal similarity."""
+        if not HAS_SCIPY:
+            return {0: set(range(len(cell_normals)))}
+
         clustering = AgglomerativeClustering(
             n_clusters=None,
             distance_threshold=1 - np.cos(np.radians(threshold_deg)),
@@ -311,6 +319,9 @@ class FilletAwareConverter:
     def _segment_faces(self, mesh, face_ids: Set[int], edge_to_faces: dict,
                        cell_normals: np.ndarray, angle_threshold: float) -> List[Set[int]]:
         """Segment faces into connected regions."""
+        if not HAS_SCIPY:
+            return [face_ids]
+
         if not face_ids:
             return []
 
@@ -556,23 +567,26 @@ class FilletAwareConverter:
                 return None
 
             # Create ordered boundary using convex hull
-            from scipy.spatial import ConvexHull
+            boundary_points = points
 
-            # Project to 2D for ordering
-            u = np.cross(normal, [0, 0, 1]) if abs(normal[2]) < 0.9 else np.cross(normal, [1, 0, 0])
-            u = u / np.linalg.norm(u)
-            v = np.cross(normal, u)
+            if HAS_SCIPY:
+                from scipy.spatial import ConvexHull
 
-            centered = points - centroid
-            points_2d = np.column_stack([np.dot(centered, u), np.dot(centered, v)])
+                # Project to 2D for ordering
+                u = np.cross(normal, [0, 0, 1]) if abs(normal[2]) < 0.9 else np.cross(normal, [1, 0, 0])
+                u = u / np.linalg.norm(u)
+                v = np.cross(normal, u)
 
-            try:
-                hull = ConvexHull(points_2d)
-                boundary_indices = hull.vertices
-                boundary_points = points[boundary_indices]
-            except Exception as e:
-                logger.debug(f"[meshconverter] Fehler: {e}")
-                boundary_points = points
+                centered = points - centroid
+                points_2d = np.column_stack([np.dot(centered, u), np.dot(centered, v)])
+
+                try:
+                    hull = ConvexHull(points_2d)
+                    boundary_indices = hull.vertices
+                    boundary_points = points[boundary_indices]
+                except Exception as e:
+                    logger.debug(f"[meshconverter] Fehler: {e}")
+                    boundary_points = points
 
             # Normalize normal
             normal = normal / (np.linalg.norm(normal) + 1e-10)

@@ -15,8 +15,14 @@ from typing import Optional, List, Dict, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from loguru import logger
-from scipy.optimize import minimize, least_squares
-from scipy.spatial import ConvexHull
+try:
+    from scipy.optimize import minimize, least_squares
+    from scipy.spatial import ConvexHull
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+    logger.warning("Scipy nicht verfügbar (Optimierung eingeschränkt)")
+
 from sklearn.decomposition import PCA
 
 try:
@@ -306,6 +312,9 @@ class PrimitiveDetector:
         """
         Verfeinert Zylinder-Fit via Levenberg-Marquardt.
         """
+        if not HAS_SCIPY:
+            return initial
+
         def residual(params):
             cx, cy, cz, ax, ay, az, r = params
             center = np.array([cx, cy, cz])

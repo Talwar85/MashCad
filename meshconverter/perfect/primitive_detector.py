@@ -149,6 +149,10 @@ class PrimitiveDetector:
 
         return primitives
 
+    def detect_all(self, mesh: 'pv.PolyData') -> List[DetectedPrimitive]:
+        """Alias for detect_primitives for compatibility."""
+        return self.detect_primitives(mesh)
+
     def _segment_by_normals(
         self,
         mesh: 'pv.PolyData'

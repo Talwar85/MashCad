@@ -55,6 +55,7 @@ class Sketch:
     _line_shape_uuids: Dict[str, str] = field(default_factory=dict)  # line.id -> shape_uuid
     _circle_shape_uuids: Dict[str, str] = field(default_factory=dict)  # circle.id -> shape_uuid
     _arc_shape_uuids: Dict[str, str] = field(default_factory=dict)     # arc.id -> shape_uuid
+    _spline_shape_uuids: Dict[str, str] = field(default_factory=dict)  # spline.id -> shape_uuid
 
     # Geometrie
     points: List[Point2D] = field(default_factory=list)

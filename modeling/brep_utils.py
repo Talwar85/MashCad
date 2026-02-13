@@ -1,5 +1,7 @@
 import numpy as np
-from build123d import *
+import numpy as np
+from build123d import Face, Vector
+from build123d import *  # Keep star import for other potential uses, but explicit import fixes pylint for used ones
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
 from OCP.gp import gp_Lin, gp_Pnt, gp_Dir
 from OCP.BRep import BRep_Tool
@@ -38,7 +40,7 @@ def pick_face_by_ray(solid_obj, ray_origin, ray_direction):
         if best_face_idx != -1:
             # Face wieder in Build123d Objekt wandeln
             ocp_face = intersector.Face(best_face_idx)
-            return Face(ocp_face), min_u
+            return Face(ocp_face), min_u # Face is imported from build123d
             
     return None, None
     
@@ -52,7 +54,7 @@ def find_closest_face(solid_obj, target_point, tolerance=2.0):
         return None
 
     # Sicherstellen, dass target_point ein Vektor ist
-    if not isinstance(target_point, Vector):
+    if not isinstance(target_point, Vector): # Vector is imported from build123d
         target_point = Vector(target_point)
 
     best_face = None

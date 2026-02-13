@@ -17,6 +17,7 @@ from sketching.core.result_types import (
     PartResult, AssemblyResult, BatchResult,
     MeshAnalysis, ReconstructionResult
 )
+from sketching.analysis.reconstruction_agent import ReconstructionAgent
 from modeling import Body, ExtrudeFeature, FilletFeature
 
 
@@ -61,6 +62,9 @@ class SketchAgent:
         # Statistiken
         self._parts_generated = 0
         self._parts_successful = 0
+        
+        # Viewport (optional, used by Visual subclass)
+        self.viewport = None
 
     def generate_part(
         self,

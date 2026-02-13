@@ -33,7 +33,7 @@ from typing import Dict
 FEATURE_FLAGS: Dict[str, bool] = {
     # Debug-Modi
     "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
-    "tnp_debug_logging": False,  # TNP v4.0 Shape-Tracking Debug (sehr verbose, nur in Tests aktivieren)
+    "tnp_debug_logging": True,  # TNP v4.0 Shape-Tracking Debug (sehr verbose, nur in Tests aktivieren)
     "sketch_debug": False,  # Sketch-Editor Debug ([Orientation], [PROFILE], [Auto-Align])
     "extrude_debug": False,  # Extrude Operation Debug ([EXTRUDE DEBUG], [SELECTOR])
     "viewport_debug": False,  # Viewport/Mesh Debug (Mesh regeneration, Actors)
