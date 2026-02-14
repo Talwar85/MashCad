@@ -4337,7 +4337,7 @@ class Body:
 
     def _register_extrude_shapes(self, feature: 'ExtrudeFeature', solid) -> None:
         """
-        TNP v4.0: Registriert alle Edges eines Extrude-Solids im NamingService.
+        TNP v4.0: Registriert alle Edges und Faces eines Extrude-Solids im NamingService.
         Wird nach erfolgreicher Extrusion aufgerufen.
         """
         if not self._document or not hasattr(self._document, '_shape_naming_service'):
@@ -4367,6 +4367,25 @@ class Body:
                 )
                 shape_ids.append(shape_id)
             
+            # Faces registrieren
+            face_count = 0
+            try:
+                from OCP.TopTools import TopTools_IndexedMapOfShape
+                from OCP.TopExp import TopExp
+                from OCP.TopoDS import TopoDS
+
+                solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+                face_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(solid_wrapped, TopAbs_FACE, face_map)
+
+                for fi in range(1, face_map.Extent() + 1):
+                    face = TopoDS.Face_s(face_map.FindKey(fi))
+                    service.register_shape(face, ShapeType.FACE, feature.id, fi - 1)
+                    face_count += 1
+            except Exception as e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: Extrude Face-Registrierung fehlgeschlagen: {e}")
+
             # Operation aufzeichnen
             service.record_operation(
                 OperationRecord(
@@ -4379,7 +4398,7 @@ class Body:
             )
             
             if is_enabled("tnp_debug_logging"):
-                logger.info(f"TNP v4.0: {len(shape_ids)} Edges für Extrude '{feature.name}' registriert")
+                logger.info(f"TNP v4.0: {len(shape_ids)} Edges, {face_count} Faces für Extrude '{feature.name}' registriert")
             
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
@@ -4387,7 +4406,7 @@ class Body:
 
     def _register_base_feature_edges(self, feature, solid) -> None:
         """
-        TNP v4.0: Registriert alle Edges eines neu erzeugten Solids fuer Basis-Features
+        TNP v4.0: Registriert alle Edges UND Faces eines neu erzeugten Solids fuer Basis-Features
         (Loft, Revolve, Sweep, Primitive, Import). Nur einmal pro Feature-ID.
         """
         if not self._document or not hasattr(self._document, '_shape_naming_service'):
@@ -4399,7 +4418,31 @@ class Body:
             service = self._document._shape_naming_service
             if service.get_shapes_by_feature(feature.id):
                 return
-            service.register_solid_edges(solid, feature.id)
+
+            # Edges registrieren
+            edge_count = service.register_solid_edges(solid, feature.id)
+
+            # Faces registrieren
+            face_count = 0
+            try:
+                from OCP.TopTools import TopTools_IndexedMapOfShape
+                from OCP.TopExp import TopExp
+                from OCP.TopoDS import TopoDS
+
+                solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+                face_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(solid_wrapped, TopAbs_FACE, face_map)
+
+                for i in range(1, face_map.Extent() + 1):
+                    face = TopoDS.Face_s(face_map.FindKey(i))
+                    service.register_shape(face, ShapeType.FACE, feature.id, i - 1)
+                    face_count += 1
+            except Exception as e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: Face-Registrierung fehlgeschlagen: {e}")
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Base-Feature '{feature.id[:8]}': {edge_count} Edges, {face_count} Faces registriert")
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
                 logger.debug(f"TNP v4.0: Base-Feature Registrierung fehlgeschlagen: {e}")
