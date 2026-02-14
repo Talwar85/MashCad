@@ -937,24 +937,24 @@ class Body:
 
                             # Alle Faces registrieren
                             try:
-                                from OCP.TopExp import TopExp_Explorer
-                                from OCP.TopAbs import TopAbs_FACE
+                                from OCP.TopTools import TopTools_IndexedMapOfShape
+                                from OCP.TopExp import TopExp
+                                from OCP.TopoDS import TopoDS
                                 from modeling.tnp_system import ShapeType
 
-                                face_idx = 0
-                                explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
-                                while explorer.More():
-                                    face_shape = explorer.Current()
+                                face_map = TopTools_IndexedMapOfShape()
+                                TopExp.MapShapes_s(solid.wrapped, TopAbs_FACE, face_map)
+
+                                for fi in range(1, face_map.Extent() + 1):
+                                    face_shape = TopoDS.Face_s(face_map.FindKey(fi))
                                     service.register_shape(
                                         ocp_shape=face_shape,
                                         shape_type=ShapeType.FACE,
                                         feature_id=feature_id,
-                                        local_index=face_idx
+                                        local_index=fi - 1
                                     )
-                                    face_idx += 1
-                                    explorer.Next()
 
-                                logger.info(f"  [TNP] {edge_count} Edges, {face_idx} Faces registriert")
+                                logger.info(f"  [TNP] {edge_count} Edges, {face_map.Extent()} Faces registriert")
                             except Exception as e:
                                 logger.debug(f"[TNP] Face-Registrierung fehlgeschlagen: {e}")
                 except Exception as e:
