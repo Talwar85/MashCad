@@ -355,6 +355,44 @@ class PrimitiveFeature(Feature):
         if not self.name or self.name == "Feature":
             self.name = f"Primitive: {self.primitive_type}"
 
+    def create_solid(self):
+        """Erstellt den Primitiv-Solid via direktes OCP (OpenCASCADE)."""
+        from OCP.BRepPrimAPI import (
+            BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder,
+            BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeCone
+        )
+        from OCP.gp import gp_Pnt
+        from build123d import Solid
+
+        p = self.parameters
+        t = self.primitive_type.lower()
+        try:
+            if t == "box":
+                builder = BRepPrimAPI_MakeBox(
+                    p.get("length", 10), p.get("width", 10), p.get("height", 10)
+                )
+            elif t == "cylinder":
+                builder = BRepPrimAPI_MakeCylinder(
+                    p.get("radius", 5), p.get("height", 10)
+                )
+            elif t == "sphere":
+                builder = BRepPrimAPI_MakeSphere(p.get("radius", 5))
+            elif t == "cone":
+                builder = BRepPrimAPI_MakeCone(
+                    p.get("bottom_radius", 5), p.get("top_radius", 0), p.get("height", 10)
+                )
+            else:
+                return None
+
+            builder.Build()
+            if not builder.IsDone():
+                return None
+            return Solid(builder.Shape())
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"PrimitiveFeature.create_solid({t}) OCP failed: {e}")
+            return None
+
 @dataclass
 class LatticeFeature(Feature):
     """

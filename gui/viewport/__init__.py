@@ -7,6 +7,7 @@ from .extrude_mixin import ExtrudeMixin
 from .picking_mixin import PickingMixin
 from .body_mixin import BodyRenderingMixin
 from .brep_cleanup_mixin import BRepCleanupMixin
+from .stl_feature_mixin import STLFeatureMixin
 from .render_queue import RenderQueue, request_render
 
 # V3: Full Feature (Move/Rotate/Scale/Copy/Mirror) - AKTIV
@@ -20,6 +21,7 @@ TransformController = FullTransformController
 
 __all__ = [
     'ExtrudeMixin', 'PickingMixin', 'BodyRenderingMixin', 'BRepCleanupMixin',
+    'STLFeatureMixin',
     'TransformMixin', 'TransformGizmo', 'TransformController',
     'TransformMixinV3', 'FullTransformGizmo', 'FullTransformController', 'TransformMode'
 ]

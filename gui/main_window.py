@@ -6849,6 +6849,27 @@ class MainWindow(QMainWindow):
              # Body-Referenz setzen und Texture-Preview aktualisieren
              self.viewport_3d.set_body_object(body.id, body)
              self.viewport_3d.refresh_texture_previews(body.id)
+
+             # SelectionFaces für diesen Body aktualisieren, damit
+             # Picking nach Topology-Änderungen (z.B. Hole) korrekt
+             # die neuen Faces findet.
+             if hasattr(self.viewport_3d, 'detector'):
+                 det = self.viewport_3d.detector
+                 # Alte Faces für diesen Body entfernen
+                 det.selection_faces = [
+                     f for f in det.selection_faces
+                     if not (f.domain_type == "body_face" and f.owner_id == body.id)
+                 ]
+                 # Cache für diesen Body löschen
+                 if body.id in det._body_face_cache:
+                     del det._body_face_cache[body.id]
+                 # Neue Faces registrieren
+                 face_info = getattr(body, 'face_info', None)
+                 det.process_body_mesh(
+                     body.id, body.vtk_mesh,
+                     extrude_mode=getattr(self.viewport_3d, 'extrude_mode', False),
+                     face_info=face_info
+                 )
              return
 
         # 3. LEGACY PFAD: Alte Listen (nur Fallback)
