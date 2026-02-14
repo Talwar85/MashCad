@@ -320,23 +320,117 @@ class STLFeatureAnalyzer:
     
     def _detect_base_plane(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
         """
-        Detects the most likely base plane (Z=0 usually).
-        Uses RANSAC if available, otherwise fallback to 6-sided bounding box logic.
+        Detects the base plane (bottom or top face with largest area).
+        
+        For parts like V1.stl: Finds the large rectangular face at the bottom/top,
+        not side faces. Returns exact contour from mesh.
         """
-        # 1. Option: RANSAC (Robuster gegen Noise & Rundungen)
-        if HAS_SKLEARN:
-            ransac_plane = self._detect_plane_ransac(mesh)
-            if ransac_plane:
-                logger.info(f"RANSAC Plane found: {ransac_plane.area:.0f}mm², normal={ransac_plane.normal}")
-                return ransac_plane
-
-        # 2. Option: 6-Sided Logic (Legacy/Fallback)
-        # Compute face normals and centers
-        if not mesh.n_faces:
-            return None
+        try:
+            import pyvista as pv
             
-        existing_plane = self._detect_base_plane_legacy(mesh)
-        return existing_plane
+            # Get mesh bounds
+            bounds = mesh.bounds
+            min_x, max_x = bounds[0], bounds[1]
+            min_y, max_y = bounds[2], bounds[3]
+            min_z, max_z = bounds[4], bounds[5]
+            
+            # Calculate dimensions
+            dim_x = max_x - min_x
+            dim_y = max_y - min_y  
+            dim_z = max_z - min_z
+            
+            # Determine which dimension is smallest (thickness direction)
+            # The base planes are perpendicular to this direction
+            dims = [(dim_x, 'x'), (dim_y, 'y'), (dim_z, 'z')]
+            dims.sort(key=lambda x: x[0])
+            
+            # The base plane is perpendicular to the smallest dimension
+            thickness_dir = dims[0][1]
+            logger.info(f"Detected thickness direction: {thickness_dir}")
+            
+            # Get face centers and normals
+            centers = mesh.cell_centers().points
+            normals = mesh.cell_normals
+            
+            # Find faces at bottom and top of thickness direction
+            if thickness_dir == 'z':
+                bottom_z = min_z + dim_z * 0.1  # Bottom 10%
+                top_z = max_z - dim_z * 0.1     # Top 10%
+                
+                # Find faces at bottom (normal pointing down)
+                bottom_faces = []
+                for i, (center, normal) in enumerate(zip(centers, normals)):
+                    if center[2] < bottom_z and normal[2] < -0.8:  # Normal points down
+                        bottom_faces.append(i)
+                
+                # Find faces at top (normal pointing up)  
+                top_faces = []
+                for i, (center, normal) in enumerate(zip(centers, normals)):
+                    if center[2] > top_z and normal[2] > 0.8:  # Normal points up
+                        top_faces.append(i)
+                
+                # Choose the one with more faces (usually the machined/base side)
+                if len(bottom_faces) > len(top_faces):
+                    face_indices = bottom_faces
+                    normal = (0, 0, -1)
+                    origin = (0, 0, min_z)
+                else:
+                    face_indices = top_faces
+                    normal = (0, 0, 1)
+                    origin = (0, 0, max_z)
+                    
+            elif thickness_dir == 'x':
+                # Similar logic for X-thickness
+                bottom_x = min_x + dim_x * 0.1
+                bottom_faces = []
+                for i, (center, normal) in enumerate(zip(centers, normals)):
+                    if center[0] < bottom_x and normal[0] < -0.8:
+                        bottom_faces.append(i)
+                
+                face_indices = bottom_faces
+                normal = (-1, 0, 0)
+                origin = (min_x, 0, 0)
+                
+            else:  # thickness_dir == 'y'
+                bottom_y = min_y + dim_y * 0.1
+                bottom_faces = []
+                for i, (center, normal) in enumerate(zip(centers, normals)):
+                    if center[1] < bottom_y and normal[1] < -0.8:
+                        bottom_faces.append(i)
+                
+                face_indices = bottom_faces
+                normal = (0, -1, 0)
+                origin = (0, min_y, 0)
+            
+            if not face_indices:
+                logger.warning("No base plane faces found, using fallback")
+                return self._detect_base_plane_legacy(mesh)
+            
+            # Calculate area from face sizes
+            areas = mesh.compute_cell_sizes()["Area"]
+            total_area = np.sum([areas[i] for i in face_indices])
+            
+            # Calculate centroid
+            face_centers = [centers[i] for i in face_indices]
+            origin = tuple(np.mean(face_centers, axis=0))
+            
+            plane = PlaneInfo(
+                origin=origin,
+                normal=normal,
+                area=float(total_area),
+                face_indices=face_indices,
+                confidence=0.85,  # High confidence for this method
+                detection_method="bounding_box_base"
+            )
+            
+            logger.info(f"Base plane detected: {len(face_indices)} faces, "
+                       f"area={total_area:.2f}mm², normal={normal}")
+            
+            return plane
+            
+        except Exception as e:
+            logger.error(f"Base plane detection failed: {e}")
+            return self._detect_base_plane_legacy(mesh)
 
     def _detect_plane_ransac(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
         """
