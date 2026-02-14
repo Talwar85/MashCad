@@ -72,6 +72,7 @@ class ContourInfo:
     bounding_box: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)  # (min_x, max_x, min_y, max_y)
     equivalent_radius: float = 0.0
     aspect_ratio: float = 0.0
+    has_holes: bool = False  # NEW: True wenn Kontur Löcher enthält (z.B. Rechteck mit Loch)
 
 
 @dataclass
@@ -433,6 +434,9 @@ class VisualMeshAnalyzer:
                         centroid = poly.centroid.coords[0]
                         x, y = zip(*exterior_coords)
 
+                        # Check for interiors (holes) - filter them out
+                        has_holes = hasattr(poly, 'interiors') and len(poly.interiors) > 0
+
                         contours.append(ContourInfo(
                             points=points_2d,
                             area=float(area),
@@ -440,6 +444,7 @@ class VisualMeshAnalyzer:
                             centroid=centroid,
                             is_closed=True,
                             bounding_box=(min(x), max(x), min(y), max(y)),
+                            has_holes=has_holes,  # NEW: Track holes in contour
                         ))
 
             except Exception as e:
@@ -810,10 +815,20 @@ def detect_base_plane_visual(mesh) -> Optional[Dict[str, Any]]:
     rect = analyzer._detect_min_area_rect(dominant_proj)
 
     if rect is None:
-        # Fallback: Convex Hull
+        # Fallback: Convex Hull / Alpha Shape
         contours = result["contours"].get(dominant_proj.name, [])
         if contours:
-            outer_contour = max(contours, key=lambda c: c.area)
+            # IMPORTANT: Filter out contours WITH holes!
+            # A rectangle with a hole has has_holes=True - we want the SOLID base plane
+            # Priority: 1) No holes (solid), 2) Largest area
+            solid_contours = [c for c in contours if not c.has_holes]
+            if solid_contours:
+                outer_contour = max(solid_contours, key=lambda c: c.area)
+                logger.info(f"Visual detection: Using SOLID contour (area={outer_contour.area:.0f}mm²)")
+            else:
+                # All contours have holes - take largest but warn
+                outer_contour = max(contours, key=lambda c: c.area)
+                logger.warning(f"Visual detection: All contours have holes! Taking largest (area={outer_contour.area:.0f}mm²)")
             boundary_points = analyzer.backproject_contour_to_3d(outer_contour, dominant_proj)
         else:
             boundary_points = []

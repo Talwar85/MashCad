@@ -17,6 +17,8 @@ from loguru import logger
 
 from sketching.core.result_types import ReconstructionResult, PartResult, MeshAnalysis
 from sketching.analysis.mesh_analyzer import MeshAnalyzer, ReconstructionStep
+from sketching.analysis.visual_mesh_analyzer import VisualMeshAnalyzer
+from sketching.analysis.cross_validator import FeatureCrossValidator
 
 
 class ReconstructionAgent:
@@ -205,6 +207,280 @@ class ReconstructionAgent:
                 duration_ms=duration_ms,
                 error=str(e)
             )
+
+    def reconstruct_from_mesh_visual(
+        self,
+        mesh_path: str,
+        interactive: bool = True,
+        analysis: Optional[MeshAnalysis] = None
+    ) -> ReconstructionResult:
+        """
+        Rekonstruiert CAD aus Mesh mit visuellen Algorithmen.
+
+        Verwendet:
+        1. VisualMeshAnalyzer für 2D-Projektionen und Kontur-Extraktion
+        2. Cross-Validation für Methoden-Vergleich
+        3. Echte Tiefe durch Ray-Casting (kein Raten!)
+
+        Args:
+            mesh_path: Pfad zur STL/OBJ Datei
+            interactive: Ob User zuschauen kann
+            analysis: Optional vor-analysiertes Mesh
+
+        Returns:
+            ReconstructionResult mit cross-validated features
+        """
+        start_time = time.time()
+        steps = []
+        solid = None
+        current_sketch = None
+
+        try:
+            logger.info(f"[VisualReconstruction] Analysiere mit visuellen Methoden: {mesh_path}")
+
+            # 1. Visual Mesh Analyzer erstellen
+            visual_analyzer = VisualMeshAnalyzer()
+            cross_validator = FeatureCrossValidator()
+
+            # Mesh laden
+            import pyvista as pv
+            mesh = pv.read(mesh_path)
+
+            # 2. Visuelle Analyse durchführen
+            if self.on_progress:
+                self.on_progress(0.1, "Erstelle 2D-Projektionen...")
+
+            self._notify("Starte visuelle Analyse...")
+
+            # 2D-Projektionen erstellen
+            projections = visual_analyzer.create_2d_projections(mesh)
+
+            if self.on_progress:
+                self.on_progress(0.2, "Extrahiere Konturen...")
+
+            # Konturen extrahieren
+            contours = visual_analyzer.extract_contours_from_all_projections()
+
+            # Base Plane mit visueller Methode
+            if self.on_progress:
+                self.on_progress(0.3, "Erkenne Base Plane (visuell)...")
+
+            base_plane_visual = visual_analyzer.detect_base_plane_visual(mesh)
+
+            # Alpha Shape für Vergleich
+            base_plane_alpha = visual_analyzer.detect_base_plane_alpha_shape(mesh)
+
+            # 3. Cross-Validation für Base Plane
+            if self.on_progress:
+                self.on_progress(0.4, "Cross-Validiere Base Plane...")
+
+            base_plane_validation = cross_validator.validate_base_plane(
+                mesh=mesh,
+                visual_result=base_plane_visual,
+                alpha_result=base_plane_alpha
+            )
+
+            logger.info(f"[VisualReconstruction] Base Plane Confidence: {base_plane_validation.final_confidence:.2f}")
+
+            # 4. Löcher mit Ray-Casting (echte Tiefe!)
+            if self.on_progress:
+                self.on_progress(0.5, "Erkenne Löcher mit Ray-Casting...")
+
+            holes_visual = visual_analyzer.detect_holes_ray_cast(mesh, base_plane_visual)
+
+            # 5. Cross-Validation für Löcher
+            if self.on_progress:
+                self.on_progress(0.6, "Cross-Validiere Löcher...")
+
+            holes_validation = cross_validator.validate_hole(
+                mesh=mesh,
+                visual_result=holes_visual,
+                base_plane=base_plane_visual
+            )
+
+            logger.info(f"[VisualReconstruction] Hole Confidence: {holes_validation.final_confidence:.2f}")
+
+            # 6. Schritte aus cross-validated results planen
+            if self.on_progress:
+                self.on_progress(0.7, "Plane Rekonstruktion...")
+
+            step_data_list = self._convert_validated_results_to_steps(
+                base_plane_validation,
+                holes_validation
+            )
+
+            # 7. Schritte ausführen
+            step_id = 0
+            total_steps = len(step_data_list)
+
+            for step_data in step_data_list:
+                if isinstance(step_data, dict):
+                    step = ReconstructionStep(**step_data)
+                else:
+                    step = step_data
+
+                if self.on_step_start:
+                    self.on_step_start(step)
+
+                self._notify(f"Schritt {step_id + 1}/{total_steps}: {step.description}")
+
+                result = self._execute_step_with_context(
+                    step,
+                    sketch=current_sketch,
+                    solid=solid
+                )
+
+                if step.operation == "create_profile" and result is not None:
+                    current_sketch = result
+                elif step.operation == "extrude" and result is not None:
+                    solid = result
+                    current_sketch = None
+                elif step.operation == "fillet" and result is not None:
+                    solid = result
+
+                if result:
+                    steps.append(step)
+
+                    if self.on_step_complete:
+                        self.on_step_complete(step, result)
+
+                progress = 0.7 + (0.3 * (step_id + 1) / total_steps)
+                if self.on_progress:
+                    self.on_progress(progress, f"Schritt {step_id + 1}/{total_steps}")
+
+                if self.slow_mode:
+                    time.sleep(self.step_delay)
+
+                step_id += 1
+
+            duration_ms = (time.time() - start_time) * 1000
+
+            return ReconstructionResult(
+                success=solid is not None,
+                solid=solid,
+                analysis=analysis,
+                executed_steps=[s.to_dict() for s in steps],
+                duration_ms=duration_ms,
+                error=None if solid is not None else "Visuelle Rekonstruktion ohne Solid-Ergebnis"
+            )
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"[VisualReconstruction] Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+            return ReconstructionResult(
+                success=False,
+                solid=None,
+                analysis=MeshAnalysis([], [], {}, {}, 0),
+                executed_steps=[],
+                duration_ms=duration_ms,
+                error=str(e)
+            )
+
+    def _convert_validated_results_to_steps(
+        self,
+        base_plane_validation,
+        holes_validation
+    ) -> List[dict]:
+        """
+        Konvertiert cross-validierte Ergebnisse in ReconstructionSteps.
+        """
+        steps = []
+        step_id = 0
+
+        # Base Plane aus merged result
+        if base_plane_validation.merged_result:
+            base_plane = base_plane_validation.merged_result
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_plane",
+                "description": f"Base-Plane (Cross-Validated, Confidence: {base_plane_validation.final_confidence:.2f})",
+                "params": {"plane": base_plane}
+            })
+            step_id += 1
+
+            # Base Profile
+            if hasattr(base_plane, 'boundary_points') and base_plane.boundary_points:
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_profile",
+                    "description": f"Base-Profil (visuell, {len(base_plane.boundary_points)} Punkte)",
+                    "params": {
+                        "type": "polygon",
+                        "points": base_plane.boundary_points,
+                        "plane_origin": base_plane.origin,
+                        "plane_normal": base_plane.normal
+                    }
+                })
+            else:
+                # Fallback: Rechteck
+                size = (base_plane.area ** 0.5) if hasattr(base_plane, 'area') else 20
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_profile",
+                    "description": "Base-Profil (Rechteck Fallback)",
+                    "params": {
+                        "type": "rectangle",
+                        "width": size,
+                        "height": size,
+                        "center": (0, 0),
+                        "plane_origin": base_plane.origin,
+                        "plane_normal": base_plane.normal
+                    }
+                })
+            step_id += 1
+
+            # Extrude Base
+            depth = 10.0
+            if holes_validation.merged_result:
+                depth = max(depth, holes_validation.merged_result.depth * 1.5)
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Extrudiere Base: {depth:.1f}mm",
+                "params": {
+                    "distance": depth,
+                    "operation": "New Body"
+                }
+            })
+            step_id += 1
+
+        # Löcher aus merged result
+        if holes_validation.merged_result:
+            hole = holes_validation.merged_result
+            i = 0
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_profile",
+                "description": f"Hole (Ray-Cast Tiefe: {hole.depth:.1f}mm, r={hole.radius:.1f}mm)",
+                "params": {
+                    "type": "circle",
+                    "radius": hole.radius,
+                    "center": (0, 0),
+                    "plane_origin": hole.center,
+                    "plane_normal": hole.axis
+                }
+            })
+            step_id += 1
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Hole Cut (echte Tiefe, d={hole.depth:.1f}mm)",
+                "params": {
+                    "distance": hole.depth,
+                    "operation": "Cut"
+                }
+            })
+            step_id += 1
+            i += 1
+
+        return steps
 
     def _execute_step(self, step: ReconstructionStep) -> Optional[Any]:
         """
