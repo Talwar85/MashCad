@@ -56,8 +56,19 @@ from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
+from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
+
+# STL Reconstruction (TNP-Exempt)
+try:
+    from sketching.analysis.mesh_quality_checker import MeshQualityChecker, check_mesh_quality
+    from sketching.analysis.stl_feature_analyzer import STLFeatureAnalyzer, analyze_stl
+    from sketching.reconstruction.mesh_reconstructor import MeshReconstructor, reconstruct_from_analysis
+    HAS_STL_RECONSTRUCTION = True
+except ImportError as e:
+    HAS_STL_RECONSTRUCTION = False
+    logger.warning(f"STL Reconstruction module not available: {e}")
 
 try:
     from ocp_tessellate.tessellator import tessellate
@@ -1066,6 +1077,171 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Import fehlgeschlagen: {e}")
     
+    def _on_stl_to_cad(self):
+        """
+        STL to CAD Reconstruction Workflow.
+        
+        1. Select STL file
+        2. Mesh Quality Check
+        3. Feature Analysis
+        4. Show Reconstruction Panel
+        5. User review and reconstruct
+        """
+        if not HAS_STL_RECONSTRUCTION:
+            QMessageBox.warning(
+                self,
+                "Not Available",
+                "STL Reconstruction module is not available.\n"
+                "Please check the installation."
+            )
+            return
+        
+        # 1. File Dialog
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select STL for CAD Reconstruction",
+            "",
+            "STL Files (*.stl);;All Files (*.*)"
+        )
+        
+        if not path:
+            return
+        
+        try:
+            logger.info(f"Starting STL to CAD reconstruction for: {path}")
+            
+            # 2. Mesh Quality Check
+            self.statusBar().showMessage("Checking mesh quality...")
+            quality_report = check_mesh_quality(path, auto_repair=True, auto_decimate=True)
+            
+            if quality_report.recommended_action == "reject":
+                QMessageBox.critical(
+                    self,
+                    "Invalid Mesh",
+                    f"Mesh quality check failed:\n{', '.join(quality_report.warnings)}"
+                )
+                return
+            
+            logger.info(f"Mesh quality: {quality_report.recommended_action}, "
+                       f"{quality_report.face_count} faces")
+            
+            # 3. Feature Analysis
+            self.statusBar().showMessage("Analyzing features...")
+            analyzer = STLFeatureAnalyzer()
+            analysis = analyzer.analyze(path)
+            
+            if not analysis.base_plane and not analysis.holes:
+                QMessageBox.warning(
+                    self,
+                    "No Features Detected",
+                    "Could not detect any CAD features in the mesh.\n"
+                    "The mesh may be too complex or not contain recognizable features."
+                )
+                return
+            
+            logger.info(f"Analysis complete: {len(analysis.holes)} holes, "
+                       f"confidence={analysis.overall_confidence:.2f}")
+            
+            # 4. Show Reconstruction Panel
+            self._show_reconstruction_panel(path, analysis, quality_report)
+            
+        except Exception as e:
+            logger.error(f"STL to CAD failed: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"STL to CAD reconstruction failed:\n{str(e)}"
+            )
+    
+    def _show_reconstruction_panel(self, mesh_path: str, analysis, quality_report):
+        """
+        Show the STL Reconstruction Panel with analysis results.
+        
+        Args:
+            mesh_path: Path to STL file
+            analysis: STLFeatureAnalysis
+            quality_report: MeshQualityReport
+        """
+        try:
+            # Create panel
+            panel = STLReconstructionPanel(self)
+            panel.set_analysis(analysis, quality_report)
+            
+            # Connect signals
+            panel.reconstruct_requested.connect(
+                lambda: self._start_stl_reconstruction(panel, analysis)
+            )
+            
+            # Show as dialog
+            from PySide6.QtWidgets import QDialog, QVBoxLayout
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("STL to CAD Reconstruction")
+            dialog.setMinimumSize(500, 700)
+            
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(panel)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            logger.error(f"Failed to show reconstruction panel: {e}")
+            raise
+    
+    def _start_stl_reconstruction(self, panel, analysis):
+        """
+        Start the actual reconstruction process.
+        
+        Args:
+            panel: STLReconstructionPanel instance
+            analysis: STLFeatureAnalysis
+        """
+        try:
+            logger.info("Starting reconstruction...")
+            
+            # Create reconstructor
+            reconstructor = MeshReconstructor(
+                document=self.document,
+                use_tnp=False  # TNP-Exempt for stability
+            )
+            
+            # Progress callback
+            def progress_callback(percent, message):
+                panel.update_progress(percent)
+                panel.set_status(message)
+                QApplication.processEvents()  # Keep UI responsive
+            
+            reconstructor.set_progress_callback(progress_callback)
+            
+            # Run reconstruction
+            result = reconstructor.reconstruct(analysis)
+            
+            if result.success:
+                # Refresh viewport and browser
+                self._update_viewport_all()
+                self.browser.refresh()
+                
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Reconstruction complete!\n"
+                    f"Created {len(result.created_features)} features."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Reconstruction Failed",
+                    f"Failed to reconstruct CAD:\n{result.message}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Reconstruction error: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Reconstruction failed:\n{str(e)}"
+            )
+    
     def _update_viewport_all_impl(self):
         """
         Das eigentliche Update, wird vom Timer aufgerufen.
@@ -1266,6 +1442,7 @@ class MainWindow(QMainWindow):
             'offset_plane': self._start_offset_plane,
             'extrude': self._extrude_dialog,
             'import_mesh': self._import_mesh_dialog,
+            'stl_to_cad': self._on_stl_to_cad,
             'export_stl': self._export_stl,
             'export_step': self._export_step,
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),

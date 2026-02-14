@@ -228,6 +228,7 @@ class ToolPanel3D(QWidget):
         # --- File ---
         self._add_group(tr("File"), [
             (tr("Import Mesh"), tr("Load STL, OBJ, PLY file\nSelect file in dialog\nMesh appears in viewport"), "import_mesh"),
+            (tr("STL to CAD..."), tr("Convert STL to parametric CAD\nAnalyzes features, creates editable sketches\nReconstructs hole features automatically"), "stl_to_cad"),
             (tr("Convert Mesh to CAD"), tr("Convert mesh to parametric solid\nSelect: mesh body\nEnables CAD operations on imported meshes"), "convert_to_brep"),
             (tr("Export STL..."), tr("Export body as STL for 3D printing\nSelect: body or export all\nChoose resolution in dialog"), "export_stl"),
             (tr("Export STEP..."), tr("Export as STEP for CAD exchange\nIndustry-standard format\nPreserves parametric data"), "export_step"),

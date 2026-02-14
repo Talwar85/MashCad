@@ -4404,7 +4404,7 @@ class Body:
             if is_enabled("tnp_debug_logging"):
                 logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
 
-    def _register_base_feature_edges(self, feature, solid) -> None:
+    def _register_base_feature_shapes(self, feature, solid) -> None:
         """
         TNP v4.0: Registriert alle Edges UND Faces eines neu erzeugten Solids fuer Basis-Features
         (Loft, Revolve, Sweep, Primitive, Import). Nur einmal pro Feature-ID.
@@ -4960,7 +4960,7 @@ class Body:
                     new_solid = base_solid
                     logger.info(f"PrimitiveFeature: {feature.primitive_type} erstellt")
                     if current_solid is None:
-                        self._register_base_feature_edges(feature, new_solid)
+                        self._register_base_feature_shapes(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"PrimitiveFeature: Erstellung fehlgeschlagen")
@@ -4973,7 +4973,7 @@ class Body:
                     new_solid = base_solid
                     logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
                     if current_solid is None:
-                        self._register_base_feature_edges(feature, new_solid)
+                        self._register_base_feature_shapes(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"ImportFeature: Konnte BREP nicht laden")
@@ -5231,7 +5231,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5259,7 +5259,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5287,7 +5287,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
