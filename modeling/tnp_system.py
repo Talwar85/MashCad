@@ -2628,6 +2628,105 @@ class ShapeNamingService:
             traceback.print_exc()
             return None
 
+    def track_draft_operation(
+        self,
+        feature_id: str,
+        source_solid: Any,
+        result_solid: Any,
+        occt_history: Optional[Any] = None,
+        angle: float = 0.0,
+    ) -> Optional[OperationRecord]:
+        """
+        TNP v4.0: Trackt eine BRepOffsetAPI_DraftAngle Operation.
+        
+        Draft modifiziert Faces. Wir tracken Modified() und Generated().
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+            
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Tracke Draft Operation '{feature_id}'")
+
+            manual_mappings: Dict[str, List[str]] = {}
+            new_shape_ids: List[ShapeID] = []
+
+            # Kernel-first: OCCT History
+            if occt_history is not None:
+                # Iterate known FACES
+                for uuid, record in list(self._shapes.items()):
+                    if record.shape_id.shape_type != ShapeType.FACE:
+                        continue
+                    if record.ocp_shape is None:
+                        continue
+                        
+                    # Prüfe ob Face im Source-Solid (optional, Draft modifiziert eh nur selektierte)
+                    if not self._shape_exists_in_solid(record.ocp_shape, source_solid):
+                        continue
+
+                    modified_shapes = self._history_outputs_for_shape(occt_history, record.ocp_shape)
+                    
+                    if modified_shapes:
+                        input_shape_id = record.shape_id
+                        output_uuids = []
+                        
+                        for mod_shape in modified_shapes:
+                            # 1. Update existing ID if possible
+                            existing_id = self._find_exact_shape_id_by_ocp_shape(mod_shape)
+                            if existing_id:
+                                output_uuids.append(existing_id.uuid)
+                                if existing_id not in new_shape_ids:
+                                    new_shape_ids.append(existing_id)
+                            else:
+                                # 2. Update Geometry of existing ID
+                                if self.update_shape_id_after_operation(
+                                    old_shape=record.ocp_shape,
+                                    new_shape=mod_shape,
+                                    feature_id=feature_id,
+                                    operation_type=f"draft_{feature_id}"
+                                ):
+                                    output_uuids.append(record.shape_id.uuid)
+                                    if record.shape_id not in new_shape_ids:
+                                        new_shape_ids.append(record.shape_id)
+                                else:
+                                    # 3. Register New
+                                    new_id = self.register_shape(
+                                        ocp_shape=mod_shape,
+                                        shape_type=ShapeType.FACE,
+                                        feature_id=feature_id,
+                                        local_index=len(new_shape_ids)
+                                    )
+                                    new_shape_ids.append(new_id)
+                                    output_uuids.append(new_id.uuid)
+                        
+                        if output_uuids:
+                            manual_mappings[input_shape_id.uuid] = output_uuids
+
+            # OperationRecord
+            op_record = OperationRecord(
+                operation_type="DRAFT",
+                feature_id=feature_id,
+                input_shape_ids=[sid for sid in self._shapes.values() if sid.shape_id.uuid in manual_mappings],
+                output_shape_ids=new_shape_ids,
+                occt_history=occt_history,
+                manual_mappings=manual_mappings,
+                metadata={"angle": angle}
+            )
+            self.record_operation(op_record)
+            
+            # Edges registrieren (die sich vllt geändert haben)
+            self._register_unmapped_edges(result_solid, feature_id, existing_mappings=[])
+            
+            return op_record
+
+        except Exception as e:
+            logger.error(f"TNP Draft Tracking failed: {e}")
+            return None
+
     def track_sketch_extrude(
         self,
         feature_id: str,

@@ -1157,36 +1157,239 @@ class MainWindow(QMainWindow):
         """
         Show the STL Reconstruction Panel with analysis results.
         
+        Also loads the STL mesh into viewport for visual reference
+        and connects feature selection to viewport highlighting.
+        
         Args:
             mesh_path: Path to STL file
             analysis: STLFeatureAnalysis
             quality_report: MeshQualityReport
         """
         try:
-            # Create panel
+            import pyvista as pv
+            
+            # 1. Load and display STL mesh in viewport (semi-transparent)
+            mesh = pv.read(mesh_path)
+            
+            # Remove existing STL preview if any
+            if hasattr(self, '_stl_preview_actor'):
+                try:
+                    self.viewport_3d.plotter.remove_actor(self._stl_preview_actor)
+                except:
+                    pass
+            
+            # Add mesh with transparency for reference
+            self._stl_preview_actor = self.viewport_3d.plotter.add_mesh(
+                mesh,
+                color='lightgray',
+                opacity=0.3,
+                show_edges=True,
+                edge_color='darkgray',
+                line_width=0.5,
+                name='stl_preview'
+            )
+            
+            # Add feature preview actors (cylinders for holes, etc.)
+            self._stl_feature_actors = []
+            self._add_feature_previews(analysis)
+            
+            # 2. Create panel
             panel = STLReconstructionPanel(self)
             panel.set_analysis(analysis, quality_report)
             
-            # Connect signals
+            # 3. Connect signals
             panel.reconstruct_requested.connect(
                 lambda: self._start_stl_reconstruction(panel, analysis)
             )
             
-            # Show as dialog
+            # Connect feature selection to viewport highlighting
+            panel.feature_selected.connect(
+                lambda ftype, idx: self._highlight_stl_feature(analysis, ftype, idx)
+            )
+            
+            # 4. Show as dialog (non-modal to keep viewport interactive)
             from PySide6.QtWidgets import QDialog, QVBoxLayout
             
             dialog = QDialog(self)
             dialog.setWindowTitle("STL to CAD Reconstruction")
             dialog.setMinimumSize(500, 700)
+            dialog.setModal(False)  # Non-modal
             
             layout = QVBoxLayout(dialog)
             layout.addWidget(panel)
             
-            dialog.exec()
+            # Cleanup when dialog closes
+            dialog.finished.connect(lambda: self._cleanup_stl_preview())
+            
+            dialog.show()  # Use show() instead of exec() for non-modal
+            self._reconstruction_dialog = dialog  # Keep reference
             
         except Exception as e:
             logger.error(f"Failed to show reconstruction panel: {e}")
             raise
+    
+    def _add_feature_previews(self, analysis):
+        """Add preview geometry for detected features."""
+        try:
+            import pyvista as pv
+            
+            # Preview holes as translucent cylinders
+            for i, hole in enumerate(analysis.holes):
+                # Create cylinder for hole
+                cylinder = pv.Cylinder(
+                    center=hole.center,
+                    direction=hole.axis,
+                    radius=hole.radius,
+                    height=hole.depth * 1.2  # Slightly longer
+                )
+                
+                # Color based on confidence
+                if hole.confidence >= 0.9:
+                    color = 'green'
+                elif hole.confidence >= 0.7:
+                    color = 'blue'
+                elif hole.confidence >= 0.5:
+                    color = 'orange'
+                else:
+                    color = 'red'
+                
+                actor = self.viewport_3d.plotter.add_mesh(
+                    cylinder,
+                    color=color,
+                    opacity=0.4,
+                    show_edges=False,
+                    name=f'hole_preview_{i}'
+                )
+                self._stl_feature_actors.append(actor)
+            
+            # Preview base plane
+            if analysis.base_plane:
+                # Create a plane representation
+                plane_center = analysis.base_plane.origin
+                plane_normal = analysis.base_plane.normal
+                
+                # Create a disk/plane visualization
+                disk = pv.Disc(
+                    center=plane_center,
+                    normal=plane_normal,
+                    inner=0,
+                    outer=np.sqrt(analysis.base_plane.area / np.pi) if analysis.base_plane.area > 0 else 10
+                )
+                
+                actor = self.viewport_3d.plotter.add_mesh(
+                    disk,
+                    color='green',
+                    opacity=0.2,
+                    show_edges=True,
+                    line_width=2,
+                    name='base_plane_preview'
+                )
+                self._stl_feature_actors.append(actor)
+            
+            logger.info(f"Added {len(self._stl_feature_actors)} feature previews to viewport")
+            
+        except Exception as e:
+            logger.warning(f"Failed to add feature previews: {e}")
+    
+    def _highlight_stl_feature(self, analysis, feature_type: str, index: int):
+        """Highlight a feature in the viewport when selected in panel."""
+        try:
+            import pyvista as pv
+            
+            # Remove previous highlight
+            if hasattr(self, '_highlight_actor'):
+                try:
+                    self.viewport_3d.plotter.remove_actor(self._highlight_actor)
+                except:
+                    pass
+            
+            # Create highlight geometry based on feature type
+            if feature_type == "hole" and index < len(analysis.holes):
+                hole = analysis.holes[index]
+                
+                # Create highlighted cylinder
+                highlight_cyl = pv.Cylinder(
+                    center=hole.center,
+                    direction=hole.axis,
+                    radius=hole.radius * 1.05,  # Slightly larger
+                    height=hole.depth * 1.3
+                )
+                
+                self._highlight_actor = self.viewport_3d.plotter.add_mesh(
+                    highlight_cyl,
+                    color='yellow',
+                    opacity=0.6,
+                    show_edges=True,
+                    edge_color='white',
+                    line_width=3,
+                    name='feature_highlight'
+                )
+                
+                # Also show center point
+                center_sphere = pv.Sphere(radius=hole.radius*0.1, center=hole.center)
+                self.viewport_3d.plotter.add_mesh(
+                    center_sphere,
+                    color='red',
+                    name='highlight_center'
+                )
+                
+                logger.debug(f"Highlighted hole {index}")
+                
+            elif feature_type == "base_plane":
+                # Highlight base plane
+                if analysis.base_plane:
+                    plane = analysis.base_plane
+                    disk = pv.Disc(
+                        center=plane.origin,
+                        normal=plane.normal,
+                        inner=0,
+                        outer=np.sqrt(plane.area / np.pi) * 1.1 if plane.area > 0 else 11
+                    )
+                    
+                    self._highlight_actor = self.viewport_3d.plotter.add_mesh(
+                        disk,
+                        color='lime',
+                        opacity=0.5,
+                        show_edges=True,
+                        edge_color='yellow',
+                        line_width=4,
+                        name='feature_highlight'
+                    )
+                    
+                    logger.debug("Highlighted base plane")
+            
+            # Update viewport
+            self.viewport_3d.plotter.render()
+            
+        except Exception as e:
+            logger.warning(f"Failed to highlight feature: {e}")
+    
+    def _cleanup_stl_preview(self):
+        """Remove STL preview and feature previews from viewport."""
+        try:
+            # Remove STL mesh
+            if hasattr(self, '_stl_preview_actor'):
+                self.viewport_3d.plotter.remove_actor(self._stl_preview_actor)
+                del self._stl_preview_actor
+            
+            # Remove feature previews
+            if hasattr(self, '_stl_feature_actors'):
+                for actor in self._stl_feature_actors:
+                    try:
+                        self.viewport_3d.plotter.remove_actor(actor)
+                    except:
+                        pass
+                del self._stl_feature_actors
+            
+            # Remove highlight
+            if hasattr(self, '_highlight_actor'):
+                self.viewport_3d.plotter.remove_actor(self._highlight_actor)
+                del self._highlight_actor
+            
+            logger.info("STL preview cleaned up")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cleanup STL preview: {e}")
     
     def _start_stl_reconstruction(self, panel, analysis):
         """

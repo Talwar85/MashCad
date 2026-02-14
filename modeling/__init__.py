@@ -2998,6 +2998,24 @@ class Body:
         if draft_op.IsDone():
             result_shape = draft_op.Shape()
             result_shape = self._fix_shape_ocp(result_shape)
+
+            # TNP v4.0: History Tracking für Draft
+            if self._document and hasattr(self._document, '_shape_naming_service'):
+                try:
+                    service = self._document._shape_naming_service
+                    feature_id = getattr(feature, 'id', None) or str(id(feature))
+                    
+                    # History tracken (Faces modified/generated)
+                    service.track_draft_operation(
+                        feature_id=feature_id,
+                        source_solid=shape,
+                        result_solid=result_shape,
+                        occt_history=draft_op,
+                        angle=feature.draft_angle
+                    )
+                except Exception as e:
+                    logger.warning(f"Draft TNP tracking fail: {e}")
+
             from build123d import Solid
             result = Solid(result_shape)
             logger.debug(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
@@ -3165,19 +3183,20 @@ class Body:
             raise ValueError("Thread: Depth muss > 0 sein")
         n_turns = depth / pitch
 
-        # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
+            # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
         H = 0.8660254 * pitch
         groove_depth = 0.625 * H
 
         return self._compute_thread_helix(
             shape, pos, direction, r, pitch, depth, n_turns,
-            groove_depth, feature.thread_type, feature.tolerance_offset
+            groove_depth, feature.thread_type, feature.tolerance_offset,
+            feature=feature
         )
 
     def _compute_thread_helix(self, shape, pos, direction, r, pitch, depth, n_turns,
-                               groove_depth, thread_type, tolerance_offset):
+                               groove_depth, thread_type, tolerance_offset, feature=None):
         """Echtes Gewinde via Helix + Sweep mit korrekter Profil-Orientierung.
-
+        
         Das Profil wird senkrecht zum Helix-Tangenten am Startpunkt platziert
         (nicht auf Plane.XZ!). Dadurch entsteht saubere Geometrie mit wenigen
         Faces/Edges → schnelle Tessellation ohne Lag.
@@ -3185,7 +3204,8 @@ class Body:
         import numpy as np
         from build123d import (Helix, Solid, Polyline, BuildSketch, BuildLine,
                                Plane, make_face, sweep, Vector)
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+        from modeling.boolean_engine_v4 import BooleanEngineV4
+        # BRepAlgoAPI direct import removed in favor of BooleanEngineV4
 
         logger.debug(f"[THREAD] Helix sweep: r={r:.2f}, pitch={pitch}, depth={depth}, "
                      f"type={thread_type}, groove={groove_depth:.3f}")
@@ -3227,19 +3247,31 @@ class Body:
         thread_solid = sweep(profile_sk.sketch, path=helix)
         thread_ocp = thread_solid.wrapped if hasattr(thread_solid, 'wrapped') else thread_solid
 
-        # 4. Boolean Operation
-        if thread_type == "external":
-            op = BRepAlgoAPI_Cut(shape, thread_ocp)
+        # 4. Boolean Operation via BooleanEngineV4 (TNP-safe)
+        bool_op_type = "Cut" if thread_type == "external" else "Fuse"
+
+        # Tool-Shapes registrieren (optional, aber gut für Debugging/Picking)
+        if feature and self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                # Wir registrieren das Tool temporär unter der Feature-ID
+                self._register_base_feature_shapes(feature, thread_solid)
+            except Exception:
+                pass
+
+        current_solid_b123d = Solid(shape)
+        
+        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
+            current_solid_b123d, thread_solid, bool_op_type
+        )
+
+        if bool_result.is_success:
+            result = bool_result.value
+            if feature:
+                self._register_boolean_history(bool_result, feature, operation_name=f"Thread_{bool_op_type}")
+            logger.debug(f"[THREAD] Helix sweep completed successfully (BooleanV4)")
+            return result
         else:
-            op = BRepAlgoAPI_Fuse(shape, thread_ocp)
-
-        op.Build()
-        if not op.IsDone():
-            raise RuntimeError("Thread boolean failed")
-
-        result_shape = self._fix_shape_ocp(op.Shape())
-        logger.debug(f"[THREAD] Helix sweep completed successfully")
-        return Solid(result_shape)
+            raise RuntimeError(f"Thread boolean via V4 failed: {bool_result.message}")
 
     def _profile_data_to_face(self, profile_data: dict):
         """
