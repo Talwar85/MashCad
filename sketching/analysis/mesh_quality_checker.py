@@ -186,7 +186,7 @@ class MeshQualityChecker:
             Aktualisierter Report
         """
         # Anzahl Faces/Vertices
-        report.face_count = mesh.n_faces
+        report.face_count = mesh.n_cells
         report.vertex_count = mesh.n_points
         
         # Bounding Box
@@ -347,7 +347,7 @@ class MeshQualityChecker:
         try:
             import pyvista as pv
             
-            original_faces = mesh.n_faces
+            original_faces = mesh.n_cells
             
             # 1. Clean - entfernt degenerierte Faces
             mesh = mesh.clean(
@@ -411,7 +411,7 @@ class MeshQualityChecker:
         if max_faces is None:
             max_faces = self.TARGET_FACE_COUNT_AFTER_DECIMATION
         
-        current_faces = mesh.n_faces
+        current_faces = mesh.n_cells
         
         if current_faces <= max_faces:
             return mesh
@@ -426,7 +426,7 @@ class MeshQualityChecker:
             # PyVista decimate
             decimated = mesh.decimate(reduction)
             
-            logger.info(f"Decimation: {current_faces} -> {decimated.n_faces} faces "
+            logger.info(f"Decimation: {current_faces} -> {decimated.n_cells} cells "
                        f"({reduction*100:.1f}% reduction)")
             
             # Store original info
@@ -466,7 +466,7 @@ class MeshQualityChecker:
             mesh = pv.read(mesh_path)
             
             info["loaded"] = True
-            info["face_count"] = mesh.n_faces
+            info["face_count"] = mesh.n_cells
             info["vertex_count"] = mesh.n_points
             info["watertight"] = self._check_watertight(mesh)
             info["bounds"] = mesh.bounds

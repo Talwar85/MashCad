@@ -228,11 +228,11 @@ class STLFeatureAnalyzer:
             else:
                 mesh = pv.read(mesh_path)
             
-            if mesh is None or mesh.n_faces == 0:
+            if mesh is None or mesh.n_cells == 0:
                 logger.error("Failed to load mesh")
                 return analysis
             
-            logger.info(f"Analyzing mesh: {mesh.n_faces} faces, {mesh.n_points} points")
+            logger.info(f"Analyzing mesh: {mesh.n_cells} cells, {mesh.n_points} points")
             
             # 2. Detect base plane
             logger.info("Detecting base plane...")
