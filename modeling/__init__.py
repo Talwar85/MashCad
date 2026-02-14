@@ -2840,14 +2840,29 @@ class Body:
                 raise ValueError("Hole: Countersink-Geometrie konnte nicht positioniert werden")
             hole_shape = hole_shape.fuse(cs_shape)
 
-        # Boolean Cut: Bohrung vom Koerper abziehen
-        result = current_solid.cut(hole_shape)
-        if result and hasattr(result, 'is_valid') and result.is_valid():
-            logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
-            return result
+        # Boolean Cut: Bohrung vom Koerper abziehen via BooleanEngineV4 (TNP-safe)
+        # Zuerst Tool-Shapes registrieren (damit sie ShapeIDs haben)
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            # Wir registrieren das Tool als temporäres Feature oder unter der Hole-ID
+            # Da das Hole-Feature das Tool "besitzt", ist es okay, die Faces des Tools
+            # unter der Feature-ID zu registrieren.
+            self._register_base_feature_shapes(feature, hole_shape)
 
-        detail = brepfeat_reason if brepfeat_reason else "Boolean-Cut war ungültig oder leer"
-        raise ValueError(f"Hole Boolean Cut fehlgeschlagen ({detail})")
+        # Boolean ausführen
+        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
+            current_solid, hole_shape, "Cut"
+        )
+
+        if bool_result.is_success:
+            result = bool_result.value
+            self._register_boolean_history(bool_result, feature, operation_name="Hole_Cut")
+            logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich (BooleanV4)")
+            return result
+        else:
+            logger.warning(f"Hole Boolean fehlgeschlagen: {bool_result.message}")
+            if brepfeat_reason:
+                 raise ValueError(f"Hole fehlgeschlagen. BRepFeat: {brepfeat_reason}. Boolean: {bool_result.message}")
+            raise ValueError(f"Hole Boolean fehlgeschlagen: {bool_result.message}")
 
     def _position_cylinder(self, cyl_solid, position, direction, depth):
         """Positioniert einen Zylinder an position entlang direction."""

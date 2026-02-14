@@ -290,7 +290,6 @@ class STLReconstructionPanel(QWidget):
         
         self._log_text = QTextEdit()
         self._log_text.setReadOnly(True)
-        self._log_text.setMaximumBlockCount(100)  # Keep last 100 lines
         self._log_text.setStyleSheet("font-family: monospace; font-size: 10px;")
         
         layout.addWidget(self._log_text)
