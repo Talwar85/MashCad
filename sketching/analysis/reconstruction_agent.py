@@ -362,6 +362,41 @@ class ReconstructionAgent:
                         v = np.dot(vec, y_dir)
                         projected_points.append((u, v))
                         
+                    # Clean Polygon using Shapely
+                    try: 
+                        from shapely.geometry import Polygon as ShapelyPoly
+                        
+                        # 1. Create Polygon
+                        poly = ShapelyPoly(projected_points)
+                        
+                        # 2. Fix self-intersections (buffer 0)
+                        if not poly.is_valid:
+                            logger.info("[ReconstructionAgent] Fixing invalid polygon...")
+                            poly = poly.buffer(0)
+                            
+                        # 3. Simplify (remove RANSAC noise)
+                        # Tolerance 0.5mm is usually safe for base profiles
+                        poly: ShapelyPoly = poly.simplify(0.5, preserve_topology=True)
+                        
+                        # 4. Extract points
+                        if poly.is_empty:
+                             logger.warning("[ReconstructionAgent] Polygon is empty after cleaning!")
+                        else:
+                            # Handle MultiPolygon (if buffer splits it) - take largest
+                            if poly.geom_type == 'MultiPolygon':
+                                poly = max(poly.geoms, key=lambda p: p.area)
+                                
+                            # Get exterior coords
+                            cleaned_points = list(poly.exterior.coords)[:-1] # Remove duplicate end
+                            if len(cleaned_points) > 2:
+                                logger.info(f"[ReconstructionAgent] Polygon cleaned: {len(projected_points)} -> {len(cleaned_points)} points")
+                                projected_points = cleaned_points
+                            else:
+                                logger.warning("[ReconstructionAgent] Polygon collapsed to <3 points!")
+                                
+                    except Exception as e:
+                        logger.warning(f"[ReconstructionAgent] Polygon cleaning failed: {e}")
+
                     sketch.add_polygon(projected_points)
                     
                 else:

@@ -410,11 +410,29 @@ class STLFeatureAnalyzer:
                 # Wir müssen die "Outline" dieser Face-Menge finden
                 boundary_points = []
                 try:
-                    # This needs to be adapted to use the mesh and inlier_indices
-                    # The original _extract_edge_loops takes lines_cells, not mesh
-                    # For now, leave it as a placeholder or simplify
-                    # boundary_points = self._extract_edge_loops(mesh, inlier_indices)
-                    pass # Skipping complex boundary extraction for RANSAC for now
+                    # Create submesh
+                    submesh = mesh.extract_cells(inlier_indices)
+                    
+                    # Extract boundary edges
+                    edges = submesh.extract_feature_edges(
+                        boundary_edges=True,
+                        non_manifold_edges=False,
+                        manifold_edges=False,
+                        feature_edges=False
+                    )
+                    
+                    if edges.n_cells > 0:
+                       # Extract loops
+                       lines_cells = edges.lines.reshape(-1, 3)[:, 1:]
+                       points = edges.points
+                       loops = self._extract_edge_loops(lines_cells)
+                       
+                       if loops:
+                           # Find longest loop (perimeter)
+                           longest_loop = max(loops, key=len)
+                           
+                           # Get points
+                           boundary_points = [tuple(points[idx]) for idx in longest_loop]
                 except Exception as e:
                     logger.warning(f"RANSAC Boundary extraction failed: {e}")
                 
