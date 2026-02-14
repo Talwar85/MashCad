@@ -1,8 +1,8 @@
 """
-Mesh Reconstructor - TNP-Exempt CAD Generation.
+Mesh Reconstructor - CAD Generation from STL Features.
 
 Converts STL feature analysis to parametric CAD.
-Uses only geometric selectors - no TNP/ShapeID dependencies.
+Supports both TNP and geometric selectors.
 """
 
 import logging
@@ -66,9 +66,9 @@ class MeshReconstructor:
     """
     Reconstructs parametric CAD from mesh features.
     
-    TNP-Exempt Design:
-    - Uses only geometric selectors (center points, normals, etc.)
-    - No ShapeID dependencies
+    TNP Support (now stable):
+    - Uses TNP for feature tracking when enabled
+    - Falls back to geometric selectors if needed
     - Validates each step geometrically
     - Rolls back on failure
     
@@ -80,16 +80,16 @@ class MeshReconstructor:
     MIN_SOLID_VOLUME = 0.001  # mm³
     MAX_VOLUME_RATIO = 10.0  # New volume shouldn't be >10x original
     
-    def __init__(self, document: Any, use_tnp: bool = False):
+    def __init__(self, document: Any, use_tnp: bool = True):
         """
         Initialize reconstructor.
         
         Args:
             document: Target document for CAD objects
-            use_tnp: If True, attempts TNP registration (optional, not required)
+            use_tnp: If True, uses TNP for feature tracking (default True, now stable)
         """
         self.document = document
-        self.use_tnp = use_tnp  # Default False until TNP is stable
+        self.use_tnp = use_tnp  # Default True - TNP is now stable
         
         self.steps: List[ReconstructionStep] = []
         self.completed_steps: List[ReconstructionStep] = []
@@ -385,7 +385,7 @@ class MeshReconstructor:
         """
         Extrude base sketch to create solid.
         
-        TNP-Exempt: Uses geometric parameters.
+        Uses TNP for feature tracking (now stable).
         """
         try:
             from modeling import Body, ExtrudeFeature
@@ -424,7 +424,7 @@ class MeshReconstructor:
         """
         Create sketch for a hole.
         
-        TNP-Exempt: Uses geometric hole parameters.
+        Uses geometric hole parameters.
         """
         try:
             from sketching import Sketch
@@ -455,7 +455,7 @@ class MeshReconstructor:
         """
         Cut hole from body.
         
-        TNP-Exempt: Uses geometric parameters.
+        Uses TNP for feature tracking (now stable).
         """
         try:
             from modeling import ExtrudeFeature
@@ -599,7 +599,7 @@ class MeshReconstructor:
 # Convenience function
 def reconstruct_from_analysis(analysis: Any, document: Any, 
                                progress_callback: Callable = None,
-                               use_tnp: bool = False) -> ReconstructionResult:
+                               use_tnp: bool = True) -> ReconstructionResult:
     """
     Convenience function for reconstruction.
     
@@ -607,7 +607,7 @@ def reconstruct_from_analysis(analysis: Any, document: Any,
         analysis: STLFeatureAnalysis
         document: Target document
         progress_callback: Optional progress callback
-        use_tnp: Whether to use TNP (default False)
+        use_tnp: Whether to use TNP (default True - TNP is now stable)
         
     Returns:
         ReconstructionResult

@@ -1202,7 +1202,7 @@ class MainWindow(QMainWindow):
             # Create reconstructor
             reconstructor = MeshReconstructor(
                 document=self.document,
-                use_tnp=False  # TNP-Exempt for stability
+                use_tnp=True  # TNP is now stable
             )
             
             # Progress callback
