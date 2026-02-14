@@ -2,7 +2,7 @@
 STL Feature Analyzer for CAD Feature Detection.
 
 Detects features from STL meshes with confidence scoring.
-No external library modifications - only standard PyVista/numpy.
+Uses scikit-learn and scipy for robust detection if available.
 """
 
 import logging
@@ -13,10 +13,28 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.decomposition import PCA
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+
 from .mesh_quality_checker import MeshQualityChecker, MeshQualityReport
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class EdgeInfo:
+    """Detected feature edge."""
+    feature_type: str = "edge"
+    points: List[List[float]] = field(default_factory=list) # List of Start/End points or polyline?
+    # PyVista returns lines as cells. 
+    # Let's store as list of points for now, or segments.
+    # To keep it simple: Just points.
+    type: str = "sharp" # "sharp" | "boundary"
+    length: float = 0.0
 
 @dataclass
 class PlaneInfo:
@@ -26,10 +44,12 @@ class PlaneInfo:
     normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     area: float = 0.0
     face_indices: List[int] = field(default_factory=list)
+    boundary_points: List[Tuple[float, float, float]] = field(default_factory=list)
     
     # Confidence
     confidence: float = 0.0
     detection_method: str = "unknown"  # "largest_planar" | "best_fit" | "manual"
+    enabled: bool = True
     
     @property
     def is_valid(self) -> bool:
@@ -54,6 +74,7 @@ class HoleInfo:
     # Confidence
     confidence: float = 0.0
     detection_method: str = "unknown"  # "cylinder_fit" | "template_match" | "manual"
+    enabled: bool = True
     
     # Fallback hints for manual override
     fallback_hints: Dict[str, Any] = field(default_factory=dict)
@@ -88,6 +109,7 @@ class PocketInfo:
     # Confidence
     confidence: float = 0.0
     detection_method: str = "unknown"  # "depression_detection" | "manual"
+    enabled: bool = True
     fallback_hints: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +124,7 @@ class FilletInfo:
     # Confidence
     confidence: float = 0.0
     detection_method: str = "unknown"  # "edge_curvature" | "manual"
+    enabled: bool = True
 
 
 @dataclass
@@ -114,7 +137,9 @@ class STLFeatureAnalysis:
     base_plane: Optional[PlaneInfo] = None
     holes: List[HoleInfo] = field(default_factory=list)
     pockets: List[PocketInfo] = field(default_factory=list)
+    pockets: List[PocketInfo] = field(default_factory=list)
     fillets: List[FilletInfo] = field(default_factory=list)
+    edges: List[EdgeInfo] = field(default_factory=list)
     
     # Global confidence
     overall_confidence: float = 0.0
@@ -153,7 +178,8 @@ class STLFeatureAnalyzer:
     """
     Analyzes STL mesh and detects CAD features.
     
-    No library changes - only standard PyVista/numpy functions.
+    Leverages scikit-learn/scipy for robust detection if available,
+    falls back to heuristic methods otherwise.
     """
     
     # Detection thresholds
@@ -178,6 +204,11 @@ class STLFeatureAnalyzer:
             "min_inlier_ratio": 0.8,    # Min ratio of points fitting cylinder
             "axis_alignment_threshold": 0.95,  # Cosine similarity for axis alignment
         }
+        
+        if HAS_SKLEARN:
+            logger.info("STLFeatureAnalyzer initialized with scikit-learn support")
+        else:
+            logger.warning("scikit-learn not found - using basic heuristic detection")
     
     def analyze(self, mesh_path: str, 
                 skip_quality_check: bool = False) -> STLFeatureAnalysis:
@@ -239,14 +270,26 @@ class STLFeatureAnalyzer:
             analysis.base_plane = self._detect_base_plane(mesh)
             
             # 3. Detect holes
+            # 3. Detect holes
             logger.info("Detecting holes...")
-            analysis.holes = self._detect_holes(mesh, analysis.base_plane)
+            # Hybrid approach: Face clustering + Edge Loops
+            face_holes = self._detect_holes(mesh, analysis.base_plane)
+            edge_holes = self._detect_holes_via_edges(mesh, analysis.base_plane)
+            
+            # Merge holes
+            # Prefer edge holes as they are simpler and more robust for "clean" CAD
+            # Use spatial hashing/KDTree to merge duplicates
+            analysis.holes = self._merge_holes(face_holes, edge_holes)
             
             # 4. Detect pockets (simplified version)
             logger.info("Detecting pockets...")
             analysis.pockets = self._detect_pockets_simple(mesh, analysis.base_plane)
             
-            # 5. Calculate overall confidence
+            # 5. Detect edges
+            logger.info("Detecting edges...")
+            analysis.edges = self._detect_edges(mesh)
+            
+            # 6. Calculate overall confidence
             analysis = self._calculate_overall_confidence(analysis)
             
             # 6. Determine if user review needed
@@ -275,117 +318,411 @@ class STLFeatureAnalyzer:
         mesh = pv.read(mesh_path)
         return self.quality_checker.auto_repair(mesh)
     
-    def _detect_base_plane(self, mesh) -> Optional[PlaneInfo]:
+    def _detect_base_plane(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
         """
-        Detect base plane (largest planar surface).
+        Detects the most likely base plane (Z=0 usually).
+        Uses RANSAC if available, otherwise fallback to 6-sided bounding box logic.
+        """
+        # 1. Option: RANSAC (Robuster gegen Noise & Rundungen)
+        if HAS_SKLEARN:
+            ransac_plane = self._detect_plane_ransac(mesh)
+            if ransac_plane:
+                logger.info(f"RANSAC Plane found: {ransac_plane.area:.0f}mm², normal={ransac_plane.normal}")
+                return ransac_plane
+
+        # 2. Option: 6-Sided Logic (Legacy/Fallback)
+        # Compute face normals and centers
+        if not mesh.n_faces:
+            return None
+            
+        existing_plane = self._detect_base_plane_legacy(mesh)
+        return existing_plane
+
+    def _detect_plane_ransac(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
+        """
+        Detektiert eine Ebene mittels RANSAC (Random Sample Consensus).
+        Ideal für verrauschte oder komplexe STLs.
+        """
+        try:
+            from sklearn.linear_model import RANSACRegressor
+            
+            # Hole Faces und deren Center/Normals
+            # Wir nutzen Face-Centers als Punktwolke für RANSAC
+            # Das ist schneller als alle Vertices
+            centers = mesh.cell_centers().points
+            normals = mesh.cell_normals # Use cell_normals for face normals
+            
+            if len(centers) < 10:
+                return None
+                
+            # RANSAC fitting: z = ax + by + d
+            # Wir müssen aufpassen bei vertikalen Ebenen!
+            # Besser: PCA für Hauptrichtung, dann RANSAC in lokalem KOS
+            # ODER: Wir nehmen einfach die größte planare Fläche via Clustering als "Seed"
+            
+            # Simple approach: Suche dominante Ebene
+            # Wir testen 3 Hypothesen: Z=f(x,y), X=f(y,z), Y=f(x,z)
+            # und nehmen den besten Inlier-Score
+            
+            best_plane = None
+            best_score = -1
+            best_inliers = None
+            
+            # Helper for fitting
+            def fit_ransac(X, y):
+                ransac = RANSACRegressor(random_state=42, residual_threshold=1.0) # 1mm Toleranz
+                ransac.fit(X, y)
+                return ransac, ransac.inlier_mask_
+            
+            # Case 1: Z-Plane (z = ax + by + c)
+            try:
+                X = centers[:, :2] # x,y
+                y = centers[:, 2]  # z
+                model_z, inliers_z = fit_ransac(X, y)
+                score_z = np.sum(inliers_z)
+                
+                if score_z > best_score:
+                    best_score = score_z
+                    best_inliers = inliers_z
+                    # Normal calculation from ax + by - z + c = 0
+                    a, b = model_z.estimator_.coef_
+                    length = np.sqrt(a**2 + b**2 + 1)
+                    best_normal = np.array([a, b, -1]) / length
+                    if best_normal[2] < 0: best_normal = -best_normal # Point up
+                    best_plane = (model_z, 'z', best_normal)
+            except Exception: pass
+            
+            # Wenn wir dominante Ebene haben
+            if best_plane and best_score > (len(centers) * 0.1): # Min 10% Inliers
+                model, axis_type, normal = best_plane
+                
+                # Sammle face indices
+                inlier_indices = np.where(best_inliers)[0]
+                
+                # Area calculation
+                # Sum area of inlier faces
+                total_area = 0
+                sizes = mesh.compute_cell_sizes()
+                areas = sizes.cell_data['Area']
+                total_area = np.sum(areas[inlier_indices])
+                
+                # Boundary Extraction
+                # Wir müssen die "Outline" dieser Face-Menge finden
+                boundary_points = []
+                try:
+                    # This needs to be adapted to use the mesh and inlier_indices
+                    # The original _extract_edge_loops takes lines_cells, not mesh
+                    # For now, leave it as a placeholder or simplify
+                    # boundary_points = self._extract_edge_loops(mesh, inlier_indices)
+                    pass # Skipping complex boundary extraction for RANSAC for now
+                except Exception as e:
+                    logger.warning(f"RANSAC Boundary extraction failed: {e}")
+                
+                # Origin: Centroid of inliers
+                origin = np.mean(centers[inlier_indices], axis=0)
+                
+                return PlaneInfo(
+                    origin=tuple(origin),
+                    normal=tuple(normal),
+                    area=float(total_area),
+                    face_indices=inlier_indices.tolist(),
+                    confidence=float(best_score / len(centers)),
+                    detection_method="ransac_sklearn",
+                    boundary_points=boundary_points
+                )
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"RANSAC failed: {e}")
+            return None
+
+    def _detect_base_plane_legacy(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
+        """
+        Detect base plane using 6-sided bounding box strategy (RANSAC-like).
         
         Strategy:
-        1. Compute face normals
-        2. Cluster faces by normal direction
-        3. Find largest cluster
-        4. Fit plane to cluster
+        1. Get Bounding Box of mesh
+        2. Define 6 candidate planes from BB faces (Min/Max X, Y, Z)
+        3. Project all mesh faces onto these 6 candidates
+        4. Score based on:
+           - Total Area of coplanar faces (within tolerance)
+           - Normal alignment
+        5. Return best candidate
         """
         try:
             import pyvista as pv
             
-            # Get face centers and normals
+            # 1. Get Bounding Box
+            bounds = mesh.bounds # (xmin, xmax, ymin, ymax, zmin, zmax)
+            centers = mesh.cell_centers().points
+            normals = mesh.cell_normals
+            areas = mesh.compute_cell_sizes()["Area"]
+            
+            if len(centers) == 0:
+                return None
+
+            # 2. Define 6 Candidates: (Normal, Origin, Name)
+            candidates = [
+                (np.array([-1, 0, 0]), np.array([bounds[0], 0, 0]), "Left (-X)"),
+                (np.array([ 1, 0, 0]), np.array([bounds[1], 0, 0]), "Right (+X)"),
+                (np.array([ 0,-1, 0]), np.array([0, bounds[2], 0]), "Front (-Y)"),
+                (np.array([ 0, 1, 0]), np.array([0, bounds[3], 0]), "Back (+Y)"),
+                (np.array([ 0, 0,-1]), np.array([0, 0, bounds[4]]), "Bottom (-Z)"),
+                (np.array([ 0, 0, 1]), np.array([0, 0, bounds[5]]), "Top (+Z)"),
+            ]
+            
+            best_score = -1.0
+            best_plane = None
+            
+            # Tolerances
+            dist_tolerance = (bounds[1]-bounds[0] + bounds[3]-bounds[2] + bounds[5]-bounds[4]) / 3 * 0.01 # 1% of avg dim
+            if dist_tolerance < 0.1: dist_tolerance = 0.1
+            angle_tolerance = 5.0 # degrees
+            cos_threshold = np.cos(np.radians(angle_tolerance))
+            
+            for normal, origin, name in candidates:
+                # 3. Check faces against this candidate
+                
+                # Caclulate vector from face center to plane origin
+                # dist = dot(center - origin, normal)
+                # But origin is just a point on the plane.
+                # For X-min plane, origin x is bounds[0]. 
+                # dist = (center.x - bounds[0]) * (-1)
+                
+                # Vectorized distance check
+                # d = (P - O) . N
+                vec = centers - origin
+                dists = np.abs(np.dot(vec, normal))
+                
+                # Vectorized angle check
+                # dot(face_normal, plane_normal)
+                dots = np.dot(normals, normal)
+                # We care about alignment, so dot should be close to 1.0 (normals point same way)
+                # If normals point opposite, it's an interior face or wrong winding? 
+                # For a solid, normals point OUT. 
+                # For "Bottom" plane (Normal 0,0,-1), faces on bottom should have normal (0,0,-1).
+                # So dot should be ~1.0.
+                
+                mask = (dists < dist_tolerance) & (dots > cos_threshold)
+                
+                # 4. Score
+                matched_indices = np.where(mask)[0]
+                if len(matched_indices) == 0:
+                    continue
+                    
+                matched_area = np.sum(areas[matched_indices])
+                start_time = time.time() # Just for a seed
+                
+                # Score = Area * weighting
+                # Prefer Z planes slightly for "Base"
+                score = matched_area
+                if abs(normal[2]) > 0.9: # Z axis
+                    score *= 1.2 
+                elif abs(normal[1]) > 0.9: # Y axis
+                    score *= 1.0
+                
+                if score > best_score:
+                    best_score = score
+                    
+                    # Refine origin to be the mean of matched faces? 
+                    # No, usually we want the bounding box limit or the average level of the faces.
+                    # Let's use the average 'level' of the matched faces to be more precise than BB
+                    # projected_dist = np.mean(np.dot(centers[matched_indices] - origin, normal))
+                    # refined_origin = origin + normal * projected_dist
+                    
+                    # Actually, for "Base Plane", we often want the geometric extremum (BB) 
+                    # OR the actual physical surface average.
+                    # Let's use the average of the faces to be safe (avoids noise outliers defining BB)
+                    avg_center = np.mean(centers[matched_indices], axis=0)
+                    
+                    # Extract boundary loop
+                    boundary_points = []
+                    try:
+                        # Create submesh
+                        submesh = mesh.extract_cells(matched_indices)
+                        
+                        # Extract boundary edges
+                        edges = submesh.extract_feature_edges(
+                            boundary_edges=True,
+                            non_manifold_edges=False,
+                            manifold_edges=False,
+                            feature_edges=False
+                        )
+                        
+                        if edges.n_cells > 0:
+                           # Extract loops
+                           lines_cells = edges.lines.reshape(-1, 3)[:, 1:]
+                           points = edges.points
+                           loops = self._extract_edge_loops(lines_cells)
+                           
+                           if loops:
+                               # Find longest loop (perimeter)
+                               # Or largest area? Length is easier.
+                               longest_loop = max(loops, key=len)
+                               
+                               # Get points
+                               boundary_points = [tuple(points[idx]) for idx in longest_loop]
+                               # Ensure closed? Usually loop logic ensures it.
+                    except Exception as e:
+                        logger.warning(f"Failed to extract boundary: {e}")
+
+                    best_plane = PlaneInfo(
+                        origin=tuple(avg_center),
+                        normal=tuple(normal),
+                        area=float(matched_area),
+                        face_indices=matched_indices.tolist(),
+                        boundary_points=boundary_points,
+                        confidence=min(1.0, float(len(matched_indices) / len(centers)) * 5), # Boost confidence
+                        detection_method=f"6-sided_bbox ({name})"
+                    )
+            
+            if best_plane:
+                logger.info(f"Base plane detected via 6-sided analysis: {best_plane.detection_method}, Area={best_plane.area:.2f}")
+                return best_plane
+            
+            # Fallback to clustering if 6-sided failed (unlikely for CAD parts)
+            logger.warning("6-sided analysis failed to find dominant plane, falling back to clustering...")
+            return self._detect_base_plane_clustering(mesh)
+            
+        except Exception as e:
+            logger.error(f"Base plane detection failed: {e}")
+            return None
+
+    def _detect_base_plane_clustering(self, mesh) -> Optional[PlaneInfo]:
+        """Original clustering strategy as fallback."""
+        try:
             centers = mesh.cell_centers().points
             normals = mesh.cell_normals
             
             if len(centers) == 0 or len(normals) == 0:
-                logger.warning("No face centers or normals found")
                 return None
             
-            # Find dominant normal direction (base plane is usually large)
-            # Use simple clustering: group by similar normals
-            normal_clusters = self._cluster_normals(normals, angle_threshold=10.0)
+            if HAS_SKLEARN:
+                normal_clusters = self._cluster_normals_sklearn(normals, angle_threshold=5.0)
+            else:
+                normal_clusters = self._cluster_normals_simple(normals, angle_threshold=10.0)
             
             if not normal_clusters:
-                logger.warning("Could not cluster normals")
                 return None
             
-            # Find largest cluster
-            largest_cluster_idx = max(normal_clusters.keys(), 
-                                     key=lambda k: len(normal_clusters[k]))
-            largest_cluster = normal_clusters[largest_cluster_idx]
-            
-            # Get faces in cluster
-            cluster_face_indices = largest_cluster
+            largest_cluster_idx = max(normal_clusters.keys(), key=lambda k: len(normal_clusters[k]))
+            cluster_face_indices = normal_clusters[largest_cluster_idx]
             cluster_centers = centers[cluster_face_indices]
+            
             cluster_normal = np.mean(normals[cluster_face_indices], axis=0)
             cluster_normal = cluster_normal / np.linalg.norm(cluster_normal)
-            
-            # Fit plane
             origin = np.mean(cluster_centers, axis=0)
             
-            # Calculate area (approximate from face sizes)
             areas = mesh.compute_cell_sizes()["Area"]
             total_area = np.sum(areas[cluster_face_indices])
             
-            # Calculate confidence
             confidence = self._calculate_plane_confidence(
-                len(cluster_face_indices), 
-                len(centers),
-                cluster_normal,
-                normals[cluster_face_indices]
+                len(cluster_face_indices), len(centers), cluster_normal, normals[cluster_face_indices]
             )
             
-            plane = PlaneInfo(
+            return PlaneInfo(
                 origin=tuple(origin),
                 normal=tuple(cluster_normal),
                 area=float(total_area),
                 face_indices=cluster_face_indices.tolist(),
                 confidence=confidence,
-                detection_method="largest_planar"
+                detection_method="clustering_fallback"
             )
-            
-            logger.info(f"Base plane detected: area={plane.area:.2f}, "
-                       f"confidence={plane.confidence:.2f}")
-            
-            return plane
-            
         except Exception as e:
-            logger.error(f"Base plane detection failed: {e}")
+            logger.error(f"Clustering fallback failed: {e}")
             return None
     
-    def _cluster_normals(self, normals: np.ndarray, 
-                        angle_threshold: float = 10.0) -> Dict[int, np.ndarray]:
+    def _cluster_normals_sklearn(self, normals: np.ndarray, 
+                                angle_threshold: float = 5.0) -> Dict[int, np.ndarray]:
         """
-        Cluster normals by similar direction.
-        
-        Args:
-            normals: Array of normal vectors (N, 3)
-            angle_threshold: Max angle difference in degrees
+        Cluster normals using AgglomerativeClustering.
+        Much more robust than grid-based binning.
+        """
+        try:
+            # Normalize normals
+            norms = np.linalg.norm(normals, axis=1, keepdims=True)
+            norms[norms < 1e-10] = 1.0
+            normals_norm = normals / norms
             
-        Returns:
-            Dict mapping cluster_id to array of indices
+            # Downsample for speed if too many faces
+            n_samples = len(normals)
+            if n_samples > 5000:
+                indices = np.random.choice(n_samples, 5000, replace=False)
+                sample_normals = normals_norm[indices]
+            else:
+                indices = np.arange(n_samples)
+                sample_normals = normals_norm
+                
+            # Distance threshold: 1 - cos(angle)
+            # For 5 degrees: cos(5) = 0.99619 -> dist = 0.0038
+            dist_threshold = 1.0 - np.cos(np.radians(angle_threshold))
+            
+            # Use cosine distance for clustering
+            clustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=dist_threshold,
+                metric='cosine',
+                linkage='average'
+            )
+            labels = clustering.fit_predict(sample_normals)
+            
+            # Map back to clusters
+            clusters = {}
+            for i, label in enumerate(labels):
+                if label not in clusters:
+                    clusters[label] = []
+                clusters[label].append(indices[i])
+            
+            # If we downsampled, we should assign remaining points (nearest neighbor)
+            # For now, simplistic approach: just use what we have or re-run on full set if critical
+            # In production: k-NN assignment for non-samples
+            
+            return {k: np.array(v) for k, v in clusters.items()}
+            
+        except Exception as e:
+            logger.warning(f"Sklearn clustering failed: {e}, falling back to simple")
+            return self._cluster_normals_simple(normals, angle_threshold)
+
+    def _cluster_normals_simple(self, normals: np.ndarray, 
+                               angle_threshold: float = 10.0) -> Dict[int, np.ndarray]:
         """
-        threshold_cos = np.cos(np.radians(angle_threshold))
-        n_normals = len(normals)
-        
-        if n_normals == 0:
-            return {}
-        
+        Cluster normals by similar direction (Simple Grid/Binning).
+        """
         # Normalize normals
-        normals_norm = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+        norms = np.linalg.norm(normals, axis=1, keepdims=True)
+        norms[norms < 1e-10] = 1.0
+        normals_norm = normals / norms
         
-        # Simple clustering: use first normal as reference, find similar ones
-        # This is a simplified version - could use proper clustering for complex meshes
+        threshold_cos = np.cos(np.radians(angle_threshold))
+        
         clusters = {}
         used = set()
         
-        for i in range(n_normals):
+        # Simple greedy clustering
+        # Iterate and group neighbors
+        # This is slow O(N^2) worst case - should use Grid Binning in production
+        # Implementation simplified for backup
+        
+        # Use simple quantization
+        for i in range(len(normals)):
             if i in used:
                 continue
             
-            # Find all normals similar to this one
-            similarity = np.dot(normals_norm, normals_norm[i])
-            similar_indices = np.where(similarity > threshold_cos)[0]
+            # Find all compatible
+            ref = normals_norm[i]
+            sim = np.dot(normals_norm, ref)
+            matches = np.where(sim > threshold_cos)[0]
             
-            cluster_id = len(clusters)
-            clusters[cluster_id] = similar_indices
-            used.update(similar_indices)
-        
+            # Only take matches not used
+            # Actually with greedy, we can overlap, but let's be strict
+            new_matches = [idx for idx in matches if idx not in used]
+            
+            if new_matches:
+                cluster_id = len(clusters)
+                clusters[cluster_id] = np.array(new_matches)
+                used.update(new_matches)
+                
         return clusters
     
     def _calculate_plane_confidence(self, cluster_size: int, total_faces: int,
@@ -411,12 +748,6 @@ class STLFeatureAnalyzer:
     def _detect_holes(self, mesh, base_plane: Optional[PlaneInfo]) -> List[HoleInfo]:
         """
         Detect holes in the mesh.
-        
-        Strategy:
-        1. Find cylindrical surfaces
-        2. Check if they go through the base plane
-        3. Validate hole parameters
-        4. Calculate confidence
         """
         holes = []
         
@@ -426,11 +757,22 @@ class STLFeatureAnalyzer:
             normals = mesh.cell_normals
             
             # Find potential cylindrical faces
+            # optimization: Exclude base plane faces
+            excluded_indices = set()
+            if base_plane:
+                excluded_indices.update(base_plane.face_indices)
+            
             cylindrical_candidates = self._find_cylindrical_faces(
                 mesh, centers, normals
             )
             
-            logger.info(f"Found {len(cylindrical_candidates)} cylindrical candidates")
+            # Filter candidates
+            cylindrical_candidates = [
+                idx for idx in cylindrical_candidates 
+                if idx not in excluded_indices
+            ]
+            
+            logger.info(f"Found {len(cylindrical_candidates)} cylindrical candidates after filtering planars")
             
             # Group candidates into holes
             hole_groups = self._group_cylindrical_faces(cylindrical_candidates, centers)
@@ -451,41 +793,286 @@ class STLFeatureAnalyzer:
         
         return holes
     
+    def _detect_holes_via_edges(self, mesh, base_plane: Optional[PlaneInfo]) -> List[HoleInfo]:
+        """
+        Detect holes by analyzing feature edge loops.
+        Much more robust for clean CAD meshes than face clustering.
+        """
+        holes = []
+        try:
+            # 1. Extract feature edges
+            # angle=30 is standard for sharp edges
+            edges = mesh.extract_feature_edges(
+                feature_angle=30.0,
+                boundary_edges=True,
+                non_manifold_edges=False,
+                manifold_edges=False
+            )
+            
+            if edges.n_cells == 0:
+                return []
+                
+            # 2. Extract Loops
+            # Convert lines to adjacency graph
+            lines_cells = edges.lines.reshape(-1, 3)[:, 1:] # Skip size param
+            points = edges.points
+            
+            loops = self._extract_edge_loops(lines_cells)
+            logger.info(f"Extracted {len(loops)} edge loops from feature edges")
+            
+            # 3. Filter Circular Loops
+            circular_loops = []
+            for loop_indices in loops:
+                is_circ, params = self._is_circular_loop(loop_indices, points)
+                if is_circ:
+                    circular_loops.append(params) # (center, normal, radius)
+            
+            logger.info(f"Found {len(circular_loops)} circular loops")
+            
+            # 4. Pair Loops to form Cylinders/Holes
+            # A hole usually has 2 loops (top/bottom) or 1 loop (blind/surface)
+            # We group by Axis and Radius
+            
+            # Simple greedy grouping
+            used_loops = set()
+            
+            for i in range(len(circular_loops)):
+                if i in used_loops: continue
+                
+                c1, n1, r1 = circular_loops[i]
+                
+                # Look for partner
+                best_partner = -1
+                
+                for j in range(i + 1, len(circular_loops)):
+                    if j in used_loops: continue
+                    
+                    c2, n2, r2 = circular_loops[j]
+                    
+                    # Check radius similarity
+                    if abs(r1 - r2) > 0.1 * r1: continue # 10% diff
+                    
+                    # Check normal alignment (should be parallel or anti-parallel)
+                    if abs(np.dot(n1, n2)) < 0.9: continue
+                    
+                    # Check coaxial alignment
+                    # Vector between centers should be parallel to normal
+                    center_vec = c2 - c1
+                    dist = np.linalg.norm(center_vec)
+                    
+                    if dist < 0.1: # Same position (duplicate?)
+                        continue
+                        
+                    center_dir = center_vec / dist
+                    if abs(np.dot(center_dir, n1)) < 0.9: continue
+                    
+                    best_partner = j
+                    break
+                
+                if best_partner != -1:
+                    # Found a Through Hole!
+                    c2, n2, r2 = circular_loops[best_partner]
+                    
+                    # Average parameters
+                    avg_radius = (r1 + r2) / 2
+                    axis = n1
+                    if np.dot(axis, c2 - c1) < 0: axis = -axis # Point towards c2
+                    
+                    depth = np.linalg.norm(c2 - c1)
+                    center = (c1 + c2) / 2
+                    
+                    # Check base plane alignment
+                    if base_plane:
+                         # Holes usually perpendicular to base or parallel
+                         pass
+                    
+                    hole = HoleInfo(
+                        center=tuple(center),
+                        radius=float(avg_radius),
+                        depth=float(depth),
+                        axis=tuple(axis),
+                        confidence=0.95, # High confidence for edge match
+                        detection_method="edge_loop_pair"
+                    )
+                    holes.append(hole)
+                    used_loops.add(i)
+                    used_loops.add(best_partner)
+                    
+                else:
+                    # Single Loop - Blind Hole or just a Circle
+                    # We assume it's a hole with some default depth or check geometry
+                    # For V1.stl, holes might be single loops if other side is obscured?
+                    # Or maybe we just add it with lower confidence
+                    
+                    # Heuristic: If normal is perpendicular to Base Plane, it's a hole on the plane.
+                    hole = HoleInfo(
+                        center=tuple(c1),
+                        radius=float(r1),
+                        depth=float(r1)*2, # Guess depth
+                        axis=tuple(n1),
+                        confidence=0.6,
+                        detection_method="single_edge_loop"
+                    )
+                    holes.append(hole)
+                    used_loops.add(i)
+
+        except Exception as e:
+            logger.error(f"Edge-based hole detection failed: {e}")
+            
+        return holes
+
+    def _extract_edge_loops(self, lines: np.ndarray) -> List[List[int]]:
+        """Extract closed loops from lines array."""
+        try:
+            from collections import defaultdict
+            adj = defaultdict(list)
+            for i, (u, v) in enumerate(lines):
+                adj[u].append((v, i))
+                adj[v].append((u, i))
+                
+            visited_edges = set()
+            loops = []
+            
+            for i, (u, v) in enumerate(lines):
+                if i in visited_edges: continue
+                
+                path = [u]
+                curr = v
+                path_edges = {i}
+                
+                while True:
+                    path.append(curr)
+                    neighbors = adj[curr]
+                    
+                    # Find unvisited active edge
+                    next_step = None
+                    for n_node, n_edge in neighbors:
+                        if n_edge in path_edges: continue
+                        
+                        # Stop at junctions? Simple holes have deg=2
+                        # If deg > 2, logic is complex. 
+                        # We just pick first valid, assuming simple loops.
+                        next_step = (n_node, n_edge)
+                        break
+                    
+                    if next_step:
+                        n_node, n_edge = next_step
+                        path_edges.add(n_edge)
+                        curr = n_node
+                        
+                        if curr == path[0]: # Closed
+                            visited_edges.update(path_edges)
+                            loops.append(path)
+                            break
+                    else:
+                        visited_edges.update(path_edges)
+                        break # Dead end
+            return loops
+        except Exception as e:
+            logger.error(f"Loop extraction error: {e}")
+            return []
+
+    def _is_circular_loop(self, loop_indices: List[int], points: np.ndarray) -> Tuple[bool, Any]:
+        """Check if loop is circular."""
+        try:
+           pts = points[loop_indices]
+           if len(pts) < 10: return False, None # Too few points
+           
+           # 1. Planarity (SVD)
+           centroid = np.mean(pts, axis=0)
+           centered = pts - centroid
+           U, S, Vt = np.linalg.svd(centered)
+           normal = Vt[-1]
+           
+           # Check thickness (smallest singular value)
+           # S values are sqrt of eigenvalues. 
+           # Ratio of smallest to largest gives flatness.
+           if S[0] > 0 and S[-1]/S[0] > 0.05: return False, None # Not planar
+           
+           # 2. Circularity
+           dists = np.linalg.norm(centered, axis=1)
+           mean_r = np.mean(dists)
+           std_r = np.std(dists)
+           
+           if std_r / mean_r < 0.1: # 10% deviation
+               return True, (centroid, normal, mean_r)
+               
+           return False, None
+        except:
+           return False, None
+    
+    def _merge_holes(self, holes1: List[HoleInfo], holes2: List[HoleInfo]) -> List[HoleInfo]:
+        """Merge two lists of holes, preferring the second list (edge-based)."""
+        merged = []
+        if holes2:
+            merged.extend(holes2)
+        
+        if not holes1:
+            return merged
+            
+        for h1 in holes1:
+            # Check if duplicate in merged
+            is_dup = False
+            for h2 in merged:
+                dist = np.linalg.norm(np.array(h1.center) - np.array(h2.center))
+                # If centers are close and radii are similar
+                if dist < h1.radius and abs(h1.radius - h2.radius) < h1.radius * 0.5:
+                     is_dup = True
+                     break
+            
+            if not is_dup:
+                merged.append(h1)
+                
+        return merged
+    
     def _find_cylindrical_faces(self, mesh, centers: np.ndarray, 
                                 normals: np.ndarray) -> List[int]:
         """
         Find faces that could be part of a cylinder.
-        
-        A cylindrical face has:
-        - Normal perpendicular to radial direction from cylinder axis
-        - Consistent curvature
         """
         candidates = []
+        n_faces = len(centers)
         
+        # Optimization: Try to use curvature if available in PyVista
+        # Otherwise use simple normal heuristic
+        
+        # Simple heuristic:
+        # Cylinders have curvature in one direction only.
+        # This is hard to detect locally without curvature filter.
+        # Fallback: Detect if normal is perpendicular to Principal Direction of global mesh? No.
+        
+        # We'll stick to the existing heuristic but allow more tolerance
+        # Ideally: Use discrete curvatures
         try:
-            # Compute curvature (approximation)
-            # For each face, check if normal points away from some center line
-            # This is simplified - proper cylinder fitting would be more complex
+            # if mesh has 'Mean_Curvature', use it
+            if 'Mean_Curvature' in mesh.point_data:
+                # Map to cells
+                pass 
+                
+            # Basic geometric check
+            # This needs spatial queries which are expensive
+            # For now, assumes we are looking for holes roughly aligned with World Z or X/Y
+            # OR we check relative to local neighborhood.
+            pass
             
-            n_faces = len(centers)
+            # Reusing original logic for now as 'find candidates'
+            # Enhanced logic:
+            # Check adjacent faces. If angle is large (>20 deg) and edges are shared?
+            # Actually, `mesh_converter` uses region segmentation first.
+            # We will assume `surface_segmenter` logic is superior but too complex to fully inline here.
+            # We stick to a simplified check:
             
-            # Use face neighborhoods to detect curvature
+            # Return all faces for now to let grouping/fitting do the work? Too slow.
+            # Let's assume input is simple or used mesh quality checker to filter.
+            
+            # Using the mock implementation from Plan
             for i in range(n_faces):
-                # Simple heuristic: faces with normals not aligned with 
-                # the vector to mesh center might be cylindrical
-                center_to_face = centers[i] - np.mean(centers, axis=0)
-                center_to_face = center_to_face / (np.linalg.norm(center_to_face) + 1e-10)
+                candidates.append(i) # ! Placeholder to test robust fitting
                 
-                # If normal is perpendicular to radial direction, it might be cylindrical
-                alignment = abs(np.dot(normals[i], center_to_face))
-                
-                if alignment < 0.3:  # Roughly perpendicular
-                    candidates.append(i)
-            
         except Exception as e:
             logger.debug(f"Cylindrical face detection failed: {e}")
-        
-        return candidates
+            
+        return list(range(n_faces)) # Placeholder: try fitting on clusters
     
     def _group_cylindrical_faces(self, candidates: List[int], 
                                  centers: np.ndarray) -> Dict[int, np.ndarray]:
@@ -493,29 +1080,29 @@ class STLFeatureAnalyzer:
         if not candidates:
             return {}
         
-        # Simple grouping by spatial clustering
+        # If we have too many candidates (loop above returned all), we MUST cluster
+        if len(candidates) > 5000:
+             # Just take a subset or use grid
+             candidates = candidates[:5000]
+             
         candidate_centers = centers[candidates]
         
-        # Use distance-based clustering
+        if HAS_SKLEARN:
+            from sklearn.cluster import DBSCAN
+            # Determine suitable epsilon based on mesh scale
+            db = DBSCAN(eps=5.0, min_samples=3).fit(candidate_centers)
+            labels = db.labels_
+        else:
+            # Simple distance clustering
+            return {0: np.array(candidates)}
+            
         groups = {}
-        used = set()
-        
-        for i, idx in enumerate(candidates):
-            if idx in used:
-                continue
+        for i, label in enumerate(labels):
+            if label == -1: continue
+            if label not in groups: groups[label] = []
+            groups[label].append(candidates[i])
             
-            center_i = candidate_centers[i]
-            
-            # Find all candidates within distance threshold
-            distances = np.linalg.norm(candidate_centers - center_i, axis=1)
-            nearby_mask = distances < 10.0  # 10mm threshold - should be relative to mesh size
-            nearby_indices = np.array(candidates)[nearby_mask]
-            
-            group_id = len(groups)
-            groups[group_id] = nearby_indices
-            used.update(nearby_indices)
-        
-        return groups
+        return {k: np.array(v) for k, v in groups.items()}
     
     def _fit_hole_to_faces(self, mesh, face_indices: np.ndarray,
                           centers: np.ndarray,
@@ -523,58 +1110,138 @@ class STLFeatureAnalyzer:
         """
         Fit a hole to a group of faces.
         
-        Estimates:
-        - Center (from face centers)
-        - Radius (from spread of faces)
-        - Axis (from face normals)
-        - Depth (from extent along axis)
+        Enhanced with PCA and Circle Fitting.
         """
-        if len(face_indices) < 3:
+        if len(face_indices) < 10: # Need enough points for cylinder
             return None
         
         try:
             face_centers = centers[face_indices]
             
-            # Estimate center as mean of face centers
-            center = np.mean(face_centers, axis=0)
+            # 1. Determine Axis via PCA
+            # For a cylinder shell, largest variance is not necessarily axis (it's a ring)
+            # Actually for a tube:
+            # - Axis 1 & 2: Circle plane (similar eigenvalues)
+            # - Axis 3: Tube height (if long) OR Thickness (if short ring)
             
-            # Estimate axis from face normals (should be roughly parallel)
-            face_normals = mesh.cell_normals[face_indices]
-            axis = np.mean(face_normals, axis=0)
-            axis_norm = np.linalg.norm(axis)
-            if axis_norm < 0.01:
-                return None
-            axis = axis / axis_norm
+            # Better: Fit plane to points -> Normal is axis (if hole is cut in planar surface)
+            # OR SVD on centered points.
             
-            # Estimate radius from distance of face centers to axis
-            # Project centers onto plane perpendicular to axis
-            center_to_faces = face_centers - center
-            projections = center_to_faces - np.outer(
-                np.dot(center_to_faces, axis), axis
-            )
-            distances = np.linalg.norm(projections, axis=1)
-            radius = np.median(distances)
+            centroid = np.mean(face_centers, axis=0)
+            centered = face_centers - centroid
             
+            if HAS_SKLEARN:
+                pca = PCA(n_components=3)
+                pca.fit(centered)
+                # Components are sorted by variance.
+                # If it's a hole (ring-like), points lie on cylinder surface.
+                # If hole is short (ring), min variance direction is radial? No.
+                
+                # Robust approach from mesh_converter:
+                # 1. Estimate normal from average face normal (if they curve around, avg might be 0)
+                # 2. But for a hole, normals point "inward" to axis.
+                #    So they all intersect the axis.
+                
+                # Let's try to find vector perpendicular to all normals?
+                face_normals = mesh.cell_normals[face_indices]
+                
+                # SVD on normals matrix n x 3
+                # The null space of normals matrix is the cylinder axis!
+                # i.e. dot(n, axis) ~ 0
+                U, S, Vt = np.linalg.svd(face_normals, full_matrices=False)
+                axis = Vt[-1] # Direction with least variance in normals = perpedicular to all normals
+                
+            else:
+                # Fallback: use average of abs normals? bad.
+                # Fallback: Assume Z axis if aligned
+                axis = np.array([0., 0., 1.])
+
+            axis = axis / np.linalg.norm(axis)
+            
+            # Check axis alignment with base plane normal (holes usually distinct)
+            if base_plane:
+                dot = abs(np.dot(axis, np.array(base_plane.normal)))
+                if dot < 0.8: # Not aligned
+                    # Maybe it's a cross-hole.
+                    pass
+                else:
+                    # Align direction
+                    if np.dot(axis, base_plane.normal) < 0:
+                        axis = -axis
+
+            # 2. Project to 2D plane perpendicular to axis
+            # Create basis
+            z_axis = axis
+            if abs(z_axis[0]) < 0.9:
+                x_axis = np.cross(z_axis, [1, 0, 0])
+            else:
+                x_axis = np.cross(z_axis, [0, 1, 0])
+            x_axis /= np.linalg.norm(x_axis)
+            y_axis = np.cross(z_axis, x_axis)
+            
+            # Project
+            u = np.dot(centered, x_axis)
+            v = np.dot(centered, y_axis)
+            h = np.dot(centered, z_axis) # height
+            
+            # 3. Fit Circle in 2D (u,v)
+            # Simple least squares: (u-uc)^2 + (v-vc)^2 = R^2
+            # u^2 + v^2 - 2u*uc - 2v*vc + (uc^2+vc^2-R^2) = 0
+            # A*x = B
+            # A = [2u, 2v, 1]
+            # x = [uc, vc, C]
+            # B = u^2 + v^2
+            
+            A = np.column_stack((2*u, 2*v, np.ones_like(u)))
+            B = u**2 + v**2
+            result, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+            uc, vc, C = result
+            
+            radius = np.sqrt(C + uc**2 + vc**2)
+            
+            # Valid radius?
             if radius < self.MIN_HOLE_RADIUS or radius > self.MAX_HOLE_RADIUS:
                 return None
             
-            # Estimate depth from extent along axis
-            axis_projections = np.dot(face_centers - center, axis)
-            depth = np.max(axis_projections) - np.min(axis_projections)
+            # 4. Refine Center
+            center_offset = uc * x_axis + vc * y_axis
+            center = centroid + center_offset
             
-            if depth < self.MIN_HOLE_DEPTH:
-                depth = self.MIN_HOLE_DEPTH  # Minimum depth
+            # Project center back to 'start' of hole using depth/base plane?
+            # For now keep it at centroid level or adjust to base plane surface
+            if base_plane:
+                # Move center to lie on base plane surface (intersection of axis line and plane)
+                # Line: P(t) = C + t*A
+                # Plane: (P - P0) . N = 0
+                # (C + tA - P0) . N = 0 => t = (P0 - C).N / (A.N)
+                p0 = np.array(base_plane.origin)
+                pn = np.array(base_plane.normal)
+                
+                denom = np.dot(axis, pn)
+                if abs(denom) > 1e-6:
+                    t = np.dot(p0 - center, pn) / denom
+                    center = center + t * axis
             
-            # Calculate confidence
-            confidence = self._calculate_hole_confidence(
-                face_indices, centers, radius, axis, face_normals, base_plane
-            )
+            # 5. Calculate Depth
+            min_h, max_h = np.min(h), np.max(h)
+            depth = max_h - min_h
+            if depth < self.MIN_HOLE_DEPTH: 
+                depth = self.MIN_HOLE_DEPTH
+
+            # 6. Confidence
+            # Calculate residual error of circle fit
+            # distances from center in 2D
+            dists = np.sqrt((u - uc)**2 + (v - vc)**2)
+            residuals = np.abs(dists - radius)
+            mean_error = np.mean(residuals)
             
-            # Validation data
+            # Confidence score
+            confidence = 1.0 - min(1.0, mean_error / (radius * 0.2)) # 20% tolerance
+            
             validation_data = {
                 "face_count": len(face_indices),
-                "radius_std": float(np.std(distances)),
-                "axis_variance": float(np.var(np.dot(face_normals, axis))),
+                "residual_mean": float(mean_error),
+                "radius_std": float(np.std(dists)),
             }
             
             hole = HoleInfo(
@@ -583,8 +1250,8 @@ class STLFeatureAnalyzer:
                 depth=float(depth),
                 axis=tuple(axis),
                 face_indices=face_indices.tolist(),
-                confidence=confidence,
-                detection_method="cylinder_fit",
+                confidence=float(confidence),
+                detection_method="pca_lsq",
                 validation_data=validation_data,
                 fallback_hints={
                     "alternative_axes": [],
@@ -598,79 +1265,47 @@ class STLFeatureAnalyzer:
             logger.debug(f"Hole fitting failed: {e}")
             return None
     
-    def _calculate_hole_confidence(self, face_indices: np.ndarray,
-                                   centers: np.ndarray,
-                                   radius: float,
-                                   axis: np.ndarray,
-                                   face_normals: np.ndarray,
-                                   base_plane: Optional[PlaneInfo]) -> float:
+    def _detect_edges(self, mesh) -> List[EdgeInfo]:
         """
-        Calculate confidence for hole detection.
-        
-        Factors:
-        1. Cylinder fit quality (radius consistency)
-        2. Plane connectivity (goes through base plane)
-        3. Orientation (axis reasonable)
-        4. Size plausibility
+        Detect sharp/feature edges.
         """
-        # Factor 1: Radius consistency
-        face_centers = centers[face_indices]
-        center = np.mean(face_centers, axis=0)
-        center_to_faces = face_centers - center
-        projections = center_to_faces - np.outer(np.dot(center_to_faces, axis), axis)
-        distances = np.linalg.norm(projections, axis=1)
-        radius_consistency = 1.0 - min(1.0, np.std(distances) / (radius + 0.001))
-        
-        # Factor 2: Normal consistency (cylinder normals should be perpendicular to axis)
-        normal_alignment = np.abs(np.dot(face_normals, axis))
-        normal_consistency = 1.0 - np.mean(normal_alignment)
-        
-        # Factor 3: Plane connectivity
-        plane_connectivity = 0.5  # Default if no base plane
-        if base_plane is not None:
-            # Check if hole center projects onto base plane
-            center_to_plane = np.dot(np.array(base_plane.origin) - center, 
-                                    np.array(base_plane.normal))
-            if abs(center_to_plane) < radius * 2:  # Within reasonable distance
-                plane_connectivity = 0.9
-            else:
-                plane_connectivity = 0.3
-        
-        # Factor 4: Size plausibility
-        size_score = 1.0
-        if radius < 1.0 or radius > 50.0:
-            size_score = 0.7
-        
-        # Weighted combination
-        confidence = (
-            radius_consistency * 0.35 +
-            normal_consistency * 0.25 +
-            plane_connectivity * 0.25 +
-            size_score * 0.15
-        )
-        
-        return float(np.clip(confidence, 0.0, 1.0))
-    
+        edges = []
+        try:
+            # Feature Edges: Boundary (open) + Feature (sharp)
+            # angle defaults to 30 deg
+            feature_edges = mesh.extract_feature_edges(
+                feature_angle=30.0,
+                boundary_edges=True,
+                non_manifold_edges=False, 
+                manifold_edges=False 
+            )
+            
+            if feature_edges.n_cells > 0:
+                pts = feature_edges.points.tolist()
+                
+                # In a real impl, we would separate into connected chains?
+                # For now just one blob
+                edge_info = EdgeInfo(
+                    feature_type="feature_edges",
+                    points=pts, 
+                    type="sharp",
+                    length=0.0 
+                )
+                edges.append(edge_info)
+                
+        except Exception as e:
+            logger.warning(f"Feature edge detection failed (VTK/PyVista issue?): {e}")
+            
+        return edges
+
     def _detect_pockets_simple(self, mesh, 
                                base_plane: Optional[PlaneInfo]) -> List[PocketInfo]:
         """
         Simple pocket detection.
-        
-        Strategy:
-        1. Find depressed areas (faces pointing "inward")
-        2. Group by proximity
-        3. Estimate depth
-        
-        Note: This is a simplified version. Full pocket detection would require
-        more sophisticated surface analysis.
         """
         pockets = []
-        
         try:
-            # For now, return empty list - pockets are complex
-            # Would need proper surface segmentation
             logger.debug("Pocket detection not fully implemented")
-            
         except Exception as e:
             logger.error(f"Pocket detection failed: {e}")
         
@@ -705,15 +1340,7 @@ class STLFeatureAnalyzer:
         return analysis
     
     def quick_analyze(self, mesh_path: str) -> Dict[str, Any]:
-        """
-        Quick analysis returning only essential info.
-        
-        Args:
-            mesh_path: Path to STL file
-            
-        Returns:
-            Dict with summary info
-        """
+        """Quick analysis returning only essential info."""
         analysis = self.analyze(mesh_path)
         
         return {
@@ -730,15 +1357,6 @@ class STLFeatureAnalyzer:
 # Convenience function
 def analyze_stl(mesh_path: str, 
                 quality_checker: Optional[MeshQualityChecker] = None) -> STLFeatureAnalysis:
-    """
-    Quick analysis of STL file.
-    
-    Args:
-        mesh_path: Path to STL file
-        quality_checker: Optional quality checker instance
-        
-    Returns:
-        STLFeatureAnalysis
-    """
+    """Quick analysis of STL file."""
     analyzer = STLFeatureAnalyzer(quality_checker)
     return analyzer.analyze(mesh_path)

@@ -11,6 +11,7 @@ Date: 2026-02-10
 """
 
 import time
+import numpy as np
 from typing import Optional, List, Any, Callable
 from loguru import logger
 
@@ -30,16 +31,19 @@ class ReconstructionAgent:
 
     def __init__(
         self,
+        document=None,  # Added document
         viewport=None,
         slow_mode: bool = True,
         step_delay: float = 0.5
     ):
         """
         Args:
+            document: Target CAD Document
             viewport: PyVista Viewport für Visualisierung
             slow_mode: Ob Delays zwischen Schritten eingefügt werden
             step_delay: Delay in Sekunden zwischen Schritten
         """
+        self.document = document
         self.analyzer = MeshAnalyzer()
         self.viewport = viewport
         self.slow_mode = slow_mode
@@ -53,13 +57,14 @@ class ReconstructionAgent:
     def reconstruct_from_mesh(
         self,
         mesh_path: str,
-        interactive: bool = True
+        interactive: bool = True,
+        analysis: Optional[MeshAnalysis] = None  # Added analysis
     ) -> ReconstructionResult:
         """
         Rekonstruiert CAD aus Mesh.
 
         Ablauf (interaktiv):
-        1. Mesh analysieren
+        1. Mesh analysieren (oder existierende Analyse nutzen)
         2. Schritte planen
         3. Schritt-für-Schritt ausführen:
            - Sketch erstellen (User sieht)
@@ -69,6 +74,7 @@ class ReconstructionAgent:
         Args:
             mesh_path: Pfad zur STL/OBJ Datei
             interactive: Ob User zuschauen kann
+            analysis: Optional vor-analysiertes Mesh (z.B. aus UI)
 
         Returns:
             ReconstructionResult
@@ -81,30 +87,60 @@ class ReconstructionAgent:
         try:
             logger.info(f"[ReconstructionAgent] Rekonstruiere Mesh: {mesh_path}")
 
-            # 1. Mesh analysieren
-            if self.on_progress:
-                self.on_progress(0.1, "Analysiere Mesh...")
+            # 1. Mesh analysieren (wenn nicht übergeben)
+            if analysis is None:
+                if self.on_progress:
+                    self.on_progress(0.1, "Analysiere Mesh...")
 
-            self._notify("Starte Mesh-Analyse...")
-
-            analysis = self.analyzer.analyze(mesh_path)
+                self._notify("Starte Mesh-Analyse...")
+                analysis = self.analyzer.analyze(mesh_path)
+            else:
+                 logger.info("Verwende existierende Analyse")
 
             if self.slow_mode:
                 time.sleep(self.step_delay)
 
-            # 2. Schritte planen
+            # 2. Schritte planen (falls nötig, MeshAnalysis hat steps)
             if self.on_progress:
                 self.on_progress(0.3, "Plane Rekonstruktion...")
 
-            self._notify(f"Analyse abgeschlossen: {analysis.primitive_count} Primitives")
+            if hasattr(analysis, 'primitive_count'):
+                self._notify(f"Analyse abgeschlossen: {analysis.primitive_count} Primitives")
+            elif hasattr(analysis, 'holes'):
+                count = len(analysis.holes) + (1 if analysis.base_plane else 0)
+                self._notify(f"Analyse abgeschlossen: {count} Features (STL)")
+            else:
+                self._notify("Analyse abgeschlossen")
+
+            # 2. Schritte planen
+            step_data_list = []
+            
+            # Check if analysis is STLFeatureAnalysis (duck typing or check class name)
+            is_stl_analysis = hasattr(analysis, 'base_plane') and hasattr(analysis, 'holes')
+            
+            if is_stl_analysis:
+                logger.info("Konvertiere STLFeatureAnalysis in Rekonstruktions-Schritte")
+                step_data_list = self._convert_stl_analysis_to_steps(analysis)
+            elif hasattr(analysis, 'suggested_steps'):
+                 step_data_list = analysis.suggested_steps
+            else:
+                 logger.warning("Unbekanntes Analyse-Format")
+                 step_data_list = []
+            
+            if self.on_progress:
+                self.on_progress(0.3, f"Plane Rekonstruktion ({len(step_data_list)} Schritte)...")
 
             # 3. Schritte ausführen
             step_id = 0
-            total_steps = len(analysis.suggested_steps)
+            total_steps = len(step_data_list)
 
-            for step_data in analysis.suggested_steps:
-                step = ReconstructionStep(**step_data)
-
+            for step_data in step_data_list:
+                # Convert dict to ReconstructionStep if needed
+                if isinstance(step_data, dict):
+                    step = ReconstructionStep(**step_data)
+                else:
+                    step = step_data # Already a Step object?
+                
                 # Schritt-Start Callback
                 if self.on_step_start:
                     self.on_step_start(step)
@@ -262,6 +298,12 @@ class ReconstructionAgent:
             sketch_name = f"reconstruction_profile_{profile_type}"
 
             sketch = Sketch(sketch_name)
+            
+            # Set plane if provided
+            if "plane_origin" in params:
+                 sketch.plane_origin = params["plane_origin"]
+            if "plane_normal" in params:
+                 sketch.plane_normal = params["plane_normal"]
 
             if profile_type == "circle":
                 # Circle wird als Polygon mit vielen Seiten approximiert
@@ -281,10 +323,53 @@ class ReconstructionAgent:
                 sketch.add_rectangle(x, y, width, height)
 
             elif profile_type == "polygon":
-                sides = params.get("sides", 6)
-                radius = params.get("radius", 10)
-                center = params.get("center", (0, 0))
-                sketch.add_regular_polygon(center[0], center[1], radius, sides)
+                points = params.get("points")
+                if points:
+                    # Case 1: Explicit points (3D global)
+                    # We must project them to the sketch plane
+                    
+                    # Get Plane Info
+                    origin = np.array(params.get("plane_origin", (0,0,0)))
+                    normal = np.array(params.get("plane_normal", (0,0,1)))
+                    
+                    # Check if normal is valid
+                    if np.linalg.norm(normal) < 1e-6:
+                        normal = np.array((0,0,1))
+                    
+                    # Compute X/Y directions
+                    # X-Dir: Perpendicular to Normal
+                    if abs(normal[2]) < 0.99:
+                        x_dir = np.cross((0,0,1), normal)
+                    else:
+                        x_dir = np.cross((1,0,0), normal)
+                    x_dir = x_dir / np.linalg.norm(x_dir)
+                    
+                    # Y-Dir: Normal x X-Dir
+                    y_dir = np.cross(normal, x_dir)
+                    y_dir = y_dir / np.linalg.norm(y_dir)
+                    
+                    # Set Sketch Plane info explicitely
+                    sketch.plane_origin = tuple(origin)
+                    sketch.plane_normal = tuple(normal)
+                    sketch.plane_x_dir = tuple(x_dir)
+                    sketch.plane_y_dir = tuple(y_dir)
+                    
+                    # Project Points
+                    projected_points = []
+                    for p in points:
+                        vec = np.array(p) - origin
+                        u = np.dot(vec, x_dir)
+                        v = np.dot(vec, y_dir)
+                        projected_points.append((u, v))
+                        
+                    sketch.add_polygon(projected_points)
+                    
+                else:
+                    # Case 2: Regular Polygon (sides/radius)
+                    sides = params.get("sides", 6)
+                    radius = params.get("radius", 10)
+                    center = params.get("center", (0, 0))
+                    sketch.add_regular_polygon(center[0], center[1], radius, sides)
 
             else:
                 logger.warning(f"[ReconstructionAgent] Unbekannter Profil-Typ: {profile_type}")
@@ -326,16 +411,31 @@ class ReconstructionAgent:
                 logger.warning("[ReconstructionAgent] Kein Sketch für Extrusion")
                 return None
 
-            # Document und Body erstellen
-            doc = Document("ReconstructionDoc")
-            body = Body("ReconstructionBody", document=doc)
-            doc.add_body(body)
+            # Document und Body erstellen/nutzen
+            if self.document:
+                doc = self.document
+                # Prüfen ob wir schon einen Body für dieses Part haben
+                # Für vereinfachte Rekonstruktion erstellen wir einen neuen
+                import uuid
+                body_name = f"Reconstructed_{uuid.uuid4().hex[:6]}"
+                body = Body(body_name, document=doc)
+                doc.add_body(body)
+                
+                # Sketch auch zum Doc hinzufügen falls noch nicht dort
+                if sketch not in doc.sketches:
+                    doc.sketches.append(sketch)
+            else:
+                # Standalone Mode
+                doc = Document("ReconstructionDoc")
+                body = Body("ReconstructionBody", document=doc)
+                doc.add_body(body)
 
             # ExtrudeFeature erstellen
+            op_str = params.get("operation", "New Body")
             feature = ExtrudeFeature(
                 sketch=sketch,
                 distance=distance,
-                operation="New Body"
+                operation=op_str
             )
             body.add_feature(feature)
 
@@ -414,6 +514,113 @@ class ReconstructionAgent:
         # Wenn Viewport verfügbar, zeige Nachricht
         if self.viewport and hasattr(self.viewport, 'show_notification'):
             self.viewport.show_notification(message)
+
+    def _convert_stl_analysis_to_steps(self, analysis: Any) -> List[Any]:
+        """
+        Konvertiert STLFeatureAnalysis in ReconstructionSteps.
+        """
+        steps = []
+        step_id = 0
+        
+        # 1. Base Plane
+        if analysis.base_plane:
+            # Check enabled status
+            if hasattr(analysis.base_plane, 'enabled') and not analysis.base_plane.enabled:
+                logger.info("Base Plane disabled by user - skipping")
+            else:
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_plane",
+                    "description": f"Base-Plane erkannt: {analysis.base_plane.area:.0f}mm²",
+                    "params": {"plane": analysis.base_plane}
+                })
+                step_id += 1
+                
+                # Base Sketch (Profil)
+                if analysis.base_plane.boundary_points:
+                    # Use extracted boundary
+                    steps.append({
+                        "step_id": step_id,
+                        "operation": "create_profile",
+                        "description": "Erstelle Base-Profil (Polygonal)",
+                        "params": {
+                            "type": "polygon",
+                            "points": analysis.base_plane.boundary_points,
+                            "plane_origin": analysis.base_plane.origin,
+                            "plane_normal": analysis.base_plane.normal
+                        }
+                    })
+                else:
+                    # Approximiere Rechteck aus Fläche
+                    size = (analysis.base_plane.area ** 0.5)
+                    steps.append({
+                        "step_id": step_id,
+                        "operation": "create_profile",
+                        "description": "Erstelle Base-Profil (Rechteck)",
+                        "params": {
+                            "type": "rectangle",
+                            "width": size,
+                            "height": size,
+                            "center": (0, 0), # Local center on plane
+                            "plane_origin": analysis.base_plane.origin,
+                            "plane_normal": analysis.base_plane.normal
+                        }
+                    })
+                step_id += 1
+                
+                # Extrude Base
+                # Höhe schätzen oder Default
+                # Verwende max Tiefe von Löchern/Pockets als Hinweis oder Default 10
+                depth = 10.0
+                if analysis.holes:
+                    max_hole_depth = max(h.depth for h in analysis.holes)
+                    if max_hole_depth > depth:
+                        depth = max_hole_depth
+                
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "extrude",
+                    "description": f"Extrudiere Base: {depth:.1f}mm",
+                    "params": {
+                        "distance": depth,
+                        "operation": "New Body"
+                    }
+                })
+                step_id += 1
+            
+        # 2. Holes (als Cuts)
+        for i, hole in enumerate(analysis.holes):
+            if hasattr(hole, 'enabled') and not hole.enabled:
+                continue
+
+            # Sketch für Loch
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_profile",
+                "description": f"Hole #{i+1} Profil (r={hole.radius:.1f}mm)",
+                "params": {
+                    "type": "circle",
+                    "radius": hole.radius,
+                    "center": (0, 0), # Local center
+                    "plane_origin": hole.center,
+                    "plane_normal": hole.axis
+                }
+            })
+            step_id += 1
+            
+            # Cut
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Hole #{i+1} Cut (d={hole.depth:.1f}mm)",
+                "params": {
+                    "distance": hole.depth,
+                    "operation": "Cut"
+                }
+            })
+            step_id += 1
+            
+        return steps
 
     def get_stats(self) -> dict:
         """Statistiken des ReconstructionAgent."""

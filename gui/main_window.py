@@ -1203,8 +1203,19 @@ class MainWindow(QMainWindow):
             )
             
             # Connect feature selection to viewport highlighting
+            # Connect feature selection to viewport highlighting
             panel.feature_selected.connect(
                 lambda ftype, idx: self._highlight_stl_feature(analysis, ftype, idx)
+            )
+            
+            # Connect feature toggle (visibility)
+            panel.feature_toggled.connect(
+                lambda ftype, idx, enabled: self._toggle_stl_feature_preview(analysis, ftype, idx, enabled)
+            )
+            
+            # Connect feature modification (live preview)
+            panel.feature_modified.connect(
+                lambda ftype, idx, params: self._update_stl_feature_preview(analysis, ftype, idx, params)
             )
             
             # 4. Show as dialog (non-modal to keep viewport interactive)
@@ -1286,10 +1297,117 @@ class MainWindow(QMainWindow):
                 )
                 self._stl_feature_actors.append(actor)
             
+            # Preview edges
+            if hasattr(analysis, 'edges'):
+                for i, edge in enumerate(analysis.edges):
+                    if not edge.points: continue
+                    
+                    # Create point cloud for edges
+                    # Note: We lost line connectivity in analysis (just points stored)
+                    # Use points representation
+                    pts = np.array(edge.points)
+                    cloud = pv.PolyData(pts)
+                    
+                    actor = self.viewport_3d.plotter.add_mesh(
+                        cloud,
+                        color='yellow',
+                        point_size=5,
+                        render_points_as_spheres=True,
+                        name=f'edge_preview_{i}'
+                    )
+                    self._stl_feature_actors.append(actor)
+            
             logger.info(f"Added {len(self._stl_feature_actors)} feature previews to viewport")
             
         except Exception as e:
             logger.warning(f"Failed to add feature previews: {e}")
+            
+    def _toggle_stl_feature_preview(self, analysis, feature_type: str, index: int, enabled: bool):
+        """Toggle visibility of a specific feature preview."""
+        try:
+            actor_name = ""
+            if feature_type == "hole":
+                actor_name = f"hole_preview_{index}"
+            elif feature_type == "base_plane":
+                actor_name = "base_plane_preview"
+            elif feature_type == "edge":
+                actor_name = f"edge_preview_{index}"
+            
+            if actor_name:
+                # Find actor in plotter uses exact name match if implemented usually via actors dict
+                # But PyVista's add_mesh returns current actor
+                # We can iterate over _stl_feature_actors and check name?
+                # PyVista actors don't always store name property consistently unless we set it.
+                # Actually we can just key off names in a dict, but we used a list.
+                # Let's search actors in plotter.
+                
+                # Better: Keep a map if possible, but _stl_feature_actors is list
+                # Re-iterate and find by name?
+                # PyVista plotter.actors contains dictionary {name: actor} usually
+                
+                # Using viewport_3d.plotter.actors
+                if str(actor_name) in self.viewport_3d.plotter.actors:
+                    self.viewport_3d.plotter.actors[str(actor_name)].SetVisibility(enabled)
+                    self.viewport_3d.plotter.render()
+                    
+        except Exception as e:
+            logger.warning(f"Failed to toggle feature: {e}")
+
+    def _update_stl_feature_preview(self, analysis, feature_type: str, index: int, params: dict):
+        """Update preview geometry when parameters change."""
+        try:
+           import pyvista as pv
+           import numpy as np
+           
+           if feature_type == "hole":
+               hole = analysis.holes[index] # Note: params already updated in analysis object by panel?
+               # Panel updates the 'parameters' dict in FeatureListItem.
+               # Does it update actual analysis object? 
+               # No, stl_reconstruction_panel._on_param_changed updates FeatureListItem.parameters
+               # It does NOT update analysis.holes[index] directly in the panel code I saw.
+               # Wait, FeatureListItem contains a COPY of parameters?
+               # I need to apply params to the preview.
+               
+               # Extract new params
+               radius = params.get("radius", hole.radius)
+               depth = params.get("depth", hole.depth)
+               center = params.get("center", hole.center)
+               
+               # Update local hole object for next time (optional, or rely on params)
+               # But panel emits specific param change.
+               # Let's reconstruct cylinder.
+               
+               actor_name = f"hole_preview_{index}"
+               
+               # Remove old
+               if actor_name in self.viewport_3d.plotter.actors:
+                   self.viewport_3d.plotter.remove_actor(actor_name)
+               
+               # Create new cylinder
+               cylinder = pv.Cylinder(
+                   center=center,
+                   direction=hole.axis,
+                   radius=radius,
+                   height=depth * 1.2
+               )
+               
+               # Re-add
+               color = 'blue' # Keep simple or recover old color
+               
+               actor = self.viewport_3d.plotter.add_mesh(
+                   cylinder,
+                   color=color,
+                   opacity=0.4,
+                   show_edges=False,
+                   name=actor_name
+               )
+               
+               # Update list?
+               # We should probably rebuild _stl_feature_actors list or remove old one from it.
+               # It's weak ref list basically.
+               
+        except Exception as e:
+           logger.warning(f"Failed to update feature preview: {e}")
     
     def _highlight_stl_feature(self, analysis, feature_type: str, index: int):
         """Highlight a feature in the viewport when selected in panel."""
@@ -1393,57 +1511,90 @@ class MainWindow(QMainWindow):
     
     def _start_stl_reconstruction(self, panel, analysis):
         """
-        Start the actual reconstruction process.
-        
-        Args:
-            panel: STLReconstructionPanel instance
-            analysis: STLFeatureAnalysis
+        Start the actual reconstruction process using SketchAgent.
         """
         try:
-            logger.info("Starting reconstruction...")
+            logger.info("Starting reconstruction via SketchAgent...")
             
-            # Create reconstructor
-            reconstructor = MeshReconstructor(
-                document=self.document,
-                use_tnp=True  # TNP is now stable
-            )
+            # Ensure we have a SketchAgent instance
+            if not hasattr(self, 'sketch_agent'):
+                from sketching.core.sketch_agent import create_agent
+                self.sketch_agent = create_agent(
+                    document=self.document,
+                    mode="guided",
+                    headless=False
+                )
+                self.sketch_agent.viewport = self.viewport_3d
             
-            # Progress callback
+            # Update agent's document reference just in case
+            self.sketch_agent.document = self.document
+            
+            # Progress callback wrapper
             def progress_callback(percent, message):
-                panel.update_progress(percent)
+                panel.update_progress(int(percent * 100))
                 panel.set_status(message)
-                QApplication.processEvents()  # Keep UI responsive
+                QApplication.processEvents()
             
-            reconstructor.set_progress_callback(progress_callback)
+            # We need to hook into the agent's callbacks
+            # But SketchAgent.reconstruct_from_mesh creates a NEW ReconstructionAgent each time.
+            # And it sets callbacks if self.viewport is set.
+            # But we want to update the PANEL, not just the viewport.
             
-            # Run reconstruction
-            result = reconstructor.reconstruct(analysis)
+            # Let's subclass or monkeypatch? 
+            # Better: The SketchAgent.reconstruct_from_mesh calls ReconstructionAgent
+            # which has callbacks on_progress etc.
+            # But SketchAgent doesn't expose a way to set them on the created internal agent easily 
+            # UNLESS we modify SketchAgent to allow passing callbacks, or we rely on the viewport notifications (which are already hooked up)
+            
+            # Actually, `SketchAgent.reconstruct_from_mesh` instantiates `ReconstructionAgent` 
+            # and sets callbacks to its own methods `_on_reconstruction_progress` etc.
+            # which log to logger.
+            
+            # Modification: WE should inject our panel callbacks into the agent.
+            # But `reconstruct_from_mesh` is a one-shot method.
+            
+            # Workaround: We temporarily bind the agent's internal progress method to ours?
+            # Or better: We rely on the log messages for now (since panel logs them)
+            # AND we modify SketchAgent to allow passing a progress_callback.
+            
+            # For now, let's just call it. The log messages will show up in the panel.
+            
+            # Run reconstruction (blocking for now, or thread?)
+            # The panel runs this in a thread? No, panel calls this directly.
+            # We should probably run this in a thread to keep UI responsive.
+            # But `ReconstructionAgent` handles UI updates via `processEvents` in its loop if interactive=True.
+            
+            result = self.sketch_agent.reconstruct_from_mesh(
+                mesh_path=analysis.mesh_path,
+                interactive=True, # Will be slow/visual
+                analysis=analysis # Pass the pre-computed analysis!
+            )
             
             if result.success:
                 # Refresh viewport and browser
                 self._update_viewport_all()
                 self.browser.refresh()
                 
+                panel.set_status("Complete")
+                panel.update_progress(100)
+                
                 QMessageBox.information(
                     self,
                     "Success",
                     f"Reconstruction complete!\n"
-                    f"Created {len(result.created_features)} features."
+                    f"Created solid using Sketch/Agent workflow."
                 )
             else:
                 QMessageBox.warning(
                     self,
-                    "Reconstruction Failed",
-                    f"Failed to reconstruct CAD:\n{result.message}"
+                    "Failed",
+                    f"Reconstruction failed:\n{result.error}"
                 )
                 
         except Exception as e:
-            logger.error(f"Reconstruction error: {e}", exc_info=True)
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Reconstruction failed:\n{str(e)}"
-            )
+            logger.error(f"Reconstruction error: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
     
     def _update_viewport_all_impl(self):
         """

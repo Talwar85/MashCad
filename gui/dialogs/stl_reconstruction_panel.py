@@ -434,7 +434,24 @@ class STLReconstructionPanel(QWidget):
         if column == 0:  # Checkbox column
             feature_item = item.data(0, Qt.UserRole)
             if feature_item:
-                feature_item.is_selected = item.checkState(0) == Qt.Checked
+                is_selected = (item.checkState(0) == Qt.Checked)
+                feature_item.is_selected = is_selected
+                
+                # Update underlying analysis object if possible
+                if self._analysis:
+                    if feature_item.feature_type == "base_plane":
+                        if self._analysis.base_plane:
+                            self._analysis.base_plane.enabled = is_selected
+                    elif feature_item.feature_type == "hole":
+                        if 0 <= feature_item.index < len(self._analysis.holes):
+                            self._analysis.holes[feature_item.index].enabled = is_selected
+                    elif feature_item.feature_type == "pocket":
+                         if 0 <= feature_item.index < len(self._analysis.pockets):
+                            self._analysis.pockets[feature_item.index].enabled = is_selected
+                    elif feature_item.feature_type == "fillet":
+                         if 0 <= feature_item.index < len(self._analysis.fillets):
+                            self._analysis.fillets[feature_item.index].enabled = is_selected
+
                 self.feature_toggled.emit(
                     feature_item.feature_type,
                     feature_item.index,

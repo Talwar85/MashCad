@@ -354,10 +354,7 @@ class MeshReconstructor:
             size = np.sqrt(base_plane.area)
             half_size = size / 2
             
-            sketch.add_rectangle(
-                (-half_size, -half_size),
-                (half_size, half_size)
-            )
+            sketch.add_rectangle(-half_size, -half_size, size, size)
             
             # Add to document
             if self.document:
