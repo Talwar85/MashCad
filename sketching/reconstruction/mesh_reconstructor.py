@@ -413,84 +413,64 @@ class MeshReconstructor:
     
     def _extract_boundary_points(self, base_plane: Any) -> List[Tuple[float, float, float]]:
         """
-        Extract exact boundary contour from mesh.
+        Extract exact boundary contour from mesh vertices.
         
-        Uses the actual mesh geometry to get precise edge loop.
+        Uses Z-min + tolerance (0.1mm) to find base vertices.
+        Same logic as viewport preview.
         """
         try:
             import pyvista as pv
+            from scipy.spatial import ConvexHull
             
-            if self._mesh is None or not hasattr(base_plane, 'face_indices'):
-                # Fallback to rectangle
+            if self._mesh is None:
                 return self._extract_rectangle_fallback(base_plane)
             
-            # Extract faces belonging to base plane
-            face_indices = base_plane.face_indices
-            if not face_indices:
+            # Get all mesh points
+            points = self._mesh.points
+            
+            # Find Z-min + tolerance (0.1mm for 3D print tolerance)
+            z_min = points[:, 2].min()
+            tolerance = 0.1
+            
+            # Points at base level
+            base_mask = points[:, 2] < (z_min + tolerance)
+            base_points = points[base_mask]
+            
+            if len(base_points) < 3:
+                logger.warning(f"Only {len(base_points)} base points found")
                 return self._extract_rectangle_fallback(base_plane)
             
-            # Get points from these faces
-            all_points = []
-            for face_id in face_indices:
-                try:
-                    face = self._mesh.extract_cells(face_id)
-                    points = face.points
-                    all_points.extend(points)
-                except:
-                    continue
+            # Project to 2D (XY)
+            points_2d = base_points[:, :2]
             
-            if not all_points:
+            # Remove duplicates
+            unique_points = []
+            for p in points_2d:
+                is_dup = False
+                for u in unique_points:
+                    if np.linalg.norm(p - u) < 0.5:
+                        is_dup = True
+                        break
+                if not is_dup:
+                    unique_points.append(p)
+            
+            if len(unique_points) < 3:
                 return self._extract_rectangle_fallback(base_plane)
             
-            # Project points to plane and find convex hull
-            origin = np.array(base_plane.origin)
-            normal = np.array(base_plane.normal)
+            points_2d = np.array(unique_points)
             
-            # Create local coordinate system
-            if np.allclose(normal, [0, 0, 1]) or np.allclose(normal, [0, 0, -1]):
-                u = np.array([1, 0, 0])
-                v = np.array([0, 1, 0])
-            else:
-                u = np.cross(normal, [0, 0, 1])
-                u = u / (np.linalg.norm(u) + 1e-10)
-                v = np.cross(normal, u)
-                v = v / (np.linalg.norm(v) + 1e-10)
+            # Convex hull
+            hull = ConvexHull(points_2d)
+            hull_points_2d = points_2d[hull.vertices]
             
-            # Project all points to 2D
-            points_2d = []
-            for p in all_points:
-                p_vec = np.array(p) - origin
-                u_coord = np.dot(p_vec, u)
-                v_coord = np.dot(p_vec, v)
-                points_2d.append((u_coord, v_coord))
+            # Back to 3D at Z-min
+            points_3d = [(float(p[0]), float(p[1]), float(z_min)) for p in hull_points_2d]
             
-            # Find convex hull (outer boundary)
-            try:
-                from scipy.spatial import ConvexHull
-                hull = ConvexHull(points_2d)
-                hull_points_2d = [points_2d[i] for i in hull.vertices]
-            except:
-                # Fallback: use min/max bounding box
-                u_coords = [p[0] for p in points_2d]
-                v_coords = [p[1] for p in points_2d]
-                u_min, u_max = min(u_coords), max(u_coords)
-                v_min, v_max = min(v_coords), max(v_coords)
-                hull_points_2d = [
-                    (u_min, v_min), (u_max, v_min),
-                    (u_max, v_max), (u_min, v_max)
-                ]
-            
-            # Convert back to 3D
-            points_3d = []
-            for u_coord, v_coord in hull_points_2d:
-                point = origin + u_coord * u + v_coord * v
-                points_3d.append(tuple(point))
-            
-            logger.info(f"Extracted exact contour from mesh: {len(points_3d)} points")
+            logger.info(f"Extracted {len(points_3d)} boundary points from mesh")
             return points_3d
             
         except Exception as e:
-            logger.warning(f"Failed to extract boundary from mesh: {e}")
+            logger.warning(f"Failed to extract boundary: {e}")
             return self._extract_rectangle_fallback(base_plane)
     
     def _extract_rectangle_fallback(self, base_plane: Any) -> List[Tuple[float, float, float]]:

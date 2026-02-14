@@ -3,6 +3,7 @@ STL Feature Analyzer for CAD Feature Detection.
 
 Detects features from STL meshes with confidence scoring.
 Uses scikit-learn and scipy for robust detection if available.
+NOW WITH VISUAL ALGORITHMS - No more guessing!
 """
 
 import logging
