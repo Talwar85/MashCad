@@ -342,23 +342,12 @@ class MeshReconstructor:
         TNP-Exempt: Uses geometric plane parameters, not ShapeIDs.
         """
         try:
-            from sketching import Sketch
-            from modeling import Plane
+            from sketcher import Sketch
             
-            # Create plane from detected parameters
-            origin = base_plane.origin
-            normal = base_plane.normal
-            
-            # Create a plane for the sketch
-            # Note: This is simplified - real implementation would need
-            # to properly define the plane orientation
-            plane = Plane(
-                origin=origin,
-                normal=normal
-            )
-            
-            # Create sketch
-            sketch = Sketch(name="Base_Sketch", plane=plane)
+            # Create sketch with detected plane parameters
+            sketch = Sketch(name="Base_Sketch")
+            sketch.plane_origin = base_plane.origin
+            sketch.plane_normal = base_plane.normal
             
             # Add profile geometry (simplified rectangle for now)
             # Real implementation would trace the actual mesh profile
@@ -427,16 +416,12 @@ class MeshReconstructor:
         Uses geometric hole parameters.
         """
         try:
-            from sketching import Sketch
-            from modeling import Plane
+            from sketcher import Sketch
             
-            # Create plane at hole center, oriented to hole axis
-            plane = Plane(
-                origin=hole.center,
-                normal=hole.axis
-            )
-            
-            sketch = Sketch(name=f"Hole_Sketch_{uuid.uuid4().hex[:8]}", plane=plane)
+            # Create sketch at hole center, oriented to hole axis
+            sketch = Sketch(name=f"Hole_Sketch_{uuid.uuid4().hex[:8]}")
+            sketch.plane_origin = hole.center
+            sketch.plane_normal = hole.axis
             
             # Add circle for hole
             sketch.add_circle((0, 0), hole.radius)

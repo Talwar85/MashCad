@@ -60,6 +60,7 @@ class ReconstructionWorker(QObject):
     progress_updated = Signal(int)  # percent
     reconstruction_finished = Signal(bool, str)  # success, message
     log_message = Signal(str)  # message
+    finished = Signal()  # Emitted when worker is done
     
     def __init__(self, reconstructor, analysis):
         super().__init__()
@@ -104,6 +105,8 @@ class ReconstructionWorker(QObject):
         except Exception as e:
             logger.error(f"Reconstruction failed: {e}")
             self.reconstruction_finished.emit(False, str(e))
+        finally:
+            self.finished.emit()
     
     def cancel(self):
         """Request cancellation."""
