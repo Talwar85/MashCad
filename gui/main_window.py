@@ -1273,10 +1273,9 @@ class MainWindow(QMainWindow):
                 )
                 self._stl_feature_actors.append(actor)
             
-            # Preview base plane
+            # Preview base plane - EXACT contour from mesh
             if analysis.base_plane:
-                # Create a plane representation
-                plane_center = analysis.base_plane.origin
+                self._preview_base_plane_exact(mesh, analysis.base_plane)
                 plane_normal = analysis.base_plane.normal
                 
                 # Create a disk/plane visualization
@@ -1321,6 +1320,104 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             logger.warning(f"Failed to add feature previews: {e}")
+    
+    def _preview_base_plane_exact(self, mesh, base_plane):
+        """
+        Preview base plane with EXACT contour from mesh vertices.
+        
+        Extracts vertices at the base Z-level with 0.1mm tolerance.
+        """
+        try:
+            import pyvista as pv
+            import numpy as np
+            from scipy.spatial import ConvexHull
+            
+            # Get all mesh points
+            points = mesh.points
+            
+            # Determine Z-range for base (bottom 10% + tolerance)
+            z_min = points[:, 2].min()
+            z_max = points[:, 2].max()
+            tolerance = 0.1  # 0.1mm for 3D print tolerance
+            
+            # Find points at base level (bottom)
+            base_mask = points[:, 2] < (z_min + tolerance)
+            base_points = points[base_mask]
+            
+            if len(base_points) < 3:
+                logger.warning("Not enough base points found")
+                return
+            
+            logger.info(f"Found {len(base_points)} base points (Z < {z_min + tolerance:.3f})")
+            
+            # Project to 2D (XY plane, ignoring Z)
+            points_2d = base_points[:, :2]
+            
+            # Remove duplicates (very close points)
+            # Simple deduplication
+            unique_points = []
+            for p in points_2d:
+                is_duplicate = False
+                for u in unique_points:
+                    if np.linalg.norm(p - u) < 0.5:  # 0.5mm threshold
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    unique_points.append(p)
+            
+            points_2d = np.array(unique_points)
+            
+            if len(points_2d) < 3:
+                logger.warning("Not enough unique base points")
+                return
+            
+            # Compute convex hull
+            hull = ConvexHull(points_2d)
+            hull_points_2d = points_2d[hull.vertices]
+            
+            # Create 3D polygon (at Z = z_min)
+            hull_points_3d = np.column_stack([
+                hull_points_2d,
+                np.full(len(hull_points_2d), z_min)
+            ])
+            
+            # Create lines connecting hull points
+            lines = []
+            n = len(hull_points_3d)
+            for i in range(n):
+                lines.append([2, i, (i + 1) % n])  # PyVista line format
+            
+            lines = np.array(lines)
+            
+            # Create polydata
+            poly = pv.PolyData()
+            poly.points = hull_points_3d
+            poly.lines = lines
+            
+            # Add to viewport
+            actor = self.viewport_3d.plotter.add_mesh(
+                poly,
+                color='lime',
+                line_width=4,
+                name='base_plane_exact'
+            )
+            self._stl_feature_actors.append(actor)
+            
+            # Also add points as spheres for visibility
+            spheres = pv.PolyData(hull_points_3d)
+            actor_pts = self.viewport_3d.plotter.add_mesh(
+                spheres,
+                color='red',
+                point_size=10,
+                render_points_as_spheres=True,
+                name='base_plane_points'
+            )
+            self._stl_feature_actors.append(actor_pts)
+            
+            logger.info(f"Exact base plane preview: {len(hull_points_3d)} vertices")
+            
+        except Exception as e:
+            logger.warning(f"Failed to preview exact base plane: {e}")
             
     def _toggle_stl_feature_preview(self, analysis, feature_type: str, index: int, enabled: bool):
         """Toggle visibility of a specific feature preview."""

@@ -412,26 +412,349 @@ class STLFeatureAnalyzer:
             
             # Calculate centroid
             face_centers = [centers[i] for i in face_indices]
-            origin = tuple(np.mean(face_centers, axis=0))
+            z_min = bounds[4]
+            z_max = bounds[5]
+            z_height = z_max - z_min
             
-            plane = PlaneInfo(
-                origin=origin,
-                normal=normal,
-                area=float(total_area),
-                face_indices=face_indices,
-                confidence=0.85,  # High confidence for this method
-                detection_method="bounding_box_base"
+            # Slice slightly above bottom to avoid noise/chamfers
+            # 1% height or 0.1mm, whichever is larger, but max 0.5mm
+            slice_h = max(0.1, min(0.5, z_height * 0.01))
+            slice_z = z_min + slice_h
+            
+            # Create slice
+            # Normal=(0,0,1) means slice plane normal is Z
+            slices = mesh.slice(normal=(0, 0, 1), origin=(0, 0, slice_z))
+            
+            if slices.n_points < 3:
+                return None
+                
+            # Compute area of the slice (approximate via triangulation of polygon)
+            # PyVista doesn't give area of lines directly, but we can extract loops
+            
+            # Extract loops
+            feature_edges = slices.extract_feature_edges(
+                boundary_edges=False, # It's lines, not faces
+                non_manifold_edges=False,
+                manifold_edges=False,
+                feature_edges=False
+            )
+            # slices are already lines (polydata lines), so we just need points/lines
+            lines = slices.lines
+            if lines.size == 0: return None
+            
+            # Helper to extract ordered loops from lines
+            # PyVista lines format: [n_pts, p0, p1, ..., n_pts, p0, p1...]
+            # But slice creates independent line segments usually
+            # We use our existing _extract_edge_loops if applicable, or logic here.
+            
+            # Actually, slices.lines might be connected strips.
+            # Let's try to grab the largest connected component
+            connectivity = slices.connectivity(largest=True)
+            boundary_points = []
+            
+            # Strip lines to ordered points
+            # This is tricky without a proper looper.
+            # Alternative: simpler approximation -> Convex Hull of the slice?
+            # User wants "exact shape".
+            # Let's trust my _extract_edge_loops which I might have implemented or will implement
+            
+            # Let's re-implement a simple looper for the slice
+            # Slice output is PolyData with Lines.
+            
+            # 1. Get all points of the largest component
+            pts = connectivity.points
+            # 2. Project to Z=0 for PlaneInfo (local coords 2D?)
+            # No, PlaneInfo needs 3D points.
+            # Using ConvexHull might lose concavities (holes).
+            
+            # Better: Use `strip` filter to join segments
+            stripped = connectivity.strip()
+            if stripped.n_lines > 0:
+                 # Get the first line (largest)
+                 # Format: [n, p0, p1, ... pk]
+                 lines_arr = stripped.lines
+                 n = lines_arr[0]
+                 point_indices = lines_arr[1:1+n]
+                 boundary_points = [tuple(stripped.points[i]) for i in point_indices]
+                 
+                 # Force Z to z_min (the actual base, not the slice height)
+                 boundary_points = [(p[0], p[1], z_min) for p in boundary_points]
+            
+            if not boundary_points:
+                return None
+                
+            # Calculate Area (Shoelace formula for XY)
+            # Area = 0.5 * |sum(x_i * y_{i+1} - x_{i+1} * y_i)|
+            area = 0.0
+            for i in range(len(boundary_points)):
+                j = (i + 1) % len(boundary_points)
+                area += boundary_points[i][0] * boundary_points[j][1]
+                area -= boundary_points[j][0] * boundary_points[i][1]
+            area = abs(area) * 0.5
+            
+            if area < 1.0: return None
+            
+            return PlaneInfo(
+                origin=(0.0, 0.0, z_min),
+                normal=(0.0, 0.0, 1.0),
+                area=area,
+                face_indices=[], # No faces mapped directly
+                confidence=0.95, # Very high confidence if sliced successfully
+                detection_method="z_slice_footprint",
+                boundary_points=boundary_points,
+                enabled=True
             )
             
-            logger.info(f"Base plane detected: {len(face_indices)} faces, "
-                       f"area={total_area:.2f}mm², normal={normal}")
+        except Exception as e:
+            logger.warning(f"Slice detection failed: {e}")
+    def _detect_base_plane_slice(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
+        """
+        Detects base plane by slicing the mesh near the bottom (Z-min).
+        Most robust method for 3D printed objects ("footprint").
+        """
+        try:
+            bounds = mesh.bounds
+            z_min = bounds[4]
+            z_max = bounds[5]
+            z_height = z_max - z_min
             
-            return plane
+            # Slice slightly above bottom to avoid noise/chamfers
+            # 1% height or 0.1mm, whichever is larger, but max 0.5mm
+            slice_h = max(0.1, min(0.5, z_height * 0.01))
+            slice_z = z_min + slice_h
+            
+            # Create slice
+            # Normal=(0,0,1) means slice plane normal is Z
+            slices = mesh.slice(normal=(0, 0, 1), origin=(0, 0, slice_z))
+            
+            if slices.n_points < 3:
+                return None
+                
+            # Compute area of the slice (approximate via triangulation of polygon)
+            # PyVista doesn't give area of lines directly, but we can extract loops
+            
+            # Extract loops
+            # Extract feature edges (boundary of the slice)
+            lines = slices.lines
+            if lines.size == 0: return None
+            
+            try:
+                from shapely.geometry import LineString, MultiLineString, Polygon, MultiPoint
+                from shapely.ops import linemerge, polygonize, unary_union
+            except ImportError:
+                logger.warning("Shapely not available for slice processing")
+                return None
+            
+            # Convert PyVista lines to Shapely LineStrings
+            # lines array: [n, p0, p1, ..., n, p0, p1]
+            segments = []
+            i = 0
+            pts = slices.points
+            while i < len(lines):
+                n_pts = lines[i]
+                if n_pts >= 2:
+                    # Extract points for this segment
+                    segment_indices = lines[i+1 : i+1+n_pts]
+                    segment_pts = pts[segment_indices]
+                    # We only care about X,Y for base plane (Z is constant slice_z)
+                    segments.append(LineString(segment_pts[:, :2])) 
+                i += 1 + n_pts
+                
+            if not segments:
+                return None
+                
+            # Merge segments into continuous lines
+            # This handles the "connecting" part robustly
+            try:
+                merged = linemerge(segments)
+            except Exception as e:
+                logger.warning(f"Linemerge failed: {e}")
+                merged = MultiLineString(segments)
+            
+            # Find polygons
+            polys = list(polygonize(merged))
+            
+            if not polys:
+                # logger.warning("Slice did not form a closed loop, trying ConvexHull of points")
+                # Fallback: Convex Hull of all points
+                points_2d = pts[:, :2]
+                hull = MultiPoint(points_2d).convex_hull
+                if hull.geom_type == 'Polygon':
+                    best_poly = hull
+                else:
+                    return None
+            else:
+                # Take the largest polygon by area (outer footprint)
+                best_poly = max(polys, key=lambda p: p.area)
+            
+            # Simplify slightly to reduce vertex count (0.1mm)
+            best_poly = best_poly.simplify(0.1, preserve_topology=True)
+            
+            if best_poly.is_empty: return None
+            
+            # Extract boundary points (back to 3D)
+            # exterior.coords is a list of (x, y)
+            exterior_coords = list(best_poly.exterior.coords)
+            
+            # Z=z_min (project back to true bottom)
+            boundary_points = [(x, y, z_min) for x, y in exterior_coords]
+            
+            if not boundary_points:
+                return None
+                
+            # Calculate Area (Shoelace formula for XY)
+            # Area = 0.5 * |sum(x_i * y_{i+1} - x_{i+1} * y_i)|
+            area = 0.0
+            for i in range(len(boundary_points)):
+                j = (i + 1) % len(boundary_points)
+                area += boundary_points[i][0] * boundary_points[j][1]
+                area -= boundary_points[j][0] * boundary_points[i][1]
+            area = abs(area) * 0.5
+            
+            if area < 1.0: return None
+            
+            return PlaneInfo(
+                origin=(0.0, 0.0, z_min),
+                normal=(0.0, 0.0, 1.0),
+                area=area,
+                face_indices=[], # No faces mapped directly
+                confidence=0.95, # Very high confidence if sliced successfully
+                detection_method="z_slice_footprint",
+                boundary_points=boundary_points,
+                enabled=True
+            )
             
         except Exception as e:
-            logger.error(f"Base plane detection failed: {e}")
-            return self._detect_base_plane_legacy(mesh)
+            logger.warning(f"Slice detection failed: {e}")
+            return None
 
+    def _detect_base_plane_points(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
+        """
+        Detects base plane by analyzing the point cloud at the bottom (Z-min).
+        Uses 'Alpha Shape' (Concave Hull) logic to find the true footprint.
+        """
+        try:
+            from scipy.spatial import Delaunay
+            from shapely.geometry import MultiPoint, Polygon
+            from shapely.ops import unary_union, triangulate
+            
+            bounds = mesh.bounds
+            z_min = bounds[4]
+            
+            # 1. Collect all points near z_min (within 0.5mm)
+            # This captures the "floor" points
+            points = mesh.points
+            mask = points[:, 2] < (z_min + 0.5)
+            floor_points = points[mask]
+            
+            if len(floor_points) < 4:
+                return None
+                
+            # 2. Project to 2D
+            points_2d = floor_points[:, :2]
+            
+            # 3. Compute Alpha Shape (Concave Hull) manually via Delaunay
+            # We filter triangles with edges longer than 'alpha'
+            # alpha = 10.0mm (max hole size we want to bridge? or feature detail?)
+            # Actually, for a footprint, we usually want the Convex Hull UNLESS there are large cutouts.
+            # But ConvexHull fills re-entrant corners (L-shapes).
+            # So Alpha Shape is better.
+            
+            # Simple approach using Shapely triangulate (Delaunay)
+            mp = MultiPoint(points_2d)
+            triangles = triangulate(mp)
+            
+            # Filter triangles by edge length
+            valid_triangles = []
+            max_edge_len = 15.0 # mm. Edges longer than this are "empty space"
+            
+            for tri in triangles:
+                if tri.area < 1e-6: continue
+                # Check edge lengths
+                coords = list(tri.exterior.coords)
+                is_valid = True
+                for k in range(3):
+                    p1 = np.array(coords[k])
+                    p2 = np.array(coords[k+1])
+                    dist = np.linalg.norm(p1 - p2)
+                    if dist > max_edge_len:
+                        is_valid = False
+                        break
+                if is_valid:
+                    valid_triangles.append(tri)
+            
+            if not valid_triangles:
+                # Fallbck to Convex Hull if no dense triangles found
+                hull = mp.convex_hull
+                if not isinstance(hull, Polygon): return None
+                best_poly = hull
+            else:
+                # Union of valid triangles = Concave Hull
+                best_poly = unary_union(valid_triangles)
+                
+                # Cleanup: Close holes? 
+                # For base plane, we usually want the OUTER boundary.
+                # If there are legit holes (like screw holes), they should be kept.
+                # But 'holes' in point cloud might be just missing data.
+                # Let's focus on the largest polygon
+                if best_poly.geom_type == 'MultiPolygon':
+                    best_poly = max(best_poly.geoms, key=lambda p: p.area)
+            
+            # Simplify
+            best_poly = best_poly.simplify(0.5, preserve_topology=True)
+            
+            if best_poly.is_empty: return None
+             
+            # 4. Extract Boundary
+            exterior_coords = list(best_poly.exterior.coords)
+            boundary_points = [(x, y, z_min) for x, y in exterior_coords]
+            
+            return PlaneInfo(
+                origin=(0.0, 0.0, z_min),
+                normal=(0.0, 0.0, 1.0),
+                area=best_poly.area,
+                face_indices=[],
+                confidence=0.98,
+                detection_method="point_cloud_alpha_shape",
+                boundary_points=boundary_points,
+                enabled=True
+            )
+            
+        except Exception as e:
+            logger.warning(f"Point cloud detection failed: {e}")
+            return None
+
+    def _detect_base_plane(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
+        """
+        Detects the most likely base plane (Z=0 usually).
+        Prioritizes Point Cloud (Alpha Shape) > Slicing > RANSAC > Legacy.
+        """
+        # 1. Option: Point Cloud Alpha Shape (User Request: "Connect the dots at bottom")
+        alpha_plane = self._detect_base_plane_points(mesh)
+        if alpha_plane:
+            logger.info(f"Alpha-Shape Plane found: {alpha_plane.area:.0f}mm²")
+            return alpha_plane
+
+        # 2. Option: Slice (Z-Min Footprint)
+        slice_plane = self._detect_base_plane_slice(mesh)
+        if slice_plane:
+            logger.info(f"Slice-Plane found: {slice_plane.area:.0f}mm²")
+            return slice_plane
+            
+        # 3. Option: RANSAC (Existing logic)
+        if HAS_SKLEARN:
+            ransac_plane = self._detect_plane_ransac(mesh)
+            # Only use RANSAC if we didn't find a slice or user wants generic plane
+            if ransac_plane:
+                logger.info(f"RANSAC Plane found: {ransac_plane.area:.0f}mm², normal={ransac_plane.normal}")
+                return ransac_plane
+
+        # 3. Option: 6-Sided Logic (Legacy/Fallback)
+        if not mesh.n_faces:
+             return None
+        existing_plane = self._detect_base_plane_legacy(mesh)
+        return existing_plane
+    
     def _detect_plane_ransac(self, mesh: 'pyvista.PolyData') -> Optional[PlaneInfo]:
         """
         Detektiert eine Ebene mittels RANSAC (Random Sample Consensus).
