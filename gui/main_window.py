@@ -4283,26 +4283,26 @@ class MainWindow(QMainWindow):
                 name = f"Box_{dialog.length:.0f}x{dialog.width:.0f}x{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="box", name=name,
-                    length=dialog.length, width=dialog.width, height=dialog.height
+                    parameters={"length": dialog.length, "width": dialog.width, "height": dialog.height}
                 )
             elif t == "cylinder":
                 name = f"Cylinder_R{dialog.radius:.0f}_H{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="cylinder", name=name,
-                    radius=dialog.radius, height=dialog.height
+                    parameters={"radius": dialog.radius, "height": dialog.height}
                 )
             elif t == "sphere":
                 name = f"Sphere_R{dialog.radius:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="sphere", name=name,
-                    radius=dialog.radius
+                    parameters={"radius": dialog.radius}
                 )
             elif t == "cone":
                 name = f"Cone_R{dialog.bottom_radius:.0f}_H{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="cone", name=name,
-                    bottom_radius=dialog.bottom_radius,
-                    top_radius=dialog.top_radius, height=dialog.height
+                    parameters={"bottom_radius": dialog.bottom_radius,
+                                "top_radius": dialog.top_radius, "height": dialog.height}
                 )
             else:
                 return
