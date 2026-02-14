@@ -1387,24 +1387,56 @@ class Body:
 
         for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX):
             explorer = TopExp_Explorer(input_shape, shape_type)
+            count = 0
             while explorer.More():
+                count += 1
                 sub_shape = explorer.Current()
-                try:
-                    for s in make_shape_op.Generated(sub_shape):
-                        history.AddGenerated(sub_shape, s)
-                except Exception:
-                    pass
-                try:
-                    for s in make_shape_op.Modified(sub_shape):
-                        history.AddModified(sub_shape, s)
-                except Exception:
-                    pass
-                try:
-                    if make_shape_op.IsDeleted(sub_shape):
-                        history.Remove(sub_shape)
-                except Exception:
-                    pass
+                
+                # Helper to check history for a shape and its reverse
+                def _check_and_add(s):
+                    # Generated
+                    try:
+                        gen = list(make_shape_op.Generated(s))
+                        if gen:
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Generated for {s} (Ori={s.Orientation()}): {len(gen)} items")
+                            for res in gen:
+                                history.AddGenerated(sub_shape, res) # Always map FROM the original sub_shape
+                    except Exception:
+                        pass
+                    
+                    # Modified
+                    try:
+                        mod = list(make_shape_op.Modified(s))
+                        if mod:
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Modified for {s} (Ori={s.Orientation()}): {len(mod)} items")
+                            for res in mod:
+                                history.AddModified(sub_shape, res)
+                    except Exception:
+                        pass
+                        
+                    # Deleted
+                    try:
+                        if make_shape_op.IsDeleted(s):
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Deleted {s} (Ori={s.Orientation()})")
+                            history.Remove(sub_shape)
+                    except Exception:
+                        pass
+
+                _check_and_add(sub_shape)
+                if sub_shape.Orientation() != 0: # Check reverse only if orientation is not "EXTERNAL" (0)? TopAbs orientation is enum.
+                     # TopAbs_FORWARD=0, TopAbs_REVERSED=1. 
+                     # Safe to just check Reversed() always.
+                     _check_and_add(sub_shape.Reversed())
+                
                 explorer.Next()
+            
+            if is_enabled("tnp_debug_logging"):
+                 logger.debug(f"TNP History: Scanned {count} items of type {shape_type}")
+
+        return history
 
         return history
 
@@ -4183,7 +4215,28 @@ class Body:
 
                     # TNP v4.0: ShapeNamingService Record aktualisieren
                     if idx < len(edge_shape_ids):
-                        self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
+                        old_sid = edge_shape_ids[idx]
+                        self._update_shape_naming_record(old_sid, best_edge)
+
+                        # Wenn UUID nach Rebuild-Invalidierung nicht mehr im
+                        # Registry ist, neue ShapeID registrieren und
+                        # edge_shape_ids aktualisieren.
+                        if (self._document
+                                and hasattr(self._document, '_shape_naming_service')):
+                            svc = self._document._shape_naming_service
+                            if hasattr(old_sid, 'uuid') and old_sid.uuid not in svc._shapes:
+                                new_sid = svc.register_shape(
+                                    ocp_shape=best_edge.wrapped if hasattr(best_edge, 'wrapped') else best_edge,
+                                    shape_type=ShapeType.EDGE,
+                                    feature_id=getattr(old_sid, 'feature_id', getattr(feature, 'id', '')),
+                                    local_index=getattr(old_sid, 'local_index', idx),
+                                )
+                                edge_shape_ids[idx] = new_sid
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(
+                                        f"ShapeID erneuert nach Rebuild: "
+                                        f"{old_sid.uuid[:8]} → {new_sid.uuid[:8]}"
+                                    )
 
                     # TNP v4.0: Topology-Index aktualisieren
                     try:
@@ -4977,6 +5030,31 @@ class Body:
                                 status = "ERROR"
                                 # Behalte current_solid (keine Änderung)
                                 continue
+
+            # ================= PUSHPULL =================
+            elif isinstance(feature, PushPullFeature):
+                # Push/Pull nutzt exakt dieselbe Logik wie Extrude (Join/Cut) auf Body-Face.
+                # Wir delegieren an _compute_extrude_part_brepfeat.
+                
+                def op_pushpull():
+                    return self._compute_extrude_part_brepfeat(feature, current_solid)
+
+                pushpull_result, status = self._safe_operation(
+                    f"PushPull_{i}",
+                    op_pushpull,
+                    feature=feature,
+                )
+
+                if pushpull_result and status == "SUCCESS":
+                    new_solid = pushpull_result
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"PushPullFeature: Erfolgreich ausgeführt ({feature.operation}, d={feature.distance})")
+                    
+                    self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
+                else:
+                    status = "ERROR"
+                    logger.error(f"PushPullFeature fehlgeschlagen: {self._last_operation_error}")
+                    new_solid = current_solid
 
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
@@ -7286,8 +7364,12 @@ class Body:
                         if not prism.IsDone():
                             raise ValueError("BRepFeat Operation fehlgeschlagen")
 
-                        result_shape = prism.Shape()
-                        result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
+                        # WICHTIG: Pre-USD Result für History-Tracking aufheben!
+                        # UnifySameDomain zerstört die Topologie, auf die die
+                        # BRepFeat-History verweist. Die History muss gegen
+                        # das pre-USD Solid geprüft werden.
+                        pre_usd_result_shape = prism.Shape()
+                        result_shape = self._unify_same_domain(pre_usd_result_shape, "BRepFeat_MakePrism")
                         result = Solid(result_shape)
 
                         is_valid = True
@@ -7328,23 +7410,21 @@ class Body:
                         _sync_feature_face_refs(candidate_face)
 
                         # === TNP v4.0: BRepFeat-Operation tracken ===
+                        # WICHTIG: Wir übergeben den prism-Operator direkt als
+                        # occt_history (wie Fillet/Chamfer), und das pre-USD
+                        # Result als result_solid. So findet _shape_exists_in_solid
+                        # die Generated-Shapes (die im pre-USD Solid leben).
                         try:
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 service = self._document._shape_naming_service
-                                brepfeat_history = None
-                                try:
-                                    brepfeat_history = self._build_history_from_make_shape(prism, shape)
-                                except Exception as hist_err:
-                                    if is_enabled("tnp_debug_logging"):
-                                        logger.debug(f"TNP v4.0 BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                 service.track_brepfeat_operation(
                                     feature_id=feature.id,
                                     source_solid=current_solid,
-                                    result_solid=result,
+                                    result_solid=pre_usd_result_shape,
                                     modified_face=candidate_face,
                                     direction=(float(trial_normal[0]), float(trial_normal[1]), float(trial_normal[2])),
                                     distance=abs_dist,
-                                    occt_history=brepfeat_history,
+                                    occt_history=prism,
                                 )
                         except Exception as tnp_e:
                             if is_enabled("tnp_debug_logging"):

@@ -544,6 +544,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if hasattr(self.plotter, 'iren') and self.plotter.iren:
                 self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
         except: pass
+
+        # FPS-Observer an VTK RenderWindow anhängen
+        from gui.viewport.render_queue import RenderQueue
+        RenderQueue.attach_fps_observer(self.plotter)
     
     def _reset_camera_animated(self):
         self.plotter.view_isometric()

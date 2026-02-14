@@ -62,9 +62,11 @@ from gui.transform_state import TransformState
 try:
     from ocp_tessellate.tessellator import tessellate
     HAS_OCP_TESSELLATE = True
-except ImportError:
+except ImportError as e:
     HAS_OCP_TESSELLATE = False
-    logger.warning("ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
+    logger.critical(f"ocp-tessellate (Critical Dependency) nicht gefunden: {e}")
+    logger.critical("Bitte installieren mit: pip install ocp-tessellate")
+    sys.exit(1)
 
 # Surface Texture Export
 try:
@@ -415,6 +417,10 @@ class MainWindow(QMainWindow):
         # === STATUS BAR (unten) ===
         self.mashcad_status_bar = MashCadStatusBar()
         main_vertical.addWidget(self.mashcad_status_bar)
+
+        # FPS Counter mit StatusBar verbinden
+        from gui.viewport.render_queue import RenderQueue
+        RenderQueue.register_fps_callback(self.mashcad_status_bar.update_fps)
 
         # Extrude Input Panel (immer sichtbar während Extrude-Modus)
         self.extrude_panel = ExtrudeInputPanel(self)
@@ -6082,7 +6088,11 @@ class MainWindow(QMainWindow):
                     logger.debug(f"BRepFeat_MakePrism.IsDone() = {is_done}")
 
                     if is_done:
-                        result_shape = prism.Shape()
+                        # WICHTIG: Pre-USD Result für History-Tracking aufheben!
+                        # UnifySameDomain zerstört die Topologie, auf die die
+                        # BRepFeat-History verweist.
+                        pre_usd_result_shape = prism.Shape()
+                        result_shape = pre_usd_result_shape
 
                         # UnifySameDomain anwenden um koplanare Faces zu vereinen
                         # (BRepFeat erstellt eine Kante zwischen alter und neuer Geometrie)
@@ -6152,26 +6162,20 @@ class MainWindow(QMainWindow):
                                 feat.face_shape_id = feat_face_shape_id
 
                             # === TNP v4.0: BRepFeat Operation tracken (mit echter Feature-ID) ===
+                            # WICHTIG: prism-Operator direkt als occt_history und
+                            # pre-USD Result als result_solid übergeben, damit
+                            # _shape_exists_in_solid die Generated-Shapes findet.
                             try:
                                 if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
                                     service = self.document._shape_naming_service
-                                    brepfeat_history = None
-                                    try:
-                                        brepfeat_history = source_body._build_history_from_make_shape(
-                                            prism,
-                                            old_solid.wrapped if hasattr(old_solid, "wrapped") else old_solid,
-                                        )
-                                    except Exception as hist_err:
-                                        if is_enabled("tnp_debug_logging"):
-                                            logger.debug(f"TNP BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                     service.track_brepfeat_operation(
                                         feature_id=feat.id,
                                         source_solid=old_solid,
-                                        result_solid=new_solid,
+                                        result_solid=pre_usd_result_shape,
                                         modified_face=best_face,
                                         direction=(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2])),
                                         distance=abs_height,
-                                        occt_history=brepfeat_history,
+                                        occt_history=prism,
                                     )
                             except Exception as tnp_e:
                                 if is_enabled("tnp_debug_logging"):

@@ -1,0 +1,50 @@
+(cad_env) C:\LiteCad>python main.py
+2026-02-14 13:47:32.606 | SUCCESS  | modeling:<module>:83 - ✓ OCP (OpenCASCADE) geladen.
+2026-02-14 13:47:32.607 | SUCCESS  | modeling:<module>:102 - ✓ build123d geladen (High-Level API).
+2026-02-14 13:47:32.726 | SUCCESS  | gui.sketch_editor:<module>:48 - QuadTree Module loaded.
+2026-02-14 13:47:32.730 | SUCCESS  | gui.sketch_editor:<module>:93 - Build123d erfolgreich geladen für Sketch-Editor
+2026-02-14 13:47:33.652 | SUCCESS  | gui.viewport_pyvista:<module>:38 - PyVista & VTK erfolgreich geladen.
+13:47:33 | INFO     | TNP v4.0 ShapeNamingService initialisiert
+13:47:33 | DEBUG    | TNP v4.0: ShapeNamingService initialisiert für 'Projekt1'
+13:47:33 | DEBUG    | Component erstellt: Root (id=3f229d59)
+13:47:33 | INFO     | [ASSEMBLY] Component-System aktiviert für 'Projekt1'
+13:47:35 | DEBUG    | FPS-Observer an RenderWindow angehängt
+13:47:36 | DEBUG    | RenderQueue initialisiert (mit FPS-Tracking)
+13:47:36 | INFO     | Ready
+13:47:36 | INFO     | Ready. PyVista & Build123d active.
+13:47:37 | INFO     | Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche
+13:47:39 | DEBUG    | [Auto-Align] 90° (screen Y-dir, dot=0.52)
+13:47:39 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
+13:47:39 | DEBUG    | Sketch-Pfad-Modus beendet
+13:47:45 | DEBUG    | Profil-Trace abgebrochen: kein Nachbar für Punkt (7.00, 20.00), 1 Linien gesammelt
+13:47:45 | DEBUG    | Auto: VERTICAL
+13:47:46 | DEBUG    | Profil-Trace abgebrochen: kein Nachbar für Punkt (7.00, 62.00), 2 Linien gesammelt
+13:47:46 | DEBUG    | Auto: VERTICAL
+13:47:47 | DEBUG    | Profil-Trace abgebrochen: kein Nachbar für Punkt (7.00, 87.40), 3 Linien gesammelt
+13:47:47 | DEBUG    | Auto: HORIZONTAL
+13:47:48 | DEBUG    | Profil-Trace abgebrochen: kein Nachbar für Punkt (-0.20, 87.40), 4 Linien gesammelt
+13:47:48 | DEBUG    | Profile 0: 5 geometry segments: {'line'}
+13:47:48 | DEBUG    | Stored geometry map for profile: (-0.1, -0.0, 7.0, 87.4, 549.55)
+13:47:48 | DEBUG    | [CAD Kernel First] Synced 1 profiles to sketch (inkl. Holes)
+13:47:49 | DEBUG    | Profile 0: 5 geometry segments: {'line'}
+13:47:49 | DEBUG    | Stored geometry map for profile: (-0.1, -0.0, 7.0, 87.4, 549.55)
+13:47:49 | DEBUG    | [CAD Kernel First] Synced 1 profiles to sketch (inkl. Holes)
+13:47:50 | DEBUG    | [preview] clear transient previews: mode:sketch->3d
+13:47:50 | DEBUG    | Sketch-Pfad-Modus beendet
+13:47:53 | DEBUG    | Parent Polygon 0: area=549.5, holes_found=0
+13:47:53 | INFO     |   → Shell nach difference: area=549.5, interiors=0
+13:47:55 | DEBUG    | [REVOLVE] Matched selection (3.30, 48.48) → sketch (3.30, 48.48)
+13:47:55 | DEBUG    | FeatureDependencyGraph initialisiert
+13:47:55 | DEBUG    | [TNP] Feature 45c90606 invalidiert vor Redo
+13:47:55 | DEBUG    | Feature '45c90606' hinzugefügt (Index 0)
+13:47:55 | INFO     | Rebuilding Body 'Body1' (Features 0-0/1)...
+13:47:55 | INFO     | Revolve: 1/1 Profile via Selektor
+13:47:55 | WARNING  | Feature 'Revolve_0' fehlgeschlagen: Revolve fehlgeschlagen für Face 1/1
+13:47:55 | WARNING  | Body 'Body1' is empty after rebuild.
+13:47:55 | DEBUG    | Redo: Added Revolve to Body1 (rebuild=True)
+13:47:55 | ERROR    | Redo rollback (Revolve): new feature errors: 45c90606
+13:47:55 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=9f123054)
+13:47:55 | WARNING  | Body 'Body1' hat keine Mesh-Daten!
+13:47:55 | WARNING  | Revolve ließ Body verschwinden. Undo.
+13:47:55 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=9f123054)
+13:47:55 | WARNING  | Body 'Body1' hat keine Mesh-Daten!

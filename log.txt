@@ -1,505 +1,350 @@
 (cad_env) C:\LiteCad>python main.py
-2026-02-13 22:00:02.755 | SUCCESS  | modeling:<module>:83 - ✓ OCP (OpenCASCADE) geladen.
-2026-02-13 22:00:02.755 | SUCCESS  | modeling:<module>:102 - ✓ build123d geladen (High-Level API).
-2026-02-13 22:00:02.797 | SUCCESS  | gui.sketch_editor:<module>:48 - QuadTree Module loaded.
-2026-02-13 22:00:02.797 | SUCCESS  | gui.sketch_editor:<module>:93 - Build123d erfolgreich geladen für Sketch-Editor
-2026-02-13 22:00:03.389 | SUCCESS  | gui.viewport_pyvista:<module>:38 - PyVista & VTK erfolgreich geladen.
-22:00:03 | INFO     | TNP v4.0 ShapeNamingService initialisiert
-22:00:03 | DEBUG    | TNP v4.0: ShapeNamingService initialisiert für 'Projekt1'
-22:00:03 | DEBUG    | Component erstellt: Root (id=b87f3d09)
-22:00:03 | INFO     | [ASSEMBLY] Component-System aktiviert für 'Projekt1'
-22:00:05 | INFO     | Ready
-22:00:05 | INFO     | Ready. PyVista & Build123d active.
-22:00:07 | INFO     | Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche
-22:00:07 | DEBUG    | RenderQueue initialisiert
-22:00:08 | DEBUG    | [Auto-Align] 90° (screen Y-dir, dot=0.52)
-22:00:08 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
-22:00:08 | DEBUG    | Sketch-Pfad-Modus beendet
-
-(cad_env) C:\LiteCad>python main.py
-2026-02-13 22:03:11.955 | SUCCESS  | modeling:<module>:83 - ✓ OCP (OpenCASCADE) geladen.
-2026-02-13 22:03:11.955 | SUCCESS  | modeling:<module>:102 - ✓ build123d geladen (High-Level API).
-2026-02-13 22:03:11.990 | SUCCESS  | gui.sketch_editor:<module>:48 - QuadTree Module loaded.
-2026-02-13 22:03:11.992 | SUCCESS  | gui.sketch_editor:<module>:93 - Build123d erfolgreich geladen für Sketch-Editor
-2026-02-13 22:03:12.519 | SUCCESS  | gui.viewport_pyvista:<module>:38 - PyVista & VTK erfolgreich geladen.
-22:03:12 | INFO     | TNP v4.0 ShapeNamingService initialisiert
-22:03:12 | DEBUG    | TNP v4.0: ShapeNamingService initialisiert für 'Projekt1'
-22:03:12 | DEBUG    | Component erstellt: Root (id=294ff1df)
-22:03:12 | INFO     | [ASSEMBLY] Component-System aktiviert für 'Projekt1'
-22:03:14 | INFO     | Ready
-22:03:14 | INFO     | Ready. PyVista & Build123d active.
-22:03:20 | INFO     | Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche
-22:03:20 | DEBUG    | RenderQueue initialisiert
-22:03:21 | DEBUG    | [Auto-Align] 90° (screen Y-dir, dot=0.52)
-22:03:21 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
-22:03:21 | DEBUG    | Sketch-Pfad-Modus beendet
-22:03:23 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
-22:03:23 | DEBUG    | Stored geometry map for profile: (21.0, -25.0, 51.0, 31.0, 1680.0)
-22:03:23 | DEBUG    | [CAD Kernel First] Synced 1 profiles to sketch (inkl. Holes)
-22:03:24 | DEBUG    | [preview] clear transient previews: mode:sketch->3d
-22:03:24 | DEBUG    | Sketch-Pfad-Modus beendet
-22:03:25 | DEBUG    | Parent Polygon 0: area=1680.0, holes_found=0
-22:03:25 | INFO     |   → Shell nach difference: area=1680.0, interiors=0
-22:03:25 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
-22:03:26 | DEBUG    | FeatureDependencyGraph initialisiert
-22:03:26 | DEBUG    | [EXTRUDE] Matched selection (36.00, 3.00) → sketch (36.00, 3.00)
-22:03:26 | DEBUG    | [TNP] Feature 9540ca1c invalidiert vor Redo
-22:03:26 | DEBUG    | Feature '9540ca1c' hinzugefügt (Index 0)
-22:03:26 | INFO     | Rebuilding Body 'Body1' (Features 0-0/1)...
-22:03:26 | INFO     | [OCP-FIRST] 1/1 Profile via Selektor
-22:03:26 | DEBUG    | Shape registriert: ShapeID(uuid='1442367a-9576-44bd-ba7b-10d396ba4e49', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=0, geometry_hash='504200ff53c47828', timestamp=1771016606.9999623)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='9efbb8ed-dd1e-4078-8738-ea5f34dbd88b', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=1, geometry_hash='b0af64ece5e13bfa', timestamp=1771016606.9999623)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='ac9333aa-70c4-4116-8875-44c26dce93c8', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=2, geometry_hash='7f8d7b6bd5db238b', timestamp=1771016607.0009384)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='75bf82fa-ed09-4044-abfc-71a32ed79411', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=3, geometry_hash='c166968b702a28cf', timestamp=1771016607.0009384)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='7f93167d-57d6-480d-bff1-f477a4a63331', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=4, geometry_hash='740b7d688f59c7a7', timestamp=1771016607.0033696)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='088d0f65-f6e8-4001-82a0-4e1273bbe7a2', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=5, geometry_hash='5eeb21bdf6c96044', timestamp=1771016607.0042706)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='4f11f1aa-4d10-4d81-a455-a6b624f46eb7', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=0, geometry_hash='876f179ae2e4c55e', timestamp=1771016607.0052705)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='2b56f88f-3b47-41ed-ae28-2ff7269b0cb4', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=1, geometry_hash='8dc148a4385b5135', timestamp=1771016607.0062726)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='b170829b-c3b6-4d14-9544-9aec8e8032a2', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=2, geometry_hash='8f27ca92f1009fac', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='33972c0b-a51e-4f0a-a595-96fde7058470', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=3, geometry_hash='bdb3eb0d7612c8b6', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='62ea1c8e-9708-4d5d-89a4-199419dcff58', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=4, geometry_hash='fd2658c5026d77bb', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='569826a5-5699-4a44-8256-cd5fdf7b313c', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=5, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016607.0082698)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='6396a13d-2430-4d3d-8a1f-17c8b29b5301', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=6, geometry_hash='ad7f96521fec54ab', timestamp=1771016607.0082698)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='9c252715-84e6-4aaf-92c2-f0d531fccb11', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=7, geometry_hash='d865c0e3385e24fe', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='59f1810c-22c0-4e4b-b8a2-ad7245e95969', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=8, geometry_hash='4a13a49533e2beb5', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='c3140121-59b6-4c0b-9abd-493de2641917', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=9, geometry_hash='f9aacebeaed29486', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='347738c3-c720-409b-9d61-36a94cb2ac00', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=10, geometry_hash='c97415a00ae9fbe1', timestamp=1771016607.0102696)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='6824dc65-830a-47b8-84b5-0b8a420e2879', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=11, geometry_hash='0aff1c250007d4dc', timestamp=1771016607.0102696)
-22:03:27 | INFO     | TNP: 12 Edges für Feature '9540ca1c' registriert
-22:03:27 | SUCCESS  | OCP Extrude TNP: 6 Faces, 12 Edges registriert
-22:03:27 | DEBUG    | [OCP-FIRST] Extrudiert: 9540ca1c
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='4f11f1aa-4d10-4d81-a455-a6b624f46eb7', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=0, geometry_hash='876f179ae2e4c55e', timestamp=1771016607.0052705)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='2b56f88f-3b47-41ed-ae28-2ff7269b0cb4', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=1, geometry_hash='8dc148a4385b5135', timestamp=1771016607.0062726)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='b170829b-c3b6-4d14-9544-9aec8e8032a2', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=2, geometry_hash='8f27ca92f1009fac', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='33972c0b-a51e-4f0a-a595-96fde7058470', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=3, geometry_hash='bdb3eb0d7612c8b6', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='62ea1c8e-9708-4d5d-89a4-199419dcff58', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=4, geometry_hash='fd2658c5026d77bb', timestamp=1771016607.0072703)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='569826a5-5699-4a44-8256-cd5fdf7b313c', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=5, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016607.0082698)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='6396a13d-2430-4d3d-8a1f-17c8b29b5301', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=6, geometry_hash='ad7f96521fec54ab', timestamp=1771016607.0082698)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='9c252715-84e6-4aaf-92c2-f0d531fccb11', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=7, geometry_hash='d865c0e3385e24fe', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='59f1810c-22c0-4e4b-b8a2-ad7245e95969', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=8, geometry_hash='4a13a49533e2beb5', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='c3140121-59b6-4c0b-9abd-493de2641917', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=9, geometry_hash='f9aacebeaed29486', timestamp=1771016607.0092719)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='347738c3-c720-409b-9d61-36a94cb2ac00', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=10, geometry_hash='c97415a00ae9fbe1', timestamp=1771016607.0102696)
-22:03:27 | DEBUG    | Shape registriert: ShapeID(uuid='6824dc65-830a-47b8-84b5-0b8a420e2879', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=11, geometry_hash='0aff1c250007d4dc', timestamp=1771016607.0102696)
-22:03:27 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
-22:03:27 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
-22:03:27 | DEBUG    | ✓ Body1: BREP Valid (6 Faces)
-22:03:27 | DEBUG    | Redo: Added Extrude to Body1 (rebuild=True)
-22:03:27 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=ffa9fcf5)
-22:03:27 | DEBUG    | Adaptive Tessellation: BBox-Diag=76.7mm → Deflection=0.0767mm
-22:03:27 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
-22:03:27 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
-22:03:27 | DEBUG    | Mesh regenerated for 'Body1': 24 pts, 24 edges, 6 B-Rep faces
-22:03:27 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
-22:03:27 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:03:27 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:03:27 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:03:27 | DEBUG    | Parent Polygon 0: area=1680.0, holes_found=0
-22:03:27 | INFO     |   → Shell nach difference: area=1680.0, interiors=0
-22:03:27 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:03:27 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:03:27 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:03:27 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:03:27 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
-22:03:29 | DEBUG    | Face-Suche: Normale=(1.00, 0.00, 0.00)
-22:03:29 | INFO     | Face direkt via ocp_face_id=3 gefunden
-22:03:29 | INFO     | Face gefunden: dist=0.000
-22:03:29 | INFO     | Face hat 1 Wire(s) (1=outer only, >1=mit Löchern)
-22:03:29 | INFO     | Face hat 1 Wire(s) - 0 Löcher
-22:03:29 | DEBUG    |   Koordinatensystem bei Extraktion:
-22:03:29 | DEBUG    |     origin=(51.0, 31.0, 0.0)
-22:03:29 | DEBUG    |     x_dir=(0.0, -1.0, 0.0)
-22:03:29 | DEBUG    |     y_dir=(0.0, 0.0, -1.0)
-22:03:29 | DEBUG    |     normal=(1.0, 0.0, 0.0)
-22:03:29 | INFO     | ✅ Face-Polygon extrahiert: 4 Punkte, 0 Löcher, Area=2404.1
-22:03:29 | DEBUG    | BRepFeat_MakePrism: direction=(1.000, 0.000, 0.000), fuse_mode=1, height=21.79
-22:03:29 | DEBUG    | BRepFeat_MakePrism.IsDone() = True
-22:03:29 | DEBUG    | BRepFeat: UnifySameDomain angewendet
-22:03:29 | DEBUG    | BRepFeat result: is_valid=True, volume=124507.30 (original=72122.40)
-22:03:29 | INFO     | ✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='1dc9ec34-53d9-4b43-9b3b-f4cf604e8640', shape_type=<ShapeType.FACE: 2>, feature_id='aba4aa01', local_index=0, geometry_hash='c166968b702a28cf', timestamp=1771016609.6094296)
-22:03:29 | INFO     | TNP v4.0: Tracke BRepFeat Operation 'aba4aa01'
-22:03:29 | WARNING  | TNP v4.0: BRepFeat History hatte Source-Inputs aber 0 Mappings. Fallback auf Heuristik.
-22:03:29 | DEBUG    | TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, falle auf Heuristik zurück
-22:03:29 | DEBUG    | TNP BRepFeat: 4/4 betroffene Edges gefunden
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='493f9b0a-aaff-441c-8324-435702e7ecbc', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=0, geometry_hash='4a89d8408f14b8f5', timestamp=1771016609.7478046)
-22:03:29 | DEBUG    | TNP BRepFeat: Mapped 4f11f1aa → 493f9b0a (score=0.000)
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='77ddd166-6023-4b43-ad94-cf94ef4b1935', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=1, geometry_hash='b7dfa13108396dbf', timestamp=1771016609.7498064)
-22:03:29 | DEBUG    | TNP BRepFeat: Mapped 9c252715 → 77ddd166 (score=0.000)
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='441e1378-9842-46b5-92b4-1b3877981e87', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=2, geometry_hash='06b3b22d3b07c5d5', timestamp=1771016609.7518063)
-22:03:29 | DEBUG    | TNP BRepFeat: Mapped 347738c3 → 441e1378 (score=0.000)
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='e46ca542-e1a5-4683-908d-cc500429dc38', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=3, geometry_hash='6ab8fe9cc4df8705', timestamp=1771016609.7554789)
-22:03:29 | DEBUG    | TNP BRepFeat: Mapped 6824dc65 → e46ca542 (score=0.000)
-22:03:29 | DEBUG    | [TNP] _register_unmapped_edges: 12 unique Edges in result, 16 already known
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='6895e5ca-6f54-42c5-bfad-5c136204dc38', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=4, geometry_hash='4837dd0d4bb00c07', timestamp=1771016609.7554789)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 6895e5ca
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='0e059a5f-27b5-49c3-9cb3-4a024fa9428e', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=5, geometry_hash='af66c829d34e1505', timestamp=1771016609.7554789)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 0e059a5f
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='9d1980df-3880-4e17-9aec-e4246787484b', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=6, geometry_hash='fd2658c5026d77bb', timestamp=1771016609.7554789)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 9d1980df
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='f9bd8193-0da1-4991-91a3-7fb98a84924d', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=7, geometry_hash='89671b0d30d8459b', timestamp=1771016609.7554789)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: f9bd8193
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='7b567ef1-4999-4bcc-8345-c80e829f45d1', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=8, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016609.7616682)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 7b567ef1
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='66cb6787-f7c6-4fac-a956-8a268cf7db7a', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=9, geometry_hash='d5fc519eeb014d55', timestamp=1771016609.7626688)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 66cb6787
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='2c564a01-4504-4073-a555-c1883b738770', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=10, geometry_hash='ad7f96521fec54ab', timestamp=1771016609.763669)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 2c564a01
-22:03:29 | DEBUG    | Shape registriert: ShapeID(uuid='7872c890-af04-4baf-a233-e1d6200e1525', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=11, geometry_hash='8dc148a4385b5135', timestamp=1771016609.763669)
-22:03:29 | DEBUG    | [TNP] Neue Edge registriert: 7872c890
-22:03:29 | INFO     | [TNP] _register_unmapped_edges: 8 neue Edges registriert
-22:03:29 | INFO     | TNP BRepFeat: 4 mappings + 8 neue Edges registriert
-22:03:29 | DEBUG    | Operation aufgezeichnet: BREPFEAT_PRISM (4 in -> 4 out)
-22:03:29 | SUCCESS  | TNP v4.0: BRepFeat Operation getrackt - 4 mappings (4 unique) + 8 neue Edges = 12 unique refs
-22:03:29 | DEBUG    | Push/Pull Geometry Delta: old_solid=True, new_solid=True
-22:03:29 | DEBUG    | Push/Pull Metrics: before={'volume': 72122.4, 'faces': 6, 'edges': 12}, after={'volume': 124507.30319999998, 'faces': 6, 'edges': 12}
-22:03:29 | SUCCESS  | Push/Pull Geometry Delta gesetzt: Vol 72122 → 124507 (+72.6%)
-22:03:29 | INFO     | TNP: Feature 'aba4aa01' invalidiert
-22:03:29 | DEBUG    | [TNP] Feature aba4aa01 invalidiert vor Redo
-22:03:29 | DEBUG    | Feature 'aba4aa01' hinzugefügt (Index 1)
-22:03:29 | DEBUG    | Redo: Added Push/Pull (Join) to Body1 (rebuild=False)
-22:03:29 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=ffa9fcf5)
-22:03:29 | DEBUG    | Adaptive Tessellation: BBox-Diag=87.5mm → Deflection=0.0875mm
-22:03:29 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
-22:03:29 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
-22:03:29 | DEBUG    | Mesh regenerated for 'Body1': 24 pts, 24 edges, 6 B-Rep faces
-22:03:29 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
-22:03:29 | INFO     | ✅ Push/Pull Join: 6 Faces (BRepFeat - lokale Op)
-22:03:29 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:03:29 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:03:29 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:03:29 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:03:29 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:03:29 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:03:29 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:03:29 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:03:30 | DEBUG    | Parent Polygon 0: area=1680.0, holes_found=0
-22:03:30 | INFO     |   → Shell nach difference: area=1680.0, interiors=0
-22:03:30 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:03:30 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:03:30 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:03:30 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:03:30 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:03:30 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:03:30 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:03:30 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:03:30 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
-22:03:33 | DEBUG    | Face-Suche: Normale=(-0.00, -0.00, 1.00)
-22:03:33 | INFO     | Face direkt via ocp_face_id=2 gefunden
-22:03:33 | INFO     | Face gefunden: dist=0.000
-22:03:33 | INFO     | Face hat 1 Wire(s) (1=outer only, >1=mit Löchern)
-22:03:33 | INFO     | Face hat 1 Wire(s) - 0 Löcher
-22:03:33 | DEBUG    |   Koordinatensystem bei Extraktion:
-22:03:33 | DEBUG    |     origin=(51.0, 31.0, 42.93)
-22:03:33 | DEBUG    |     x_dir=(0.0, -1.0, 0.0)
-22:03:33 | DEBUG    |     y_dir=(1.0, 0.0, 0.0)
-22:03:33 | DEBUG    |     normal=(-0.0, -0.0, 1.0)
-22:03:33 | INFO     | ✅ Face-Polygon extrahiert: 4 Punkte, 0 Löcher, Area=2900.2
-22:03:33 | DEBUG    | BRepFeat_MakePrism: direction=(-0.000, -0.000, 1.000), fuse_mode=1, height=25.0
-22:03:33 | DEBUG    | BRepFeat_MakePrism.IsDone() = True
-22:03:33 | DEBUG    | BRepFeat: UnifySameDomain angewendet
-22:03:33 | DEBUG    | BRepFeat result: is_valid=True, volume=197013.30 (original=124507.30)
-22:03:33 | INFO     | ✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)
-22:03:33 | DEBUG    | Shape registriert: ShapeID(uuid='f8e801b0-bfbc-42e9-b975-54fe6fd271b2', shape_type=<ShapeType.FACE: 2>, feature_id='b1e3aaec', local_index=0, geometry_hash='4cbafebef8bf8259', timestamp=1771016613.966096)
-22:03:34 | INFO     | TNP v4.0: Tracke BRepFeat Operation 'b1e3aaec'
-22:03:34 | WARNING  | TNP v4.0: BRepFeat History hatte Source-Inputs aber 0 Mappings. Fallback auf Heuristik.
-22:03:34 | DEBUG    | TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, falle auf Heuristik zurück
-22:03:34 | DEBUG    | TNP BRepFeat: 0/4 betroffene Edges gefunden
-22:03:34 | DEBUG    | [TNP] _register_unmapped_edges: 12 unique Edges in result, 12 already known
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='9cf4c4c6-4c94-4b46-a9f9-967b0a41cbb3', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=0, geometry_hash='64e8614b30ad4ac6', timestamp=1771016614.0887182)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 9cf4c4c6
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='4de97d94-e0d2-4cea-8b8a-4fbb42c49eab', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=1, geometry_hash='b51788042d2ecc1d', timestamp=1771016614.0952406)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 4de97d94
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='510007bc-239f-4d48-8654-82ec042fed10', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=2, geometry_hash='06b3b22d3b07c5d5', timestamp=1771016614.097242)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 510007bc
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='b4fd66b1-242b-4416-8c9d-38cb9eb13829', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=3, geometry_hash='87df937ba25ff752', timestamp=1771016614.0982397)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: b4fd66b1
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='7ced39b5-348d-4810-bb22-9d020746c037', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=4, geometry_hash='f227eadc7ba5a27f', timestamp=1771016614.0992403)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 7ced39b5
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='e1692d9f-f956-4c88-b503-f667420cd9ea', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=5, geometry_hash='4837dd0d4bb00c07', timestamp=1771016614.0992403)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: e1692d9f
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='34112518-9dfd-42c0-90da-b6fa64b77541', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=6, geometry_hash='c481bc0dc758f3fe', timestamp=1771016614.1002398)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 34112518
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='4bff43b1-023d-44ed-be45-0ffc4dce052c', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=7, geometry_hash='d9b26e8e253592fd', timestamp=1771016614.1012404)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 4bff43b1
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='5987c340-8efe-4830-8959-b5c098620055', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=8, geometry_hash='eb31399423f283ea', timestamp=1771016614.1055467)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 5987c340
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='61c2eeb7-ae6a-4170-b148-367e3517aa10', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=9, geometry_hash='89671b0d30d8459b', timestamp=1771016614.1055467)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 61c2eeb7
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='cc85b8e6-23a1-4313-9576-29b2d617de59', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=10, geometry_hash='7df12ae331c2139e', timestamp=1771016614.1055467)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: cc85b8e6
-22:03:34 | DEBUG    | Shape registriert: ShapeID(uuid='32b69c89-bccf-4492-8839-ccc9e573043d', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=11, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016614.1055467)
-22:03:34 | DEBUG    | [TNP] Neue Edge registriert: 32b69c89
-22:03:34 | INFO     | [TNP] _register_unmapped_edges: 12 neue Edges registriert
-22:03:34 | INFO     | TNP BRepFeat: 0 mappings + 12 neue Edges registriert
-22:03:34 | WARNING  | TNP v4.0: Keine BRepFeat Mappings erstellt
-22:03:34 | DEBUG    | Push/Pull Geometry Delta: old_solid=True, new_solid=True
-22:03:34 | DEBUG    | Push/Pull Metrics: before={'volume': 124507.30319999998, 'faces': 6, 'edges': 12}, after={'volume': 197013.3032, 'faces': 6, 'edges': 12}
-22:03:34 | SUCCESS  | Push/Pull Geometry Delta gesetzt: Vol 124507 → 197013 (+58.2%)
-22:03:34 | INFO     | TNP: Feature 'b1e3aaec' invalidiert
-22:03:34 | DEBUG    | [TNP] Feature b1e3aaec invalidiert vor Redo
-22:03:34 | DEBUG    | Feature 'b1e3aaec' hinzugefügt (Index 2)
-22:03:34 | DEBUG    | Redo: Added Push/Pull (Join) to Body1 (rebuild=False)
-22:03:34 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=ffa9fcf5)
-22:03:34 | DEBUG    | Adaptive Tessellation: BBox-Diag=102.1mm → Deflection=0.1021mm
-22:03:34 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
-22:03:34 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
-22:03:34 | DEBUG    | Mesh regenerated for 'Body1': 24 pts, 24 edges, 6 B-Rep faces
-22:03:34 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
-22:03:34 | INFO     | ✅ Push/Pull Join: 6 Faces (BRepFeat - lokale Op)
-22:03:34 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:03:34 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:03:34 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:03:34 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:03:34 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:03:34 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:03:34 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:03:34 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:04:01 | INFO     | Fillet: Klicke auf einen Körper in der 3D-Ansicht oder wähle im Browser
-22:04:02 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (6 faces)
-22:04:02 | DEBUG    | Body ffa9fcf5: 6 unique face_ids (EXAKT via face_id)
-22:04:02 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:04:02 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:04:02 | DEBUG    |   Face 2: 2 triangles, surface=plane
-22:04:02 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:04:02 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:04:02 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:04:02 | INFO     | Edge Mode: 12 Kanten (V8 Batch-Rendering)
-22:04:02 | INFO     | Fillet: Klicke auf Kanten von 'Body1' (A = alle wählen, ESC = abbrechen)
-22:04:02 | INFO     | Loop Select: 4 Kanten markiert.
-22:04:03 | INFO     | Wende fillet auf 4 Kanten an (r=2.0)...
-22:04:03 | DEBUG    | TNP Phase 1: 4 GeometricSelectors erstellt
-22:04:03 | DEBUG    | TNP Phase 2: Fillet/Chamfer hängt von Feature Push/Pull (Join) ab
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='e7a35b62-f578-456f-aa77-772f92075e17', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=0, geometry_hash='64e8614b30ad4ac6', timestamp=1771016643.4291954)
-22:04:03 | DEBUG    | TNP v4.0: Edge registriert (Fallback) e7a35b62...
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='24c7dd9f-cf19-44ab-bf73-9ad119217b12', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=1, geometry_hash='f227eadc7ba5a27f', timestamp=1771016643.430227)
-22:04:03 | DEBUG    | TNP v4.0: Edge registriert (Fallback) 24c7dd9f...
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='07b88101-da81-443c-86e6-a2adc9259b2d', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=2, geometry_hash='eb31399423f283ea', timestamp=1771016643.4311976)
-22:04:03 | DEBUG    | TNP v4.0: Edge registriert (Fallback) 07b88101...
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='7c2aed32-98dd-48cc-be7c-9fc58cb8676f', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=3, geometry_hash='7df12ae331c2139e', timestamp=1771016643.4321964)
-22:04:03 | DEBUG    | TNP v4.0: Edge registriert (Fallback) 7c2aed32...
-22:04:03 | DEBUG    | TNP v4.0: 4 ShapeIDs für Feature 269a39ad gefunden
-22:04:03 | INFO     | TNP: Feature '269a39ad' invalidiert
-22:04:03 | DEBUG    | [TNP] Feature 269a39ad invalidiert vor Redo
-22:04:03 | DEBUG    | Feature '269a39ad' hinzugefügt (Index 3)
-22:04:03 | INFO     | Rebuilding Body 'Body1' (Features 0-3/4)...
-22:04:03 | INFO     | [OCP-FIRST] 1/1 Profile via Selektor
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='1442367a-9576-44bd-ba7b-10d396ba4e49', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=0, geometry_hash='504200ff53c47828', timestamp=1771016606.9999623)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='9efbb8ed-dd1e-4078-8738-ea5f34dbd88b', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=1, geometry_hash='b0af64ece5e13bfa', timestamp=1771016606.9999623)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='ac9333aa-70c4-4116-8875-44c26dce93c8', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=2, geometry_hash='7f8d7b6bd5db238b', timestamp=1771016607.0009384)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='75bf82fa-ed09-4044-abfc-71a32ed79411', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=3, geometry_hash='c166968b702a28cf', timestamp=1771016607.0009384)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='7f93167d-57d6-480d-bff1-f477a4a63331', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=4, geometry_hash='740b7d688f59c7a7', timestamp=1771016607.0033696)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='088d0f65-f6e8-4001-82a0-4e1273bbe7a2', shape_type=<ShapeType.FACE: 2>, feature_id='9540ca1c', local_index=5, geometry_hash='5eeb21bdf6c96044', timestamp=1771016607.0042706)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='4f11f1aa-4d10-4d81-a455-a6b624f46eb7', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=0, geometry_hash='876f179ae2e4c55e', timestamp=1771016607.0052705)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='2b56f88f-3b47-41ed-ae28-2ff7269b0cb4', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=1, geometry_hash='8dc148a4385b5135', timestamp=1771016607.0062726)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='b170829b-c3b6-4d14-9544-9aec8e8032a2', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=2, geometry_hash='8f27ca92f1009fac', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='33972c0b-a51e-4f0a-a595-96fde7058470', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=3, geometry_hash='bdb3eb0d7612c8b6', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='62ea1c8e-9708-4d5d-89a4-199419dcff58', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=4, geometry_hash='fd2658c5026d77bb', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='569826a5-5699-4a44-8256-cd5fdf7b313c', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=5, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016607.0082698)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6396a13d-2430-4d3d-8a1f-17c8b29b5301', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=6, geometry_hash='ad7f96521fec54ab', timestamp=1771016607.0082698)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='9c252715-84e6-4aaf-92c2-f0d531fccb11', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=7, geometry_hash='d865c0e3385e24fe', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='59f1810c-22c0-4e4b-b8a2-ad7245e95969', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=8, geometry_hash='4a13a49533e2beb5', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='c3140121-59b6-4c0b-9abd-493de2641917', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=9, geometry_hash='f9aacebeaed29486', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='347738c3-c720-409b-9d61-36a94cb2ac00', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=10, geometry_hash='c97415a00ae9fbe1', timestamp=1771016607.0102696)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6824dc65-830a-47b8-84b5-0b8a420e2879', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=11, geometry_hash='0aff1c250007d4dc', timestamp=1771016607.0102696)
-22:04:03 | INFO     | TNP: 12 Edges für Feature '9540ca1c' registriert
-22:04:03 | SUCCESS  | OCP Extrude TNP: 6 Faces, 12 Edges registriert
-22:04:03 | DEBUG    | [OCP-FIRST] Extrudiert: 9540ca1c
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='4f11f1aa-4d10-4d81-a455-a6b624f46eb7', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=0, geometry_hash='876f179ae2e4c55e', timestamp=1771016607.0052705)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='2b56f88f-3b47-41ed-ae28-2ff7269b0cb4', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=1, geometry_hash='8dc148a4385b5135', timestamp=1771016607.0062726)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='b170829b-c3b6-4d14-9544-9aec8e8032a2', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=2, geometry_hash='8f27ca92f1009fac', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='33972c0b-a51e-4f0a-a595-96fde7058470', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=3, geometry_hash='bdb3eb0d7612c8b6', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='62ea1c8e-9708-4d5d-89a4-199419dcff58', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=4, geometry_hash='fd2658c5026d77bb', timestamp=1771016607.0072703)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='569826a5-5699-4a44-8256-cd5fdf7b313c', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=5, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016607.0082698)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6396a13d-2430-4d3d-8a1f-17c8b29b5301', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=6, geometry_hash='ad7f96521fec54ab', timestamp=1771016607.0082698)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='9c252715-84e6-4aaf-92c2-f0d531fccb11', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=7, geometry_hash='d865c0e3385e24fe', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='59f1810c-22c0-4e4b-b8a2-ad7245e95969', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=8, geometry_hash='4a13a49533e2beb5', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='c3140121-59b6-4c0b-9abd-493de2641917', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=9, geometry_hash='f9aacebeaed29486', timestamp=1771016607.0092719)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='347738c3-c720-409b-9d61-36a94cb2ac00', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=10, geometry_hash='c97415a00ae9fbe1', timestamp=1771016607.0102696)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6824dc65-830a-47b8-84b5-0b8a420e2879', shape_type=<ShapeType.EDGE: 1>, feature_id='9540ca1c', local_index=11, geometry_hash='0aff1c250007d4dc', timestamp=1771016607.0102696)
-22:04:03 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
-22:04:03 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
-22:04:03 | DEBUG    | BRepFeat Push/Pull: Face via TNP-v4 aufgelöst (face_index=3, has_shape_id=True, source=index, shape_method=-, rank=1.100, normal_mode=primary)
-22:04:03 | DEBUG    | UnifySameDomain (BRepFeat_MakePrism): 10 → 6 Faces
-22:04:03 | DEBUG    | BRepFeat Push/Pull erfolgreich: volume=124507.30mm³
-22:04:03 | INFO     | TNP v4.0: Tracke BRepFeat Operation 'aba4aa01'
-22:04:03 | WARNING  | TNP v4.0: BRepFeat History hatte Source-Inputs aber 0 Mappings. Fallback auf Heuristik.
-22:04:03 | DEBUG    | TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, falle auf Heuristik zurück
-22:04:03 | DEBUG    | TNP BRepFeat: 4/4 betroffene Edges gefunden
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='df3a9a88-caea-47cf-83de-ed97213cc750', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=0, geometry_hash='4a89d8408f14b8f5', timestamp=1771016643.6195908)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped 4f11f1aa → df3a9a88 (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6cfe08be-8e8b-4f97-944c-43b39f506ea8', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=1, geometry_hash='b7dfa13108396dbf', timestamp=1771016643.6216168)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped 9c252715 → 6cfe08be (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='1b00571a-0949-4331-8316-fab462f17ce2', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=2, geometry_hash='06b3b22d3b07c5d5', timestamp=1771016643.6236231)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped 347738c3 → 1b00571a (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='4c7c71ac-fdf5-457a-aa49-693a02ca6655', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=3, geometry_hash='6ab8fe9cc4df8705', timestamp=1771016643.6255908)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped 6824dc65 → 4c7c71ac (score=0.000)
-22:04:03 | DEBUG    | [TNP] _register_unmapped_edges: 12 unique Edges in result, 16 already known
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='aac74149-88c6-44eb-b63c-477f926374c6', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=4, geometry_hash='4837dd0d4bb00c07', timestamp=1771016643.628145)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: aac74149
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='e2448e89-4ec7-46e7-93e6-527710c211c4', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=5, geometry_hash='af66c829d34e1505', timestamp=1771016643.628145)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: e2448e89
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='8dd46651-e0f6-4f60-aa87-1fcde365a7e0', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=6, geometry_hash='fd2658c5026d77bb', timestamp=1771016643.6291444)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 8dd46651
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='feaaadfc-3021-45f0-b1e0-ae4f7b176d50', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=7, geometry_hash='89671b0d30d8459b', timestamp=1771016643.6301463)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: feaaadfc
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='a51083e9-880e-41b5-b48a-738672b0ebb8', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=8, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016643.630956)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: a51083e9
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='cb2a9ba9-acbb-4c8d-8664-8dfab85f2461', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=9, geometry_hash='d5fc519eeb014d55', timestamp=1771016643.6319635)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: cb2a9ba9
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='e1fe8dc4-d47f-45d2-8ab3-ceb4db31d4d1', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=10, geometry_hash='ad7f96521fec54ab', timestamp=1771016643.6329634)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: e1fe8dc4
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='92d1e045-d9d0-4508-b8e6-aee071bc7abd', shape_type=<ShapeType.EDGE: 1>, feature_id='aba4aa01', local_index=11, geometry_hash='8dc148a4385b5135', timestamp=1771016643.6339638)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 92d1e045
-22:04:03 | INFO     | [TNP] _register_unmapped_edges: 8 neue Edges registriert
-22:04:03 | INFO     | TNP BRepFeat: 4 mappings + 8 neue Edges registriert
-22:04:03 | DEBUG    | Operation aufgezeichnet: BREPFEAT_PRISM (4 in -> 4 out)
-22:04:03 | SUCCESS  | TNP v4.0: BRepFeat Operation getrackt - 4 mappings (4 unique) + 8 neue Edges = 12 unique refs
-22:04:03 | DEBUG    | TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism
-22:04:03 | DEBUG    | BRepFeat Push/Pull: Face via TNP-v4 aufgelöst (face_index=2, has_shape_id=True, source=index, shape_method=-, rank=1.100, normal_mode=primary)
-22:04:03 | DEBUG    | UnifySameDomain (BRepFeat_MakePrism): 10 → 6 Faces
-22:04:03 | DEBUG    | BRepFeat Push/Pull: Face via TNP-v4 aufgelöst (face_index=2, has_shape_id=True, source=index, shape_method=-, rank=1.100, normal_mode=flipped)
-22:04:03 | DEBUG    | UnifySameDomain (BRepFeat_MakePrism): 10 → 6 Faces
-22:04:03 | DEBUG    | BRepFeat Push/Pull erfolgreich: volume=197013.30mm³
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='6948a09a-dcca-47fe-84b1-1799b47ba875', shape_type=<ShapeType.FACE: 2>, feature_id='b1e3aaec', local_index=0, geometry_hash='4cbafebef8bf8259', timestamp=1771016643.6780124)
-22:04:03 | INFO     | TNP v4.0: Tracke BRepFeat Operation 'b1e3aaec'
-22:04:03 | WARNING  | TNP v4.0: BRepFeat History hatte Source-Inputs aber 0 Mappings. Fallback auf Heuristik.
-22:04:03 | DEBUG    | TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, falle auf Heuristik zurück
-22:04:03 | DEBUG    | TNP BRepFeat: 4/4 betroffene Edges gefunden
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='bfff8aa3-503e-45e7-a477-7efee528d681', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=0, geometry_hash='64e8614b30ad4ac6', timestamp=1771016643.8056433)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped 4c7c71ac → bfff8aa3 (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='c191a9ad-2f85-4e80-86e5-0b19a7470dc0', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=1, geometry_hash='f227eadc7ba5a27f', timestamp=1771016643.8129966)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped e2448e89 → c191a9ad (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='51f1a718-5cf4-4bf3-b91f-32b4eedd64fc', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=2, geometry_hash='eb31399423f283ea', timestamp=1771016643.8150322)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped cb2a9ba9 → 51f1a718 (score=0.000)
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='8d9d9081-119f-4859-adcb-494f35ea7552', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=3, geometry_hash='7df12ae331c2139e', timestamp=1771016643.815996)
-22:04:03 | DEBUG    | TNP BRepFeat: Mapped e1fe8dc4 → 8d9d9081 (score=0.000)
-22:04:03 | DEBUG    | [TNP] _register_unmapped_edges: 12 unique Edges in result, 28 already known
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='39318f22-672f-4038-ac37-d4a1815e1536', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=4, geometry_hash='b51788042d2ecc1d', timestamp=1771016643.8182452)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 39318f22
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='259865f4-689d-4ea3-9544-6b46f3e2a711', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=5, geometry_hash='06b3b22d3b07c5d5', timestamp=1771016643.8183975)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 259865f4
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='d9fe682c-d828-4207-9d40-27f6a8369d96', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=6, geometry_hash='87df937ba25ff752', timestamp=1771016643.8214152)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: d9fe682c
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='3fa099fe-6902-4317-add0-7bb657bc761e', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=7, geometry_hash='4837dd0d4bb00c07', timestamp=1771016643.8214152)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 3fa099fe
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='adb44053-2499-4615-9002-6ac000f3c0de', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=8, geometry_hash='c481bc0dc758f3fe', timestamp=1771016643.8214152)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: adb44053
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='499de351-38ab-4007-8d9b-91c1b7108d87', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=9, geometry_hash='d9b26e8e253592fd', timestamp=1771016643.824123)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 499de351
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='cccf28b9-c420-4758-853b-132b18255766', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=10, geometry_hash='89671b0d30d8459b', timestamp=1771016643.8251753)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: cccf28b9
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='47d50d13-fe79-4b95-8397-70897d33c7f0', shape_type=<ShapeType.EDGE: 1>, feature_id='b1e3aaec', local_index=11, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016643.8253183)
-22:04:03 | DEBUG    | [TNP] Neue Edge registriert: 47d50d13
-22:04:03 | INFO     | [TNP] _register_unmapped_edges: 8 neue Edges registriert
-22:04:03 | INFO     | TNP BRepFeat: 4 mappings + 8 neue Edges registriert
-22:04:03 | DEBUG    | Operation aufgezeichnet: BREPFEAT_PRISM (4 in -> 4 out)
-22:04:03 | SUCCESS  | TNP v4.0: BRepFeat Operation getrackt - 4 mappings (4 unique) + 8 neue Edges = 12 unique refs
-22:04:03 | DEBUG    | TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | Feature 'Fillet': 4/4 Edges aktualisiert
-22:04:03 | INFO     | TNP v4.0: Resolving edges for Fillet (shape_ids=4, indices=4, selectors=4, solid_edges=12)
-22:04:03 | WARNING  | TNP v4.0: Edge 0 konnte via ShapeID nicht aufgelöst werden
-22:04:03 | WARNING  | TNP v4.0: Edge 1 konnte via ShapeID nicht aufgelöst werden
-22:04:03 | WARNING  | TNP v4.0: Edge 2 konnte via ShapeID nicht aufgelöst werden
-22:04:03 | WARNING  | TNP v4.0: Edge 3 konnte via ShapeID nicht aufgelöst werden
-22:04:03 | WARNING  | Fillet: Topologie-Referenzen ungültig (ShapeID/Index-Mismatch). Versuche Geometric-Fallback (4 Selektoren)...
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
-22:04:03 | DEBUG    | TNP v4.0: 4/4 Edges aufgelöst
-22:04:03 | INFO     | TNP Debug: 4 resolved, 4 unresolved
-22:04:03 | DEBUG    | [TNP] Fillet-Operator als OCCT-History verwendet
-22:04:03 | INFO     | TNP v4.0: Tracke Fillet Operation '269a39ad'
-22:04:03 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für bfff8aa3
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='45fac936-104f-4fa1-aa8c-6787e85d4bfd', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=0, geometry_hash='935c0b6e17776db6', timestamp=1771016643.9703703)
-22:04:03 | DEBUG    | TNP Fillet: bfff8aa3 → 1 Shapes gemappt
-22:04:03 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für c191a9ad
-22:04:03 | DEBUG    | Shape registriert: ShapeID(uuid='e31fe8a8-57a9-4ce2-b6b7-61aeb4ef7e1a', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=1, geometry_hash='8453d4d1bf224712', timestamp=1771016643.9877362)
-22:04:03 | DEBUG    | TNP Fillet: c191a9ad → 1 Shapes gemappt
-22:04:03 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für 51f1a718
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='ca97e505-3f65-4fb0-9bc9-78248b3dcfd0', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=2, geometry_hash='4df9fb779f0b1dd9', timestamp=1771016644.0042827)
-22:04:04 | DEBUG    | TNP Fillet: 51f1a718 → 1 Shapes gemappt
-22:04:04 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für 8d9d9081
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='1f8eedbb-da8d-4945-94c5-50dee0c73bda', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=3, geometry_hash='500e6f440b5f5701', timestamp=1771016644.0228002)
-22:04:04 | DEBUG    | TNP Fillet: 8d9d9081 → 1 Shapes gemappt
-22:04:04 | SUCCESS  | TNP v4.1: ShapeID 39318f22 aktualisiert nach fillet_269a39ad
-22:04:04 | DEBUG    | TNP Fillet: 39318f22 aktualisiert (ShapeID behalten)
-22:04:04 | DEBUG    | TNP Fillet: 39318f22 → 1 Shapes gemappt
-22:04:04 | SUCCESS  | TNP v4.1: ShapeID d9fe682c aktualisiert nach fillet_269a39ad
-22:04:04 | DEBUG    | TNP Fillet: d9fe682c aktualisiert (ShapeID behalten)
-22:04:04 | DEBUG    | TNP Fillet: d9fe682c → 1 Shapes gemappt
-22:04:04 | SUCCESS  | TNP v4.1: ShapeID adb44053 aktualisiert nach fillet_269a39ad
-22:04:04 | DEBUG    | TNP Fillet: adb44053 aktualisiert (ShapeID behalten)
-22:04:04 | DEBUG    | TNP Fillet: adb44053 → 1 Shapes gemappt
-22:04:04 | SUCCESS  | TNP v4.1: ShapeID 499de351 aktualisiert nach fillet_269a39ad
-22:04:04 | DEBUG    | TNP Fillet: 499de351 aktualisiert (ShapeID behalten)
-22:04:04 | DEBUG    | TNP Fillet: 499de351 → 1 Shapes gemappt
-22:04:04 | DEBUG    | Operation aufgezeichnet: FILLET (8 in -> 8 out)
-22:04:04 | SUCCESS  | TNP v4.0: Fillet History getrackt - 8 mappings, 8 neue Shapes
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='45fac936-104f-4fa1-aa8c-6787e85d4bfd', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=0, geometry_hash='935c0b6e17776db6', timestamp=1771016643.9703703)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='e31fe8a8-57a9-4ce2-b6b7-61aeb4ef7e1a', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=1, geometry_hash='8453d4d1bf224712', timestamp=1771016643.9877362)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='ca97e505-3f65-4fb0-9bc9-78248b3dcfd0', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=2, geometry_hash='4df9fb779f0b1dd9', timestamp=1771016644.0042827)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='1f8eedbb-da8d-4945-94c5-50dee0c73bda', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=3, geometry_hash='500e6f440b5f5701', timestamp=1771016644.0228002)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='50bc07d3-a16c-4ab8-99aa-801c3f7de14b', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=4, geometry_hash='74c7ae85daa05585', timestamp=1771016644.11413)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='a8bf5ffb-6391-4335-b021-11f63d69d577', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=5, geometry_hash='c0faa8a1ab443b5a', timestamp=1771016644.11413)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='d6ee845c-aaec-42d3-9d24-71f4c6dd2299', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=6, geometry_hash='4df9fb779f0b1dd9', timestamp=1771016644.11513)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='39d59163-a061-44c8-a3a1-a07fc2839d88', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=7, geometry_hash='8453d4d1bf224712', timestamp=1771016644.11513)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='455856af-66b1-49a2-a60b-793714dd801a', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=8, geometry_hash='0c1151096fe21d19', timestamp=1771016644.116129)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='e05c1039-2454-4811-aee9-d9a082c600e1', shape_type=<ShapeType.FACE: 2>, feature_id='269a39ad', local_index=9, geometry_hash='500e6f440b5f5701', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='a29bff01-9b49-4ab7-ac44-d79ac69d7854', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=0, geometry_hash='8eaa92929bd8c02f', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='7d226abf-9ef4-4b2f-b266-c393d275dec7', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=1, geometry_hash='37f7b5970489ce04', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='32aa919d-feae-4854-9d84-8bf887a968c5', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=2, geometry_hash='06b3b22d3b07c5d5', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='5c377490-18cf-448c-b39b-c16e491eed79', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=3, geometry_hash='23ecc779be3dabc1', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='91e6a776-e1fe-4c91-a59f-23b5291f63ef', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=4, geometry_hash='89d820a139f273e1', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='4b53f453-a976-43f6-9df9-42cdba3b7ca4', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=5, geometry_hash='3b8ac8a02f3fd131', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='6d33c988-32b4-4097-9b3b-f4f6812b8462', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=6, geometry_hash='89671b0d30d8459b', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='20cf32ba-11bb-4dfa-8ad8-b3aee1af6c8f', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=7, geometry_hash='610538b917e2c871', timestamp=1771016644.1170182)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='19538d5a-a6f0-4a68-a3c2-5426cc7c099d', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=8, geometry_hash='b1da243b22354d45', timestamp=1771016644.1230364)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='1a9d0ff1-0302-4d09-a262-c88a273830b5', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=9, geometry_hash='766f12ceb1f987fb', timestamp=1771016644.1236825)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='2393a061-719d-40a1-8f18-398771dc4efb', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=10, geometry_hash='4837dd0d4bb00c07', timestamp=1771016644.1239915)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='905c621a-e754-427b-9eef-93017e7903b2', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=11, geometry_hash='c1ee6b452a3d5f4b', timestamp=1771016644.1239915)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='6ff7bc6d-b84b-4c55-ad35-571ae4b46bbf', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=12, geometry_hash='32e01abb99086fe5', timestamp=1771016644.1249926)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='b11f16c3-2880-4702-9978-83a088c45d18', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=13, geometry_hash='3668b43acb8123c1', timestamp=1771016644.1249926)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='aff6a5af-a126-4cf8-93b5-58d830aa2bb7', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=14, geometry_hash='34d52acc11514cf7', timestamp=1771016644.1259916)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='f199b01f-f139-4609-855d-57f793fe6c71', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=15, geometry_hash='cfd8042e9793e151', timestamp=1771016644.1259916)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='098010f1-0c0a-489f-9e74-92bc99f4b60d', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=16, geometry_hash='b32d6264b544cefd', timestamp=1771016644.1259916)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='79b3b906-3f91-4d66-8de2-ff2c7e3ee887', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=17, geometry_hash='2846d2cc86d0c900', timestamp=1771016644.1271632)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='efab20c8-b7ad-4e93-b53d-c597067abb1f', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=18, geometry_hash='379deb1598877e78', timestamp=1771016644.1275373)
-22:04:04 | DEBUG    | Shape registriert: ShapeID(uuid='d000cca5-c0c7-4ebb-ac6c-613b6f14966a', shape_type=<ShapeType.EDGE: 1>, feature_id='269a39ad', local_index=19, geometry_hash='12e8728fd8e82665', timestamp=1771016644.1275373)
-22:04:04 | INFO     | TNP: 20 Edges für Feature '269a39ad' registriert
-22:04:04 | SUCCESS  | OCP Fillet TNP: 10 Faces, 56 Edges registriert
-22:04:04 | DEBUG    | UnifySameDomain (Rebuild) übersprungen: aktive TNP-Referenzen vorhanden
-22:04:04 | DEBUG    | ✓ Body1: BREP Valid (10 Faces)
-22:04:04 | DEBUG    | Redo: Added Fillet to Body1 (rebuild=True)
-22:04:04 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=ffa9fcf5)
-22:04:04 | DEBUG    | Adaptive Tessellation: BBox-Diag=102.1mm → Deflection=0.1021mm
-22:04:04 | INFO     | Tessellated with face IDs: 84 triangles, 10 faces
-22:04:04 | DEBUG    | B-Rep Edges extrahiert: 48 Feature-Kanten
-22:04:04 | DEBUG    | Mesh regenerated for 'Body1': 104 pts, 48 edges, 10 B-Rep faces
-22:04:04 | DEBUG    | Verwende vtk_mesh: 104 Punkte, vtk_edges: 48
-22:04:04 | DEBUG    | Body ffa9fcf5: Bypassing cache, using B-Rep face_info (10 faces)
-22:04:04 | DEBUG    | Body ffa9fcf5: 10 unique face_ids (EXAKT via face_id)
-22:04:04 | DEBUG    |   Face 0: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 1: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 2: 18 triangles, surface=cylinder
-22:04:04 | DEBUG    |   Face 3: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 4: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 5: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 6: 18 triangles, surface=cylinder
-22:04:04 | DEBUG    |   Face 7: 18 triangles, surface=cylinder
-22:04:04 | DEBUG    |   Face 8: 2 triangles, surface=plane
-22:04:04 | DEBUG    |   Face 9: 18 triangles, surface=cylinder
-22:04:04 | SUCCESS  | Fillet R=2.0mm — 4 Kanten, Vol -0.1%
+2026-02-14 13:56:46.447 | SUCCESS  | modeling:<module>:83 - ✓ OCP (OpenCASCADE) geladen.
+2026-02-14 13:56:46.447 | SUCCESS  | modeling:<module>:102 - ✓ build123d geladen (High-Level API).
+2026-02-14 13:56:46.573 | SUCCESS  | gui.sketch_editor:<module>:48 - QuadTree Module loaded.
+2026-02-14 13:56:46.586 | SUCCESS  | gui.sketch_editor:<module>:93 - Build123d erfolgreich geladen für Sketch-Editor
+2026-02-14 13:56:47.661 | SUCCESS  | gui.viewport_pyvista:<module>:38 - PyVista & VTK erfolgreich geladen.
+13:56:47 | INFO     | TNP v4.0 ShapeNamingService initialisiert
+13:56:47 | DEBUG    | TNP v4.0: ShapeNamingService initialisiert für 'Projekt1'
+13:56:47 | DEBUG    | Component erstellt: Root (id=44104cb5)
+13:56:47 | INFO     | [ASSEMBLY] Component-System aktiviert für 'Projekt1'
+13:56:49 | DEBUG    | FPS-Observer an RenderWindow angehängt
+13:56:49 | DEBUG    | RenderQueue initialisiert (mit FPS-Tracking)
+13:56:49 | INFO     | Ready
+13:56:49 | INFO     | Ready. PyVista & Build123d active.
+13:56:59 | INFO     | Wähle Ebene: 1=XY, 2=XZ, 3=YZ oder Klick auf Fläche
+13:57:00 | DEBUG    | [Auto-Align] 90° (screen Y-dir, dot=0.52)
+13:57:00 | DEBUG    | [preview] clear transient previews: mode:3d->sketch
+13:57:00 | DEBUG    | Sketch-Pfad-Modus beendet
+13:57:02 | DEBUG    | Profile 0: 4 geometry segments: {'line'}
+13:57:02 | DEBUG    | Stored geometry map for profile: (-19.0, -40.0, 36.0, 34.0, 4070.0)
+13:57:02 | DEBUG    | [CAD Kernel First] Synced 1 profiles to sketch (inkl. Holes)
+13:57:04 | DEBUG    | [preview] clear transient previews: mode:sketch->3d
+13:57:04 | DEBUG    | Sketch-Pfad-Modus beendet
+13:57:07 | DEBUG    | Parent Polygon 0: area=4070.0, holes_found=0
+13:57:07 | INFO     |   → Shell nach difference: area=4070.0, interiors=0
+13:57:07 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+13:57:08 | DEBUG    | FeatureDependencyGraph initialisiert
+13:57:08 | DEBUG    | [EXTRUDE] Matched selection (8.50, -3.00) → sketch (8.50, -3.00)
+13:57:08 | DEBUG    | [TNP] Feature ad22f503 invalidiert vor Redo
+13:57:08 | DEBUG    | Feature 'ad22f503' hinzugefügt (Index 0)
+13:57:08 | INFO     | Rebuilding Body 'Body1' (Features 0-0/1)...
+13:57:08 | INFO     | [OCP-FIRST] 1/1 Profile via Selektor
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='9b0fa26e-a1f3-4f4c-a629-0ecd1d1acaa6', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=0, geometry_hash='9609c610d5454570', timestamp=1771073828.8252156)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='94958498-58f5-4ccb-93fa-21f909c7d8b2', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=1, geometry_hash='ca0671e51a5c018e', timestamp=1771073828.8252156)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='df4a06ab-271b-4673-af40-8d5817ec1a4d', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=2, geometry_hash='122c5121ef81f46d', timestamp=1771073828.826215)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='c6e75640-b6c6-455e-9cbc-0e6dd9306cc3', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=3, geometry_hash='d5607d4a06c7433c', timestamp=1771073828.826215)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='eb4de237-f787-4b55-b7ab-3d7fb67fb3e5', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=4, geometry_hash='66fb0a631cabf955', timestamp=1771073828.8272145)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='df592d3f-6751-4639-8096-9080b6793c3b', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=5, geometry_hash='ff2f25f1befc3633', timestamp=1771073828.8272145)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='704f60a5-a6d8-4606-8704-3300534003d9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=0, geometry_hash='adaba73ec19b4c78', timestamp=1771073828.828215)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='400d5b8d-fe8b-4794-981e-5a1c4eb517db', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=1, geometry_hash='d3a45b8ca346dfb4', timestamp=1771073828.8292136)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='4101a00d-a3bb-41ec-a24f-6fdbb29b082a', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=2, geometry_hash='aea91d57586c6b1b', timestamp=1771073828.8312168)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='47c6cd00-70d1-434a-b93d-0a0ac8f32902', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=3, geometry_hash='94c52f79ee256417', timestamp=1771073828.8322158)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='c7c0d16f-aff9-434d-b1d4-e395838190eb', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=4, geometry_hash='743e17d4754d4b29', timestamp=1771073828.8322158)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='a6ca7ecf-60c3-4a40-b4bd-6f25fe9c7991', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=5, geometry_hash='ca334472267faa97', timestamp=1771073828.8332143)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='c44e1364-9c40-4204-9c23-bdbfe87c6407', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=6, geometry_hash='6a194020b7cb5194', timestamp=1771073828.8332143)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='5e845f20-2e4e-450a-ba6f-de1a8ff767fd', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=7, geometry_hash='c5867c85002cd0f3', timestamp=1771073828.8342142)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='52d8341e-6a1e-468b-a639-624913c53ef9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=8, geometry_hash='1e9fdd06e43b90b1', timestamp=1771073828.8342142)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='9e7e9b5c-7c9d-44d6-95ae-e443129e2111', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=9, geometry_hash='c4feb353bdcf946d', timestamp=1771073828.8352149)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='d73ffffa-3727-4b1c-a3d4-6932e689813b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=10, geometry_hash='6dcdc2175463afbb', timestamp=1771073828.8352149)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='754ee605-9190-40fe-aae1-4db7629a383b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=11, geometry_hash='d877275ce6d0d2d9', timestamp=1771073828.8359988)
+13:57:08 | INFO     | TNP: 12 Edges für Feature 'ad22f503' registriert
+13:57:08 | SUCCESS  | OCP Extrude TNP: 6 Faces, 12 Edges registriert
+13:57:08 | DEBUG    | [OCP-FIRST] Extrudiert: ad22f503
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='704f60a5-a6d8-4606-8704-3300534003d9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=0, geometry_hash='adaba73ec19b4c78', timestamp=1771073828.828215)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='400d5b8d-fe8b-4794-981e-5a1c4eb517db', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=1, geometry_hash='d3a45b8ca346dfb4', timestamp=1771073828.8292136)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='4101a00d-a3bb-41ec-a24f-6fdbb29b082a', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=2, geometry_hash='aea91d57586c6b1b', timestamp=1771073828.8312168)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='47c6cd00-70d1-434a-b93d-0a0ac8f32902', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=3, geometry_hash='94c52f79ee256417', timestamp=1771073828.8322158)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='c7c0d16f-aff9-434d-b1d4-e395838190eb', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=4, geometry_hash='743e17d4754d4b29', timestamp=1771073828.8322158)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='a6ca7ecf-60c3-4a40-b4bd-6f25fe9c7991', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=5, geometry_hash='ca334472267faa97', timestamp=1771073828.8332143)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='c44e1364-9c40-4204-9c23-bdbfe87c6407', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=6, geometry_hash='6a194020b7cb5194', timestamp=1771073828.8332143)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='5e845f20-2e4e-450a-ba6f-de1a8ff767fd', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=7, geometry_hash='c5867c85002cd0f3', timestamp=1771073828.8342142)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='52d8341e-6a1e-468b-a639-624913c53ef9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=8, geometry_hash='1e9fdd06e43b90b1', timestamp=1771073828.8342142)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='9e7e9b5c-7c9d-44d6-95ae-e443129e2111', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=9, geometry_hash='c4feb353bdcf946d', timestamp=1771073828.8352149)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='d73ffffa-3727-4b1c-a3d4-6932e689813b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=10, geometry_hash='6dcdc2175463afbb', timestamp=1771073828.8352149)
+13:57:08 | DEBUG    | Shape registriert: ShapeID(uuid='754ee605-9190-40fe-aae1-4db7629a383b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=11, geometry_hash='d877275ce6d0d2d9', timestamp=1771073828.8359988)
+13:57:08 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
+13:57:08 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
+13:57:08 | DEBUG    | ✓ Body1: BREP Valid (6 Faces)
+13:57:08 | DEBUG    | Redo: Added Extrude to Body1 (rebuild=True)
+13:57:08 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=d84f658e)
+13:57:08 | DEBUG    | Adaptive Tessellation: BBox-Diag=123.8mm → Deflection=0.1238mm
+13:57:08 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
+13:57:08 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
+13:57:08 | DEBUG    | Mesh regenerated for 'Body1': 24 pts, 24 edges, 6 B-Rep faces
+13:57:08 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
+13:57:09 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (6 faces)
+13:57:09 | DEBUG    | Body d84f658e: 6 unique face_ids (EXAKT via face_id)
+13:57:09 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 2: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 5: 2 triangles, surface=plane
+13:57:09 | DEBUG    | Parent Polygon 0: area=4070.0, holes_found=0
+13:57:09 | INFO     |   → Shell nach difference: area=4070.0, interiors=0
+13:57:09 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (6 faces)
+13:57:09 | DEBUG    | Body d84f658e: 6 unique face_ids (EXAKT via face_id)
+13:57:09 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 2: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:09 | DEBUG    |   Face 5: 2 triangles, surface=plane
+13:57:09 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+13:57:10 | INFO     | Extrude abgebrochen
+13:57:11 | DEBUG    | Parent Polygon 0: area=4070.0, holes_found=0
+13:57:11 | INFO     |   → Shell nach difference: area=4070.0, interiors=0
+13:57:11 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (6 faces)
+13:57:11 | DEBUG    | Body d84f658e: 6 unique face_ids (EXAKT via face_id)
+13:57:11 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:11 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:11 | DEBUG    |   Face 2: 2 triangles, surface=plane
+13:57:11 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:11 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:11 | DEBUG    |   Face 5: 2 triangles, surface=plane
+13:57:11 | INFO     | Fläche wählen und ziehen. Bestätigen mit Enter oder Rechtsklick.
+13:57:13 | DEBUG    | Face-Suche: Normale=(1.00, 0.00, 0.00)
+13:57:13 | INFO     | Face direkt via ocp_face_id=3 gefunden
+13:57:13 | INFO     | Face gefunden: dist=0.000
+13:57:13 | INFO     | Face hat 1 Wire(s) (1=outer only, >1=mit Löchern)
+13:57:13 | INFO     | Face hat 1 Wire(s) - 0 Löcher
+13:57:13 | DEBUG    |   Koordinatensystem bei Extraktion:
+13:57:13 | DEBUG    |     origin=(36.0, 34.0, 0.0)
+13:57:13 | DEBUG    |     x_dir=(0.0, -1.0, 0.0)
+13:57:13 | DEBUG    |     y_dir=(0.0, 0.0, -1.0)
+13:57:13 | DEBUG    |     normal=(1.0, 0.0, 0.0)
+13:57:13 | INFO     | ✅ Face-Polygon extrahiert: 4 Punkte, 0 Löcher, Area=6113.9
+13:57:13 | DEBUG    | BRepFeat_MakePrism: direction=(1.000, 0.000, 0.000), fuse_mode=1, height=26.08
+13:57:13 | DEBUG    | BRepFeat_MakePrism.IsDone() = True
+13:57:13 | DEBUG    | BRepFeat: UnifySameDomain angewendet
+13:57:13 | DEBUG    | BRepFeat result: is_valid=True, volume=495713.39 (original=336263.40)
+13:57:13 | INFO     | ✅ BRepFeat_MakePrism erfolgreich (lokale Op - Zylinder bleiben intakt)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='4523a236-0be7-4ba6-b62c-125823377832', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=0, geometry_hash='d5607d4a06c7433c', timestamp=1771073833.0285378)
+13:57:13 | INFO     | TNP v4.0: Tracke BRepFeat Operation '6b1ce902'
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='4523a236-0be7-4ba6-b62c-125823377832', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=0, geometry_hash='d5607d4a06c7433c', timestamp=1771073833.0285378)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='07ad2382-2f93-4619-be76-5da53f5fda2f', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=1, geometry_hash='b8a38984a453b779', timestamp=1771073833.0309215)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='b77b3c6b-7e0a-4df2-b062-928f756abeb6', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=2, geometry_hash='dd874eccca0f91e9', timestamp=1771073833.0374527)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='06c7f59b-0c0f-43ff-babf-aafe1e75a33c', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=3, geometry_hash='c5867c85002cd0f3', timestamp=1771073833.038452)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='49f43a6b-95c8-40dd-84e5-8f540f960ded', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=4, geometry_hash='d0fa025125439fc5', timestamp=1771073833.038452)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='36baff85-ab7a-4a81-889f-21fa55fea027', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=5, geometry_hash='456e2f46f3c3e30f', timestamp=1771073833.0419357)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='092dffd5-5875-4144-b409-0c90bcea3a0b', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=6, geometry_hash='ce2670e85e685dff', timestamp=1771073833.0419357)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='883bd997-a325-4d4e-9ca0-5c698b192655', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=7, geometry_hash='138743504fcce4c5', timestamp=1771073833.0429335)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='aef5c34c-ceeb-466f-9cb4-501bb164ddae', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=8, geometry_hash='adaba73ec19b4c78', timestamp=1771073833.0429335)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='c8e6edf7-5278-42a8-bb11-898168ddab7c', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=9, geometry_hash='2c9abd089981a4b7', timestamp=1771073833.0439355)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='a1e1a8c2-1782-4d58-8da2-dd6046f56126', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=10, geometry_hash='75fd0701dc06e07f', timestamp=1771073833.0447986)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='781869a4-4df8-4a25-ab5e-e0092b621b5c', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=11, geometry_hash='6dcdc2175463afbb', timestamp=1771073833.0447986)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='4cf2231a-d6b3-4325-9acb-b199d8f41a13', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=12, geometry_hash='97f926b75f444f12', timestamp=1771073833.0447986)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='86eb1add-5aff-49b4-a204-295f666fc5dd', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=13, geometry_hash='e31ff82354f195bb', timestamp=1771073833.053382)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='518a63c5-7c20-44f9-beda-23943da237d4', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=14, geometry_hash='d877275ce6d0d2d9', timestamp=1771073833.053382)
+13:57:13 | DEBUG    | Shape registriert: ShapeID(uuid='7599160b-e4a5-42bc-abf7-6504448d963f', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=15, geometry_hash='44c78b73e94e35f2', timestamp=1771073833.0543458)
+13:57:13 | DEBUG    | [TNP] _register_unmapped_edges: 20 unique Edges in result, 20 already known
+13:57:13 | INFO     | [TNP] _register_unmapped_edges: 0 neue Edges registriert
+13:57:13 | DEBUG    | Operation aufgezeichnet: BREPFEAT_PRISM (5 in -> 16 out)
+13:57:13 | SUCCESS  | TNP v4.0: BRepFeat kernel-history getrackt - 4 mappings + 0 neue Edges
+13:57:13 | DEBUG    | Push/Pull Geometry Delta: old_solid=True, new_solid=True
+13:57:13 | DEBUG    | Push/Pull Metrics: before={'volume': 336263.4, 'faces': 6, 'edges': 12}, after={'volume': 495713.39040000003, 'faces': 6, 'edges': 12}
+13:57:13 | SUCCESS  | Push/Pull Geometry Delta gesetzt: Vol 336263 → 495713 (+47.4%)
+13:57:13 | INFO     | TNP: Feature '6b1ce902' invalidiert
+13:57:13 | DEBUG    | [TNP] Feature 6b1ce902 invalidiert vor Redo
+13:57:13 | DEBUG    | Feature '6b1ce902' hinzugefügt (Index 1)
+13:57:13 | DEBUG    | Redo: Added Push/Pull (Join) to Body1 (rebuild=False)
+13:57:13 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=d84f658e)
+13:57:13 | DEBUG    | Adaptive Tessellation: BBox-Diag=137.4mm → Deflection=0.1374mm
+13:57:13 | INFO     | Tessellated with face IDs: 12 triangles, 6 faces
+13:57:13 | DEBUG    | B-Rep Edges extrahiert: 24 Feature-Kanten
+13:57:13 | DEBUG    | Mesh regenerated for 'Body1': 24 pts, 24 edges, 6 B-Rep faces
+13:57:13 | DEBUG    | Verwende vtk_mesh: 24 Punkte, vtk_edges: 24
+13:57:13 | INFO     | ✅ Push/Pull Join: 6 Faces (BRepFeat - lokale Op)
+13:57:13 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (6 faces)
+13:57:13 | DEBUG    | Body d84f658e: 6 unique face_ids (EXAKT via face_id)
+13:57:13 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:13 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:13 | DEBUG    |   Face 2: 2 triangles, surface=plane
+13:57:13 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:13 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:13 | DEBUG    |   Face 5: 2 triangles, surface=plane
+13:57:17 | INFO     | Fillet: Klicke auf einen Körper in der 3D-Ansicht oder wähle im Browser
+13:57:17 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (6 faces)
+13:57:17 | DEBUG    | Body d84f658e: 6 unique face_ids (EXAKT via face_id)
+13:57:17 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:17 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:17 | DEBUG    |   Face 2: 2 triangles, surface=plane
+13:57:17 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:17 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:17 | DEBUG    |   Face 5: 2 triangles, surface=plane
+13:57:17 | INFO     | Edge Mode: 12 Kanten (V8 Batch-Rendering)
+13:57:17 | INFO     | Fillet: Klicke auf Kanten von 'Body1' (A = alle wählen, ESC = abbrechen)
+13:57:19 | INFO     | Loop Select: 4 Kanten markiert.
+13:57:20 | INFO     | Wende fillet auf 4 Kanten an (r=2.0)...
+13:57:20 | DEBUG    | TNP Phase 1: 4 GeometricSelectors erstellt
+13:57:20 | DEBUG    | TNP Phase 2: Fillet/Chamfer hängt von Feature Push/Pull (Join) ab
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='b65568f4-ca8e-43da-9929-cce1df838fdd', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=0, geometry_hash='f57aa85f4de1c1d3', timestamp=1771073840.756095)
+13:57:20 | DEBUG    | TNP v4.0: Edge registriert (Fallback) b65568f4...
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='da643dd0-4088-4433-bb21-2fb2fb8af6d1', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=1, geometry_hash='44c78b73e94e35f2', timestamp=1771073840.756338)
+13:57:20 | DEBUG    | TNP v4.0: Edge registriert (Fallback) da643dd0...
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='2c52d60a-cc5b-4dd9-b7de-a34af32300a8', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=2, geometry_hash='c59835b7cfa023b3', timestamp=1771073840.7573478)
+13:57:20 | DEBUG    | TNP v4.0: Edge registriert (Fallback) 2c52d60a...
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='6b1e1eaa-6656-4c90-b247-cffcf2e59997', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=3, geometry_hash='6a194020b7cb5194', timestamp=1771073840.758347)
+13:57:20 | DEBUG    | TNP v4.0: Edge registriert (Fallback) 6b1e1eaa...
+13:57:20 | DEBUG    | TNP v4.0: 4 ShapeIDs für Feature a1b8bc5d gefunden
+13:57:20 | INFO     | TNP: Feature 'a1b8bc5d' invalidiert
+13:57:20 | DEBUG    | [TNP] Feature a1b8bc5d invalidiert vor Redo
+13:57:20 | DEBUG    | Feature 'a1b8bc5d' hinzugefügt (Index 2)
+13:57:20 | INFO     | Rebuilding Body 'Body1' (Features 0-2/3)...
+13:57:20 | INFO     | [OCP-FIRST] 1/1 Profile via Selektor
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='9b0fa26e-a1f3-4f4c-a629-0ecd1d1acaa6', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=0, geometry_hash='9609c610d5454570', timestamp=1771073828.8252156)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='94958498-58f5-4ccb-93fa-21f909c7d8b2', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=1, geometry_hash='ca0671e51a5c018e', timestamp=1771073828.8252156)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='df4a06ab-271b-4673-af40-8d5817ec1a4d', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=2, geometry_hash='122c5121ef81f46d', timestamp=1771073828.826215)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c6e75640-b6c6-455e-9cbc-0e6dd9306cc3', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=3, geometry_hash='d5607d4a06c7433c', timestamp=1771073828.826215)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='eb4de237-f787-4b55-b7ab-3d7fb67fb3e5', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=4, geometry_hash='66fb0a631cabf955', timestamp=1771073828.8272145)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='df592d3f-6751-4639-8096-9080b6793c3b', shape_type=<ShapeType.FACE: 2>, feature_id='ad22f503', local_index=5, geometry_hash='ff2f25f1befc3633', timestamp=1771073828.8272145)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='704f60a5-a6d8-4606-8704-3300534003d9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=0, geometry_hash='adaba73ec19b4c78', timestamp=1771073828.828215)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='400d5b8d-fe8b-4794-981e-5a1c4eb517db', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=1, geometry_hash='d3a45b8ca346dfb4', timestamp=1771073828.8292136)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='4101a00d-a3bb-41ec-a24f-6fdbb29b082a', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=2, geometry_hash='aea91d57586c6b1b', timestamp=1771073828.8312168)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='47c6cd00-70d1-434a-b93d-0a0ac8f32902', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=3, geometry_hash='94c52f79ee256417', timestamp=1771073828.8322158)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c7c0d16f-aff9-434d-b1d4-e395838190eb', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=4, geometry_hash='743e17d4754d4b29', timestamp=1771073828.8322158)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='a6ca7ecf-60c3-4a40-b4bd-6f25fe9c7991', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=5, geometry_hash='ca334472267faa97', timestamp=1771073828.8332143)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c44e1364-9c40-4204-9c23-bdbfe87c6407', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=6, geometry_hash='6a194020b7cb5194', timestamp=1771073828.8332143)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='5e845f20-2e4e-450a-ba6f-de1a8ff767fd', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=7, geometry_hash='c5867c85002cd0f3', timestamp=1771073828.8342142)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='52d8341e-6a1e-468b-a639-624913c53ef9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=8, geometry_hash='1e9fdd06e43b90b1', timestamp=1771073828.8342142)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='9e7e9b5c-7c9d-44d6-95ae-e443129e2111', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=9, geometry_hash='c4feb353bdcf946d', timestamp=1771073828.8352149)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='d73ffffa-3727-4b1c-a3d4-6932e689813b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=10, geometry_hash='6dcdc2175463afbb', timestamp=1771073828.8352149)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='754ee605-9190-40fe-aae1-4db7629a383b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=11, geometry_hash='d877275ce6d0d2d9', timestamp=1771073828.8359988)
+13:57:20 | INFO     | TNP: 12 Edges für Feature 'ad22f503' registriert
+13:57:20 | SUCCESS  | OCP Extrude TNP: 6 Faces, 12 Edges registriert
+13:57:20 | DEBUG    | [OCP-FIRST] Extrudiert: ad22f503
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='704f60a5-a6d8-4606-8704-3300534003d9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=0, geometry_hash='adaba73ec19b4c78', timestamp=1771073828.828215)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='400d5b8d-fe8b-4794-981e-5a1c4eb517db', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=1, geometry_hash='d3a45b8ca346dfb4', timestamp=1771073828.8292136)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='4101a00d-a3bb-41ec-a24f-6fdbb29b082a', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=2, geometry_hash='aea91d57586c6b1b', timestamp=1771073828.8312168)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='47c6cd00-70d1-434a-b93d-0a0ac8f32902', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=3, geometry_hash='94c52f79ee256417', timestamp=1771073828.8322158)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c7c0d16f-aff9-434d-b1d4-e395838190eb', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=4, geometry_hash='743e17d4754d4b29', timestamp=1771073828.8322158)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='a6ca7ecf-60c3-4a40-b4bd-6f25fe9c7991', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=5, geometry_hash='ca334472267faa97', timestamp=1771073828.8332143)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c44e1364-9c40-4204-9c23-bdbfe87c6407', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=6, geometry_hash='6a194020b7cb5194', timestamp=1771073828.8332143)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='5e845f20-2e4e-450a-ba6f-de1a8ff767fd', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=7, geometry_hash='c5867c85002cd0f3', timestamp=1771073828.8342142)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='52d8341e-6a1e-468b-a639-624913c53ef9', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=8, geometry_hash='1e9fdd06e43b90b1', timestamp=1771073828.8342142)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='9e7e9b5c-7c9d-44d6-95ae-e443129e2111', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=9, geometry_hash='c4feb353bdcf946d', timestamp=1771073828.8352149)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='d73ffffa-3727-4b1c-a3d4-6932e689813b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=10, geometry_hash='6dcdc2175463afbb', timestamp=1771073828.8352149)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='754ee605-9190-40fe-aae1-4db7629a383b', shape_type=<ShapeType.EDGE: 1>, feature_id='ad22f503', local_index=11, geometry_hash='d877275ce6d0d2d9', timestamp=1771073828.8359988)
+13:57:20 | DEBUG    | Operation aufgezeichnet: EXTRUDE (0 in -> 12 out)
+13:57:20 | INFO     | TNP v4.0: 12 Edges für Extrude 'Extrude' registriert
+13:57:20 | DEBUG    | Shape 4523a236 via geometry_hash (d5607d4a) → c6e75640 aufgelöst
+13:57:20 | DEBUG    | BRepFeat Push/Pull: Face via TNP-v4 aufgelöst (face_index=3, has_shape_id=True, source=shape:geometry_hash, shape_method=geometry_hash, rank=1.200, normal_mode=primary)
+13:57:20 | DEBUG    | UnifySameDomain (BRepFeat_MakePrism): 10 → 6 Faces
+13:57:20 | DEBUG    | BRepFeat Push/Pull erfolgreich: volume=495713.39mm³
+13:57:20 | INFO     | TNP v4.0: Tracke BRepFeat Operation '6b1ce902'
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c6ffe56d-d8e1-43ba-bf09-09181d8f86f0', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=0, geometry_hash='d912676dba7af4e4', timestamp=1771073840.8309622)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='1a12fb85-c954-4ed7-be88-505beb5287a4', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=1, geometry_hash='b8a38984a453b779', timestamp=1771073840.832207)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='71ace5dd-cfbd-47aa-91f6-d302d2162216', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=2, geometry_hash='dd874eccca0f91e9', timestamp=1771073840.832721)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='ed15f190-f150-4411-bede-dcd2748890b9', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=3, geometry_hash='c5867c85002cd0f3', timestamp=1771073840.832721)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='7faac7ce-7498-4ae5-817f-d08d4e5d1564', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=4, geometry_hash='d0fa025125439fc5', timestamp=1771073840.832721)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='647692a2-61e3-4bec-9403-184ce53285cf', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=5, geometry_hash='456e2f46f3c3e30f', timestamp=1771073840.832721)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='03e460a4-0536-496e-b924-105311c88a83', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=6, geometry_hash='ce2670e85e685dff', timestamp=1771073840.8375382)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='e8cce990-1e09-4a73-94e0-e04c784bcb48', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=7, geometry_hash='138743504fcce4c5', timestamp=1771073840.8385417)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='ffb75e8a-5c93-4649-8bac-61973641933f', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=8, geometry_hash='adaba73ec19b4c78', timestamp=1771073840.839539)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='5fe5c53b-4e38-4894-95e7-a230b1ad1c55', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=9, geometry_hash='2c9abd089981a4b7', timestamp=1771073840.839539)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='cc8b8906-77f8-4a5b-a152-feda1ed9cb81', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=10, geometry_hash='75fd0701dc06e07f', timestamp=1771073840.8425374)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='7b081a78-de5b-41ae-9b62-1476b0337192', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=11, geometry_hash='6dcdc2175463afbb', timestamp=1771073840.843528)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='ad8831f0-547a-42ad-9041-1c711c746069', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=12, geometry_hash='97f926b75f444f12', timestamp=1771073840.843528)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='5fa34784-bb0b-4a3c-8420-4432e84d2cef', shape_type=<ShapeType.FACE: 2>, feature_id='6b1ce902', local_index=13, geometry_hash='e31ff82354f195bb', timestamp=1771073840.843528)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='f9104bac-4ea5-4e72-964f-6c01c5f3b618', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=14, geometry_hash='d877275ce6d0d2d9', timestamp=1771073840.843528)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='c5cfe15a-2d26-44ff-bc4c-c6f7b18b3bf1', shape_type=<ShapeType.EDGE: 1>, feature_id='6b1ce902', local_index=15, geometry_hash='44c78b73e94e35f2', timestamp=1771073840.843528)
+13:57:20 | DEBUG    | [TNP] _register_unmapped_edges: 20 unique Edges in result, 20 already known
+13:57:20 | INFO     | [TNP] _register_unmapped_edges: 0 neue Edges registriert
+13:57:20 | DEBUG    | Operation aufgezeichnet: BREPFEAT_PRISM (5 in -> 16 out)
+13:57:20 | SUCCESS  | TNP v4.0: BRepFeat kernel-history getrackt - 4 mappings + 0 neue Edges
+13:57:20 | DEBUG    | TNP BRepFeat: Push/Pull erfolgreich via BRepFeat_MakePrism
+13:57:20 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='4ea907c5-6c83-4c1b-84dd-fe5e0f9546f4', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=0, geometry_hash='f57aa85f4de1c1d3', timestamp=1771073840.875393)
+13:57:20 | DEBUG    | ShapeID erneuert nach Rebuild: b65568f4 → 4ea907c5
+13:57:20 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='b746e011-05f9-406c-8533-d65361e1ed74', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=1, geometry_hash='44c78b73e94e35f2', timestamp=1771073840.8773923)
+13:57:20 | DEBUG    | ShapeID erneuert nach Rebuild: da643dd0 → b746e011
+13:57:20 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='77dc932b-5b05-4cb8-8128-7f0c90d9147a', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=2, geometry_hash='c59835b7cfa023b3', timestamp=1771073840.8801696)
+13:57:20 | DEBUG    | ShapeID erneuert nach Rebuild: 2c52d60a → 77dc932b
+13:57:20 | DEBUG    | ✅ Edge Match gefunden (Score: 90.00%)
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='a5856db3-f7c2-4bc3-9267-e30716c63e58', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=3, geometry_hash='6a194020b7cb5194', timestamp=1771073840.8806808)
+13:57:20 | DEBUG    | ShapeID erneuert nach Rebuild: 6b1e1eaa → a5856db3
+13:57:20 | DEBUG    | Feature 'Fillet': 4/4 Edges aktualisiert
+13:57:20 | INFO     | TNP v4.0: Resolving edges for Fillet (shape_ids=4, indices=4, selectors=4, solid_edges=12)
+13:57:20 | DEBUG    | Shape 4ea907c5 direkt gefunden
+13:57:20 | DEBUG    | TNP v4.0: Edge 0 via ShapeID aufgelöst (method=direct)
+13:57:20 | DEBUG    | Shape b746e011 direkt gefunden
+13:57:20 | DEBUG    | TNP v4.0: Edge 1 via ShapeID aufgelöst (method=direct)
+13:57:20 | DEBUG    | Shape 77dc932b direkt gefunden
+13:57:20 | DEBUG    | TNP v4.0: Edge 2 via ShapeID aufgelöst (method=direct)
+13:57:20 | DEBUG    | Shape a5856db3 direkt gefunden
+13:57:20 | DEBUG    | TNP v4.0: Edge 3 via ShapeID aufgelöst (method=direct)
+13:57:20 | DEBUG    | TNP v4.0: 4/4 Edges aufgelöst
+13:57:20 | INFO     | TNP Debug: 4 resolved, 0 unresolved
+13:57:20 | DEBUG    | [TNP] Fillet-Operator als OCCT-History verwendet
+13:57:20 | INFO     | TNP v4.0: Tracke Fillet Operation 'a1b8bc5d'
+13:57:20 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für 4ea907c5
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='83fc0f8a-35ce-45f8-bfb4-a027171d5112', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=0, geometry_hash='3cb9e721eaeb7b32', timestamp=1771073840.9346907)
+13:57:20 | DEBUG    | TNP Fillet: 4ea907c5 → 1 Shapes gemappt
+13:57:20 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für b746e011
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='1a78aae7-b6a1-45d6-8eaa-9b8db1979426', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=1, geometry_hash='c18a28a0a0593578', timestamp=1771073840.9523594)
+13:57:20 | DEBUG    | TNP Fillet: b746e011 → 1 Shapes gemappt
+13:57:20 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für 77dc932b
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='7cb54877-2b87-4010-b31b-c6176ad224ae', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=2, geometry_hash='1951cd14f0f156c6', timestamp=1771073840.9702218)
+13:57:20 | DEBUG    | TNP Fillet: 77dc932b → 1 Shapes gemappt
+13:57:20 | WARNING  | TNP: Konnte Geometrie-Daten nicht berechnen für a5856db3
+13:57:20 | DEBUG    | Shape registriert: ShapeID(uuid='a3aa5563-54a8-4812-8743-4c4c1a330116', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=3, geometry_hash='17e2aa08ba87955e', timestamp=1771073840.988299)
+13:57:20 | DEBUG    | TNP Fillet: a5856db3 → 1 Shapes gemappt
+13:57:20 | DEBUG    | Operation aufgezeichnet: FILLET (4 in -> 4 out)
+13:57:20 | SUCCESS  | TNP v4.0: Fillet History getrackt - 4 mappings, 4 neue Shapes
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='83fc0f8a-35ce-45f8-bfb4-a027171d5112', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=0, geometry_hash='3cb9e721eaeb7b32', timestamp=1771073840.9346907)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='1a78aae7-b6a1-45d6-8eaa-9b8db1979426', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=1, geometry_hash='c18a28a0a0593578', timestamp=1771073840.9523594)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='7cb54877-2b87-4010-b31b-c6176ad224ae', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=2, geometry_hash='1951cd14f0f156c6', timestamp=1771073840.9702218)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='a3aa5563-54a8-4812-8743-4c4c1a330116', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=3, geometry_hash='17e2aa08ba87955e', timestamp=1771073840.988299)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='c6c141c7-2dbb-4500-bf91-b4134b041309', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=4, geometry_hash='c4460c1c5acda857', timestamp=1771073841.0061307)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='545e51e4-a4e6-4b15-aeda-af3e07d96e90', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=5, geometry_hash='c18a28a0a0593578', timestamp=1771073841.0071306)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='425fff24-e20d-435e-ad8c-4742a239ee8a', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=6, geometry_hash='17b583ffe12924b5', timestamp=1771073841.0081306)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='32c0e0e3-acee-4569-9c6c-c385ed7c9015', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=7, geometry_hash='17e2aa08ba87955e', timestamp=1771073841.0081306)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='72084d71-ccef-485a-b9d5-ba5b1839b170', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=8, geometry_hash='715896f936f64af1', timestamp=1771073841.0091302)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='340dc56e-43ee-4385-b849-e12f49e098e3', shape_type=<ShapeType.FACE: 2>, feature_id='a1b8bc5d', local_index=9, geometry_hash='1951cd14f0f156c6', timestamp=1771073841.0091302)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='4ea907c5-6c83-4c1b-84dd-fe5e0f9546f4', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=0, geometry_hash='f57aa85f4de1c1d3', timestamp=1771073840.875393)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='b746e011-05f9-406c-8533-d65361e1ed74', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=1, geometry_hash='44c78b73e94e35f2', timestamp=1771073840.8773923)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='77dc932b-5b05-4cb8-8128-7f0c90d9147a', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=2, geometry_hash='c59835b7cfa023b3', timestamp=1771073840.8801696)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='a5856db3-f7c2-4bc3-9267-e30716c63e58', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=3, geometry_hash='6a194020b7cb5194', timestamp=1771073840.8806808)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='93a2d4ce-50fd-49ae-a28d-d90d9f07b33f', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=4, geometry_hash='f68d898a745c7986', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='d190ba8d-1578-4e60-8080-8c8ddaab6159', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=5, geometry_hash='97f926b75f444f12', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='d861e8a0-acdf-4d3b-9439-2b065ab37137', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=6, geometry_hash='b56c93657aadd4ee', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='fb281bdc-9229-4803-a342-502074179614', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=7, geometry_hash='8468247ee8f65cc5', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='1b0059b0-0422-46a0-9f32-a7695ee29935', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=8, geometry_hash='a4509ceda32d8250', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='09890b53-bcde-4903-96c1-cdecae74bfd1', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=9, geometry_hash='db419bb89f197a28', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='8112bb18-7a65-4388-8d58-595efddfe238', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=10, geometry_hash='107eb314662efa70', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='5e866cf0-1090-40c6-844f-d59f268f4f9c', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=11, geometry_hash='ca334472267faa97', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='220e2ae9-d996-4aea-a2e1-3c704bcfaa21', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=12, geometry_hash='f28e89faa65323a1', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='13441c17-ed6d-4b21-a660-038b3f80b2bf', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=13, geometry_hash='0343cd8ce1ea325e', timestamp=1771073841.010172)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='0067f07e-6c98-489f-9717-edd9c463469d', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=14, geometry_hash='a0409d8fcd1194b3', timestamp=1771073841.0169058)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='a9efe0e0-cf47-4066-8be5-c660998ca963', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=15, geometry_hash='9ab4e7411427c352', timestamp=1771073841.0191586)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='ece3b2ab-0be6-44e0-a630-94094a1c88dc', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=16, geometry_hash='a355cf8f897ec82a', timestamp=1771073841.0201588)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='52aff8d4-cf71-4023-9ebe-10dbe831ccd0', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=17, geometry_hash='c810001931cc4135', timestamp=1771073841.0201588)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='50befaba-4cf8-4107-8865-ac3c6b068f6d', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=18, geometry_hash='fc11263e1d847a44', timestamp=1771073841.0211594)
+13:57:21 | DEBUG    | Shape registriert: ShapeID(uuid='63589dcc-2aa2-453a-8cbd-18928f876d7d', shape_type=<ShapeType.EDGE: 1>, feature_id='a1b8bc5d', local_index=19, geometry_hash='753deb7213de9e36', timestamp=1771073841.0211594)
+13:57:21 | INFO     | TNP: 20 Edges für Feature 'a1b8bc5d' registriert
+13:57:21 | SUCCESS  | OCP Fillet TNP: 10 Faces, 44 Edges registriert
+13:57:21 | DEBUG    | UnifySameDomain (Rebuild) übersprungen: aktive TNP-Referenzen vorhanden
+13:57:21 | DEBUG    | ✓ Body1: BREP Valid (10 Faces)
+13:57:21 | DEBUG    | Redo: Added Fillet to Body1 (rebuild=True)
+13:57:21 | DEBUG    | _update_body_mesh aufgerufen für 'Body1' (id=d84f658e)
+13:57:21 | DEBUG    | Adaptive Tessellation: BBox-Diag=137.4mm → Deflection=0.1374mm
+13:57:21 | INFO     | Tessellated with face IDs: 60 triangles, 10 faces
+13:57:21 | DEBUG    | B-Rep Edges extrahiert: 36 Feature-Kanten
+13:57:21 | DEBUG    | Mesh regenerated for 'Body1': 80 pts, 36 edges, 10 B-Rep faces
+13:57:21 | DEBUG    | Verwende vtk_mesh: 80 Punkte, vtk_edges: 36
+13:57:21 | DEBUG    | Body d84f658e: Bypassing cache, using B-Rep face_info (10 faces)
+13:57:21 | DEBUG    | Body d84f658e: 10 unique face_ids (EXAKT via face_id)
+13:57:21 | DEBUG    |   Face 0: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 1: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 2: 14 triangles, surface=cylinder
+13:57:21 | DEBUG    |   Face 3: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 4: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 5: 12 triangles, surface=cylinder
+13:57:21 | DEBUG    |   Face 6: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 7: 12 triangles, surface=cylinder
+13:57:21 | DEBUG    |   Face 8: 2 triangles, surface=plane
+13:57:21 | DEBUG    |   Face 9: 10 triangles, surface=cylinder
+13:57:21 | SUCCESS  | Fillet R=2.0mm — 4 Kanten, Vol -0.1%
