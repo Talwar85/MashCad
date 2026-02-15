@@ -661,6 +661,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     DIM_COLOR = QColor(255, 200, 100)
     CONSTRAINT_COLOR = QColor(100, 200, 100)
     PREVIEW_COLOR = QColor(0, 150, 255, 150)
+    SELECTION_FILTER_ORDER = ("all", "line", "circle", "arc", "spline", "point")
+    SELECTION_FILTER_LABELS = {
+        "all": "All",
+        "line": "Lines",
+        "circle": "Circles",
+        "arc": "Arcs",
+        "spline": "Splines",
+        "point": "Points",
+    }
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -708,6 +717,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_constraints = []  # Für Constraint-Selektion
         self.hovered_entity = None
         self._last_hovered_entity = None
+        self.selection_filter_mode = "all"
+        self._overlap_cycle_candidates = []
+        self._overlap_cycle_signature = ()
+        self._overlap_cycle_index = 0
+        self._overlap_cycle_anchor_screen = QPointF(-1.0, -1.0)
+        self._overlap_cycle_anchor_world = QPointF()
+        self._overlap_cycle_anchor_radius_px = 10.0
+        self._last_non_select_tool = SketchTool.LINE
 
         # Constraint Selection Highlighting (für 2-Entity Constraints)
         self._constraint_highlighted_entity = None
@@ -3255,7 +3272,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def set_tool(self, tool):
         self._cancel_tool()
+        if tool != SketchTool.SELECT:
+            self._last_non_select_tool = tool
         self.current_tool = tool
+        self._reset_overlap_cycle_state(clear_hover=(tool != SketchTool.SELECT))
         self.tool_changed.emit(tool)
         self._update_cursor()
         self._show_tool_hint()
@@ -3378,6 +3398,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # Constraint Highlight zurücksetzen
         self._clear_constraint_highlight()
+        self._reset_overlap_cycle_state(clear_hover=False)
 
         self.request_update()
 
@@ -4067,16 +4088,28 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.setCursor(Qt.SizeHorCursor)
             return
 
-        if self.current_tool == SketchTool.SELECT: self.setCursor(Qt.ArrowCursor)
+        if self.current_tool == SketchTool.SELECT:
+            if self.hovered_entity is not None:
+                self.setCursor(Qt.PointingHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
         elif self.current_tool == SketchTool.MOVE: self.setCursor(Qt.SizeAllCursor)
         else: self.setCursor(Qt.CrossCursor)
     
     def _show_tool_hint(self):
-        n_sel = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points)
+        n_sel = (
+            len(self.selected_lines)
+            + len(self.selected_circles)
+            + len(self.selected_arcs)
+            + len(self.selected_points)
+            + len(self.selected_splines)
+        )
         sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
         
         hints = {
-            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Circle/Polygon: Drag center or rim | Rectangle: select edge + drag | Del=Delete"),
+            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Circle/Polygon: Drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
+                flt=self._selection_filter_label()
+            ),
             SketchTool.LINE: tr("Click=Start | Tab=Length/Angle | RightClick=Finish"),
             SketchTool.RECTANGLE: tr("Rectangle") + f" ({tr('Center') if self.rect_mode else tr('2-Point')}) | " + tr("Click=Start"),
             SketchTool.RECTANGLE_CENTER: tr("Rectangle") + " (" + tr("Center") + ") | " + tr("Click=Start"),
@@ -5105,6 +5138,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 spline_elem = self._find_spline_element_at(self.mouse_world)
                 if spline_elem:
                     spline, cp_idx, elem_type = spline_elem
+                    if not self._entity_passes_selection_filter(spline):
+                        spline_elem = None
+                if spline_elem:
+                    spline, cp_idx, elem_type = spline_elem
                     self.spline_dragging = True
                     self.spline_drag_spline = spline
                     self.spline_drag_cp_index = cp_idx
@@ -5120,10 +5157,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             snapped, snap_type, snap_entity = self.snap_point(self.mouse_world)
             
             # D. Selektion (wenn kein Tool aktiv)
-            if self.current_tool == SketchTool.SELECT and not self._find_entity_at(snapped):
+            if self.current_tool == SketchTool.SELECT and not self._pick_select_hit(snapped):
                 # Auch Spline-Kurve selbst prüfen (Body-Klick)
                 spline = self._find_spline_at(self.mouse_world)
-                if spline:
+                if spline and self._entity_passes_selection_filter(spline):
                     self._clear_selection()
                     self.selected_splines = [spline]
                     
@@ -5167,11 +5204,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif event.button() == Qt.RightButton:
             from loguru import logger
             logger.debug(f"[MOUSE] Right Click at {pos} / World {self.mouse_world}")
-            
-            if self.tool_step > 0: 
+
+            # Leerer Bereich: Rechtsklick soll immer "eine Ebene" abbrechen.
+            if self._is_empty_right_click_target(pos, self.mouse_world):
+                if self._cancel_right_click_empty_action():
+                    logger.debug("[MOUSE] Empty right-click -> action cancelled")
+                else:
+                    logger.debug("[MOUSE] Empty right-click -> nothing to cancel")
+                self.request_update()
+                return
+
+            if self.tool_step > 0:
                 logger.debug("[MOUSE] Cancelling current tool step")
                 self._finish_current_operation()
-            else: 
+            else:
                 logger.debug("[MOUSE] Showing context menu")
                 self._show_context_menu(pos)
         
@@ -5397,8 +5443,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             else:
                 self.hovered_ref_edge = None
 
-            # Entity Hover Logic (DAS IST DER KEY PERF BOOSTER)
-            new_hovered = self._find_entity_at(self.mouse_world)
+            # Entity Hover Logic mit Selection-Filter + Overlap-Cycle
+            if self.current_tool == SketchTool.SELECT:
+                hover_candidates = self._update_overlap_cycle_candidates(self.mouse_world, pos)
+                if hover_candidates:
+                    idx = min(self._overlap_cycle_index, len(hover_candidates) - 1)
+                    new_hovered = hover_candidates[idx]
+                else:
+                    new_hovered = None
+            else:
+                self._reset_overlap_cycle_state(clear_hover=False)
+                new_hovered = self._find_entity_at(self.mouse_world)
             
             if new_hovered != self._last_hovered_entity:
                 # 1. Markiere altes Entity als Dirty (um Highlight zu entfernen)
@@ -5430,6 +5485,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     needs_full_update = True
 
                 spline_elem = self._find_spline_element_at(self.mouse_world)
+                if spline_elem:
+                    spline, _, _ = spline_elem
+                    if not self._entity_passes_selection_filter(spline):
+                        spline_elem = None
                 if spline_elem != self.hovered_spline_element:
                      # Spline Handle Hover changed -> Update Spline area
                      if spline_elem:
@@ -5880,8 +5939,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif key == Qt.Key_I: self.import_dxf(); return
             elif key == Qt.Key_E: self.export_dxf(); return
             elif key == Qt.Key_B: self._canvas_toggle_visible(); return
+
+        if key == Qt.Key_W and self.current_tool == SketchTool.SELECT:
+            self._cycle_selection_filter()
+            self._show_tool_hint()
+            return
         
         if key == Qt.Key_Tab:
+            if self.current_tool == SketchTool.SELECT and self._cycle_overlap_candidate():
+                return
             self._show_dimension_input()
             return
         
@@ -5910,6 +5976,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Qt.Key_Q: lambda: self.set_tool(SketchTool.ROTATE),    # Q für Rotieren  
             Qt.Key_I: lambda: self.set_tool(SketchTool.MIRROR),    # I für Spiegeln (mIrror)
             Qt.Key_S: lambda: self.set_tool(SketchTool.SCALE),     # S für Skalieren
+            Qt.Key_Y: self._repeat_last_tool,      # Y = letztes Werkzeug wiederholen
             Qt.Key_Plus: self._increase_tolerance,   # + für Toleranz erhöhen
             Qt.Key_Minus: self._decrease_tolerance,  # - für Toleranz verringern
             Qt.Key_P: lambda: self.set_tool(SketchTool.PROJECT), # <--- NEU
@@ -5948,7 +6015,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
 
         # Level 3: Selektion aufheben
-        if self.selected_lines or self.selected_points or self.selected_circles or self.selected_arcs or self.selected_constraints:
+        if (self.selected_lines or self.selected_points or self.selected_circles
+                or self.selected_arcs or self.selected_constraints or self.selected_splines):
             self._clear_selection()
             self.request_update()
             return
@@ -6011,9 +6079,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def _select_all(self):
         self._clear_selection()
-        self.selected_lines = list(self.sketch.lines)
-        self.selected_circles = list(self.sketch.circles)
-        self.selected_arcs = list(self.sketch.arcs)
+        self.selected_lines = [line for line in self.sketch.lines if self._entity_passes_selection_filter(line)]
+        self.selected_circles = [circle for circle in self.sketch.circles if self._entity_passes_selection_filter(circle)]
+        self.selected_arcs = [arc for arc in self.sketch.arcs if self._entity_passes_selection_filter(arc)]
         # Nur standalone Punkte (nicht Teil anderer Geometrie)
         used_point_ids = set()
         for line in self.sketch.lines:
@@ -6023,8 +6091,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             used_point_ids.add(circle.center.id)
         for arc in self.sketch.arcs:
             used_point_ids.add(arc.center.id)
-        self.selected_points = [p for p in self.sketch.points if p.id not in used_point_ids]
-        self.selected_splines = list(self.sketch.splines)
+        self.selected_points = [
+            p for p in self.sketch.points
+            if p.id not in used_point_ids and self._entity_passes_selection_filter(p)
+        ]
+        self.selected_splines = [s for s in self.sketch.splines if self._entity_passes_selection_filter(s)]
         self.request_update()
 
     def _finish_selection_box(self):
@@ -6034,16 +6105,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         rect = QRectF(min(x1,x2), min(y1,y2), abs(x2-x1), abs(y2-y1))
         if not (QApplication.keyboardModifiers() & Qt.ShiftModifier): self._clear_selection()
         for line in self.sketch.lines:
+            if not self._entity_passes_selection_filter(line):
+                continue
             p1 = self.world_to_screen(QPointF(line.start.x, line.start.y))
             p2 = self.world_to_screen(QPointF(line.end.x, line.end.y))
             if rect.contains(p1) and rect.contains(p2) and line not in self.selected_lines:
                 self.selected_lines.append(line)
         for circle in self.sketch.circles:
+            if not self._entity_passes_selection_filter(circle):
+                continue
             center = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
             r = circle.radius * self.view_scale
             if rect.contains(QRectF(center.x()-r, center.y()-r, 2*r, 2*r)) and circle not in self.selected_circles:
                 self.selected_circles.append(circle)
         for arc in self.sketch.arcs:
+            if not self._entity_passes_selection_filter(arc):
+                continue
             center = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
             r = arc.radius * self.view_scale
             if rect.contains(QRectF(center.x()-r, center.y()-r, 2*r, 2*r)) and arc not in self.selected_arcs:
@@ -6052,10 +6129,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         used_point_ids = self._get_used_point_ids()
         for pt in self.sketch.points:
             if pt.id not in used_point_ids:
+                if not self._entity_passes_selection_filter(pt):
+                    continue
                 pos = self.world_to_screen(QPointF(pt.x, pt.y))
                 if rect.contains(pos) and pt not in self.selected_points:
                     self.selected_points.append(pt)
         for spline in self.sketch.splines:
+            if not self._entity_passes_selection_filter(spline):
+                continue
             all_inside = True
             for cp in spline.control_points:
                 sp = self.world_to_screen(QPointF(cp.point.x, cp.point.y))
@@ -6129,101 +6210,226 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return constraint
         return None
 
-    def _find_entity_at(self, pos):
-        """
-        Optimized hit-testing using Spatial Index (Quadtree).
-        Complexity: O(log n)
-        """
-        # 1. Update Index if needed
-        if self.index_dirty:
-            self._rebuild_spatial_index()
+    @staticmethod
+    def _entity_kind(entity):
+        if isinstance(entity, Line2D):
+            return "line"
+        if isinstance(entity, Circle2D):
+            return "circle"
+        if isinstance(entity, Arc2D):
+            return "arc"
+        if isinstance(entity, Point2D):
+            return "point"
+        if hasattr(entity, "control_points"):
+            return "spline"
+        return "unknown"
 
-        r_screen = self.snap_radius
-        r_world = r_screen / self.view_scale
-        
-        # 2. Define Query Area (in World Coordinates)
-        query_rect = QRectF(pos.x() - r_world, pos.y() - r_world, 
-                            r_world * 2, r_world * 2)
+    def _selection_filter_label(self, mode: Optional[str] = None) -> str:
+        key = mode or self.selection_filter_mode
+        return self.SELECTION_FILTER_LABELS.get(key, str(key))
 
-        candidates = []
-        
-        # 3. Broad Phase: Get candidates from Quadtree
-        if self.spatial_index:
-            candidates = self.spatial_index.query(query_rect)
-            # Add points separately or ensure they are in tree? 
-            # Currently standalone points are not in tree in my snippet above, 
-            # let's assume they are few or add them to tree if needed.
-            # For now, we fallback to linear search for points if they are critical,
-            # or add points to the tree in _rebuild.
-        else:
-            # Fallback if tree failed
-            candidates = self.sketch.lines + self.sketch.circles + self.sketch.arcs + self.sketch.splines
+    def _entity_passes_selection_filter(self, entity) -> bool:
+        mode = getattr(self, "selection_filter_mode", "all")
+        if mode == "all":
+            return True
+        return self._entity_kind(entity) == mode
 
-        # 4. Narrow Phase: Exact Distance Check
-        best_entity = None
-        best_dist = r_world # Start with max allowed distance
-        
-        # Helper for Spline distance (computationally expensive, so strictly filter first)
-        def check_spline(spline):
-            # ... existing spline check logic from your code ...
-            # Reuse logic from original _find_spline_at
-            pts = spline.get_curve_points(segments_per_span=10)
-            local_min = self._safe_float('inf')
+    def _entity_pick_priority(self, entity) -> int:
+        # Linien/Flaechenkanten zuerst, Punkte zuletzt, damit Selektion stabil bleibt.
+        kind = self._entity_kind(entity)
+        return {
+            "line": 0,
+            "circle": 1,
+            "arc": 2,
+            "spline": 3,
+            "point": 4,
+        }.get(kind, 99)
+
+    def _entity_distance_to_pos(self, entity, pos: QPointF) -> float:
+        dist = self._safe_float("inf")
+
+        if isinstance(entity, Line2D):
+            dist = entity.distance_to_point(Point2D(pos.x(), pos.y()))
+            return float(dist)
+
+        if isinstance(entity, (Circle2D, Arc2D)):
+            center_dist = math.hypot(entity.center.x - pos.x(), entity.center.y - pos.y())
+            dist = abs(center_dist - entity.radius)
+            if isinstance(entity, Arc2D):
+                angle = math.degrees(math.atan2(pos.y() - entity.center.y, pos.x() - entity.center.x)) % 360
+                s = entity.start_angle % 360
+                e = entity.end_angle % 360
+                in_arc = (s <= e and s <= angle <= e) or (s > e and (angle >= s or angle <= e))
+                if not in_arc:
+                    return self._safe_float("inf")
+            return float(dist)
+
+        if hasattr(entity, "control_points"):
+            pts = entity.get_curve_points(segments_per_span=10)
             px, py = pos.x(), pos.y()
+            best = self._safe_float("inf")
             for i in range(len(pts) - 1):
                 x1, y1 = pts[i]
                 x2, y2 = pts[i + 1]
-                line_len = math.hypot(x2 - x1, y2 - y1)
-                if line_len < 1e-9: continue
-                t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / (line_len**2)))
-                dist = math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)))
-                if dist < local_min: local_min = dist
-            return local_min
+                line_len_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
+                if line_len_sq < 1e-12:
+                    continue
+                t = max(0.0, min(1.0, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_len_sq))
+                cx = x1 + t * (x2 - x1)
+                cy = y1 + t * (y2 - y1)
+                best = min(best, math.hypot(px - cx, py - cy))
+            return float(best)
 
-        for entity in candidates:
-            dist = self._safe_float('inf')
-            
-            # Type-based distance check
-            # We assume your entity classes have .distance_to_point or similar logic
-            if hasattr(entity, 'start') and hasattr(entity, 'end'): # Line
-                # Using sketcher's distance logic
-                from sketcher import Point2D
-                dist = entity.distance_to_point(Point2D(pos.x(), pos.y()))
-            
-            elif hasattr(entity, 'center') and hasattr(entity, 'radius'): # Circle/Arc
-                center_dist = math.hypot(entity.center.x - pos.x(), entity.center.y - pos.y())
-                dist = abs(center_dist - entity.radius)
-                
-                # Special check for Arcs (angle limit)
-                if hasattr(entity, 'start_angle'): # It's an Arc
-                    if dist < best_dist: # Only do angle math if close enough to ring
-                        angle = math.degrees(math.atan2(pos.y() - entity.center.y, pos.x() - entity.center.x))
-                        angle = angle % 360
-                        s = entity.start_angle % 360
-                        e = entity.end_angle % 360
-                        # Check if angle is within sweep
-                        in_arc = (s <= e and s <= angle <= e) or (s > e and (angle >= s or angle <= e))
-                        if not in_arc: dist = self._safe_float('inf')
+        if isinstance(entity, Point2D):
+            return float(math.hypot(entity.x - pos.x(), entity.y - pos.y()))
 
-            elif hasattr(entity, 'control_points'): # Spline
-                dist = check_spline(entity)
+        return self._safe_float("inf")
 
-            # 5. Winner Check
-            if dist < best_dist:
-                best_dist = dist
-                best_entity = entity
+    def _find_entities_at(self, pos: QPointF, apply_selection_filter: bool = False):
+        """
+        Liefert alle treffenden Entitaeten an Position `pos`, sortiert nach Distanz + Prioritaet.
+        """
+        if self.index_dirty:
+            self._rebuild_spatial_index()
 
-        # 6. Standalone Points (usually few, ok to check linearly or add to tree)
-        # Re-using logic from original code for points
+        r_world = self.snap_radius / self.view_scale
+        query_rect = QRectF(pos.x() - r_world, pos.y() - r_world, r_world * 2, r_world * 2)
+
+        if self.spatial_index:
+            broad_candidates = list(self.spatial_index.query(query_rect))
+        else:
+            broad_candidates = list(self.sketch.lines) + list(self.sketch.circles) + list(self.sketch.arcs) + list(self.sketch.splines)
+
+        hits = []
+        seen = set()
+        for entity in broad_candidates:
+            ent_id = id(entity)
+            if ent_id in seen:
+                continue
+            seen.add(ent_id)
+
+            if apply_selection_filter and not self._entity_passes_selection_filter(entity):
+                continue
+
+            dist = self._entity_distance_to_pos(entity, pos)
+            if dist <= r_world:
+                hits.append((dist, self._entity_pick_priority(entity), ent_id, entity))
+
         used_point_ids = self._get_used_point_ids()
         for point in self.sketch.points:
-             if point.id not in used_point_ids:
-                 d = math.hypot(point.x - pos.x(), point.y - pos.y())
-                 if d < best_dist:
-                     best_dist = d
-                     best_entity = point
+            if point.id in used_point_ids:
+                continue
+            if apply_selection_filter and not self._entity_passes_selection_filter(point):
+                continue
+            dist = self._entity_distance_to_pos(point, pos)
+            if dist <= r_world:
+                hits.append((dist, self._entity_pick_priority(point), id(point), point))
 
-        return best_entity
+        hits.sort(key=lambda row: (row[0], row[1], row[2]))
+        return [row[3] for row in hits]
+
+    def _find_entity_at(self, pos, apply_selection_filter: bool = False):
+        entities = self._find_entities_at(pos, apply_selection_filter=apply_selection_filter)
+        return entities[0] if entities else None
+
+    @staticmethod
+    def _entities_signature(entities) -> tuple:
+        return tuple(id(e) for e in entities)
+
+    def _reset_overlap_cycle_state(self, clear_hover: bool = False):
+        self._overlap_cycle_candidates = []
+        self._overlap_cycle_signature = ()
+        self._overlap_cycle_index = 0
+        self._overlap_cycle_anchor_screen = QPointF(-1.0, -1.0)
+        self._overlap_cycle_anchor_world = QPointF()
+        if clear_hover:
+            self.hovered_entity = None
+            self._last_hovered_entity = None
+
+    def _is_same_overlap_anchor(self, screen_pos: QPointF) -> bool:
+        dx = screen_pos.x() - self._overlap_cycle_anchor_screen.x()
+        dy = screen_pos.y() - self._overlap_cycle_anchor_screen.y()
+        return (dx * dx + dy * dy) <= (self._overlap_cycle_anchor_radius_px ** 2)
+
+    def _update_overlap_cycle_candidates(self, world_pos: QPointF, screen_pos: QPointF):
+        candidates = self._find_entities_at(world_pos, apply_selection_filter=True)
+        signature = self._entities_signature(candidates)
+        same_anchor = self._is_same_overlap_anchor(screen_pos)
+
+        if signature != self._overlap_cycle_signature or not same_anchor:
+            self._overlap_cycle_signature = signature
+            self._overlap_cycle_candidates = candidates
+            self._overlap_cycle_index = 0
+            self._overlap_cycle_anchor_world = QPointF(world_pos.x(), world_pos.y())
+            self._overlap_cycle_anchor_screen = QPointF(screen_pos.x(), screen_pos.y())
+        else:
+            self._overlap_cycle_candidates = candidates
+            if self._overlap_cycle_candidates:
+                self._overlap_cycle_index = min(self._overlap_cycle_index, len(self._overlap_cycle_candidates) - 1)
+            else:
+                self._overlap_cycle_index = 0
+
+        return self._overlap_cycle_candidates
+
+    def _pick_select_hit(self, world_pos: QPointF):
+        screen_pos = self.world_to_screen(world_pos)
+        candidates = self._update_overlap_cycle_candidates(world_pos, screen_pos)
+        if not candidates:
+            return None
+        idx = min(self._overlap_cycle_index, len(candidates) - 1)
+        return candidates[idx]
+
+    def _cycle_overlap_candidate(self) -> bool:
+        if self.current_tool != SketchTool.SELECT:
+            return False
+        candidates = self._update_overlap_cycle_candidates(self.mouse_world, self.mouse_screen)
+        if len(candidates) <= 1:
+            return False
+
+        self._overlap_cycle_index = (self._overlap_cycle_index + 1) % len(candidates)
+        target = candidates[self._overlap_cycle_index]
+        self.hovered_entity = target
+        self._last_hovered_entity = target
+        kind = self._entity_kind(target)
+        self.status_message.emit(
+            tr("Overlap cycle: {idx}/{total} ({kind})").format(
+                idx=self._overlap_cycle_index + 1,
+                total=len(candidates),
+                kind=kind,
+            )
+        )
+        self._update_cursor()
+        self.request_update()
+        return True
+
+    def _set_selection_filter_mode(self, mode: str, announce: bool = True):
+        if mode not in self.SELECTION_FILTER_ORDER:
+            return
+        if mode == self.selection_filter_mode:
+            return
+
+        self.selection_filter_mode = mode
+        self._reset_overlap_cycle_state(clear_hover=True)
+        if announce:
+            label = self._selection_filter_label(mode)
+            self.status_message.emit(tr("Selection filter: {label}").format(label=label))
+        self.request_update()
+
+    def _cycle_selection_filter(self):
+        order = list(self.SELECTION_FILTER_ORDER)
+        try:
+            idx = order.index(self.selection_filter_mode)
+        except ValueError:
+            idx = 0
+        self._set_selection_filter_mode(order[(idx + 1) % len(order)], announce=True)
+
+    def _repeat_last_tool(self):
+        tool = getattr(self, "_last_non_select_tool", SketchTool.SELECT)
+        if tool == SketchTool.SELECT:
+            self.status_message.emit(tr("No previous tool to repeat"))
+            return
+        self.set_tool(tool)
+        self.status_message.emit(tr("Repeat tool: {tool}").format(tool=tool.name))
     
     def _find_line_at(self, pos):
         r = self.snap_radius / self.view_scale
@@ -6387,7 +6593,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         menu = QMenu(self)
         menu.setStyleSheet(DesignTokens.stylesheet_sketch())
 
-        has_selection = self.selected_lines or self.selected_circles or self.selected_arcs
+        has_selection = bool(
+            self.selected_lines or self.selected_circles or self.selected_arcs
+            or self.selected_points or self.selected_splines
+        )
+
+        if self.current_tool == SketchTool.SELECT:
+            filter_menu = menu.addMenu("Selection Filter")
+            for mode in self.SELECTION_FILTER_ORDER:
+                action = filter_menu.addAction(self._selection_filter_label(mode))
+                action.setCheckable(True)
+                action.setChecked(mode == self.selection_filter_mode)
+                action.triggered.connect(lambda checked=False, m=mode: self._set_selection_filter_mode(m))
+            filter_menu.addSeparator()
+            filter_menu.addAction("Cycle Filter (W)", self._cycle_selection_filter)
+            if len(self._overlap_cycle_candidates) > 1:
+                menu.addAction(
+                    f"Cycle Overlap (Tab) [{self._overlap_cycle_index + 1}/{len(self._overlap_cycle_candidates)}]",
+                    self._cycle_overlap_candidate,
+                )
+            menu.addSeparator()
 
         # === Constraint-Optionen ===
         if self.selected_lines:
@@ -6470,6 +6695,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # === Standard-Aktionen ===
         if has_selection:
             menu.addAction("Löschen (Del)", self._delete_selected)
+            menu.addSeparator()
+
+        if self.current_tool == SketchTool.SELECT:
+            menu.addAction("Repeat Last Tool (Y)", self._repeat_last_tool)
             menu.addSeparator()
 
         menu.addAction("Alles auswählen (Ctrl+A)", self._select_all)
@@ -6603,6 +6832,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             selected_entities.add(id(circle))
         for arc in self.selected_arcs:
             selected_entities.add(id(arc))
+        for point in self.selected_points:
+            selected_entities.add(id(point))
 
         matching = []
         for c in self.sketch.constraints:
@@ -6768,3 +6999,53 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.view_offset == QPointF(0, 0):
             self._center_view()
 
+    def _is_empty_right_click_target(self, screen_pos: QPointF, world_pos: QPointF) -> bool:
+        """True, wenn unter dem Cursor keine editierbare/auswählbare Sketch-Entität liegt."""
+        if self._find_constraint_at(screen_pos):
+            return False
+        if self._find_spline_element_at(world_pos):
+            return False
+        if self._find_entity_at(world_pos):
+            return False
+        if self._find_face_at(world_pos):
+            return False
+        if self.canvas_image and self._canvas_hit_test(world_pos):
+            return False
+        return True
+
+    def _cancel_right_click_empty_action(self) -> bool:
+        """Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab."""
+        if self.dim_input_active and self.dim_input.isVisible():
+            self.dim_input.hide()
+            self.dim_input.unlock_all()
+            self.dim_input_active = False
+            self.setFocus()
+            return True
+
+        if self._canvas_calibrating:
+            self._canvas_calibrating = False
+            self._canvas_calib_points = []
+            self._show_hud(tr("Kalibrierung abgebrochen"))
+            return True
+
+        if self.selection_box_start:
+            self.selection_box_start = None
+            self.selection_box_end = None
+            return True
+
+        if self.tool_step > 0:
+            self._cancel_tool()
+            self.status_message.emit(tr("Aktion abgebrochen"))
+            return True
+
+        if self.current_tool != SketchTool.SELECT:
+            self.set_tool(SketchTool.SELECT)
+            self.status_message.emit(tr("Werkzeug deaktiviert"))
+            return True
+
+        if (self.selected_lines or self.selected_points or self.selected_circles
+                or self.selected_arcs or self.selected_constraints or self.selected_splines):
+            self._clear_selection()
+            return True
+
+        return False

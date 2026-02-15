@@ -306,21 +306,40 @@ class SketchHandlersMixin:
         return True, result
     
     def _handle_select(self, pos, snap_type):
-        hit = self._find_entity_at(pos)
-        if not (QApplication.keyboardModifiers() & Qt.ShiftModifier): self._clear_selection()
+        if hasattr(self, "_pick_select_hit"):
+            hit = self._pick_select_hit(pos)
+        else:
+            hit = self._find_entity_at(pos)
+
+        if not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
+            self._clear_selection()
+
         if hit:
             if isinstance(hit, Line2D):
-                if hit in self.selected_lines: self.selected_lines.remove(hit)
-                else: self.selected_lines.append(hit)
+                if hit in self.selected_lines:
+                    self.selected_lines.remove(hit)
+                else:
+                    self.selected_lines.append(hit)
             elif isinstance(hit, Circle2D):
-                if hit in self.selected_circles: self.selected_circles.remove(hit)
-                else: self.selected_circles.append(hit)
+                if hit in self.selected_circles:
+                    self.selected_circles.remove(hit)
+                else:
+                    self.selected_circles.append(hit)
             elif isinstance(hit, Arc2D):
-                if hit in self.selected_arcs: self.selected_arcs.remove(hit)
-                else: self.selected_arcs.append(hit)
+                if hit in self.selected_arcs:
+                    self.selected_arcs.remove(hit)
+                else:
+                    self.selected_arcs.append(hit)
             elif isinstance(hit, Point2D):
-                if hit in self.selected_points: self.selected_points.remove(hit)
-                else: self.selected_points.append(hit)
+                if hit in self.selected_points:
+                    self.selected_points.remove(hit)
+                else:
+                    self.selected_points.append(hit)
+            elif hasattr(hit, "control_points"):
+                if hit in self.selected_splines:
+                    self.selected_splines.remove(hit)
+                else:
+                    self.selected_splines.append(hit)
 
     def _add_point_constraint(self, point, pos, snap_type, snap_entity, new_line):
         """

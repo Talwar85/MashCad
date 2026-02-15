@@ -721,11 +721,16 @@ class SketchRendererMixin:
 
             screen_pt = self.world_to_screen(QPointF(pt.x, pt.y))
             is_sel = pt in self.selected_points
+            is_hov = self.hovered_entity == pt
 
             # Farbe basierend auf Zustand
             if is_sel:
                 p.setPen(QPen(DesignTokens.COLOR_GEO_SELECTED, 2))
                 p.setBrush(DesignTokens.COLOR_GEO_SELECTED)
+                size = 5
+            elif is_hov:
+                p.setPen(QPen(DesignTokens.COLOR_GEO_HOVER, 2))
+                p.setBrush(DesignTokens.COLOR_GEO_HOVER)
                 size = 5
             elif getattr(pt, 'construction', False):
                 p.setPen(QPen(DesignTokens.COLOR_GEO_CONSTRUCTION, 2))
