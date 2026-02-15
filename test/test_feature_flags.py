@@ -178,6 +178,10 @@ class TestPerformanceFeatureFlags:
         """Test: self_heal_strict ist standardmäßig True."""
         assert is_enabled("self_heal_strict") is True
 
+    def test_strict_topology_fallback_policy_default_true(self):
+        """Test: strict_topology_fallback_policy ist standardmäßig True."""
+        assert is_enabled("strict_topology_fallback_policy") is True
+
 
 class TestBooleanRobustnessFeatureFlags:
     """Tests für Boolean Robustness Feature Flags."""

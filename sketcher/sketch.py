@@ -432,6 +432,13 @@ class Sketch:
         p2 = self.add_point(x + width, y, construction)       # Unten rechts
         p3 = self.add_point(x + width, y + height, construction) # Oben rechts
         p4 = self.add_point(x, y + height, construction)      # Oben links
+
+        # Rectangle-Eckpunkte gehören zur Geometrie und dürfen beim Löschen
+        # nicht als explizite Standalone-Punkte übrig bleiben.
+        p1.standalone = False
+        p2.standalone = False
+        p3.standalone = False
+        p4.standalone = False
         
         # 4 Linien verbinden
         l1 = self.add_line_from_points(p1, p2, construction) # Unten

@@ -432,6 +432,10 @@ class MainWindow(QMainWindow):
         from gui.viewport.render_queue import RenderQueue
         RenderQueue.register_fps_callback(self.mashcad_status_bar.update_fps)
 
+        # W3: Strict Mode Indicator
+        if is_enabled("strict_topology_fallback_policy"):
+            self.mashcad_status_bar.set_strict_mode(True)
+
         # Extrude Input Panel (immer sichtbar während Extrude-Modus)
         self.extrude_panel = ExtrudeInputPanel(self)
         self.extrude_panel.height_changed.connect(self._on_extrude_panel_height_changed)
@@ -2996,6 +3000,15 @@ class MainWindow(QMainWindow):
             # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("2D")
+            if prev_mode != mode:
+                nav_hint = tr("Sketch-Navigation: Shift+R dreht Ansicht | Space halten fuer 3D-Peek")
+                self.statusBar().showMessage(nav_hint, 7000)
+                if hasattr(self, "sketch_editor") and hasattr(self.sketch_editor, "show_message"):
+                    self.sketch_editor.show_message(
+                        tr("Shift+R Ansicht drehen | Space halten fuer 3D-Peek"),
+                        duration=2600,
+                        color=QColor(110, 180, 255),
+                    )
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
@@ -3440,21 +3453,7 @@ class MainWindow(QMainWindow):
                 return
         super().keyReleaseEvent(event)
 
-    def eventFilter(self, obj, event):
-        """Event-Filter für globale Shortcuts und Viewport-Resize."""
-        from PySide6.QtCore import QEvent
 
-        if obj is self.viewport_3d and event.type() == QEvent.Resize:
-            self._position_transform_toolbar()
-
-        # Backup für 3D-Peek Space-Release
-        if getattr(self, '_peek_3d_active', False):
-            if event.type() == QEvent.KeyRelease and event.key() == Qt.Key_Space:
-                if not event.isAutoRepeat():
-                    self._on_peek_3d(False)
-                    return True
-
-        return super().eventFilter(obj, event)
 
     def _auto_align_sketch_view(self, plane_normal, plane_x):
         """
@@ -7335,12 +7334,95 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent, Qt
 
+        # Merged Logic from shadowed eventFilter (global shortcuts, resize, peek)
+        if obj is self.viewport_3d and event.type() == QEvent.Resize:
+            self._position_transform_toolbar()
+
+        # Backup für 3D-Peek Space-Release
+        if getattr(self, '_peek_3d_active', False):
+            if event.type() == QEvent.KeyRelease and event.key() == Qt.Key_Space:
+                if not event.isAutoRepeat():
+                    self._on_peek_3d(False)
+                    return True
+
         if event.type() == QEvent.KeyPress:
+            # SU-006: Centralized Abort Logic (Priority Stack)
+            if event.key() == Qt.Key_Escape:
+                # 1. Drag Operations (Highest Priority)
+                if self.viewport_3d.is_dragging or self.viewport_3d._offset_plane_dragging or self.viewport_3d._split_dragging:
+                    # Viewport handles drag cancellation internally via its own event filter or we trigger it here
+                    # For now, let viewport handle it if it has focus, but we can force it:
+                    if hasattr(self.viewport_3d, 'cancel_drag'):
+                        self.viewport_3d.cancel_drag()
+                    elif hasattr(self.viewport_3d, 'handle_offset_plane_mouse_release'):
+                         self.viewport_3d.handle_offset_plane_mouse_release()
+                    return True
+
+                # 2. Modal Dialogs / Panels / Input Focus
+                # Check for active modal widgets or focused inputs
+                from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox
+                focus_widget = QApplication.focusWidget()
+                
+                # If focus is on an input field, remove focus (don't close panel yet)
+                if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox)):
+                    focus_widget.clearFocus()
+                    return True
+
+                # Close specific panels if they are open/active modes
+                if self._hole_mode:
+                    self._on_hole_cancelled()
+                    return True
+                if self._draft_mode:
+                    self._on_draft_cancelled()
+                    return True
+                if self.viewport_3d.revolve_mode:
+                    self._on_revolve_cancelled()
+                    return True
+                if self.viewport_3d.offset_plane_mode:
+                    self._on_offset_plane_cancelled()
+                    return True
+                if self.viewport_3d.extrude_mode:
+                    self._on_extrude_cancelled()
+                    return True
+                if self.viewport_3d.point_to_point_mode:
+                    self._cancel_point_to_point_move()
+                    return True
+                
+                # Close transforms
+                if hasattr(self.transform_panel, 'isVisible') and self.transform_panel.isVisible():
+                    self._on_transform_panel_cancelled()
+                    return True
+
+                # 3. Active Tool (Sketch) is handled by SketchEditor's own keyPressEvent if it has focus.
+                # If we are here, SketchEditor might not have focus, but we check mode.
+                if self.mode == "sketch":
+                    # Delegate to sketch editor
+                    self.sketch_editor._handle_escape_logic()
+                    return True
+
+                # 4. Selection (Lowest Priority)
+                # If we are in 3D mode and have a selection, clear it.
+                if self.mode == "3d":
+                    has_selection = False
+                    if hasattr(self.viewport_3d, 'selected_faces') and self.viewport_3d.selected_faces:
+                        has_selection = True
+                    if hasattr(self.viewport_3d, 'selected_edges') and self.viewport_3d.selected_edges:
+                        has_selection = True
+                    
+                    if has_selection:
+                        if hasattr(self.viewport_3d, 'clear_selection'):
+                            self.viewport_3d.clear_selection()
+                        return True
+
+                # 5. Idle - No Op
+                return False
+
             # Keine Shortcuts wenn ein Dialog offen ist oder ein Textfeld Fokus hat
             from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox
             focus_widget = QApplication.focusWidget()
             if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox)):
-                return False  # Event normal weiterleiten an das Textfeld
+                # Allow standard keys (Backspace, Delete, etc.)
+                return False 
             if isinstance(focus_widget, QComboBox) and focus_widget.isEditable():
                 return False
             active_modal = QApplication.activeModalWidget()
@@ -7348,7 +7430,8 @@ class MainWindow(QMainWindow):
                 return False  # Dialog ist offen → Shortcuts ignorieren
 
             k = event.key()
-             # Tab - fokussiert Input-Felder
+
+            # Tab - Fokussiert Input-Felder
             if k == Qt.Key_Tab:
                 if self.mode == "sketch":
                     self.sketch_editor.keyPressEvent(event)
@@ -11759,7 +11842,7 @@ class MainWindow(QMainWindow):
     def _on_background_clicked(self):
         """Handler for background click in Viewport -> Deselect Body"""
         # 1. Clear Transform UI & Selection
-        if self._selected_body_for_transform:
+        if hasattr(self, '_selected_body_for_transform') and self._selected_body_for_transform:
              self._selected_body_for_transform = None
              self._hide_transform_ui()
         

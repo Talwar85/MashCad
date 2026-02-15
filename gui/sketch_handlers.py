@@ -397,6 +397,48 @@ class SketchHandlersMixin:
                     self.sketch.add_coincident(point, snap_entity.center)
                     logger.debug(f"Auto: COINCIDENT mit Center")
 
+        # INTERSECTION / VIRTUAL_INTERSECTION: keep point constrained to source geometry
+        elif snap_type in (SnapType.INTERSECTION, SnapType.VIRTUAL_INTERSECTION):
+            entities = []
+            if isinstance(snap_entity, dict):
+                entities = list(snap_entity.get("entities") or [])
+            elif isinstance(snap_entity, (tuple, list)):
+                entities = list(snap_entity)
+            elif snap_entity is not None:
+                entities = [snap_entity]
+
+            applied = False
+            for ent in entities:
+                if hasattr(ent, "start") and hasattr(ent, "end"):
+                    if hasattr(self.sketch, "add_point_on_line"):
+                        self.sketch.add_point_on_line(point, ent)
+                        applied = True
+                elif hasattr(ent, "center") and hasattr(ent, "radius"):
+                    if hasattr(self.sketch, "add_point_on_circle"):
+                        self.sketch.add_point_on_circle(point, ent)
+                        applied = True
+                elif hasattr(ent, "x") and hasattr(ent, "y"):
+                    if hasattr(self.sketch, "add_coincident") and ent is not point:
+                        self.sketch.add_coincident(point, ent)
+                        applied = True
+
+            if applied:
+                logger.debug("Auto: INTERSECTION")
+
+        # ORIGIN: lock to sketch origin
+        elif snap_type == SnapType.ORIGIN:
+            origin_point = None
+            for p in getattr(self.sketch, "points", []):
+                if abs(float(getattr(p, "x", 1e9))) < 1e-9 and abs(float(getattr(p, "y", 1e9))) < 1e-9:
+                    origin_point = p
+                    break
+            if origin_point is not None and origin_point is not point and hasattr(self.sketch, "add_coincident"):
+                self.sketch.add_coincident(point, origin_point)
+                logger.debug("Auto: ORIGIN coincident")
+            else:
+                point.x = 0.0
+                point.y = 0.0
+
         # MIDPOINT: MIDPOINT Constraint (falls vorhanden)
         elif snap_type == SnapType.MIDPOINT:
             if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
@@ -551,58 +593,89 @@ class SketchHandlersMixin:
                 # Poly-Line Modus
                 self.tool_points.append(pos)
     
-    def _handle_rectangle(self, pos, snap_type):
-        """Rechteck mit Modus-UnterstÃ¼tzung (0=2-Punkt, 1=Center) und Auto-Constraints"""
-        
-        # Berechnung der Geometrie basierend auf dem Modus
+    def _handle_rectangle(self, pos, snap_type, snap_entity=None):
+        """Rectangle with mode support (0=2-point, 1=center) plus persisted snap constraints."""
+
+        first_snap = None
+        second_snap = (snap_type, snap_entity, QPointF(pos.x(), pos.y()))
+
         if self.rect_mode == 1:
-            # Center-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
+                self._rect_first_snap = (snap_type, snap_entity, QPointF(pos.x(), pos.y()))
                 self.tool_step = 1
                 self.status_message.emit(tr("Corner | Tab=Width/Height"))
                 return
-            else:
-                c = self.tool_points[0]
-                w = abs(pos.x() - c.x()) * 2
-                h = abs(pos.y() - c.y()) * 2
-                x = c.x() - w / 2
-                y = c.y() - h / 2
+
+            c = self.tool_points[0]
+            first_snap = getattr(self, "_rect_first_snap", None)
+            w = abs(pos.x() - c.x()) * 2
+            h = abs(pos.y() - c.y()) * 2
+            x = c.x() - w / 2
+            y = c.y() - h / 2
         else:
-            # 2-Punkt-Modus (Standard)
             if self.tool_step == 0:
                 self.tool_points = [pos]
+                self._rect_first_snap = (snap_type, snap_entity, QPointF(pos.x(), pos.y()))
                 self.tool_step = 1
                 self.status_message.emit(tr("Opposite corner | Tab=Width/Height"))
                 return
-            else:
-                p1, p2 = self.tool_points[0], pos
-                x = min(p1.x(), p2.x())
-                y = min(p1.y(), p2.y())
-                w = abs(p2.x() - p1.x())
-                h = abs(p2.y() - p1.y())
 
-        # Erstellung und BemaÃŸung
+            p1, p2 = self.tool_points[0], pos
+            first_snap = getattr(self, "_rect_first_snap", None)
+            x = min(p1.x(), p2.x())
+            y = min(p1.y(), p2.y())
+            w = abs(p2.x() - p1.x())
+            h = abs(p2.y() - p1.y())
+
         if w > 0.01 and h > 0.01:
             self._save_undo()
-
-            # 1. Rechteck erstellen (gibt [Unten, Rechts, Oben, Links] zurÃ¼ck)
-            # Hinweis: add_rectangle muss in sketch.py return [l1, l2, l3, l4] haben!
             lines = self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
 
-            # 2. Automatische BemaÃŸung hinzufÃ¼gen (Constraints)
-            # Wir bemaÃŸen die untere Linie (Breite) und die linke Linie (HÃ¶he)
             if lines and len(lines) >= 4:
-                # Breite (Index 0 = Unten)
                 self.sketch.add_length(lines[0], w)
-                # HÃ¶he (Index 3 = Links)
                 self.sketch.add_length(lines[3], h)
 
-            # 3. LÃ¶sen & Update
-            self._solve_async() # Thread start
-            self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                # Map click anchors back to closest created corners and persist snap intent.
+                corner_points = []
+                seen_ids = set()
+                for ln in lines:
+                    for pt in (ln.start, ln.end):
+                        if pt.id not in seen_ids:
+                            seen_ids.add(pt.id)
+                            corner_points.append(pt)
+
+                def pick_corner(target: QPointF, used_ids: set):
+                    best_pt = None
+                    best_dist = float("inf")
+                    for cp in corner_points:
+                        if cp.id in used_ids:
+                            continue
+                        d = math.hypot(cp.x - target.x(), cp.y - target.y())
+                        if d < best_dist:
+                            best_dist = d
+                            best_pt = cp
+                    return best_pt
+
+                used_anchor_ids = set()
+                if self.rect_mode == 0 and first_snap is not None:
+                    s_type, s_entity, s_pos = first_snap
+                    anchor_pt = pick_corner(s_pos, used_anchor_ids)
+                    if anchor_pt is not None:
+                        self._add_point_constraint(anchor_pt, s_pos, s_type, s_entity, lines[0])
+                        used_anchor_ids.add(anchor_pt.id)
+
+                e_type, e_entity, e_pos = second_snap
+                end_pt = pick_corner(e_pos, used_anchor_ids)
+                if end_pt is not None:
+                    self._add_point_constraint(end_pt, e_pos, e_type, e_entity, lines[0])
+
+            self._solve_async()
+            self._find_closed_profiles()
             self.sketched_changed.emit()
-            
+
+        if hasattr(self, "_rect_first_snap"):
+            del self._rect_first_snap
         self._cancel_tool()
 
     def _handle_circle(self, pos, snap_type, snap_entity=None):
@@ -854,40 +927,36 @@ class SketchHandlersMixin:
         end = math.degrees(math.atan2(cy-uy, cx-ux))
         return (ux, uy, r, start, end)
     
-    def _handle_slot(self, pos, snap_type):
+    def _handle_slot(self, pos, snap_type, snap_entity=None):
         """
-        Handler fÃ¼r das Langloch-Werkzeug.
-        Ablauf: 
-        1. Klick: Startpunkt der Mittellinie
-        2. Klick: Endpunkt der Mittellinie
-        3. Klick: Radius (Breite) festlegen
+        Handler for slot workflow.
+        1) Click start of center line
+        2) Click end of center line
+        3) Click/enter radius
         """
-        
-        # --- Schritt 1: Startpunkt ---
+
         if self.tool_step == 0:
             self.tool_points = [pos]
+            self._slot_start_snap = (snap_type, snap_entity)
             self.tool_step = 1
             self.status_message.emit(tr("Endpoint center line | Tab=Length/Angle"))
-            
-        # --- Schritt 2: Endpunkt der Mittellinie ---
+
         elif self.tool_step == 1:
             self.tool_points.append(pos)
+            self._slot_end_snap = (snap_type, snap_entity)
             self.tool_step = 2
             self.status_message.emit(tr("Radius | Tab=Enter radius"))
 
-            # Show dimension input for radius (Phase 8: Auto-show)
-            logger.info(f"[SLOT] Step 1â†’2: Showing radius input panel")
+            logger.info("[SLOT] Step 1->2: Showing radius input panel")
             logger.debug(f"[SLOT] hasattr dim_input: {hasattr(self, 'dim_input')}")
 
-            # Clear any previous state and show radius input
             if hasattr(self, 'dim_input'):
-                logger.debug(f"[SLOT] dim_input exists, setting up radius field")
+                logger.debug("[SLOT] dim_input exists, setting up radius field")
                 self.dim_input.committed_values.clear()
                 self.dim_input.unlock_all()
                 radius_default = self.live_radius if self.live_radius > 0 else 5.0
                 fields = [("R", "radius", radius_default, "mm")]
                 self.dim_input.setup(fields)
-                # Position near mouse
                 pos_screen = self.world_to_screen(pos)
                 x = min(int(pos_screen.x()) + 20, self.width() - self.dim_input.width() - 10)
                 y = min(int(pos_screen.y()) - 40, self.height() - self.dim_input.height() - 10)
@@ -897,68 +966,49 @@ class SketchHandlersMixin:
                 self.dim_input_active = True
                 logger.success(f"[SLOT] Radius panel shown at ({x}, {y}), visible={self.dim_input.isVisible()}")
             else:
-                logger.error(f"[SLOT] dim_input NOT FOUND on self!")
-            
-        # --- Schritt 3: Breite/Radius und Erstellung ---
+                logger.error("[SLOT] dim_input NOT FOUND on self!")
+
         else:
             p1 = self.tool_points[0]
             p2 = self.tool_points[1]
-            
-            # Vektor der Mittellinie berechnen
+
             dx_line = p2.x() - p1.x()
             dy_line = p2.y() - p1.y()
             length = math.hypot(dx_line, dy_line)
-            
-            # Verhindern von Null-LÃ¤ngen
+
             if length > 0.01:
-                # Radius berechnen (Senkrechter Abstand Maus zur Mittellinie)
-                
-                # 1. Normalisierter Richtungsvektor der Linie (Einheitsvektor)
                 ux = dx_line / length
                 uy = dy_line / length
-                
-                # 2. Normalenvektor dazu (-y, x)
                 nx, ny = -uy, ux
-                
-                # 3. Vektor vom Startpunkt zur Maus
                 vx = pos.x() - p1.x()
                 vy = pos.y() - p1.y()
-                
-                # 4. Skalarprodukt mit der Normalen ergibt den Abstand (Radius)
                 radius = abs(vx * nx + vy * ny)
-                
-                # Nur erstellen, wenn Radius sinnvoll ist
+
                 if radius > 0.01:
                     self._save_undo()
-                    
-                    # A. Robustes Slot erstellen (ruft die Methode in sketch.py auf)
-                    # WICHTIG: add_slot muss (center_line, main_arc) zurÃ¼ckgeben!
                     center_line, main_arc = self.sketch.add_slot(
-                        p1.x(), p1.y(), p2.x(), p2.y(), radius, 
-                        construction=self.construction_mode
+                        p1.x(), p1.y(), p2.x(), p2.y(), radius,
+                        construction=self.construction_mode,
                     )
-                    
-                    # B. BemaÃŸungen hinzufÃ¼gen (Constraints)
-                    
-                    # 1. LÃ¤nge der Mittellinie fixieren
+
                     self.sketch.add_length(center_line, length)
-                    
-                    # 2. Radius (Breite) fixieren
                     self.sketch.add_radius(main_arc, radius)
-                    
-                    # C. Solver anstoÃŸen
-                    # Das rÃ¼ckt alles gerade und aktualisiert Winkel
+
+                    start_snap_type, start_snap_entity = getattr(self, "_slot_start_snap", (SnapType.NONE, None))
+                    end_snap_type, end_snap_entity = getattr(self, "_slot_end_snap", (SnapType.NONE, None))
+                    self._add_point_constraint(center_line.start, p1, start_snap_type, start_snap_entity, center_line)
+                    self._add_point_constraint(center_line.end, p2, end_snap_type, end_snap_entity, center_line)
+
                     self.sketch.solve()
-                    
-                    # D. UI Updates
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
-                    
-            # Werkzeug zurÃ¼cksetzen
+
+            if hasattr(self, "_slot_start_snap"):
+                del self._slot_start_snap
+            if hasattr(self, "_slot_end_snap"):
+                del self._slot_end_snap
             self._cancel_tool()
-    
-    
-    
+
     def _handle_spline(self, pos, snap_type):
         # 3. Capture Snap Data for Constraint Creation
         # We need to store not just the position, but what we snapped to.

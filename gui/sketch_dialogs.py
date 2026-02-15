@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QRectF
 from loguru import logger
 from PySide6.QtGui import QColor, QPalette, QPainter, QBrush, QPen, QFont
+import math
 import re
 
 try:
@@ -240,8 +241,10 @@ class DimensionInput(QFrame):
         # Visuelles Feedback: Locked Style anwenden, validate first
         if key in self.fields:
             is_valid = self._validate_field(key, text)
+            is_incomplete = self._is_incomplete_expression((text or "").strip())
+            show_error = (not is_valid) and (not is_incomplete)
             self.fields[key].setStyleSheet(
-                self._get_lineedit_style(locked=True, error=not is_valid)
+                self._get_lineedit_style(locked=True, error=show_error)
             )
 
     def _on_text_changed(self, key, text):
@@ -268,6 +271,12 @@ class DimensionInput(QFrame):
         Returns:
             True if valid, False otherwise
         """
+        normalized = (text or "").strip()
+        if self._is_incomplete_expression(normalized):
+            # Zwischenstand waehrend der Eingabe: nicht als harter Fehler markieren.
+            self._clear_field_error(key)
+            return False
+
         value = self._evaluate_expression(text)
 
         # Basic validation: Must evaluate to a number
@@ -326,6 +335,75 @@ class DimensionInput(QFrame):
             locked = key in self.locked_fields
             self.fields[key].setStyleSheet(self._get_lineedit_style(locked=locked))
 
+    @staticmethod
+    def _base_eval_namespace() -> dict:
+        """Sicheres Basis-Namespace fuer mathematische Ausdruecke."""
+        return {
+            "sin": math.sin,
+            "cos": math.cos,
+            "tan": math.tan,
+            "asin": math.asin,
+            "acos": math.acos,
+            "atan": math.atan,
+            "atan2": math.atan2,
+            "sqrt": math.sqrt,
+            "log": math.log,
+            "log10": math.log10,
+            "exp": math.exp,
+            "pow": pow,
+            "floor": math.floor,
+            "ceil": math.ceil,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "pi": math.pi,
+            "e": math.e,
+            "tau": math.tau,
+            "radians": math.radians,
+            "degrees": math.degrees,
+        }
+
+    @staticmethod
+    def _is_incomplete_expression(expr: str) -> bool:
+        """Erkennt Zwischenstaende waehrend der Eingabe (z.B. 'width+' oder '(pi')."""
+        if not expr:
+            return True
+        if expr.count("(") != expr.count(")"):
+            return True
+        if re.search(r"[\+\-\*/\^,(]\s*$", expr):
+            return True
+        return False
+
+    def _safe_eval_expression(self, expr: str, extra_names: dict | None = None):
+        """
+        Sicheres Auswerten ohne Side-Effects.
+        Unterstuetzt Parameter + Mathe-Konstanten/Funktionen.
+        """
+        if not expr:
+            return None
+
+        expr = expr.strip().replace(",", ".")
+        if self._is_incomplete_expression(expr):
+            return None
+
+        # Anwender-Erwartung: '^' als Potenz akzeptieren.
+        expr = expr.replace("^", "**")
+
+        namespace = self._base_eval_namespace()
+        if extra_names:
+            namespace.update(extra_names)
+
+        identifiers = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr)
+        allowed_names = set(namespace.keys())
+        if any(name not in allowed_names for name in identifiers):
+            return None
+
+        try:
+            result = eval(expr, {"__builtins__": {}}, namespace)
+            return float(result)
+        except Exception:
+            return None
+
     def _evaluate_expression(self, text: str):
         """
         Evaluiert einen Ausdruck: Zahl, Parameter-Name oder Formel.
@@ -334,6 +412,8 @@ class DimensionInput(QFrame):
             "100" -> 100.0
             "width" -> Wert von Parameter 'width'
             "width * 2" -> Berechneter Wert
+            "pi/2" -> 1.5707...
+            "e" -> 2.7182...
         """
         if not text:
             return None
@@ -346,40 +426,27 @@ class DimensionInput(QFrame):
         except ValueError:
             pass
 
-        # Versuch 2: Parameter-System nutzen
+        # Versuch 2: Parameter + sichere Auswertung
+        extra_names = {}
         if HAS_PARAMETERS:
             params = get_parameters()
             if params:
-                # Ist es ein Parameter-Name?
-                param_names = {p[0] for p in params.list_all()}
-                if text in param_names:
-                    return params.get(text)
-
-                # Nur auswerten, wenn alle Namen bekannt sind.
-                # Verhindert Warn-Spam bei Zwischenständen wie "e" oder "width+".
-                if re.search(r'[\+\-\*/,(]\s*$', text):
-                    return None
-                if text.count('(') != text.count(')'):
-                    return None
-
-                identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', text)
-                math_names = set(getattr(params, "_math_funcs", {}).keys())
-                allowed_names = param_names | math_names
-                if any(name not in allowed_names for name in identifiers):
-                    return None
-
-                # Versuche als Formel zu evaluieren
                 try:
-                    # Temporär evaluieren
-                    temp_name = "__dim_eval__"
-                    params.set(temp_name, text)
-                    result = params.get(temp_name)
-                    params.delete(temp_name)
-                    return result
-                except Exception as e:
-                    logger.debug(f"[sketch_dialogs.py] Fehler: {e}")
+                    for name, value, _formula in params.list_all():
+                        extra_names[name] = float(value)
+                except Exception:
+                    extra_names = {}
 
-        return None
+                # Direktzugriff auf Parametername
+                if text in extra_names:
+                    return extra_names[text]
+
+                # Parameter-spezifische Math-Funktionen uebernehmen (falls erweitert)
+                param_math = getattr(params, "_math_funcs", {})
+                if isinstance(param_math, dict):
+                    extra_names.update(param_math)
+
+        return self._safe_eval_expression(text, extra_names=extra_names)
 
     def _on_confirm(self):
         self.confirmed.emit()

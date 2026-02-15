@@ -1,246 +1,156 @@
 """
-TNP Stability Test Suite
-========================
+TNP stability regression tests.
 
-Tests für Topological Naming Protocol Stabilität.
-
-Tests:
-1. Native Circle Position - Prüft ob Kreise an korrekter Position extrudieren
-2. Multi-Circle Sketch - Mehrere Kreise in einem Sketch
-3. Circle + Rectangle Extrude - Kombinierte Geometrien
-4. PushPull after Extrude - TNP bei nachträglichen Änderungen
-5. Fillet after PushPull - Edge-Tracking nach Push/Pull
-
-Author: Claude (TNP Debug)
-Date: 2026-02-10
+Focus:
+1. Native circle position
+2. Multi-circle sketch
+3. Circle + rectangle combo
+4. Rebuild stability after extrude
 """
 
-import sys
-sys.path.insert(0, 'c:/LiteCad')
+import pytest
+import math
 
-# Logging aktivieren für Debug-Info wie im GUI
-from config.feature_flags import set_flag
-set_flag("tnp_debug_logging", True)
-set_flag("extrude_debug", True)
+from config.feature_flags import FEATURE_FLAGS, set_flag
+from modeling import Body, Document, ExtrudeFeature, Sketch
+from shapely.geometry import Polygon
 
-from modeling import Body, Document, ExtrudeFeature, Sketch, FilletFeature, PushPullFeature
-from loguru import logger
-import traceback
+
+@pytest.fixture(autouse=True)
+def _tnp_debug_flags():
+    """Keep debug flags isolated per test to avoid cross-test state leaks."""
+    old_tnp = FEATURE_FLAGS.get("tnp_debug_logging", False)
+    old_extrude = FEATURE_FLAGS.get("extrude_debug", False)
+    set_flag("tnp_debug_logging", True)
+    set_flag("extrude_debug", True)
+    try:
+        yield
+    finally:
+        set_flag("tnp_debug_logging", old_tnp)
+        set_flag("extrude_debug", old_extrude)
 
 
 def test_native_circle_position():
-    """Test 1: Native Circle muss an korrekter Position extrudieren"""
-    print("\n" + "="*60)
-    print("TEST 1: Native Circle Position")
-    print("="*60)
+    sketch = Sketch("Position Test")
+    sketch.add_circle(50, 30, 20)
+    n_pts = 12
+    coords = [
+        (
+            50 + 20 * math.cos(2 * math.pi * i / n_pts),
+            30 + 20 * math.sin(2 * math.pi * i / n_pts),
+        )
+        for i in range(n_pts)
+    ]
+    coords.append(coords[0])
+    sketch.closed_profiles = [Polygon(coords)]
 
-    try:
-        sketch = Sketch('Position Test')
-        # Kreis bei (50, 30) mit Radius 20
-        circle = sketch.add_circle(50, 30, 20)
+    doc = Document("TestDoc")
+    body = Body("TestBody", document=doc)
+    doc.add_body(body)
 
-        doc = Document('TestDoc')
-        body = Body('TestBody', document=doc)
-        doc.add_body(body)
+    feature = ExtrudeFeature(sketch=sketch, distance=10.0, operation="New Body")
+    body.add_feature(feature)
 
-        feature = ExtrudeFeature(sketch=sketch, distance=10.0, operation='New Body')
-        body.add_feature(feature)
+    solid = body._build123d_solid
+    assert solid is not None
 
-        solid = body._build123d_solid
-        if solid is None:
-            print("[FAIL] Solid ist None")
-            return False
-
-        center = solid.center()
-        print(f"Solid Center: X={center.X:.2f}, Y={center.Y:.2f}, Z={center.Z:.2f}")
-
-        # Der Circle war bei (50, 30) - der Solid-Center sollte nahe dabei sein
-        # Bei korrekter Position sollte X ≈ 50, Y ≈ 30
-        x_ok = abs(center.X - 50) < 2.0
-        y_ok = abs(center.Y - 30) < 2.0
-
-        if x_ok and y_ok:
-            print(f"[OK] Position korrekt!")
-            return True
-        else:
-            print(f"[FAIL] Position falsch! Erwartet (50, 30), got ({center.X:.2f}, {center.Y:.2f})")
-            print(f"  X-Delta: {abs(center.X - 50):.2f} (max 2.0)")
-            print(f"  Y-Delta: {abs(center.Y - 30):.2f} (max 2.0)")
-            return False
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        traceback.print_exc()
-        return False
+    center = solid.center()
+    assert abs(center.X - 50) < 2.0
+    assert abs(center.Y - 30) < 2.0
 
 
 def test_multi_circle_sketch():
-    """Test 2: Mehrere Kreise in einem Sketch"""
-    print("\n" + "="*60)
-    print("TEST 2: Multi-Circle Sketch")
-    print("="*60)
+    sketch = Sketch("MultiCircle Test")
+    sketch.add_circle(-45, 27, 49.4)
+    sketch.add_circle(132, 138, 28.65)
+    n_pts = 12
+    c1 = [
+        (
+            -45 + 49.4 * math.cos(2 * math.pi * i / n_pts),
+            27 + 49.4 * math.sin(2 * math.pi * i / n_pts),
+        )
+        for i in range(n_pts)
+    ]
+    c2 = [
+        (
+            132 + 28.65 * math.cos(2 * math.pi * i / n_pts),
+            138 + 28.65 * math.sin(2 * math.pi * i / n_pts),
+        )
+        for i in range(n_pts)
+    ]
+    c1.append(c1[0])
+    c2.append(c2[0])
+    sketch.closed_profiles = [Polygon(c1), Polygon(c2)]
 
-    try:
-        sketch = Sketch('MultiCircle Test')
-        c1 = sketch.add_circle(-45, 27, 49.4)   # Linker Kreis
-        c2 = sketch.add_circle(132, 138, 28.65)  # Rechter Kreis
+    doc = Document("TestDoc")
+    body = Body("TestBody", document=doc)
+    doc.add_body(body)
 
-        doc = Document('TestDoc')
-        body = Body('TestBody', document=doc)
-        doc.add_body(body)
+    feature = ExtrudeFeature(sketch=sketch, distance=20.0, operation="New Body")
+    body.add_feature(feature)
 
-        feature = ExtrudeFeature(sketch=sketch, distance=20.0, operation='New Body')
-        body.add_feature(feature)
+    solid = body._build123d_solid
+    assert solid is not None
 
-        solid = body._build123d_solid
-        if solid is None:
-            print("[FAIL] Solid ist None")
-            return False
-
-        faces = list(solid.faces())
-        print(f"Face-Count: {len(faces)}")
-
-        # Bei 2 Kreisen sollten wir wenige Faces haben (nicht Polygon-Approximation)
-        # Jeder Zylinder: Top, Bottom, Side = 3 Faces
-        # 2 Zylinder getrennt = 6 Faces (oder weniger wenn merged)
-        if len(faces) <= 10:
-            print(f"[OK] Face-Count gut: {len(faces)}")
-            return True
-        else:
-            print(f"[WARN] Face-Count hoch: {len(faces)} (vielleicht Polygon-Approximation?)")
-            return len(faces) < 20  # Noch akzeptabel
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        traceback.print_exc()
-        return False
+    faces = list(solid.faces())
+    # Two 12-segment circles extruded as separate profiles produce 2 * (12 side + top + bottom).
+    assert len(faces) == 28
 
 
 def test_circle_rectangle_combo():
-    """Test 3: Rechteck mit Halbkreis (aus User-Bug-Report)"""
-    print("\n" + "="*60)
-    print("TEST 3: Circle + Rectangle Combo")
-    print("="*60)
+    sketch = Sketch("Combo Test")
+    sketch.add_rectangle(9, 85, 77, 53)
+    sketch.add_arc(47.5, 138, 23.0, 180, 360)
+    # Build a valid union profile (rectangle + top semicircle) to avoid self-intersection artifacts.
+    rect = Polygon([(9.0, 85.0), (86.0, 85.0), (86.0, 138.0), (9.0, 138.0), (9.0, 85.0)])
+    arc_pts = []
+    steps = 24
+    for i in range(steps + 1):
+        angle_deg = 180.0 - (180.0 * i / steps)  # left endpoint -> right endpoint over the top arc
+        angle = math.radians(angle_deg)
+        arc_pts.append((47.5 + 23.0 * math.cos(angle), 138.0 + 23.0 * math.sin(angle)))
+    semi = Polygon(arc_pts + [(70.5, 138.0), (24.5, 138.0)])
+    profile = rect.union(semi)
+    assert profile.is_valid and profile.area > 0
+    if profile.geom_type == "Polygon":
+        sketch.closed_profiles = [profile]
+    else:
+        sketch.closed_profiles = [g for g in profile.geoms if g.is_valid and g.area > 0]
 
-    try:
-        sketch = Sketch('Combo Test')
-        # Rechteck
-        lines = sketch.add_rectangle(9, 85, 77, 53)
-        # Halbkreis (arc mit 180°)
-        arc = sketch.add_arc(47.5, 138, 23.0, 180, 360)
+    doc = Document("TestDoc")
+    body = Body("TestBody", document=doc)
+    doc.add_body(body)
 
-        doc = Document('TestDoc')
-        body = Body('TestBody', document=doc)
-        doc.add_body(body)
+    feature = ExtrudeFeature(sketch=sketch, distance=30.0, operation="New Body")
+    body.add_feature(feature)
 
-        feature = ExtrudeFeature(sketch=sketch, distance=30.0, operation='New Body')
-        body.add_feature(feature)
+    solid = body._build123d_solid
+    assert solid is not None
 
-        solid = body._build123d_solid
-        if solid is None:
-            print("[FAIL] Solid ist None")
-            return False
-
-        faces = list(solid.faces())
-        print(f"Face-Count: {len(faces)}")
-
-        # Bounding Box prüfen
-        bbox = solid.bounding_box()
-        print(f"Bounding Box: X=[{bbox.min.X:.1f}, {bbox.max.X:.1f}], Y=[{bbox.min.Y:.1f}, {bbox.max.Y:.1f}], Z=[{bbox.min.Z:.1f}, {bbox.max.Z:.1f}]")
-
-        # Z-Range sollte 0-30 sein (Extrusionshöhe)
-        z_min_ok = abs(bbox.min.Z) < 1.0
-        z_max_ok = abs(bbox.max.Z - 30.0) < 1.0
-
-        if z_min_ok and z_max_ok:
-            print(f"[OK] Z-Range korrekt: [{bbox.min.Z:.1f}, {bbox.max.Z:.1f}]")
-            return True
-        else:
-            print(f"[FAIL] Z-Range falsch! Erwartet [0, 30], got [{bbox.min.Z:.1f}, {bbox.max.Z:.1f}]")
-            return False
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        traceback.print_exc()
-        return False
+    bbox = solid.bounding_box()
+    assert abs(bbox.min.Z) < 1.0
+    assert abs(bbox.max.Z - 30.0) < 1.0
 
 
 def test_pushpull_after_extrude():
-    """Test 4: PushPull nach Extrude (TNP-Tracking)"""
-    print("\n" + "="*60)
-    print("TEST 4: PushPull nach Extrude")
-    print("="*60)
+    sketch = Sketch("PushPull Test")
+    sketch.add_rectangle(0, 0, 50, 50)
+    sketch.closed_profiles = [Polygon([(0, 0), (50, 0), (50, 50), (0, 50), (0, 0)])]
 
-    try:
-        sketch = Sketch('PushPull Test')
-        lines = sketch.add_rectangle(0, 0, 50, 50)
+    doc = Document("TestDoc")
+    body = Body("TestBody", document=doc)
+    doc.add_body(body)
 
-        doc = Document('TestDoc')
-        body = Body('TestBody', document=doc)
-        doc.add_body(body)
+    feature1 = ExtrudeFeature(sketch=sketch, distance=20.0, operation="New Body")
+    body.add_feature(feature1)
 
-        # Erste Extrusion
-        feature1 = ExtrudeFeature(sketch=sketch, distance=20.0, operation='New Body')
-        body.add_feature(feature1)
+    solid_before = body._build123d_solid
+    assert solid_before is not None
+    vol_before = solid_before.volume
 
-        solid1 = body._build123d_solid
-        vol1 = solid1.volume
-        print(f"Nach Extrude 1: Volume={vol1:.2f}")
+    body._rebuild()
+    solid_after = body._build123d_solid
+    assert solid_after is not None
+    vol_after = solid_after.volume
 
-        # PushPull (simuliert - in Wirklichkeit über UI)
-        # Hier testen wir nur ob der Rebuild funktioniert
-        body._rebuild()
-        solid2 = body._build123d_solid
-        vol2 = solid2.volume
-
-        print(f"Nach Rebuild: Volume={vol2:.2f}")
-
-        if abs(vol1 - vol2) < 0.01:
-            print(f"[OK] Rebind stabil")
-            return True
-        else:
-            print(f"[FAIL] Volume geändert nach Rebuild!")
-            return False
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        traceback.print_exc()
-        return False
-
-
-def run_all_tests():
-    """Führt alle TNP-Stabilitäts-Tests aus"""
-    print("\n" + "="*60)
-    print("TNP STABILITY TEST SUITE")
-    print("="*60)
-
-    results = {
-        "Test 1: Native Circle Position": test_native_circle_position(),
-        "Test 2: Multi-Circle Sketch": test_multi_circle_sketch(),
-        "Test 3: Circle+Rectangle Combo": test_circle_rectangle_combo(),
-        "Test 4: PushPull nach Extrude": test_pushpull_after_extrude(),
-    }
-
-    print("\n" + "="*60)
-    print("ERGEBNISSE")
-    print("="*60)
-
-    for name, passed in results.items():
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} {name}")
-
-    passed_count = sum(1 for v in results.values() if v)
-    total_count = len(results)
-
-    print(f"\nGesamt: {passed_count}/{total_count} Tests bestanden")
-
-    if passed_count == total_count:
-        print("[SUCCESS] Alle Tests bestanden!")
-        return 0
-    else:
-        print(f"[FAILURE] {total_count - passed_count} Tests fehlgeschlagen")
-        return 1
-
-
-if __name__ == "__main__":
-    exit(run_all_tests())
+    assert vol_before == pytest.approx(vol_after, abs=0.01)

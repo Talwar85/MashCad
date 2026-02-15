@@ -381,19 +381,26 @@ class BooleanEngineV4:
 
     @staticmethod
     def execute_boolean(
-        body: 'Body',
-        tool_solid: Any,
-        operation: str,
+        body: 'Body' = None,
+        tool_solid: Any = None,
+        operation: str = "",
         fuzzy_tolerance: Optional[float] = None,
-        feature_id: Optional[str] = None
+        feature_id: Optional[str] = None,
+        base_solid: Any = None,
+        naming_service: Any = None,
     ) -> BooleanResult:
         """
         Execute Boolean operation with transaction safety on a Body object.
 
+        Standardpfad:
         Wrapper um execute_boolean_on_shapes() mit:
         - BodyTransaction (Rollback bei Fehler)
         - Body-Update (solid + mesh invalidation)
         - TNP v4.1: History-basierte ShapeID-Aktualisierung
+
+        Legacy-Compat:
+        Wenn `body is None` und `base_solid` gesetzt ist, wird direkt der
+        Shape-Level-Pfad ausgeführt (ältere Tests/Callsites).
 
         Args:
             body: Target body (will be modified in transaction)
@@ -401,10 +408,29 @@ class BooleanEngineV4:
             operation: "Join", "Cut", or "Intersect"
             fuzzy_tolerance: Override default tolerance
             feature_id: Optional Feature ID für TNP-Update
+            base_solid: Legacy-Compat für shape-level Aufruf ohne Body
+            naming_service: Optionaler ShapeNamingService (shape-level Compat)
 
         Returns:
             BooleanResult with SUCCESS, ERROR, or EMPTY status
         """
+        # Legacy-Compat: ältere API execute_boolean(base_solid=..., tool_solid=...)
+        if body is None:
+            if base_solid is None:
+                return BooleanResult(
+                    status=ResultStatus.ERROR,
+                    message="base_solid fehlt für execute_boolean ohne body",
+                    operation_type=operation.lower() if operation else "unknown"
+                )
+            return BooleanEngineV4.execute_boolean_on_shapes(
+                solid1=base_solid,
+                solid2=tool_solid,
+                operation=operation,
+                fuzzy_tolerance=fuzzy_tolerance,
+                naming_service=naming_service,
+                feature_id=feature_id,
+            )
+
         if body._build123d_solid is None:
             return BooleanResult(
                 status=ResultStatus.ERROR,

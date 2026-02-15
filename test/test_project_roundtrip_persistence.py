@@ -5,18 +5,21 @@ from shapely.geometry import Polygon
 
 from modeling import (
     Body,
+    ChamferFeature,
     Document,
+    FilletFeature,
     ExtrudeFeature,
     DraftFeature,
     HollowFeature,
     HoleFeature,
+    ShellFeature,
     Sketch,
     SurfaceTextureFeature,
     SweepFeature,
     ThreadFeature,
 )
 from modeling.geometric_selector import GeometricFaceSelector
-from modeling.topology_indexing import face_index_of
+from modeling.topology_indexing import edge_index_of, face_index_of
 from modeling.tnp_system import ShapeID, ShapeType
 
 
@@ -137,6 +140,22 @@ def _top_face_and_index(solid):
     top_index = face_index_of(solid, top_face)
     assert top_index is not None
     return top_face, int(top_index)
+
+
+def _top_edge_indices(solid, limit: int = 4):
+    top_face = max(list(solid.faces()), key=lambda f: float(f.center().Z))
+    indices = []
+    for edge in top_face.edges():
+        edge_idx = edge_index_of(solid, edge)
+        if edge_idx is None:
+            continue
+        idx = int(edge_idx)
+        if idx not in indices:
+            indices.append(idx)
+        if len(indices) >= limit:
+            break
+    assert indices, "Keine Top-Edge-Indizes gefunden"
+    return indices
 
 
 def test_document_to_dict_from_dict_roundtrip_preserves_identity_and_split_metadata():
@@ -492,3 +511,115 @@ def test_load_project_migrates_texture_shapeid_selector_refs_to_indices_and_rehy
     )
     assert _is_success_status(second_extrude.status)
     assert "referenz" not in (second_extrude.status_message or "").lower()
+
+
+def test_after_load_fillet_edit_rebuild_keeps_reference_integrity(tmp_path):
+    doc = Document("roundtrip_fillet_edit")
+    sketch = doc.new_sketch("SketchFillet")
+    sketch.id = "sketch_fillet_01"
+    sketch.plane_origin = (0.0, 0.0, 0.0)
+    sketch.plane_normal = (0.0, 0.0, 1.0)
+    sketch.plane_x_dir = (1.0, 0.0, 0.0)
+    sketch.plane_y_dir = (0.0, 1.0, 0.0)
+    sketch.closed_profiles = [_make_square_profile(24.0)]
+
+    body = doc.new_body("BodyFillet")
+    body.id = "body_fillet_01"
+    base = _add_extrude_from_sketch(body, sketch, distance=12.0, operation="New Body")
+    assert _is_success_status(base.status)
+
+    fillet = FilletFeature(radius=0.8, edge_indices=_top_edge_indices(body._build123d_solid, limit=4))
+    body.add_feature(fillet, rebuild=True)
+    assert _is_success_status(fillet.status)
+
+    save_path = tmp_path / "roundtrip_fillet_edit.mshcad"
+    assert doc.save_project(str(save_path))
+
+    loaded = Document.load_project(str(save_path))
+    assert loaded is not None
+    loaded_body = loaded.find_body_by_id("body_fillet_01")
+    assert loaded_body is not None
+
+    loaded_fillet = next(feat for feat in loaded_body.features if isinstance(feat, FilletFeature))
+    loaded_fillet.radius = 1.1
+    loaded_body._rebuild()
+
+    assert _is_success_status(loaded_fillet.status)
+    assert "referenz" not in (loaded_fillet.status_message or "").lower()
+    code = (loaded_fillet.status_details or {}).get("code")
+    assert code not in {"tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift"}
+
+
+def test_after_load_chamfer_edit_rebuild_keeps_reference_integrity(tmp_path):
+    doc = Document("roundtrip_chamfer_edit")
+    sketch = doc.new_sketch("SketchChamfer")
+    sketch.id = "sketch_chamfer_01"
+    sketch.plane_origin = (0.0, 0.0, 0.0)
+    sketch.plane_normal = (0.0, 0.0, 1.0)
+    sketch.plane_x_dir = (1.0, 0.0, 0.0)
+    sketch.plane_y_dir = (0.0, 1.0, 0.0)
+    sketch.closed_profiles = [_make_square_profile(20.0)]
+
+    body = doc.new_body("BodyChamfer")
+    body.id = "body_chamfer_01"
+    base = _add_extrude_from_sketch(body, sketch, distance=10.0, operation="New Body")
+    assert _is_success_status(base.status)
+
+    chamfer = ChamferFeature(distance=0.6, edge_indices=_top_edge_indices(body._build123d_solid, limit=4))
+    body.add_feature(chamfer, rebuild=True)
+    assert _is_success_status(chamfer.status)
+
+    save_path = tmp_path / "roundtrip_chamfer_edit.mshcad"
+    assert doc.save_project(str(save_path))
+
+    loaded = Document.load_project(str(save_path))
+    assert loaded is not None
+    loaded_body = loaded.find_body_by_id("body_chamfer_01")
+    assert loaded_body is not None
+
+    loaded_chamfer = next(feat for feat in loaded_body.features if isinstance(feat, ChamferFeature))
+    loaded_chamfer.distance = 0.4
+    loaded_body._rebuild()
+
+    assert _is_success_status(loaded_chamfer.status)
+    assert "referenz" not in (loaded_chamfer.status_message or "").lower()
+    code = (loaded_chamfer.status_details or {}).get("code")
+    assert code not in {"tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift"}
+
+
+def test_after_load_shell_edit_rebuild_keeps_reference_integrity(tmp_path):
+    doc = Document("roundtrip_shell_edit")
+    sketch = doc.new_sketch("SketchShell")
+    sketch.id = "sketch_shell_01"
+    sketch.plane_origin = (0.0, 0.0, 0.0)
+    sketch.plane_normal = (0.0, 0.0, 1.0)
+    sketch.plane_x_dir = (1.0, 0.0, 0.0)
+    sketch.plane_y_dir = (0.0, 1.0, 0.0)
+    sketch.closed_profiles = [_make_square_profile(30.0)]
+
+    body = doc.new_body("BodyShell")
+    body.id = "body_shell_01"
+    base = _add_extrude_from_sketch(body, sketch, distance=20.0, operation="New Body")
+    assert _is_success_status(base.status)
+
+    _, top_index = _top_face_and_index(body._build123d_solid)
+    shell = ShellFeature(thickness=2.0, face_indices=[top_index])
+    body.add_feature(shell, rebuild=True)
+    assert _is_success_status(shell.status)
+
+    save_path = tmp_path / "roundtrip_shell_edit.mshcad"
+    assert doc.save_project(str(save_path))
+
+    loaded = Document.load_project(str(save_path))
+    assert loaded is not None
+    loaded_body = loaded.find_body_by_id("body_shell_01")
+    assert loaded_body is not None
+
+    loaded_shell = next(feat for feat in loaded_body.features if isinstance(feat, ShellFeature))
+    loaded_shell.thickness = 1.0
+    loaded_body._rebuild()
+
+    assert _is_success_status(loaded_shell.status)
+    assert "referenz" not in (loaded_shell.status_message or "").lower()
+    code = (loaded_shell.status_details or {}).get("code")
+    assert code not in {"tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift"}

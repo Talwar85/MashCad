@@ -237,15 +237,26 @@ class TNPStatsPanel(QWidget):
             return base_status
 
         code = str(details.get("code", "") or "").strip().lower()
-        if code in {"fallback_used"}:
+        
+        # W3-Taxonomy Mapping
+        if code in {
+            "fallback_used",
+            "tnp_ref_drift", # Drift -> Warning/Fallback
+        }:
             return "fallback"
+            
         if code in {
             "operation_failed",
             "fallback_failed",
             "no_result_solid",
             "self_heal_rollback_geometry_drift",
+            "tnp_ref_missing",   # Missing -> Broken
+            "tnp_ref_mismatch",  # Mismatch -> Broken
+            "rebuild_finalize_failed", # CH-004
+            "ocp_api_unavailable",     # CH-006
         }:
             return "broken"
+            
         return base_status
 
     @staticmethod
@@ -397,6 +408,21 @@ class TNPStatsPanel(QWidget):
             code = str(details.get("code", "") or "").strip()
             if code:
                 lines.append(f"Code: {code}")
+
+            # W3: TNP Category Badge
+            tnp_failure = details.get("tnp_failure", {})
+            if isinstance(tnp_failure, dict):
+                cat = tnp_failure.get("category")
+                if cat:
+                    # Badge style
+                    cat_color = STATUS_COLORS.get("broken", "#e74c3c")
+                    if cat == "drift":
+                         cat_color = STATUS_COLORS.get("fallback", "#f39c12")
+                    
+                    lines.append(
+                        f"Category: <span style='background-color:{cat_color}; color:white; "
+                        f"padding:2px 6px; border-radius:3px;'>{cat}</span>"
+                    )
 
             hint = str(details.get("hint", "") or "").strip()
             if hint:

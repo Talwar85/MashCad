@@ -675,7 +675,7 @@ def _find_face_by_edge_geometry(shape, edge_shape):
                             return face
                 except Exception as e:
                     logger.debug(f"[edge_operations.py] Fehler: {e}")
-                    pass
+                    continue
                 edge_explorer.Next()
             face_explorer.Next()
 
@@ -757,7 +757,7 @@ def _find_adjacent_face(shape, edge_shape):
                             return face
                     except Exception as e:
                         logger.debug(f"[edge_operations.py] Fehler: {e}")
-                        pass
+                        continue
                     edge_explorer.Next()
                 face_explorer.Next()
         except Exception as e:
@@ -806,7 +806,7 @@ def _resolve_edge_on_solid(solid, original_edge) -> Optional[object]:
                     best_edge = edge
             except Exception as e:
                 logger.debug(f"[edge_operations.py] Fehler: {e}")
-                pass
+                continue
 
         if best_edge and min_dist < tolerance:
             return best_edge
@@ -965,7 +965,7 @@ def estimate_max_fillet_radius(edges: List) -> float:
                 min_length = length
         except Exception as e:
             logger.debug(f"[edge_operations.py] Fehler: {e}")
-            pass
+            continue
 
     if min_length == float('inf'):
         return 10.0

@@ -616,8 +616,10 @@ def test_resolve_edges_tnp_blocks_selector_fallback_when_topology_refs_break(mon
         edge_indices=[999],
         geometric_selectors=[_edge_selector()],
     )
+    calls = {"count": 0}
 
     def _fail_from_dict(cls, _data):
+        calls["count"] += 1
         raise AssertionError("edge selector fallback must not run when topological refs exist but break")
 
     monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
@@ -625,6 +627,77 @@ def test_resolve_edges_tnp_blocks_selector_fallback_when_topology_refs_break(mon
 
     assert resolved == []
     assert feature.edge_indices == [999]
+    assert calls["count"] == 0
+
+
+def test_resolve_edges_tnp_allows_selector_recovery_when_strict_policy_disabled(monkeypatch):
+    from build123d import Solid
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_selector_recovery_policy_disabled")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    class _Selector:
+        def find_best_match(self, edges):
+            return edges[0] if edges else None
+
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(lambda cls, _data: _Selector()))
+
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved) == 1
+    assert feature.edge_indices == [0]
+    drift_notice = body._consume_tnp_failure(feature)
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "edge"
+    assert (drift_notice or {}).get("strict") is False
+
+
+def test_safe_operation_emits_tnp_ref_drift_warning_after_selector_recovery(monkeypatch):
+    from build123d import Solid
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_selector_recovery_drift_warning")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    class _Selector:
+        def find_best_match(self, edges):
+            return edges[0] if edges else None
+
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(lambda cls, _data: _Selector()))
+
+    def _op():
+        resolved = body._resolve_edges_tnp(solid, feature)
+        assert len(resolved) == 1
+        return object()
+
+    result, status = body._safe_operation(
+        "EdgeSelectorRecoveryDrift",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "edge"
 
 
 def test_resolve_edges_tnp_shapeid_fallback_is_quiet(monkeypatch):
@@ -677,6 +750,217 @@ def test_resolve_edges_tnp_fillet_requires_shape_index_consistency(monkeypatch):
     assert resolved == []
 
 
+def test_resolve_edges_tnp_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("fillet_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = FilletFeature(radius=1.0, edge_indices=[0], geometric_selectors=[])
+    feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_geo_conflict", 0)]
+
+    mismatch_edge = edge_from_index(solid, 3)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_edges_tnp(solid, feature)
+    drift_notice = body._consume_tnp_failure(feature)
+
+    assert len(resolved) == 1
+    assert feature.edge_indices == [0]
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "edge"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_safe_operation_emits_drift_warning_for_single_ref_pair_geometric_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("safe_op_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = FilletFeature(radius=1.0, edge_indices=[0], geometric_selectors=[])
+    feature.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_geo_conflict_safe_op", 0)]
+
+    mismatch_edge = edge_from_index(solid, 3)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    def _op():
+        resolved = body._resolve_edges_tnp(solid, feature)
+        assert len(resolved) == 1
+        return object()
+
+    result, status = body._safe_operation(
+        "SingleRefPairGeometricConflict",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_rebuild_fillet_invalid_edge_sets_tnp_missing_ref_error_code():
+    body = Body("fillet_invalid_edge_tnp_missing_ref")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[999], geometric_selectors=[])
+    body.features = [base, fillet]
+
+    body._rebuild()
+
+    details = fillet.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert fillet.status == "ERROR"
+    assert details.get("code") == "tnp_ref_missing"
+    assert tnp_failure.get("category") == "missing_ref"
+    assert tnp_failure.get("reference_kind") == "edge"
+
+
+def test_rebuild_fillet_invalid_edge_error_is_idempotent_across_cycles():
+    body = Body("fillet_invalid_edge_idempotent")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[999], geometric_selectors=[])
+    body.features = [base, fillet]
+
+    body._rebuild()
+    first_details = dict(fillet.status_details or {})
+
+    body._rebuild()
+    second_details = dict(fillet.status_details or {})
+
+    assert fillet.status == "ERROR"
+    assert first_details.get("code") == "tnp_ref_missing"
+    assert second_details.get("code") == "tnp_ref_missing"
+    assert (first_details.get("tnp_failure") or {}).get("category") == "missing_ref"
+    assert (second_details.get("tnp_failure") or {}).get("category") == "missing_ref"
+
+
+def test_rebuild_fillet_shape_index_mismatch_sets_tnp_mismatch_error_code(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("fillet_shape_index_mismatch_tnp_code")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[0], geometric_selectors=[])
+    fillet.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_status_mismatch", 0)]
+    body.features = [base, fillet]
+
+    def _resolve_shape(_shape_id, solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        mismatch_edge = edge_from_index(solid, 3)
+        assert mismatch_edge is not None
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    body._rebuild()
+
+    details = fillet.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert fillet.status == "ERROR"
+    assert details.get("code") == "tnp_ref_mismatch"
+    assert tnp_failure.get("category") == "mismatch"
+    assert tnp_failure.get("reference_kind") == "edge"
+
+
+def test_rebuild_fillet_shape_index_mismatch_error_is_idempotent_across_cycles(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("fillet_shape_index_mismatch_idempotent")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[0], geometric_selectors=[])
+    fillet.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_status_mismatch_idempotent", 0)]
+    body.features = [base, fillet]
+
+    def _resolve_shape(_shape_id, solid, *, log_unresolved=True):
+        mismatch_edge = edge_from_index(solid, 3)
+        assert mismatch_edge is not None
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    body._rebuild()
+    first_details = dict(fillet.status_details or {})
+
+    body._rebuild()
+    second_details = dict(fillet.status_details or {})
+
+    assert fillet.status == "ERROR"
+    assert first_details.get("code") == "tnp_ref_mismatch"
+    assert second_details.get("code") == "tnp_ref_mismatch"
+    assert (first_details.get("tnp_failure") or {}).get("category") == "mismatch"
+    assert (second_details.get("tnp_failure") or {}).get("category") == "mismatch"
+
+
+def test_resolve_edges_tnp_normalizes_index_order_deterministically():
+    from build123d import Solid
+
+    body = Body("resolve_edges_order_normalized")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+
+    feature = FilletFeature(radius=1.0, edge_indices=[4, 1, 3, 1])
+    resolved_first = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved_first) == 3
+    assert feature.edge_indices == [1, 3, 4]
+
+    feature.edge_indices = [3, 4, 1]
+    resolved_second = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved_second) == 3
+    assert feature.edge_indices == [1, 3, 4]
+
+
+def test_rebuild_edge_index_normalization_is_idempotent_across_cycles():
+    doc = Document()
+    body = Body("edge_index_normalization_idempotent")
+    doc.add_body(body)
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=0.8, edge_indices=[4, 1, 3, 1])
+    body.features = [base, fillet]
+
+    body._rebuild()
+    first_indices = list(fillet.edge_indices or [])
+
+    body._rebuild()
+    second_indices = list(fillet.edge_indices or [])
+
+    assert fillet.status in ("OK", "SUCCESS")
+    assert first_indices == [1, 3, 4]
+    assert second_indices == [1, 3, 4]
+
+
 def test_resolve_edges_tnp_uses_shape_probe_for_single_ref_even_with_legacy_local_index(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index
@@ -705,6 +989,25 @@ def test_resolve_edges_tnp_uses_shape_probe_for_single_ref_even_with_legacy_loca
     assert len(resolved) == 1
     assert calls["count"] >= 1
     assert feature.edge_indices == [0]
+
+
+def test_resolve_feature_faces_normalizes_index_order_deterministically():
+    from build123d import Solid
+
+    body = Body("resolve_faces_order_normalized")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+
+    feature = SurfaceTextureFeature(face_indices=[4, 1, 3], face_selectors=[_face_selector()] * 3)
+    resolved_first = body._resolve_feature_faces(feature, solid)
+
+    assert len(resolved_first) == 3
+    assert feature.face_indices == [1, 3, 4]
+
+    feature.face_indices = [3, 4, 1]
+    resolved_second = body._resolve_feature_faces(feature, solid)
+
+    assert len(resolved_second) == 3
+    assert feature.face_indices == [1, 3, 4]
 
 
 def test_resolve_feature_faces_uses_indices_when_shapeid_local_index_is_stale(monkeypatch):
@@ -762,6 +1065,94 @@ def test_resolve_feature_faces_extrude_blocks_mismatch_even_with_legacy_shape_lo
     assert feature.face_index == 0
 
 
+def test_resolve_feature_faces_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("extrude_face_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_face_geo_conflict", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_feature_faces(feature, solid)
+    drift_notice = body._consume_tnp_failure(feature)
+
+    assert len(resolved) == 1
+    assert feature.face_index == 0
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "face"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_safe_operation_emits_drift_warning_for_single_ref_pair_geometric_face_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("safe_op_single_ref_pair_geometric_face_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_face_geo_conflict_safe_op", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    def _op():
+        resolved = body._resolve_feature_faces(feature, solid)
+        assert len(resolved) == 1
+        return object()
+
+    result, status = body._safe_operation(
+        "SingleRefPairGeometricFaceConflict",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "face"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
 def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index
@@ -789,6 +1180,178 @@ def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     wire = body._resolve_path(sweep.path_data, solid, sweep)
 
     assert wire is None
+
+
+def test_sweep_resolve_path_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index, edge_index_of
+
+    doc = Document()
+    body = Body("sweep_path_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_geo_conflict", 0)
+
+    mismatch_edge = edge_from_index(solid, 4)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+    drift_notice = body._consume_tnp_failure(sweep)
+
+    assert wire is not None
+    wire_edges = list(wire.edges())
+    assert len(wire_edges) == 1
+    assert edge_index_of(solid, wire_edges[0]) == 0
+    assert sweep.path_shape_id is not None
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "edge"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_sweep_resolve_path_single_ref_pair_shape_missing_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_index_of
+
+    doc = Document()
+    body = Body("sweep_path_single_ref_pair_shape_missing")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_shape_missing", 0)
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return None, "unresolved"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+    drift_notice = body._consume_tnp_failure(sweep)
+
+    assert wire is not None
+    wire_edges = list(wire.edges())
+    assert len(wire_edges) == 1
+    assert edge_index_of(solid, wire_edges[0]) == 0
+    assert sweep.path_shape_id is not None
+    assert drift_notice is None
+
+
+def test_safe_operation_emits_drift_warning_for_sweep_path_single_ref_pair_geometric_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index, edge_index_of
+
+    doc = Document()
+    body = Body("safe_op_sweep_path_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_geo_conflict_safe_op", 0)
+
+    mismatch_edge = edge_from_index(solid, 4)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    def _op():
+        wire = body._resolve_path(sweep.path_data, solid, sweep)
+        assert wire is not None
+        wire_edges = list(wire.edges())
+        assert len(wire_edges) == 1
+        assert edge_index_of(solid, wire_edges[0]) == 0
+        return object()
+
+    result, status = body._safe_operation(
+        "SweepPathSingleRefPairGeometricConflict",
+        _op,
+        feature=sweep,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "edge"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_rebuild_sweep_invalid_path_sets_tnp_missing_ref_error_code():
+    body = Body("sweep_invalid_path_tnp_missing_ref")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    sweep = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [999]},
+    )
+    sweep.profile_face_index = 0
+    body.features = [base, sweep]
+
+    body._rebuild()
+
+    details = sweep.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert sweep.status == "ERROR"
+    assert details.get("code") == "tnp_ref_missing"
+    assert tnp_failure.get("category") == "missing_ref"
+    assert tnp_failure.get("reference_kind") == "edge"
+
+
+def test_rebuild_sweep_path_shape_index_mismatch_sets_tnp_mismatch_code(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("sweep_path_mismatch_tnp_code")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    sweep = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.profile_face_index = 0
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_status_mismatch", 0)
+    body.features = [base, sweep]
+
+    def _resolve_shape(_shape_id, solid, *, log_unresolved=True):
+        mismatch_edge = edge_from_index(solid, 4)
+        assert mismatch_edge is not None
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    body._rebuild()
+
+    details = sweep.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert sweep.status == "ERROR"
+    assert details.get("code") == "tnp_ref_mismatch"
+    assert tnp_failure.get("category") == "mismatch"
+    assert tnp_failure.get("reference_kind") == "edge"
 
 
 def test_compute_nsided_patch_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
@@ -897,6 +1460,142 @@ def test_compute_sweep_requires_profile_shape_index_consistency(monkeypatch):
 
     with pytest.raises(ValueError, match="inkonsistent"):
         body._compute_sweep(feature, solid)
+
+
+def test_compute_sweep_profile_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("sweep_profile_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_geo_conflict", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop_after_profile_resolution"):
+        body._compute_sweep(feature, solid)
+
+    drift_notice = body._consume_tnp_failure(feature)
+    assert feature.profile_face_index == 0
+    assert feature.profile_shape_id is not None
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "face"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_compute_sweep_profile_single_ref_pair_shape_missing_prefers_index(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("sweep_profile_single_ref_pair_shape_missing")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_shape_missing", 0)
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return None, "unresolved"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop_after_profile_resolution"):
+        body._compute_sweep(feature, solid)
+
+    drift_notice = body._consume_tnp_failure(feature)
+    assert feature.profile_face_index == 0
+    assert feature.profile_shape_id is not None
+    assert drift_notice is None
+
+
+def test_safe_operation_emits_drift_warning_for_sweep_profile_single_ref_pair_geometric_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("safe_op_sweep_profile_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_geo_conflict_safe_op", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    def _op():
+        try:
+            body._compute_sweep(feature, solid)
+        except RuntimeError as e:
+            assert "stop_after_profile_resolution" in str(e)
+            return object()
+        return object()
+
+    result, status = body._safe_operation(
+        "SweepProfileSingleRefPairGeometricConflict",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "face"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
 
 
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
@@ -1337,6 +2036,58 @@ def test_safe_operation_strict_blocks_topology_fallback(monkeypatch):
     assert result is None
     assert status == "ERROR"
     assert (body._last_operation_error_details or {}).get("code") == "fallback_blocked_strict"
+
+
+def test_safe_operation_policy_blocks_topology_fallback_without_self_heal(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+
+    body = Body("strict_topology_policy_fallback_block")
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+    )
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", False)
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", True)
+
+    result, status = body._safe_operation(
+        "StrictTopologyPolicyBlock",
+        lambda: (_ for _ in ()).throw(ValueError("primary failed")),
+        fallback_func=lambda: object(),
+        feature=feature,
+    )
+
+    assert result is None
+    assert status == "ERROR"
+    assert (body._last_operation_error_details or {}).get("code") == "fallback_blocked_strict"
+
+
+def test_safe_operation_allows_fallback_when_strict_policies_disabled(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+
+    body = Body("fallback_allowed_without_strict_policies")
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+    )
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", False)
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+
+    result, status = body._safe_operation(
+        "FallbackAllowed",
+        lambda: (_ for _ in ()).throw(ValueError("primary failed")),
+        fallback_func=lambda: object(),
+        feature=feature,
+    )
+
+    assert result is not None
+    assert status == "WARNING"
+    assert (body._last_operation_error_details or {}).get("code") == "fallback_used"
 
 
 def test_rebuild_strict_self_heal_rolls_back_invalid_feature_result(monkeypatch):

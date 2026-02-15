@@ -861,6 +861,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.reference_bodies = []  # Liste von {'edges_2d': [...], 'color': (r,g,b)}
         self.show_body_reference = True  # Toggle für Anzeige
         self.body_reference_opacity = 0.25  # Transparenz der Bodies
+        self.reference_clip_mode = "all"  # all | front | section
+        self.reference_section_thickness = 1.0
+        self.reference_depth_tol = 1e-3
         self.sketch_plane_normal = (0, 0, 1)  # Normale der Sketch-Ebene
         self.sketch_plane_origin = (0, 0, 0)  # Ursprung der Sketch-Ebene
         self.sketch_plane_x_dir = (1, 0, 0)  # X-Achse der Sketch-Ebene (3D)
@@ -1535,9 +1538,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             
                             # Liniensegmente speichern (Native Floats!)
                             for k in range(n_pts - 1):
+                                p3d_1 = segment_points[k]
+                                p3d_2 = segment_points[k + 1]
+                                d1 = self._safe_float(np.dot(p3d_1 - origin, n))
+                                d2 = self._safe_float(np.dot(p3d_2 - origin, n))
                                 edges_2d.append((
                                     self._safe_float(xs[k]), self._safe_float(ys[k]), 
-                                    self._safe_float(xs[k+1]), self._safe_float(ys[k+1])
+                                    self._safe_float(xs[k+1]), self._safe_float(ys[k+1]),
+                                    d1, d2,
                                 ))
                         
                         i += n_pts + 1
@@ -1551,9 +1559,61 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 logger.error(f"Body reference error: {e}")
         
         self.request_update()
+
+    @staticmethod
+    def _reference_edge_components(edge):
+        """Normalize edge tuple to (x1, y1, x2, y2, d1, d2)."""
+        if isinstance(edge, (tuple, list)):
+            if len(edge) >= 6:
+                return (
+                    float(edge[0]), float(edge[1]), float(edge[2]), float(edge[3]),
+                    float(edge[4]), float(edge[5]),
+                )
+            if len(edge) >= 4:
+                return float(edge[0]), float(edge[1]), float(edge[2]), float(edge[3]), 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    def _is_reference_edge_visible(self, d1: float, d2: float) -> bool:
+        mode = getattr(self, "reference_clip_mode", "all")
+        tol = max(float(getattr(self, "reference_depth_tol", 1e-3)), 1e-9)
+        band = max(float(getattr(self, "reference_section_thickness", 1.0)), tol)
+        if mode == "front":
+            return d1 >= -tol and d2 >= -tol
+        if mode == "section":
+            crossing = (d1 < -tol and d2 > tol) or (d1 > tol and d2 < -tol)
+            near_plane = abs(d1) <= band or abs(d2) <= band
+            return crossing or near_plane
+        return True
+
+    def _cycle_reference_clip_mode(self):
+        order = ("all", "front", "section")
+        try:
+            idx = order.index(self.reference_clip_mode)
+        except ValueError:
+            idx = 0
+        self._set_reference_clip_mode(order[(idx + 1) % len(order)], announce=True)
+
+    def _set_reference_clip_mode(self, mode: str, announce: bool = True):
+        if mode not in {"all", "front", "section"}:
+            return
+        self.reference_clip_mode = mode
+        if announce:
+            labels = {"all": "All", "front": "Front", "section": "Section"}
+            self.status_message.emit(
+                tr("Reference clip: {mode}").format(mode=labels.get(self.reference_clip_mode, self.reference_clip_mode))
+            )
+        self.request_update()
+
+    def _adjust_reference_section_thickness(self, delta: float):
+        val = float(getattr(self, "reference_section_thickness", 1.0)) + float(delta)
+        self.reference_section_thickness = max(0.05, min(50.0, val))
+        self.status_message.emit(
+            tr("Section band: {val} mm").format(val=f"{self.reference_section_thickness:.2f}")
+        )
+        self.request_update()
     
     def _draw_body_references(self, painter):
-        """Zeichnet Bodies als transparente Referenz im Hintergrund"""
+        """Zeichnet Bodies als transparente Referenz im Hintergrund."""
         if not self.show_body_reference or not self.reference_bodies:
             return
         
@@ -1576,13 +1636,39 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             # Farbe mit Transparenz
             r, g, b = int(color[0]*255), int(color[1]*255), int(color[2]*255)
-            alpha = int(self.body_reference_opacity * 255)
-            
-            pen = QPen(QColor(r, g, b, alpha))
-            pen.setWidth(1)
-            painter.setPen(pen)
-            
-            for x1, y1, x2, y2 in edges_2d:
+            base_alpha = int(self.body_reference_opacity * 255)
+            depth_tol = max(float(self.reference_depth_tol), 1e-9)
+            section_band = max(float(self.reference_section_thickness), depth_tol)
+
+            for edge in edges_2d:
+                x1, y1, x2, y2, z1, z2 = self._reference_edge_components(edge)
+                if not self._is_reference_edge_visible(z1, z2):
+                    continue
+
+                behind = z1 < -depth_tol and z2 < -depth_tol
+                crossing = (z1 < -depth_tol and z2 > depth_tol) or (z1 > depth_tol and z2 < -depth_tol)
+                near_plane = abs(z1) <= section_band or abs(z2) <= section_band
+
+                alpha = base_alpha
+                pen = QPen(QColor(r, g, b, alpha))
+                pen.setWidth(1)
+
+                if self.reference_clip_mode == "all":
+                    if behind:
+                        alpha = max(20, int(base_alpha * 0.35))
+                        pen.setColor(QColor(r, g, b, alpha))
+                        pen.setStyle(Qt.DashLine)
+                    elif crossing or near_plane:
+                        pen.setWidth(2)
+                elif self.reference_clip_mode == "front":
+                    if crossing or near_plane:
+                        pen.setWidth(2)
+                elif self.reference_clip_mode == "section":
+                    alpha = max(alpha, 120)
+                    pen.setColor(QColor(r, g, b, alpha))
+                    pen.setWidth(2)
+
+                painter.setPen(pen)
                 p1 = self.world_to_screen(QPointF(x1, y1))
                 p2 = self.world_to_screen(QPointF(x2, y2))
                 painter.drawLine(p1, p2)
@@ -3200,8 +3286,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.current_tool == SketchTool.SELECT:
             return False
 
-        # Only digits, minus (for negative), and decimal point
-        if not char or char not in "0123456789.-":
+        # Numeric and formula-friendly characters.
+        if not char or (char not in "0123456789.,+-*/()^" and not char.isalpha() and char != "_"):
             return False
 
         # If dim_input already visible and active, Qt handles input
@@ -3588,6 +3674,86 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return None, None
         return line, context
 
+    def _build_line_move_drag_context(self, line):
+        """
+        Kontext für direktes Verschieben einer einzelnen Linie.
+        Enthält Startkoordinaten und visuell abhängige Geometrie für Dirty-Rect-Updates.
+        """
+        if not isinstance(line, Line2D):
+            return None
+
+        points = [line.start, line.end]
+        connected_entities = []
+        seen = set()
+
+        def add_entity(entity):
+            if entity is None:
+                return
+            eid = id(entity)
+            if eid in seen:
+                return
+            seen.add(eid)
+            connected_entities.append(entity)
+
+        add_entity(line)
+        for other in self._lines_sharing_point(line.start, exclude_line=line):
+            add_entity(other)
+        for other in self._lines_sharing_point(line.end, exclude_line=line):
+            add_entity(other)
+        for circle in self.sketch.circles:
+            if circle.center in points:
+                add_entity(circle)
+        for arc in self.sketch.arcs:
+            if arc.center in points:
+                add_entity(arc)
+
+        constraints = [
+            c for c in self.sketch.constraints
+            if line in getattr(c, "entities", ())
+            or line.start in getattr(c, "entities", ())
+            or line.end in getattr(c, "entities", ())
+        ]
+
+        return {
+            "line": line,
+            "start_start_x": float(line.start.x),
+            "start_start_y": float(line.start.y),
+            "start_end_x": float(line.end.x),
+            "start_end_y": float(line.end.y),
+            "connected_entities": connected_entities,
+            "constraints": constraints,
+        }
+
+    def _resolve_direct_edit_target_line(self):
+        """
+        Ermittelt eine frei verschiebbare Linie für Direct-Edit.
+        Rechteckkanten (Resize-Modus) und Polygon-Treiberlinien werden hier bewusst
+        ausgeschlossen, um deren Spezialverhalten nicht zu überschreiben.
+        """
+        line = None
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Line2D):
+            line = hovered
+        elif len(self.selected_lines) == 1:
+            line = self.selected_lines[0]
+
+        if not isinstance(line, Line2D):
+            return None, None
+
+        # Polygon-Linien bleiben im Circle/Polygon-Direct-Edit Pfad.
+        if self._find_polygon_driver_circle_for_line(line) is not None:
+            return None, None
+
+        # Rechteckkanten nur über den dedizierten line_edge Resize-Modus bearbeiten.
+        if self._build_rectangle_edge_drag_context(line):
+            return None, None
+
+        context = self._build_line_move_drag_context(line)
+        if not context:
+            return None, None
+        return line, context
+
     def _resolve_direct_edit_target_circle(self):
         """
         Ermittelt den aktuell bearbeitbaren Kreis:
@@ -3661,6 +3827,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Hit-Test für Direct-Edit:
         - Circle/Polygon: Center- und Radius-Handle
         - Rectangle: selektierte Kante direkt ziehen
+        - Line: freie Linie per Drag verschieben
 
         Returns:
             Dict mit mode + Handle-Daten oder None.
@@ -3699,10 +3866,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     "context": context,
                 }
 
+        line, context = self._resolve_direct_edit_target_line()
+        if line is not None and context is not None:
+            dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
+            if dist <= hit_radius:
+                return {
+                    "kind": "line",
+                    "mode": "line_move",
+                    "line": line,
+                    "source": "line",
+                    "context": context,
+                }
+
         return None
 
     def _start_direct_edit_drag(self, handle_hit):
-        """Startet Circle/Polygon/Rectangle-Direct-Manipulation."""
+        """Startet Circle/Polygon/Rectangle/Line-Direct-Manipulation."""
         if not handle_hit:
             return
 
@@ -3726,7 +3905,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_line_context = None
         self._direct_edit_line_length_constraints = []
 
-        if kind == "line" and mode == "line_edge":
+        if kind == "line" and mode in ("line_edge", "line_move"):
             line = handle_hit.get("line")
             context = handle_hit.get("context")
             if line is None or context is None:
@@ -3813,6 +3992,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return True
             return False
 
+        if mode == "line_move":
+            if not line_context:
+                return False
+            line = line_context.get("line")
+            if line is None:
+                return False
+            line_points = {getattr(line, "start", None), getattr(line, "end", None)}
+            line_points.discard(None)
+            allowed_types = {
+                ConstraintType.HORIZONTAL,
+                ConstraintType.VERTICAL,
+                ConstraintType.LENGTH,
+                ConstraintType.PARALLEL,
+                ConstraintType.PERPENDICULAR,
+                ConstraintType.COLLINEAR,
+                ConstraintType.EQUAL_LENGTH,
+                ConstraintType.COINCIDENT,
+            }
+            for c in self.sketch.constraints:
+                entities = set(getattr(c, "entities", ()))
+                if line not in entities and not entities.intersection(line_points):
+                    continue
+                if c.type in allowed_types:
+                    continue
+                return True
+            return False
+
         if circle is None:
             return False
 
@@ -3892,6 +4098,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 rect = rect.united(bbox)
         return rect.adjusted(-8.0, -8.0, 8.0, 8.0)
 
+    def _line_move_dirty_rect(self, context) -> QRectF:
+        entities = context.get("connected_entities", [])
+        rect = QRectF()
+        for entity in entities:
+            bbox = self._get_entity_bbox(entity)
+            if rect.isEmpty():
+                rect = QRectF(bbox)
+            else:
+                rect = rect.united(bbox)
+        return rect.adjusted(-8.0, -8.0, 8.0, 8.0)
+
     def _update_line_edge_length_constraints(self, context, new_length: float):
         constraints = context.get("length_constraints")
         if not isinstance(constraints, list):
@@ -3953,6 +4170,43 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         else:
             self.update(dirty.toAlignedRect())
 
+    def _apply_direct_edit_line_move_drag(self, world_pos, axis_lock=False):
+        context = self._direct_edit_line_context
+        if not context:
+            return
+
+        line = context.get("line")
+        if line is None:
+            return
+
+        dirty_old = self._line_move_dirty_rect(context)
+
+        dx = world_pos.x() - self._direct_edit_start_pos.x()
+        dy = world_pos.y() - self._direct_edit_start_pos.y()
+        if axis_lock:
+            if abs(dx) >= abs(dy):
+                dy = 0.0
+            else:
+                dx = 0.0
+
+        line.start.x = context.get("start_start_x", float(line.start.x)) + dx
+        line.start.y = context.get("start_start_y", float(line.start.y)) + dy
+        line.end.x = context.get("start_end_x", float(line.end.x)) + dx
+        line.end.y = context.get("start_end_y", float(line.end.y)) + dy
+
+        self._direct_edit_drag_moved = True
+        self._maybe_live_solve_during_direct_drag()
+        if self._direct_edit_live_solve:
+            self.request_update()
+            return
+
+        dirty_new = self._line_move_dirty_rect(context)
+        dirty = dirty_old.united(dirty_new)
+        if dirty.isEmpty():
+            self.request_update()
+        else:
+            self.update(dirty.toAlignedRect())
+
     def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
         """Aktualisiert Geometrie während des Drag-Vorgangs."""
         if not self._direct_edit_dragging:
@@ -3960,6 +4214,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         if self._direct_edit_mode == "line_edge":
             self._apply_direct_edit_line_drag(world_pos, axis_lock=axis_lock)
+            return
+        if self._direct_edit_mode == "line_move":
+            self._apply_direct_edit_line_move_drag(world_pos, axis_lock=axis_lock)
             return
 
         if self._direct_edit_circle is None:
@@ -4054,6 +4311,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(f"{source.title()} moved")
             elif mode == "line_edge":
                 self.status_message.emit(tr("Rectangle size updated"))
+            elif mode == "line_move":
+                self.status_message.emit(tr("Line moved"))
 
         self.request_update()
 
@@ -4079,11 +4338,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif mode == "line_edge":
                 orientation = self._direct_hover_handle.get("orientation")
                 if orientation == "horizontal":
-                    self.setCursor(Qt.SizeVerCursor)
-                elif orientation == "vertical":
                     self.setCursor(Qt.SizeHorCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeVerCursor)
                 else:
                     self.setCursor(Qt.SizeAllCursor)
+            elif mode == "line_move":
+                self.setCursor(Qt.OpenHandCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -4107,7 +4368,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
         
         hints = {
-            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Circle/Polygon: Drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
+            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Shift+C=Clip | Line: drag to move | Circle/Polygon: drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
                 flt=self._selection_filter_label()
             ),
             SketchTool.LINE: tr("Click=Start | Tab=Length/Angle | RightClick=Finish"),
@@ -4119,6 +4380,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.POLYGON: tr("Polygon") + f" ({self.polygon_sides} " + tr("{n} sides").format(n="") + ") | Tab",
             SketchTool.ARC_3POINT: tr("[A] Arc | Click=Start→Through→End"),
             SketchTool.SLOT: tr("Slot | Click=Start"),
+            SketchTool.PROJECT: tr("Project | Hover edge + click | Shift+C=Clip mode ({mode}) | [ ]=Section band").format(
+                mode=getattr(self, "reference_clip_mode", "all")
+            ),
             SketchTool.SPLINE: tr("Spline | Click=Points | Right=Finish"),
             SketchTool.MOVE: tr("[M] Move | Click=Base→Target") + sel_info,
             SketchTool.COPY: tr("Copy") + sel_info,
@@ -4147,7 +4411,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.TEXT: tr("Text") + " | " + tr("Click=Position"),
             SketchTool.CANVAS: tr("Canvas") + " | " + tr("Click to place image reference"),
         }
-        self.status_message.emit(hints.get(self.current_tool, ""))
+        tool_hint = hints.get(self.current_tool, "")
+        nav_hint = tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+        if tool_hint:
+            self.status_message.emit(f"{tool_hint} | {nav_hint}")
+        else:
+            self.status_message.emit(nav_hint)
     
     def _show_dimension_input(self):
         fields = []
@@ -5504,11 +5773,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     elif mode == "line_edge":
                         orientation = self._direct_hover_handle.get("orientation")
                         if orientation == "horizontal":
-                            self.setCursor(Qt.SizeVerCursor)
-                        elif orientation == "vertical":
                             self.setCursor(Qt.SizeHorCursor)
+                        elif orientation == "vertical":
+                            self.setCursor(Qt.SizeVerCursor)
                         else:
                             self.setCursor(Qt.SizeAllCursor)
+                    elif mode == "line_move":
+                        self.setCursor(Qt.OpenHandCursor)
                     else:
                         self.setCursor(Qt.SizeHorCursor)
                 elif spline_elem:
@@ -5535,7 +5806,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
              pass
         
     def _find_reference_edge_at(self, pos):
-        """Findet eine Kante in den Background-Bodies"""
+        """Findet eine Kante in den Background-Bodies."""
         if not self.reference_bodies or not self.show_body_reference:
             return None
             
@@ -5566,20 +5837,34 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             dy = y - yy
             return dx * dx + dy * dy
 
+        best_edge = None
+        best_score = float("inf")
+        depth_tol = max(float(self.reference_depth_tol), 1e-9)
+
         # Suche in allen Bodies
         for body in self.reference_bodies:
             edges = body.get('edges_2d', [])
             for edge in edges:
-                x1, y1, x2, y2 = edge
+                x1, y1, x2, y2, d1, d2 = self._reference_edge_components(edge)
+                if not self._is_reference_edge_visible(d1, d2):
+                    continue
                 # Grober Bounding Box Check zuerst (Performance)
                 if px < min(x1, x2) - r or px > max(x1, x2) + r or \
                    py < min(y1, y2) - r or py > max(y1, y2) + r:
                     continue
                 
-                d2 = dist_sq(px, py, x1, y1, x2, y2)
-                if d2 < r*r:
-                    return edge
-        return None
+                dist2 = dist_sq(px, py, x1, y1, x2, y2)
+                if dist2 < r * r:
+                    side_penalty = 0.0
+                    if self.reference_clip_mode == "all":
+                        behind = d1 < -depth_tol and d2 < -depth_tol
+                        if behind:
+                            side_penalty = 0.35 * (r * r)
+                    score = dist2 + side_penalty
+                    if score < best_score:
+                        best_score = score
+                        best_edge = (x1, y1, x2, y2)
+        return best_edge
 
 
     def _find_spline_element_at(self, pos: QPointF, threshold=None):
@@ -5885,6 +6170,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.rotate_view()
             return
 
+        # Shift+C: Clip-Modus fuer Referenzkanten umschalten.
+        if key == Qt.Key_C and (mod & Qt.ShiftModifier):
+            self._cycle_reference_clip_mode()
+            return
+
+        # [ / ]: Section-Band Breite fuer Referenz-Clip.
+        if key == Qt.Key_BracketLeft:
+            self._adjust_reference_section_thickness(-0.25)
+            return
+        if key == Qt.Key_BracketRight:
+            self._adjust_reference_section_thickness(0.25)
+            return
+
         # Space: 3D-Peek (zeigt temporär 3D-Viewport)
         if key == Qt.Key_Space and not event.isAutoRepeat():
             self.peek_3d_requested.emit(True)
@@ -5915,7 +6213,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # If the active field is unlocked and user types a digit, select all first
             # so Qt will replace instead of append
             char = event.text()
-            if char and char in "0123456789.-":
+            if char and (char in "0123456789.,+-*/()^" or char.isalpha() or char == "_"):
                 active_key = self.dim_input.get_active_field_key()
                 if active_key and not self.dim_input.is_locked(active_key):
                     # Select all so the next character replaces
@@ -6691,6 +6989,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             menu.addSeparator()
 
+        if self.reference_bodies:
+            clip_labels = {"all": "All", "front": "Front only", "section": "Section band"}
+            clip_menu = menu.addMenu("Reference Clip")
+            for mode in ("all", "front", "section"):
+                action = clip_menu.addAction(clip_labels.get(mode, mode))
+                action.setCheckable(True)
+                action.setChecked(mode == self.reference_clip_mode)
+                action.triggered.connect(lambda checked=False, m=mode: self._set_reference_clip_mode(m, announce=True))
+            clip_menu.addSeparator()
+            clip_menu.addAction("Cycle Mode (Shift+C)", self._cycle_reference_clip_mode)
+            clip_menu.addAction("Band +0.25 mm (])", lambda: self._adjust_reference_section_thickness(+0.25))
+            clip_menu.addAction("Band -0.25 mm ([)", lambda: self._adjust_reference_section_thickness(-0.25))
+            menu.addSeparator()
 
         # === Standard-Aktionen ===
         if has_selection:

@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 build/
+handoffs/
 develop-eggs/
 dist/
 downloads/
@@ -27,6 +28,9 @@ nul
 .claude
 tests/
 docs/
+roadmap_gemini/
+roadmap_kimi/
+roadmap_ctp/
 
 
 # Virtual environments

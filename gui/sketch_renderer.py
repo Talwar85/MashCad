@@ -2608,53 +2608,68 @@ class SketchRendererMixin:
     def _draw_hud(self, p):
         p.setPen(QPen(QColor(150, 150, 150)))
         p.setFont(QFont("Consolas", 10))
-        p.drawText(10, self.height()-10, f"X: {self.mouse_world.x():.2f}  Y: {self.mouse_world.y():.2f}")
-        p.drawText(self.width()-100, self.height()-10, f"Zoom: {self.view_scale:.1f}x")
+        p.drawText(10, self.height() - 10, f"X: {self.mouse_world.x():.2f}  Y: {self.mouse_world.y():.2f}")
+        p.drawText(self.width() - 100, self.height() - 10, f"Zoom: {self.view_scale:.1f}x")
         tool_name = self.current_tool.name.replace('_', ' ').title()
         p.setFont(QFont("Arial", 12, QFont.Bold))
         p.setPen(QPen(self.GEO_SELECTED))
         p.drawText(12, 25, f"Tool: {tool_name}")
-        
-        # Tab-Hinweis für Zeichentools (dezent)
-        drawing_tools = [SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.CIRCLE,
-                        SketchTool.ELLIPSE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.ARC_3POINT]
+
+        hint_y = 45
+        p.setFont(QFont("Arial", 10))
+        p.setPen(QPen(QColor(110, 180, 255, 220)))
+        p.drawText(12, hint_y, tr("Navigation: Shift+R=Ansicht drehen | Space halten=3D-Peek"))
+        hint_y += 18
+
+        # Tab hint for drawing tools.
+        drawing_tools = [
+            SketchTool.LINE,
+            SketchTool.RECTANGLE,
+            SketchTool.CIRCLE,
+            SketchTool.ELLIPSE,
+            SketchTool.POLYGON,
+            SketchTool.SLOT,
+            SketchTool.ARC_3POINT,
+        ]
         if self.current_tool in drawing_tools and self.tool_step >= 1:
             p.setFont(QFont("Arial", 10))
             p.setPen(QPen(QColor(100, 180, 255, 180)))
-            p.drawText(12, 65, "💡 Tab = Maße eingeben")
-        
+            p.drawText(12, hint_y, tr("Tipp: Tab = Masse eingeben"))
+            hint_y += 18
+
         sel_count = len(self.selected_lines) + len(self.selected_circles)
         if sel_count > 0:
             p.setFont(QFont("Arial", 10))
             p.setPen(QPen(QColor(150, 150, 150)))
-            p.drawText(12, 45, f"Ausgewählt: {sel_count}")
+            p.drawText(12, hint_y, tr("Ausgewaehlt: {count}").format(count=sel_count))
+
         profile_count = len(self.closed_profiles)
         p.setFont(QFont("Arial", 10))
         if profile_count > 0:
             p.setPen(QPen(QColor(100, 200, 100)))
-            p.drawText(self.width()-180, 25, f"✓ {profile_count} geschlossene Profile")
+            p.drawText(self.width() - 180, 25, f"✓ {profile_count} geschlossene Profile")
         else:
             p.setPen(QPen(QColor(200, 150, 100)))
-            p.drawText(self.width()-160, 25, "○ Kein geschlossenes Profil")
-        
-        # Constraint-Status anzeigen
+            p.drawText(self.width() - 160, 25, "○ Kein geschlossenes Profil")
+
+        # Constraint status.
         constraint_count = len(self.sketch.constraints)
         if constraint_count > 0:
             p.setFont(QFont("Arial", 9))
             p.setPen(QPen(QColor(150, 200, 150)))
-            p.drawText(self.width()-180, 42, f"⚙ {constraint_count} Constraints")
-        
+            p.drawText(self.width() - 180, 42, f"⚙ {constraint_count} Constraints")
+
         y = 58
         p.setFont(QFont("Arial", 10))
         if self.construction_mode:
             p.setPen(QPen(self.GEO_CONSTRUCTION))
-            p.drawText(self.width()-130, y, "KONSTRUKTION (X)")
+            p.drawText(self.width() - 130, y, "KONSTRUKTION (X)")
             y += 18
         if not self.grid_snap:
             p.setPen(QPen(QColor(180, 100, 100)))
-            p.drawText(self.width()-100, y, "Grid: AUS (G)")
+            p.drawText(self.width() - 100, y, "Grid: AUS (G)")
 
-        # HUD-Nachricht zeichnen (zentraler Toast)
+        # Draw central HUD toast.
         self._draw_hud_message(p)
 
     def _draw_hud_message(self, p):
