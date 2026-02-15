@@ -1345,6 +1345,29 @@ class Body:
             if hasattr(result, 'is_valid') and not result.is_valid():
                 raise ValueError("Result geometry is invalid")
 
+            tnp_notice = self._consume_tnp_failure(feature)
+            notice_category = (
+                str((tnp_notice or {}).get("category") or "").strip().lower()
+                if isinstance(tnp_notice, dict)
+                else ""
+            )
+            if notice_category == "drift":
+                notice_reason = str(tnp_notice.get("reason") or "").strip()
+                notice_msg = "TNP-Referenzdrift erkannt; Geometric-Fallback wurde verwendet."
+                if notice_reason:
+                    notice_msg = f"{notice_msg} reason={notice_reason}"
+                self._last_operation_error = notice_msg
+                drift_hint = str(tnp_notice.get("next_action") or "").strip()
+                self._last_operation_error_details = self._build_operation_error_details(
+                    op_name=op_name,
+                    code="tnp_ref_drift",
+                    message=notice_msg,
+                    feature=feature,
+                    hint=drift_hint,
+                )
+                self._last_operation_error_details["tnp_failure"] = tnp_notice
+                return result, "WARNING"
+
             return result, "SUCCESS"
             
         except Exception as e:
@@ -6676,6 +6699,20 @@ class Body:
             if edges_after_geo > edges_before_geo:
                 recovered = edges_after_geo - edges_before_geo
                 logger.success(f"  Geometric-Fallback: {recovered}/{len(geometric_selectors)} Edges wiederhergestellt")
+                if unresolved_topology_refs and not strict_topology_fallback_policy:
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="drift",
+                        reference_kind="edge",
+                        reason=(
+                            "shape_index_mismatch_recovered_by_selector"
+                            if strict_topology_mismatch
+                            else "unresolved_topology_reference_recovered_by_selector"
+                        ),
+                        expected=max(len(valid_edge_indices), expected_shape_refs),
+                        resolved=edges_after_geo,
+                        strict=False,
+                    )
 
         def _edge_sort_key(edge_obj):
             edge_idx = _edge_index_of(edge_obj)

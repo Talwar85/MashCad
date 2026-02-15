@@ -654,6 +654,50 @@ def test_resolve_edges_tnp_allows_selector_recovery_when_strict_policy_disabled(
 
     assert len(resolved) == 1
     assert feature.edge_indices == [0]
+    drift_notice = body._consume_tnp_failure(feature)
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "edge"
+    assert (drift_notice or {}).get("strict") is False
+
+
+def test_safe_operation_emits_tnp_ref_drift_warning_after_selector_recovery(monkeypatch):
+    from build123d import Solid
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_selector_recovery_drift_warning")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    class _Selector:
+        def find_best_match(self, edges):
+            return edges[0] if edges else None
+
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(lambda cls, _data: _Selector()))
+
+    def _op():
+        resolved = body._resolve_edges_tnp(solid, feature)
+        assert len(resolved) == 1
+        return object()
+
+    result, status = body._safe_operation(
+        "EdgeSelectorRecoveryDrift",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "edge"
 
 
 def test_resolve_edges_tnp_shapeid_fallback_is_quiet(monkeypatch):
