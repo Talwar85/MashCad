@@ -3674,6 +3674,86 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return None, None
         return line, context
 
+    def _build_line_move_drag_context(self, line):
+        """
+        Kontext für direktes Verschieben einer einzelnen Linie.
+        Enthält Startkoordinaten und visuell abhängige Geometrie für Dirty-Rect-Updates.
+        """
+        if not isinstance(line, Line2D):
+            return None
+
+        points = [line.start, line.end]
+        connected_entities = []
+        seen = set()
+
+        def add_entity(entity):
+            if entity is None:
+                return
+            eid = id(entity)
+            if eid in seen:
+                return
+            seen.add(eid)
+            connected_entities.append(entity)
+
+        add_entity(line)
+        for other in self._lines_sharing_point(line.start, exclude_line=line):
+            add_entity(other)
+        for other in self._lines_sharing_point(line.end, exclude_line=line):
+            add_entity(other)
+        for circle in self.sketch.circles:
+            if circle.center in points:
+                add_entity(circle)
+        for arc in self.sketch.arcs:
+            if arc.center in points:
+                add_entity(arc)
+
+        constraints = [
+            c for c in self.sketch.constraints
+            if line in getattr(c, "entities", ())
+            or line.start in getattr(c, "entities", ())
+            or line.end in getattr(c, "entities", ())
+        ]
+
+        return {
+            "line": line,
+            "start_start_x": float(line.start.x),
+            "start_start_y": float(line.start.y),
+            "start_end_x": float(line.end.x),
+            "start_end_y": float(line.end.y),
+            "connected_entities": connected_entities,
+            "constraints": constraints,
+        }
+
+    def _resolve_direct_edit_target_line(self):
+        """
+        Ermittelt eine frei verschiebbare Linie für Direct-Edit.
+        Rechteckkanten (Resize-Modus) und Polygon-Treiberlinien werden hier bewusst
+        ausgeschlossen, um deren Spezialverhalten nicht zu überschreiben.
+        """
+        line = None
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Line2D):
+            line = hovered
+        elif len(self.selected_lines) == 1:
+            line = self.selected_lines[0]
+
+        if not isinstance(line, Line2D):
+            return None, None
+
+        # Polygon-Linien bleiben im Circle/Polygon-Direct-Edit Pfad.
+        if self._find_polygon_driver_circle_for_line(line) is not None:
+            return None, None
+
+        # Rechteckkanten nur über den dedizierten line_edge Resize-Modus bearbeiten.
+        if self._build_rectangle_edge_drag_context(line):
+            return None, None
+
+        context = self._build_line_move_drag_context(line)
+        if not context:
+            return None, None
+        return line, context
+
     def _resolve_direct_edit_target_circle(self):
         """
         Ermittelt den aktuell bearbeitbaren Kreis:
@@ -3747,6 +3827,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Hit-Test für Direct-Edit:
         - Circle/Polygon: Center- und Radius-Handle
         - Rectangle: selektierte Kante direkt ziehen
+        - Line: freie Linie per Drag verschieben
 
         Returns:
             Dict mit mode + Handle-Daten oder None.
@@ -3785,10 +3866,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     "context": context,
                 }
 
+        line, context = self._resolve_direct_edit_target_line()
+        if line is not None and context is not None:
+            dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
+            if dist <= hit_radius:
+                return {
+                    "kind": "line",
+                    "mode": "line_move",
+                    "line": line,
+                    "source": "line",
+                    "context": context,
+                }
+
         return None
 
     def _start_direct_edit_drag(self, handle_hit):
-        """Startet Circle/Polygon/Rectangle-Direct-Manipulation."""
+        """Startet Circle/Polygon/Rectangle/Line-Direct-Manipulation."""
         if not handle_hit:
             return
 
@@ -3812,7 +3905,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_line_context = None
         self._direct_edit_line_length_constraints = []
 
-        if kind == "line" and mode == "line_edge":
+        if kind == "line" and mode in ("line_edge", "line_move"):
             line = handle_hit.get("line")
             context = handle_hit.get("context")
             if line is None or context is None:
@@ -3899,6 +3992,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return True
             return False
 
+        if mode == "line_move":
+            if not line_context:
+                return False
+            line = line_context.get("line")
+            if line is None:
+                return False
+            line_points = {getattr(line, "start", None), getattr(line, "end", None)}
+            line_points.discard(None)
+            allowed_types = {
+                ConstraintType.HORIZONTAL,
+                ConstraintType.VERTICAL,
+                ConstraintType.LENGTH,
+                ConstraintType.PARALLEL,
+                ConstraintType.PERPENDICULAR,
+                ConstraintType.COLLINEAR,
+                ConstraintType.EQUAL_LENGTH,
+                ConstraintType.COINCIDENT,
+            }
+            for c in self.sketch.constraints:
+                entities = set(getattr(c, "entities", ()))
+                if line not in entities and not entities.intersection(line_points):
+                    continue
+                if c.type in allowed_types:
+                    continue
+                return True
+            return False
+
         if circle is None:
             return False
 
@@ -3978,6 +4098,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 rect = rect.united(bbox)
         return rect.adjusted(-8.0, -8.0, 8.0, 8.0)
 
+    def _line_move_dirty_rect(self, context) -> QRectF:
+        entities = context.get("connected_entities", [])
+        rect = QRectF()
+        for entity in entities:
+            bbox = self._get_entity_bbox(entity)
+            if rect.isEmpty():
+                rect = QRectF(bbox)
+            else:
+                rect = rect.united(bbox)
+        return rect.adjusted(-8.0, -8.0, 8.0, 8.0)
+
     def _update_line_edge_length_constraints(self, context, new_length: float):
         constraints = context.get("length_constraints")
         if not isinstance(constraints, list):
@@ -4039,6 +4170,43 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         else:
             self.update(dirty.toAlignedRect())
 
+    def _apply_direct_edit_line_move_drag(self, world_pos, axis_lock=False):
+        context = self._direct_edit_line_context
+        if not context:
+            return
+
+        line = context.get("line")
+        if line is None:
+            return
+
+        dirty_old = self._line_move_dirty_rect(context)
+
+        dx = world_pos.x() - self._direct_edit_start_pos.x()
+        dy = world_pos.y() - self._direct_edit_start_pos.y()
+        if axis_lock:
+            if abs(dx) >= abs(dy):
+                dy = 0.0
+            else:
+                dx = 0.0
+
+        line.start.x = context.get("start_start_x", float(line.start.x)) + dx
+        line.start.y = context.get("start_start_y", float(line.start.y)) + dy
+        line.end.x = context.get("start_end_x", float(line.end.x)) + dx
+        line.end.y = context.get("start_end_y", float(line.end.y)) + dy
+
+        self._direct_edit_drag_moved = True
+        self._maybe_live_solve_during_direct_drag()
+        if self._direct_edit_live_solve:
+            self.request_update()
+            return
+
+        dirty_new = self._line_move_dirty_rect(context)
+        dirty = dirty_old.united(dirty_new)
+        if dirty.isEmpty():
+            self.request_update()
+        else:
+            self.update(dirty.toAlignedRect())
+
     def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
         """Aktualisiert Geometrie während des Drag-Vorgangs."""
         if not self._direct_edit_dragging:
@@ -4046,6 +4214,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         if self._direct_edit_mode == "line_edge":
             self._apply_direct_edit_line_drag(world_pos, axis_lock=axis_lock)
+            return
+        if self._direct_edit_mode == "line_move":
+            self._apply_direct_edit_line_move_drag(world_pos, axis_lock=axis_lock)
             return
 
         if self._direct_edit_circle is None:
@@ -4140,6 +4311,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(f"{source.title()} moved")
             elif mode == "line_edge":
                 self.status_message.emit(tr("Rectangle size updated"))
+            elif mode == "line_move":
+                self.status_message.emit(tr("Line moved"))
 
         self.request_update()
 
@@ -4165,11 +4338,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif mode == "line_edge":
                 orientation = self._direct_hover_handle.get("orientation")
                 if orientation == "horizontal":
-                    self.setCursor(Qt.SizeVerCursor)
-                elif orientation == "vertical":
                     self.setCursor(Qt.SizeHorCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeVerCursor)
                 else:
                     self.setCursor(Qt.SizeAllCursor)
+            elif mode == "line_move":
+                self.setCursor(Qt.OpenHandCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -4193,7 +4368,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
         
         hints = {
-            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Shift+C=Clip | Circle/Polygon: Drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
+            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Shift+C=Clip | Line: drag to move | Circle/Polygon: drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
                 flt=self._selection_filter_label()
             ),
             SketchTool.LINE: tr("Click=Start | Tab=Length/Angle | RightClick=Finish"),
@@ -4236,7 +4411,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.TEXT: tr("Text") + " | " + tr("Click=Position"),
             SketchTool.CANVAS: tr("Canvas") + " | " + tr("Click to place image reference"),
         }
-        self.status_message.emit(hints.get(self.current_tool, ""))
+        tool_hint = hints.get(self.current_tool, "")
+        nav_hint = tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+        if tool_hint:
+            self.status_message.emit(f"{tool_hint} | {nav_hint}")
+        else:
+            self.status_message.emit(nav_hint)
     
     def _show_dimension_input(self):
         fields = []
@@ -5593,11 +5773,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     elif mode == "line_edge":
                         orientation = self._direct_hover_handle.get("orientation")
                         if orientation == "horizontal":
-                            self.setCursor(Qt.SizeVerCursor)
-                        elif orientation == "vertical":
                             self.setCursor(Qt.SizeHorCursor)
+                        elif orientation == "vertical":
+                            self.setCursor(Qt.SizeVerCursor)
                         else:
                             self.setCursor(Qt.SizeAllCursor)
+                    elif mode == "line_move":
+                        self.setCursor(Qt.OpenHandCursor)
                     else:
                         self.setCursor(Qt.SizeHorCursor)
                 elif spline_elem:

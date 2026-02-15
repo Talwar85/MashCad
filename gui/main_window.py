@@ -2996,6 +2996,15 @@ class MainWindow(QMainWindow):
             # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("2D")
+            if prev_mode != mode:
+                nav_hint = tr("Sketch-Navigation: Shift+R dreht Ansicht | Space halten fuer 3D-Peek")
+                self.statusBar().showMessage(nav_hint, 7000)
+                if hasattr(self, "sketch_editor") and hasattr(self.sketch_editor, "show_message"):
+                    self.sketch_editor.show_message(
+                        tr("Shift+R Ansicht drehen | Space halten fuer 3D-Peek"),
+                        duration=2600,
+                        color=QColor(110, 180, 255),
+                    )
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
