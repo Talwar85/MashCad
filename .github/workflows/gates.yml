@@ -1,0 +1,221 @@
+# MashCAD Gate Runner CI (W2)
+# Runs Core-Gate, UI-Gate, Hygiene-Gate, and Evidence Generation on push and PR
+# W2: Automated evidence generation + artifact upload
+
+name: Gates
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**' ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Core-Gate: Must always pass
+  core-gate:
+    name: Core-Gate
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        activate-environment: cad_env
+        python-version: '3.11'
+        auto-activate-base: false
+    
+    - name: Install dependencies
+      shell: powershell
+      run: |
+        conda install -y pytest
+        pip install -r requirements.txt
+    
+    - name: Run Core-Gate
+      shell: powershell
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/gate_core.ps1
+      continue-on-error: false  # Core-Gate must pass
+    
+    - name: Upload Core-Gate Evidence
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: core-gate-evidence
+        path: |
+          test_output*.txt
+
+  # PI-010 Gate: Parametric Reference Modelset
+  pi010-gate:
+    name: PI-010 Parametric Reference
+    runs-on: windows-latest
+    needs: core-gate
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        activate-environment: cad_env
+        python-version: '3.11'
+        auto-activate-base: false
+    
+    - name: Install dependencies
+      shell: powershell
+      run: |
+        conda install -y pytest
+        pip install -r requirements.txt
+    
+    - name: Run PI-010 Gate
+      shell: powershell
+      run: |
+        conda run -n cad_env python -m pytest -q test/test_parametric_reference_modelset.py
+
+  # Hygiene-Gate: Warning only (non-blocking)
+  hygiene-gate:
+    name: Hygiene-Gate
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Hygiene Check
+      shell: powershell
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/hygiene_check.ps1
+      continue-on-error: true  # Hygiene is warning-only by default
+    
+    # Optional: Strict mode for release branches
+    - name: Run Hygiene Check (Strict Mode)
+      if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+      shell: powershell
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/hygiene_check.ps1 -FailOnUntracked
+      continue-on-error: false  # Enforce hygiene on main/release
+
+  # Evidence Generation Job (W2)
+  evidence:
+    name: Generate Evidence
+    runs-on: windows-latest
+    needs: [core-gate, pi010-gate]
+    if: always()  # Generate evidence even if gates fail
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          activate-environment: cad_env
+          python-version: '3.11'
+          auto-activate-base: false
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          conda install -y pytest
+
+      - name: Generate Gate Evidence (W2)
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\generate_gate_evidence.ps1
+
+      - name: Upload Evidence Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-evidence
+          path: |
+            roadmap_ctp/QA_EVIDENCE_W2_*
+          retention-days: 30
+
+      - name: Generate Step Summary
+        shell: powershell
+        run: |
+          $evidence = Get-ChildItem roadmap_ctp/QA_EVIDENCE_W2_*.md | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($evidence) {
+            $content = Get-Content $evidence -Raw
+            $content | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          }
+
+  # UI-Gate: Currently blocked, run for diagnostics only
+  ui-gate:
+    name: UI-Gate (Diagnostic)
+    runs-on: windows-latest
+    needs: core-gate
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        activate-environment: cad_env
+        python-version: '3.11'
+        auto-activate-base: false
+    
+    - name: Install dependencies
+      shell: powershell
+      run: |
+        conda install -y pytest
+        pip install -r requirements.txt
+        pip install PySide6  # UI dependencies
+    
+    - name: Run UI-Gate
+      shell: powershell
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/gate_ui.ps1
+      continue-on-error: true  # UI currently blocked by tr() error
+    
+    - name: Report UI Blocker
+      if: failure()
+      run: |
+        echo "UI-Gate blocked - see evidence in artifacts"
+        echo "Known blocker: NameError 'tr' not defined in gui/widgets/status_bar.py:126"
+
+  # Summary Job (W2: Enhanced with Evidence)
+  gate-summary:
+    name: Gate Summary
+    runs-on: windows-latest
+    needs: [core-gate, pi010-gate, hygiene-gate, ui-gate, evidence]
+    if: always()
+    
+    steps:
+    - name: Summary
+      run: |
+        echo "========================================"
+        echo "Gate Run Summary"
+        echo "========================================"
+        echo "Core-Gate: ${{ needs.core-gate.result }}"
+        echo "PI-010-Gate: ${{ needs.pi010-gate.result }}"
+        echo "Hygiene-Gate: ${{ needs.hygiene-gate.result }}"
+        echo "UI-Gate: ${{ needs.ui-gate.result }}"
+        echo "Evidence: ${{ needs.evidence.result }}"
+        echo "========================================"
+    
+    - name: Check Overall Status
+      if: needs.core-gate.result != 'success'
+      run: |
+        echo "Core-Gate failed - blocking merge"
+        exit 1

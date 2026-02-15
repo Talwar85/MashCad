@@ -257,6 +257,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # Phase 4: Globales Mouse-Event Throttling
         self._last_mouse_move_time = 0
         self._mouse_move_interval = 0.016  # ~60 FPS max (16ms)
+        self._right_click_start_pos = None
+        self._right_click_start_global_pos = None
+        self._right_click_start_time = 0.0
 
         # PERFORMANCE: Reusable cell picker (avoid creating new picker per hover)
         self._body_cell_picker = None  # Lazy init on first use
@@ -269,6 +272,11 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # PERFORMANCE: Hover pick cache (avoid redundant picks within same frame)
         self._hover_pick_cache = None  # (timestamp, x, y, body_id, cell_id, normal, position)
         self._hover_pick_cache_ttl = 0.008  # 8ms cache validity (~120 FPS worth)
+
+        # Route direct viewport events through the same eventFilter logic.
+        # Must be installed after state initialization because style/focus setup
+        # can fire early events.
+        self.installEventFilter(self)
 
     def cancel_drag(self):
         """
@@ -524,6 +532,8 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             )
         else:
             self.remove_actor(f"hover_{face_id}")
+
+
     
     def _setup_plotter(self):
         self._drag_screen_vector = np.array([1.0, 0.0])
@@ -2253,7 +2263,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     # ==================== EVENT FILTER ====================
     def eventFilter(self, obj, event):
         if not HAS_PYVISTA: return False
-        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtCore import QEvent, Qt, QPoint
         from PySide6.QtWidgets import QApplication
 
         # Phase 4: Globales Mouse-Move Throttling (max 60 FPS)
@@ -2262,6 +2272,94 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             if current_time - self._last_mouse_move_time < self._mouse_move_interval:
                 return False  # Event ignorieren, zu schnell
             self._last_mouse_move_time = current_time
+
+        def _event_global_point(evt):
+            if hasattr(evt, "globalPosition"):
+                gp = evt.globalPosition()
+                return gp.toPoint() if hasattr(gp, "toPoint") else QPoint(int(gp.x()), int(gp.y()))
+            if hasattr(evt, "globalPos"):
+                return evt.globalPos()
+            if hasattr(evt, "pos") and hasattr(obj, "mapToGlobal"):
+                return obj.mapToGlobal(evt.pos())
+            return QPoint(0, 0)
+
+        # P0-2: Right-Click Abort & Background Clear (Welle 6 Consolidated)
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
+            # 1. Abort active Drag/Operation immediately on Press
+            if self.is_dragging or self._offset_plane_dragging or self._split_dragging:
+                self.cancel_drag()
+                return True # Consume event (prevent Zoom/Menu start)
+            
+            if self.extrude_mode:
+                self.extrude_cancelled.emit()
+                return True
+                
+            if self.point_to_point_mode:
+                self.cancel_point_to_point_mode()
+                return True
+            
+            # Record state for potential "Click on Background" detection (on Release)
+            self._right_click_start_pos = event.pos() if hasattr(event, 'pos') else QPoint(0,0)
+            self._right_click_start_global_pos = _event_global_point(event)
+            self._right_click_start_time = time.time()
+
+            # Fast-path: If right-press is already on background, clear immediately.
+            # This keeps deselect behavior reliable even when release events are
+            # absorbed by VTK/Qt interaction handling.
+            try:
+                if hasattr(self, "pick"):
+                    local_pos = event.position() if hasattr(event, "position") else event.pos()
+                    x, y = int(local_pos.x()), int(local_pos.y())
+                    picked_id = self.pick(x, y, selection_filter=self.active_selection_filter)
+                    if picked_id == -1:
+                        self.clear_selection()
+                        self.background_clicked.emit()
+                        self._right_click_start_pos = None
+                        self._right_click_start_global_pos = None
+                        self._right_click_start_time = 0.0
+                        return True
+            except Exception:
+                pass
+            
+            # Consume press and defer all right-click decisions to release.
+            return True
+
+        elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.RightButton:
+            # 2. Handle "Click on Background" -> Deselect
+            if self._right_click_start_global_pos is not None:
+                current_time = time.time()
+                pos = event.pos() if hasattr(event, 'pos') else QPoint(0,0)
+                global_pos = _event_global_point(event)
+                dist = (global_pos - self._right_click_start_global_pos).manhattanLength()
+                duration = current_time - self._right_click_start_time
+                
+                self._right_click_start_pos = None # Reset
+                self._right_click_start_global_pos = None
+                self._right_click_start_time = 0.0
+                
+                # Thresholds for "Click": < 5 pixels move, < 0.3s duration
+                if dist < 5 and duration < 0.3:
+                    # It was a click!
+                    if hasattr(self, "plotter") and hasattr(self.plotter, "interactor"):
+                        local_pick_pos = self.plotter.interactor.mapFromGlobal(global_pos)
+                    else:
+                        local_pick_pos = pos
+                    x, y = int(local_pick_pos.x()), int(local_pick_pos.y())
+                    
+                    try:
+                        # Use pick() from PickingMixin
+                        if hasattr(self, 'pick'):
+                            picked_id = self.pick(x, y, selection_filter=self.active_selection_filter)
+                            if picked_id == -1:
+                                # Background clicked -> Clear Selection
+                                self.clear_selection()
+                                self.background_clicked.emit()
+                                return True # Consume (no context menu)
+                            self._show_context_menu(pos)
+                            return True
+                    except Exception:
+                        pass
+
 
         # --- OFFSET PLANE MODE (Muss VOR Transform Mode geprüft werden) ---
         if self.offset_plane_mode:
@@ -2946,7 +3044,12 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         # --- MOUSE PRESS (Right) - Context Menu ---
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
             # Nur wenn kein aktiver Modus (außer Extrude, der hat eigenes Handling)
-            if not self.extrude_mode and not self.measure_mode and not self.point_to_point_mode:
+            if (
+                not self.extrude_mode
+                and not self.measure_mode
+                and not self.point_to_point_mode
+                and self._right_click_start_pos is None
+            ):
                  pos = event.position() if hasattr(event, 'position') else event.pos()
                  self._show_context_menu(pos)
                  return True

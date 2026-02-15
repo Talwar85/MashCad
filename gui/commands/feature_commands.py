@@ -5,8 +5,11 @@ Implements QUndoCommand for undoable feature operations (Extrude, Fillet, etc.)
 
 import copy
 
+
 from PySide6.QtGui import QUndoCommand
 from loguru import logger
+
+from i18n import tr
 
 
 def _solid_signature_safe(body) -> dict:
@@ -236,6 +239,12 @@ class AddFeatureCommand(QUndoCommand):
             if regressed:
                 logger.error(f"Redo rollback ({self.feature.name}): {reason}")
                 _restore_body_state(self.body, tx_state)
+                if hasattr(self.main_window, "show_notification"):
+                    self.main_window.show_notification(
+                        tr("Rollback"),
+                        f"{tr('Operation prevented')}: {reason}",
+                        level="warning"
+                    )
 
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
@@ -252,6 +261,12 @@ class AddFeatureCommand(QUndoCommand):
         except Exception as e:
             logger.error(f"Redo failed ({self.feature.name}): {e}")
             _restore_body_state(self.body, tx_state)
+            if hasattr(self.main_window, "show_notification"):
+                self.main_window.show_notification(
+                    tr("Operation Failed"),
+                    str(e),
+                    level="error"
+                )
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
 
@@ -331,6 +346,12 @@ class DeleteFeatureCommand(QUndoCommand):
             if regressed:
                 logger.error(f"Delete redo rollback ({self.feature.name}): {reason}")
                 _restore_body_state(self.body, tx_state)
+                if hasattr(self.main_window, "show_notification"):
+                    self.main_window.show_notification(
+                        tr("Rollback"),
+                        f"{tr('Deletion prevented')}: {reason}",
+                        level="warning"
+                    )
 
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
@@ -397,6 +418,12 @@ class EditFeatureCommand(QUndoCommand):
                 logger.error(f"Edit redo rollback ({self.feature.name}): {reason}")
                 self._apply_params(self.old_params)
                 _restore_body_state(self.body, tx_state)
+                if hasattr(self.main_window, "show_notification"):
+                    self.main_window.show_notification(
+                        tr("Rollback"),
+                        f"{tr('Change prevented')}: {reason}",
+                        level="warning"
+                    )
 
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
@@ -404,6 +431,12 @@ class EditFeatureCommand(QUndoCommand):
             logger.error(f"Edit redo failed ({self.feature.name}): {e}")
             self._apply_params(self.old_params)
             _restore_body_state(self.body, tx_state)
+            if hasattr(self.main_window, "show_notification"):
+                self.main_window.show_notification(
+                    tr("Update Failed"),
+                    str(e),
+                    level="error"
+                )
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
 

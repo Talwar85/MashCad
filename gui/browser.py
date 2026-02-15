@@ -48,8 +48,14 @@ def _format_feature_status_tooltip(status_msg: str, status: str = "", status_det
         base_msg = str(details.get("message", "") or "").strip()
 
     lines = []
+    # W5: Drift UX
+    is_drift = details.get("code") == "tnp_ref_drift" or details.get("tnp_failure", {}).get("category") == "drift"
+
     if status == "ERROR":
-        lines.append(tr("Error"))
+        if is_drift:
+            lines.append(tr("Warning (Recoverable)"))
+        else:
+            lines.append(tr("Error"))
     elif status == "WARNING":
         lines.append(tr("Warning"))
 
@@ -82,8 +88,21 @@ def _format_feature_status_tooltip(status_msg: str, status: str = "", status_det
         lines.append(f"{tr('Hint')}: {hint}")
 
     code = str(details.get("code", "") or "").strip()
-    if code:
+    
+    # W3: TNP Category 
+    tnp_failure = details.get("tnp_failure", {})
+    category = tnp_failure.get("category")
+    if category:
+        cat_map = {
+            "missing_ref": tr("Referenz verloren"),
+            "mismatch": tr("Formkonflikt"),
+            "drift": tr("Geometrie-Drift"),
+        }
+        cat_str = cat_map.get(category, category)
         lines.append("")
+        lines.append(f"[{cat_str}]")
+
+    if code:
         lines.append(f"{tr('Code')}: {code}")
 
     return "\n".join(lines)
@@ -538,7 +557,13 @@ class ProjectBrowser(QFrame):
                     prefix = "↳" if not rolled_back else "⊘"
                     color = "#777" if not rolled_back else "#444"
                     if hasattr(f, 'status') and f.status == "ERROR":
-                        color = "#cc5555"
+                        # W5: Drift UX - Treat as recoverable warning
+                        details = getattr(f, "status_details", {}) or {}
+                        tnp = details.get("tnp_failure", {})
+                        if details.get("code") == "tnp_ref_drift" or tnp.get("category") == "drift":
+                            color = "#e0a030"  # Orange for drift/recoverable
+                        else:
+                            color = "#cc5555"  # Red for hard errors
 
                     # Geometry Badge: zeigt Volume-Delta und Edge-Erfolgsrate
                     badge = ""

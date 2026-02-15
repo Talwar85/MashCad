@@ -6,6 +6,7 @@ Moderne Statusleiste nach Figma-Design mit Koordinaten, Tool-Info, Grid und Zoom
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Qt
 from gui.design_tokens import DesignTokens
+from i18n import tr
 
 
 class MashCadStatusBar(QWidget):
@@ -118,6 +119,23 @@ class MashCadStatusBar(QWidget):
             font-family: 'Consolas', monospace;
         """)
         layout.addWidget(self.fps_badge)
+
+        layout.addWidget(self._create_separator())
+        
+        # Strict Mode Badge (W3)
+        self.strict_badge = QLabel("STRICT")
+        self.strict_badge.setToolTip(tr("Strict Topology Fallback: No geometric guessing."))
+        self.strict_badge.setStyleSheet(f"""
+            background: {DesignTokens.COLOR_BG_ELEVATED.name()};
+            border: 1px solid {DesignTokens.COLOR_PRIMARY.name()};
+            border-radius: 4px;
+            padding: 2px 6px;
+            color: {DesignTokens.COLOR_PRIMARY.name()};
+            font-size: 10px;
+            font-weight: bold;
+        """)
+        self.strict_badge.setVisible(False)
+        layout.addWidget(self.strict_badge)
 
     def _create_separator(self):
         """Erstellt einen vertikalen Separator."""
@@ -244,3 +262,7 @@ class MashCadStatusBar(QWidget):
                 padding: 2px 8px;
                 color: #eab308;  /* Gelb für Under-Constrained */
             """)
+
+    def set_strict_mode(self, active: bool):
+        """Enable/Disable Strict Mode badge."""
+        self.strict_badge.setVisible(active)

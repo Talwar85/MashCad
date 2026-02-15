@@ -432,6 +432,10 @@ class MainWindow(QMainWindow):
         from gui.viewport.render_queue import RenderQueue
         RenderQueue.register_fps_callback(self.mashcad_status_bar.update_fps)
 
+        # W3: Strict Mode Indicator
+        if is_enabled("strict_topology_fallback_policy"):
+            self.mashcad_status_bar.set_strict_mode(True)
+
         # Extrude Input Panel (immer sichtbar während Extrude-Modus)
         self.extrude_panel = ExtrudeInputPanel(self)
         self.extrude_panel.height_changed.connect(self._on_extrude_panel_height_changed)
