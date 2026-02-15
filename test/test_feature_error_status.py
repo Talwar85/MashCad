@@ -37,7 +37,13 @@ def test_hole_invalid_diameter_sets_feature_error_message():
 
     assert hole.status == "ERROR"
     assert "Durchmesser" in (hole.status_message or "")
-    assert (hole.status_details or {}).get("code") == "operation_failed"
+    details = hole.status_details or {}
+    assert details.get("code") == "operation_failed"
+    assert details.get("schema") == "error_envelope_v1"
+    assert details.get("operation")
+    assert details.get("message")
+    assert (details.get("feature") or {}).get("class") == "HoleFeature"
+    assert details.get("next_action")
 
 
 def test_draft_invalid_pull_direction_sets_feature_error_message():
@@ -51,7 +57,11 @@ def test_draft_invalid_pull_direction_sets_feature_error_message():
 
     assert draft.status == "ERROR"
     assert "Pull-Richtung" in (draft.status_message or "")
-    assert (draft.status_details or {}).get("code") == "operation_failed"
+    details = draft.status_details or {}
+    assert details.get("code") == "operation_failed"
+    assert details.get("schema") == "error_envelope_v1"
+    assert (details.get("feature") or {}).get("class") == "DraftFeature"
+    assert details.get("next_action")
 
 
 def test_hole_tnp_error_message_contains_reference_diagnostics():

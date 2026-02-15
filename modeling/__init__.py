@@ -1216,16 +1216,41 @@ class Body:
         hint: str = "",
         fallback_error: str = "",
     ) -> dict:
+        def _default_next_action(error_code: str) -> str:
+            defaults = {
+                "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
+                "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
+                "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
+                "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
+                "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
+                "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
+                "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
+                "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
+            }
+            return defaults.get(
+                error_code,
+                "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
+            )
+
         details = {
+            "schema": "error_envelope_v1",
             "code": code,
             "operation": op_name,
             "message": message,
         }
+        if feature is not None:
+            details["feature"] = {
+                "id": getattr(feature, "id", ""),
+                "name": getattr(feature, "name", ""),
+                "class": feature.__class__.__name__,
+            }
         refs = self._collect_feature_reference_payload(feature)
         if refs:
             details["refs"] = refs
-        if hint:
-            details["hint"] = hint
+        next_action = hint or _default_next_action(code)
+        if next_action:
+            details["hint"] = next_action
+            details["next_action"] = next_action
         if fallback_error:
             details["fallback_error"] = fallback_error
         return details
