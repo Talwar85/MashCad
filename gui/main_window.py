@@ -982,6 +982,14 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewport_3d, 'split_drag_changed'):
             self.viewport_3d.split_drag_changed.connect(self._on_split_drag)
 
+        # NEU: Background Click -> Deselect
+        if hasattr(self.viewport_3d, 'background_clicked'):
+            self.viewport_3d.background_clicked.connect(self._on_background_clicked)
+            
+        # NEU: Context Menu -> Create Sketch
+        if hasattr(self.viewport_3d, 'create_sketch_requested'):
+            self.viewport_3d.create_sketch_requested.connect(self._on_create_sketch_requested)
+
     # --- DEBOUNCED UPDATE LOGIC ---
     def _trigger_viewport_update(self):
         """Startet den Timer für das Update (Debounce)"""
@@ -2694,8 +2702,11 @@ class MainWindow(QMainWindow):
                     self.viewport_3d.show_transform_gizmo(body_ids[0], force_refresh=False)
 
             # UI aufräumen
+            # UI aufräumen
+            # FIX: Panel NICHT verstecken, damit man mehrere Transforms nacheinander machen kann
             if hasattr(self, 'transform_panel'):
-                self.transform_panel.hide()
+                # self.transform_panel.hide() # Keep open
+                pass
 
             if success_count > 0:
                 logger.success(f"Transform-Feature auf {success_count} Bodies angewendet (Undo: Ctrl+Z)")
@@ -11745,3 +11756,48 @@ class MainWindow(QMainWindow):
                 self.browser.refresh()
             else:
                 QMessageBox.warning(self, "Fehler", "Operation fehlgeschlagen (Geometrie Fehler).")
+    def _on_background_clicked(self):
+        """Handler for background click in Viewport -> Deselect Body"""
+        # 1. Clear Transform UI & Selection
+        if self._selected_body_for_transform:
+             self._selected_body_for_transform = None
+             self._hide_transform_ui()
+        
+        # 2. Unhighlight Body in Viewport
+        if hasattr(self, '_highlighted_body_id') and self._highlighted_body_id:
+              self.viewport_3d.unhighlight_body(self._highlighted_body_id)
+              self._highlighted_body_id = None
+        
+        # 3. Clear Property Panel
+        self.body_properties.clear()
+        
+        # 4. Clear Browser Selection
+        if hasattr(self, 'browser') and hasattr(self.browser, 'tree'):
+            self.browser.tree.clearSelection()
+            
+        self.statusBar().showMessage("Ready")
+
+    def _on_create_sketch_requested(self, face_id: int):
+        """Handler for Context Menu -> Create Sketch"""
+        # Access face from viewport detector
+        # Note: SketchEditor usually expects a selected face object
+        
+        if not hasattr(self.viewport_3d, 'detector') or not self.viewport_3d.detector:
+            return
+
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if face:
+             # Start Sketch Mode
+             if hasattr(self, 'sketch_editor'):
+                 # Ensure we are not in another mode
+                 if hasattr(self, '_end_current_mode'):
+                     self._end_current_mode()
+                     
+                 # Start Sketch
+                 self.sketch_editor.start_sketch(face)
+                 
+                 # Show Tool Panel
+                 if hasattr(self, 'tool_panel'):
+                     self.tool_panel.show_sketch_tools()
+                     
+                 logger.info(f"Sketch created on Face {face_id}")

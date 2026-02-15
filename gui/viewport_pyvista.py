@@ -107,7 +107,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
     draft_face_clicked = Signal(str, int, tuple, tuple)  # body_id, cell_id, normal, position
     split_body_clicked = Signal(str)  # body_id
     split_drag_changed = Signal(float)  # position during drag
+    split_drag_changed = Signal(float)  # position during drag
     extrude_cancelled = Signal()  # Rechtsklick/Esc bricht Extrude ab
+    background_clicked = Signal()  # Klick ins Leere (Deselect)
+    create_sketch_requested = Signal(int)  # face_id für Sketch-Erstellung
 
 
     def __init__(self, parent=None):
@@ -2873,8 +2876,25 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.face_selected.emit(hit_id)
                 return True
             else:
-                # Kein Face getroffen - im Extrude-Mode State sauber halten
-                pass
+                # Kein Face getroffen -> Background Click
+                if not is_multi:
+                    # 1. Face Selection clearen
+                    if self.selected_face_ids:
+                        self.selected_face_ids.clear()
+                        self._draw_selectable_faces_from_detector()
+                        self.face_selected.emit(-1)
+                    
+                    # 2. Body Selection clearen (via Signal)
+                    self.background_clicked.emit()
+
+
+        # --- MOUSE PRESS (Right) - Context Menu ---
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
+            # Nur wenn kein aktiver Modus (außer Extrude, der hat eigenes Handling)
+            if not self.extrude_mode and not self.measure_mode and not self.point_to_point_mode:
+                 pos = event.position() if hasattr(event, 'position') else event.pos()
+                 self._show_context_menu(pos)
+                 return True
 
         # --- MOUSE RELEASE ---
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
@@ -6590,6 +6610,43 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self.hide_transform_gizmo()
 
     def update(self): self.plotter.update(); super().update()
+
+    def _show_context_menu(self, pos):
+        """Zeigt Kontext-Menü an der Mausposition."""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        # Picken was unter der Maus ist (Face oder Body)
+        x, y = int(pos.x()), int(pos.y())
+        hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
+        
+        menu = QMenu(self)
+        
+        # 1. Sketch auf Face erstellen
+        if hit_id != -1:
+             # Finde Face
+             if hasattr(self, 'detector') and self.detector and self.detector.selection_faces:
+                 face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
+                 if face:
+                     action = QAction("✏️ Create Sketch", self)
+                     # Lambda muss Argument binden damit es nicht überschrieben wird
+                     action.triggered.connect(lambda chk=False, fid=hit_id: self.create_sketch_requested.emit(fid))
+                     menu.addAction(action)
+                     
+                     menu.addSeparator()
+
+        # 2. View Operations (Immer verfügbar)
+        action_home = QAction("🏠 Home View", self)
+        action_home.triggered.connect(lambda: self.view_iso())
+        menu.addAction(action_home)
+
+        action_fit = QAction("🔍 Fit View", self)
+        action_fit.triggered.connect(lambda: self.view_fit())
+        menu.addAction(action_fit)
+
+        # Show Menu
+        global_pos = self.mapToGlobal(pos.toPoint())
+        menu.exec(global_pos)
 
 
 def create_viewport(parent=None):
