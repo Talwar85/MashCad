@@ -1182,6 +1182,92 @@ def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     assert wire is None
 
 
+def test_sweep_resolve_path_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index, edge_index_of
+
+    doc = Document()
+    body = Body("sweep_path_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_geo_conflict", 0)
+
+    mismatch_edge = edge_from_index(solid, 4)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+    drift_notice = body._consume_tnp_failure(sweep)
+
+    assert wire is not None
+    wire_edges = list(wire.edges())
+    assert len(wire_edges) == 1
+    assert edge_index_of(solid, wire_edges[0]) == 0
+    assert sweep.path_shape_id is not None
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "edge"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_safe_operation_emits_drift_warning_for_sweep_path_single_ref_pair_geometric_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index, edge_index_of
+
+    doc = Document()
+    body = Body("safe_op_sweep_path_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_geo_conflict_safe_op", 0)
+
+    mismatch_edge = edge_from_index(solid, 4)
+    assert mismatch_edge is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_edge.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    def _op():
+        wire = body._resolve_path(sweep.path_data, solid, sweep)
+        assert wire is not None
+        wire_edges = list(wire.edges())
+        assert len(wire_edges) == 1
+        assert edge_index_of(solid, wire_edges[0]) == 0
+        return object()
+
+    result, status = body._safe_operation(
+        "SweepPathSingleRefPairGeometricConflict",
+        _op,
+        feature=sweep,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "edge"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
 def test_rebuild_sweep_invalid_path_sets_tnp_missing_ref_error_code():
     body = Body("sweep_invalid_path_tnp_missing_ref")
     base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)

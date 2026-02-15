@@ -3641,11 +3641,13 @@ class Body:
                         logger.debug(f"Sweep: Topology-Index-PfadauflÃ¶sung fehlgeschlagen: {e}")
 
                 resolved_shape_edge = None
+                path_shape_resolution_method = ""
                 if feature and feature.path_shape_id and shape_service:
                     try:
                         resolved_ocp, method = shape_service.resolve_shape_with_method(
                             feature.path_shape_id, source_solid
                         )
+                        path_shape_resolution_method = str(method or "").strip().lower()
                         if resolved_ocp is not None:
                             if all_edges:
                                 resolved_shape_edge = self._find_matching_edge_in_solid(
@@ -3659,6 +3661,11 @@ class Body:
                         logger.debug(f"Sweep: Path-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
                 strict_path_mismatch = False
+                single_path_ref_pair = bool(
+                    feature
+                    and getattr(feature, "path_shape_id", None) is not None
+                    and len(edge_indices) == 1
+                )
                 if edge_indices and feature and getattr(feature, "path_shape_id", None) is not None:
                     if not resolved_index_edges or resolved_shape_edge is None:
                         strict_path_mismatch = True
@@ -3667,6 +3674,45 @@ class Body:
                             self._is_same_edge(idx_edge, resolved_shape_edge)
                             for idx_edge in resolved_index_edges
                         )
+
+                if strict_path_mismatch and single_path_ref_pair:
+                    index_resolved = bool(resolved_index_edges)
+                    shape_resolved = resolved_shape_edge is not None
+                    pair_conflict = False
+                    if index_resolved and shape_resolved:
+                        pair_conflict = not any(
+                            self._is_same_edge(idx_edge, resolved_shape_edge)
+                            for idx_edge in resolved_index_edges
+                        )
+                    weak_shape_resolution = path_shape_resolution_method in {"geometric", "geometry_hash"}
+
+                    if index_resolved and (not shape_resolved):
+                        strict_path_mismatch = False
+                        if feature is not None:
+                            feature.path_shape_id = None
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning(
+                                "Sweep: single_ref_pair path ShapeID nicht aufloesbar -> "
+                                "verwende index-basierten Pfad."
+                            )
+                    elif index_resolved and shape_resolved and pair_conflict and weak_shape_resolution:
+                        strict_path_mismatch = False
+                        if feature is not None:
+                            feature.path_shape_id = None
+                        self._record_tnp_failure(
+                            feature=feature,
+                            category="drift",
+                            reference_kind="edge",
+                            reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                            expected=max(1, len(edge_indices)),
+                            resolved=1,
+                            strict=False,
+                        )
+                        if is_enabled("tnp_debug_logging"):
+                            logger.warning(
+                                "Sweep: single_ref_pair Path Shape/Index-Konflikt mit schwacher "
+                                "Shape-Aufloesung (geometric/hash) -> index-basierten Pfad bevorzugt."
+                            )
 
                 if strict_path_mismatch:
                     logger.warning(
