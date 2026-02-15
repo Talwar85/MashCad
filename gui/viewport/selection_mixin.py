@@ -68,10 +68,9 @@ class SelectionMixin:
 
         DEPRECATED: Bitte selected_face_ids verwenden.
         """
-        # Gibt selected_face_ids zurück für Kompatibilität
-        # Note: Dies ist ein Mapping von IDs auf sich selbst
-        # Für echten Index-basierten Zugriff müsste eine Mapping-Tabelle her
-        return self.selected_face_ids
+        # Legacy-First: Falls ein legacy-Set aktiv gepflegt wird (z. B. String-IDs
+        # aus älteren UI-Tests), dieses zurückgeben. Sonst auf TNP-v4 IDs fallen.
+        return self._legacy_selected_faces if self._legacy_selected_faces else self.selected_face_ids
 
     @selected_faces.setter
     def selected_faces(self, value: Any) -> None:
@@ -80,17 +79,21 @@ class SelectionMixin:
 
         DEPRECATED: Bitte selected_face_ids verwenden.
         """
-        # Konvertiere verschiedene Input-Typen zu Set[int]
+        # Konvertiere verschiedene Input-Typen zu Set
         if isinstance(value, set):
-            self.selected_face_ids = value
+            values = set(value)
         elif isinstance(value, (list, tuple)):
-            self.selected_face_ids = set(value)
+            values = set(value)
         else:
             logger.warning(f"[SelectionMixin] Unexpected type for selected_faces: {type(value)}")
-            self.selected_face_ids = set()
+            values = set()
 
-        # Sync für legacy compatibility
-        self._legacy_selected_faces = self.selected_face_ids.copy()
+        self._legacy_selected_faces = set(values)
+
+        # Nur numerische IDs in den TNP-v4 State spiegeln.
+        # Nicht-numerische Legacy-Werte (z. B. "face_1") bleiben separat erhalten.
+        if all(isinstance(v, int) for v in values):
+            self.selected_face_ids = set(values)
 
     @property
     def selected_edges(self) -> List[Any]:
