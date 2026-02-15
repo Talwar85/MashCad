@@ -11,6 +11,7 @@ Core hat PI-001/PI-002 nachgezogen:
 - Referenzauflösung (Face/Edge) wird stabil kanonisch sortiert persisted.
 - Sweep-Profil/Pfad-Toporeferenzen melden ebenfalls taxonomische `tnp_ref_*` Codes.
 - PI-003: Edge-Resolver macht bei vorhandenen kaputten Topologie-Referenzen standardmäßig keinen Selector-Recovery mehr.
+- PI-004: Rebuild-Idempotenz für TNP-Fehlerpfade (missing/mismatch) und Index-Normalisierung über mehrere Rebuild-Zyklen abgesichert.
 
 Damit ist der Kernel konsistenter, aber UI muss die neuen Fehlercodes sauber anzeigen.
 
@@ -73,7 +74,7 @@ conda run -n cad_env python -m pytest -q test/test_feature_error_status.py test/
 ```
 
 Resultat:
-- `189 passed, 2 skipped`
+- `192 passed, 2 skipped`
 
 ## Breaking Changes / Rest-Risiken
 - Kein API-Break auf Feature-Objekten.

@@ -722,6 +722,25 @@ def test_rebuild_fillet_invalid_edge_sets_tnp_missing_ref_error_code():
     assert tnp_failure.get("reference_kind") == "edge"
 
 
+def test_rebuild_fillet_invalid_edge_error_is_idempotent_across_cycles():
+    body = Body("fillet_invalid_edge_idempotent")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[999], geometric_selectors=[])
+    body.features = [base, fillet]
+
+    body._rebuild()
+    first_details = dict(fillet.status_details or {})
+
+    body._rebuild()
+    second_details = dict(fillet.status_details or {})
+
+    assert fillet.status == "ERROR"
+    assert first_details.get("code") == "tnp_ref_missing"
+    assert second_details.get("code") == "tnp_ref_missing"
+    assert (first_details.get("tnp_failure") or {}).get("category") == "missing_ref"
+    assert (second_details.get("tnp_failure") or {}).get("category") == "missing_ref"
+
+
 def test_rebuild_fillet_shape_index_mismatch_sets_tnp_mismatch_error_code(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index
@@ -753,6 +772,40 @@ def test_rebuild_fillet_shape_index_mismatch_sets_tnp_mismatch_error_code(monkey
     assert tnp_failure.get("reference_kind") == "edge"
 
 
+def test_rebuild_fillet_shape_index_mismatch_error_is_idempotent_across_cycles(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("fillet_shape_index_mismatch_idempotent")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=1.0, edge_indices=[0], geometric_selectors=[])
+    fillet.edge_shape_ids = [_make_shape_id(ShapeType.EDGE, "fillet_status_mismatch_idempotent", 0)]
+    body.features = [base, fillet]
+
+    def _resolve_shape(_shape_id, solid, *, log_unresolved=True):
+        mismatch_edge = edge_from_index(solid, 3)
+        assert mismatch_edge is not None
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    body._rebuild()
+    first_details = dict(fillet.status_details or {})
+
+    body._rebuild()
+    second_details = dict(fillet.status_details or {})
+
+    assert fillet.status == "ERROR"
+    assert first_details.get("code") == "tnp_ref_mismatch"
+    assert second_details.get("code") == "tnp_ref_mismatch"
+    assert (first_details.get("tnp_failure") or {}).get("category") == "mismatch"
+    assert (second_details.get("tnp_failure") or {}).get("category") == "mismatch"
+
+
 def test_resolve_edges_tnp_normalizes_index_order_deterministically():
     from build123d import Solid
 
@@ -770,6 +823,25 @@ def test_resolve_edges_tnp_normalizes_index_order_deterministically():
 
     assert len(resolved_second) == 3
     assert feature.edge_indices == [1, 3, 4]
+
+
+def test_rebuild_edge_index_normalization_is_idempotent_across_cycles():
+    doc = Document()
+    body = Body("edge_index_normalization_idempotent")
+    doc.add_body(body)
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    fillet = FilletFeature(radius=0.8, edge_indices=[4, 1, 3, 1])
+    body.features = [base, fillet]
+
+    body._rebuild()
+    first_indices = list(fillet.edge_indices or [])
+
+    body._rebuild()
+    second_indices = list(fillet.edge_indices or [])
+
+    assert fillet.status in ("OK", "SUCCESS")
+    assert first_indices == [1, 3, 4]
+    assert second_indices == [1, 3, 4]
 
 
 def test_resolve_edges_tnp_uses_shape_probe_for_single_ref_even_with_legacy_local_index(monkeypatch):
