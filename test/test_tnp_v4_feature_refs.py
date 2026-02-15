@@ -616,8 +616,10 @@ def test_resolve_edges_tnp_blocks_selector_fallback_when_topology_refs_break(mon
         edge_indices=[999],
         geometric_selectors=[_edge_selector()],
     )
+    calls = {"count": 0}
 
     def _fail_from_dict(cls, _data):
+        calls["count"] += 1
         raise AssertionError("edge selector fallback must not run when topological refs exist but break")
 
     monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(_fail_from_dict))
@@ -625,6 +627,33 @@ def test_resolve_edges_tnp_blocks_selector_fallback_when_topology_refs_break(mon
 
     assert resolved == []
     assert feature.edge_indices == [999]
+    assert calls["count"] == 0
+
+
+def test_resolve_edges_tnp_allows_selector_recovery_when_strict_policy_disabled(monkeypatch):
+    from build123d import Solid
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.geometric_selector import GeometricEdgeSelector
+
+    body = Body("edge_selector_recovery_policy_disabled")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    feature = FilletFeature(
+        radius=1.0,
+        edge_indices=[999],
+        geometric_selectors=[_edge_selector()],
+    )
+
+    class _Selector:
+        def find_best_match(self, edges):
+            return edges[0] if edges else None
+
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+    monkeypatch.setattr(GeometricEdgeSelector, "from_dict", classmethod(lambda cls, _data: _Selector()))
+
+    resolved = body._resolve_edges_tnp(solid, feature)
+
+    assert len(resolved) == 1
+    assert feature.edge_indices == [0]
 
 
 def test_resolve_edges_tnp_shapeid_fallback_is_quiet(monkeypatch):

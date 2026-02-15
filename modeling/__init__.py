@@ -6582,14 +6582,23 @@ class Body:
                 )
                 return []
 
-        # TNP v4.1: Bei Topology-Mismatch zuerst Geometric-Fallback probieren
-        # (statt sofort aufzugeben wie in v4.0)
+        strict_topology_fallback_policy = is_enabled("strict_topology_fallback_policy")
+
+        # PI-003: Bei Topologie-Referenzen kein stilles Selector-Recovery mehr.
+        # Nur wenn strict_topology_fallback_policy deaktiviert wird, bleibt das
+        # alte Geometric-Recovery-Verhalten aktiv.
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
-            logger.warning(
-                f"{feature_name}: Topologie-Referenzen ungÃ¼ltig{mismatch_hint}. "
-                f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
-            )
+            if strict_topology_fallback_policy:
+                logger.warning(
+                    f"{feature_name}: Topologie-Referenzen ungÃ¼ltig{mismatch_hint}. "
+                    "Kein Geometric-Fallback (strict_topology_fallback_policy)."
+                )
+            else:
+                logger.warning(
+                    f"{feature_name}: Topologie-Referenzen ungÃ¼ltig{mismatch_hint}. "
+                    f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
+                )
             self._record_tnp_failure(
                 feature=feature,
                 category="mismatch" if strict_topology_mismatch else "missing_ref",
@@ -6599,7 +6608,8 @@ class Body:
                 resolved=max(len(resolved_edge_indices), len(resolved_shape_ids)),
                 strict=bool(strict_edge_feature),
             )
-            # Don't return here - try geometric recovery first!
+            if strict_topology_fallback_policy:
+                return []
 
         # TNP v4.1: Geometric-Fallback wenn:
         # 1. Keine Topologie-Referenzen vorhanden (original)

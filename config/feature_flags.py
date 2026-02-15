@@ -59,6 +59,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "batch_fillets": True,  # Phase 12: Fillet/Chamfer History-Extraction für TNP
     "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
     "self_heal_strict": True,  # Strict: atomischer Rollback bei invalider Geometrie statt stiller Weiterverarbeitung
+    # PI-003: Wenn Topologie-Referenzen vorhanden sind, kein Geometric-Selector-Recovery.
+    # Verhindert stilles "falsches" Recovery bei TNP-Mismatch.
+    "strict_topology_fallback_policy": True,
 
     # Boolean Robustness (OCP Feature Audit 2026)
     "boolean_self_intersection_check": True,  # Pre-Check: BOPAlgo_CheckerSI vor Booleans

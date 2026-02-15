@@ -10,6 +10,7 @@ Core hat PI-001/PI-002 nachgezogen:
 - TNP-Fehler werden jetzt taxonomisch klassifiziert statt nur `operation_failed`.
 - Referenzauflösung (Face/Edge) wird stabil kanonisch sortiert persisted.
 - Sweep-Profil/Pfad-Toporeferenzen melden ebenfalls taxonomische `tnp_ref_*` Codes.
+- PI-003: Edge-Resolver macht bei vorhandenen kaputten Topologie-Referenzen standardmäßig keinen Selector-Recovery mehr.
 
 Damit ist der Kernel konsistenter, aber UI muss die neuen Fehlercodes sauber anzeigen.
 
@@ -41,13 +42,20 @@ Determinismus:
 - `_resolve_feature_faces()` normalisiert `feature.face_indices` stabil (aufsteigend, eindeutig).
 - Persistierte ShapeIDs folgen derselben stabilen Reihenfolge.
 
+Fallback-Policy (PI-003):
+- Neues Feature-Flag `strict_topology_fallback_policy` (Default `True`).
+- Bei `True`: Wenn Topologie-Referenzen vorhanden aber ungültig sind, kein Geometric-Selector-Fallback.
+- Bei `False`: Legacy-Recovery via Selector bleibt für Edge-Resolver möglich.
+
 Failsafe:
 - Wenn die Rebuild-Finalisierung (z. B. Mesh-Update) crasht, wird auf den Pre-Rebuild-Snapshot zurückgerollt.
 - `status_details.rollback` enthält dabei `from/to` Metriken.
 
 ## Impact
 Betroffene Core-Files:
+- `config/feature_flags.py`
 - `modeling/__init__.py`
+- `test/test_feature_flags.py`
 - `test/test_tnp_v4_feature_refs.py`
 
 Empfohlene UX-Folgen (Gemini-Owner):
@@ -65,7 +73,7 @@ conda run -n cad_env python -m pytest -q test/test_feature_error_status.py test/
 ```
 
 Resultat:
-- `159 passed, 2 skipped`
+- `189 passed, 2 skipped`
 
 ## Breaking Changes / Rest-Risiken
 - Kein API-Break auf Feature-Objekten.
