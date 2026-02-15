@@ -1,27 +1,81 @@
+"""
+UI-Abort Logic Tests (UX-W2-01: SU-006)
+=========================================
 
+Validiert die Abort State Machine Priority Stack:
+Drag > Dialog > Tool > Selection > Idle
+
+Update W5 (Paket A: UI-Gate Hardening):
+- Zentrale UI-Test-Infrastruktur in test/ui/conftest.py
+- QT_OPENGL=software wird VOR Qt-Import gesetzt
+- Deterministische Cleanup-Strategie
+
+Author: GLM 4.7 (UX/WORKFLOW + QA Integration Cell)
+Date: 2026-02-16
+Branch: feature/v1-ux-aiB
+"""
+
+# CRITICAL: QT_OPENGL muss VOR jedem Qt/PyVista Import gesetzt werden
 import os
-import pytest
-import sys
-import time
+os.environ["QT_OPENGL"] = "software"
 
-os.environ.setdefault("QT_OPENGL", "software")
+import pytest
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
 from gui.main_window import MainWindow
 
-# Global app instance to prevent segfaults on multiple test runs
-app = QApplication.instance() or QApplication(sys.argv)
+# Session-weite QApplication (verhindert Segfaults bei mehreren Läufen)
+@pytest.fixture(scope="session")
+def qt_app():
+    """Session-weite QApplication Instanz."""
+    app = QApplication.instance()
+    if app is None:
+        import sys
+        app = QApplication(sys.argv)
+    return app
+
 
 @pytest.fixture
-def main_window():
-    """Fixture providing a MainWindow instance."""
-    window = MainWindow()
-    # We need to show it so it has a window handle and focus context
-    window.show()
-    yield window
-    window.close()
+def main_window(qt_app):
+    """
+    MainWindow Fixture mit deterministischem Cleanup (Paket A).
+
+    Verwendet Cleanup-Strategie aus UI-Gate Hardening.
+    """
+    import gc
+
+    window = None
+    try:
+        window = MainWindow()
+        window.show()
+        QTest.qWaitForWindowExposed(window)
+        yield window
+    finally:
+        # Deterministischer Cleanup (Paket A)
+        if window is not None:
+            try:
+                if hasattr(window, 'viewport_3d') and window.viewport_3d:
+                    if hasattr(window.viewport_3d, 'plotter'):
+                        try:
+                            window.viewport_3d.plotter.close()
+                        except Exception:
+                            pass
+                window.close()
+                window.deleteLater()
+            except Exception:
+                pass
+
+        # RenderQueue flush falls vorhanden
+        try:
+            from gui.viewport.render_queue import RenderQueue
+            RenderQueue.flush()
+        except Exception:
+            pass
+
+        # Python Garbage Collection
+        gc.collect()
 
 class TestAbortLogic:
     """

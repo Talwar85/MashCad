@@ -17,9 +17,13 @@ class _DummyMainWindow:
     def __init__(self):
         self.browser = _DummyBrowser()
         self.viewport_3d = type("_Viewport", (), {"remove_body": lambda self, _bid: None})()
+        self.notifications = []
 
     def _update_body_from_build123d(self, _body, _solid):
         return None
+
+    def show_notification(self, title, message, level="info"):
+        self.notifications.append((title, message, level))
 
 
 def _make_body_with_box(name="cmd_atomic_body"):
@@ -54,6 +58,12 @@ def test_add_feature_command_redo_rolls_back_on_new_feature_error(monkeypatch):
     assert [feat.id for feat in body.features] == before_feature_ids
     assert feature not in body.features
     assert all(getattr(feat, "status", "") != "ERROR" for feat in body.features)
+    
+    # Verify notification
+    assert len(ui.notifications) > 0
+    assert ui.notifications[0][0] == "Rollback"
+    # Reason from _has_transaction_regression contains "new feature errors"
+    assert "new feature errors" in ui.notifications[0][1]
 
 
 def test_delete_feature_command_redo_rolls_back_on_rebuild_regression(monkeypatch):
@@ -77,6 +87,11 @@ def test_delete_feature_command_redo_rolls_back_on_rebuild_regression(monkeypatc
     assert [feat.id for feat in body.features] == before_feature_ids
     assert second in body.features
     assert all(getattr(feat, "status", "") != "ERROR" for feat in body.features)
+
+    # Verify notification
+    assert len(ui.notifications) > 0
+    assert ui.notifications[0][0] == "Rollback"
+    assert "new feature errors" in ui.notifications[0][1]
 
 
 def test_edit_feature_command_redo_rolls_back_and_restores_old_params(monkeypatch):
@@ -103,6 +118,11 @@ def test_edit_feature_command_redo_rolls_back_and_restores_old_params(monkeypatc
 
     assert feature.length == old_length
     assert getattr(feature, "status", "") != "ERROR"
+
+    # Verify notification
+    assert len(ui.notifications) > 0
+    assert ui.notifications[0][0] == "Rollback"
+    assert "new feature errors" in ui.notifications[0][1]
 
 
 def test_transform_command_redo_rolls_back_on_transform_error(monkeypatch):

@@ -4,14 +4,24 @@ SU-004 Direct Manipulation Test Harness
 ---------------------------------------
 Provides a framework for testing interactions like Click, Drag, Snap, and Selection.
 Implemented with PySide6.QtTest for real event simulation.
+
+Update W5 (Paket A: UI-Gate Hardening):
+- QT_OPENGL=software wird VOR Qt-Import gesetzt
+- Deterministische Cleanup-Strategie
+
+Author: GLM 4.7 (UX/WORKFLOW + QA Integration Cell)
+Date: 2026-02-16
+Branch: feature/v1-ux-aiB
 """
 
-import pytest
+# CRITICAL: QT_OPENGL muss VOR jedem Qt/PyVista Import gesetzt werden
 import os
+os.environ["QT_OPENGL"] = "software"
+
+import pytest
 import sys
 import math
 
-os.environ.setdefault("QT_OPENGL", "software")
 from PySide6.QtCore import Qt, QPoint, QPointF
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
@@ -19,9 +29,6 @@ from PySide6.QtTest import QTest
 from gui.main_window import MainWindow
 from gui.sketch_tools import SketchTool
 from sketcher import Point2D, Line2D, Circle2D
-
-# Ensure QApplication exists
-app = QApplication.instance() or QApplication(sys.argv)
 
 class InteractionTestHarness:
     """Simulates user interactions for testing direct manipulation in 3D Viewport."""
@@ -136,21 +143,92 @@ class SketchInteractionTestHarness:
     def current_cursor(self):
         return self.editor.cursor().shape()
 
-@pytest.fixture
-def interaction_harness():
-    """Fixture providing 3D viewport harness."""
-    window = MainWindow()
-    harness = InteractionTestHarness(window)
-    yield harness
-    window.close()
+# Session-weite QApplication (Paket A: UI-Gate Hardening)
+@pytest.fixture(scope="session")
+def qt_app_session():
+    """Session-weite QApplication Instanz."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    return app
+
 
 @pytest.fixture
-def sketch_harness():
-    """Fixture providing 2D sketch harness."""
-    window = MainWindow()
-    harness = SketchInteractionTestHarness(window)
-    yield harness
-    window.close()
+def interaction_harness(qt_app_session):
+    """
+    Fixture providing 3D viewport harness mit deterministischem Cleanup (Paket A).
+    """
+    import gc
+
+    window = None
+    harness = None
+    try:
+        window = MainWindow()
+        harness = InteractionTestHarness(window)
+        yield harness
+    finally:
+        # Deterministischer Cleanup (Paket A)
+        if harness is not None and hasattr(harness, 'window'):
+            try:
+                if hasattr(harness.window, 'viewport_3d') and harness.window.viewport_3d:
+                    if hasattr(harness.window.viewport_3d, 'plotter'):
+                        try:
+                            harness.window.viewport_3d.plotter.close()
+                        except Exception:
+                            pass
+                harness.window.close()
+                harness.window.deleteLater()
+            except Exception:
+                pass
+
+        # RenderQueue flush falls vorhanden
+        try:
+            from gui.viewport.render_queue import RenderQueue
+            RenderQueue.flush()
+        except Exception:
+            pass
+
+        # Python Garbage Collection
+        gc.collect()
+
+
+@pytest.fixture
+def sketch_harness(qt_app_session):
+    """
+    Fixture providing 2D sketch harness mit deterministischem Cleanup (Paket A).
+    """
+    import gc
+
+    window = None
+    harness = None
+    try:
+        window = MainWindow()
+        harness = SketchInteractionTestHarness(window)
+        yield harness
+    finally:
+        # Deterministischer Cleanup (Paket A)
+        if harness is not None and hasattr(harness, 'window'):
+            try:
+                if hasattr(harness.window, 'viewport_3d') and harness.window.viewport_3d:
+                    if hasattr(harness.window.viewport_3d, 'plotter'):
+                        try:
+                            harness.window.viewport_3d.plotter.close()
+                        except Exception:
+                            pass
+                harness.window.close()
+                harness.window.deleteLater()
+            except Exception:
+                pass
+
+        # RenderQueue flush falls vorhanden
+        try:
+            from gui.viewport.render_queue import RenderQueue
+            RenderQueue.flush()
+        except Exception:
+            pass
+
+        # Python Garbage Collection
+        gc.collect()
 
 class TestInteractionConsistency:
     """

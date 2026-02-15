@@ -11842,7 +11842,7 @@ class MainWindow(QMainWindow):
     def _on_background_clicked(self):
         """Handler for background click in Viewport -> Deselect Body"""
         # 1. Clear Transform UI & Selection
-        if self._selected_body_for_transform:
+        if hasattr(self, '_selected_body_for_transform') and self._selected_body_for_transform:
              self._selected_body_for_transform = None
              self._hide_transform_ui()
         

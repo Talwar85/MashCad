@@ -18,6 +18,7 @@ from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
 from gui.viewport.section_view_mixin import SectionViewMixin
+from gui.viewport.selection_mixin import SelectionMixin  # Paket B: Unified Selection API
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 3
@@ -79,7 +80,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin):
+class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -204,6 +205,9 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
 
         # Section View Mixin initialisieren
         self._init_section_view()
+
+        # Paket B: Unified Selection API initialisieren
+        self._init_selection_state()
 
         # Box selection
         self._box_select_active = False
