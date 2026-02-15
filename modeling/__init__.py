@@ -6122,6 +6122,21 @@ class Body:
         if len(resolved_edges) < len(edge_shape_ids) or valid_edge_indices:
             _resolve_by_indices()
 
+        index_authoritative = (
+            strict_edge_feature
+            and len(valid_edge_indices) > 1
+            and len(resolved_edges_from_index) == len(valid_edge_indices)
+        )
+        if index_authoritative:
+            # Für Multi-Edge Fillet/Chamfer sind stabile edge_indices deterministisch.
+            # ShapeIDs können nach Topologieänderung stale sein und würden sonst
+            # zusätzliche/falsche Kanten in den Resolver ziehen.
+            resolved_edges = list(resolved_edges_from_index)
+            resolved_edges_from_shape = []
+            resolved_shape_ids = []
+            resolved_edge_indices = list(valid_edge_indices)
+            strict_dual_edge_refs = False
+
         strict_topology_mismatch = False
         if strict_dual_edge_refs:
             if (
@@ -6140,11 +6155,31 @@ class Body:
                             strict_topology_mismatch = True
                             break
 
-        # Single-Edge UX-Fall: Bei genau einer Index+ShapeID-Referenz kann eine
-        # stale ShapeID (nach Undo/Redo) auf eine andere Edge zeigen, obwohl der
-        # index-konsistente Edge-Pfad korrekt ist. Dann index deterministisch
-        # bevorzugen und ShapeID später auf den tatsächlich verwendeten Edge heilen.
-        if strict_topology_mismatch and single_ref_pair and resolved_edges_from_index:
+        strict_topology_policy = is_enabled("strict_topology_fallback_policy")
+
+        # Single-Edge Recovery:
+        # - Immer erlaubt bei deaktivierter Strict-Policy
+        # - Bei aktiver Strict-Policy nur dann, wenn die ShapeID offensichtlich stale
+        #   ist (local_index fehlt/ist invalid/entspricht nicht dem referenzierten edge_index).
+        single_ref_stale_local_index = False
+        if single_ref_pair and resolved_edges_from_index and edge_shape_ids:
+            sid = next((s for s in edge_shape_ids if hasattr(s, "uuid")), None)
+            sid_local_index = getattr(sid, "local_index", None) if sid is not None else None
+            try:
+                target_index = int(valid_edge_indices[0]) if valid_edge_indices else None
+            except Exception:
+                target_index = None
+            single_ref_stale_local_index = (
+                (target_index is not None)
+                and (not isinstance(sid_local_index, int) or int(sid_local_index) != target_index)
+            )
+
+        if (
+            strict_topology_mismatch
+            and single_ref_pair
+            and resolved_edges_from_index
+            and ((not strict_topology_policy) or single_ref_stale_local_index)
+        ):
             if is_enabled("tnp_debug_logging"):
                 logger.warning(
                     f"{feature_name}: Single-Edge ShapeID/Index-Mismatch erkannt; "
@@ -6167,25 +6202,36 @@ class Body:
         if strict_dual_edge_refs and strict_topology_mismatch:
             unresolved_topology_refs = True
 
-        # TNP v4.1: Bei Topology-Mismatch zuerst Geometric-Fallback probieren
-        # (statt sofort aufzugeben wie in v4.0)
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
-            logger.warning(
-                f"{feature_name}: Topologie-Referenzen ungültig{mismatch_hint}. "
-                f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
-            )
-            # Don't return here - try geometric recovery first!
+            if strict_topology_policy:
+                logger.warning(
+                    f"{feature_name}: Topologie-Referenzen ungültig{mismatch_hint}. "
+                    "Strict Policy aktiv -> kein Geometric-Fallback."
+                )
+                # Für Fillet/Chamfer führt inkonsistente Topologie zu hartem Fail.
+                if strict_edge_feature:
+                    resolved_edges = []
+                    resolved_edges_from_shape = []
+                    resolved_edges_from_index = []
+                    resolved_shape_ids = []
+                    resolved_edge_indices = []
+            else:
+                logger.warning(
+                    f"{feature_name}: Topologie-Referenzen ungültig{mismatch_hint}. "
+                    f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
+                )
 
-        # TNP v4.1: Geometric-Fallback wenn:
-        # 1. Keine Topologie-Referenzen vorhanden (original)
-        # 2. ODER Topologie-Referenzen sind aufgelöst/inkonsistent (unresolved_topology_refs)
+        # Geometric-Fallback:
+        # 1. Nur ohne Topologie-Referenzen, oder
+        # 2. optional (strict_topology_fallback_policy=False) bei ungültiger Topologie.
+        allow_topology_recovery = (not strict_topology_policy)
         need_selector_recovery = (
             ((not has_topological_refs) and (not resolved_edges))
-            or (unresolved_topology_refs and geometric_selectors)
+            or (allow_topology_recovery and unresolved_topology_refs and geometric_selectors)
         )
 
-        # GeometricSelector-Auflösung ohne Topologie-Referenzen oder bei Mismatch (Recovery)
+        # GeometricSelector-Auflösung
         if need_selector_recovery and geometric_selectors:
             edges_before_geo = len(resolved_edges)
             try:

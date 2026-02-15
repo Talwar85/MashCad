@@ -218,7 +218,10 @@ def test_brepopngun_make_draft_angle():
 
     Draft kann verwendet werden um zylindrische Faces in konische umzuwandeln.
     """
-    from OCP.BRepFeat import BRepFeat_MakeDraft
+    try:
+        from OCP.BRepFeat import BRepFeat_MakeDraft
+    except Exception as exc:
+        pytest.skip(f"BRepFeat_MakeDraft nicht verfügbar: {exc}")
 
     body = create_box_with_hole(radius=5.0)
 

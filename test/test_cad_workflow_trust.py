@@ -563,9 +563,11 @@ class TestSketchTo3D:
         assert sig["volume"] == pytest.approx(expected_vol, rel=0.05), (
             f"Cylinder volume {sig['volume']} != expected {expected_vol}"
         )
-        # Mit 12-Polygon-Approximation: 12 Seiten + 2 Deckelflächen = 14 Faces
-        # (Besser als 64 Punkte = 34 Faces)
-        assert sig["faces"] == 14, f"Cylinder should have 14 faces (12-sided polygon), got {sig['faces']}"
+        # Legacy: 12-Polygon-Approximation => 14 Faces.
+        # OCP-native Circle Extrude kann analytischen Zylinder erzeugen => 3 Faces.
+        assert sig["faces"] in {3, 14}, (
+            f"Cylinder should have 3 (native) or 14 (polygonized) faces, got {sig['faces']}"
+        )
 
     def test_revolve_l_shape_360(self):
         """L-Profil → Revolve 360° → Rotationskörper."""
