@@ -68,7 +68,7 @@ class RenderQueue(QObject):
     _fps: float = 0.0                # Aktueller FPS-Wert
     _fps_callbacks: List[Callable] = None  # Listener für FPS-Updates
     _fps_update_timer: Optional[QTimer] = None
-    FPS_WINDOW_SIZE = 60             # Frames für gleitenden Durchschnitt
+    FPS_WINDOW_SIZE = 300            # Frames für gleitenden Durchschnitt (Buffer für >200 FPS)
 
     def __new__(cls):
         if cls._instance is None:
@@ -232,20 +232,19 @@ class RenderQueue(QObject):
 
     @classmethod
     def get_fps(cls) -> float:
-        """Gibt aktuellen FPS-Wert zurück (gleitender Durchschnitt)."""
-        if cls._frame_times is None or len(cls._frame_times) < 2:
+        """Gibt aktuellen FPS-Wert zurück (Anzahl Frames im letzten 1.0s Fenster)."""
+        if cls._frame_times is None:
             return 0.0
+            
         now = time.perf_counter()
-        # Nur Frames der letzten 2 Sekunden berücksichtigen
-        cutoff = now - 2.0
+        cutoff = now - 1.0  # Striktes 1-Sekunden Fenster
+        
+        # Alte Frames entfernen
         while cls._frame_times and cls._frame_times[0] < cutoff:
             cls._frame_times.popleft()
-        if len(cls._frame_times) < 2:
-            return 0.0
-        elapsed = cls._frame_times[-1] - cls._frame_times[0]
-        if elapsed <= 0:
-            return 0.0
-        return (len(cls._frame_times) - 1) / elapsed
+            
+        # Anzahl der Frames im Fenster = FPS
+        return float(len(cls._frame_times))
 
     @classmethod
     def register_fps_callback(cls, callback: Callable[[float], None]):
