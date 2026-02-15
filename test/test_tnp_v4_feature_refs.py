@@ -1430,6 +1430,49 @@ def test_compute_sweep_requires_profile_shape_index_consistency(monkeypatch):
         body._compute_sweep(feature, solid)
 
 
+def test_compute_sweep_profile_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("sweep_profile_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_geo_conflict", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop_after_profile_resolution"):
+        body._compute_sweep(feature, solid)
+
+    drift_notice = body._consume_tnp_failure(feature)
+    assert feature.profile_face_index == 0
+    assert feature.profile_shape_id is not None
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "face"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
     body = Body("resolver_delegate")
     hole = HoleFeature(face_selectors=[_face_selector()])

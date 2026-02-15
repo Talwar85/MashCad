@@ -1997,13 +1997,14 @@ class Body:
             ):
                 return
             try:
+                from modeling.tnp_system import ShapeType as TNPShapeType
                 shape_id = shape_service.find_shape_id_by_face(face_obj)
                 if shape_id is None:
                     fc = face_obj.center()
                     area = face_obj.area if hasattr(face_obj, "area") else 0.0
                     shape_id = shape_service.register_shape(
                         ocp_shape=face_obj.wrapped,
-                        shape_type=ShapeType.FACE,
+                        shape_type=TNPShapeType.FACE,
                         feature_id=feature.id,
                         local_index=max(0, int(profile_face_index) if profile_face_index is not None else 0),
                         geometry_data=(fc.X, fc.Y, fc.Z, area),
@@ -2028,11 +2029,13 @@ class Body:
                 logger.debug(f"Sweep: Profil-Index AuflÃ¶sung fehlgeschlagen: {e}")
 
         profile_face_from_shape = None
+        profile_shape_resolution_method = ""
         if profile_source_solid is not None and has_profile_shape_ref and shape_service:
             try:
                 resolved_ocp, method = shape_service.resolve_shape_with_method(
                     feature.profile_shape_id, profile_source_solid
                 )
+                profile_shape_resolution_method = str(method or "").strip().lower()
                 if resolved_ocp is not None:
                     from build123d import Face
                     from modeling.topology_indexing import face_index_of
@@ -2049,34 +2052,75 @@ class Body:
                 logger.debug(f"Sweep: Profil-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
         if has_profile_shape_ref and profile_face_index is not None:
+            single_profile_ref_pair = True
             if profile_face_from_index is None or profile_face_from_shape is None:
-                self._record_tnp_failure(
-                    feature=feature,
-                    category="missing_ref",
-                    reference_kind="face",
-                    reason="sweep_profile_unresolved_topology_reference",
-                    expected=2,
-                    resolved=int(profile_face_from_index is not None) + int(profile_face_from_shape is not None),
-                    strict=True,
-                )
-                raise ValueError(
-                    "Sweep: Profil-Referenz ist inkonsistent "
-                    "(profile_shape_id/profile_face_index). Bitte Profil neu auswÃ¤hlen."
-                )
-            if not _is_same_face(profile_face_from_index, profile_face_from_shape):
-                self._record_tnp_failure(
-                    feature=feature,
-                    category="mismatch",
-                    reference_kind="face",
-                    reason="sweep_profile_shape_index_mismatch",
-                    expected=2,
-                    resolved=2,
-                    strict=True,
-                )
-                raise ValueError(
-                    "Sweep: Profil-Referenz ist inkonsistent "
-                    "(profile_shape_id != profile_face_index). Bitte Profil neu auswÃ¤hlen."
-                )
+                index_resolved = profile_face_from_index is not None
+                shape_resolved = profile_face_from_shape is not None
+                if single_profile_ref_pair and index_resolved and (not shape_resolved):
+                    feature.profile_shape_id = None
+                    if profile_face_index is not None:
+                        feature.profile_face_index = int(profile_face_index)
+                    _persist_profile_shape_id(profile_face_from_index)
+                    profile_face = profile_face_from_index
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(
+                            "Sweep: single_ref_pair profile ShapeID nicht aufloesbar -> "
+                            "verwende index-basiertes Profil."
+                        )
+                else:
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="missing_ref",
+                        reference_kind="face",
+                        reason="sweep_profile_unresolved_topology_reference",
+                        expected=2,
+                        resolved=int(index_resolved) + int(shape_resolved),
+                        strict=True,
+                    )
+                    raise ValueError(
+                        "Sweep: Profil-Referenz ist inkonsistent "
+                        "(profile_shape_id/profile_face_index). Bitte Profil neu auswÃ¤hlen."
+                    )
+            if (
+                profile_face_from_index is not None
+                and profile_face_from_shape is not None
+                and not _is_same_face(profile_face_from_index, profile_face_from_shape)
+            ):
+                weak_shape_resolution = profile_shape_resolution_method in {"geometric", "geometry_hash"}
+                if single_profile_ref_pair and weak_shape_resolution:
+                    feature.profile_shape_id = None
+                    if profile_face_index is not None:
+                        feature.profile_face_index = int(profile_face_index)
+                    _persist_profile_shape_id(profile_face_from_index)
+                    profile_face = profile_face_from_index
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="drift",
+                        reference_kind="face",
+                        reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                        expected=1,
+                        resolved=1,
+                        strict=False,
+                    )
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(
+                            "Sweep: single_ref_pair Profile Shape/Index-Konflikt mit schwacher "
+                            "Shape-Aufloesung (geometric/hash) -> index-basiertes Profil bevorzugt."
+                        )
+                else:
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="mismatch",
+                        reference_kind="face",
+                        reason="sweep_profile_shape_index_mismatch",
+                        expected=2,
+                        resolved=2,
+                        strict=True,
+                    )
+                    raise ValueError(
+                        "Sweep: Profil-Referenz ist inkonsistent "
+                        "(profile_shape_id != profile_face_index). Bitte Profil neu auswÃ¤hlen."
+                    )
             profile_face = profile_face_from_index
 
         if profile_face is None and has_topological_profile_refs:
