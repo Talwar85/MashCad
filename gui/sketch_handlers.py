@@ -62,6 +62,35 @@ class SketchHandlersMixin:
     def _point_to_angle_deg(center: Point2D, point: Point2D) -> float:
         return math.degrees(math.atan2(point.y - center.y, point.x - center.x))
 
+    def _get_valid_formula_from_dim_input(self, key: str):
+        """Gibt nur dann Formeltext zurück, wenn er tatsächlich evaluierbar ist."""
+        if not hasattr(self, "dim_input") or self.dim_input is None:
+            return None
+
+        try:
+            raw = (self.dim_input.get_raw_texts().get(key, "") or "").strip()
+        except Exception:
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            float(raw.replace(',', '.'))
+            return None
+        except ValueError:
+            pass
+
+        evaluator = getattr(self.dim_input, "_evaluate_expression", None)
+        if callable(evaluator):
+            try:
+                if evaluator(raw) is None:
+                    return None
+            except Exception:
+                return None
+
+        return raw
+
     def _build_trim_preview_geometry(self, target, segment):
         """
         Erstellt eine visuelle Vorschau der zu trimmenden Geometrie.
@@ -626,6 +655,75 @@ class SketchHandlersMixin:
                 if hasattr(self, "_circle_center_snap"):
                     del self._circle_center_snap
                 self._cancel_tool()
+
+    def _handle_ellipse(self, pos, snap_type, snap_entity=None):
+        """
+        Ellipse im Fusion-ähnlichen 3-Schritt-Workflow:
+        1) Zentrum
+        2) Endpunkt der Hauptachse (Richtung + Major-Radius)
+        3) Minor-Radius (senkrecht zur Hauptachse)
+        """
+        if self.tool_step == 0:
+            self.tool_points = [pos]
+            self._ellipse_center_snap = (snap_type, snap_entity)
+            self.tool_step = 1
+            self.status_message.emit(tr("Major axis endpoint | Tab=Major/Angle"))
+            return
+
+        if self.tool_step == 1:
+            center = self.tool_points[0]
+            major_radius = math.hypot(pos.x() - center.x(), pos.y() - center.y())
+            if major_radius <= 0.01:
+                self.status_message.emit(tr("Major axis too short"))
+                return
+
+            self.tool_points.append(pos)
+            self.tool_step = 2
+            self.status_message.emit(tr("Minor radius | Tab=Minor"))
+            return
+
+        center = self.tool_points[0]
+        major_end = self.tool_points[1]
+        dx = major_end.x() - center.x()
+        dy = major_end.y() - center.y()
+        major_radius = math.hypot(dx, dy)
+        if major_radius <= 0.01:
+            self.status_message.emit(tr("Major axis too short"))
+            self._cancel_tool()
+            return
+
+        ux = dx / major_radius
+        uy = dy / major_radius
+        vx = -uy
+        vy = ux
+
+        rel_x = pos.x() - center.x()
+        rel_y = pos.y() - center.y()
+        minor_radius = abs(rel_x * vx + rel_y * vy)
+        minor_radius = max(0.01, minor_radius)
+        angle_deg = math.degrees(math.atan2(uy, ux))
+
+        self._save_undo()
+        _, _, _, center_point = self.sketch.add_ellipse(
+            cx=center.x(),
+            cy=center.y(),
+            major_radius=major_radius,
+            minor_radius=minor_radius,
+            angle_deg=angle_deg,
+            construction=self.construction_mode,
+            segments=max(24, int(getattr(self, "circle_segments", 64) * 0.5)),
+        )
+
+        center_snap_type, center_snap_entity = getattr(self, "_ellipse_center_snap", (SnapType.NONE, None))
+        self._apply_center_snap_constraint(center_point, center_snap_type, center_snap_entity)
+
+        self._solve_async()
+        self._find_closed_profiles()
+        self.sketched_changed.emit()
+
+        if hasattr(self, "_ellipse_center_snap"):
+            del self._ellipse_center_snap
+        self._cancel_tool()
     
     def _calc_circle_3points(self, p1, p2, p3):
         """Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte"""
@@ -2243,6 +2341,9 @@ class SketchHandlersMixin:
         if self.dim_input_active:
              vals = self.dim_input.get_values()
              if 'value' in vals: new_val = vals['value']
+        if self.dim_input_active and hasattr(self.dim_input, "has_errors") and self.dim_input.has_errors():
+            self.status_message.emit(getattr(self.dim_input, "_last_validation_error", tr("Ungültiger Wert")))
+            return
         
         line = self._find_line_at(pos)
         if line:
@@ -2253,11 +2354,9 @@ class SketchHandlersMixin:
                  constraint = self.sketch.add_length(line, new_val)
                  # Formel-Binding: Rohtext speichern wenn kein reiner Float
                  if constraint:
-                     raw = self.dim_input.get_raw_texts().get('value', '')
-                     try:
-                         float(raw.replace(',', '.'))
-                     except ValueError:
-                         constraint.formula = raw
+                     formula = self._get_valid_formula_from_dim_input('value')
+                     if formula:
+                         constraint.formula = formula
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -2283,11 +2382,9 @@ class SketchHandlersMixin:
                  self._save_undo()
                  constraint = self.sketch.add_radius(circle, new_val)
                  if constraint:
-                     raw = self.dim_input.get_raw_texts().get('value', '')
-                     try:
-                         float(raw.replace(',', '.'))
-                     except ValueError:
-                         constraint.formula = raw
+                     formula = self._get_valid_formula_from_dim_input('value')
+                     if formula:
+                         constraint.formula = formula
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -2370,16 +2467,17 @@ class SketchHandlersMixin:
                 if self.dim_input_active:
                      vals = self.dim_input.get_values()
                      if 'angle' in vals: new_val = vals['angle']
+                if self.dim_input_active and hasattr(self.dim_input, "has_errors") and self.dim_input.has_errors():
+                    self.status_message.emit(getattr(self.dim_input, "_last_validation_error", tr("Ungültiger Wert")))
+                    return
                 
                 if new_val is not None:
                     self._save_undo()
                     constraint = self.sketch.add_angle(l1, line, new_val)
                     if constraint:
-                        raw = self.dim_input.get_raw_texts().get('angle', '')
-                        try:
-                            float(raw.replace(',', '.'))
-                        except ValueError:
-                            constraint.formula = raw
+                        formula = self._get_valid_formula_from_dim_input('angle')
+                        if formula:
+                            constraint.formula = formula
                     self._solve_async()
                     self.sketched_changed.emit()
                     self._find_closed_profiles()

@@ -20,6 +20,7 @@ from threading import Thread
 from enum import Enum, auto
 from typing import Optional, List, Tuple, Set
 import math
+import time
 import sys
 import os
 import numpy as np
@@ -825,6 +826,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_start_radius = 0.0
         self._direct_edit_anchor_angle = 0.0
         self._direct_edit_drag_moved = False
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_live_solve = False
+        self._direct_edit_pending_solve = False
+        self._direct_edit_last_live_solve_ts = 0.0
+        self._direct_edit_live_solve_interval_s = 1.0 / 30.0
         
         # Schwebende Optionen-Palette
         self.tool_options = ToolOptionsPopup(self)
@@ -939,6 +945,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.RECTANGLE,
             SketchTool.RECTANGLE_CENTER,
             SketchTool.CIRCLE,
+            SketchTool.ELLIPSE,
             SketchTool.CIRCLE_2POINT,
             SketchTool.CIRCLE_3POINT,
             SketchTool.POLYGON,
@@ -1268,6 +1275,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
         # Padding für Strichstärke (5px) + Glow (10px) = sicherheitshalber 15
         return rect.adjusted(-15, -15, 15, 15)
+
+    def _get_circle_dirty_rect(self, cx: float, cy: float, radius: float) -> QRectF:
+        """
+        Screen-Dirty-Rect fuer Circle-Direct-Edit.
+        Enthaelt Kreis, Selection-Glow, Handles und kleine Sicherheitsreserve.
+        """
+        center_screen = self.world_to_screen(QPointF(float(cx), float(cy)))
+        r_screen = max(1.0, float(radius) * float(self.view_scale))
+        rect = QRectF(
+            center_screen.x() - r_screen,
+            center_screen.y() - r_screen,
+            2.0 * r_screen,
+            2.0 * r_screen,
+        )
+        return rect.adjusted(-28.0, -28.0, 28.0, 28.0)
     
     def _calculate_plane_axes(self, normal_vec):
         """
@@ -3088,6 +3110,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.RECTANGLE: 1,
             SketchTool.RECTANGLE_CENTER: 1,
             SketchTool.CIRCLE: 1,
+            SketchTool.ELLIPSE: 1,
             SketchTool.POLYGON: 1,
             SketchTool.SLOT: 1,
             SketchTool.NUT: 1,            # After center point
@@ -3162,7 +3185,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Check if this tool supports dimension input at current step
         tools_with_dim_input = {
             SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
-            SketchTool.CIRCLE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.NUT, SketchTool.STAR,
+            SketchTool.CIRCLE, SketchTool.ELLIPSE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.NUT, SketchTool.STAR,
             SketchTool.MOVE, SketchTool.COPY, SketchTool.ROTATE, SketchTool.SCALE,
             SketchTool.OFFSET, SketchTool.FILLET_2D, SketchTool.CHAMFER_2D,
             SketchTool.PATTERN_LINEAR, SketchTool.PATTERN_CIRCULAR,
@@ -3336,6 +3359,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_circle = None
         self._direct_edit_source = None
         self._direct_edit_drag_moved = False
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_live_solve = False
+        self._direct_edit_pending_solve = False
+        self._direct_edit_last_live_solve_ts = 0.0
 
         # Constraint Highlight zurücksetzen
         self._clear_constraint_highlight()
@@ -3536,6 +3563,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_start_radius = float(circle.radius)
         self._direct_edit_anchor_angle = float(handle_hit.get("angle", 0.0))
         self._direct_edit_drag_moved = False
+        self._direct_edit_last_live_solve_ts = 0.0
+        self._direct_edit_pending_solve = False
+        self._direct_edit_live_solve = self._direct_edit_requires_live_solve(
+            circle=circle,
+            source=self._direct_edit_source,
+            mode=mode,
+        )
+        self._direct_edit_radius_constraints = [
+            c for c in self.sketch.constraints
+            if (circle in getattr(c, "entities", ()))
+            and c.type in (ConstraintType.RADIUS, ConstraintType.DIAMETER)
+        ]
 
         if circle not in self.selected_circles:
             self._clear_selection()
@@ -3544,12 +3583,59 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.setCursor(Qt.ClosedHandCursor)
         self.request_update()
 
+    def _direct_edit_requires_live_solve(self, circle, source, mode) -> bool:
+        """
+        Live-Solve nur dort, wo es für visuelles Follow-Up nötig ist.
+        Normale Circle-Drags bleiben dadurch flüssig.
+        """
+        if circle is None:
+            return False
+
+        if source == "polygon":
+            return True
+
+        for c in self.sketch.constraints:
+            entities = getattr(c, "entities", ())
+            if circle not in entities and circle.center not in entities:
+                continue
+            if c.type in (ConstraintType.RADIUS, ConstraintType.DIAMETER):
+                continue
+            return True
+        return False
+
+    def _maybe_live_solve_during_direct_drag(self):
+        """Gedrosseltes Live-Solve für komplexe Abhängigkeiten beim Drag."""
+        if not self._direct_edit_live_solve:
+            return
+
+        now = time.perf_counter()
+        if (now - self._direct_edit_last_live_solve_ts) < self._direct_edit_live_solve_interval_s:
+            self._direct_edit_pending_solve = True
+            return
+
+        try:
+            self.sketch.solve()
+        except Exception as e:
+            logger.debug(f"Direct drag solve failed: {e}")
+
+        self._direct_edit_last_live_solve_ts = now
+        self._direct_edit_pending_solve = False
+
     def _update_circle_radius_constraint(self, circle, new_radius: float):
         """Synchronisiert Radius-Änderungen mit vorhandenen Radius/Diameter-Constraints."""
         found = False
-        for c in self.sketch.constraints:
-            if circle not in c.entities:
-                continue
+        constraints = self._direct_edit_radius_constraints
+        if not isinstance(constraints, list):
+            constraints = []
+        if not constraints:
+            constraints = [
+                c for c in self.sketch.constraints
+                if (circle in getattr(c, "entities", ()))
+                and c.type in (ConstraintType.RADIUS, ConstraintType.DIAMETER)
+            ]
+            self._direct_edit_radius_constraints = constraints
+
+        for c in constraints:
             if c.type == ConstraintType.RADIUS:
                 c.value = float(new_radius)
                 found = True
@@ -3559,7 +3645,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         circle.radius = float(new_radius)
         if not found:
-            self.sketch.add_radius(circle, float(new_radius))
+            created = self.sketch.add_radius(circle, float(new_radius))
+            if created is not None:
+                self._direct_edit_radius_constraints.append(created)
 
     def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
         """Aktualisiert Geometrie während des Drag-Vorgangs."""
@@ -3568,6 +3656,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         circle = self._direct_edit_circle
         mode = self._direct_edit_mode
+        old_cx = float(circle.center.x)
+        old_cy = float(circle.center.y)
+        old_radius = float(circle.radius)
 
         if mode == "center":
             dx = world_pos.x() - self._direct_edit_start_pos.x()
@@ -3582,7 +3673,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             circle.center.y = self._direct_edit_start_center.y() + dy
 
         elif mode == "radius":
-            new_radius = math.hypot(world_pos.x() - circle.center.x, world_pos.y() - circle.center.y())
+            new_radius = math.hypot(world_pos.x() - circle.center.x, world_pos.y() - circle.center.y)
             new_radius = max(0.01, new_radius)
             self._direct_edit_anchor_angle = math.atan2(
                 world_pos.y() - circle.center.y,
@@ -3594,14 +3685,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
 
         self._direct_edit_drag_moved = True
+        # Live-Solve nur bei komplexen Abhaengigkeiten und dann gedrosselt.
+        self._maybe_live_solve_during_direct_drag()
+        if self._direct_edit_live_solve:
+            # Abhaengige Geometrie kann ueber den Kreis hinaus veraendert werden.
+            self.request_update()
+            return
 
-        # Live-Solve für visuelles Feedback (z.B. reguläres Polygon folgt sofort).
-        try:
-            self.sketch.solve()
-        except Exception as e:
-            logger.debug(f"Direct drag solve failed: {e}")
-
-        self.request_update()
+        # Fast path: nur den tatsaechlich geaenderten Kreisbereich neu zeichnen.
+        dirty_old = self._get_circle_dirty_rect(old_cx, old_cy, old_radius)
+        dirty_new = self._get_circle_dirty_rect(circle.center.x, circle.center.y, circle.radius)
+        dirty = dirty_old.united(dirty_new)
+        if dirty.isEmpty():
+            self.request_update()
+        else:
+            self.update(dirty.toAlignedRect())
 
     def _finish_direct_edit_drag(self):
         """Schließt Direct-Manipulation ab und propagiert UI-Updates."""
@@ -3617,6 +3715,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_circle = None
         self._direct_edit_source = None
         self._direct_edit_drag_moved = False
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_live_solve = False
+        self._direct_edit_pending_solve = False
+        self._direct_edit_last_live_solve_ts = 0.0
 
         if moved:
             result = self.sketch.solve()
@@ -3664,6 +3766,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.RECTANGLE: tr("Rectangle") + f" ({tr('Center') if self.rect_mode else tr('2-Point')}) | " + tr("Click=Start"),
             SketchTool.RECTANGLE_CENTER: tr("Rectangle") + " (" + tr("Center") + ") | " + tr("Click=Start"),
             SketchTool.CIRCLE: tr("Circle") + f" ({[tr('Center'), tr('2-Point'), tr('3-Point')][self.circle_mode]}) | Tab=" + tr("Radius"),
+            SketchTool.ELLIPSE: tr("Ellipse | Click=Center→Major→Minor | Tab=Input"),
             SketchTool.CIRCLE_2POINT: tr("Circle") + " (" + tr("2-Point") + ")",
             SketchTool.POLYGON: tr("Polygon") + f" ({self.polygon_sides} " + tr("{n} sides").format(n="") + ") | Tab",
             SketchTool.ARC_3POINT: tr("[A] Arc | Click=Start→Through→End"),
@@ -3724,6 +3827,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 fields = [("R", "radius", self.live_radius, "mm")]
             elif self.tool_step == 0:
                 fields = [("R", "radius", 25.0, "mm")]
+
+        # ELLIPSE: Step 1 = Major + Angle, Step 2 = Minor
+        elif self.current_tool == SketchTool.ELLIPSE:
+            if self.tool_step == 1:
+                fields = [
+                    ("Ra", "major", self.live_length if self.live_length > 0 else 25.0, "mm"),
+                    ("∠", "angle", self.live_angle, "°"),
+                ]
+            elif self.tool_step == 2:
+                fields = [("Rb", "minor", self.live_radius if self.live_radius > 0 else 12.0, "mm")]
                 
         # POLYGON: Nach Zentrum (mit Rotation)
         elif self.current_tool == SketchTool.POLYGON:
@@ -3817,6 +3930,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif key == "height": self.live_height = value
         elif self.current_tool == SketchTool.CIRCLE:
             if key == "radius": self.live_radius = value
+        elif self.current_tool == SketchTool.ELLIPSE:
+            if key == "major":
+                self.live_length = value
+            elif key == "minor":
+                self.live_radius = value
+            elif key == "angle":
+                self.live_angle = value
         elif self.current_tool == SketchTool.POLYGON:
             if key == "radius": self.live_radius = value
             elif key == "angle": self.live_angle = value
@@ -3900,6 +4020,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.dim_input.set_value("height", self.live_height)
         elif key == "radius":
             self.dim_input.set_value("radius", self.live_radius)
+        elif key == "major":
+            self.dim_input.set_value("major", self.live_length)
+        elif key == "minor":
+            self.dim_input.set_value("minor", self.live_radius)
         elif key == "distance":
             self.dim_input.set_value("distance", self.offset_distance)
         elif key == "factor":
@@ -3915,6 +4039,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _on_dim_confirmed(self):
         from sketcher.constraints import ConstraintType
         from sketcher.geometry import Line2D, Circle2D, Arc2D
+
+        if self.dim_input.has_errors():
+            msg = getattr(self.dim_input, "_last_validation_error", None) or tr("Ungültiger Eingabewert")
+            self.status_message.emit(msg)
+            self.show_message(msg, 1800, QColor(255, 140, 100))
+            return
 
         values = self.dim_input.get_values()
 
@@ -3941,6 +4071,177 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.sketched_changed.emit()
             return result
 
+        def solve_quiet():
+            try:
+                return self.sketch.solve()
+            except Exception as e:
+                logger.debug(f"Quiet solve failed: {e}")
+                return None
+
+        def is_success(result) -> bool:
+            return bool(getattr(result, "success", True)) if result is not None else False
+
+        def get_valid_formula(field_key: str):
+            raw_map = {}
+            try:
+                raw_map = self.dim_input.get_raw_texts()
+            except Exception:
+                return None
+
+            raw = (raw_map.get(field_key, "") or "").strip()
+            if not raw:
+                return None
+
+            try:
+                float(raw.replace(',', '.'))
+                return None
+            except ValueError:
+                pass
+
+            evaluator = getattr(self.dim_input, "_evaluate_expression", None)
+            if callable(evaluator):
+                try:
+                    if evaluator(raw) is None:
+                        return None
+                except Exception:
+                    return None
+
+            return raw
+
+        def line_parallel_score(line_a: Line2D, line_b: Line2D) -> float:
+            ax = line_a.end.x - line_a.start.x
+            ay = line_a.end.y - line_a.start.y
+            bx = line_b.end.x - line_b.start.x
+            by = line_b.end.y - line_b.start.y
+            la = math.hypot(ax, ay)
+            lb = math.hypot(bx, by)
+            if la < 1e-9 or lb < 1e-9:
+                return -1.0
+
+            # |cross|/(|a||b|) ~ 0 => parallel.
+            parallel_error = abs(ax * by - ay * bx) / (la * lb)
+            if parallel_error > 1e-3:
+                return -1.0
+
+            ma_x = (line_a.start.x + line_a.end.x) * 0.5
+            ma_y = (line_a.start.y + line_a.end.y) * 0.5
+            mb_x = (line_b.start.x + line_b.end.x) * 0.5
+            mb_y = (line_b.start.y + line_b.end.y) * 0.5
+            distance = math.hypot(ma_x - mb_x, ma_y - mb_y)
+
+            equal_hint = any(
+                c.type == ConstraintType.EQUAL_LENGTH and line_a in c.entities and line_b in c.entities
+                for c in self.sketch.constraints
+            )
+            return distance - (1000.0 if equal_hint else 0.0)
+
+        def length_constraints_for_line(line: Line2D):
+            return [
+                c for c in self.sketch.constraints
+                if c.type == ConstraintType.LENGTH and line in c.entities
+            ]
+
+        def apply_length_value(constraint, new_length: float, formula_text=None) -> bool:
+            old_value = constraint.value
+            old_formula = constraint.formula
+
+            constraint.value = float(new_length)
+            constraint.formula = formula_text
+            if is_success(solve_quiet()):
+                return True
+
+            constraint.value = old_value
+            constraint.formula = old_formula
+            solve_quiet()
+            return False
+
+        def try_add_length_constraint(line: Line2D, new_length: float, formula_text=None) -> bool:
+            added = self.sketch.add_length(line, float(new_length))
+            if added is None:
+                return False
+
+            added.formula = formula_text
+            if is_success(solve_quiet()):
+                return True
+
+            self.sketch.remove_constraint(added)
+            solve_quiet()
+            return False
+
+        def apply_line_length_edit(line: Line2D, new_length: float, formula_text=None):
+            # 1) Direkt vorhandenen Constraint aktualisieren.
+            for existing in length_constraints_for_line(line):
+                if apply_length_value(existing, new_length, formula_text):
+                    return True, "direct"
+
+            # 2) Neuen Constraint auf diese Linie versuchen.
+            if try_add_length_constraint(line, new_length, formula_text):
+                return True, "added"
+
+            # 3) Fallback: vorhandenen Driver auf paralleler Linie aktualisieren
+            # (wichtig für Rechteck-Höhe, wenn die gegenüberliegende Seite der Driver ist).
+            candidates = []
+            for c in self.sketch.constraints:
+                if c.type != ConstraintType.LENGTH or not c.entities:
+                    continue
+                other_line = c.entities[0]
+                if not isinstance(other_line, Line2D) or other_line is line:
+                    continue
+                score = line_parallel_score(line, other_line)
+                if score >= 0.0:
+                    candidates.append((score, c))
+
+            candidates.sort(key=lambda item: item[0])
+            for _, candidate in candidates:
+                if apply_length_value(candidate, new_length, formula_text):
+                    return True, "parallel"
+
+            return False, "failed"
+
+        def radius_constraints_for_entity(entity):
+            return [
+                c for c in self.sketch.constraints
+                if c.type in (ConstraintType.RADIUS, ConstraintType.DIAMETER) and entity in c.entities
+            ]
+
+        def radius_formula_for_constraint(constraint, formula_text):
+            if not formula_text:
+                return None
+            if constraint.type == ConstraintType.DIAMETER:
+                return f"({formula_text})*2"
+            return formula_text
+
+        def apply_radius_value(constraint, new_radius: float, formula_text=None) -> bool:
+            old_value = constraint.value
+            old_formula = constraint.formula
+
+            constraint.value = float(new_radius) * (2.0 if constraint.type == ConstraintType.DIAMETER else 1.0)
+            constraint.formula = radius_formula_for_constraint(constraint, formula_text)
+            if is_success(solve_quiet()):
+                return True
+
+            constraint.value = old_value
+            constraint.formula = old_formula
+            solve_quiet()
+            return False
+
+        def apply_circle_radius_edit(entity, new_radius: float, formula_text=None):
+            for existing in radius_constraints_for_entity(entity):
+                if apply_radius_value(existing, new_radius, formula_text):
+                    return True
+
+            added = self.sketch.add_radius(entity, float(new_radius))
+            if added is None:
+                return False
+
+            added.formula = formula_text
+            if is_success(solve_quiet()):
+                return True
+
+            self.sketch.remove_constraint(added)
+            solve_quiet()
+            return False
+
         # === EDITING MODE: Constraint/Geometrie bearbeiten ===
         if self.editing_entity is not None:
             self._save_undo()
@@ -3954,18 +4255,43 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 logger.debug(f"Constraint {self.editing_entity.type.name} geändert auf {new_val}")
 
             elif self.editing_mode == "line_length":
-                # Längen-Constraint zu Linie hinzufügen
+                # Länge robust bearbeiten: vorhandenen Driver aktualisieren statt blind zu duplizieren.
                 new_length = values.get("length", 10.0)
-                self.sketch.add_length(self.editing_entity, new_length)
+                formula_text = get_valid_formula("length")
+                updated, strategy = apply_line_length_edit(self.editing_entity, new_length, formula_text)
                 run_solver_and_update()
-                self.show_message(f"Länge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+
+                if updated:
+                    if strategy == "parallel":
+                        self.show_message(
+                            f"Länge {new_length:.2f} mm aktualisiert (bestehender Höhen-Constraint)",
+                            2200,
+                            QColor(100, 255, 100),
+                        )
+                    else:
+                        self.show_message(f"Länge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+                else:
+                    self.show_message(
+                        tr("Länge konnte nicht konfliktfrei gesetzt werden"),
+                        2200,
+                        QColor(255, 120, 120),
+                    )
 
             elif self.editing_mode == "circle_radius":
-                # Radius-Constraint zu Kreis/Bogen hinzufügen
+                # Radius-Constraint aktualisieren oder hinzufügen.
                 new_radius = values.get("radius", 10.0)
-                self.sketch.add_radius(self.editing_entity, new_radius)
+                formula_text = get_valid_formula("radius")
+                updated = apply_circle_radius_edit(self.editing_entity, new_radius, formula_text)
                 run_solver_and_update()
-                self.show_message(f"Radius {new_radius:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+
+                if updated:
+                    self.show_message(f"Radius {new_radius:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+                else:
+                    self.show_message(
+                        tr("Radius konnte nicht gesetzt werden"),
+                        2200,
+                        QColor(255, 120, 120),
+                    )
 
             # Editing-State zurücksetzen
             self.editing_entity = None
@@ -4094,6 +4420,72 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 QTimer.singleShot(0, self._cancel_tool)
             # 3-Punkt-Modus: Keine dim_input Bestätigung - muss durch 3 Klicks erfolgen
             
+        elif self.current_tool == SketchTool.ELLIPSE:
+            if self.tool_step == 1:
+                center = self.tool_points[0] if self.tool_step >= 1 else (self.mouse_world or QPointF(0, 0))
+                major_radius = self.live_length if self.dim_input.is_locked('major') else values.get("major", self.live_length or 25.0)
+                angle_deg = self.live_angle if self.dim_input.is_locked('angle') else values.get("angle", self.live_angle)
+
+                major_radius = max(0.01, abs(float(major_radius)))
+                angle_rad = math.radians(float(angle_deg))
+                major_end = QPointF(
+                    center.x() + major_radius * math.cos(angle_rad),
+                    center.y() + major_radius * math.sin(angle_rad),
+                )
+
+                self.tool_points.append(major_end)
+                self.tool_step = 2
+                self.status_message.emit(tr("Minor radius | Tab=Input"))
+
+                # Direkt auf Schritt-2 Feld umstellen (wie beim Slot-Tool).
+                self.dim_input.committed_values.clear()
+                self.dim_input.unlock_all()
+                minor_default = self.live_radius if self.live_radius > 0 else max(0.01, major_radius * 0.6)
+                self.dim_input.setup([("Rb", "minor", minor_default, "mm")])
+                pos = self.mouse_screen
+                x = min(int(pos.x()) + 20, self.width() - self.dim_input.width() - 10)
+                y = min(int(pos.y()) - 40, self.height() - self.dim_input.height() - 10)
+                self.dim_input.move(max(10, x), max(10, y))
+                self.dim_input.show()
+                self.dim_input.focus_field(0)
+                self.dim_input_active = True
+                return
+
+            elif self.tool_step == 2:
+                center = self.tool_points[0]
+                major_end = self.tool_points[1]
+                dx = major_end.x() - center.x()
+                dy = major_end.y() - center.y()
+                major_radius = math.hypot(dx, dy)
+                if major_radius <= 0.01:
+                    self.status_message.emit(tr("Major axis too short"))
+                    QTimer.singleShot(0, self._cancel_tool)
+                    return
+
+                angle_deg = math.degrees(math.atan2(dy, dx))
+                minor_radius = self.live_radius if self.dim_input.is_locked('minor') else values.get("minor", self.live_radius or major_radius * 0.5)
+                minor_radius = max(0.01, abs(float(minor_radius)))
+
+                self._save_undo()
+                _, _, _, center_point = self.sketch.add_ellipse(
+                    cx=center.x(),
+                    cy=center.y(),
+                    major_radius=major_radius,
+                    minor_radius=minor_radius,
+                    angle_deg=angle_deg,
+                    construction=self.construction_mode,
+                    segments=max(24, int(getattr(self, "circle_segments", 64) * 0.5)),
+                )
+
+                center_snap_type, center_snap_entity = getattr(self, "_ellipse_center_snap", (SnapType.NONE, None))
+                self._apply_center_snap_constraint(center_point, center_snap_type, center_snap_entity)
+                run_solver_and_update()
+
+                if hasattr(self, "_ellipse_center_snap"):
+                    del self._ellipse_center_snap
+                QTimer.singleShot(0, self._cancel_tool)
+                return
+
         elif self.current_tool == SketchTool.POLYGON:
             r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
             n = int(values.get("sides", self.polygon_sides))
@@ -4988,6 +5380,36 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.live_radius = math.hypot(snapped.x() - c.x(), snapped.y() - c.y())
                 if self.dim_input.isVisible():
                     self.dim_input.set_value('radius', self.live_radius)
+
+        elif self.current_tool == SketchTool.ELLIPSE:
+            if self.tool_step == 1:
+                c = self.tool_points[0]
+                dx = snapped.x() - c.x()
+                dy = snapped.y() - c.y()
+                if not self.dim_input.is_locked('major'):
+                    self.live_length = math.hypot(dx, dy)
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('major', self.live_length)
+                if not self.dim_input.is_locked('angle'):
+                    self.live_angle = math.degrees(math.atan2(dy, dx))
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('angle', self.live_angle)
+            elif self.tool_step == 2:
+                center = self.tool_points[0]
+                major_end = self.tool_points[1]
+                dx = major_end.x() - center.x()
+                dy = major_end.y() - center.y()
+                major_radius = math.hypot(dx, dy)
+                if major_radius > 0.01 and not self.dim_input.is_locked('minor'):
+                    ux = dx / major_radius
+                    uy = dy / major_radius
+                    vx = -uy
+                    vy = ux
+                    rel_x = snapped.x() - center.x()
+                    rel_y = snapped.y() - center.y()
+                    self.live_radius = abs(rel_x * vx + rel_y * vy)
+                    if self.dim_input.isVisible():
+                        self.dim_input.set_value('minor', self.live_radius)
                 
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             c = self.tool_points[0]
@@ -5981,7 +6403,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # UI-Elemente (Constraints, Snaps etc.) zeichnen
         self._draw_constraints(p) 
-        self._draw_open_ends(p)
+        if not self._direct_edit_dragging:
+            self._draw_open_ends(p)
         self._draw_preview(p)
         self._draw_selection_box(p)
         self._draw_snap(p)
@@ -6027,3 +6450,4 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         super().resizeEvent(event)
         if self.view_offset == QPointF(0, 0):
             self._center_view()
+

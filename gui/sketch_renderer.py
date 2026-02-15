@@ -397,7 +397,7 @@ class SketchRendererMixin:
         # Alle Endpunkte von Linien und Bögen sammeln
         endpoints = []
         for l in self.sketch.lines:
-            if not l.construction:
+            if not l.construction and not bool(getattr(l, "_suppress_endpoint_markers", False)):
                 endpoints.append(l.start)
                 endpoints.append(l.end)
         for a in self.sketch.arcs:
@@ -464,7 +464,7 @@ class SketchRendererMixin:
             # Liegt auf einer Linie (T-Kreuzung)?
             on_line = False
             for line in self.sketch.lines:
-                if not line.construction:
+                if not line.construction and not bool(getattr(line, "_suppress_endpoint_markers", False)):
                     # Nicht die eigene Linie prüfen
                     if pt != line.start and pt != line.end:
                         if point_on_line(pt, line, TOLERANCE):
@@ -551,6 +551,9 @@ class SketchRendererMixin:
             else:
                 path_normal.moveTo(p1)
                 path_normal.lineTo(p2)
+
+            if bool(getattr(line, "_suppress_endpoint_markers", False)):
+                continue
 
             for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
                 if hasattr(pt, 'fixed') and pt.fixed:
@@ -1334,6 +1337,71 @@ class SketchRendererMixin:
                         p.drawEllipse(self.world_to_screen(pt), 5, 5)
                     p.setBrush(Qt.NoBrush)
             
+        elif self.current_tool == SketchTool.ELLIPSE and self.tool_step >= 1:
+            center = self.tool_points[0]
+
+            if self.tool_step == 1:
+                if use_dim_input and self.live_length > 0:
+                    major_radius = self.live_length
+                    angle_rad = math.radians(self.live_angle)
+                    major_end = QPointF(
+                        center.x() + major_radius * math.cos(angle_rad),
+                        center.y() + major_radius * math.sin(angle_rad),
+                    )
+                else:
+                    major_end = snap
+                    major_radius = math.hypot(major_end.x() - center.x(), major_end.y() - center.y())
+
+                if major_radius > 0.01:
+                    dx = major_end.x() - center.x()
+                    dy = major_end.y() - center.y()
+                    ux = dx / major_radius
+                    uy = dy / major_radius
+                    p_major_1 = QPointF(center.x() - ux * major_radius, center.y() - uy * major_radius)
+                    p_major_2 = QPointF(center.x() + ux * major_radius, center.y() + uy * major_radius)
+                    p.drawLine(self.world_to_screen(p_major_1), self.world_to_screen(p_major_2))
+
+            elif self.tool_step == 2:
+                major_end = self.tool_points[1]
+                dx = major_end.x() - center.x()
+                dy = major_end.y() - center.y()
+                major_radius = math.hypot(dx, dy)
+                if major_radius > 0.01:
+                    ux = dx / major_radius
+                    uy = dy / major_radius
+                    vx = -uy
+                    vy = ux
+
+                    if use_dim_input and self.live_radius > 0:
+                        minor_radius = self.live_radius
+                    else:
+                        rel_x = snap.x() - center.x()
+                        rel_y = snap.y() - center.y()
+                        minor_radius = abs(rel_x * vx + rel_y * vy)
+                    minor_radius = max(0.01, minor_radius)
+
+                    p_major_1 = QPointF(center.x() - ux * major_radius, center.y() - uy * major_radius)
+                    p_major_2 = QPointF(center.x() + ux * major_radius, center.y() + uy * major_radius)
+                    p_minor_1 = QPointF(center.x() - vx * minor_radius, center.y() - vy * minor_radius)
+                    p_minor_2 = QPointF(center.x() + vx * minor_radius, center.y() + vy * minor_radius)
+                    p.drawLine(self.world_to_screen(p_major_1), self.world_to_screen(p_major_2))
+                    p.drawLine(self.world_to_screen(p_minor_1), self.world_to_screen(p_minor_2))
+
+                    path = QPainterPath()
+                    n_pts = 64
+                    for i in range(n_pts + 1):
+                        t = (2.0 * math.pi * i) / float(n_pts)
+                        lx = major_radius * math.cos(t)
+                        ly = minor_radius * math.sin(t)
+                        x = center.x() + lx * ux + ly * vx
+                        y = center.y() + lx * uy + ly * vy
+                        sp = self.world_to_screen(QPointF(x, y))
+                        if i == 0:
+                            path.moveTo(sp)
+                        else:
+                            path.lineTo(sp)
+                    p.drawPath(path)
+
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             c = self.tool_points[0]
             if use_dim_input and self.live_radius > 0:
@@ -2184,7 +2252,7 @@ class SketchRendererMixin:
         # Define tools that should show snap labels
         drawing_tools = [
             SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
-            SketchTool.CIRCLE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.CIRCLE, SketchTool.ELLIPSE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
             SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
         ]
         
@@ -2264,7 +2332,7 @@ class SketchRendererMixin:
         """
         drawing_tools = [
             SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
-            SketchTool.CIRCLE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.CIRCLE, SketchTool.ELLIPSE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
             SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
         ]
         drawing_mode = self.current_tool in drawing_tools and self.tool_step >= 1
@@ -2520,6 +2588,13 @@ class SketchRendererMixin:
             p.setPen(QPen(self.DIM_COLOR))
             diameter = self.live_radius * 2
             p.drawText(int(ctr.x())+10, int(ctr.y())-int(self.live_radius*self.view_scale)-8, f"R {self.live_radius:.1f} / Ø {diameter:.1f} mm")
+        elif self.current_tool == SketchTool.ELLIPSE and self.tool_step >= 1:
+            ctr = self.world_to_screen(self.tool_points[0])
+            p.setPen(QPen(self.DIM_COLOR))
+            if self.tool_step == 1:
+                p.drawText(int(ctr.x())+10, int(ctr.y())-8, f"Ra {self.live_length:.1f} @ {self.live_angle:.1f}°")
+            else:
+                p.drawText(int(ctr.x())+10, int(ctr.y())-8, f"Rb {self.live_radius:.1f} mm")
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             ctr = self.world_to_screen(self.tool_points[0])
             p.setPen(QPen(self.DIM_COLOR))
@@ -2536,8 +2611,8 @@ class SketchRendererMixin:
         p.drawText(12, 25, f"Tool: {tool_name}")
         
         # Tab-Hinweis für Zeichentools (dezent)
-        drawing_tools = [SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.CIRCLE, 
-                        SketchTool.POLYGON, SketchTool.SLOT, SketchTool.ARC_3POINT]
+        drawing_tools = [SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.CIRCLE,
+                        SketchTool.ELLIPSE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.ARC_3POINT]
         if self.current_tool in drawing_tools and self.tool_step >= 1:
             p.setFont(QFont("Arial", 10))
             p.setPen(QPen(QColor(100, 180, 255, 180)))

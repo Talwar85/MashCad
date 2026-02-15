@@ -330,6 +330,100 @@ class Sketch:
         self.points.append(center)
         self.arcs.append(arc)
         return arc
+
+    def add_ellipse(self, cx: float, cy: float, major_radius: float, minor_radius: float,
+                    angle_deg: float = 0.0, construction: bool = False,
+                    segments: int = 32):
+        """
+        Fügt eine Ellipse hinzu.
+
+        Aktuelle Implementierung:
+        - Ellipsenrand als geschlossene Segmentkette (profilfähig für Extrude).
+        - Zwei Konstruktionslinien (Major/Minor-Achse) im Fusion360-Stil.
+        - Basis-Constraints für Achsen:
+            * MIDPOINT(center, major_axis)
+            * MIDPOINT(center, minor_axis)
+            * PERPENDICULAR(major_axis, minor_axis)
+            * LENGTH(major_axis), LENGTH(minor_axis)
+
+        Returns:
+            (ellipse_lines, major_axis_line, minor_axis_line, center_point)
+        """
+        major_radius = max(0.01, float(major_radius))
+        minor_radius = max(0.01, float(minor_radius))
+
+        seg_count = max(24, int(segments))
+        if seg_count % 4 != 0:
+            seg_count += (4 - (seg_count % 4))
+
+        angle = math.radians(float(angle_deg))
+        ux = math.cos(angle)
+        uy = math.sin(angle)
+        vx = -uy
+        vy = ux
+
+        center = Point2D(cx, cy, construction=True)
+        major_pos = Point2D(cx + ux * major_radius, cy + uy * major_radius, construction=True)
+        major_neg = Point2D(cx - ux * major_radius, cy - uy * major_radius, construction=True)
+        minor_pos = Point2D(cx + vx * minor_radius, cy + vy * minor_radius, construction=True)
+        minor_neg = Point2D(cx - vx * minor_radius, cy - vy * minor_radius, construction=True)
+
+        self.points.extend([center, major_pos, major_neg, minor_pos, minor_neg])
+
+        major_axis = Line2D(major_neg, major_pos, construction=True)
+        minor_axis = Line2D(minor_neg, minor_pos, construction=True)
+        self.lines.extend([major_axis, minor_axis])
+
+        # Ensure visible relation between ellipse and axis endpoints.
+        quarter = seg_count // 4
+        perimeter_points: List[Point2D] = []
+        for i in range(seg_count):
+            if i == 0:
+                perimeter_points.append(major_pos)
+                continue
+            if i == quarter:
+                perimeter_points.append(minor_pos)
+                continue
+            if i == 2 * quarter:
+                perimeter_points.append(major_neg)
+                continue
+            if i == 3 * quarter:
+                perimeter_points.append(minor_neg)
+                continue
+
+            t = (2.0 * math.pi * i) / float(seg_count)
+            local_x = major_radius * math.cos(t)
+            local_y = minor_radius * math.sin(t)
+            x = cx + local_x * ux + local_y * vx
+            y = cy + local_x * uy + local_y * vy
+            perimeter_points.append(Point2D(x, y, construction=construction))
+
+        # Add only newly created points (axis points are already appended).
+        for pt in perimeter_points:
+            if pt not in (major_pos, minor_pos, major_neg, minor_neg):
+                self.points.append(pt)
+
+        ellipse_lines: List[Line2D] = []
+        for i in range(seg_count):
+            p1 = perimeter_points[i]
+            p2 = perimeter_points[(i + 1) % seg_count]
+            line = Line2D(p1, p2, construction=construction)
+            # UI-Hinweis: Ellipse ist intern segmentiert, soll aber wie eine
+            # einzelne Kurve wirken (keine Endpoint-Punktwolke / Endpoint-Snaps).
+            line._ellipse_segment = True
+            line._suppress_endpoint_markers = True
+            self.lines.append(line)
+            ellipse_lines.append(line)
+
+        # Axis constraints (Fusion-like helper geometry behavior).
+        self.add_midpoint(center, major_axis)
+        self.add_midpoint(center, minor_axis)
+        self.add_perpendicular(major_axis, minor_axis)
+        self.add_length(major_axis, 2.0 * major_radius)
+        self.add_length(minor_axis, 2.0 * minor_radius)
+
+        self.invalidate_profiles()
+        return ellipse_lines, major_axis, minor_axis, center
     
     def add_rectangle(self, x: float, y: float, width: float, height: float, construction: bool = False) -> List[Line2D]:
         """Fügt ein Rechteck hinzu (4 Linien mit geteilten Eckpunkten)"""
@@ -1440,7 +1534,8 @@ class Sketch:
             'name': self.name,
             'id': self.id,
             'points': [(p.x, p.y, p.id, p.fixed, p.construction, p.standalone) for p in self.points],
-            'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction)
+            'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction,
+                       bool(getattr(l, "_suppress_endpoint_markers", False)))
                       for l in self.lines],
             'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction)
                         for c in self.circles],
@@ -1476,9 +1571,13 @@ class Sketch:
             x1, y1, x2, y2 = ldata[0], ldata[1], ldata[2], ldata[3]
             lid = ldata[4] if len(ldata) > 4 else None
             construction = ldata[5] if len(ldata) > 5 else False
+            suppress_endpoint_markers = ldata[6] if len(ldata) > 6 else False
             line = sketch.add_line(x1, y1, x2, y2, construction=construction)
             if lid:
                 line.id = lid
+            if suppress_endpoint_markers:
+                line._suppress_endpoint_markers = True
+                line._ellipse_segment = True
 
         # Kreise wiederherstellen
         for cdata in data.get('circles', []):

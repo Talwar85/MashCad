@@ -13,6 +13,7 @@ class SketchTool(Enum):
     RECTANGLE = auto()
     RECTANGLE_CENTER = auto()
     CIRCLE = auto()
+    ELLIPSE = auto()
     CIRCLE_2POINT = auto()
     CIRCLE_3POINT = auto()
     POLYGON = auto()

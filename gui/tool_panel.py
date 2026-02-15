@@ -183,10 +183,11 @@ class ToolPanel(QFrame):
             (f"◯ {tr('Circle')}", "circle", "C", "Circle", 1, 0),
             (f"⬡ {tr('Polygon')}", "polygon", "P", "Polygon", 1, 1),
             (f"◠ {tr('Arc')}", "arc_3point", "A", "Arc", 2, 0),
-            (f"⊂⊃ {tr('Slot')}", "slot", "", "Slot", 2, 1),
-            (f"~ {tr('Spline')}", "spline", "", "Spline", 3, 0),
-            (f"• {tr('Point')}", "point", "", "Point", 3, 1),
-            (f"⬅ {tr('Project')}", "project", "P", "Project", 4, 0),
+            (f"El {tr('Ellipse')}", "ellipse", "", "Ellipse", 2, 1),
+            (f"⊂⊃ {tr('Slot')}", "slot", "", "Slot", 3, 0),
+            (f"~ {tr('Spline')}", "spline", "", "Spline", 3, 1),
+            (f"• {tr('Point')}", "point", "", "Point", 4, 0),
+            (f"⬅ {tr('Project')}", "project", "P", "Project", 4, 1),
         ]
         
         for text, name, shortcut, key, row, col in tools_draw:
@@ -570,3 +571,5 @@ class PropertiesPanel(QFrame):
         self.props_group.hide()
         self.coords_group.hide()
         self.constraints_group.hide()
+
+
