@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Any
 from enum import Enum
+from loguru import logger
 from .base import Feature, FeatureType
 from modeling.nurbs import ContinuityMode
 from modeling.tnp_system import ShapeID
@@ -205,7 +206,9 @@ class DraftFeature(Feature):
     """
     Draft (Entformungsschräge) für ausgewählte Flächen relativ zu einer Ebene.
     """
-    angle: float = 2.0  # Winkel in Grad
+    draft_angle: float = 2.0  # Winkel in Grad (primaerer Feldname)
+    # Legacy-Compat: aeltere Callsites nutzen "angle".
+    angle: Optional[float] = None
     
     # TNP v4.0: Persistent ShapeIDs für Faces
     face_shape_ids: List = None
@@ -219,6 +222,18 @@ class DraftFeature(Feature):
         self.type = FeatureType.DRAFT
         if not self.name or self.name == "Feature":
             self.name = "Draft"
+        # Normalisiere Legacy-"angle" auf draft_angle.
+        if self.angle is not None:
+            try:
+                self.draft_angle = float(self.angle)
+            except Exception as e:
+                logger.warning(
+                    f"DraftFeature: ungueltiger Legacy-Wert fuer angle={self.angle!r}; "
+                    f"verwende draft_angle={self.draft_angle!r}. Fehler: {e}"
+                )
+        # Halte beide Attribute synchron, da Kernel-Code und Serialization
+        # gemischt "draft_angle" und "angle" verwenden.
+        self.angle = self.draft_angle
         if self.face_shape_ids is None:
             self.face_shape_ids = []
         if self.face_indices is None:
@@ -255,9 +270,19 @@ class ThreadFeature(Feature):
     Unterstützt geometrische (echte) und kosmetische Gewinde (Textur/Annotation).
     """
     thread_type: str = "ISO Metric"
-    size: str = "M10"
+    # Legacy-Compat Felder fuer Serialisierung/UI
+    standard: str = "M"
+    diameter: float = 10.0
     pitch: float = 1.5
     depth: float = 20.0
+    position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    direction: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    tolerance_class: str = "6g"
+    tolerance_offset: float = 0.0
+    cosmetic: bool = True
+
+    # Neue/alte UI-Parameter parallel weiterfuehren
+    size: str = "M10"
     mode: str = "Geometric"  # "Geometric", "Cosmetic"
     
     # Face Selection (Zylinderfläche auswählen)
@@ -269,6 +294,18 @@ class ThreadFeature(Feature):
         self.type = FeatureType.THREAD
         if not self.name or self.name == "Feature":
             self.name = f"Thread: {self.size}"
+        # Sync size <-> standard/diameter fuer Legacy- und neue Pfade.
+        if self.size and self.size.startswith("M"):
+            self.standard = "M"
+            try:
+                self.diameter = float(self.size[1:])
+            except Exception as e:
+                logger.warning(
+                    f"ThreadFeature: ungueltiges size-Format {self.size!r}; "
+                    f"behalte diameter={self.diameter!r}. Fehler: {e}"
+                )
+        else:
+            self.size = f"{self.standard}{self.diameter:g}"
 
 
 @dataclass
@@ -277,6 +314,12 @@ class HollowFeature(Feature):
     Hollow - Volles Aushöhlen des Solids (Shell nach innen).
     """
     wall_thickness: float = 2.0
+
+    # Legacy-Compat: Wird in UI/Serialization verwendet.
+    drain_hole: bool = False
+    drain_diameter: float = 2.0
+    drain_position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    drain_direction: Tuple[float, float, float] = (0.0, 0.0, -1.0)
     
     # Optional: Öffnung nach außen (Drain Hole)
     opening_face_shape_ids: List = None
@@ -308,6 +351,9 @@ class NSidedPatchFeature(Feature):
     # Legacy: Geometrische Selektoren
     geometric_selectors: List[dict] = field(default_factory=list)
 
+    # Legacy-Compat fuer Serialisierung
+    degree: int = 3
+    tangent: bool = True
     continuity: str = "G0"  # "G0" (Position), "G1" (Tangent)
 
     def __post_init__(self):
@@ -329,6 +375,11 @@ class SurfaceTextureFeature(Feature):
     texture_type: str = "Fuzzy"
     scale: float = 1.0
     depth: float = 0.5
+    # Legacy-Compat: UI/Export serialisiert Rotationswinkel explizit.
+    rotation: float = 0.0
+    invert: bool = False
+    type_params: dict = field(default_factory=dict)
+    export_subdivisions: int = 2
     face_shape_ids: List = None
     face_indices: List = None
     face_selectors: List[dict] = field(default_factory=list)
@@ -349,11 +400,62 @@ class PrimitiveFeature(Feature):
     """
     primitive_type: str = "Box"
     parameters: dict = field(default_factory=dict)
+    # Legacy-compatible direct parameters (used across tests/serialization).
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    radius: Optional[float] = None
+    bottom_radius: Optional[float] = None
+    top_radius: Optional[float] = None
 
     def __post_init__(self):
         self.type = FeatureType.PRIMITIVE
         if not self.name or self.name == "Feature":
             self.name = f"Primitive: {self.primitive_type}"
+        if self.parameters is None:
+            self.parameters = {}
+
+        p = dict(self.parameters)
+
+        # Merge legacy explicit ctor params into dict-style parameters.
+        legacy_keys = (
+            "length",
+            "width",
+            "height",
+            "radius",
+            "bottom_radius",
+            "top_radius",
+        )
+        for key in legacy_keys:
+            val = getattr(self, key, None)
+            if val is not None and key not in p:
+                p[key] = float(val)
+
+        primitive = (self.primitive_type or "").lower()
+        # Normalize defaults so downstream code can rely on stable keys.
+        if primitive == "box":
+            p.setdefault("length", 10.0)
+            p.setdefault("width", 10.0)
+            p.setdefault("height", 10.0)
+        elif primitive == "cylinder":
+            p.setdefault("radius", 5.0)
+            p.setdefault("height", 10.0)
+        elif primitive == "sphere":
+            p.setdefault("radius", 5.0)
+        elif primitive == "cone":
+            p.setdefault("bottom_radius", 5.0)
+            p.setdefault("top_radius", 0.0)
+            p.setdefault("height", 10.0)
+
+        self.parameters = p
+
+        # Mirror normalized values back for serialization/UI compatibility.
+        self.length = float(p["length"]) if "length" in p else None
+        self.width = float(p["width"]) if "width" in p else None
+        self.height = float(p["height"]) if "height" in p else None
+        self.radius = float(p["radius"]) if "radius" in p else None
+        self.bottom_radius = float(p["bottom_radius"]) if "bottom_radius" in p else None
+        self.top_radius = float(p["top_radius"]) if "top_radius" in p else None
 
     def create_solid(self):
         """Erstellt den Primitiv-Solid via direktes OCP (OpenCASCADE)."""
@@ -406,4 +508,3 @@ class LatticeFeature(Feature):
         self.type = FeatureType.LATTICE
         if not self.name or self.name == "Feature":
             self.name = "Lattice"
-

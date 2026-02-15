@@ -270,7 +270,61 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
         self._hover_pick_cache = None  # (timestamp, x, y, body_id, cell_id, normal, position)
         self._hover_pick_cache_ttl = 0.008  # 8ms cache validity (~120 FPS worth)
 
+    def cancel_drag(self):
+        """
+        Cancels any active drag operation.
+        Used by Abort Logic (Escape).
+        """
+        if self.is_dragging:
+            self.is_dragging = False
+            self.drag_start_pos = QPoint()
+            # Reset cursor
+            self.setCursor(Qt.ArrowCursor)
+            logger.debug("[Viewport] Drag cancelled via Abort/Escape")
+        
+        if self._offset_plane_dragging:
+            self._offset_plane_dragging = False
+            self._offset_plane_drag_start = None
+            self.setCursor(Qt.ArrowCursor)
+            
+        if self._split_dragging:
+            self._split_dragging = False
+            self.setCursor(Qt.ArrowCursor)
+
+        self.request_render()
+
+    def clear_selection(self):
+        """
+        Clears all current selections (faces, edges, etc.)
+        Used by Abort Logic (Escape).
+        """
+        # 1. Clear Face Selection
+        self.selected_faces.clear()
+        if hasattr(self, 'selected_face_ids'):
+            self.selected_face_ids.clear()
+        self.face_selected.emit(-1) # Notify UI (-1 = none)
+        
+        # 2. Clear Edge Selection
+        if hasattr(self, 'selected_edges'):
+            self.selected_edges.clear()
+            self.edge_selection_changed.emit(0)
+
+        # 3. Clear TNP Selection Manager
+        if hasattr(self, 'selection_manager'):
+            # Only if method exists
+            if hasattr(self.selection_manager, 'clear_selection'):
+                self.selection_manager.clear_selection()
+
+        # 4. Trigger Repaint
+        if hasattr(self, 'request_render'):
+            self.request_render()
+        elif hasattr(self, 'plotter'):
+            self.plotter.render()
+            
+        logger.debug("[Viewport] Selection cleared via Abort/Escape")
+
     def _get_picker(self, tolerance_type: str = "standard"):
+
         """
         Phase 4: Performance - Wiederverwendbarer Picker Pool
 

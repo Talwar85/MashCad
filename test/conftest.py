@@ -15,8 +15,22 @@ def _is_tnp_suite_test(node: pytest.Item) -> bool:
 
 @pytest.fixture(autouse=True)
 def _tnp_debug_logging_only_for_tnp_suite(request: pytest.FixtureRequest):
+    debug_defaults = {
+        "tnp_debug_logging": False,
+        "extrude_debug": False,
+        "sketch_debug": False,
+        "sketch_input_logging": False,
+        "viewport_debug": False,
+    }
+
     if not _is_tnp_suite_test(request.node):
+        # Harte Isolation: Non-TNP-Tests laufen immer mit deaktiviertem
+        # Debug-Flags, auch wenn ein anderes Testmodul Flags global setzt.
+        for key, value in debug_defaults.items():
+            set_flag(key, value)
         yield
+        for key, value in debug_defaults.items():
+            set_flag(key, value)
         return
 
     previous = bool(FEATURE_FLAGS.get("tnp_debug_logging", False))

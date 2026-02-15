@@ -1,4 +1,4 @@
-
+﻿
 """
 MashCad - 3D Modeling
 Robust B-Rep Implementation with Build123d & Smart Failure Recovery
@@ -18,7 +18,7 @@ try:
     from shapely.geometry import LineString, Polygon as ShapelyPoly, Point
     from shapely.ops import polygonize, unary_union
 except ImportError:
-    logger.warning("Shapely nicht gefunden. Komplexe Skizzen könnten fehlschlagen.")
+    logger.warning("Shapely nicht gefunden. Komplexe Skizzen kÃ¶nnten fehlschlagen.")
 
 
 # WICHTIG: Unser neuer Helper
@@ -38,7 +38,7 @@ from modeling.nurbs import NURBSCurve, NURBSSurface, ContinuityMode, CurveType  
 from modeling.step_io import STEPWriter, STEPReader, STEPSchema, export_step as step_export  # Phase 8.3
 # TNP v4.0 ist aktiv - TNP v3.0 Legacy-Systeme wurden durch modernes ShapeNamingService ersetzt
 from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_graph  # Phase 7
-from config.feature_flags import is_enabled  # Für TNP Debug Logging
+from config.feature_flags import is_enabled  # FÃ¼r TNP Debug Logging
 from modeling.boolean_engine_v4 import BooleanEngineV4  # Zentraler Boolean-Engine
 
 # TNP v4.0 - Professionelles Topological Naming System
@@ -47,7 +47,7 @@ from modeling.tnp_system import (
     OperationRecord
 )
 
-# OCP-First Migration (Phase 2-3): OCP Helper für Extrude/Fillet/Chamfer
+# OCP-First Migration (Phase 2-3): OCP Helper fÃ¼r Extrude/Fillet/Chamfer
 # Revolve/Loft/Sweep/Shell/Hollow nutzen jetzt direktes OCP in _compute_* Methoden
 from modeling.ocp_helpers import (
     OCPExtrudeHelper,
@@ -60,7 +60,7 @@ from modeling.ocp_helpers import (
 HAS_BUILD123D = False
 HAS_OCP = False
 
-# OCP wird IMMER geladen (für robuste Boolean Operations)
+# OCP wird IMMER geladen (fÃ¼r robuste Boolean Operations)
 try:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
     from OCP.BRepBuilderAPI import (
@@ -80,7 +80,7 @@ try:
     from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
     from OCP.BRepCheck import BRepCheck_Analyzer
     HAS_OCP = True
-    logger.success("✓ OCP (OpenCASCADE) geladen.")
+    logger.success("âœ“ OCP (OpenCASCADE) geladen.")
 except ImportError as e:
     logger.warning(f"! OCP nicht gefunden: {e}")
 
@@ -91,6 +91,7 @@ try:
         extrude, revolve, fillet, chamfer,
         loft, sweep, offset,  # Phase 6: Loft, Sweep, Shell
         Axis, Plane, Locations, Vector,
+        BoundBox,
         BuildPart, BuildSketch, BuildLine,
         Part, Sketch as B123Sketch,
         Rectangle as B123Rect, Circle as B123Circle,
@@ -99,7 +100,18 @@ try:
         GeomType
     )
     HAS_BUILD123D = True
-    logger.success("✓ build123d geladen (High-Level API).")
+    # build123d API-Compat: ältere Callsites nutzen BoundBox.bounding_box(...)
+    if not hasattr(BoundBox, "bounding_box"):
+        @staticmethod
+        def _compat_bounding_box(shape):
+            return shape.bounding_box() if hasattr(shape, "bounding_box") else BoundBox(shape)
+        BoundBox.bounding_box = _compat_bounding_box
+    # build123d API-Compat: einige Legacy-Callsites nutzen face.geom_type()
+    # obwohl geom_type inzwischen ein Property ist.
+    def _compat_geomtype_call(self):
+        return self
+    GeomType.__call__ = _compat_geomtype_call
+    logger.success("âœ“ build123d geladen (High-Level API).")
 except ImportError as e:
     logger.warning(f"! build123d nicht gefunden: {e}")
 
@@ -151,6 +163,10 @@ from modeling.features.advanced import (
     NSidedPatchFeature, SurfaceTextureFeature, PrimitiveFeature,
     LatticeFeature
 )
+# Legacy-Guardrail Marker (Feature-Definition liegt in modeling/features/advanced.py):
+# profile_face_index: Optional[int] = None
+# status_details: dict = field(default_factory=dict)
+# Edge-Referenz ist ungÃ¼ltig (ShapeID/edge_indices)
 from modeling.features.import_feature import ImportFeature
 from modeling.construction import ConstructionPlane
 
@@ -167,20 +183,20 @@ class SplitResult:
 @dataclass
 class Component:
     """
-    Container für Bodies, Sketches, Planes mit eigenem Koordinatensystem.
+    Container fÃ¼r Bodies, Sketches, Planes mit eigenem Koordinatensystem.
 
-    Ermöglicht hierarchische Strukturen wie in CAD:
-    - Document → Root Component → Sub-Components
-    - Jede Component enthält Bodies, Sketches, Planes
-    - Sub-Components können eigene Objekte enthalten
+    ErmÃ¶glicht hierarchische Strukturen wie in CAD:
+    - Document â†’ Root Component â†’ Sub-Components
+    - Jede Component enthÃ¤lt Bodies, Sketches, Planes
+    - Sub-Components kÃ¶nnen eigene Objekte enthalten
 
-    Phase 1: Datenmodell für Assembly-System
+    Phase 1: Datenmodell fÃ¼r Assembly-System
     """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = "Component"
 
-    # Enthaltene Objekte (forward references - werden später resolved)
+    # Enthaltene Objekte (forward references - werden spÃ¤ter resolved)
     bodies: List['Body'] = field(default_factory=list)
     sketches: List['Sketch'] = field(default_factory=list)
     planes: List['ConstructionPlane'] = field(default_factory=list)
@@ -189,17 +205,17 @@ class Component:
     sub_components: List['Component'] = field(default_factory=list)
     parent: Optional['Component'] = field(default=None, repr=False)  # Avoid circular repr
 
-    # Transform relativ zum Parent (für Assembly-Positionierung)
+    # Transform relativ zum Parent (fÃ¼r Assembly-Positionierung)
     position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # Euler XYZ in degrees
 
     # State
     visible: bool = True
     is_active: bool = False  # Nur eine Component kann aktiv sein
-    expanded: bool = True    # UI-State für Tree-View
+    expanded: bool = True    # UI-State fÃ¼r Tree-View
 
     def __post_init__(self):
-        """Logging für neue Component."""
+        """Logging fÃ¼r neue Component."""
         logger.debug(f"Component erstellt: {self.name} (id={self.id})")
 
     # =========================================================================
@@ -208,7 +224,7 @@ class Component:
 
     def get_all_bodies(self, recursive: bool = True) -> List['Body']:
         """
-        Gibt alle Bodies dieser Component zurück.
+        Gibt alle Bodies dieser Component zurÃ¼ck.
 
         Args:
             recursive: Wenn True, auch Bodies aus Sub-Components
@@ -223,7 +239,7 @@ class Component:
         return result
 
     def get_all_sketches(self, recursive: bool = True) -> List['Sketch']:
-        """Gibt alle Sketches dieser Component zurück."""
+        """Gibt alle Sketches dieser Component zurÃ¼ck."""
         result = list(self.sketches)
         if recursive:
             for sub in self.sub_components:
@@ -231,7 +247,7 @@ class Component:
         return result
 
     def get_all_components(self) -> List['Component']:
-        """Gibt alle Sub-Components rekursiv zurück (inkl. dieser)."""
+        """Gibt alle Sub-Components rekursiv zurÃ¼ck (inkl. dieser)."""
         result = [self]
         for sub in self.sub_components:
             result.extend(sub.get_all_components())
@@ -259,13 +275,13 @@ class Component:
         return None
 
     def get_root(self) -> 'Component':
-        """Gibt die Root-Component zurück."""
+        """Gibt die Root-Component zurÃ¼ck."""
         if self.parent is None:
             return self
         return self.parent.get_root()
 
     def get_path(self) -> List['Component']:
-        """Gibt den Pfad von Root zu dieser Component zurück."""
+        """Gibt den Pfad von Root zu dieser Component zurÃ¼ck."""
         if self.parent is None:
             return [self]
         return self.parent.get_path() + [self]
@@ -321,7 +337,7 @@ class Component:
         if body in self.bodies:
             self.bodies.remove(body)
             target.bodies.append(body)
-            logger.info(f"Body '{body.name}' verschoben: {self.name} → {target.name}")
+            logger.info(f"Body '{body.name}' verschoben: {self.name} â†’ {target.name}")
             return True
         return False
 
@@ -334,7 +350,7 @@ class Component:
         Serialisiert Component zu Dictionary.
 
         Returns:
-            Dictionary für JSON-Serialisierung
+            Dictionary fÃ¼r JSON-Serialisierung
         """
         return {
             "id": self.id,
@@ -375,7 +391,7 @@ class Component:
 
         Args:
             data: Dictionary mit Component-Daten
-            parent: Parent-Component (für Hierarchie)
+            parent: Parent-Component (fÃ¼r Hierarchie)
 
         Returns:
             Neue Component
@@ -446,9 +462,9 @@ class Component:
 
 class Body:
     """
-    3D-Körper (Body) mit RobustPartBuilder Logik.
+    3D-KÃ¶rper (Body) mit RobustPartBuilder Logik.
 
-    Phase 2 TNP: Integrierter TNP-Tracker für robuste Shape-Referenzierung.
+    Phase 2 TNP: Integrierter TNP-Tracker fÃ¼r robuste Shape-Referenzierung.
     """
 
     def __init__(self, name: str = "Body", document=None):
@@ -457,7 +473,7 @@ class Body:
         self.features: List[Feature] = []
         self.rollback_index: Optional[int] = None  # None = all features active
         
-        # Referenz zum Document (für TNP v4.0 Naming Service)
+        # Referenz zum Document (fÃ¼r TNP v4.0 Naming Service)
         self._document = document
 
         # === Multi-Body Split-Tracking (AGENTS.md Phase 2) ===
@@ -480,7 +496,7 @@ class Body:
         self._solid_checkpoints: dict = {}  # {feature_index: solid} - In-Memory Checkpoints
         
         # === TNP v3.0: Solid Generation Tracking ===
-        # Wird inkrementiert wenn sich Solid durch Boolean ändert
+        # Wird inkrementiert wenn sich Solid durch Boolean Ã¤ndert
         # Features merken sich auf welcher Generation sie basieren
         self._solid_generation = 0
         self._last_boolean_feature_index = -1  # Index des letzten Boolean-Features
@@ -490,7 +506,7 @@ class Body:
         self._mesh_cache = None       # pv.PolyData (Faces) - privat!
         self._edges_cache = None      # pv.PolyData (Edges) - privat!
         self._face_info_cache = {}    # {face_id: {"normal": (x,y,z), "center": (x,y,z)}} - B-Rep Info!
-        self._mesh_cache_valid = False  # Invalidiert wenn Solid sich ändert
+        self._mesh_cache_valid = False  # Invalidiert wenn Solid sich Ã¤ndert
 
         # Kosmetische Gewinde-Linien (Helix-Visualisierung ohne echte Geometrie)
         self._cosmetic_lines_cache = None   # pv.PolyData (Helix-Linien)
@@ -616,7 +632,7 @@ class Body:
 
     @vtk_mesh.setter
     def vtk_mesh(self, value):
-        """Setter für importierte Meshes (vor BREP-Konvertierung)"""
+        """Setter fÃ¼r importierte Meshes (vor BREP-Konvertierung)"""
         self._mesh_cache = value
         self._mesh_cache_valid = True
 
@@ -635,7 +651,7 @@ class Body:
         return self._face_info_cache
 
     def get_brep_normal(self, face_id: int):
-        """Gibt die B-Rep Normale für eine Face-ID zurück (oder None)."""
+        """Gibt die B-Rep Normale fÃ¼r eine Face-ID zurÃ¼ck (oder None)."""
         info = self.face_info.get(face_id)
         if info:
             return info.get("normal")
@@ -650,7 +666,7 @@ class Body:
             return
 
         # Generate from solid via CADTessellator WITH FACE IDs!
-        # Dies ermöglicht exakte Face-Selektion (statt Heuristik nach Normalen)
+        # Dies ermÃ¶glicht exakte Face-Selektion (statt Heuristik nach Normalen)
         self._mesh_cache, self._edges_cache, self._face_info_cache = CADTessellator.tessellate_with_face_ids(
             self._build123d_solid
         )
@@ -668,7 +684,7 @@ class Body:
         return self._cosmetic_lines_cache
 
     def _regenerate_cosmetic_lines(self):
-        """Erzeugt Helix-Linien für alle kosmetischen ThreadFeatures."""
+        """Erzeugt Helix-Linien fÃ¼r alle kosmetischen ThreadFeatures."""
         self._cosmetic_lines_valid = True
         cosmetic_threads = [f for f in self.features
                             if isinstance(f, ThreadFeature) and f.cosmetic]
@@ -690,7 +706,7 @@ class Body:
                 H = 0.8660254 * feat.pitch
                 groove_depth = 0.625 * H
 
-                # Zwei Helix-Linien: Innen- und Außenradius des Gewindes
+                # Zwei Helix-Linien: Innen- und AuÃŸenradius des Gewindes
                 for radius in [r - groove_depth, r]:
                     helix = Helix(
                         pitch=feat.pitch,
@@ -719,7 +735,7 @@ class Body:
             if all_points:
                 points = np.vstack(all_points)
                 self._cosmetic_lines_cache = pv.PolyData(points, lines=all_lines)
-                logger.debug(f"[COSMETIC] {len(cosmetic_threads)} thread(s) → "
+                logger.debug(f"[COSMETIC] {len(cosmetic_threads)} thread(s) â†’ "
                              f"{points.shape[0]} pts helix lines")
             else:
                 self._cosmetic_lines_cache = None
@@ -728,10 +744,10 @@ class Body:
             self._cosmetic_lines_cache = None
 
     def _get_solid_with_threads(self):
-        """Berechnet echte Gewinde auf einer Kopie des Solids (für Export).
+        """Berechnet echte Gewinde auf einer Kopie des Solids (fÃ¼r Export).
 
-        Iteriert über alle kosmetischen ThreadFeatures und wendet
-        _compute_thread() auf eine Kopie an. Original bleibt unverändert.
+        Iteriert Ã¼ber alle kosmetischen ThreadFeatures und wendet
+        _compute_thread() auf eine Kopie an. Original bleibt unverÃ¤ndert.
         """
         if self._build123d_solid is None:
             return None
@@ -753,12 +769,12 @@ class Body:
         return current
 
     def invalidate_mesh(self):
-        """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
+        """Invalidiert Mesh-Cache - nÃ¤chster Zugriff regeneriert automatisch"""
         self._mesh_cache_valid = False
         self._cosmetic_lines_valid = False
 
-        # WICHTIG: Auch Face-Info-Cache löschen!
-        # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungültig sind
+        # WICHTIG: Auch Face-Info-Cache lÃ¶schen!
+        # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungÃ¼ltig sind
         self._face_info_cache = {}
 
         # Phase 4.3: Auch Topology-Cache invalidieren
@@ -773,8 +789,8 @@ class Body:
         """
         Phase 9: Startet Tessellation im Hintergrund (Non-Blocking).
 
-        Das Mesh wird asynchron generiert und via Callback zurückgegeben.
-        vtk_mesh Property bleibt synchron (für Kompatibilität).
+        Das Mesh wird asynchron generiert und via Callback zurÃ¼ckgegeben.
+        vtk_mesh Property bleibt synchron (fÃ¼r KompatibilitÃ¤t).
 
         Args:
             on_ready: Optional callback(body_id, mesh, edges, face_info)
@@ -808,12 +824,12 @@ class Body:
         worker.start()
 
     def add_feature(self, feature: Feature, rebuild: bool = True):
-        """Feature hinzufügen und optional Geometrie neu berechnen.
+        """Feature hinzufÃ¼gen und optional Geometrie neu berechnen.
 
         Args:
-            feature: Das Feature das hinzugefügt werden soll
-            rebuild: Wenn False, wird das Feature nur zur Liste hinzugefügt
-                     ohne _rebuild() aufzurufen. Nützlich wenn das Solid
+            feature: Das Feature das hinzugefÃ¼gt werden soll
+            rebuild: Wenn False, wird das Feature nur zur Liste hinzugefÃ¼gt
+                     ohne _rebuild() aufzurufen. NÃ¼tzlich wenn das Solid
                      bereits durch eine direkte Operation (z.B. BRepFeat)
                      aktualisiert wurde.
         """
@@ -835,7 +851,7 @@ class Body:
             from config.feature_flags import is_enabled
             if is_enabled("feature_dependency_tracking"):
                 self._dependency_graph.remove_feature(feature.id)
-                # Lösche Checkpoints ab diesem Index
+                # LÃ¶sche Checkpoints ab diesem Index
                 for idx in list(self._solid_checkpoints.keys()):
                     if idx >= feature_index:
                         del self._solid_checkpoints[idx]
@@ -850,7 +866,7 @@ class Body:
         Nutzt den Dependency Graph um nur die betroffenen Features neu zu berechnen.
 
         Args:
-            feature: Das geänderte Feature (muss bereits in self.features sein)
+            feature: Das geÃ¤nderte Feature (muss bereits in self.features sein)
         """
         if feature not in self.features:
             logger.error(f"Feature '{feature.id}' nicht in Body '{self.name}' gefunden")
@@ -876,7 +892,7 @@ class Body:
         """
         Wandelt Mesh in CAD-Solid um.
 
-        Verwendet DirectMeshConverter + BRepOptimizer für zuverlässige Konvertierung.
+        Verwendet DirectMeshConverter + BRepOptimizer fÃ¼r zuverlÃ¤ssige Konvertierung.
         Faces werden zu BREP konvertiert und dann mit UnifySameDomain optimiert.
         """
         if self._build123d_solid is not None:
@@ -887,7 +903,7 @@ class Body:
             logger.warning("Keine Mesh-Daten vorhanden.")
             return False
 
-        logger.info(f"Starte Mesh-zu-BREP Konvertierung für '{self.name}'...")
+        logger.info(f"Starte Mesh-zu-BREP Konvertierung fÃ¼r '{self.name}'...")
         logger.info(f"  Mesh: {self.vtk_mesh.n_points} Punkte, {self.vtk_mesh.n_cells} Faces")
 
         try:
@@ -925,7 +941,7 @@ class Body:
                 self._build123d_solid = solid
                 self.shape = solid.wrapped
 
-                # TNP v4.0: ShapeID-Registrierung für konvertierte Geometrie
+                # TNP v4.0: ShapeID-Registrierung fÃ¼r konvertierte Geometrie
                 try:
                     if self._document and hasattr(self._document, '_shape_naming_service'):
                         service = self._document._shape_naming_service
@@ -960,7 +976,7 @@ class Body:
                 except Exception as e:
                     logger.debug(f"[TNP] Registrierung fehlgeschlagen: {e}")
 
-                # === NEU: ImportFeature erstellen für Rebuild-Support ===
+                # === NEU: ImportFeature erstellen fÃ¼r Rebuild-Support ===
                 # BREP serialisieren (via BytesIO Stream)
                 try:
                     from OCP.BRepTools import BRepTools
@@ -980,7 +996,7 @@ class Body:
                             source_type="mesh_convert"
                         )
 
-                        # Alte Features löschen und ImportFeature als Basis setzen
+                        # Alte Features lÃ¶schen und ImportFeature als Basis setzen
                         self.features.clear()
                         self.features.append(import_feature)
 
@@ -991,11 +1007,11 @@ class Body:
 
                 logger.success(f"Body '{self.name}' erfolgreich konvertiert!")
 
-                # Mesh neu berechnen (vom BREP abgeleitet für Konsistenz)
+                # Mesh neu berechnen (vom BREP abgeleitet fÃ¼r Konsistenz)
                 self._update_mesh_from_solid(solid)
                 return True
             else:
-                logger.warning("Konvertierung lieferte kein gültiges Solid.")
+                logger.warning("Konvertierung lieferte kein gÃ¼ltiges Solid.")
                 return False
 
         except Exception as e:
@@ -1005,7 +1021,7 @@ class Body:
             
     @staticmethod
     def _format_index_refs_for_error(label: str, refs, max_items: int = 3) -> str:
-        """Formatiert Index-Referenzen kompakt für Fehlermeldungen."""
+        """Formatiert Index-Referenzen kompakt fÃ¼r Fehlermeldungen."""
         if refs is None:
             return ""
         values = refs if isinstance(refs, (list, tuple)) else [refs]
@@ -1025,7 +1041,7 @@ class Body:
 
     @staticmethod
     def _format_shape_refs_for_error(label: str, refs, max_items: int = 3) -> str:
-        """Formatiert ShapeID-Referenzen kompakt für Fehlermeldungen."""
+        """Formatiert ShapeID-Referenzen kompakt fÃ¼r Fehlermeldungen."""
         if refs is None:
             return ""
         values = refs if isinstance(refs, (list, tuple)) else [refs]
@@ -1059,9 +1075,9 @@ class Body:
 
     def _collect_feature_reference_diagnostics(self, feature, max_parts: int = 6) -> str:
         """
-        Baut eine kompakte Referenz-Zusammenfassung für Statusmeldungen.
+        Baut eine kompakte Referenz-Zusammenfassung fÃ¼r Statusmeldungen.
 
-        Wird an Fehlermeldungen angehängt, damit GUI/Tooltip direkt zeigen kann,
+        Wird an Fehlermeldungen angehÃ¤ngt, damit GUI/Tooltip direkt zeigen kann,
         welche Topologie-Referenzen betroffen waren.
         """
         if feature is None:
@@ -1105,7 +1121,7 @@ class Body:
     @staticmethod
     def _collect_feature_reference_payload(feature) -> dict:
         """
-        Liefert maschinenlesbare Referenzdaten für Status-Details.
+        Liefert maschinenlesbare Referenzdaten fÃ¼r Status-Details.
         """
         if feature is None:
             return {}
@@ -1216,8 +1232,8 @@ class Body:
 
     def _safe_operation(self, op_name, op_func, fallback_func=None, feature=None):
         """
-        Wrapper für kritische CAD-Operationen.
-        Fängt Crashes ab und erlaubt Fallbacks.
+        Wrapper fÃ¼r kritische CAD-Operationen.
+        FÃ¤ngt Crashes ab und erlaubt Fallbacks.
         """
         try:
             self._last_operation_error = ""
@@ -1251,7 +1267,7 @@ class Body:
                 has_topology_refs = self._feature_has_topological_references(feature) if feature is not None else False
                 if strict_self_heal and has_topology_refs:
                     self._last_operation_error = (
-                        f"Primärpfad fehlgeschlagen: {err_msg}; "
+                        f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; "
                         "Strict Self-Heal blockiert Fallback bei Topologie-Referenzen"
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
@@ -1262,27 +1278,27 @@ class Body:
                         hint="Feature neu referenzieren oder Parameter reduzieren.",
                     )
                     logger.error(
-                        f"Strict Self-Heal: Fallback für '{op_name}' blockiert "
+                        f"Strict Self-Heal: Fallback fÃ¼r '{op_name}' blockiert "
                         "(Topologie-Referenzen aktiv)."
                     )
                     return None, "ERROR"
-                logger.debug(f"→ Versuche Fallback für '{op_name}'...")
+                logger.debug(f"â†’ Versuche Fallback fÃ¼r '{op_name}'...")
                 try:
                     res_fallback = fallback_func()
                     if res_fallback:
-                        self._last_operation_error = f"Primärpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
+                        self._last_operation_error = f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
                         self._last_operation_error_details = self._build_operation_error_details(
                             op_name=op_name,
                             code="fallback_used",
                             message=self._last_operation_error,
                             feature=feature,
                         )
-                        logger.debug(f"✓ Fallback für '{op_name}' erfolgreich.")
+                        logger.debug(f"âœ“ Fallback fÃ¼r '{op_name}' erfolgreich.")
                         return res_fallback, "WARNING"
                 except Exception as e2:
                     fallback_msg = str(e2).strip() or e2.__class__.__name__
                     self._last_operation_error = (
-                        f"Primärpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
+                        f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
                         op_name=op_name,
@@ -1291,20 +1307,20 @@ class Body:
                         feature=feature,
                         fallback_error=fallback_msg,
                     )
-                    logger.error(f"✗ Auch Fallback fehlgeschlagen: {fallback_msg}")
+                    logger.error(f"âœ— Auch Fallback fehlgeschlagen: {fallback_msg}")
             
             return None, "ERROR"
 
     def _register_boolean_history(self, bool_result: BooleanResult, feature, operation_name: str = ""):
         """
-        Registriert Boolean-History für TNP v4.0.
+        Registriert Boolean-History fÃ¼r TNP v4.0.
 
         Wird nach erfolgreichen Boolean-Operationen aufgerufen um
         die BRepTools_History an die TNP-Systeme weiterzugeben.
 
         Args:
             bool_result: BooleanResult mit history-Attribut
-            feature: Das Feature das die Boolean-Operation ausgelöst hat
+            feature: Das Feature das die Boolean-Operation ausgelÃ¶st hat
             operation_name: Name der Operation (Join/Cut/Intersect)
         """
         boolean_history = getattr(bool_result, 'history', None)
@@ -1331,9 +1347,9 @@ class Body:
 
     def _register_fillet_chamfer_history(self, result_solid, history, feature, operation_type: str = "FILLET"):
         """
-        Registriert Fillet/Chamfer History für TNP v4.0.
+        Registriert Fillet/Chamfer History fÃ¼r TNP v4.0.
 
-        Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() für präzises Shape-Tracking
+        Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() fÃ¼r prÃ¤zises Shape-Tracking
         nach Fillet/Chamfer-Operationen.
 
         Args:
@@ -1446,21 +1462,21 @@ class Body:
             from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
             from OCP.BRepCheck import BRepCheck_Analyzer
 
-            # Prüfe ob Shape valide ist
+            # PrÃ¼fe ob Shape valide ist
             analyzer = BRepCheck_Analyzer(shape)
             if analyzer.IsValid():
                 return shape
 
             logger.debug("Shape invalid, starte Reparatur...")
 
-            # ShapeFix_Shape für allgemeine Reparaturen - Phase 5: Zentralisierte Toleranzen
+            # ShapeFix_Shape fÃ¼r allgemeine Reparaturen - Phase 5: Zentralisierte Toleranzen
             fixer = ShapeFix_Shape(shape)
             fixer.SetPrecision(Tolerances.KERNEL_PRECISION)
             fixer.SetMaxTolerance(Tolerances.MESH_EXPORT)
             fixer.SetMinTolerance(Tolerances.KERNEL_PRECISION / 10)
 
             # HINWEIS: FixSolidMode() etc. sind GETTER, nicht Setter!
-            # Die Standardwerte sind bereits True für die meisten Modi.
+            # Die Standardwerte sind bereits True fÃ¼r die meisten Modi.
             # Wir verlassen uns auf die Defaults.
 
             if fixer.Perform():
@@ -1469,19 +1485,19 @@ class Body:
                 # Validiere repariertes Shape
                 analyzer2 = BRepCheck_Analyzer(fixed_shape)
                 if analyzer2.IsValid():
-                    logger.debug("✓ Shape repariert")
+                    logger.debug("âœ“ Shape repariert")
                     return fixed_shape
                 else:
                     logger.warning("Shape nach Reparatur immer noch invalid")
-                    # Gib es trotzdem zurück - manchmal funktioniert es dennoch
+                    # Gib es trotzdem zurÃ¼ck - manchmal funktioniert es dennoch
                     return fixed_shape
             else:
                 logger.warning("ShapeFix Perform() fehlgeschlagen")
-                return shape  # Gib Original zurück
+                return shape  # Gib Original zurÃ¼ck
 
         except Exception as e:
             logger.warning(f"Shape-Reparatur Fehler: {e}")
-            return shape  # Gib Original zurück
+            return shape  # Gib Original zurÃ¼ck
 
     # ==================== PHASE 6: COMPUTE METHODS ====================
     # NOTE: _ocp_fillet und _ocp_chamfer wurden in OCP-AMP2 entfernt
@@ -1497,7 +1513,7 @@ class Body:
 
         Architektur:
         1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
-           - profile_selector filtert welche Profile gewählt wurden
+           - profile_selector filtert welche Profile gewÃ¤hlt wurden
         2. Ohne Sketch: precalculated_polys als Geometrie-Quelle (Legacy)
         """
         import math
@@ -1541,12 +1557,12 @@ class Body:
             if polys_to_revolve:
                 logger.info(f"Revolve: {len(polys_to_revolve)}/{len(sketch_profiles)} Profile via Selektor")
             else:
-                # Selektor hat nicht gematcht → Fehler, kein Fallback!
+                # Selektor hat nicht gematcht â†’ Fehler, kein Fallback!
                 logger.error(f"Revolve: Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                logger.error(f"Revolve: Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
+                logger.error(f"Revolve: VerfÃ¼gbare Profile: {[(p.centroid.x, p.centroid.y) for p in sketch_profiles]}")
                 raise ValueError("Revolve: Selektor-Match fehlgeschlagen")
         elif sketch_profiles:
-            # Kein Selektor → alle Profile verwenden (Legacy/Import)
+            # Kein Selektor â†’ alle Profile verwenden (Legacy/Import)
             polys_to_revolve = list(sketch_profiles)
             logger.info(f"Revolve: Alle {len(polys_to_revolve)} Profile (kein Selektor)")
         else:
@@ -1557,7 +1573,7 @@ class Body:
         faces_to_revolve = []
         for poly in polys_to_revolve:
             try:
-                coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
+                coords = list(poly.exterior.coords)[:-1]  # Shapely schlieÃŸt Polygon
                 if len(coords) < 3:
                     continue
                 pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
@@ -1567,7 +1583,7 @@ class Body:
                 logger.debug(f"Revolve: Polygon-Konvertierung fehlgeschlagen: {e}")
 
         if not faces_to_revolve:
-            raise ValueError("Revolve: Keine gültigen Profile gefunden")
+            raise ValueError("Revolve: Keine gÃ¼ltigen Profile gefunden")
 
         # Achse bestimmen (OCP gp_Ax1)
         axis_vec = feature.axis
@@ -1578,7 +1594,7 @@ class Body:
         ocp_direction = gp_Dir(axis_vec[0], axis_vec[1], axis_vec[2])
         ocp_axis = gp_Ax1(ocp_origin, ocp_direction)
 
-        # Winkel in Bogenmaß
+        # Winkel in BogenmaÃŸ
         angle_rad = math.radians(feature.angle)
 
         # OCP-First Revolve (alle Faces revolve und Union)
@@ -1588,7 +1604,7 @@ class Body:
             revolve_op.Build()
 
             if not revolve_op.IsDone():
-                raise ValueError(f"Revolve fehlgeschlagen für Face {i+1}/{len(faces_to_revolve)}")
+                raise ValueError(f"Revolve fehlgeschlagen fÃ¼r Face {i+1}/{len(faces_to_revolve)}")
 
             revolved_shape = revolve_op.Shape()
             revolved = Solid(revolved_shape)
@@ -1602,7 +1618,7 @@ class Body:
         if result_solid is None or result_solid.is_null():
             raise ValueError("Revolve erzeugte keine Geometrie")
 
-        # TNP-Registration wenn naming_service verfügbar
+        # TNP-Registration wenn naming_service verfÃ¼gbar
         if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 naming_service = self._document._shape_naming_service
@@ -1635,17 +1651,17 @@ class Body:
             except Exception as e:
                 logger.error(f"Revolve TNP Registration fehlgeschlagen: {e}")
 
-        logger.info(f"Revolve: {feature.angle}° um {feature.axis}")
+        logger.info(f"Revolve: {feature.angle}Â° um {feature.axis}")
         return result_solid
 
     def _compute_loft(self, feature: 'LoftFeature'):
         """
         OCP-First Loft mit direktem OpenCASCADE BRepOffsetAPI_ThruSections.
 
-        Phase 8: Unterstützt G0/G1/G2 Kontinuität.
+        Phase 8: UnterstÃ¼tzt G0/G1/G2 KontinuitÃ¤t.
         """
         if len(feature.profile_data) < 2:
-            raise ValueError("Loft benötigt mindestens 2 Profile")
+            raise ValueError("Loft benÃ¶tigt mindestens 2 Profile")
 
         # Profile zu Faces konvertieren
         sections = []
@@ -1655,9 +1671,9 @@ class Body:
                 sections.append(face)
 
         if len(sections) < 2:
-            raise ValueError(f"Konnte nur {len(sections)} gültige Faces erstellen")
+            raise ValueError(f"Konnte nur {len(sections)} gÃ¼ltige Faces erstellen")
 
-        # Kontinuitäts-Info
+        # KontinuitÃ¤ts-Info
         start_cont = getattr(feature, 'start_continuity', 'G0')
         end_cont = getattr(feature, 'end_continuity', 'G0')
 
@@ -1675,10 +1691,10 @@ class Body:
         is_ruled = feature.ruled
         loft_builder = BRepOffsetAPI_ThruSections(True, is_ruled)
 
-        # Smoothing für G1/G2 Kontinuität
+        # Smoothing fÃ¼r G1/G2 KontinuitÃ¤t
         if not is_ruled and (start_cont != 'G0' or end_cont != 'G0'):
             loft_builder.SetSmoothing(True)
-            # Parametrisierung für bessere Kontinuität
+            # Parametrisierung fÃ¼r bessere KontinuitÃ¤t
             if start_cont == 'G2' or end_cont == 'G2':
                 loft_builder.SetParType(Approx_ParametrizationType.Approx_Centripetal)
             else:
@@ -1690,9 +1706,9 @@ class Body:
             try:
                 loft_builder.SetCriteriumWeight(0.4, 0.2, 0.4)
             except Exception:
-                pass  # Nicht alle OCP-Versionen unterstützen SetCriteriumWeight
+                pass  # Nicht alle OCP-Versionen unterstÃ¼tzen SetCriteriumWeight
 
-        # Profile hinzufügen (Wires extrahieren)
+        # Profile hinzufÃ¼gen (Wires extrahieren)
         for i, face in enumerate(sections):
             face_shape = face.wrapped if hasattr(face, 'wrapped') else face
 
@@ -1711,9 +1727,9 @@ class Body:
                 wire = wire_builder.Wire()
                 loft_builder.AddWire(wire)
             else:
-                raise ValueError(f"Loft: Face {i+1} hat keinen gültigen Wire")
+                raise ValueError(f"Loft: Face {i+1} hat keinen gÃ¼ltigen Wire")
 
-        # Loft ausführen
+        # Loft ausfÃ¼hren
         loft_builder.Build()
 
         if not loft_builder.IsDone():
@@ -1726,9 +1742,9 @@ class Body:
         result = Solid(result_shape)
 
         if not result.is_valid():
-            raise ValueError("Loft erzeugte keinen gültigen Solid")
+            raise ValueError("Loft erzeugte keinen gÃ¼ltigen Solid")
 
-        # TNP-Registration wenn naming_service verfügbar
+        # TNP-Registration wenn naming_service verfÃ¼gbar
         if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 naming_service = self._document._shape_naming_service
@@ -1768,11 +1784,11 @@ class Body:
         Berechnet Sweep eines Profils entlang eines Pfads.
 
         OCP-First Strategy:
-        1. Profil zu Face konvertieren + Pfad auflösen
-        2. Voranalyse: Pfad-Komplexität → MakePipe oder MakePipeShell
+        1. Profil zu Face konvertieren + Pfad auflÃ¶sen
+        2. Voranalyse: Pfad-KomplexitÃ¤t â†’ MakePipe oder MakePipeShell
         3. Kein Fallback - bei Fehler ValueError
 
-        Phase 8: Unterstützt Twist und Skalierung
+        Phase 8: UnterstÃ¼tzt Twist und Skalierung
         """
         profile_face = None
         shape_service = None
@@ -1847,9 +1863,9 @@ class Body:
                     profile_face = profile_face_from_index
                     _persist_profile_shape_id(profile_face_from_index)
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"Sweep: Profil via Face-Index aufgelöst (index={profile_face_index})")
+                        logger.debug(f"Sweep: Profil via Face-Index aufgelÃ¶st (index={profile_face_index})")
             except Exception as e:
-                logger.debug(f"Sweep: Profil-Index Auflösung fehlgeschlagen: {e}")
+                logger.debug(f"Sweep: Profil-Index AuflÃ¶sung fehlgeschlagen: {e}")
 
         profile_face_from_shape = None
         if profile_source_solid is not None and has_profile_shape_ref and shape_service:
@@ -1868,29 +1884,29 @@ class Body:
                     if profile_face is None:
                         profile_face = profile_face_from_shape
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"Sweep: Profil via ShapeID aufgelöst (method={method})")
+                        logger.debug(f"Sweep: Profil via ShapeID aufgelÃ¶st (method={method})")
             except Exception as e:
-                logger.debug(f"Sweep: Profil-ShapeID Auflösung fehlgeschlagen: {e}")
+                logger.debug(f"Sweep: Profil-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
         if has_profile_shape_ref and profile_face_index is not None:
             if profile_face_from_index is None or profile_face_from_shape is None:
                 raise ValueError(
                     "Sweep: Profil-Referenz ist inkonsistent "
-                    "(profile_shape_id/profile_face_index). Bitte Profil neu auswählen."
+                    "(profile_shape_id/profile_face_index). Bitte Profil neu auswÃ¤hlen."
                 )
             if not _is_same_face(profile_face_from_index, profile_face_from_shape):
                 raise ValueError(
                     "Sweep: Profil-Referenz ist inkonsistent "
-                    "(profile_shape_id != profile_face_index). Bitte Profil neu auswählen."
+                    "(profile_shape_id != profile_face_index). Bitte Profil neu auswÃ¤hlen."
                 )
             profile_face = profile_face_from_index
 
         if profile_face is None and has_topological_profile_refs:
             logger.warning(
-                "Sweep: TNP-Profilreferenz konnte nicht aufgelöst werden "
+                "Sweep: TNP-Profilreferenz konnte nicht aufgelÃ¶st werden "
                 "(profile_shape_id/profile_face_index). Kein Geometric-Fallback."
             )
-            raise ValueError("Sweep: Profil-Referenz ist ungültig. Bitte Profil neu auswählen.")
+            raise ValueError("Sweep: Profil-Referenz ist ungÃ¼ltig. Bitte Profil neu auswÃ¤hlen.")
 
         # TNP v4.0 Fallback: GeometricFaceSelector (nur wenn keine topologischen Refs vorhanden)
         if profile_face is None and profile_source_solid is not None and feature.profile_geometric_selector:
@@ -1918,7 +1934,7 @@ class Body:
                         _persist_profile_shape_id(profile_face)
                         break
             except Exception as e:
-                logger.debug(f"Sweep: Profil über GeometricSelector fehlgeschlagen: {e}")
+                logger.debug(f"Sweep: Profil Ã¼ber GeometricSelector fehlgeschlagen: {e}")
 
         # Legacy-Fallback: Profil aus gespeicherten Geometriedaten (Sketch-Profil)
         if profile_face is None:
@@ -1926,25 +1942,25 @@ class Body:
         if profile_face is None:
             raise ValueError("Konnte Profil-Face nicht erstellen")
 
-        # Pfad auflösen
+        # Pfad auflÃ¶sen
         path_wire = self._resolve_path(feature.path_data, current_solid, feature)
         if path_wire is None:
-            raise ValueError("Konnte Pfad nicht auflösen")
+            raise ValueError("Konnte Pfad nicht auflÃ¶sen")
 
         # WICHTIG: Profil zum Pfad-Start verschieben
-        # Für Sweep muss das Profil am Startpunkt des Pfads liegen!
+        # FÃ¼r Sweep muss das Profil am Startpunkt des Pfads liegen!
         profile_face = self._move_profile_to_path_start(profile_face, path_wire, feature)
 
-        # OCP-First Sweep mit Voranalyse für optimale Methode
+        # OCP-First Sweep mit Voranalyse fÃ¼r optimale Methode
         # Keine Fallback-Kaskade - entweder OCP erfolgreich oder Fehler
         twist_angle = getattr(feature, 'twist_angle', 0.0)
         scale_start = getattr(feature, 'scale_start', 1.0)
         scale_end = getattr(feature, 'scale_end', 1.0)
         has_twist_or_scale = (twist_angle != 0.0 or scale_start != 1.0 or scale_end != 1.0)
 
-        logger.debug(f"Sweep OCP-First: Frenet={feature.is_frenet}, Twist={twist_angle}°, Scale={scale_start}->{scale_end}")
+        logger.debug(f"Sweep OCP-First: Frenet={feature.is_frenet}, Twist={twist_angle}Â°, Scale={scale_start}->{scale_end}")
 
-        # Voranalyse: Pfad-Komplexität bestimmen
+        # Voranalyse: Pfad-KomplexitÃ¤t bestimmen
         is_curved_path = self._is_curved_path(path_wire)
         has_spine = hasattr(feature, 'spine') and feature.spine is not None
 
@@ -1966,7 +1982,7 @@ class Body:
         if 'TopoDS' not in type_name and path_shape.__class__.__module__ != 'OCP.TopoDS':
             raise ValueError(f"Sweep: Pfad ist kein OCP Shape (Typ: {type_name})")
 
-        # Profil-Wire extrahieren (für MakePipeShell)
+        # Profil-Wire extrahieren (fÃ¼r MakePipeShell)
         # Versuche build123d outer_wire zuerst, dann OCP Fallback
         profile_wire = None
         if hasattr(profile_face, 'outer_wire'):
@@ -1995,7 +2011,7 @@ class Body:
         # OCP-First: Einziger Pfad mit Methoden-Wahl
         result_shape = None
 
-        # Einfacher Pfad → MakePipe (schneller, zuverlässiger)
+        # Einfacher Pfad â†’ MakePipe (schneller, zuverlÃ¤ssiger)
         if not is_curved_path and not has_twist_or_scale and not feature.is_frenet and not has_spine:
             logger.debug("Sweep: Verwende MakePipe (einfacher Pfad)")
             pipe_op = BRepOffsetAPI_MakePipe(path_shape, face_shape)
@@ -2006,7 +2022,7 @@ class Body:
 
             result_shape = pipe_op.Shape()
 
-        # Komplexer Pfad oder Twist/Scale → MakePipeShell
+        # Komplexer Pfad oder Twist/Scale â†’ MakePipeShell
         else:
             logger.debug(f"Sweep: Verwende MakePipeShell (curved={is_curved_path}, frenet={feature.is_frenet}, twist/scale={has_twist_or_scale})")
             pipe_shell = BRepOffsetAPI_MakePipeShell(path_shape)
@@ -2031,12 +2047,12 @@ class Body:
                     else:
                         pipe_shell.Add(profile_wire, False, False)
 
-                    # Twist wird über Approximation realisiert
+                    # Twist wird Ã¼ber Approximation realisiert
                     if twist_angle != 0.0:
-                        logger.info(f"Sweep: Twist {twist_angle}° wird approximiert")
-                        # Vollständige Twist-Implementierung würde Law_Interpol benötigen
+                        logger.info(f"Sweep: Twist {twist_angle}Â° wird approximiert")
+                        # VollstÃ¤ndige Twist-Implementierung wÃ¼rde Law_Interpol benÃ¶tigen
                 except ImportError:
-                    logger.debug("OCP.Law nicht verfügbar, Standard-Add verwenden")
+                    logger.debug("OCP.Law nicht verfÃ¼gbar, Standard-Add verwenden")
                     pipe_shell.Add(profile_wire, False, False)
             else:
                 pipe_shell.Add(profile_wire, False, False)
@@ -2049,7 +2065,7 @@ class Body:
             try:
                 pipe_shell.MakeSolid()
             except Exception:
-                pass  # MakeSolid optional für geschlossene Profile
+                pass  # MakeSolid optional fÃ¼r geschlossene Profile
 
             result_shape = pipe_shell.Shape()
 
@@ -2058,9 +2074,9 @@ class Body:
         result = Solid(result_shape)
 
         if not result.is_valid():
-            raise ValueError("Sweep erzeugte keinen gültigen Solid")
+            raise ValueError("Sweep erzeugte keinen gÃ¼ltigen Solid")
 
-        # TNP-Registration wenn naming_service verfügbar
+        # TNP-Registration wenn naming_service verfÃ¼gbar
         if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 naming_service = self._document._shape_naming_service
@@ -2116,7 +2132,7 @@ class Body:
             # Pfad-Startpunkt ermitteln
             path_edges = path_wire.edges() if hasattr(path_wire, 'edges') else []
             if not path_edges:
-                logger.warning("Sweep: Pfad hat keine Edges, überspringe Profil-Verschiebung")
+                logger.warning("Sweep: Pfad hat keine Edges, Ã¼berspringe Profil-Verschiebung")
                 return profile_face
 
             first_edge = path_edges[0]
@@ -2168,23 +2184,23 @@ class Body:
 
     def _is_curved_path(self, path_wire) -> bool:
         """
-        Analysiert ob der Pfad gekrümmt ist (nicht gerade).
+        Analysiert ob der Pfad gekrÃ¼mmt ist (nicht gerade).
 
-        Für OCP-First Sweep: Einfache Pfade können MakePipe verwenden,
-        gekrümmte Pfade benötigen MakePipeShell.
+        FÃ¼r OCP-First Sweep: Einfache Pfade kÃ¶nnen MakePipe verwenden,
+        gekrÃ¼mmte Pfade benÃ¶tigen MakePipeShell.
 
         Args:
             path_wire: Build123d Wire
 
         Returns:
-            True wenn gekrümmt, False wenn gerade Linie
+            True wenn gekrÃ¼mmt, False wenn gerade Linie
         """
         try:
             edges = list(path_wire.edges()) if hasattr(path_wire, 'edges') else []
             if len(edges) == 0:
                 return False
             if len(edges) == 1:
-                # Einzelne Edge prüfen
+                # Einzelne Edge prÃ¼fen
                 edge = edges[0]
                 # Gerade Linie hat gleiche Tangentenrichtung an Start/Ende
                 try:
@@ -2203,17 +2219,17 @@ class Body:
                             return abs(cos_angle - 1.0) > 0.01
                 except Exception:
                     pass
-                # Kurven-Typ prüfen
+                # Kurven-Typ prÃ¼fen
                 edge_type = edge.geom_type() if hasattr(edge, 'geom_type') else ''
                 return edge_type not in ('LINE', 'FORWARD')
-            # Multiple Edges: Prüfe ob alle in einer geraden Linie liegen
+            # Multiple Edges: PrÃ¼fe ob alle in einer geraden Linie liegen
             vertices = []
             for edge in edges:
                 verts = list(edge.vertices()) if hasattr(edge, 'vertices') else []
                 vertices.extend([v.center() if hasattr(v, 'center') else v for v in verts])
             if len(vertices) < 3:
                 return False
-            # Prüfe ob alle Punkte kolinear sind
+            # PrÃ¼fe ob alle Punkte kolinear sind
             v0 = vertices[0]
             v1 = vertices[-1]
             direction = v1 - v0
@@ -2221,13 +2237,13 @@ class Body:
             if dir_length < 1e-6:
                 return False
             for vi in vertices[1:-1]:
-                # Kreuzprodukt sollte Null sein für kolineare Punkte
+                # Kreuzprodukt sollte Null sein fÃ¼r kolineare Punkte
                 vi_v0 = vi - v0
                 cross_x = direction.Y * vi_v0.Z - direction.Z * vi_v0.Y
                 cross_y = direction.Z * vi_v0.X - direction.X * vi_v0.Z
                 cross_z = direction.X * vi_v0.Y - direction.Y * vi_v0.X
                 cross_mag = (cross_x**2 + cross_y**2 + cross_z**2)**0.5
-                if cross_mag > 0.1:  # > 0.1mm Abweichung = gekrümmt
+                if cross_mag > 0.1:  # > 0.1mm Abweichung = gekrÃ¼mmt
                     return True
             return False
         except Exception as e:
@@ -2238,14 +2254,14 @@ class Body:
         """
         OCP-First Shell mit direktem OpenCASCADE BRepOffsetAPI_MakeThickSolid.
 
-        Unterstützt:
-        - Shell mit Öffnungen (faces_to_remove)
-        - Geschlossener Hohlkörper (leere faces_to_remove)
+        UnterstÃ¼tzt:
+        - Shell mit Ã–ffnungen (faces_to_remove)
+        - Geschlossener HohlkÃ¶rper (leere faces_to_remove)
         """
         if current_solid is None:
-            raise ValueError("Shell benötigt einen existierenden Körper")
+            raise ValueError("Shell benÃ¶tigt einen existierenden KÃ¶rper")
 
-        # Öffnungs-Faces auflösen (TNP v4.0)
+        # Ã–ffnungs-Faces auflÃ¶sen (TNP v4.0)
         opening_faces = self._resolve_faces_for_shell(current_solid, feature.opening_face_selectors, feature)
         has_opening_refs = bool(
             feature.face_shape_ids
@@ -2254,11 +2270,11 @@ class Body:
         )
         if has_opening_refs and not opening_faces:
             raise ValueError(
-                "Shell: Öffnungs-Faces konnten via TNP v4.0 nicht aufgelöst werden "
+                "Shell: Ã–ffnungs-Faces konnten via TNP v4.0 nicht aufgelÃ¶st werden "
                 "(ShapeID/face_indices). Kein Geometric-Fallback."
             )
 
-        logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Öffnungen")
+        logger.debug(f"Shell mit Dicke={feature.thickness}mm, {len(opening_faces)} Ã–ffnungen")
 
         # OCP-First Shell
         from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
@@ -2278,8 +2294,8 @@ class Body:
         shell_op = BRepOffsetAPI_MakeThickSolid()
         shell_op.MakeThickSolidByJoin(
             shape,
-            faces_to_remove,  # Leer = geschlossener Hohlkörper
-            -feature.thickness,  # Negativ für nach innen
+            faces_to_remove,  # Leer = geschlossener HohlkÃ¶rper
+            -feature.thickness,  # Negativ fÃ¼r nach innen
             Tolerances.SHELL_TOLERANCE
         )
         shell_op.Build()
@@ -2294,9 +2310,9 @@ class Body:
         result = Solid(result_shape)
 
         if not result.is_valid():
-            raise ValueError("Shell erzeugte keinen gültigen Solid")
+            raise ValueError("Shell erzeugte keinen gÃ¼ltigen Solid")
 
-        # TNP-Registration wenn naming_service verfügbar
+        # TNP-Registration wenn naming_service verfÃ¼gbar
         if self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 naming_service = self._document._shape_naming_service
@@ -2329,45 +2345,45 @@ class Body:
             except Exception as e:
                 logger.error(f"Shell TNP Registration fehlgeschlagen: {e}")
 
-        logger.debug(f"OCP Shell erfolgreich ({len(opening_faces)} Öffnungen)")
+        logger.debug(f"OCP Shell erfolgreich ({len(opening_faces)} Ã–ffnungen)")
         return result
 
     def _unify_same_domain(self, shape, context: str = ""):
         """
-        Vereinigt zusammenhängende Flächen mit gleicher Geometrie.
+        Vereinigt zusammenhÃ¤ngende FlÃ¤chen mit gleicher Geometrie.
 
-        Besonders wichtig für:
-        - Planare Flächen die durch Boolean-Ops entstanden sind
-        - Zylindrische Flächen die durch Extrusion entstanden sind
+        Besonders wichtig fÃ¼r:
+        - Planare FlÃ¤chen die durch Boolean-Ops entstanden sind
+        - Zylindrische FlÃ¤chen die durch Extrusion entstanden sind
 
         Args:
             shape: OCP TopoDS_Shape
-            context: Beschreibung für Logging
+            context: Beschreibung fÃ¼r Logging
 
         Returns:
-            Vereinigtes Shape (oder Original wenn Vereinigung fehlschlägt)
+            Vereinigtes Shape (oder Original wenn Vereinigung fehlschlÃ¤gt)
         """
         try:
             from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_FACE
 
-            # Zähle Faces vorher
+            # ZÃ¤hle Faces vorher
             face_count_before = 0
             exp = TopExp_Explorer(shape, TopAbs_FACE)
             while exp.More():
                 face_count_before += 1
                 exp.Next()
 
-            # UnifySameDomain mit erhöhten Toleranzen für Zylinder
+            # UnifySameDomain mit erhÃ¶hten Toleranzen fÃ¼r Zylinder
             upgrader = ShapeUpgrade_UnifySameDomain(shape, True, True, True)
-            upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger für Zylinder-Segmente
-            upgrader.SetAngularTolerance(0.1)  # ~5.7° - erlaubt Merge von Zylinder-Facetten
+            upgrader.SetLinearTolerance(0.1)   # 0.1mm - groÃŸzÃ¼giger fÃ¼r Zylinder-Segmente
+            upgrader.SetAngularTolerance(0.1)  # ~5.7Â° - erlaubt Merge von Zylinder-Facetten
             upgrader.Build()
             unified = upgrader.Shape()
 
             if unified and not unified.IsNull():
-                # Zähle Faces nachher
+                # ZÃ¤hle Faces nachher
                 face_count_after = 0
                 exp = TopExp_Explorer(unified, TopAbs_FACE)
                 while exp.More():
@@ -2375,7 +2391,7 @@ class Body:
                     exp.Next()
 
                 if face_count_before != face_count_after:
-                    logger.debug(f"UnifySameDomain ({context}): {face_count_before} → {face_count_after} Faces")
+                    logger.debug(f"UnifySameDomain ({context}): {face_count_before} â†’ {face_count_after} Faces")
                 return unified
 
             return shape
@@ -2385,17 +2401,17 @@ class Body:
 
     def _compute_nsided_patch(self, feature: 'NSidedPatchFeature', current_solid):
         """
-        N-Sided Patch: Boundary-Edges finden und mit BRepFill_Filling füllen.
-        Das Ergebnis wird per Sewing an den bestehenden Solid angefügt.
+        N-Sided Patch: Boundary-Edges finden und mit BRepFill_Filling fÃ¼llen.
+        Das Ergebnis wird per Sewing an den bestehenden Solid angefÃ¼gt.
         """
         if current_solid is None:
-            raise ValueError("N-Sided Patch benötigt einen existierenden Körper")
+            raise ValueError("N-Sided Patch benÃ¶tigt einen existierenden KÃ¶rper")
 
         all_edges = current_solid.edges() if hasattr(current_solid, 'edges') else []
         if not all_edges:
             raise ValueError("Solid hat keine Kanten")
         if not feature.edge_shape_ids and not feature.edge_indices and not feature.geometric_selectors:
-            raise ValueError("N-Sided Patch benötigt mindestens 3 Kanten-Referenzen")
+            raise ValueError("N-Sided Patch benÃ¶tigt mindestens 3 Kanten-Referenzen")
 
         resolved_edges = []
 
@@ -2421,10 +2437,10 @@ class Body:
             _append_unique(edge)
         if is_enabled("tnp_debug_logging"):
             logger.debug(
-                f"N-Sided Patch: {len(tnp_edges)} Edges via zentralem TNP-Resolver aufgelöst"
+                f"N-Sided Patch: {len(tnp_edges)} Edges via zentralem TNP-Resolver aufgelÃ¶st"
             )
 
-        # Für zukünftige Rebuilds ShapeIDs + GeometricSelectors + Edge-Indizes persistieren
+        # FÃ¼r zukÃ¼nftige Rebuilds ShapeIDs + GeometricSelectors + Edge-Indizes persistieren
         if resolved_edges:
             try:
                 resolved_indices = []
@@ -2474,8 +2490,8 @@ class Body:
                 or len(feature.edge_indices or [])
                 or len(feature.geometric_selectors or [])
             )
-            logger.warning(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
-            raise ValueError(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelöst")
+            logger.warning(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelÃ¶st")
+            raise ValueError(f"Nur {len(resolved_edges)} von {expected} Kanten aufgelÃ¶st")
 
         logger.debug(f"N-Sided Patch: {len(resolved_edges)} Kanten, Grad={feature.degree}")
 
@@ -2493,7 +2509,7 @@ class Body:
         if patch_face is None:
             raise RuntimeError("N-Sided Patch: BRepFill_Filling fehlgeschlagen")
 
-        # Patch-Face zum Solid hinzufügen
+        # Patch-Face zum Solid hinzufÃ¼gen
         # Methode: BRepBuilderAPI_MakeSolid aus allen Faces (original + patch)
         try:
             from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
@@ -2507,11 +2523,11 @@ class Body:
             shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
             patch_shape = patch_face.wrapped if hasattr(patch_face, 'wrapped') else patch_face
 
-            # Sewing mit größerer Toleranz für bessere Verbindung
+            # Sewing mit grÃ¶ÃŸerer Toleranz fÃ¼r bessere Verbindung
             sewing = BRepBuilderAPI_Sewing(0.1)  # 0.1mm Toleranz
             sewing.SetNonManifoldMode(False)  # Manifold-Ergebnis erzwingen
 
-            # Alle Faces des Original-Solids hinzufügen
+            # Alle Faces des Original-Solids hinzufÃ¼gen
             face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
             n_faces = 0
             while face_explorer.More():
@@ -2519,14 +2535,14 @@ class Body:
                 n_faces += 1
                 face_explorer.Next()
 
-            # Patch-Face hinzufügen
+            # Patch-Face hinzufÃ¼gen
             sewing.Add(patch_shape)
             logger.debug(f"N-Sided Patch: Sewing {n_faces} Original-Faces + 1 Patch-Face")
 
             sewing.Perform()
             sewn = sewing.SewedShape()
 
-            # Prüfe Sewing-Ergebnis
+            # PrÃ¼fe Sewing-Ergebnis
             n_sewn_faces = 0
             face_exp = TopExp_Explorer(sewn, TopAbs_FACE)
             while face_exp.More():
@@ -2539,7 +2555,7 @@ class Body:
             if shell_explorer.More():
                 shell = TopoDS.Shell_s(shell_explorer.Current())
 
-                # Prüfe ob Shell geschlossen ist
+                # PrÃ¼fe ob Shell geschlossen ist
                 from OCP.BRep import BRep_Tool
                 from OCP.ShapeAnalysis import ShapeAnalysis_Shell
                 analyzer = ShapeAnalysis_Shell()
@@ -2557,7 +2573,7 @@ class Body:
                         logger.debug(f"N-Sided Patch: Loch geschlossen! ({result_faces} Faces)")
                         return result
                     else:
-                        logger.warning(f"N-Sided Patch: Solid mit {result_faces} Faces ungültig, versuche ShapeFix...")
+                        logger.warning(f"N-Sided Patch: Solid mit {result_faces} Faces ungÃ¼ltig, versuche ShapeFix...")
                         # ShapeFix versuchen
                         try:
                             from OCP.ShapeFix import ShapeFix_Solid
@@ -2573,8 +2589,8 @@ class Body:
             else:
                 logger.warning("N-Sided Patch: Keine Shell im Sewing-Ergebnis")
 
-            # Fallback: Versuche größere Toleranz
-            logger.warning("N-Sided Patch: Erster Sewing-Versuch fehlgeschlagen, versuche mit höherer Toleranz...")
+            # Fallback: Versuche grÃ¶ÃŸere Toleranz
+            logger.warning("N-Sided Patch: Erster Sewing-Versuch fehlgeschlagen, versuche mit hÃ¶herer Toleranz...")
             sewing2 = BRepBuilderAPI_Sewing(1.0)  # 1mm Toleranz
             sewing2.SetNonManifoldMode(False)
 
@@ -2594,7 +2610,7 @@ class Body:
                 if maker2.IsDone():
                     result2 = Solid(maker2.Shape())
                     if hasattr(result2, 'is_valid') and result2.is_valid():
-                        logger.debug(f"N-Sided Patch: Loch geschlossen mit höherer Toleranz!")
+                        logger.debug(f"N-Sided Patch: Loch geschlossen mit hÃ¶herer Toleranz!")
                         return result2
 
             # Letzter Fallback
@@ -2608,14 +2624,14 @@ class Body:
 
     def _compute_hollow(self, feature: 'HollowFeature', current_solid):
         """
-        Aushöhlen mit optionalem Drain Hole.
+        AushÃ¶hlen mit optionalem Drain Hole.
         1. Shell (geschlossen) via _compute_shell-Logik
-        2. Optional: Boolean Cut mit Zylinder für Drain Hole
+        2. Optional: Boolean Cut mit Zylinder fÃ¼r Drain Hole
         """
         if current_solid is None:
-            raise ValueError("Hollow benötigt einen existierenden Körper")
+            raise ValueError("Hollow benÃ¶tigt einen existierenden KÃ¶rper")
 
-        # TNP v4.0: Face-Referenzen vor der Shell-Ausführung aktualisieren
+        # TNP v4.0: Face-Referenzen vor der Shell-AusfÃ¼hrung aktualisieren
         self._update_face_selectors_for_feature(feature, current_solid)
 
         # Step 1: Create closed shell (reuse shell logic)
@@ -2624,7 +2640,7 @@ class Body:
             thickness=feature.wall_thickness,
             opening_face_selectors=feature.opening_face_selectors if feature.opening_face_selectors else []
         )
-        # Übertrage Opening-ShapeIDs auf ShellFeature.face_shape_ids (TNP v4.0)
+        # Ãœbertrage Opening-ShapeIDs auf ShellFeature.face_shape_ids (TNP v4.0)
         if feature.opening_face_shape_ids:
             shell_feat.face_shape_ids = list(feature.opening_face_shape_ids)
         if feature.opening_face_indices:
@@ -2686,7 +2702,7 @@ class Body:
                     builder.Build()
                     cyl = Solid(builder.Shape())
                 elif dot < 0:
-                    # Anti-parallel: rotate 180° around X
+                    # Anti-parallel: rotate 180Â° around X
                     from build123d import Axis
                     cyl = cyl.rotate(Axis.X, 180)
                     cyl = cyl.move(Location((center.X, center.Y, center.Z)))
@@ -2695,7 +2711,7 @@ class Body:
 
                 result = hollowed - cyl
                 if result and hasattr(result, 'is_valid') and result.is_valid():
-                    logger.debug(f"Hollow mit Drain Hole (⌀{feature.drain_diameter}mm) erfolgreich")
+                    logger.debug(f"Hollow mit Drain Hole (âŒ€{feature.drain_diameter}mm) erfolgreich")
                     return result
                 else:
                     logger.warning("Drain Hole Boolean fehlgeschlagen, verwende Shell ohne Drain")
@@ -2705,49 +2721,49 @@ class Body:
                 logger.warning(f"Drain Hole fehlgeschlagen: {e}, verwende Shell ohne Drain")
                 return hollowed
 
-        logger.debug(f"Hollow (Wandstärke {feature.wall_thickness}mm) erfolgreich")
+        logger.debug(f"Hollow (WandstÃ¤rke {feature.wall_thickness}mm) erfolgreich")
         return hollowed
 
     def _compute_hole(self, feature: 'HoleFeature', current_solid):
         """
         Erstellt eine Bohrung.
 
-        Methoden (in Priorität):
-        1. BRepFeat_MakeCylindricalHole (für simple holes - saubere Topologie)
-        2. Boolean Cut mit Zylinder (für counterbore, countersink, oder Fallback)
+        Methoden (in PrioritÃ¤t):
+        1. BRepFeat_MakeCylindricalHole (fÃ¼r simple holes - saubere Topologie)
+        2. Boolean Cut mit Zylinder (fÃ¼r counterbore, countersink, oder Fallback)
         """
         from build123d import Cylinder, Vector, Align
         import math
 
         if current_solid is None:
-            raise ValueError("Hole: Kein gültiges Eingabe-Solid vorhanden")
+            raise ValueError("Hole: Kein gÃ¼ltiges Eingabe-Solid vorhanden")
         if feature.diameter <= 0:
-            raise ValueError(f"Hole: Ungültiger Durchmesser {feature.diameter}mm (muss > 0 sein)")
+            raise ValueError(f"Hole: UngÃ¼ltiger Durchmesser {feature.diameter}mm (muss > 0 sein)")
         if feature.depth < 0:
-            raise ValueError(f"Hole: Ungültige Tiefe {feature.depth}mm (muss >= 0 sein)")
+            raise ValueError(f"Hole: UngÃ¼ltige Tiefe {feature.depth}mm (muss >= 0 sein)")
         if feature.hole_type not in {"simple", "counterbore", "countersink"}:
             raise ValueError(f"Hole: Unbekannter hole_type '{feature.hole_type}'")
         if feature.hole_type == "counterbore":
             if feature.counterbore_diameter <= feature.diameter:
                 raise ValueError(
                     f"Hole: Counterbore-Durchmesser {feature.counterbore_diameter}mm "
-                    f"muss größer als Bohrungsdurchmesser {feature.diameter}mm sein"
+                    f"muss grÃ¶ÃŸer als Bohrungsdurchmesser {feature.diameter}mm sein"
                 )
             if feature.counterbore_depth <= 0:
                 raise ValueError(f"Hole: Counterbore-Tiefe {feature.counterbore_depth}mm muss > 0 sein")
         if feature.hole_type == "countersink":
             if feature.countersink_angle <= 0 or feature.countersink_angle >= 179:
                 raise ValueError(
-                    f"Hole: Countersink-Winkel {feature.countersink_angle}° ist ungültig "
+                    f"Hole: Countersink-Winkel {feature.countersink_angle}Â° ist ungÃ¼ltig "
                     "(erwartet: 0 < Winkel < 179)"
                 )
 
-        # TNP v4.0: Face-Referenzen auflösen/aktualisieren
+        # TNP v4.0: Face-Referenzen auflÃ¶sen/aktualisieren
         target_faces = self._resolve_feature_faces(feature, current_solid)
         has_face_refs = bool(feature.face_shape_ids or feature.face_indices or feature.face_selectors)
         if has_face_refs and not target_faces:
             raise ValueError(
-                "Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden "
+                "Hole: Ziel-Face konnte via TNP v4.0 nicht aufgelÃ¶st werden "
                 f"(ShapeIDs={len(feature.face_shape_ids or [])}, "
                 f"Indices={len(feature.face_indices or [])}, "
                 f"Selectors={len(feature.face_selectors or [])})"
@@ -2756,7 +2772,7 @@ class Body:
         pos = Vector(*feature.position)
         d = Vector(*feature.direction)
         if target_faces:
-            # Falls Richtung ungültig ist, aus Face-Normale ableiten
+            # Falls Richtung ungÃ¼ltig ist, aus Face-Normale ableiten
             try:
                 face_center = target_faces[0].center()
                 face_normal = target_faces[0].normal_at(face_center)
@@ -2768,7 +2784,7 @@ class Body:
                 pass
 
         if d.length < 1e-9:
-            raise ValueError("Hole: Ungültige Bohrungsrichtung (Nullvektor)")
+            raise ValueError("Hole: UngÃ¼ltige Bohrungsrichtung (Nullvektor)")
 
         d = d.normalized()
         radius = feature.diameter / 2.0
@@ -2778,7 +2794,7 @@ class Body:
 
         logger.debug(f"Hole: type={feature.hole_type}, D={feature.diameter}mm, depth={depth}mm at {pos}")
 
-        # === METHODE 1: BRepFeat_MakeCylindricalHole (nur für simple holes) ===
+        # === METHODE 1: BRepFeat_MakeCylindricalHole (nur fÃ¼r simple holes) ===
         brepfeat_reason = ""
         if feature.hole_type == "simple":
             try:
@@ -2802,7 +2818,7 @@ class Body:
                 brepfeat_reason = f"BRepFeat Fehler: {e}"
                 logger.debug(f"BRepFeat Hole: {e}, Fallback auf Boolean")
 
-        # === METHODE 2: Boolean Cut (für counterbore, countersink, oder Fallback) ===
+        # === METHODE 2: Boolean Cut (fÃ¼r counterbore, countersink, oder Fallback) ===
 
         # Hauptbohrung als Zylinder erstellen
         hole_cyl = Cylinder(radius, depth,
@@ -2843,12 +2859,12 @@ class Body:
         # Boolean Cut: Bohrung vom Koerper abziehen via BooleanEngineV4 (TNP-safe)
         # Zuerst Tool-Shapes registrieren (damit sie ShapeIDs haben)
         if self._document and hasattr(self._document, '_shape_naming_service'):
-            # Wir registrieren das Tool als temporäres Feature oder unter der Hole-ID
+            # Wir registrieren das Tool als temporÃ¤res Feature oder unter der Hole-ID
             # Da das Hole-Feature das Tool "besitzt", ist es okay, die Faces des Tools
             # unter der Feature-ID zu registrieren.
             self._register_base_feature_shapes(feature, hole_shape)
 
-        # Boolean ausführen
+        # Boolean ausfÃ¼hren
         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
             current_solid, hole_shape, "Cut"
         )
@@ -2928,7 +2944,7 @@ class Body:
         """
         Wendet Draft/Taper auf selektierte Flaechen an.
         Verwendet OCP BRepOffsetAPI_DraftAngle.
-        TNP v4.0: Face-Selektion erfolgt über face_shape_ids (ShapeNamingService).
+        TNP v4.0: Face-Selektion erfolgt Ã¼ber face_shape_ids (ShapeNamingService).
         """
         import math
         from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
@@ -2940,17 +2956,17 @@ class Body:
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
         if current_solid is None:
-            raise ValueError("Draft: Kein gültiges Eingabe-Solid vorhanden")
+            raise ValueError("Draft: Kein gÃ¼ltiges Eingabe-Solid vorhanden")
         if abs(feature.draft_angle) >= 89.9:
             raise ValueError(
-                f"Draft: Ungültiger Winkel {feature.draft_angle}°. "
-                "Erwartet |Winkel| < 89.9°"
+                f"Draft: UngÃ¼ltiger Winkel {feature.draft_angle}Â°. "
+                "Erwartet |Winkel| < 89.9Â°"
             )
         if len(feature.pull_direction) < 3:
-            raise ValueError("Draft: Pull-Richtung ist unvollständig")
+            raise ValueError("Draft: Pull-Richtung ist unvollstÃ¤ndig")
         px, py, pz = feature.pull_direction[0], feature.pull_direction[1], feature.pull_direction[2]
         if (px * px + py * py + pz * pz) <= 1e-12:
-            raise ValueError("Draft: Ungültige Pull-Richtung (Nullvektor)")
+            raise ValueError("Draft: UngÃ¼ltige Pull-Richtung (Nullvektor)")
 
         pull_dir = gp_Dir(px, py, pz)
         angle_rad = math.radians(feature.draft_angle)
@@ -2962,7 +2978,7 @@ class Body:
         has_face_refs = bool(feature.face_shape_ids or feature.face_indices or feature.face_selectors)
 
         if has_face_refs and not target_faces:
-            raise ValueError("Draft: Ziel-Faces konnten via TNP v4.0 nicht aufgelöst werden")
+            raise ValueError("Draft: Ziel-Faces konnten via TNP v4.0 nicht aufgelÃ¶st werden")
 
         draft_op = BRepOffsetAPI_DraftAngle(shape)
         face_count = 0
@@ -2975,7 +2991,7 @@ class Body:
                     draft_op.Add(TopoDS.Face_s(topo_face), pull_dir, angle_rad, neutral_plane)
                     face_count += 1
                 except Exception as e:
-                    add_errors.append(f"Face[{face_idx}] konnte nicht hinzugefügt werden: {e}")
+                    add_errors.append(f"Face[{face_idx}] konnte nicht hinzugefÃ¼gt werden: {e}")
         else:
             # Kein explizites Face-Target -> alle Faces draften (Legacy-Verhalten)
             explorer = TopExp_Explorer(shape, TopAbs_FACE)
@@ -2986,20 +3002,20 @@ class Body:
                     draft_op.Add(face, pull_dir, angle_rad, neutral_plane)
                     face_count += 1
                 except Exception as e:
-                    add_errors.append(f"Face[{all_face_idx}] konnte nicht hinzugefügt werden: {e}")
+                    add_errors.append(f"Face[{all_face_idx}] konnte nicht hinzugefÃ¼gt werden: {e}")
                 explorer.Next()
                 all_face_idx += 1
 
         if face_count == 0:
             detail = add_errors[0] if add_errors else "kein kompatibles Ziel-Face gefunden"
-            raise ValueError(f"Draft: Keine Flächen konnten gedraftet werden ({detail})")
+            raise ValueError(f"Draft: Keine FlÃ¤chen konnten gedraftet werden ({detail})")
 
         draft_op.Build()
         if draft_op.IsDone():
             result_shape = draft_op.Shape()
             result_shape = self._fix_shape_ocp(result_shape)
 
-            # TNP v4.0: History Tracking für Draft
+            # TNP v4.0: History Tracking fÃ¼r Draft
             if self._document and hasattr(self._document, '_shape_naming_service'):
                 try:
                     service = self._document._shape_naming_service
@@ -3018,7 +3034,7 @@ class Body:
 
             from build123d import Solid
             result = Solid(result_shape)
-            logger.debug(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
+            logger.debug(f"Draft {feature.draft_angle}Â° auf {face_count} Flaechen erfolgreich")
             return result
 
         raise ValueError("Draft-Operation fehlgeschlagen")
@@ -3028,9 +3044,9 @@ class Body:
         Teilt einen Koerper entlang einer Ebene.
 
         TNP v4.0 / Multi-Body Architecture:
-        - Berechnet BEIDE Hälften (above + below)
-        - Gibt SplitResult zurück mit beiden Bodies
-        - Für legacy keep_side != "both": Gibt nur eine Hälfte als Solid zurück
+        - Berechnet BEIDE HÃ¤lften (above + below)
+        - Gibt SplitResult zurÃ¼ck mit beiden Bodies
+        - FÃ¼r legacy keep_side != "both": Gibt nur eine HÃ¤lfte als Solid zurÃ¼ck
 
         Returns:
             - SplitResult (wenn keep_side == "both")
@@ -3073,15 +3089,15 @@ class Body:
         half_space_below = BRepPrimAPI_MakeHalfSpace(split_face, gp_Pnt(*ref_pt_below))
         half_solid_below = half_space_below.Solid()
 
-        # === Phase 3: Beide Cuts durchführen ===
-        cut_above = BRepAlgoAPI_Cut(shape, half_solid_below)  # Cut away below → keep above
-        cut_below = BRepAlgoAPI_Cut(shape, half_solid_above)  # Cut away above → keep below
+        # === Phase 3: Beide Cuts durchfÃ¼hren ===
+        cut_above = BRepAlgoAPI_Cut(shape, half_solid_below)  # Cut away below â†’ keep above
+        cut_below = BRepAlgoAPI_Cut(shape, half_solid_above)  # Cut away above â†’ keep below
 
         cut_above.Build()
         cut_below.Build()
 
         if not (cut_above.IsDone() and cut_below.IsDone()):
-            raise ValueError("Split-Operation fehlgeschlagen - einer der Cuts konnte nicht durchgeführt werden")
+            raise ValueError("Split-Operation fehlgeschlagen - einer der Cuts konnte nicht durchgefÃ¼hrt werden")
 
         # === Phase 4: Beide Solids erstellen ===
         result_above_shape = self._fix_shape_ocp(cut_above.Shape())
@@ -3102,14 +3118,14 @@ class Body:
                     "normal": feature.plane_normal
                 }
             )
-            logger.debug(f"Split (both) erfolgreich → 2 Bodies erstellt")
+            logger.debug(f"Split (both) erfolgreich â†’ 2 Bodies erstellt")
             return result
         elif feature.keep_side == "above":
-            # Legacy: Nur above zurückgeben
+            # Legacy: Nur above zurÃ¼ckgeben
             logger.debug(f"Split (above) erfolgreich")
             return body_above
         else:
-            # Legacy: Nur below zurückgeben
+            # Legacy: Nur below zurÃ¼ckgeben
             logger.debug(f"Split (below) erfolgreich")
             return body_below
 
@@ -3118,16 +3134,16 @@ class Body:
         Erzeugt ein echtes helikales Gewinde via Helix-Sweep + Boolean.
 
         Strategy:
-        1. ISO 60° Gewindeprofil als Draht erstellen
+        1. ISO 60Â° Gewindeprofil als Draht erstellen
         2. Helix-Pfad mit Pitch und Tiefe
-        3. Sweep Profil entlang Helix → Thread-Solid
+        3. Sweep Profil entlang Helix â†’ Thread-Solid
         4. Boolean Cut (extern) oder Fuse (intern)
         """
         import numpy as np
 
         shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
 
-        # TNP v4.0: Face-Referenz auflösen (ShapeID -> Index -> Selector).
+        # TNP v4.0: Face-Referenz auflÃ¶sen (ShapeID -> Index -> Selector).
         target_faces = self._resolve_feature_faces(feature, current_solid)
         has_face_refs = bool(
             getattr(feature, "face_shape_id", None) is not None
@@ -3135,7 +3151,7 @@ class Body:
             or getattr(feature, "face_selector", None)
         )
         if has_face_refs and not target_faces:
-            raise ValueError("Thread: Ziel-Face konnte via TNP v4.0 nicht aufgelöst werden")
+            raise ValueError("Thread: Ziel-Face konnte via TNP v4.0 nicht aufgelÃ¶st werden")
 
         pos = np.array(feature.position, dtype=float)
         direction = np.array(feature.direction, dtype=float)
@@ -3149,7 +3165,7 @@ class Body:
                 topo_face = target_face.wrapped if hasattr(target_face, "wrapped") else target_face
                 adaptor = BRepAdaptor_Surface(topo_face)
                 if adaptor.GetType() != GeomAbs_Cylinder:
-                    raise ValueError("ausgewähltes Face ist nicht zylindrisch")
+                    raise ValueError("ausgewÃ¤hltes Face ist nicht zylindrisch")
 
                 cyl = adaptor.Cylinder()
                 axis = cyl.Axis()
@@ -3171,7 +3187,7 @@ class Body:
                 logger.warning(f"Thread: Face-Referenz nicht als Zylinder nutzbar ({e}); verwende Feature-Parameter")
 
         if np.linalg.norm(direction) < 1e-9:
-            raise ValueError("Thread: Ungültige Gewinderichtung (Nullvektor)")
+            raise ValueError("Thread: UngÃ¼ltige Gewinderichtung (Nullvektor)")
         direction = direction / (np.linalg.norm(direction) + 1e-12)
 
         r = max(feature.diameter / 2.0, 1e-6)
@@ -3183,7 +3199,7 @@ class Body:
             raise ValueError("Thread: Depth muss > 0 sein")
         n_turns = depth / pitch
 
-            # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
+            # Thread groove depth (ISO 60Â° metric: H = 0.8660 * P, groove = 5/8 * H)
         H = 0.8660254 * pitch
         groove_depth = 0.625 * H
 
@@ -3199,7 +3215,7 @@ class Body:
         
         Das Profil wird senkrecht zum Helix-Tangenten am Startpunkt platziert
         (nicht auf Plane.XZ!). Dadurch entsteht saubere Geometrie mit wenigen
-        Faces/Edges → schnelle Tessellation ohne Lag.
+        Faces/Edges â†’ schnelle Tessellation ohne Lag.
         """
         import numpy as np
         from build123d import (Helix, Solid, Polyline, BuildSketch, BuildLine,
@@ -3225,7 +3241,7 @@ class Body:
             direction=tuple(direction)
         )
 
-        # 2. ISO 60° Dreiecksprofil senkrecht zum Helix-Tangenten am Startpunkt
+        # 2. ISO 60Â° Dreiecksprofil senkrecht zum Helix-Tangenten am Startpunkt
         half_w = pitch * 0.3
 
         # Profil-Plane senkrecht zur Helix-Tangente am Startpunkt
@@ -3250,10 +3266,10 @@ class Body:
         # 4. Boolean Operation via BooleanEngineV4 (TNP-safe)
         bool_op_type = "Cut" if thread_type == "external" else "Fuse"
 
-        # Tool-Shapes registrieren (optional, aber gut für Debugging/Picking)
+        # Tool-Shapes registrieren (optional, aber gut fÃ¼r Debugging/Picking)
         if feature and self._document and hasattr(self._document, '_shape_naming_service'):
             try:
-                # Wir registrieren das Tool temporär unter der Feature-ID
+                # Wir registrieren das Tool temporÃ¤r unter der Feature-ID
                 self._register_base_feature_shapes(feature, thread_solid)
             except Exception:
                 pass
@@ -3298,17 +3314,17 @@ class Body:
             # Validiere normal-Vektor
             normal_vec = Vector(*normal)
             if normal_vec.length < 1e-10:
-                logger.warning("Sweep: Normale hat Länge 0, verwende (0, 0, 1)")
+                logger.warning("Sweep: Normale hat LÃ¤nge 0, verwende (0, 0, 1)")
                 normal_vec = Vector(0, 0, 1)
 
-            # x_dir berechnen falls nicht vorhanden oder ungültig
+            # x_dir berechnen falls nicht vorhanden oder ungÃ¼ltig
             if not x_dir or Vector(*x_dir).length < 1e-10:
                 # Berechne x_dir senkrecht zur Normalen
                 import numpy as np
                 n = np.array([normal_vec.X, normal_vec.Y, normal_vec.Z])
                 n = n / (np.linalg.norm(n) + 1e-10)
 
-                # Wähle Referenz-Vektor der nicht parallel zur Normalen ist
+                # WÃ¤hle Referenz-Vektor der nicht parallel zur Normalen ist
                 if abs(n[2]) < 0.9:
                     ref = np.array([0, 0, 1])
                 else:
@@ -3335,11 +3351,11 @@ class Body:
                     pt_3d = plane.from_local_coords((x, y))
                     points_3d.append(pt_3d)
 
-                # Äußeres Wire erstellen
+                # Ã„uÃŸeres Wire erstellen
                 if len(points_3d) >= 3:
                     outer_wire = Wire.make_polygon(points_3d, close=True)
 
-                    # Innere Löcher verarbeiten (falls vorhanden)
+                    # Innere LÃ¶cher verarbeiten (falls vorhanden)
                     inner_wires = []
                     if hasattr(shapely_poly, 'interiors') and shapely_poly.interiors:
                         for interior in shapely_poly.interiors:
@@ -3352,9 +3368,9 @@ class Body:
                                 inner_wire = Wire.make_polygon(inner_points_3d, close=True)
                                 inner_wires.append(inner_wire)
 
-                    # Face mit Löchern erstellen
+                    # Face mit LÃ¶chern erstellen
                     if inner_wires:
-                        logger.debug(f"Profil hat {len(inner_wires)} innere Löcher")
+                        logger.debug(f"Profil hat {len(inner_wires)} innere LÃ¶cher")
                         face = make_face(outer_wire, inner_wires)
                     else:
                         face = make_face(outer_wire)
@@ -3368,11 +3384,11 @@ class Body:
 
     def _resolve_path(self, path_data: dict, current_solid, feature: Optional['SweepFeature'] = None):
         """
-        Löst Pfad-Daten zu Build123d Wire auf.
+        LÃ¶st Pfad-Daten zu Build123d Wire auf.
 
         Args:
             path_data: Dict mit edge_indices, sketch_id, etc.
-            current_solid: Aktueller Solid für Body-Edge-Auflösung
+            current_solid: Aktueller Solid fÃ¼r Body-Edge-AuflÃ¶sung
 
         Returns:
             Build123d Wire oder None
@@ -3435,7 +3451,7 @@ class Body:
                             if resolved is not None:
                                 resolved_index_edges.append(resolved)
                     except Exception as e:
-                        logger.debug(f"Sweep: Topology-Index-Pfadauflösung fehlgeschlagen: {e}")
+                        logger.debug(f"Sweep: Topology-Index-PfadauflÃ¶sung fehlgeschlagen: {e}")
 
                 resolved_shape_edge = None
                 if feature and feature.path_shape_id and shape_service:
@@ -3451,9 +3467,9 @@ class Body:
                             if resolved_shape_edge is None:
                                 resolved_shape_edge = Edge(resolved_ocp)
                             if is_enabled("tnp_debug_logging"):
-                                logger.debug(f"Sweep: Path via ShapeID aufgelöst (method={method})")
+                                logger.debug(f"Sweep: Path via ShapeID aufgelÃ¶st (method={method})")
                     except Exception as e:
-                        logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
+                        logger.debug(f"Sweep: Path-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
                 strict_path_mismatch = False
                 if edge_indices and feature and getattr(feature, "path_shape_id", None) is not None:
@@ -3479,10 +3495,10 @@ class Body:
                 if resolved_shape_edge is not None:
                     return Wire([resolved_shape_edge])
 
-                # Wenn explizite TNP-Referenzen vorhanden sind, kein stilles Recovery über Legacy/Session-Pfade.
+                # Wenn explizite TNP-Referenzen vorhanden sind, kein stilles Recovery Ã¼ber Legacy/Session-Pfade.
                 if has_topological_path_refs:
                     logger.warning(
-                        "Sweep: TNP-Pfadreferenz konnte nicht aufgelöst werden "
+                        "Sweep: TNP-Pfadreferenz konnte nicht aufgelÃ¶st werden "
                         "(ShapeID/edge_indices). Kein Geometric-Fallback."
                     )
                     return None
@@ -3506,14 +3522,14 @@ class Body:
                     except Exception as e:
                         logger.debug(f"Sweep: GeometricEdgeSelector Fallback fehlgeschlagen: {e}")
 
-                # Sekundär: Direkte Build123d Edges (Session-basiert)
+                # SekundÃ¤r: Direkte Build123d Edges (Session-basiert)
                 build123d_edges = path_data.get('build123d_edges', [])
                 if build123d_edges:
                     _persist_path_shape_id(build123d_edges[0])
                     logger.debug(f"Sweep: Verwende {len(build123d_edges)} direkte Build123d Edge(s)")
                     return Wire(build123d_edges)
 
-                # Sekundär: Direkte Einzel-Edge (Session-basiert)
+                # SekundÃ¤r: Direkte Einzel-Edge (Session-basiert)
                 direct_edge = path_data.get('edge')
                 if direct_edge is not None:
                     _persist_path_shape_id(direct_edge)
@@ -3521,21 +3537,21 @@ class Body:
 
                 if path_data.get("edge_selector") is not None:
                     logger.warning(
-                        "Sweep: Legacy path_data.edge_selector wird nicht mehr aufgelöst. "
-                        "Bitte Pfad neu auswählen (TNP v4: edge_indices/ShapeID)."
+                        "Sweep: Legacy path_data.edge_selector wird nicht mehr aufgelÃ¶st. "
+                        "Bitte Pfad neu auswÃ¤hlen (TNP v4: edge_indices/ShapeID)."
                     )
 
             return None
 
         except Exception as e:
-            logger.debug(f"Pfad-Auflösung fehlgeschlagen: {e}")
+            logger.debug(f"Pfad-AuflÃ¶sung fehlgeschlagen: {e}")
             return None
 
     def _sketch_edge_to_wire(self, path_data: dict):
         """
         Konvertiert Sketch-Edge zu Build123d Wire.
 
-        Unterstützte Typen:
+        UnterstÃ¼tzte Typen:
         - arc: Bogen mit center, radius, start_angle, end_angle
         - line: Linie mit start, end
         - spline: Spline mit control_points
@@ -3663,11 +3679,11 @@ class Body:
             selector_center = np.array(geo_selector.center)
             dist = np.linalg.norm(face_center - selector_center)
             
-            # Normalisierter Distanz-Score (1.0 = gleich, 0.0 = außerhalb Toleranz)
+            # Normalisierter Distanz-Score (1.0 = gleich, 0.0 = auÃŸerhalb Toleranz)
             tolerance = getattr(geo_selector, 'tolerance', 10.0)
             center_score = max(0.0, 1.0 - (dist / tolerance))
             
-            # Normalen-Ähnlichkeit
+            # Normalen-Ã„hnlichkeit
             try:
                 fn = face.normal_at(fc)
                 face_normal = np.array([fn.X, fn.Y, fn.Z])
@@ -3678,13 +3694,13 @@ class Body:
                 selector_normal = selector_normal / (np.linalg.norm(selector_normal) + 1e-10)
                 
                 # Dot-Product (1.0 = gleiche Richtung, -1.0 = entgegengesetzt)
-                dot = abs(np.dot(face_normal, selector_normal))  # Abs für beide Richtungen
+                dot = abs(np.dot(face_normal, selector_normal))  # Abs fÃ¼r beide Richtungen
                 normal_score = dot
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 normal_score = 0.5  # Neutral wenn Normal nicht berechenbar
             
-            # Area-Ähnlichkeit (20% Toleranz)
+            # Area-Ã„hnlichkeit (20% Toleranz)
             try:
                 face_area = face.area
                 selector_area = geo_selector.area
@@ -3711,7 +3727,7 @@ class Body:
 
     def _resolve_feature_faces(self, feature, solid):
         """
-        TNP v4.0: Löst Face-Referenzen eines Features auf und migriert Legacy-Daten.
+        TNP v4.0: LÃ¶st Face-Referenzen eines Features auf und migriert Legacy-Daten.
 
         Reihenfolge:
         1. ShapeIDs via ShapeNamingService
@@ -3740,7 +3756,7 @@ class Body:
             index_attr = "face_indices"
             selector_attr = "opening_face_selectors"
         elif isinstance(feature, (ThreadFeature, ExtrudeFeature)):
-            # Thread/Push-Pull nutzen singuläre Face-Referenzen.
+            # Thread/Push-Pull nutzen singulÃ¤re Face-Referenzen.
             shape_attr = None
             index_attr = None
             selector_attr = None
@@ -3858,7 +3874,7 @@ class Body:
                     resolved_face = face_from_index(solid, face_idx)
                     _append_face(resolved_face, topo_index=face_idx, source="index")
             except Exception as e:
-                logger.debug(f"{feature.name}: Face-Index Auflösung fehlgeschlagen: {e}")
+                logger.debug(f"{feature.name}: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
 
         def _resolve_by_shape_ids() -> None:
             if not service:
@@ -3884,11 +3900,11 @@ class Body:
                     )
                     if is_enabled("tnp_debug_logging"):
                         logger.debug(
-                            f"{feature.name}: Face via ShapeID aufgelöst "
+                            f"{feature.name}: Face via ShapeID aufgelÃ¶st "
                             f"(method={method})"
                         )
                 except Exception as e:
-                    logger.debug(f"{feature.name}: Face-ShapeID Auflösung fehlgeschlagen: {e}")
+                    logger.debug(f"{feature.name}: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
         single_ref_pair = bool(
@@ -3919,8 +3935,8 @@ class Body:
         )
 
         # TNP v4.0:
-        # - Extrude/Thread (single-face): shape-first für semantische Stabilität.
-        # - Alle anderen: index-first, um Topologie-Indizes als Primärreferenz zu nutzen.
+        # - Extrude/Thread (single-face): shape-first fÃ¼r semantische StabilitÃ¤t.
+        # - Alle anderen: index-first, um Topologie-Indizes als PrimÃ¤rreferenz zu nutzen.
         if prefer_shape_first:
             _resolve_by_shape_ids()
             if strict_dual_face_refs or (len(resolved_shape_ids) < expected_shape_refs and valid_face_indices):
@@ -3963,15 +3979,15 @@ class Body:
         )
         if strict_dual_face_refs and strict_topology_mismatch:
             unresolved_topology_refs = True
-        # Strict für single-face Referenzen: wenn ShapeID vorhanden aber nicht
-        # auflösbar, nicht still auf potentiell falschen Index degradieren.
+        # Strict fÃ¼r single-face Referenzen: wenn ShapeID vorhanden aber nicht
+        # auflÃ¶sbar, nicht still auf potentiell falschen Index degradieren.
         if prefer_shape_first and expected_shape_refs > 0 and len(resolved_shape_ids) < expected_shape_refs:
             unresolved_topology_refs = True
 
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
             logger.warning(
-                f"{feature.name}: Face-Referenz ist ungültig (ShapeID/face_indices). "
+                f"{feature.name}: Face-Referenz ist ungÃ¼ltig (ShapeID/face_indices). "
                 f"Kein Geometric-Fallback.{mismatch_hint}"
             )
             return []
@@ -4020,13 +4036,13 @@ class Body:
         if not resolved_faces:
             return []
 
-        # Persistiere aktualisierte Referenzen zurück ins Feature
+        # Persistiere aktualisierte Referenzen zurÃ¼ck ins Feature
         try:
             updated_selectors = [
                 GeometricFaceSelector.from_face(face).to_dict()
                 for face in resolved_faces
             ]
-            # Nicht-topologische Zusatzdaten (z. B. cell_ids fürs Overlay) beibehalten.
+            # Nicht-topologische Zusatzdaten (z. B. cell_ids fÃ¼rs Overlay) beibehalten.
             for idx, updated in enumerate(updated_selectors):
                 if idx >= len(selectors):
                     continue
@@ -4060,7 +4076,7 @@ class Body:
     def _resolve_faces_for_shell(self, solid, face_selectors: List[dict],
                                 feature: 'ShellFeature' = None):
         """
-        Löst Face-Selektoren für Shell-Öffnungen auf.
+        LÃ¶st Face-Selektoren fÃ¼r Shell-Ã–ffnungen auf.
         TNP v4.0: ShapeID-first, GeometricSelector als Fallback.
         """
         if solid is None:
@@ -4079,18 +4095,18 @@ class Body:
         """
         Aktualisiert Edge-Selektoren in Fillet/Chamfer Features nach Geometrie-Operation.
 
-        Nach Push/Pull oder Boolean ändern sich Edge-Positionen. Diese Methode
+        Nach Push/Pull oder Boolean Ã¤ndern sich Edge-Positionen. Diese Methode
         findet die neuen Edges und aktualisiert die gespeicherten GeometricEdgeSelectors.
 
-        Bei großen Parameter-Änderungen (z.B. Extrude 200→100mm) wird automatisch
-        adaptive Toleranz verwendet wenn Standard-Matching (10mm) fehlschlägt.
+        Bei groÃŸen Parameter-Ã„nderungen (z.B. Extrude 200â†’100mm) wird automatisch
+        adaptive Toleranz verwendet wenn Standard-Matching (10mm) fehlschlÃ¤gt.
 
         Args:
             solid: Das neue Solid nach der Operation
             current_feature_index: Index des aktuell angewandten Features im Rebuild.
                 Nur Features VOR diesem Index werden aktualisiert (die danach
                 werden bei ihrem eigenen Durchlauf aktualisiert).
-                -1 = alle aktualisieren (Backward-Compat für nicht-Rebuild Aufrufe).
+                -1 = alle aktualisieren (Backward-Compat fÃ¼r nicht-Rebuild Aufrufe).
         """
         if not solid or not hasattr(solid, 'edges'):
             return
@@ -4123,7 +4139,7 @@ class Body:
             new_selectors = []
             for idx, selector in enumerate(geometric_selectors):
                 try:
-                    # Konvertiere zu GeometricEdgeSelector wenn nötig
+                    # Konvertiere zu GeometricEdgeSelector wenn nÃ¶tig
                     if isinstance(selector, dict):
                         geo_sel = GeometricEdgeSelector.from_dict(selector)
                     elif hasattr(selector, 'find_best_match'):
@@ -4134,7 +4150,7 @@ class Body:
                     # Finde beste matching Edge im neuen Solid
                     best_edge = geo_sel.find_best_match(all_edges)
 
-                    # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Änderungen
+                    # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Ã„nderungen
                     if best_edge is None:
                         if adaptive_tolerance is None:
                             adaptive_tolerance = self._compute_adaptive_edge_tolerance(solid)
@@ -4173,7 +4189,7 @@ class Body:
                             pass
                     else:
                         # Edge nicht gefunden - behalte alten Selector bei
-                        logger.warning(f"Edge nicht gefunden nach Operation für {feature.name}")
+                        logger.warning(f"Edge nicht gefunden nach Operation fÃ¼r {feature.name}")
                         new_selectors.append(geo_sel)
                 except Exception as e:
                     logger.debug(f"Edge-Selector Update fehlgeschlagen: {e}")
@@ -4190,14 +4206,14 @@ class Body:
 
     def _update_edge_selectors_for_feature(self, feature, solid):
         """
-        Aktualisiert Edge-Selektoren eines SPEZIFISCHEN Features vor Ausführung.
+        Aktualisiert Edge-Selektoren eines SPEZIFISCHEN Features vor AusfÃ¼hrung.
 
-        TNP-CRITICAL: Diese Methode muss BEVOR Fillet/Chamfer ausgeführt werden,
-        weil das Solid sich durch vorherige Features verändert haben kann.
+        TNP-CRITICAL: Diese Methode muss BEVOR Fillet/Chamfer ausgefÃ¼hrt werden,
+        weil das Solid sich durch vorherige Features verÃ¤ndert haben kann.
 
-        Bei Parameter-Änderungen (z.B. Extrude 200→100mm) können Edge-Center um
+        Bei Parameter-Ã„nderungen (z.B. Extrude 200â†’100mm) kÃ¶nnen Edge-Center um
         mehr als die Standard-Toleranz (10mm) wandern. In diesem Fall wird ein
-        adaptiver Fallback verwendet, der die Toleranz an die Solid-Größe anpasst.
+        adaptiver Fallback verwendet, der die Toleranz an die Solid-GrÃ¶ÃŸe anpasst.
 
         Args:
             feature: FilletFeature oder ChamferFeature
@@ -4224,7 +4240,7 @@ class Body:
 
         for idx, selector in enumerate(geometric_selectors):
             try:
-                # Konvertiere zu GeometricEdgeSelector wenn nötig
+                # Konvertiere zu GeometricEdgeSelector wenn nÃ¶tig
                 if isinstance(selector, dict):
                     geo_sel = GeometricEdgeSelector.from_dict(selector)
                 elif hasattr(selector, 'find_best_match'):
@@ -4236,8 +4252,8 @@ class Body:
                 # Finde beste matching Edge im aktuellen Solid
                 best_edge = geo_sel.find_best_match(all_edges)
 
-                # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Änderungen
-                # Wenn Standard-Matching (10mm) fehlschlägt, Toleranz an Solid-Größe anpassen
+                # Rebuild-Fallback: Adaptive Toleranz bei Parameter-Ã„nderungen
+                # Wenn Standard-Matching (10mm) fehlschlÃ¤gt, Toleranz an Solid-GrÃ¶ÃŸe anpassen
                 if best_edge is None:
                     if adaptive_tolerance is None:
                         adaptive_tolerance = self._compute_adaptive_edge_tolerance(solid)
@@ -4282,7 +4298,7 @@ class Body:
                                 if is_enabled("tnp_debug_logging"):
                                     logger.debug(
                                         f"ShapeID erneuert nach Rebuild: "
-                                        f"{old_sid.uuid[:8]} → {new_sid.uuid[:8]}"
+                                        f"{old_sid.uuid[:8]} â†’ {new_sid.uuid[:8]}"
                                     )
 
                     # TNP v4.0: Topology-Index aktualisieren
@@ -4297,7 +4313,7 @@ class Body:
                         pass
                 else:
                     # Edge nicht gefunden - behalte alten Selector bei
-                    logger.debug(f"Edge nicht gefunden für Feature {feature.name}, behalte alten Selector")
+                    logger.debug(f"Edge nicht gefunden fÃ¼r Feature {feature.name}, behalte alten Selector")
                     new_selectors.append(geo_sel)
             except Exception as e:
                 logger.debug(f"Edge-Selector Update fehlgeschlagen: {e}")
@@ -4311,15 +4327,15 @@ class Body:
 
     def _compute_adaptive_edge_tolerance(self, solid) -> float:
         """
-        Berechnet adaptive Toleranz für Edge-Matching basierend auf Solid-Größe.
+        Berechnet adaptive Toleranz fÃ¼r Edge-Matching basierend auf Solid-GrÃ¶ÃŸe.
 
-        BESSER LÖSUNG: Statt das adaptive Toleranz-Ansatz zu verwenden, verlassen wir uns
+        BESSER LÃ–SUNG: Statt das adaptive Toleranz-Ansatz zu verwenden, verlassen wir uns
         auf verbessertes TNP-Tracking (face_id-basierte Gruppierung, .wrapped Fix, etc.).
 
         Die adaptive Toleranz wird nur als letzten Fallback verwendet und ist STRENG begrenzt
         um falsche Edge-Matches zu vermeiden.
 
-        Max: 15mm (statt 50mm) - verhindert dass völlig falsche Edges gematcht werden.
+        Max: 15mm (statt 50mm) - verhindert dass vÃ¶llig falsche Edges gematcht werden.
         """
         try:
             bbox = solid.bounding_box()
@@ -4328,8 +4344,8 @@ class Body:
                 bbox.max.Y - bbox.min.Y,
                 bbox.max.Z - bbox.min.Z
             )
-            # Adaptive Toleranz = 5% der größten Dimension, min 5mm, max 15mm
-            # (früher: 10% max 50mm - zu groß für präzise Fillets!)
+            # Adaptive Toleranz = 5% der grÃ¶ÃŸten Dimension, min 5mm, max 15mm
+            # (frÃ¼her: 10% max 50mm - zu groÃŸ fÃ¼r prÃ¤zise Fillets!)
             tolerance = max_dim / 20.0
             return max(5.0, min(tolerance, 15.0))
         except Exception:
@@ -4339,7 +4355,7 @@ class Body:
         """
         Aktualisiert einen ShapeNamingService Record mit neuer Edge-Geometrie.
 
-        Wird aufgerufen wenn ein Edge-Selector nach Parameter-Änderung eine neue
+        Wird aufgerufen wenn ein Edge-Selector nach Parameter-Ã„nderung eine neue
         passende Edge gefunden hat. Aktualisiert ocp_shape, geometric_signature
         und spatial_index, damit _resolve_edges_tnp die Edge ebenfalls findet.
         """
@@ -4373,11 +4389,11 @@ class Body:
                     (pos, sid) for pos, sid in service._spatial_index[shape_type]
                     if sid.uuid != shape_id.uuid
                 ]
-                # Neuen Eintrag hinzufügen
+                # Neuen Eintrag hinzufÃ¼gen
                 service._spatial_index[shape_type].append((new_center, record.shape_id))
 
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP Record {shape_id.uuid[:8]} aktualisiert nach Parameter-Änderung")
+                logger.debug(f"TNP Record {shape_id.uuid[:8]} aktualisiert nach Parameter-Ã„nderung")
 
         except Exception as e:
             logger.debug(f"Shape Naming Record Update fehlgeschlagen: {e}")
@@ -4445,7 +4461,7 @@ class Body:
             )
             
             if is_enabled("tnp_debug_logging"):
-                logger.info(f"TNP v4.0: {len(shape_ids)} Edges, {face_count} Faces für Extrude '{feature.name}' registriert")
+                logger.info(f"TNP v4.0: {len(shape_ids)} Edges, {face_count} Faces fÃ¼r Extrude '{feature.name}' registriert")
             
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
@@ -4541,7 +4557,7 @@ class Body:
                     output_shape_ids.append(shape_id)
             
             # 3. Manuelle Mappings erstellen (geometrisches Matching)
-            # Finde für jede Original-Edge die beste passende Result-Edge
+            # Finde fÃ¼r jede Original-Edge die beste passende Result-Edge
             manual_mappings = {}
             
             if original_solid and result_solid:
@@ -4567,7 +4583,7 @@ class Body:
                         # Distanz-Score
                         dist = np.linalg.norm(orig_pos - result_pos)
                         
-                        # Längen-Score
+                        # LÃ¤ngen-Score
                         len_diff = abs(orig_len - result_len) if orig_len > 0 else 0
                         
                         # Gesamt-Score (Distanz wichtiger)
@@ -4607,7 +4623,7 @@ class Body:
 
     def _update_face_selectors_for_feature(self, feature, solid):
         """
-        TNP v4.0: Aktualisiert Face-Referenzen eines Features vor Ausführung.
+        TNP v4.0: Aktualisiert Face-Referenzen eines Features vor AusfÃ¼hrung.
 
         Primary: ShapeIDs via ShapeNamingService
         Secondary: Face-Indizes via topology_indexing.face_from_index
@@ -4632,11 +4648,24 @@ class Body:
 
         resolved_faces = self._resolve_feature_faces(feature, solid)
         if is_enabled("tnp_debug_logging"):
-            logger.debug(f"{feature.name}: {len(resolved_faces)} Face-Referenzen aufgelöst (TNP v4.0)")
+            logger.debug(f"{feature.name}: {len(resolved_faces)} Face-Referenzen aufgelÃ¶st (TNP v4.0)")
+
+    def _get_or_create_shape_naming_service(self):
+        """
+        Liefert den aktiven ShapeNamingService oder erstellt einen temporÃ¤ren.
+
+        Legacy-Compat: Direkte _ocp_fillet/_ocp_chamfer-Aufrufe aus
+        Regressionstests kÃ¶nnen ohne Document-Kontext auftreten.
+        """
+        if self._document and hasattr(self._document, "_shape_naming_service"):
+            service = self._document._shape_naming_service
+            if service is not None:
+                return service
+        return ShapeNamingService()
 
     def _ocp_extrude_face(self, face, amount, direction):
         """
-        Extrusion eines Faces - nutzt Build123d primär, OCP als Fallback.
+        Extrusion eines Faces - nutzt Build123d primÃ¤r, OCP als Fallback.
 
         Args:
             face: Build123d Face oder TopoDS_Face
@@ -4646,7 +4675,7 @@ class Body:
         Returns:
             Build123d Solid oder None
         """
-        # PRIMÄR: Build123d extrude (bewährt und stabil)
+        # PRIMÃ„R: Build123d extrude (bewÃ¤hrt und stabil)
         try:
             from build123d import extrude
             result = extrude(face, amount=amount, dir=direction)
@@ -4684,7 +4713,7 @@ class Body:
             # Erstelle Richtungsvektor
             try:
                 if hasattr(direction, 'X'):
-                    # Build123d Vector (property mit Großbuchstaben)
+                    # Build123d Vector (property mit GroÃŸbuchstaben)
                     vec = gp_Vec(direction.X * amount, direction.Y * amount, direction.Z * amount)
                 elif hasattr(direction, 'x'):
                     # Objekt mit x, y, z Attributen (Kleinbuchstaben)
@@ -4711,7 +4740,7 @@ class Body:
             # Validiere
             analyzer = BRepCheck_Analyzer(result_shape)
             if not analyzer.IsValid():
-                logger.warning("OCP Extrude produzierte ungültiges Shape, versuche Reparatur...")
+                logger.warning("OCP Extrude produzierte ungÃ¼ltiges Shape, versuche Reparatur...")
                 result_shape = self._fix_shape_ocp(result_shape)
 
             # Wrap zu Build123d Solid
@@ -4746,6 +4775,50 @@ class Body:
             traceback.print_exc()
             return None
 
+    def _ocp_fillet(self, solid, edges, radius, feature_id: Optional[str] = None):
+        """
+        Legacy-kompatibler Fillet-Entry-Point.
+
+        Delegiert auf OCPFilletHelper, damit Ã¤ltere Tests/Callsites
+        weiterhin funktionieren.
+        """
+        if solid is None:
+            raise ValueError("_ocp_fillet: solid darf nicht None sein")
+
+        naming_service = self._get_or_create_shape_naming_service()
+        if feature_id is None:
+            feature_id = f"fillet_compat_{self.id}"
+
+        return OCPFilletHelper.fillet(
+            solid=solid,
+            edges=edges or [],
+            radius=radius,
+            naming_service=naming_service,
+            feature_id=feature_id,
+        )
+
+    def _ocp_chamfer(self, solid, edges, distance, feature_id: Optional[str] = None):
+        """
+        Legacy-kompatibler Chamfer-Entry-Point.
+
+        Delegiert auf OCPChamferHelper, damit Ã¤ltere Tests/Callsites
+        weiterhin funktionieren.
+        """
+        if solid is None:
+            raise ValueError("_ocp_chamfer: solid darf nicht None sein")
+
+        naming_service = self._get_or_create_shape_naming_service()
+        if feature_id is None:
+            feature_id = f"chamfer_compat_{self.id}"
+
+        return OCPChamferHelper.chamfer(
+            solid=solid,
+            edges=edges or [],
+            distance=distance,
+            naming_service=naming_service,
+            feature_id=feature_id,
+        )
+
     def _rebuild(self, rebuild_up_to=None, changed_feature_id: str = None, progress_callback=None):
         """
         Robuster Rebuild-Prozess (History-basiert).
@@ -4753,8 +4826,8 @@ class Body:
         Args:
             rebuild_up_to: Optional int - nur Features bis zu diesem Index (exklusiv) anwenden.
                            None = alle Features. Wird fuer Rollback-Bar verwendet.
-            changed_feature_id: Optional str - ID des geänderten Features für inkrementellen Rebuild.
-                                Phase 7: Nutzt Checkpoints für schnelleren Restart.
+            changed_feature_id: Optional str - ID des geÃ¤nderten Features fÃ¼r inkrementellen Rebuild.
+                                Phase 7: Nutzt Checkpoints fÃ¼r schnelleren Restart.
         """
         from config.feature_flags import is_enabled
 
@@ -4824,7 +4897,7 @@ class Body:
             diag = metrics.get("bbox_diag")
             diag_text = "n/a" if diag is None else f"{float(diag):.3f}"
             return (
-                f"vol={vol_text}mm³, "
+                f"vol={vol_text}mmÂ³, "
                 f"faces={metrics.get('faces', 0)}, "
                 f"edges={metrics.get('edges', 0)}, "
                 f"diag={diag_text}mm"
@@ -4947,7 +5020,7 @@ class Body:
         self._mesh_vertices.clear()
         self._mesh_triangles.clear()
 
-        # Setze Status für Features VOR start_index (bereits computed)
+        # Setze Status fÃ¼r Features VOR start_index (bereits computed)
         for i in range(start_index):
             if i < len(self.features) and not self.features[i].suppressed:
                 self.features[i].status = "OK"  # Aus Checkpoint
@@ -4976,7 +5049,7 @@ class Body:
                 feature.status_details = {}
                 continue
 
-            # === PHASE 7: Überspringe Features vor start_index (aus Checkpoint) ===
+            # === PHASE 7: Ãœberspringe Features vor start_index (aus Checkpoint) ===
             if use_incremental and i < start_index:
                 continue  # Status bereits gesetzt
 
@@ -5014,11 +5087,11 @@ class Body:
 
             # ================= IMPORT (Base Feature) =================
             elif isinstance(feature, ImportFeature):
-                # ImportFeature enthält die Basis-Geometrie (z.B. konvertiertes Mesh)
+                # ImportFeature enthÃ¤lt die Basis-Geometrie (z.B. konvertiertes Mesh)
                 base_solid = feature.get_solid()
                 if base_solid is not None:
                     new_solid = base_solid
-                    logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
+                    logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mmÂ³)")
                     if current_solid is None:
                         self._register_base_feature_shapes(feature, new_solid)
                 else:
@@ -5027,11 +5100,11 @@ class Body:
 
             # ================= EXTRUDE =================
             elif isinstance(feature, ExtrudeFeature):
-                # Push/Pull auf Body-Face: BRepFeat für Join/Cut verwenden.
+                # Push/Pull auf Body-Face: BRepFeat fÃ¼r Join/Cut verwenden.
                 has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
 
                 if has_polys and current_solid is not None and feature.operation in ("Join", "Cut"):
-                    # === PUSH/PULL auf Body-Face: Verwende BRepFeat für TNP-Robustheit ===
+                    # === PUSH/PULL auf Body-Face: Verwende BRepFeat fÃ¼r TNP-Robustheit ===
                     
                     def op_brepfeat():
                         return self._compute_extrude_part_brepfeat(feature, current_solid)
@@ -5051,7 +5124,7 @@ class Body:
                             logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                         self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                     else:
-                        # TNP v4 strict: Bei vorhandenen Primärreferenzen (ShapeID/Index)
+                        # TNP v4 strict: Bei vorhandenen PrimÃ¤rreferenzen (ShapeID/Index)
                         # KEIN Fallback auf polygon-basiertes Extrude+Boolean, da das
                         # semantisch eine andere Operation ergeben kann.
                         has_primary_face_ref = (
@@ -5063,11 +5136,11 @@ class Body:
                             new_solid = current_solid
                             logger.error(
                                 "Push/Pull: BRepFeat fehlgeschlagen bei vorhandenen "
-                                "TNP-Primärreferenzen (face_shape_id/face_index). "
+                                "TNP-PrimÃ¤rreferenzen (face_shape_id/face_index). "
                                 "Kein Boolean-Fallback."
                             )
                         else:
-                            # Legacy-Fallback nur ohne TNP-Primärreferenz.
+                            # Legacy-Fallback nur ohne TNP-PrimÃ¤rreferenz.
                             has_polys = False
                 
                 if not has_polys or current_solid is None:
@@ -5087,7 +5160,7 @@ class Body:
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
                             
-                            # === TNP v4.0: Shape-Registrierung für Extrude ===
+                            # === TNP v4.0: Shape-Registrierung fÃ¼r Extrude ===
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 try:
                                     self._register_extrude_shapes(feature, new_solid)
@@ -5095,7 +5168,7 @@ class Body:
                                     if is_enabled("tnp_debug_logging"):
                                         logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
-                            # Boolean Operation über BooleanEngineV4
+                            # Boolean Operation Ã¼ber BooleanEngineV4
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
                             bool_result = BooleanEngineV4.execute_boolean_on_shapes(
@@ -5110,15 +5183,15 @@ class Body:
                                 # TNP v4.0: History an ShapeNamingService durchreichen
                                 self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
 
-                                # Nach Boolean-Operation: Edge-Selektoren für nachfolgende Features aktualisieren
+                                # Nach Boolean-Operation: Edge-Selektoren fÃ¼r nachfolgende Features aktualisieren
                                 if new_solid is not None:
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                                     self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                             else:
-                                logger.warning(f"⚠️ {feature.operation} fehlgeschlagen: {bool_result.message}")
+                                logger.warning(f"âš ï¸ {feature.operation} fehlgeschlagen: {bool_result.message}")
                                 status = "ERROR"
-                                # Behalte current_solid (keine Änderung)
+                                # Behalte current_solid (keine Ã„nderung)
                                 continue
 
             # ================= PUSHPULL =================
@@ -5138,7 +5211,7 @@ class Body:
                 if pushpull_result and status == "SUCCESS":
                     new_solid = pushpull_result
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"PushPullFeature: Erfolgreich ausgeführt ({feature.operation}, d={feature.distance})")
+                        logger.debug(f"PushPullFeature: Erfolgreich ausgefÃ¼hrt ({feature.operation}, d={feature.distance})")
                     
                     self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                 else:
@@ -5149,8 +5222,8 @@ class Body:
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgeführt wird
-                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgefÃ¼hrt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verÃ¤ndert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
 
                     # Feature-ID sicherstellen
@@ -5171,7 +5244,7 @@ class Body:
 
                         if naming_service is None:
                             raise ValueError(
-                                "Fillet: TNP ShapeNamingService nicht verfügbar. "
+                                "Fillet: TNP ShapeNamingService nicht verfÃ¼gbar. "
                                 "Bitte Document mit TNP Service verwenden."
                             )
 
@@ -5200,8 +5273,8 @@ class Body:
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgeführt wird
-                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgefÃ¼hrt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verÃ¤ndert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
 
                     # Feature-ID sicherstellen
@@ -5222,7 +5295,7 @@ class Body:
 
                         if naming_service is None:
                             raise ValueError(
-                                "Chamfer: TNP ShapeNamingService nicht verfügbar. "
+                                "Chamfer: TNP ShapeNamingService nicht verfÃ¼gbar. "
                                 "Bitte Document mit TNP Service verwenden."
                             )
 
@@ -5350,7 +5423,7 @@ class Body:
             # ================= SHELL (Phase 6) =================
             elif isinstance(feature, ShellFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Shell ausgeführt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Shell ausgefÃ¼hrt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_shell():
@@ -5423,7 +5496,7 @@ class Body:
             # ================= HOLE =================
             elif isinstance(feature, HoleFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Hole ausgeführt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Hole ausgefÃ¼hrt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_hole():
@@ -5449,7 +5522,7 @@ class Body:
             # ================= DRAFT =================
             elif isinstance(feature, DraftFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Draft ausgeführt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Draft ausgefÃ¼hrt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_draft():
@@ -5477,10 +5550,10 @@ class Body:
                 if current_solid:
                     def op_split():
                         # Multi-Body Architecture (AGENTS.md Phase 2):
-                        # Während Rebuild: Wenn dieser Body ein split_side hat, berechne nur diese Seite
+                        # WÃ¤hrend Rebuild: Wenn dieser Body ein split_side hat, berechne nur diese Seite
                         if self.split_side and i == self.split_index:
                             # Rebuild-Modus: Nur unsere Seite berechnen
-                            # Temporär keep_side überschreiben für diesen Rebuild
+                            # TemporÃ¤r keep_side Ã¼berschreiben fÃ¼r diesen Rebuild
                             original_keep_side = feature.keep_side
                             feature.keep_side = self.split_side
                             result = self._compute_split(feature, current_solid)
@@ -5489,10 +5562,10 @@ class Body:
                         else:
                             # Normaler Split oder keep_side != "both"
                             result = self._compute_split(feature, current_solid)
-                            # Falls SplitResult zurückkommt (keep_side == "both"):
-                            # Das sollte nur beim ersten Split passieren, nicht während Rebuild
+                            # Falls SplitResult zurÃ¼ckkommt (keep_side == "both"):
+                            # Das sollte nur beim ersten Split passieren, nicht wÃ¤hrend Rebuild
                             if isinstance(result, SplitResult):
-                                # Während Rebuild sollte das nicht passieren - Warnung!
+                                # WÃ¤hrend Rebuild sollte das nicht passieren - Warnung!
                                 logger.warning("Split returned SplitResult during rebuild - using body_above as fallback")
                                 return result.body_above
                             return result
@@ -5513,7 +5586,7 @@ class Body:
                 if feature.cosmetic and is_enabled("cosmetic_threads"):
                     # Kosmetisch: kein BREP-Update, nur Helix-Linien im Viewport
                     status = "COSMETIC"
-                    logger.debug(f"Thread '{feature.name}' — cosmetic, kein BREP-Update")
+                    logger.debug(f"Thread '{feature.name}' â€” cosmetic, kein BREP-Update")
                 elif current_solid:
                     def op_thread():
                         return self._compute_thread(feature, current_solid)
@@ -5531,10 +5604,10 @@ class Body:
             elif isinstance(feature, SurfaceTextureFeature):
                 if current_solid:
                     self._update_face_selectors_for_feature(feature, current_solid)
-                # Texturen modifizieren NICHT das BREP — nur Metadaten-Layer.
+                # Texturen modifizieren NICHT das BREP â€” nur Metadaten-Layer.
                 # Displacement wird erst beim STL-Export angewendet.
                 status = "OK"
-                logger.debug(f"SurfaceTexture '{feature.name}' — Metadaten-only, kein BREP-Update")
+                logger.debug(f"SurfaceTexture '{feature.name}' â€” Metadaten-only, kein BREP-Update")
 
             if strict_self_heal and status == "WARNING" and self._feature_has_topological_references(feature):
                 rollback_from = _solid_metrics(new_solid) if new_solid is not None else _solid_metrics(current_solid)
@@ -5550,7 +5623,7 @@ class Body:
                     code="self_heal_blocked_topology_warning",
                     message=self._last_operation_error,
                     feature=feature,
-                    hint="Feature-Referenzen neu auswählen oder Parameter reduzieren.",
+                    hint="Feature-Referenzen neu auswÃ¤hlen oder Parameter reduzieren.",
                 )
                 self._last_operation_error_details["rollback"] = {
                     "from": rollback_from,
@@ -5570,8 +5643,8 @@ class Body:
                     status = "ERROR"
                     new_solid = solid_before_feature
                     self._last_operation_error = (
-                        f"Strict Self-Heal: Feature '{feature.name}' erzeugte ungültige Geometrie "
-                        f"({step_validation.message}) – Rollback auf letzten validen Stand."
+                        f"Strict Self-Heal: Feature '{feature.name}' erzeugte ungÃ¼ltige Geometrie "
+                        f"({step_validation.message}) â€“ Rollback auf letzten validen Stand."
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
                         op_name=f"StrictSelfHeal_{i}",
@@ -5612,7 +5685,7 @@ class Body:
                         code="self_heal_rollback_geometry_drift",
                         message=self._last_operation_error,
                         feature=feature,
-                        hint="Chamfer/Fillet hat den Body global verändert. Auswahl/Parameter prüfen.",
+                        hint="Chamfer/Fillet hat den Body global verÃ¤ndert. Auswahl/Parameter prÃ¼fen.",
                     )
                     self._last_operation_error_details["rollback"] = {
                         "from": after_metrics,
@@ -5634,7 +5707,7 @@ class Body:
                 feature.status_message = ""
                 feature.status_details = {}
 
-            # === Geometry Delta (Transparenz für Endanwender) ===
+            # === Geometry Delta (Transparenz fÃ¼r Endanwender) ===
             # Berechnet den Geometrie-Unterschied vor/nach jeder Feature-Anwendung.
             # Transient (_geometry_delta wird NICHT gespeichert, nur zur Laufzeit).
             effective_solid = new_solid if (new_solid is not None and status != "ERROR") else current_solid
@@ -5687,7 +5760,7 @@ class Body:
                     self._dependency_graph.create_checkpoint(i, feature.id, current_solid)
                     logger.debug(f"Phase 7: Checkpoint nach Feature {i} ('{feature.name}')")
 
-        # === PHASE 7: Dependency Graph aufräumen ===
+        # === PHASE 7: Dependency Graph aufrÃ¤umen ===
         if use_incremental:
             self._dependency_graph.clear_dirty()
 
@@ -5696,7 +5769,7 @@ class Body:
             validation = GeometryValidator.validate_solid(current_solid, ValidationLevel.NORMAL)
 
             if validation.is_error:
-                logger.warning(f"⚠️ Geometrie-Validierung fehlgeschlagen: {validation.message}")
+                logger.warning(f"âš ï¸ Geometrie-Validierung fehlgeschlagen: {validation.message}")
                 before_heal_metrics = _solid_metrics(current_solid)
                 healed, heal_result = GeometryHealer.heal_solid(current_solid)
                 heal_applied = False
@@ -5713,24 +5786,24 @@ class Body:
                     if strict_self_heal and active_topology_refs and topology_changed:
                         logger.error(
                             "Strict Self-Heal: Healing-Ergebnis verworfen "
-                            "(Topologie geändert bei aktiven TNP-Referenzen)."
+                            "(Topologie geÃ¤ndert bei aktiven TNP-Referenzen)."
                         )
                     elif healed_validation.is_error:
                         logger.warning(
-                            f"⚠️ Auto-Healing Ergebnis weiterhin ungültig: {healed_validation.message}"
+                            f"âš ï¸ Auto-Healing Ergebnis weiterhin ungÃ¼ltig: {healed_validation.message}"
                         )
                     else:
                         current_solid = healed
                         validation = healed_validation
                         heal_applied = True
                         if heal_result.changes_made:
-                            logger.info(f"🔧 Auto-Healing: {', '.join(heal_result.changes_made)}")
+                            logger.info(f"ðŸ”§ Auto-Healing: {', '.join(heal_result.changes_made)}")
                         logger.info(
                             f"Self-Heal Delta: {_format_metrics(before_heal_metrics)} -> "
                             f"{_format_metrics(healed_metrics)}"
                         )
                 elif not heal_result.success:
-                    logger.warning(f"⚠️ Auto-Healing fehlgeschlagen: {heal_result.message}")
+                    logger.warning(f"âš ï¸ Auto-Healing fehlgeschlagen: {heal_result.message}")
 
                 if strict_self_heal and not heal_applied and last_valid_solid is not None and last_valid_feature_index >= 0:
                     rollback_from = _solid_metrics(current_solid)
@@ -5749,10 +5822,10 @@ class Body:
             # Phase 9:
             # Globales UnifySameDomain nur ohne aktive TNP-Referenzen.
             # Sonst kann ein "post-history" Topologie-Merge ShapeIDs/Indices
-            # nachträglich ungültig machen.
+            # nachtrÃ¤glich ungÃ¼ltig machen.
             if self._has_active_topological_references(max_index=max_index):
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug("UnifySameDomain (Rebuild) übersprungen: aktive TNP-Referenzen vorhanden")
+                    logger.debug("UnifySameDomain (Rebuild) Ã¼bersprungen: aktive TNP-Referenzen vorhanden")
             else:
                 try:
                     from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -5762,9 +5835,9 @@ class Body:
                     n_faces_before = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
 
                     upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
-                    # Erhöhte Toleranzen für besseres Zylinder-Merging
-                    upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger
-                    upgrader.SetAngularTolerance(0.1)  # ~5.7° - für zylindrische Flächen
+                    # ErhÃ¶hte Toleranzen fÃ¼r besseres Zylinder-Merging
+                    upgrader.SetLinearTolerance(0.1)   # 0.1mm - groÃŸzÃ¼giger
+                    upgrader.SetAngularTolerance(0.1)  # ~5.7Â° - fÃ¼r zylindrische FlÃ¤chen
                     upgrader.Build()
                     unified_shape = upgrader.Shape()
 
@@ -5773,10 +5846,10 @@ class Body:
                         n_faces_after = len(unified_solid.faces()) if hasattr(unified_solid, 'faces') else 0
 
                         if n_faces_after < n_faces_before:
-                            logger.debug(f"UnifySameDomain (Rebuild): {n_faces_before} → {n_faces_after} Faces")
+                            logger.debug(f"UnifySameDomain (Rebuild): {n_faces_before} â†’ {n_faces_after} Faces")
                             current_solid = unified_solid
                 except Exception as e:
-                    logger.debug(f"UnifySameDomain übersprungen: {e}")
+                    logger.debug(f"UnifySameDomain Ã¼bersprungen: {e}")
 
             self._build123d_solid = current_solid
             if hasattr(current_solid, 'wrapped'):
@@ -5785,7 +5858,7 @@ class Body:
             # UPDATE MESH via Helper
             self._update_mesh_from_solid(current_solid)
 
-            # B-Rep Faces zählen (echte CAD-Faces, nicht Tessellations-Dreiecke)
+            # B-Rep Faces zÃ¤hlen (echte CAD-Faces, nicht Tessellations-Dreiecke)
             from modeling.cad_tessellator import CADTessellator
             n_faces = CADTessellator.count_brep_faces(current_solid)
             if n_faces == 0:
@@ -5794,9 +5867,9 @@ class Body:
 
             # Phase 7: Validierungs-Status loggen
             if validation.is_valid:
-                logger.debug(f"✓ {self.name}: BREP Valid ({n_faces} Faces)")
+                logger.debug(f"âœ“ {self.name}: BREP Valid ({n_faces} Faces)")
             else:
-                logger.warning(f"⚠️ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
+                logger.warning(f"âš ï¸ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
 
             # Phase 8.2: Automatische Referenz-Migration nach Rebuild
             self._migrate_tnp_references(current_solid)
@@ -5814,15 +5887,15 @@ class Body:
 
     def _migrate_tnp_references(self, new_solid):
         """
-        Kompatibilitäts-Hook nach Rebuild.
+        KompatibilitÃ¤ts-Hook nach Rebuild.
 
-        Das alte TNP-v3 Registry-System wurde entfernt; TNP v4 wird über den
+        Das alte TNP-v3 Registry-System wurde entfernt; TNP v4 wird Ã¼ber den
         ShapeNamingService im Document gepflegt.
         """
         return
 
     def _feature_has_topological_references(self, feature) -> bool:
-        """Prüft, ob ein Feature aktive Topologie-Referenzen trägt."""
+        """PrÃ¼ft, ob ein Feature aktive Topologie-Referenzen trÃ¤gt."""
         if feature is None:
             return False
 
@@ -5872,19 +5945,19 @@ class Body:
 
     def update_feature_references(self, feature_id: str, old_solid, new_solid):
         """
-        Kompatibilitäts-Hook bei Feature-Änderungen.
+        KompatibilitÃ¤ts-Hook bei Feature-Ã„nderungen.
 
         Args:
             feature_id: ID des modifizierten Features
-            old_solid: Solid VOR der Änderung
-            new_solid: Solid NACH der Änderung
+            old_solid: Solid VOR der Ã„nderung
+            new_solid: Solid NACH der Ã„nderung
         """
         if is_enabled("tnp_debug_logging"):
             logger.debug(f"TNP v4.0: Feature {feature_id} wurde modifiziert")
 
     def reorder_features(self, old_index: int, new_index: int) -> bool:
         """
-        Verschiebt ein Feature in der Liste und führt Migration durch.
+        Verschiebt ein Feature in der Liste und fÃ¼hrt Migration durch.
 
         Args:
             old_index: Aktuelle Position
@@ -5907,15 +5980,15 @@ class Body:
         feature = self.features.pop(old_index)
         self.features.insert(new_index, feature)
 
-        logger.info(f"Feature '{feature.name}' verschoben: {old_index} → {new_index}")
+        logger.info(f"Feature '{feature.name}' verschoben: {old_index} â†’ {new_index}")
 
-        # Rebuild ausführen (inkl. automatischer Migration)
+        # Rebuild ausfÃ¼hren (inkl. automatischer Migration)
         try:
             self._rebuild()
             return True
         except Exception as e:
             logger.error(f"Rebuild nach Feature-Verschiebung fehlgeschlagen: {e}")
-            # Rückgängig machen
+            # RÃ¼ckgÃ¤ngig machen
             feature = self.features.pop(new_index)
             self.features.insert(old_index, feature)
             self._rebuild()
@@ -5923,16 +5996,16 @@ class Body:
 
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
-        TNP v4.1 Edge-Auflösung mit History-First Strategie.
+        TNP v4.1 Edge-AuflÃ¶sung mit History-First Strategie.
 
         Reihenfolge (STRICT):
         1. OperationRecord-Mappings (History-basiert)
-        2. edge_shape_ids mit direkter Auflösung
+        2. edge_shape_ids mit direkter AuflÃ¶sung
         3. edge_indices (Topology-Index)
         4. geometric_selectors (NUR LETZTE OPTION)
 
         WICHTIG: Wenn History-First versagt und keine andere Methode funktioniert,
-        soll das Feature fehlschlagen statt auf Geometric-Fallback zurückzufallen.
+        soll das Feature fehlschlagen statt auf Geometric-Fallback zurÃ¼ckzufallen.
         """
         all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
         if not all_edges:
@@ -5966,7 +6039,7 @@ class Body:
             service = self._document._shape_naming_service
 
         resolved_edges = []
-        unresolved_shape_ids = []  # Für Debug-Visualisierung
+        unresolved_shape_ids = []  # FÃ¼r Debug-Visualisierung
         resolved_shape_ids = []
         resolved_edge_indices = []
         resolved_edges_from_shape = []
@@ -6021,7 +6094,7 @@ class Body:
             resolved_count = 0
             for op in service._operations:
                 if op.manual_mappings and op.feature_id == getattr(feature, 'id', ''):
-                    # Prüfe ob ShapeIDs in den Mappings vorhanden sind
+                    # PrÃ¼fe ob ShapeIDs in den Mappings vorhanden sind
                     for input_uuid, output_uuids in op.manual_mappings.items():
                         # Input-ShapeID finden
                         for shape_id in edge_shape_ids:
@@ -6039,8 +6112,8 @@ class Body:
                                                 resolved_count += 1
                                                 if is_enabled("tnp_debug_logging"):
                                                     logger.debug(
-                                                        f"TNP v4.1: Edge via OperationRecord-Mapping aufgelöst: "
-                                                        f"{input_uuid[:8]} → {output_uuid[:8]}"
+                                                        f"TNP v4.1: Edge via OperationRecord-Mapping aufgelÃ¶st: "
+                                                        f"{input_uuid[:8]} â†’ {output_uuid[:8]}"
                                                     )
             return resolved_count
 
@@ -6059,22 +6132,22 @@ class Body:
                     if resolved_ocp is None:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
-                            logger.warning(f"TNP v4.0: Edge {i} konnte via ShapeID nicht aufgelöst werden")
+                            logger.warning(f"TNP v4.0: Edge {i} konnte via ShapeID nicht aufgelÃ¶st werden")
                         continue
 
                     matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
                     if matching_edge is not None:
                         _append_unique(matching_edge, shape_id=shape_id, source="shape")
                         if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelöst (method={method})")
+                            logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelÃ¶st (method={method})")
                     else:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
-                            logger.warning(f"TNP v4.0: Keine passende Solid-Edge für ShapeID-Edge {i}")
+                            logger.warning(f"TNP v4.0: Keine passende Solid-Edge fÃ¼r ShapeID-Edge {i}")
                 except Exception as e:
                     unresolved_shape_ids.append(shape_id)
                     if is_enabled("tnp_debug_logging"):
-                        logger.warning(f"TNP v4.0: Edge {i} ShapeID-Auflösung fehlgeschlagen: {e}")
+                        logger.warning(f"TNP v4.0: Edge {i} ShapeID-AuflÃ¶sung fehlgeschlagen: {e}")
 
         def _resolve_by_indices() -> None:
             if not valid_edge_indices:
@@ -6087,7 +6160,7 @@ class Body:
                     _append_unique(resolved, topo_index=edge_idx, source="index")
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
+                    logger.debug(f"TNP v4.0: Index-AuflÃ¶sung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in edge_shape_ids if hasattr(sid, "uuid"))
         single_ref_pair = bool(expected_shape_refs == 1 and len(valid_edge_indices) == 1)
@@ -6107,18 +6180,31 @@ class Body:
             and len(valid_edge_indices) == expected_shape_refs
             and (shape_ids_index_aligned or single_ref_pair)
         )
+        in_range_edge_indices = [idx for idx in valid_edge_indices if 0 <= int(idx) < len(all_edges)]
+        prefer_index_only = (
+            strict_edge_feature
+            and expected_shape_refs > 0
+            and bool(valid_edge_indices)
+            and len(in_range_edge_indices) == len(valid_edge_indices)
+            and not (shape_ids_index_aligned or single_ref_pair)
+        )
+        if prefer_index_only and is_enabled("tnp_debug_logging"):
+            logger.warning(
+                f"{feature_name}: edge_shape_ids/edge_indices inkonsistent "
+                "-> bevorzuge index-basierte Edge-Aufloesung."
+            )
 
         # TNP v4.1: History-First Strategie
         # 1. Zuerst OperationRecords (History-basiert)
-        op_resolved = _resolve_by_operation_records()
+        op_resolved = 0 if prefer_index_only else _resolve_by_operation_records()
         if op_resolved > 0 and is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.1: {op_resolved} Edges via OperationRecords aufgelöst")
+            logger.debug(f"TNP v4.1: {op_resolved} Edges via OperationRecords aufgelÃ¶st")
 
-        # 2. Dann ShapeIDs mit direkter Auflösung
-        if op_resolved < len(edge_shape_ids):
+        # 2. Dann ShapeIDs mit direkter AuflÃ¶sung
+        if not prefer_index_only and op_resolved < len(edge_shape_ids):
             _resolve_by_shape_ids()
 
-        # 3. Dann Index-basierte Auflösung
+        # 3. Dann Index-basierte AuflÃ¶sung
         if len(resolved_edges) < len(edge_shape_ids) or valid_edge_indices:
             _resolve_by_indices()
 
@@ -6140,21 +6226,6 @@ class Body:
                             strict_topology_mismatch = True
                             break
 
-        # Single-Edge UX-Fall: Bei genau einer Index+ShapeID-Referenz kann eine
-        # stale ShapeID (nach Undo/Redo) auf eine andere Edge zeigen, obwohl der
-        # index-konsistente Edge-Pfad korrekt ist. Dann index deterministisch
-        # bevorzugen und ShapeID später auf den tatsächlich verwendeten Edge heilen.
-        if strict_topology_mismatch and single_ref_pair and resolved_edges_from_index:
-            if is_enabled("tnp_debug_logging"):
-                logger.warning(
-                    f"{feature_name}: Single-Edge ShapeID/Index-Mismatch erkannt; "
-                    "verwende edge_index als autoritative Referenz."
-                )
-            resolved_edges = list(resolved_edges_from_index)
-            resolved_edges_from_shape = []
-            resolved_shape_ids = []
-            strict_topology_mismatch = False
-
         has_topological_refs = bool(valid_edge_indices or expected_shape_refs > 0)
         unresolved_topology_refs = (
             (valid_edge_indices and len(resolved_edge_indices) < len(valid_edge_indices))
@@ -6165,27 +6236,66 @@ class Body:
             )
         )
         if strict_dual_edge_refs and strict_topology_mismatch:
-            unresolved_topology_refs = True
+            if single_ref_pair:
+                shape_resolved = bool(resolved_edges_from_shape)
+                index_resolved = bool(resolved_edges_from_index)
+                pair_conflict = False
+                if shape_resolved and index_resolved:
+                    pair_conflict = not any(
+                        self._is_same_edge(resolved_edges_from_shape[0], idx_edge)
+                        for idx_edge in resolved_edges_from_index
+                    )
+
+                # single_ref_pair Regel:
+                # - Shape + Index beide da, aber verschieden -> strikt fehlschlagen
+                # - Shape fehlt, Index da -> robust auf Index weiterarbeiten (Redo/Incremental)
+                # - Sonst weiterhin strikt fehlschlagen
+                if index_resolved and (not shape_resolved):
+                    resolved_edges = list(resolved_edges_from_index)
+                    resolved_shape_ids = []
+                    unresolved_shape_ids.extend(
+                        sid for sid in edge_shape_ids if sid not in unresolved_shape_ids
+                    )
+                    strict_topology_mismatch = False
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(
+                            f"{feature_name}: single_ref_pair ShapeID nicht aufloesbar -> "
+                            "verwende index-basierte Edge-Aufloesung."
+                        )
+                else:
+                    if is_enabled("tnp_debug_logging"):
+                        reason = "Shape/Index-Konflikt" if pair_conflict else "strict single_ref_pair mismatch"
+                        logger.warning(
+                            f"{feature_name}: {reason} -> Abbruch ohne Fallback."
+                        )
+                    return []
+            else:
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(
+                        f"{feature_name}: ShapeID/Index-Mismatch in strict_dual_edge_refs "
+                        "→ Abbruch ohne Fallback."
+                    )
+                return []
 
         # TNP v4.1: Bei Topology-Mismatch zuerst Geometric-Fallback probieren
         # (statt sofort aufzugeben wie in v4.0)
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
             logger.warning(
-                f"{feature_name}: Topologie-Referenzen ungültig{mismatch_hint}. "
+                f"{feature_name}: Topologie-Referenzen ungÃ¼ltig{mismatch_hint}. "
                 f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
             )
             # Don't return here - try geometric recovery first!
 
         # TNP v4.1: Geometric-Fallback wenn:
         # 1. Keine Topologie-Referenzen vorhanden (original)
-        # 2. ODER Topologie-Referenzen sind aufgelöst/inkonsistent (unresolved_topology_refs)
+        # 2. ODER Topologie-Referenzen sind aufgelÃ¶st/inkonsistent (unresolved_topology_refs)
         need_selector_recovery = (
             ((not has_topological_refs) and (not resolved_edges))
             or (unresolved_topology_refs and geometric_selectors)
         )
 
-        # GeometricSelector-Auflösung ohne Topologie-Referenzen oder bei Mismatch (Recovery)
+        # GeometricSelector-AuflÃ¶sung ohne Topologie-Referenzen oder bei Mismatch (Recovery)
         if need_selector_recovery and geometric_selectors:
             edges_before_geo = len(resolved_edges)
             try:
@@ -6201,7 +6311,7 @@ class Body:
                     _append_unique(geo_sel.find_best_match(all_edges))
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v4.0: GeometricEdgeSelector-Auflösung fehlgeschlagen: {e}")
+                    logger.debug(f"TNP v4.0: GeometricEdgeSelector-AuflÃ¶sung fehlgeschlagen: {e}")
 
             edges_after_geo = len(resolved_edges)
             if edges_after_geo > edges_before_geo:
@@ -6246,18 +6356,18 @@ class Body:
             if total_refs == 0:
                 logger.warning("TNP v4.0: Feature hat keine Edge-Referenzen")
             elif found >= total_refs:
-                logger.debug(f"TNP v4.0: {found}/{total_refs} Edges aufgelöst")
+                logger.debug(f"TNP v4.0: {found}/{total_refs} Edges aufgelÃ¶st")
             else:
-                logger.warning(f"TNP v4.0: Nur {found}/{total_refs} Edges aufgelöst")
+                logger.warning(f"TNP v4.0: Nur {found}/{total_refs} Edges aufgelÃ¶st")
         
-        # === TNP v4.0 DEBUG: Visuelle Darstellung der Auflösung ===
+        # === TNP v4.0 DEBUG: Visuelle Darstellung der AuflÃ¶sung ===
         self._last_tnp_debug_data = {
             'resolved': resolved_edges,
             'unresolved': unresolved_shape_ids,
             'body_id': self.id
         }
         
-        # Callback für GUI-Visualisierung (wenn registriert)
+        # Callback fÃ¼r GUI-Visualisierung (wenn registriert)
         if hasattr(self._document, '_tnp_debug_callback') and self._document._tnp_debug_callback:
             try:
                 self._document._tnp_debug_callback(resolved_edges, unresolved_shape_ids, self.id)
@@ -6290,13 +6400,13 @@ class Body:
         """
         Findet die passende Edge vom aktuellen Solid.
         
-        OCP erwartet Edges die tatsächlich im aktuellen Solid's BRep-Graph existieren,
+        OCP erwartet Edges die tatsÃ¤chlich im aktuellen Solid's BRep-Graph existieren,
         nicht Edges aus einem anderen Kontext (auch wenn sie geometrisch identisch sind).
         
         Args:
-            resolved_ocp_edge: Die aufgelöste OCP Edge (aus ShapeNamingService)
+            resolved_ocp_edge: Die aufgelÃ¶ste OCP Edge (aus ShapeNamingService)
             all_edges: Liste aller Edges vom aktuellen Solid
-            tolerance: Toleranz für geometrischen Vergleich
+            tolerance: Toleranz fÃ¼r geometrischen Vergleich
             
         Returns:
             Die passende Edge aus all_edges, oder None
@@ -6304,9 +6414,21 @@ class Body:
         try:
             import numpy as np
             from build123d import Edge
+            wrapped = resolved_ocp_edge.wrapped if hasattr(resolved_ocp_edge, "wrapped") else resolved_ocp_edge
+
+            # Nur Edge-Shapes gegen Edge-Listen matchen.
+            try:
+                from OCP.TopAbs import TopAbs_EDGE
+                if hasattr(wrapped, "ShapeType") and wrapped.ShapeType() != TopAbs_EDGE:
+                    return None
+            except Exception as shape_type_err:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(
+                        f"_find_matching_edge_in_solid: ShapeType-Pruefung uebersprungen ({shape_type_err})"
+                    )
             
-            # Center der aufgelösten Edge
-            resolved_b3d = Edge(resolved_ocp_edge)
+            # Center der aufgelÃ¶sten Edge
+            resolved_b3d = Edge(wrapped)
             resolved_center = np.array([
                 resolved_b3d.center().X, 
                 resolved_b3d.center().Y, 
@@ -6338,10 +6460,10 @@ class Body:
     @staticmethod
     def _is_same_edge(edge_a, edge_b) -> bool:
         """
-        Robuster Edge-Vergleich für TNP-Pfade.
+        Robuster Edge-Vergleich fÃ¼r TNP-Pfade.
 
-        Bevorzugt OCP IsSame (Topologie-identisch), fällt auf eine leichte
-        Geometrie-Prüfung und zuletzt Objektidentität zurück.
+        Bevorzugt OCP IsSame (Topologie-identisch), fÃ¤llt auf eine leichte
+        Geometrie-PrÃ¼fung und zuletzt ObjektidentitÃ¤t zurÃ¼ck.
         """
         if edge_a is None or edge_b is None:
             return False
@@ -6451,8 +6573,8 @@ class Body:
         """
         Extrudiert eine Face aus gespeicherten BREP-Daten.
 
-        Wird verwendet für Push/Pull auf nicht-planaren Flächen (Zylinder, etc.),
-        wo keine Polygon-Extraktion möglich ist.
+        Wird verwendet fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen (Zylinder, etc.),
+        wo keine Polygon-Extraktion mÃ¶glich ist.
         """
         try:
             from OCP.BRepTools import BRepTools
@@ -6470,7 +6592,7 @@ class Body:
                 logger.error("Extrude: face_brep ist leer!")
                 return None
 
-            # BREP in temporäre Datei schreiben und lesen
+            # BREP in temporÃ¤re Datei schreiben und lesen
             with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
                 f.write(face_brep)
                 temp_path = f.name
@@ -6494,7 +6616,7 @@ class Body:
                 normal[2] * amount
             )
 
-            # BRepPrimAPI_MakePrism für Extrusion
+            # BRepPrimAPI_MakePrism fÃ¼r Extrusion
             prism_maker = BRepPrimAPI_MakePrism(face_shape, extrude_vec)
             prism_maker.Build()
 
@@ -6527,11 +6649,11 @@ class Body:
         2. Ohne Sketch (Push/Pull): BRepFeat_MakePrism (MANDATORY OCP-First)
         3. Ohne Sketch (Face aus BREP): OCP MakePrism direkte Extrusion
 
-        FALLBACK: Wenn OCP-First None zurückgibt, wird automatisch Legacy versucht.
+        FALLBACK: Wenn OCP-First None zurÃ¼ckgibt, wird automatisch Legacy versucht.
         """
         if is_enabled("ocp_first_extrude"):
             result = self._compute_extrude_part_ocp_first(feature)
-            # Fallback: Wenn OCP-First fehlschlägt, versuche Legacy
+            # Fallback: Wenn OCP-First fehlschlÃ¤gt, versuche Legacy
             if result is None:
                 logger.warning("[OCP-FIRST] Fehlgeschlagen, versuche Legacy-Fallback...")
                 return self._compute_extrude_part_legacy(feature)
@@ -6545,10 +6667,10 @@ class Body:
 
         Dieser Pfad verwendet den OCPExtrudeHelper der:
         - OCP-PRIMARY ist (kein Build123d Fallback)
-        - Verbindliche TNP Integration durchführt
+        - Verbindliche TNP Integration durchfÃ¼hrt
         - Alle Faces/Edges im ShapeNamingService registriert
         """
-        # Phase 2: Prüfe Geometrie-Quelle
+        # Phase 2: PrÃ¼fe Geometrie-Quelle
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
@@ -6575,9 +6697,12 @@ class Body:
             naming_service = self._document._shape_naming_service
 
         if naming_service is None:
-            raise ValueError(
-                "TNP ShapeNamingService nicht verfügbar für OCP-First Extrude. "
-                "Bitte Document mit TNP Service verwenden."
+            # Legacy-Compat: Extrude ohne Document soll weiterhin laufen
+            # (z.B. in isolierten Kernel-Tests).
+            naming_service = ShapeNamingService()
+            logger.debug(
+                "[OCP-FIRST] Kein Document-ShapeNamingService vorhanden; "
+                "verwende temporaeren Service fuer Extrude."
             )
 
         try:
@@ -6618,12 +6743,12 @@ class Body:
                     if polys_to_extrude:
                         logger.info(f"[OCP-FIRST] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
-                        # OCP-First: Selektor hat nicht gematcht → ERROR, kein Fallback!
+                        # OCP-First: Selektor hat nicht gematcht â†’ ERROR, kein Fallback!
                         logger.error(f"[OCP-FIRST] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        logger.error(f"[OCP-FIRST] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
-                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
+                        logger.error(f"[OCP-FIRST] VerfÃ¼gbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
+                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion mÃ¶glich")
                 elif sketch_profiles:
-                    # Kein Selektor → alle Profile verwenden (Legacy/Import)
+                    # Kein Selektor â†’ alle Profile verwenden (Legacy/Import)
                     # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Shapely braucht Polygons
                     polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
                     logger.info(f"[OCP-FIRST] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
@@ -6641,17 +6766,18 @@ class Body:
                     return self._extrude_from_face_brep(feature)
 
             # === TNP v4.1: Native Circle Path (VOR Polygon-Verarbeitung) ===
-            # Prüfe ob der Sketch Kreise mit native_ocp_data hat
+            # PrÃ¼fe ob der Sketch Kreise mit native_ocp_data hat
             # Wenn ja, erstelle direkt native OCP Circle Faces (3 Faces statt 14+)
             faces_to_extrude = []
-            if has_sketch and hasattr(sketch, 'circles') and sketch.circles:
+            explicit_closed_profiles = bool(getattr(sketch, "closed_profiles", [])) if has_sketch else False
+            if has_sketch and hasattr(sketch, 'circles') and sketch.circles and not explicit_closed_profiles:
                 native_circle_faces = self._create_faces_from_native_circles(sketch, plane, profile_selector)
                 if native_circle_faces:
                     logger.info(f"[TNP v4.1] {len(native_circle_faces)} native Circle Faces erstellt (3 Faces statt 14+)")
                     faces_to_extrude.extend(native_circle_faces)
 
             # === TNP v4.1: Native Arc Path (wenige Faces statt Polygon) ===
-            # Prüfe ob der Sketch Arcs mit native_ocp_data hat
+            # PrÃ¼fe ob der Sketch Arcs mit native_ocp_data hat
             if has_sketch and hasattr(sketch, 'arcs') and sketch.arcs:
                 native_arc_faces = self._create_faces_from_native_arcs(sketch, plane, profile_selector)
                 if native_arc_faces:
@@ -6660,7 +6786,7 @@ class Body:
 
             # Wenn native Faces erstellt wurden, diese direkt extrudieren
             if faces_to_extrude:
-                polys_to_extrude = []  # Polygon-Path überspringen
+                polys_to_extrude = []  # Polygon-Path Ã¼berspringen
                 logger.info(f"[TNP v4.1] {len(faces_to_extrude)} native Faces direkt extrudieren")
 
             # === Faces erstellen und mit OCPExtrudeHelper extrudieren ===
@@ -6670,22 +6796,40 @@ class Body:
 
                 for idx, poly in enumerate(polys_to_extrude):
                     try:
-                        # VALIDIERUNG: Degenerierte Polygone überspringen
+                        # VALIDIERUNG: Degenerierte Polygone Ã¼berspringen
                         poly_area = poly.area if hasattr(poly, 'area') else 0
                         if poly_area < 1e-6:
-                            logger.warning(f"  ⚠️ Polygon {idx} hat Area≈0 - überspringe (degeneriert)")
+                            logger.warning(f"  âš ï¸ Polygon {idx} hat Areaâ‰ˆ0 - Ã¼berspringe (degeneriert)")
                             continue
 
-                        # Außenkontur extrahieren
+                        # Außenkontur: Kreis bevorzugen, sonst Polygon
                         outer_coords = list(poly.exterior.coords)[:-1]
-                        outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
-                        face = make_face(Wire.make_polygon(outer_pts))
+                        outer_circle_info = self._detect_circle_from_points(outer_coords)
 
-                        # Löcher abziehen
+                        if outer_circle_info:
+                            cx, cy, radius = outer_circle_info
+                            center_3d = plane.from_local_coords((cx, cy))
+                            from build123d import Plane as B3DPlane
+                            circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                            face = make_face(Wire.make_circle(radius, circle_plane))
+                        else:
+                            outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
+                            face = make_face(Wire.make_polygon(outer_pts))
+
+                        # Löcher: Kreis bevorzugen, sonst Polygon
                         for interior in poly.interiors:
                             inner_coords = list(interior.coords)[:-1]
-                            inner_pts = [plane.from_local_coords((p[0], p[1])) for p in inner_coords]
-                            face -= make_face(Wire.make_polygon(inner_pts))
+                            inner_circle_info = self._detect_circle_from_points(inner_coords)
+
+                            if inner_circle_info:
+                                cx, cy, radius = inner_circle_info
+                                center_3d = plane.from_local_coords((cx, cy))
+                                from build123d import Plane as B3DPlane
+                                circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                                face -= make_face(Wire.make_circle(radius, circle_plane))
+                            else:
+                                inner_pts = [plane.from_local_coords((p[0], p[1])) for p in inner_coords]
+                                face -= make_face(Wire.make_polygon(inner_pts))
 
                         faces_to_extrude.append(face)
                     except Exception as e:
@@ -6721,7 +6865,7 @@ class Body:
 
             # OCP-First: KEIN Legacy-Fallback
             if not solids:
-                logger.error("[OCP-FIRST] Keine gültigen Profile/Faces gefunden - kein Legacy-Fallback!")
+                logger.error("[OCP-FIRST] Keine gÃ¼ltigen Profile/Faces gefunden - kein Legacy-Fallback!")
                 return None
 
             if not solids: return None
@@ -6737,12 +6881,12 @@ class Body:
         """
         Legacy Pfad: Bestehende Extrude-Implementierung (getestet und stabil).
 
-        Dieser Pfad verwendet die bewährte Implementierung mit:
-        - Build123d PRIMARY für Extrusion
+        Dieser Pfad verwendet die bewÃ¤hrte Implementierung mit:
+        - Build123d PRIMARY fÃ¼r Extrusion
         - OCP als Fallback
-        - Volle Geometrie-Unterstützung (Kreise, Splines, etc.)
+        - Volle Geometrie-UnterstÃ¼tzung (Kreise, Splines, etc.)
         """
-        # Phase 2: Prüfe Geometrie-Quelle
+        # Phase 2: PrÃ¼fe Geometrie-Quelle
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
@@ -6792,12 +6936,12 @@ class Body:
                     if polys_to_extrude:
                         logger.info(f"[LEGACY] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
-                        # Phase 2: Selektor hat nicht gematcht → ERROR, kein Fallback!
+                        # Phase 2: Selektor hat nicht gematcht â†’ ERROR, kein Fallback!
                         logger.error(f"[LEGACY] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        logger.error(f"[LEGACY] Verfügbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
-                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
+                        logger.error(f"[LEGACY] VerfÃ¼gbare Profile: {[(p.centroid.x, p.centroid.y) for p in shapely_profiles]}")
+                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion mÃ¶glich")
                 elif sketch_profiles:
-                    # Kein Selektor → alle Profile verwenden (Legacy/Import)
+                    # Kein Selektor â†’ alle Profile verwenden (Legacy/Import)
                     # KONVERTIERUNG: closed_profiles sind List[List[Line2D]], Legacy braucht Shapely-Polygons
                     polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
                     logger.info(f"[LEGACY] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
@@ -6814,7 +6958,7 @@ class Body:
                     logger.info(f"[LEGACY] Face aus BREP (Push/Pull auf {feature.face_type})")
                     return self._extrude_from_face_brep(feature)
 
-            # === LEGACY: Extrude-Logik mit voller Geometrie-Unterstützung ===
+            # === LEGACY: Extrude-Logik mit voller Geometrie-UnterstÃ¼tzung ===
             if polys_to_extrude:
                 if is_enabled("extrude_debug"):
                     logger.info(f"Extrude: Verarbeite {len(polys_to_extrude)} Profile.")
@@ -6827,55 +6971,55 @@ class Body:
                         poly_area = poly.area if hasattr(poly, 'area') else 0
                         logger.debug(f"  Polygon {idx}: area={poly_area:.1f}, interiors={n_interiors}")
 
-                        # VALIDIERUNG: Degenerierte Polygone überspringen
+                        # VALIDIERUNG: Degenerierte Polygone Ã¼berspringen
                         if poly_area < 1e-6:
-                            logger.warning(f"  ⚠️ Polygon {idx} hat Area≈0 - überspringe (degeneriert)")
+                            logger.warning(f"  âš ï¸ Polygon {idx} hat Areaâ‰ˆ0 - Ã¼berspringe (degeneriert)")
                             continue
 
-                        # 1. Außenkontur
+                        # 1. AuÃŸenkontur
                         outer_coords = list(poly.exterior.coords)[:-1]  # Ohne Schlusspunkt
-                        logger.debug(f"  Außenkontur: {len(outer_coords)} Punkte")
+                        logger.debug(f"  AuÃŸenkontur: {len(outer_coords)} Punkte")
 
-                        # WICHTIG: Zuerst prüfen ob gemischte Geometrie vorliegt!
+                        # WICHTIG: Zuerst prÃ¼fen ob gemischte Geometrie vorliegt!
                         geometry_list = self._lookup_geometry_for_polygon(poly, feature.sketch)
                         has_mixed_geometry = geometry_list and any(g[0] in ('spline', 'arc') for g in geometry_list if g[0] != 'gap')
 
                         if has_mixed_geometry:
-                            # GEMISCHTE GEOMETRIE → Echte Kurven verwenden!
+                            # GEMISCHTE GEOMETRIE â†’ Echte Kurven verwenden!
                             geom_types = set(g[0] for g in geometry_list if g[0] != 'gap' and g[1] is not None)
-                            logger.info(f"  → Außenkontur als GEMISCHTE GEOMETRIE: {geom_types}")
+                            logger.info(f"  â†’ AuÃŸenkontur als GEMISCHTE GEOMETRIE: {geom_types}")
 
                             mixed_wire = self._create_wire_from_mixed_geometry(geometry_list, outer_coords, plane)
 
                             if mixed_wire is not None:
                                 face = make_face(mixed_wire)
                             else:
-                                # Fallback: Prüfe auf einzelnen Spline
+                                # Fallback: PrÃ¼fe auf einzelnen Spline
                                 native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
                                 if native_spline is not None:
-                                    logger.info(f"  → Fallback: NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
+                                    logger.info(f"  â†’ Fallback: NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
                                     spline_wire = self._create_wire_from_native_spline(native_spline, plane)
                                     if spline_wire is not None:
                                         face = make_face(spline_wire)
                                     else:
-                                        logger.warning("  → Spline Wire Fallback: Verwende Polygon")
+                                        logger.warning("  â†’ Spline Wire Fallback: Verwende Polygon")
                                         outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                         face = make_face(Wire.make_polygon(outer_pts))
                                 else:
                                     # Letzter Fallback: Polygon
-                                    logger.warning("  → Mixed Geometry Fallback: Verwende Polygon")
+                                    logger.warning("  â†’ Mixed Geometry Fallback: Verwende Polygon")
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
 
                         elif n_interiors == 0:
-                            # Keine gemischte Geometrie - prüfen ob es ein Kreis ist
+                            # Keine gemischte Geometrie - prÃ¼fen ob es ein Kreis ist
                             outer_circle_info = self._detect_circle_from_points(outer_coords)
-                            logger.debug(f"  Außenkontur Kreis-Check: {outer_circle_info is not None}")
+                            logger.debug(f"  AuÃŸenkontur Kreis-Check: {outer_circle_info is not None}")
 
                             if outer_circle_info:
-                                # Die Außenkontur IST ein Kreis (standalone Kreis ohne Löcher)
+                                # Die AuÃŸenkontur IST ein Kreis (standalone Kreis ohne LÃ¶cher)
                                 cx, cy, radius = outer_circle_info
-                                logger.info(f"  → Außenkontur als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+                                logger.info(f"  â†’ AuÃŸenkontur als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
 
                                 center_3d = plane.from_local_coords((cx, cy))
                                 from build123d import Plane as B3DPlane
@@ -6883,21 +7027,21 @@ class Body:
                                 circle_wire = Wire.make_circle(radius, circle_plane)
                                 face = make_face(circle_wire)
                             else:
-                                # Kein Kreis, keine gemischte Geometrie → Polygon
+                                # Kein Kreis, keine gemischte Geometrie â†’ Polygon
                                 outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                 face = make_face(Wire.make_polygon(outer_pts))
                         else:
-                            # Hat Löcher (n_interiors > 0), aber KEINE gemischte Geometrie
+                            # Hat LÃ¶cher (n_interiors > 0), aber KEINE gemischte Geometrie
                             native_spline = self._detect_matching_native_spline(outer_coords, feature.sketch)
 
                             if native_spline is not None:
-                                logger.info(f"  → Außenkontur als NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
+                                logger.info(f"  â†’ AuÃŸenkontur als NATIVE SPLINE: {len(native_spline.control_points)} ctrl pts")
                                 spline_wire = self._create_wire_from_native_spline(native_spline, plane)
 
                                 if spline_wire is not None:
                                     face = make_face(spline_wire)
                                 else:
-                                    logger.warning("  → Spline Wire Fallback: Verwende Polygon")
+                                    logger.warning("  â†’ Spline Wire Fallback: Verwende Polygon")
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
                             else:
@@ -6905,7 +7049,7 @@ class Body:
 
                                 if outer_circle_info:
                                     cx, cy, radius = outer_circle_info
-                                    logger.info(f"  → Außenkontur als ECHTER KREIS (mit Löchern): r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+                                    logger.info(f"  â†’ AuÃŸenkontur als ECHTER KREIS (mit LÃ¶chern): r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
 
                                     center_3d = plane.from_local_coords((cx, cy))
                                     from build123d import Plane as B3DPlane
@@ -6916,7 +7060,7 @@ class Body:
                                     outer_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
                                     face = make_face(Wire.make_polygon(outer_pts))
 
-                        # 2. Löcher abziehen (Shapely Interiors)
+                        # 2. LÃ¶cher abziehen (Shapely Interiors)
                         for int_idx, interior in enumerate(poly.interiors):
                             inner_coords = list(interior.coords)[:-1]
                             logger.debug(f"  Interior {int_idx}: {len(inner_coords)} Punkte")
@@ -6925,7 +7069,7 @@ class Body:
 
                             if circle_info:
                                 cx, cy, radius = circle_info
-                                logger.info(f"  → Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
+                                logger.info(f"  â†’ Loch als ECHTER KREIS: r={radius:.2f} at ({cx:.2f}, {cy:.2f})")
 
                                 center_3d = plane.from_local_coords((cx, cy))
                                 from build123d import Plane as B3DPlane
@@ -6934,7 +7078,7 @@ class Body:
                                 circle_face = make_face(circle_wire)
                                 face -= circle_face
                             else:
-                                logger.warning(f"  → Loch als POLYGON ({len(inner_coords)} Punkte) - kein Kreis erkannt!")
+                                logger.warning(f"  â†’ Loch als POLYGON ({len(inner_coords)} Punkte) - kein Kreis erkannt!")
                                 inner_pts = [plane.from_local_coords((p[0], p[1])) for p in inner_coords]
                                 face -= make_face(Wire.make_polygon(inner_pts))
 
@@ -6944,16 +7088,16 @@ class Body:
                         import traceback
                         traceback.print_exc()
 
-                # Extrudieren mit OCP für bessere Robustheit (Build123d PRIMARY, OCP FALLBACK)
+                # Extrudieren mit OCP fÃ¼r bessere Robustheit (Build123d PRIMARY, OCP FALLBACK)
                 amount = feature.distance * feature.direction
 
-                # FIX: Für Cut-Operationen Extrusion verlängern um Through-Cuts zu ermöglichen
+                # FIX: FÃ¼r Cut-Operationen Extrusion verlÃ¤ngern um Through-Cuts zu ermÃ¶glichen
                 cut_extension = 0.0
                 if feature.operation == "Cut" and abs(amount) > 0.1:
                     cut_extension = abs(amount) * 0.1 + 1.0
                     original_amount = amount
                     amount = amount + (cut_extension if amount > 0 else -cut_extension)
-                    logger.debug(f"[CUT] Extrusion verlängert: {original_amount:.2f} → {amount:.2f}mm (+{cut_extension:.2f}mm)")
+                    logger.debug(f"[CUT] Extrusion verlÃ¤ngert: {original_amount:.2f} â†’ {amount:.2f}mm (+{cut_extension:.2f}mm)")
 
                 if is_enabled("extrude_debug"):
                     logger.debug(f"[EXTRUDE DEBUG] distance={feature.distance}, direction={feature.direction}, amount={amount}")
@@ -6969,15 +7113,15 @@ class Body:
                             props = GProp_GProps()
                             BRepGProp.VolumeProperties_s(s.wrapped, props)
                             if is_enabled("extrude_debug"):
-                                logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mm³")
+                                logger.debug(f"[EXTRUDE DEBUG] Extrudiertes Solid Vol={props.Mass():.2f}mmÂ³")
                         except Exception as e:
                             logger.debug(f"[__init__.py] Fehler: {e}")
                             pass
                         solids.append(s)
 
-            # LEGACY: Keine gültigen Profile/Faces
+            # LEGACY: Keine gÃ¼ltigen Profile/Faces
             if not solids:
-                logger.error("[LEGACY] Keine gültigen Profile/Faces gefunden!")
+                logger.error("[LEGACY] Keine gÃ¼ltigen Profile/Faces gefunden!")
                 return None
 
             if not solids: return None
@@ -6989,9 +7133,9 @@ class Body:
 
     def _convert_line_profiles_to_polygons(self, line_profiles: list) -> list:
         """
-        Konvertiert Profile zu Shapely Polygons für Legacy-Code.
+        Konvertiert Profile zu Shapely Polygons fÃ¼r Legacy-Code.
 
-        Unterstützt zwei Formate:
+        UnterstÃ¼tzt zwei Formate:
         1. List[List[Line2D]] - vom Sketch _find_closed_profiles()
         2. List[ShapelyPolygon] - bereits vom UI vorkonvertiert
 
@@ -7032,7 +7176,7 @@ class Body:
                     if poly.is_valid and poly.area > 0:
                         polygons.append(poly)
                     else:
-                        logger.warning(f"[PROFILE] Ungültiges/degeneriertes Polygon mit {len(coords)} Punkten")
+                        logger.warning(f"[PROFILE] UngÃ¼ltiges/degeneriertes Polygon mit {len(coords)} Punkten")
                 except Exception as e:
                     logger.warning(f"[PROFILE] Polygon-Erstellung fehlgeschlagen: {e}")
 
@@ -7042,19 +7186,19 @@ class Body:
         """
         CAD Kernel First: Filtert Profile anhand ihrer Centroids.
 
-        Der Selektor enthält Centroids [(cx, cy), ...] der ursprünglich gewählten Profile.
-        Bei Sketch-Änderungen können Profile sich verschieben - wir matchen mit Toleranz.
+        Der Selektor enthÃ¤lt Centroids [(cx, cy), ...] der ursprÃ¼nglich gewÃ¤hlten Profile.
+        Bei Sketch-Ã„nderungen kÃ¶nnen Profile sich verschieben - wir matchen mit Toleranz.
 
-        WICHTIG: Für jeden Selektor wird nur das BESTE Match (kleinste Distanz) verwendet!
-        Das verhindert dass bei überlappenden Toleranzbereichen mehrere Profile gematcht werden.
+        WICHTIG: FÃ¼r jeden Selektor wird nur das BESTE Match (kleinste Distanz) verwendet!
+        Das verhindert dass bei Ã¼berlappenden Toleranzbereichen mehrere Profile gematcht werden.
 
-        FAIL-FAST: Wenn kein Match gefunden wird, geben wir eine LEERE Liste zurück,
+        FAIL-FAST: Wenn kein Match gefunden wird, geben wir eine LEERE Liste zurÃ¼ck,
         NICHT alle Profile! Das ist CAD Kernel First konform.
 
         Args:
             profiles: Liste von Shapely Polygons (aktuelle Profile aus Sketch)
             selector: Liste von (cx, cy) Tupeln (gespeicherte Centroids)
-            tolerance: Abstand-Toleranz für Centroid-Match in mm
+            tolerance: Abstand-Toleranz fÃ¼r Centroid-Match in mm
 
         Returns:
             Gefilterte Liste von Polygons die zum Selektor passen (kann leer sein!)
@@ -7066,9 +7210,9 @@ class Body:
         matched = []
         used_profile_indices = set()  # Verhindert doppeltes Matchen
 
-        # Debug: Zeige alle verfügbaren Profile
+        # Debug: Zeige alle verfÃ¼gbaren Profile
         if is_enabled("extrude_debug"):
-            logger.debug(f"[SELECTOR] {len(profiles)} Profile verfügbar, {len(selector)} Selektoren")
+            logger.debug(f"[SELECTOR] {len(profiles)} Profile verfÃ¼gbar, {len(selector)} Selektoren")
         for i, poly in enumerate(profiles):
             try:
                 c = poly.centroid
@@ -7081,7 +7225,7 @@ class Body:
         if is_enabled("extrude_debug"):
             logger.debug(f"[SELECTOR] Selektoren: {selector}")
 
-        # Für JEDEN Selektor das BESTE Match finden (nicht alle innerhalb Toleranz!)
+        # FÃ¼r JEDEN Selektor das BESTE Match finden (nicht alle innerhalb Toleranz!)
         for sel_cx, sel_cy in selector:
             best_match_idx = None
             best_match_dist = float('inf')
@@ -7103,13 +7247,13 @@ class Body:
                     logger.warning(f"Centroid-Berechnung fehlgeschlagen: {e}")
                     continue
 
-            # Bestes Match für diesen Selektor hinzufügen
+            # Bestes Match fÃ¼r diesen Selektor hinzufÃ¼gen
             if best_match_idx is not None:
                 matched.append(profiles[best_match_idx])
                 used_profile_indices.add(best_match_idx)
                 c = profiles[best_match_idx].centroid
                 if is_enabled("extrude_debug"):
-                    logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) ≈ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
+                    logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) â‰ˆ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
             else:
                 if is_enabled("extrude_debug"):
                     logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
@@ -7123,19 +7267,19 @@ class Body:
 
     def _compute_extrude_part_brepfeat(self, feature: 'ExtrudeFeature', current_solid):
         """
-        TNP v4.0: BRepFeat-basierter Push/Pull für Body-Face-Operationen.
+        TNP v4.0: BRepFeat-basierter Push/Pull fÃ¼r Body-Face-Operationen.
 
-        Face-Referenzauflösung:
+        Face-ReferenzauflÃ¶sung:
         1. face_index (topology_indexing)
         2. face_shape_id (ShapeNamingService)
         3. face_selector (Legacy-Recovery)
         """
         if current_solid is None:
-            raise ValueError("BRepFeat Push/Pull benötigt einen existierenden Körper")
+            raise ValueError("BRepFeat Push/Pull benÃ¶tigt einen existierenden KÃ¶rper")
 
         operation = getattr(feature, "operation", "")
         if operation not in ("Join", "Cut"):
-            raise ValueError(f"BRepFeat Push/Pull unterstützt nur Join/Cut (erhalten: {operation})")
+            raise ValueError(f"BRepFeat Push/Pull unterstÃ¼tzt nur Join/Cut (erhalten: {operation})")
 
         import numpy as np
         from modeling.topology_indexing import face_from_index, face_index_of
@@ -7265,7 +7409,7 @@ class Body:
                     shape_face = Face(resolved_ocp)
             except Exception as resolve_err:
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"BRepFeat Push/Pull: ShapeID-Auflösung fehlgeschlagen: {resolve_err}")
+                    logger.debug(f"BRepFeat Push/Pull: ShapeID-AuflÃ¶sung fehlgeschlagen: {resolve_err}")
         shape_method_l = str(shape_method or "").lower()
 
         face_candidates = []
@@ -7346,7 +7490,7 @@ class Body:
             # face_index existiert, hat dieser dann Vorrang.
             if shape_method_l == "geometric":
                 logger.warning(
-                    "BRepFeat Push/Pull: face_shape_id wurde nur geometrisch aufgelöst und "
+                    "BRepFeat Push/Pull: face_shape_id wurde nur geometrisch aufgelÃ¶st und "
                     "widerspricht face_index; verwende face_index als Quelle."
                 )
                 shape_face = None
@@ -7372,9 +7516,9 @@ class Body:
                     logger.debug(f"BRepFeat Push/Pull: Selector-Recovery fehlgeschlagen: {selector_err}")
 
         if not face_candidates:
-            raise ValueError("BRepFeat Push/Pull: Zielfläche nicht gefunden (face_shape_id/face_index prüfen)")
+            raise ValueError("BRepFeat Push/Pull: ZielflÃ¤che nicht gefunden (face_shape_id/face_index prÃ¼fen)")
 
-        # Stabilität vor Geschwindigkeit: beste Kandidaten zuerst, bei Fehlschlag nächster.
+        # StabilitÃ¤t vor Geschwindigkeit: beste Kandidaten zuerst, bei Fehlschlag nÃ¤chster.
         face_candidates.sort(key=lambda c: c["score"], reverse=True)
 
         def _normal_for_face(face_obj):
@@ -7405,7 +7549,7 @@ class Body:
         signed_distance = float(getattr(feature, "distance", 0.0) or 0.0) * float(getattr(feature, "direction", 1) or 1)
         abs_dist = abs(signed_distance) if abs(signed_distance) > 1e-9 else abs(float(getattr(feature, "distance", 0.0) or 0.0))
         if abs_dist <= 1e-9:
-            raise ValueError("BRepFeat Push/Pull benötigt eine Distanz > 0")
+            raise ValueError("BRepFeat Push/Pull benÃ¶tigt eine Distanz > 0")
 
         fuse_mode = 0 if operation == "Cut" else 1
 
@@ -7437,7 +7581,7 @@ class Body:
                     try:
                         if is_enabled("tnp_debug_logging"):
                             logger.debug(
-                                f"BRepFeat Push/Pull: Face via TNP-v4 aufgelöst "
+                                f"BRepFeat Push/Pull: Face via TNP-v4 aufgelÃ¶st "
                                 f"(face_index={getattr(feature, 'face_index', None)}, "
                                 f"has_shape_id={getattr(feature, 'face_shape_id', None) is not None}, "
                                 f"source={face_resolution_source}, shape_method={candidate_method or '-'}, "
@@ -7454,10 +7598,10 @@ class Body:
                         if not prism.IsDone():
                             raise ValueError("BRepFeat Operation fehlgeschlagen")
 
-                        # WICHTIG: Pre-USD Result für History-Tracking aufheben!
-                        # UnifySameDomain zerstört die Topologie, auf die die
+                        # WICHTIG: Pre-USD Result fÃ¼r History-Tracking aufheben!
+                        # UnifySameDomain zerstÃ¶rt die Topologie, auf die die
                         # BRepFeat-History verweist. Die History muss gegen
-                        # das pre-USD Solid geprüft werden.
+                        # das pre-USD Solid geprÃ¼ft werden.
                         pre_usd_result_shape = prism.Shape()
                         result_shape = self._unify_same_domain(pre_usd_result_shape, "BRepFeat_MakePrism")
                         result = Solid(result_shape)
@@ -7480,7 +7624,7 @@ class Body:
 
                         if not (is_valid and has_volume_attr and result.volume > 0.001):
                             raise ValueError(
-                                f"BRepFeat produzierte ungültiges Ergebnis "
+                                f"BRepFeat produzierte ungÃ¼ltiges Ergebnis "
                                 f"(valid={is_valid}, vol={getattr(result, 'volume', 0):.4f})"
                             )
 
@@ -7491,16 +7635,16 @@ class Body:
                         vol_delta = abs(vol_after - vol_before)
                         if vol_delta <= 1e-6 and faces_before == faces_after:
                             raise ValueError(
-                                "BRepFeat Push/Pull erzeugte keine Geometrieänderung "
-                                "(möglicherweise stale Face-Referenz)"
+                                "BRepFeat Push/Pull erzeugte keine GeometrieÃ¤nderung "
+                                "(mÃ¶glicherweise stale Face-Referenz)"
                             )
 
-                        logger.debug(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mm³")
+                        logger.debug(f"BRepFeat Push/Pull erfolgreich: volume={result.volume:.2f}mmÂ³")
 
                         _sync_feature_face_refs(candidate_face)
 
                         # === TNP v4.0: BRepFeat-Operation tracken ===
-                        # WICHTIG: Wir übergeben den prism-Operator direkt als
+                        # WICHTIG: Wir Ã¼bergeben den prism-Operator direkt als
                         # occt_history (wie Fillet/Chamfer), und das pre-USD
                         # Result als result_solid. So findet _shape_exists_in_solid
                         # die Generated-Shapes (die im pre-USD Solid leben).
@@ -7547,14 +7691,16 @@ class Body:
         
         Args:
             points: Liste von (x, y) Tupeln
-            tolerance: Relative Toleranz für Radius-Varianz (2% default)
+            tolerance: Relative Toleranz fÃ¼r Radius-Varianz (2% default)
             
         Returns:
             (cx, cy, radius) wenn es ein Kreis ist, sonst None
         """
         import numpy as np
         
-        if len(points) < 8:  # Minimum für Kreis-Erkennung
+        # Circle-Erkennung nur bei dichter Approximation aktivieren.
+        # 12-seitige Polygone sollen als Polygon erhalten bleiben (Regression-Trust).
+        if len(points) < 24:
             return None
         
         pts = np.array(points)
@@ -7563,7 +7709,7 @@ class Body:
         cx = np.mean(pts[:, 0])
         cy = np.mean(pts[:, 1])
         
-        # Abstände zum Schwerpunkt
+        # AbstÃ¤nde zum Schwerpunkt
         distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
         
         # Mittlerer Radius
@@ -7572,7 +7718,7 @@ class Body:
         if radius < 0.1:  # Zu klein
             return None
         
-        # Varianz prüfen (sollte sehr klein sein für Kreis)
+        # Varianz prÃ¼fen (sollte sehr klein sein fÃ¼r Kreis)
         variance = np.std(distances) / radius
         
         logger.debug(f"_detect_circle: {len(points)} Punkte, r={radius:.2f}, varianz={variance:.6f}")
@@ -7592,7 +7738,7 @@ class Body:
 
         Args:
             sketch: Sketch-Objekt mit circles Liste
-            plane: Build123d Plane für 3D-Konvertierung
+            plane: Build123d Plane fÃ¼r 3D-Konvertierung
             profile_selector: Optional selector for filtering circles
 
         Returns:
@@ -7619,9 +7765,9 @@ class Body:
             cx, cy = ocp_data['center']
             radius = ocp_data['radius']
 
-            # Profiler-Selektor Matching (für selektive Extrusion)
+            # Profiler-Selektor Matching (fÃ¼r selektive Extrusion)
             if profile_selector:
-                # Selektor enthält Centroids der gewählten Profile
+                # Selektor enthÃ¤lt Centroids der gewÃ¤hlten Profile
                 circle_centroid = (cx, cy)
                 if not any(
                     abs(circle_centroid[0] - sel[0]) < 0.1 and
@@ -7631,7 +7777,7 @@ class Body:
                     continue  # Circle nicht selektiert
 
             # WICHTIG: AKTUELLE Plane-Orientation vom Sketch verwenden!
-            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem Hinzufügen)
+            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem HinzufÃ¼gen)
             origin = Vector(*sketch.plane_origin)
             z_dir = Vector(*sketch.plane_normal)
             x_dir = Vector(*sketch.plane_x_dir)
@@ -7640,7 +7786,7 @@ class Body:
             # FIX: Wenn y_dir Nullvektor ist (Bug), aus z_dir und x_dir berechnen
             if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
                 y_dir = z_dir.cross(x_dir)
-                logger.debug(f"[TNP v4.1] y_dir aus z_dir × x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
+                logger.debug(f"[TNP v4.1] y_dir aus z_dir Ã— x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
 
             # DEBUG: Plane-Werte loggen
             logger.debug(f"[TNP v4.1] Circle plane: origin=({origin.X:.1f}, {origin.Y:.1f}, {origin.Z:.1f}), "
@@ -7667,13 +7813,13 @@ class Body:
         """
         TNP v4.1: Erstellt native OCP Arc Faces aus Sketch-Arcs.
 
-        Arcs benötigen eine besondere Behandlung: Da ein Arc kein geschlossener
+        Arcs benÃ¶tigen eine besondere Behandlung: Da ein Arc kein geschlossener
         Wire ist, erstellen wir eine planare Face aus Arc + Sehne (chord).
         Bei Extrusion entsteht so ein korrekter Zylinder-Abschnitt.
 
         Args:
             sketch: Sketch-Objekt mit arcs Liste
-            plane: Build123d Plane für 3D-Konvertierung
+            plane: Build123d Plane fÃ¼r 3D-Konvertierung
             profile_selector: Optional selector for filtering arcs
 
         Returns:
@@ -7718,7 +7864,7 @@ class Body:
                     continue
 
             # WICHTIG: AKTUELLE Plane-Orientation vom Sketch verwenden!
-            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem Hinzufügen)
+            # Die native_ocp_data['plane'] kann veraltet sein (GUI rotiert die Plane nach dem HinzufÃ¼gen)
             origin = Vector(*sketch.plane_origin)
             z_dir = Vector(*sketch.plane_normal)
             x_dir = Vector(*sketch.plane_x_dir)
@@ -7727,7 +7873,7 @@ class Body:
             # FIX: Wenn y_dir Nullvektor ist (Bug), aus z_dir und x_dir berechnen
             if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
                 y_dir = z_dir.cross(x_dir)
-                logger.debug(f"[TNP v4.1] Arc y_dir aus z_dir × x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
+                logger.debug(f"[TNP v4.1] Arc y_dir aus z_dir Ã— x_dir berechnet: ({y_dir.X:.1f}, {y_dir.Y:.1f}, {y_dir.Z:.1f})")
 
             # Arc-Center in 3D
             center_3d = origin + x_dir * cx + y_dir * cy
@@ -7740,7 +7886,7 @@ class Body:
             start_3d = center_3d + x_dir * (radius * math.cos(start_rad)) + y_dir * (radius * math.sin(start_rad))
             end_3d = center_3d + x_dir * (radius * math.cos(end_rad)) + y_dir * (radius * math.sin(end_rad))
 
-            # Mittelpunkt für den Arc
+            # Mittelpunkt fÃ¼r den Arc
             mid_rad = (start_rad + end_rad) / 2
             mid_3d = center_3d + x_dir * (radius * math.cos(mid_rad)) + y_dir * (radius * math.sin(mid_rad))
 
@@ -7751,8 +7897,8 @@ class Body:
 
             arc_maker = GC_MakeArcOfCircle(gp_start, gp_mid, gp_end)
             if arc_maker.IsDone():
-                # GC_MakeArcOfCircle.Value() gibt Geom_TrimmedCurve zurück
-                # Wir müssen es in TopoDS_Edge wrappen
+                # GC_MakeArcOfCircle.Value() gibt Geom_TrimmedCurve zurÃ¼ck
+                # Wir mÃ¼ssen es in TopoDS_Edge wrappen
                 arc_geom = arc_maker.Value()
                 arc_edge_maker = BRepBuilderAPI_MakeEdge(arc_geom)
                 if not arc_edge_maker.IsDone():
@@ -7782,7 +7928,7 @@ class Body:
                             # Zu build123d Face konvertieren (direkt aus TopoDS_Face)
                             face = Face(ocp_face)
                             faces.append(face)
-                            logger.debug(f"[TNP v4.1] Native Arc Face erstellt: r={radius:.2f}, {start_angle:.1f}°-{end_angle:.1f}°")
+                            logger.debug(f"[TNP v4.1] Native Arc Face erstellt: r={radius:.2f}, {start_angle:.1f}Â°-{end_angle:.1f}Â°")
                         else:
                             logger.warning("[TNP v4.1] Face Maker fehlgeschlagen")
                     else:
@@ -7790,20 +7936,20 @@ class Body:
                 else:
                     logger.warning("[TNP v4.1] Chord Edge Maker fehlgeschlagen")
             else:
-                logger.warning(f"[TNP v4.1] Arc Maker fehlgeschlagen für {arc}")
+                logger.warning(f"[TNP v4.1] Arc Maker fehlgeschlagen fÃ¼r {arc}")
 
         return faces
 
     def _detect_matching_native_spline(self, coords, sketch, tolerance=0.5):
         """
-        Prüft ob ein Polygon-Kontur von einem nativen Spline stammt.
+        PrÃ¼ft ob ein Polygon-Kontur von einem nativen Spline stammt.
 
         Vergleicht Start/End-Punkte der Kontur mit Start/End der Native Splines.
 
         Args:
             coords: Liste von (x, y) Tupeln der Polygon-Kontur
             sketch: Sketch-Objekt mit native_splines Liste
-            tolerance: Abstandstoleranz für Punktvergleich
+            tolerance: Abstandstoleranz fÃ¼r Punktvergleich
 
         Returns:
             Spline2D Objekt wenn gefunden, sonst None
@@ -7835,15 +7981,15 @@ class Body:
                 dist_end = math.hypot(c_end[0] - s_end.x, c_end[1] - s_end.y)
 
                 if dist_start < tolerance and dist_end < tolerance:
-                    logger.info(f"  → Spline Match (forward): {spline}")
+                    logger.info(f"  â†’ Spline Match (forward): {spline}")
                     return spline
 
-                # Reverse Match: Kontur ist rückwärts
+                # Reverse Match: Kontur ist rÃ¼ckwÃ¤rts
                 dist_start_rev = math.hypot(c_start[0] - s_end.x, c_start[1] - s_end.y)
                 dist_end_rev = math.hypot(c_end[0] - s_start.x, c_end[1] - s_start.y)
 
                 if dist_start_rev < tolerance and dist_end_rev < tolerance:
-                    logger.info(f"  → Spline Match (reverse): {spline}")
+                    logger.info(f"  â†’ Spline Match (reverse): {spline}")
                     return spline
 
             except Exception as e:
@@ -7858,7 +8004,7 @@ class Body:
 
         Args:
             spline: Spline2D Objekt
-            plane: Build123d Plane für 3D-Konvertierung
+            plane: Build123d Plane fÃ¼r 3D-Konvertierung
 
         Returns:
             Build123d Wire oder None bei Fehler
@@ -7869,12 +8015,12 @@ class Body:
             # Spline zu Edge konvertieren
             edge = spline.to_build123d_edge(plane)
             if edge is None:
-                logger.warning("Native Spline → Edge Konvertierung fehlgeschlagen")
+                logger.warning("Native Spline â†’ Edge Konvertierung fehlgeschlagen")
                 return None
 
             # Wire aus einzelner Edge erstellen
             wire = Wire([edge])
-            logger.info(f"  → Native Spline Wire erstellt ({len(spline.control_points)} ctrl pts)")
+            logger.info(f"  â†’ Native Spline Wire erstellt ({len(spline.control_points)} ctrl pts)")
             return wire
 
         except Exception as e:
@@ -7886,12 +8032,12 @@ class Body:
         Erstellt einen Build123d Wire aus gemischter Geometrie (Line + Arc + Spline).
 
         NEUER ANSATZ: Nutze die Polygon-Koordinaten als Grundlage und ersetze
-        Segmente durch native Kurven wo möglich. So bleibt der Wire immer geschlossen.
+        Segmente durch native Kurven wo mÃ¶glich. So bleibt der Wire immer geschlossen.
 
         Args:
             geometry_list: Liste von (geom_type, geom_obj) Tupeln (dedupliziert!)
             outer_coords: Polygon-Koordinaten in Reihenfolge
-            plane: Build123d Plane für 3D-Konvertierung
+            plane: Build123d Plane fÃ¼r 3D-Konvertierung
 
         Returns:
             Build123d Wire oder None bei Fehler
@@ -7908,13 +8054,13 @@ class Body:
                     if obj_id not in unique_geoms:
                         unique_geoms[obj_id] = (geom_type, geom_obj)
 
-            logger.debug(f"  → Mixed geometry: {len(unique_geoms)} unique objects, {len(outer_coords)} polygon points")
+            logger.debug(f"  â†’ Mixed geometry: {len(unique_geoms)} unique objects, {len(outer_coords)} polygon points")
 
-            # Strategie: Erstelle Edges für jede Geometrie und verbinde mit Linien
+            # Strategie: Erstelle Edges fÃ¼r jede Geometrie und verbinde mit Linien
             edges = []
             used_geoms = set()
 
-            # Für jede einzigartige Geometrie, erstelle die entsprechende Edge
+            # FÃ¼r jede einzigartige Geometrie, erstelle die entsprechende Edge
             for obj_id, (geom_type, geom_obj) in unique_geoms.items():
                 if obj_id in used_geoms:
                     continue
@@ -7976,30 +8122,30 @@ class Body:
                     logger.debug(f"    {geom_type} edge failed: {e}")
 
             if not edges:
-                logger.warning("  → Keine Edges erstellt")
+                logger.warning("  â†’ Keine Edges erstellt")
                 return None
 
             # Versuche Wire aus Edges zu bauen
             try:
                 wire = Wire(edges)
                 if wire.is_closed:
-                    logger.info(f"  → Mixed Geometry Wire: {len(edges)} edges, geschlossen")
+                    logger.info(f"  â†’ Mixed Geometry Wire: {len(edges)} edges, geschlossen")
                     return wire
                 else:
-                    logger.debug(f"  → Wire nicht geschlossen, versuche Polygon-Fallback")
+                    logger.debug(f"  â†’ Wire nicht geschlossen, versuche Polygon-Fallback")
             except Exception as e:
-                logger.debug(f"  → Wire aus Edges fehlgeschlagen: {e}")
+                logger.debug(f"  â†’ Wire aus Edges fehlgeschlagen: {e}")
 
             # Fallback: Wenn Wire nicht geschlossen ist, nutze Polygon mit nativen Kurven
-            # wo möglich, aber fülle Lücken mit Linien
-            logger.debug("  → Fallback: Erstelle Wire aus Polygon-Koordinaten")
+            # wo mÃ¶glich, aber fÃ¼lle LÃ¼cken mit Linien
+            logger.debug("  â†’ Fallback: Erstelle Wire aus Polygon-Koordinaten")
             poly_pts = [plane.from_local_coords((p[0], p[1])) for p in outer_coords]
             try:
                 wire = Wire.make_polygon(poly_pts)
-                logger.info(f"  → Polygon Wire Fallback: {len(poly_pts)} Punkte")
+                logger.info(f"  â†’ Polygon Wire Fallback: {len(poly_pts)} Punkte")
                 return wire
             except Exception as e:
-                logger.warning(f"  → Polygon Wire auch fehlgeschlagen: {e}")
+                logger.warning(f"  â†’ Polygon Wire auch fehlgeschlagen: {e}")
                 return None
 
         except Exception as e:
@@ -8030,7 +8176,7 @@ class Body:
 
         geometry_list = sketch._profile_geometry_map.get(key)
         if geometry_list:
-            logger.debug(f"  → Found geometry mapping for polygon: {len(geometry_list)} segments")
+            logger.debug(f"  â†’ Found geometry mapping for polygon: {len(geometry_list)} segments")
             return geometry_list
 
         # Fuzzy matching if exact key not found
@@ -8038,7 +8184,7 @@ class Body:
             if (abs(map_key[4] - key[4]) < 0.5 and  # Area within 0.5
                 abs(map_key[0] - key[0]) < 1 and
                 abs(map_key[1] - key[1]) < 1):
-                logger.debug(f"  → Found geometry mapping (fuzzy): {len(geom_list)} segments")
+                logger.debug(f"  â†’ Found geometry mapping (fuzzy): {len(geom_list)} segments")
                 return geom_list
 
         return None
@@ -8059,7 +8205,7 @@ class Body:
         if not solid:
             return
 
-        # Invalidiere Cache - nächster Zugriff auf vtk_mesh/vtk_edges regeneriert
+        # Invalidiere Cache - nÃ¤chster Zugriff auf vtk_mesh/vtk_edges regeneriert
         self.invalidate_mesh()
 
         # Legacy Support leeren
@@ -8084,9 +8230,9 @@ class Body:
 
     def _check_free_bounds_before_export(self):
         """
-        OCP Feature Audit: Prüft ob Body offene Kanten hat vor Export.
+        OCP Feature Audit: PrÃ¼ft ob Body offene Kanten hat vor Export.
 
-        Offene Shells erzeugen STL-Dateien mit Löchern, die für 3D-Druck
+        Offene Shells erzeugen STL-Dateien mit LÃ¶chern, die fÃ¼r 3D-Druck
         unbrauchbar sind. Diese Warnung hilft dem User das Problem zu erkennen.
         """
         from config.feature_flags import is_enabled
@@ -8102,7 +8248,7 @@ class Body:
             closed_compound = fb.GetClosedWires()
             open_compound = fb.GetOpenWires()
 
-            # GetClosedWires/GetOpenWires geben TopoDS_Compound zurück
+            # GetClosedWires/GetOpenWires geben TopoDS_Compound zurÃ¼ck
             def count_wires(compound):
                 exp = TopExp_Explorer(compound, TopAbs_WIRE)
                 n = 0
@@ -8116,13 +8262,13 @@ class Body:
 
             if n_open > 0:
                 logger.warning(
-                    f"⚠️ Body '{self.name}' hat {n_open} offene Kante(n)! "
-                    f"STL könnte Löcher haben → 3D-Druck problematisch."
+                    f"âš ï¸ Body '{self.name}' hat {n_open} offene Kante(n)! "
+                    f"STL kÃ¶nnte LÃ¶cher haben â†’ 3D-Druck problematisch."
                 )
             elif n_closed > 0:
                 logger.warning(
-                    f"⚠️ Body '{self.name}' hat {n_closed} geschlossene freie Wire(s). "
-                    f"Mögliches internes Shell-Problem."
+                    f"âš ï¸ Body '{self.name}' hat {n_closed} geschlossene freie Wire(s). "
+                    f"MÃ¶gliches internes Shell-Problem."
                 )
             else:
                 logger.debug(f"Export Free-Bounds Check: Body '{self.name}' ist geschlossen (OK)")
@@ -8152,13 +8298,13 @@ class Body:
             logger.error(f"Legacy STL-Export fehlgeschlagen: {e}")
             return False
 
-    # === PHASE 8.2: Persistente Speicherung für TNP ===
+    # === PHASE 8.2: Persistente Speicherung fÃ¼r TNP ===
 
     def to_dict(self) -> dict:
         """
-        Serialisiert Body zu Dictionary für persistente Speicherung.
+        Serialisiert Body zu Dictionary fÃ¼r persistente Speicherung.
 
-        Enthält:
+        EnthÃ¤lt:
         - Body-Metadaten (name, id)
         - Features (serialisiert)
         - TNP-Referenzen und Statistiken
@@ -8192,7 +8338,7 @@ class Body:
                     "plane_normal": list(feat.plane_normal) if feat.plane_normal else None,
                     "plane_x_dir": list(feat.plane_x_dir) if feat.plane_x_dir else None,
                     "plane_y_dir": list(feat.plane_y_dir) if feat.plane_y_dir else None,
-                    # KRITISCH für parametrisches CAD: Sketch-ID speichern
+                    # KRITISCH fÃ¼r parametrisches CAD: Sketch-ID speichern
                     "sketch_id": feat.sketch.id if feat.sketch else None,
                     # CAD Kernel First: Profile-Selektor (Centroids)
                     "profile_selector": feat.profile_selector if feat.profile_selector else None,
@@ -8210,7 +8356,7 @@ class Body:
                     except Exception as e:
                         logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
-                # Face-BREP für Push/Pull auf nicht-planaren Flächen (Zylinder etc.)
+                # Face-BREP fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen (Zylinder etc.)
                 if hasattr(feat, 'face_brep') and feat.face_brep:
                     feat_dict["face_brep"] = feat.face_brep
                     feat_dict["face_type"] = getattr(feat, 'face_type', None)
@@ -8247,7 +8393,7 @@ class Body:
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
                         for gs in feat.geometric_selectors
                     ]
-                # TNP v4.0: ShapeIDs vollständig serialisieren
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig serialisieren
                 if feat.edge_shape_ids:
                     feat_dict["edge_shape_ids"] = [
                         {
@@ -8275,7 +8421,7 @@ class Body:
                         gs.to_dict() if hasattr(gs, 'to_dict') else str(gs)
                         for gs in feat.geometric_selectors
                     ]
-                # TNP v4.0: ShapeIDs vollständig serialisieren
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig serialisieren
                 if feat.edge_shape_ids:
                     feat_dict["edge_shape_ids"] = [
                         {
@@ -8297,11 +8443,11 @@ class Body:
                     "axis": list(feat.axis),
                     "axis_origin": list(feat.axis_origin),
                     "operation": feat.operation,
-                    # KRITISCH für parametrisches CAD: Sketch-ID speichern
+                    # KRITISCH fÃ¼r parametrisches CAD: Sketch-ID speichern
                     "sketch_id": feat.sketch.id if feat.sketch else None,
                     # CAD Kernel First: Profile-Selektor (Centroids)
                     "profile_selector": feat.profile_selector if feat.profile_selector else None,
-                    # TNP v4.0: Face-Referenz für Revolve-Push/Pull
+                    # TNP v4.0: Face-Referenz fÃ¼r Revolve-Push/Pull
                     "face_index": feat.face_index,
                     "face_selector": feat.face_selector,
                 })
@@ -8346,7 +8492,7 @@ class Body:
                     "end_continuity": feat.end_continuity if feat.end_continuity else "G0",
                     "profile_data": serialized_profiles,
                 })
-                # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig serialisieren (alle 6 Felder)
                 if feat.profile_shape_ids:
                     feat_dict["profile_shape_ids"] = [
                         {
@@ -8397,7 +8543,7 @@ class Body:
                     "contact_mode": feat.contact_mode,
                     "profile_face_index": feat.profile_face_index,
                 })
-                # TNP v4.0: ShapeIDs vollständig serialisieren (alle 6 Felder)
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig serialisieren (alle 6 Felder)
                 if feat.profile_shape_id:
                     feat_dict["profile_shape_id"] = {
                         "uuid": feat.profile_shape_id.uuid,
@@ -8514,7 +8660,7 @@ class Body:
                 if feat.opening_face_indices:
                     feat_dict["opening_face_indices"] = list(feat.opening_face_indices)
 
-                # TNP v4.0: Opening-Face ShapeIDs vollständig serialisieren
+                # TNP v4.0: Opening-Face ShapeIDs vollstÃ¤ndig serialisieren
                 if feat.opening_face_shape_ids:
                     feat_dict["opening_face_shape_ids"] = [
                         {
@@ -8733,7 +8879,7 @@ class Body:
                     "plane_x_dir": list(feat.plane_x_dir) if feat.plane_x_dir else None,
                     "plane_y_dir": list(feat.plane_y_dir) if feat.plane_y_dir else None,
                 })
-                # Face-BREP für nicht-planare Faces
+                # Face-BREP fÃ¼r nicht-planare Faces
                 if feat.face_brep:
                     feat_dict["face_brep"] = feat.face_brep
                     feat_dict["face_type"] = feat.face_type
@@ -8807,7 +8953,7 @@ class Body:
                 import OCP.TopoDS
                 shape = self._build123d_solid.wrapped if hasattr(self._build123d_solid, 'wrapped') else self._build123d_solid
                 stream = StringIO()
-                # BRepTools.Write_s schreibt in Datei — nutze temp file
+                # BRepTools.Write_s schreibt in Datei â€” nutze temp file
                 import tempfile, os
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as tmp:
                     tmp_path = tmp.name
@@ -8815,9 +8961,9 @@ class Body:
                 with open(tmp_path, 'r') as f:
                     brep_string = f.read()
                 os.unlink(tmp_path)
-                logger.debug(f"BREP serialisiert für '{self.name}': {len(brep_string)} Zeichen")
+                logger.debug(f"BREP serialisiert fÃ¼r '{self.name}': {len(brep_string)} Zeichen")
             except Exception as e:
-                logger.warning(f"BREP-Serialisierung fehlgeschlagen für '{self.name}': {e}")
+                logger.warning(f"BREP-Serialisierung fehlgeschlagen fÃ¼r '{self.name}': {e}")
 
         return {
             "name": self.name,
@@ -8874,7 +9020,7 @@ class Body:
                     **base_kwargs
                 )
                 feat.distance_formula = feat_dict.get("distance_formula")
-                # Sketch-ID für spätere Referenz-Wiederherstellung speichern
+                # Sketch-ID fÃ¼r spÃ¤tere Referenz-Wiederherstellung speichern
                 feat._sketch_id = feat_dict.get("sketch_id")
                 # CAD Kernel First: Profile-Selektor laden
                 if "profile_selector" in feat_dict and feat_dict["profile_selector"]:
@@ -8889,7 +9035,7 @@ class Body:
                     except Exception as e:
                         logger.debug(f"[__init__.py] Fehler: {e}")
                         pass
-                # Face-BREP für Push/Pull auf nicht-planaren Flächen
+                # Face-BREP fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen
                 if "face_brep" in feat_dict:
                     feat.face_brep = feat_dict["face_brep"]
                     feat.face_type = feat_dict.get("face_type")
@@ -8933,7 +9079,7 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
-                # TNP v4.0: ShapeIDs vollständig deserialisieren
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig deserialisieren
                 if "edge_shape_ids" in feat_dict:
                     from modeling.tnp_system import ShapeID, ShapeType
                     feat.edge_shape_ids = []
@@ -8966,7 +9112,7 @@ class Body:
                         GeometricEdgeSelector.from_dict(gs) if isinstance(gs, dict) else gs
                         for gs in feat_dict["geometric_selectors"]
                     ]
-                # TNP v4.0: ShapeIDs vollständig deserialisieren
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig deserialisieren
                 if "edge_shape_ids" in feat_dict:
                     from modeling.tnp_system import ShapeID, ShapeType
                     feat.edge_shape_ids = []
@@ -8994,7 +9140,7 @@ class Body:
                     **base_kwargs
                 )
                 feat.angle_formula = feat_dict.get("angle_formula")
-                # Sketch-ID für spätere Referenz-Wiederherstellung speichern
+                # Sketch-ID fÃ¼r spÃ¤tere Referenz-Wiederherstellung speichern
                 feat._sketch_id = feat_dict.get("sketch_id")
                 # CAD Kernel First: Profile-Selektor laden
                 if "profile_selector" in feat_dict and feat_dict["profile_selector"]:
@@ -9047,7 +9193,7 @@ class Body:
                     profile_data=profile_data,
                     **base_kwargs
                 )
-                # TNP v4.0: ShapeIDs vollständig deserialisieren (alle 6 Felder)
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig deserialisieren (alle 6 Felder)
                 if "profile_shape_ids" in feat_dict:
                     from modeling.tnp_system import ShapeID, ShapeType
                     feat.profile_shape_ids = []
@@ -9109,7 +9255,7 @@ class Body:
                             feat.profile_face_index = profile_idx
                     except Exception:
                         pass
-                # TNP v4.0: ShapeIDs vollständig deserialisieren (alle 6 Felder)
+                # TNP v4.0: ShapeIDs vollstÃ¤ndig deserialisieren (alle 6 Felder)
                 from modeling.tnp_system import ShapeID, ShapeType
                 if "profile_shape_id" in feat_dict:
                     sid_data = feat_dict["profile_shape_id"]
@@ -9284,7 +9430,7 @@ class Body:
                     **base_kwargs
                 )
 
-                # TNP v4.0: Opening-Face ShapeIDs vollständig deserialisieren
+                # TNP v4.0: Opening-Face ShapeIDs vollstÃ¤ndig deserialisieren
                 if "opening_face_shape_ids" in feat_dict:
                     from modeling.tnp_system import ShapeID, ShapeType
                     feat.opening_face_shape_ids = []
@@ -9333,7 +9479,7 @@ class Body:
                     plane_y_dir=tuple(feat_dict["plane_y_dir"]) if feat_dict.get("plane_y_dir") else None,
                     **base_kwargs
                 )
-                # Face-BREP für nicht-planare Faces
+                # Face-BREP fÃ¼r nicht-planare Faces
                 if "face_brep" in feat_dict:
                     feat.face_brep = feat_dict["face_brep"]
                     feat.face_type = feat_dict.get("face_type")
@@ -9667,11 +9813,11 @@ class Body:
                         if len(solids) == 1:
                             body._build123d_solid = Solid.cast(solids[0])
                         elif len(solids) > 1:
-                            # Mehrere Solids → als Compound behalten
+                            # Mehrere Solids â†’ als Compound behalten
                             body._build123d_solid = Compound.cast(shape)
-                            logger.debug(f"BREP Compound mit {len(solids)} Solids für '{body.name}'")
+                            logger.debug(f"BREP Compound mit {len(solids)} Solids fÃ¼r '{body.name}'")
                         else:
-                            # Kein Solid — vielleicht Shells (z.B. STL-Import)?
+                            # Kein Solid â€” vielleicht Shells (z.B. STL-Import)?
                             shells = []
                             exp2 = TopExp_Explorer(shape, TopAbs_SHELL)
                             while exp2.More():
@@ -9679,19 +9825,19 @@ class Body:
                                 exp2.Next()
                             if shells:
                                 body._build123d_solid = Compound.cast(shape)
-                                logger.debug(f"BREP Compound mit {len(shells)} Shells für '{body.name}'")
+                                logger.debug(f"BREP Compound mit {len(shells)} Shells fÃ¼r '{body.name}'")
                             else:
-                                logger.warning(f"BREP Compound enthält keinen Solid/Shell für '{body.name}'")
+                                logger.warning(f"BREP Compound enthÃ¤lt keinen Solid/Shell fÃ¼r '{body.name}'")
                     else:
                         body._build123d_solid = Solid.cast(shape)
 
                     if body._build123d_solid is not None:
                         body.invalidate_mesh()
-                        logger.debug(f"BREP geladen für '{body.name}': exakte Geometrie wiederhergestellt")
+                        logger.debug(f"BREP geladen fÃ¼r '{body.name}': exakte Geometrie wiederhergestellt")
                 else:
-                    logger.warning(f"BREP leer für '{body.name}' — Rebuild wird versucht")
+                    logger.warning(f"BREP leer fÃ¼r '{body.name}' â€” Rebuild wird versucht")
             except Exception as e:
-                logger.warning(f"BREP-Laden fehlgeschlagen für '{body.name}': {e}")
+                logger.warning(f"BREP-Laden fehlgeschlagen fÃ¼r '{body.name}': {e}")
 
         # Multi-Body Split-Tracking (AGENTS.md Phase 2)
         body.source_body_id = data.get("source_body_id")
@@ -9705,7 +9851,7 @@ class Document:
     """
     Dokument mit optionalem Assembly-System.
 
-    Phase 1 Assembly: Unterstützt hierarchische Component-Struktur.
+    Phase 1 Assembly: UnterstÃ¼tzt hierarchische Component-Struktur.
     Backward-compatible: Alte Projekte laden weiterhin korrekt.
     """
 
@@ -9714,16 +9860,16 @@ class Document:
         self.active_body: Optional[Body] = None
         self.active_sketch: Optional[Sketch] = None
         
-        # TNP v4.0: Shape Naming Service für persistente Shape-Referenzen
+        # TNP v4.0: Shape Naming Service fÃ¼r persistente Shape-Referenzen
         from modeling.tnp_system import ShapeNamingService
         self._shape_naming_service = ShapeNamingService()
         if is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.0: ShapeNamingService initialisiert für '{name}'")
+            logger.debug(f"TNP v4.0: ShapeNamingService initialisiert fÃ¼r '{name}'")
 
         # =========================================================================
         # Assembly System (Phase 1)
         # =========================================================================
-        # Feature Flag prüfen
+        # Feature Flag prÃ¼fen
         self._assembly_enabled = is_enabled("assembly_system")
 
         if self._assembly_enabled:
@@ -9731,9 +9877,9 @@ class Document:
             self.root_component: Component = Component(name="Root")
             self.root_component.is_active = True
             self._active_component: Optional[Component] = self.root_component
-            logger.info(f"[ASSEMBLY] Component-System aktiviert für '{name}'")
+            logger.info(f"[ASSEMBLY] Component-System aktiviert fÃ¼r '{name}'")
         else:
-            # Legacy: Direkte Listen (für Backward-Compatibility)
+            # Legacy: Direkte Listen (fÃ¼r Backward-Compatibility)
             self.root_component = None
             self._active_component = None
 
@@ -9743,7 +9889,7 @@ class Document:
         self._planes: List[ConstructionPlane] = []
 
     # =========================================================================
-    # Properties für Backward-Compatibility
+    # Properties fÃ¼r Backward-Compatibility
     # =========================================================================
     # Diese Properties delegieren zu active_component wenn Assembly aktiviert
 
@@ -9795,7 +9941,7 @@ class Document:
 
     @property
     def active_component(self) -> Optional[Component]:
-        """Gibt die aktive Component zurück (oder None wenn Assembly deaktiviert)."""
+        """Gibt die aktive Component zurÃ¼ck (oder None wenn Assembly deaktiviert)."""
         return self._active_component
 
     def set_active_component(self, comp: Component) -> bool:
@@ -9822,7 +9968,7 @@ class Document:
 
     def get_all_bodies(self) -> List[Body]:
         """
-        Gibt alle Bodies im Dokument zurück (rekursiv bei Assembly).
+        Gibt alle Bodies im Dokument zurÃ¼ck (rekursiv bei Assembly).
 
         Returns:
             Liste aller Bodies
@@ -9832,7 +9978,7 @@ class Document:
         return self._bodies
 
     def get_all_sketches(self) -> List[Sketch]:
-        """Gibt alle Sketches im Dokument zurück (rekursiv bei Assembly)."""
+        """Gibt alle Sketches im Dokument zurÃ¼ck (rekursiv bei Assembly)."""
         if self._assembly_enabled and self.root_component:
             return self.root_component.get_all_sketches(recursive=True)
         return self._sketches
@@ -9870,7 +10016,7 @@ class Document:
         return b
 
     def add_body(self, body: Body, component: Component = None, set_active: bool = False):
-        """Fügt einen Body dem Dokument hinzu und setzt die Document-Referenz."""
+        """FÃ¼gt einen Body dem Dokument hinzu und setzt die Document-Referenz."""
         if body is None:
             return None
 
@@ -9897,7 +10043,7 @@ class Document:
 
     def split_body(self, body: Body, plane_origin: tuple, plane_normal: tuple) -> Tuple[Body, Body]:
         """
-        Teilt einen Body in 2 Hälften und fügt beide zum Document hinzu.
+        Teilt einen Body in 2 HÃ¤lften und fÃ¼gt beide zum Document hinzu.
 
         Multi-Body Split Architecture (AGENTS.md Phase 3):
         - Erstellt SplitFeature mit keep_side="both"
@@ -9914,7 +10060,7 @@ class Document:
             (body_above, body_below) - beide Bodies im Document registriert
 
         Raises:
-            ValueError: Wenn Split fehlschlägt
+            ValueError: Wenn Split fehlschlÃ¤gt
         """
         from build123d import Solid
 
@@ -9925,11 +10071,11 @@ class Document:
             keep_side="both"  # Explizit beide behalten
         )
 
-        # 2. Feature zu Original-Body hinzufügen (ohne Rebuild - wir wollen SplitResult)
+        # 2. Feature zu Original-Body hinzufÃ¼gen (ohne Rebuild - wir wollen SplitResult)
         body.features.append(split_feat)
         split_index = len(body.features) - 1
 
-        # 3. _compute_split aufrufen → SplitResult
+        # 3. _compute_split aufrufen â†’ SplitResult
         try:
             split_result = body._compute_split(split_feat, body._build123d_solid)
         except Exception as e:
@@ -9940,7 +10086,7 @@ class Document:
         # Validierung: Muss SplitResult sein
         if not isinstance(split_result, SplitResult):
             body.features.pop()
-            raise ValueError("Split mit keep_side='both' muss SplitResult zurückgeben")
+            raise ValueError("Split mit keep_side='both' muss SplitResult zurÃ¼ckgeben")
 
         # 4. Beide Bodies erstellen mit shared history
         body_above = Body(name=f"{body.name}_above", document=self)
@@ -9962,15 +10108,15 @@ class Document:
             self.bodies.remove(body)
             logger.debug(f"Split: Original-Body '{body.name}' entfernt")
 
-        # 6. Beide neue Bodies hinzufügen
+        # 6. Beide neue Bodies hinzufÃ¼gen
         self.add_body(body_above, set_active=False)
         self.add_body(body_below, set_active=False)
 
-        # Invalidate meshes für beide Bodies
+        # Invalidate meshes fÃ¼r beide Bodies
         body_above.invalidate_mesh()
         body_below.invalidate_mesh()
 
-        logger.debug(f"Split: '{body.name}' → '{body_above.name}' + '{body_below.name}'")
+        logger.debug(f"Split: '{body.name}' â†’ '{body_above.name}' + '{body_below.name}'")
 
         # 7. Setze einen der Bodies als aktiv (optional - user kann das auch manuell machen)
         if self.active_body == body:
@@ -10102,7 +10248,7 @@ class Document:
         Persistiert immer im Component-basierten Format (v9+).
 
         Returns:
-            Dictionary für JSON-Serialisierung
+            Dictionary fÃ¼r JSON-Serialisierung
         """
         # Parameter speichern
         try:
@@ -10131,7 +10277,7 @@ class Document:
         """
         Deserialisiert Dokument aus Dictionary.
 
-        Lädt primär Component-Format (v9+). Flat-Format-Daten werden
+        LÃ¤dt primÃ¤r Component-Format (v9+). Flat-Format-Daten werden
         on-the-fly in eine Root-Component migriert.
 
         Args:
@@ -10172,7 +10318,7 @@ class Document:
         logger.info(f"[ASSEMBLY] Lade Component-Format v{version}")
         doc._load_assembly_format(payload)
 
-        # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
+        # KRITISCH fÃ¼r parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
         doc._restore_sketch_references()
 
         # Logging
@@ -10182,7 +10328,7 @@ class Document:
         return doc
 
     def _load_assembly_format(self, data: dict):
-        """Lädt Dokument aus Assembly-Format (v9.0+)."""
+        """LÃ¤dt Dokument aus Assembly-Format (v9.0+)."""
         # KRITISCH: Assembly-Flag setzen, damit Properties korrekt delegieren
         self._assembly_enabled = True
 
@@ -10281,7 +10427,7 @@ class Document:
 
     @staticmethod
     def _iter_component_payloads(component_data: dict):
-        """Iteriert rekursiv über Component-Dicts eines Payloads."""
+        """Iteriert rekursiv Ã¼ber Component-Dicts eines Payloads."""
         if not isinstance(component_data, dict):
             return
         yield component_data
@@ -10337,7 +10483,7 @@ class Document:
     def _restore_sketch_references(self):
         """
         Stellt Sketch-Referenzen in Features wieder her (nach dem Laden).
-        Ermöglicht parametrische Updates wenn Sketches geändert werden.
+        ErmÃ¶glicht parametrische Updates wenn Sketches geÃ¤ndert werden.
 
         Funktioniert mit beiden Modi (Legacy und Assembly).
         """
@@ -10354,7 +10500,7 @@ class Document:
                 if sketch_id and sketch_id in sketch_map:
                     feature.sketch = sketch_map[sketch_id]
                     restored_count += 1
-                    logger.debug(f"Sketch-Referenz wiederhergestellt: {feature.name} → {sketch_map[sketch_id].name}")
+                    logger.debug(f"Sketch-Referenz wiederhergestellt: {feature.name} â†’ {sketch_map[sketch_id].name}")
 
         if restored_count > 0:
             logger.info(f"[PARAMETRIC] {restored_count} Sketch-Referenzen wiederhergestellt")
@@ -10680,9 +10826,9 @@ class Document:
         synchronizes edge_shape_ids from stable edge_indices for strict edge features.
 
         Hintergrund:
-        Nach Save/Load können gespeicherte edge_shape_ids stale sein, obwohl edge_indices
-        weiterhin korrekt auflösbar sind. Für Fillet/Chamfer sollen shape_ids danach
-        auf die aktuell indexaufgelösten Kanten zeigen.
+        Nach Save/Load kÃ¶nnen gespeicherte edge_shape_ids stale sein, obwohl edge_indices
+        weiterhin korrekt auflÃ¶sbar sind. FÃ¼r Fillet/Chamfer sollen shape_ids danach
+        auf die aktuell indexaufgelÃ¶sten Kanten zeigen.
         """
         service = getattr(self, "_shape_naming_service", None)
         if service is None:
@@ -11031,7 +11177,7 @@ class Document:
             import numpy as np
 
             class _ProjectEncoder(json.JSONEncoder):
-                """JSON Encoder für Projekt-Daten mit Unterstützung für NumPy und Geometrie-Objekte."""
+                """JSON Encoder fÃ¼r Projekt-Daten mit UnterstÃ¼tzung fÃ¼r NumPy und Geometrie-Objekte."""
                 def default(self, obj):
                     # NumPy-Typen
                     if isinstance(obj, (np.integer,)):
@@ -11060,7 +11206,7 @@ class Document:
     @classmethod
     def load_project(cls, filename: str) -> Optional['Document']:
         """
-        Lädt Projekt aus MashCAD-Datei (.mshcad).
+        LÃ¤dt Projekt aus MashCAD-Datei (.mshcad).
 
         Args:
             filename: Pfad zur Projektdatei
@@ -11085,7 +11231,7 @@ class Document:
             # Bodies: BREP direkt laden oder Rebuild als Fallback
             for body in doc.get_all_bodies():
                 if body._build123d_solid is not None:
-                    logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nötig)")
+                    logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nÃ¶tig)")
                 elif body.features:
                     try:
                         body._rebuild()
@@ -11093,7 +11239,7 @@ class Document:
                     except Exception as e:
                         logger.warning(f"Body '{body.name}' rebuild fehlgeschlagen: {e}")
 
-            # Einmalige Legacy-Migration für NSided edge_selectors -> edge_indices/ShapeIDs.
+            # Einmalige Legacy-Migration fÃ¼r NSided edge_selectors -> edge_indices/ShapeIDs.
             migrated_nsided = doc._migrate_loaded_nsided_features_to_indices()
             migrated_face_refs = doc._migrate_loaded_face_refs_to_indices()
             seeded_shape_refs = doc._rehydrate_shape_naming_service_from_loaded_bodies()
@@ -11136,9 +11282,11 @@ class Document:
             return doc
 
         except json.JSONDecodeError as e:
-            logger.error(f"Ungültiges JSON in Projektdatei: {e}")
+            logger.error(f"UngÃ¼ltiges JSON in Projektdatei: {e}")
             return None
         except Exception as e:
             logger.error(f"Projekt konnte nicht geladen werden: {e}")
             return None
+
+
 
