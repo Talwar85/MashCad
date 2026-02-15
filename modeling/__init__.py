@@ -3998,6 +3998,7 @@ class Body:
         resolved_face_indices = []
         resolved_faces_from_shape = []
         resolved_faces_from_index = []
+        shape_resolution_methods = {}
 
         strict_face_feature = isinstance(
             feature,
@@ -4010,6 +4011,7 @@ class Body:
                 HollowFeature,
             ),
         )
+        single_ref_pair_index_preferred = False
 
         def _same_face(face_a, face_b) -> bool:
             try:
@@ -4093,6 +4095,9 @@ class Body:
                         solid,
                         log_unresolved=False,
                     )
+                    shape_resolution_methods[str(getattr(shape_id, "uuid", "") or "")] = (
+                        str(method or "").strip().lower()
+                    )
                     if resolved_ocp is None:
                         continue
                     from build123d import Face
@@ -4172,6 +4177,69 @@ class Body:
                         if not any(_same_face(shape_face, idx_face) for idx_face in resolved_faces_from_index):
                             strict_topology_mismatch = True
                             break
+        if strict_dual_face_refs and strict_topology_mismatch and single_ref_pair:
+            shape_resolved = bool(resolved_faces_from_shape)
+            index_resolved = bool(resolved_faces_from_index)
+            pair_conflict = False
+            if shape_resolved and index_resolved:
+                pair_conflict = not any(
+                    _same_face(resolved_faces_from_shape[0], idx_face)
+                    for idx_face in resolved_faces_from_index
+                )
+
+            weak_shape_resolution = False
+            if shape_resolved and expected_shape_refs == 1:
+                for sid in shape_ids:
+                    sid_uuid = str(getattr(sid, "uuid", "") or "")
+                    if not sid_uuid:
+                        continue
+                    method = shape_resolution_methods.get(sid_uuid, "")
+                    weak_shape_resolution = method in {"geometric", "geometry_hash"}
+                    break
+
+            if index_resolved and (not shape_resolved):
+                resolved_faces = list(resolved_faces_from_index)
+                resolved_shape_ids = []
+                strict_topology_mismatch = False
+                single_ref_pair_index_preferred = True
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(
+                        f"{feature.name}: single_ref_pair Face-ShapeID nicht aufloesbar -> "
+                        "verwende index-basierte Face-Aufloesung."
+                    )
+            elif index_resolved and shape_resolved and pair_conflict and weak_shape_resolution:
+                resolved_faces = list(resolved_faces_from_index)
+                resolved_shape_ids = []
+                strict_topology_mismatch = False
+                single_ref_pair_index_preferred = True
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="drift",
+                    reference_kind="face",
+                    reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                    expected=max(len(valid_face_indices), expected_shape_refs),
+                    resolved=len(resolved_faces),
+                    strict=False,
+                )
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(
+                        f"{feature.name}: single_ref_pair Shape/Index-Konflikt mit schwacher "
+                        "Face-Shape-Aufloesung (geometric/hash) -> index-basierte Face-Aufloesung bevorzugt."
+                    )
+            else:
+                if is_enabled("tnp_debug_logging"):
+                    reason = "Shape/Index-Konflikt" if pair_conflict else "strict single_ref_pair mismatch"
+                    logger.warning(f"{feature.name}: {reason} -> Abbruch ohne Fallback.")
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="mismatch",
+                    reference_kind="face",
+                    reason="single_ref_pair_conflict" if pair_conflict else "strict_single_ref_pair_mismatch",
+                    expected=max(len(valid_face_indices), expected_shape_refs),
+                    resolved=max(len(resolved_face_indices), len(resolved_shape_ids)),
+                    strict=bool(strict_face_feature),
+                )
+                return []
 
         has_topological_refs = bool(valid_face_indices or expected_shape_refs > 0)
         unresolved_topology_refs = (
@@ -4186,7 +4254,12 @@ class Body:
             unresolved_topology_refs = True
         # Strict fÃ¼r single-face Referenzen: wenn ShapeID vorhanden aber nicht
         # auflÃ¶sbar, nicht still auf potentiell falschen Index degradieren.
-        if prefer_shape_first and expected_shape_refs > 0 and len(resolved_shape_ids) < expected_shape_refs:
+        if (
+            prefer_shape_first
+            and expected_shape_refs > 0
+            and len(resolved_shape_ids) < expected_shape_refs
+            and not single_ref_pair_index_preferred
+        ):
             unresolved_topology_refs = True
 
         if has_topological_refs and unresolved_topology_refs:

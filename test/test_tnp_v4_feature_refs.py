@@ -1065,6 +1065,94 @@ def test_resolve_feature_faces_extrude_blocks_mismatch_even_with_legacy_shape_lo
     assert feature.face_index == 0
 
 
+def test_resolve_feature_faces_single_ref_pair_geometric_conflict_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("extrude_face_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_face_geo_conflict", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    resolved = body._resolve_feature_faces(feature, solid)
+    drift_notice = body._consume_tnp_failure(feature)
+
+    assert len(resolved) == 1
+    assert feature.face_index == 0
+    assert (drift_notice or {}).get("category") == "drift"
+    assert (drift_notice or {}).get("reference_kind") == "face"
+    assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_safe_operation_emits_drift_warning_for_single_ref_pair_geometric_face_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("safe_op_single_ref_pair_geometric_face_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        face_selector=_face_selector(),
+        precalculated_polys=[object()],
+    )
+    feature.face_shape_id = _make_shape_id(ShapeType.FACE, "extrude_face_geo_conflict_safe_op", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is False
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+
+    def _op():
+        resolved = body._resolve_feature_faces(feature, solid)
+        assert len(resolved) == 1
+        return object()
+
+    result, status = body._safe_operation(
+        "SingleRefPairGeometricFaceConflict",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "face"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
 def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index
