@@ -1219,6 +1219,38 @@ def test_sweep_resolve_path_single_ref_pair_geometric_conflict_prefers_index(mon
     assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
 
 
+def test_sweep_resolve_path_single_ref_pair_shape_missing_prefers_index(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_index_of
+
+    doc = Document()
+    body = Body("sweep_path_single_ref_pair_shape_missing")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    sweep = SweepFeature(
+        profile_data={},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_shape_missing", 0)
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return None, "unresolved"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    wire = body._resolve_path(sweep.path_data, solid, sweep)
+    drift_notice = body._consume_tnp_failure(sweep)
+
+    assert wire is not None
+    wire_edges = list(wire.edges())
+    assert len(wire_edges) == 1
+    assert edge_index_of(solid, wire_edges[0]) == 0
+    assert sweep.path_shape_id is not None
+    assert drift_notice is None
+
+
 def test_safe_operation_emits_drift_warning_for_sweep_path_single_ref_pair_geometric_conflict(monkeypatch):
     from build123d import Solid
     from modeling.topology_indexing import edge_from_index, edge_index_of
@@ -1471,6 +1503,43 @@ def test_compute_sweep_profile_single_ref_pair_geometric_conflict_prefers_index(
     assert (drift_notice or {}).get("category") == "drift"
     assert (drift_notice or {}).get("reference_kind") == "face"
     assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
+def test_compute_sweep_profile_single_ref_pair_shape_missing_prefers_index(monkeypatch):
+    from build123d import Solid
+
+    doc = Document()
+    body = Body("sweep_profile_single_ref_pair_shape_missing")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_shape_missing", 0)
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return None, "unresolved"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop_after_profile_resolution"):
+        body._compute_sweep(feature, solid)
+
+    drift_notice = body._consume_tnp_failure(feature)
+    assert feature.profile_face_index == 0
+    assert feature.profile_shape_id is not None
+    assert drift_notice is None
 
 
 def test_safe_operation_emits_drift_warning_for_sweep_profile_single_ref_pair_geometric_conflict(monkeypatch):
