@@ -227,7 +227,7 @@ class GeometryValidator:
                     issues.append("BRepCheck meldet Topologie-Fehler")
                 except Exception as e:
                     logger.debug(f"[geometry_validator.py] Fehler: {e}")
-                    pass
+                    # Optionales Status-Detail nicht verfuegbar -> Basismeldung bleibt erhalten.
 
         except Exception as e:
             issues.append(f"BRepCheck fehlgeschlagen: {e}")
@@ -375,7 +375,7 @@ class GeometryValidator:
                     return ValidationResult.warning("Face-Normal konnte nicht berechnet werden")
             except Exception as e:
                 logger.debug(f"[geometry_validator.py] Fehler: {e}")
-                pass
+                # Normalenberechnung optional fuer diese Validierungsstufe.
 
             return ValidationResult.valid("Face ist valide", area=area)
 
