@@ -350,6 +350,12 @@ class ToolPanel(QFrame):
         self.construction_cb.setFocusPolicy(Qt.ClickFocus)
         self.construction_cb.toggled.connect(lambda v: self.option_changed.emit("construction", v))
         options_layout.addWidget(self.construction_cb)
+
+        self.performance_cb = QCheckBox(tr("Performance Mode"))
+        self.performance_cb.setChecked(True)
+        self.performance_cb.setFocusPolicy(Qt.ClickFocus)
+        self.performance_cb.toggled.connect(lambda v: self.option_changed.emit("performance_mode", v))
+        options_layout.addWidget(self.performance_cb)
         
         grid_row = QHBoxLayout()
         grid_row.addWidget(QLabel(tr("Grid") + ":"))
@@ -427,6 +433,9 @@ class ToolPanel(QFrame):
 
     def set_snap_radius(self, radius: int):
         self.snap_radius_spin.setValue(radius)
+
+    def set_performance_mode(self, enabled: bool):
+        self.performance_cb.setChecked(enabled)
 
 
 class PropertiesPanel(QFrame):

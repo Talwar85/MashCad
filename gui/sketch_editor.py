@@ -687,6 +687,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.grid_snap = True
         self.snap_enabled = True
         self.snap_radius = Tolerances.SKETCH_SNAP_RADIUS_PX  # Konfigurierbarer Fangradius
+        self.performance_mode = True
         
         # ... Snapper initialisieren ...
         if SmartSnapper:
@@ -827,6 +828,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_anchor_angle = 0.0
         self._direct_edit_drag_moved = False
         self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
@@ -1244,6 +1248,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.snap_radius = int(value)
             state = f"{self.snap_radius} px"
             self.status_message.emit(tr("Snap Radius: {state}").format(state=state))
+
+        elif option == "performance_mode":
+            self.performance_mode = self._safe_bool(value)
+            state = tr("ON") if self.performance_mode else tr("OFF")
+            self.status_message.emit(tr("Performance mode: {state}").format(state=state))
 
         self.request_update()
 
@@ -3360,6 +3369,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_source = None
         self._direct_edit_drag_moved = False
         self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
@@ -3444,6 +3456,117 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             circles.append(circle)
         return circles
 
+    @staticmethod
+    def _line_axis_orientation(line, tol: float = 1e-6):
+        """Bestimmt, ob eine Linie horizontal/vertikal ist (oder None)."""
+        if line is None:
+            return None
+        dx = float(line.end.x - line.start.x)
+        dy = float(line.end.y - line.start.y)
+        if abs(dy) <= max(tol, abs(dx) * 1e-6):
+            return "horizontal"
+        if abs(dx) <= max(tol, abs(dy) * 1e-6):
+            return "vertical"
+        return None
+
+    def _lines_sharing_point(self, point, exclude_line=None):
+        if point is None:
+            return []
+        out = []
+        for line in self.sketch.lines:
+            if line is exclude_line:
+                continue
+            if line.start is point or line.end is point:
+                out.append(line)
+        return out
+
+    def _build_rectangle_edge_drag_context(self, edge_line):
+        """
+        Ermittelt Rectangle-Resize-Kontext für eine ausgewählte Kante.
+        Erwartet ein orthogonales 4-Linien-Rechteck mit geteilten Eckpunkten.
+        """
+        if not isinstance(edge_line, Line2D):
+            return None
+        if getattr(edge_line, "construction", False):
+            return None
+
+        orientation = self._line_axis_orientation(edge_line)
+        if orientation not in ("horizontal", "vertical"):
+            return None
+
+        expected_adj = "vertical" if orientation == "horizontal" else "horizontal"
+
+        def pick_adjacent(shared_point):
+            candidates = []
+            for line in self._lines_sharing_point(shared_point, exclude_line=edge_line):
+                if getattr(line, "construction", False):
+                    continue
+                if self._line_axis_orientation(line) == expected_adj:
+                    candidates.append(line)
+            return candidates[0] if candidates else None
+
+        adj_start = pick_adjacent(edge_line.start)
+        adj_end = pick_adjacent(edge_line.end)
+        if adj_start is None or adj_end is None or adj_start is adj_end:
+            return None
+
+        other_start = adj_start.end if adj_start.start is edge_line.start else adj_start.start
+        other_end = adj_end.end if adj_end.start is edge_line.end else adj_end.start
+        if other_start is None or other_end is None or other_start is other_end:
+            return None
+
+        opposite = None
+        for line in self.sketch.lines:
+            if line in (edge_line, adj_start, adj_end):
+                continue
+            if ((line.start is other_start and line.end is other_end) or
+                (line.start is other_end and line.end is other_start)):
+                opposite = line
+                break
+
+        if opposite is None:
+            return None
+        if self._line_axis_orientation(opposite) != orientation:
+            return None
+
+        target_length_lines = [adj_start, adj_end]
+        length_constraints = [
+            c for c in self.sketch.constraints
+            if c.type == ConstraintType.LENGTH
+            and any(line in getattr(c, "entities", ()) for line in target_length_lines)
+        ]
+
+        return {
+            "edge": edge_line,
+            "orientation": orientation,
+            "adj_start": adj_start,
+            "adj_end": adj_end,
+            "opposite": opposite,
+            "target_length_lines": target_length_lines,
+            "length_constraints": length_constraints,
+            "edge_start_x": float(edge_line.start.x),
+            "edge_start_y": float(edge_line.start.y),
+            "edge_end_x": float(edge_line.end.x),
+            "edge_end_y": float(edge_line.end.y),
+        }
+
+    def _resolve_direct_edit_target_rect_edge(self):
+        """
+        Direct-Resize für Rechteckkante:
+        - exakt eine selektierte Linie
+        - Maus hovert diese Linie
+        - Linie ist als Rechteckkante identifizierbar
+        """
+        if len(self.selected_lines) != 1:
+            return None, None
+        line = self.selected_lines[0]
+        if self._last_hovered_entity is not line:
+            return None, None
+        context = self._build_rectangle_edge_drag_context(line)
+        if not context:
+            return None, None
+        return line, context
+
     def _resolve_direct_edit_target_circle(self):
         """
         Ermittelt den aktuell bearbeitbaren Kreis:
@@ -3514,57 +3637,108 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _pick_direct_edit_handle(self, world_pos):
         """
-        Hit-Test für Center- und Radius-Handle.
+        Hit-Test für Direct-Edit:
+        - Circle/Polygon: Center- und Radius-Handle
+        - Rectangle: selektierte Kante direkt ziehen
 
         Returns:
             Dict mit mode + Handle-Daten oder None.
         """
         handles = self._get_direct_edit_handles_world()
-        if not handles:
-            return None
-
-        circle = handles["circle"]
-        center = handles["center"]
-        radius_point = handles["radius_point"]
-
         hit_radius = max(8.0 / self.view_scale, (self.snap_radius / self.view_scale) * 0.55)
 
-        d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
-        if d_center <= hit_radius:
-            return {**handles, "mode": "center"}
+        if handles:
+            circle = handles["circle"]
+            center = handles["center"]
+            radius_point = handles["radius_point"]
 
-        d_handle = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
-        if d_handle <= hit_radius:
-            return {**handles, "mode": "radius"}
+            d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+            if d_center <= hit_radius:
+                return {**handles, "kind": "circle", "mode": "center"}
 
-        # Komfort: Klick direkt auf Kreisbahn startet Radius-Drag.
-        d_ring = abs(math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) - circle.radius)
-        if d_ring <= hit_radius * 0.75:
-            return {**handles, "mode": "radius"}
+            d_handle = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
+            if d_handle <= hit_radius:
+                return {**handles, "kind": "circle", "mode": "radius"}
+
+            # Komfort: Klick direkt auf Kreisbahn startet Radius-Drag.
+            d_ring = abs(math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) - circle.radius)
+            if d_ring <= hit_radius * 0.75:
+                return {**handles, "kind": "circle", "mode": "radius"}
+
+        line, context = self._resolve_direct_edit_target_rect_edge()
+        if line is not None and context is not None:
+            dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
+            if dist <= hit_radius:
+                return {
+                    "kind": "line",
+                    "mode": "line_edge",
+                    "line": line,
+                    "source": "rectangle",
+                    "orientation": context["orientation"],
+                    "context": context,
+                }
 
         return None
 
     def _start_direct_edit_drag(self, handle_hit):
-        """Startet Circle/Polygon-Direct-Manipulation."""
+        """Startet Circle/Polygon/Rectangle-Direct-Manipulation."""
         if not handle_hit:
             return
 
-        circle = handle_hit["circle"]
+        kind = handle_hit.get("kind", "circle")
         mode = handle_hit["mode"]
 
         self._save_undo()
 
         self._direct_edit_dragging = True
         self._direct_edit_mode = mode
-        self._direct_edit_circle = circle
         self._direct_edit_source = handle_hit.get("source")
         self._direct_edit_start_pos = QPointF(self.mouse_world.x(), self.mouse_world.y())
-        self._direct_edit_start_center = QPointF(circle.center.x, circle.center.y)
-        self._direct_edit_start_radius = float(circle.radius)
-        self._direct_edit_anchor_angle = float(handle_hit.get("angle", 0.0))
         self._direct_edit_drag_moved = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
+
+        # Reset mode-specific caches
+        self._direct_edit_circle = None
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
+
+        if kind == "line" and mode == "line_edge":
+            line = handle_hit.get("line")
+            context = handle_hit.get("context")
+            if line is None or context is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_line = line
+            self._direct_edit_line_context = context
+            self._direct_edit_line_length_constraints = list(context.get("length_constraints", []))
+            self._direct_edit_live_solve = self._direct_edit_requires_live_solve(
+                mode=mode,
+                source=self._direct_edit_source,
+                line_context=context,
+            )
+
+            if line not in self.selected_lines:
+                self._clear_selection()
+                self.selected_lines = [line]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # Default: Circle/Polygon direct edit
+        circle = handle_hit.get("circle")
+        if circle is None:
+            self._direct_edit_dragging = False
+            return
+
+        self._direct_edit_circle = circle
+        self._direct_edit_start_center = QPointF(circle.center.x, circle.center.y)
+        self._direct_edit_start_radius = float(circle.radius)
+        self._direct_edit_anchor_angle = float(handle_hit.get("angle", 0.0))
         self._direct_edit_live_solve = self._direct_edit_requires_live_solve(
             circle=circle,
             source=self._direct_edit_source,
@@ -3583,11 +3757,41 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.setCursor(Qt.ClosedHandCursor)
         self.request_update()
 
-    def _direct_edit_requires_live_solve(self, circle, source, mode) -> bool:
+    def _direct_edit_requires_live_solve(self, circle=None, source=None, mode=None, line_context=None) -> bool:
         """
         Live-Solve nur dort, wo es für visuelles Follow-Up nötig ist.
-        Normale Circle-Drags bleiben dadurch flüssig.
         """
+        if mode == "line_edge":
+            if not line_context:
+                return False
+            allowed_types = {
+                ConstraintType.HORIZONTAL,
+                ConstraintType.VERTICAL,
+                ConstraintType.COINCIDENT,
+                ConstraintType.LENGTH,
+            }
+            involved_lines = {
+                line_context.get("edge"),
+                line_context.get("adj_start"),
+                line_context.get("adj_end"),
+                line_context.get("opposite"),
+            }
+            involved_lines.discard(None)
+            involved_points = set()
+            for line in involved_lines:
+                involved_points.add(getattr(line, "start", None))
+                involved_points.add(getattr(line, "end", None))
+            involved_points.discard(None)
+
+            for c in self.sketch.constraints:
+                entities = set(getattr(c, "entities", ()))
+                if not entities.intersection(involved_lines) and not entities.intersection(involved_points):
+                    continue
+                if c.type in allowed_types:
+                    continue
+                return True
+            return False
+
         if circle is None:
             return False
 
@@ -3649,9 +3853,95 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if created is not None:
                 self._direct_edit_radius_constraints.append(created)
 
+    def _line_drag_dirty_rect(self, context) -> QRectF:
+        lines = [
+            context.get("edge"),
+            context.get("adj_start"),
+            context.get("adj_end"),
+            context.get("opposite"),
+        ]
+        rect = QRectF()
+        for line in lines:
+            if line is None:
+                continue
+            bbox = self._get_entity_bbox(line)
+            if rect.isEmpty():
+                rect = QRectF(bbox)
+            else:
+                rect = rect.united(bbox)
+        return rect.adjusted(-8.0, -8.0, 8.0, 8.0)
+
+    def _update_line_edge_length_constraints(self, context, new_length: float):
+        constraints = context.get("length_constraints")
+        if not isinstance(constraints, list):
+            constraints = []
+
+        if not constraints:
+            target_lines = context.get("target_length_lines", [])
+            if target_lines:
+                created = self.sketch.add_length(target_lines[0], float(new_length))
+                if created is not None:
+                    constraints.append(created)
+
+        for c in constraints:
+            if c.type == ConstraintType.LENGTH:
+                c.value = float(new_length)
+
+        context["length_constraints"] = constraints
+        self._direct_edit_line_length_constraints = constraints
+
+    def _apply_direct_edit_line_drag(self, world_pos, axis_lock=False):
+        context = self._direct_edit_line_context
+        if not context:
+            return
+
+        edge = context.get("edge")
+        adj_start = context.get("adj_start")
+        adj_end = context.get("adj_end")
+        orientation = context.get("orientation")
+        if edge is None or adj_start is None or adj_end is None:
+            return
+
+        dirty_old = self._line_drag_dirty_rect(context)
+
+        if orientation == "horizontal":
+            dy = world_pos.y() - self._direct_edit_start_pos.y()
+            edge.start.y = context.get("edge_start_y", float(edge.start.y)) + dy
+            edge.end.y = context.get("edge_end_y", float(edge.end.y)) + dy
+        elif orientation == "vertical":
+            dx = world_pos.x() - self._direct_edit_start_pos.x()
+            edge.start.x = context.get("edge_start_x", float(edge.start.x)) + dx
+            edge.end.x = context.get("edge_end_x", float(edge.end.x)) + dx
+        else:
+            return
+
+        new_length = 0.5 * (abs(float(adj_start.length)) + abs(float(adj_end.length)))
+        new_length = max(0.01, float(new_length))
+        self._update_line_edge_length_constraints(context, new_length)
+
+        self._direct_edit_drag_moved = True
+        self._maybe_live_solve_during_direct_drag()
+        if self._direct_edit_live_solve:
+            self.request_update()
+            return
+
+        dirty_new = self._line_drag_dirty_rect(context)
+        dirty = dirty_old.united(dirty_new)
+        if dirty.isEmpty():
+            self.request_update()
+        else:
+            self.update(dirty.toAlignedRect())
+
     def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
         """Aktualisiert Geometrie während des Drag-Vorgangs."""
-        if not self._direct_edit_dragging or self._direct_edit_circle is None:
+        if not self._direct_edit_dragging:
+            return
+
+        if self._direct_edit_mode == "line_edge":
+            self._apply_direct_edit_line_drag(world_pos, axis_lock=axis_lock)
+            return
+
+        if self._direct_edit_circle is None:
             return
 
         circle = self._direct_edit_circle
@@ -3716,6 +4006,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_source = None
         self._direct_edit_drag_moved = False
         self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
@@ -3738,16 +4031,38 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(f"{source.title()} radius updated")
             elif mode == "center":
                 self.status_message.emit(f"{source.title()} moved")
+            elif mode == "line_edge":
+                self.status_message.emit(tr("Rectangle size updated"))
 
         self.request_update()
+
+    @staticmethod
+    def _direct_handle_signature(handle):
+        """Stabile Signatur für Hover-Change-Detection bei Direct-Handles."""
+        if not handle:
+            return None
+        mode = handle.get("mode")
+        kind = handle.get("kind", "circle")
+        if kind == "line":
+            return (mode, kind, id(handle.get("line")), handle.get("orientation"))
+        return (mode, kind, id(handle.get("circle")))
     
     def _update_cursor(self):
         if self._direct_edit_dragging:
             return
 
         if self.current_tool == SketchTool.SELECT and self._direct_hover_handle:
-            if self._direct_hover_handle.get("mode") == "center":
+            mode = self._direct_hover_handle.get("mode")
+            if mode == "center":
                 self.setCursor(Qt.OpenHandCursor)
+            elif mode == "line_edge":
+                orientation = self._direct_hover_handle.get("orientation")
+                if orientation == "horizontal":
+                    self.setCursor(Qt.SizeVerCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeHorCursor)
+                else:
+                    self.setCursor(Qt.SizeAllCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -3761,7 +4076,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
         
         hints = {
-            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Circle/Polygon: Drag center or rim | Del=Delete"),
+            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Circle/Polygon: Drag center or rim | Rectangle: select edge + drag | Del=Delete"),
             SketchTool.LINE: tr("Click=Start | Tab=Length/Angle | RightClick=Finish"),
             SketchTool.RECTANGLE: tr("Rectangle") + f" ({tr('Center') if self.rect_mode else tr('2-Point')}) | " + tr("Click=Start"),
             SketchTool.RECTANGLE_CENTER: tr("Rectangle") + " (" + tr("Center") + ") | " + tr("Click=Start"),
@@ -4767,7 +5082,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.request_update()
                     return
 
-            # A1. Direct Manipulation Handle (Circle/Polygon) im SELECT-Modus
+            # A1. Direct Manipulation Handle (Circle/Polygon/Rectangle) im SELECT-Modus
             if self.current_tool == SketchTool.SELECT:
                 handle_hit = self._pick_direct_edit_handle(self.mouse_world)
                 if handle_hit:
@@ -5108,19 +5423,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             # Cursor-Feedback
             if self.current_tool == SketchTool.SELECT:
-                prev_handle_sig = None
-                if self._direct_hover_handle:
-                    prev_handle_sig = (
-                        self._direct_hover_handle.get("mode"),
-                        id(self._direct_hover_handle.get("circle")),
-                    )
+                prev_handle_sig = self._direct_handle_signature(self._direct_hover_handle)
                 self._direct_hover_handle = self._pick_direct_edit_handle(self.mouse_world)
-                new_handle_sig = None
-                if self._direct_hover_handle:
-                    new_handle_sig = (
-                        self._direct_hover_handle.get("mode"),
-                        id(self._direct_hover_handle.get("circle")),
-                    )
+                new_handle_sig = self._direct_handle_signature(self._direct_hover_handle)
                 if prev_handle_sig != new_handle_sig:
                     needs_full_update = True
 
@@ -5134,8 +5439,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 
                 self.hovered_spline_element = spline_elem
                 if self._direct_hover_handle:
-                    if self._direct_hover_handle.get("mode") == "center":
+                    mode = self._direct_hover_handle.get("mode")
+                    if mode == "center":
                         self.setCursor(Qt.OpenHandCursor)
+                    elif mode == "line_edge":
+                        orientation = self._direct_hover_handle.get("orientation")
+                        if orientation == "horizontal":
+                            self.setCursor(Qt.SizeVerCursor)
+                        elif orientation == "vertical":
+                            self.setCursor(Qt.SizeHorCursor)
+                        else:
+                            self.setCursor(Qt.SizeAllCursor)
                     else:
                         self.setCursor(Qt.SizeHorCursor)
                 elif spline_elem:
@@ -6402,15 +6716,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_native_splines(p)  # Native B-Splines aus DXF Import
 
         # UI-Elemente (Constraints, Snaps etc.) zeichnen
-        self._draw_constraints(p) 
+        fast_drag = bool(self.performance_mode and self._direct_edit_dragging)
+        if not fast_drag:
+            self._draw_constraints(p)
         if not self._direct_edit_dragging:
             self._draw_open_ends(p)
         self._draw_preview(p)
         self._draw_selection_box(p)
         self._draw_snap(p)
         self._draw_direct_edit_handles(p)
-        self._draw_snap_feedback_overlay(p)
-        self._draw_live_dimensions(p)
+        if not fast_drag:
+            self._draw_snap_feedback_overlay(p)
+            self._draw_live_dimensions(p)
         self._draw_hud(p)
         
         p.end()
