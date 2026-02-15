@@ -19,6 +19,7 @@ Neu im Error-Envelope (`status_details`):
   - `tnp_ref_mismatch`
   - `tnp_ref_drift`
   - `rebuild_finalize_failed` (CH-004 Failsafe bei Finalisierungscrash)
+  - `ocp_api_unavailable` (CH-006: optionale OCP-API in dieser Build-Variante fehlt)
 - `tnp_failure` Zusatzobjekt:
   - `category`: `missing_ref|mismatch|drift`
   - `reference_kind`: `edge|face|...`
@@ -27,6 +28,12 @@ Neu im Error-Envelope (`status_details`):
   - `next_action`
   - `expected`, `resolved` (optional)
   - `feature_id`, `feature_name`, `feature_class`
+
+Optional bei Dependency-Fehlern:
+- `runtime_dependency`:
+  - `kind`: `ocp_api`
+  - `exception`: z. B. `ImportError`
+  - `detail`: Original-Importfehler
 
 Determinismus:
 - `_resolve_edges_tnp()` normalisiert `feature.edge_indices` stabil (aufsteigend, eindeutig).
@@ -57,7 +64,7 @@ conda run -n cad_env python -m pytest -q test/test_feature_error_status.py test/
 ```
 
 Resultat:
-- `156 passed, 2 skipped`
+- `157 passed, 2 skipped`
 
 ## Breaking Changes / Rest-Risiken
 - Kein API-Break auf Feature-Objekten.

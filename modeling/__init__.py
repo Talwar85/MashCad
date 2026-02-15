@@ -1298,6 +1298,7 @@ class Body:
                 "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
                 "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
                 "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
+                "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
             }
             return defaults.get(
                 error_code,
@@ -1364,6 +1365,16 @@ class Body:
                 else ""
             )
             error_code = tnp_code_by_category.get(tnp_category, "operation_failed")
+            dependency_error = None
+            if error_code == "operation_failed" and isinstance(e, (ImportError, ModuleNotFoundError)):
+                dep_msg = str(e).strip() or e.__class__.__name__
+                if "OCP" in dep_msg or "No module named 'OCP" in dep_msg or "cannot import name" in dep_msg:
+                    error_code = "ocp_api_unavailable"
+                    dependency_error = {
+                        "kind": "ocp_api",
+                        "exception": e.__class__.__name__,
+                        "detail": dep_msg,
+                    }
             tnp_hint = ""
             if isinstance(tnp_failure, dict):
                 tnp_hint = str(tnp_failure.get("next_action") or "").strip()
@@ -1376,6 +1387,8 @@ class Body:
             )
             if isinstance(tnp_failure, dict):
                 self._last_operation_error_details["tnp_failure"] = tnp_failure
+            if dependency_error:
+                self._last_operation_error_details["runtime_dependency"] = dependency_error
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
             if fallback_func:

@@ -128,3 +128,27 @@ def test_rebuild_finalize_failure_rolls_back_to_previous_solid(monkeypatch):
     assert details.get("schema") == "error_envelope_v1"
     assert rollback.get("from") is not None
     assert rollback.get("to") is not None
+
+
+def test_safe_operation_maps_ocp_import_errors_to_dependency_code():
+    body = Body("ocp_dependency_error")
+    feature = DraftFeature(
+        draft_angle=3.0,
+        pull_direction=(0.0, 0.0, 1.0),
+    )
+
+    result, status = body._safe_operation(
+        "Draft_Dependency_Test",
+        lambda: (_ for _ in ()).throw(
+            ImportError("cannot import name 'BRepFeat_MakeDraft' from 'OCP.BRepFeat'")
+        ),
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    dep = details.get("runtime_dependency") or {}
+    assert result is None
+    assert status == "ERROR"
+    assert details.get("code") == "ocp_api_unavailable"
+    assert dep.get("kind") == "ocp_api"
+    assert dep.get("exception") == "ImportError"
