@@ -75,6 +75,8 @@ def _format_feature_status_tooltip(status_msg: str, status: str = "", status_det
             lines.append(f"- +{len(ref_items) - max_items} {tr('more')}")
 
     hint = str(details.get("hint", "") or "").strip()
+    if not hint:
+        hint = str(details.get("next_action", "") or "").strip()
     if hint:
         lines.append("")
         lines.append(f"{tr('Hint')}: {hint}")

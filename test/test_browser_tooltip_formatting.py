@@ -42,3 +42,21 @@ def test_browser_tooltip_uses_status_details_when_message_has_no_refs():
     assert "- face_shape_ids=['FACE:abcd1234@0']" in tooltip
     assert ("Hint:" in tooltip) or ("Hinweis:" in tooltip)
     assert ("Code: operation_failed" in tooltip) or ("Code:" in tooltip)
+
+
+def test_browser_tooltip_uses_next_action_when_hint_missing():
+    msg = "Fillet: Kante konnte nicht aufgeloest werden"
+    details = {
+        "code": "operation_failed",
+        "next_action": "Feature-Referenz neu auswaehlen",
+        "refs": {
+            "edge_indices": [123],
+        },
+    }
+
+    tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
+
+    assert "Broken refs:" in tooltip
+    assert "- edge_indices=[123]" in tooltip
+    assert ("Hint:" in tooltip) or ("Hinweis:" in tooltip)
+    assert "Feature-Referenz neu auswaehlen" in tooltip
