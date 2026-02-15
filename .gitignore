@@ -27,6 +27,9 @@ nul
 .claude
 tests/
 docs/
+roadmap_gemini/
+roadmap_kimi/
+roadmap_ctp/
 
 
 # Virtual environments

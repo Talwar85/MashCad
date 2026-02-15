@@ -95,6 +95,21 @@ def test_solve_removes_orphan_constraints_before_solving():
     assert len(sketch.constraints) == 0
 
 
+def test_delete_rectangle_cleans_corner_points():
+    sketch = Sketch("rect_cleanup")
+    lines = sketch.add_rectangle(0.0, 0.0, 20.0, 10.0)
+
+    assert len(lines) == 4
+    assert len(sketch.points) == 4
+    assert all(not p.standalone for p in sketch.points)
+
+    for line in lines:
+        sketch.delete_line(line)
+
+    assert len(sketch.lines) == 0
+    assert len(sketch.points) == 0
+
+
 def test_solver_reports_non_finite_residuals(monkeypatch):
     sketch = Sketch("nan_residuals")
     line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
