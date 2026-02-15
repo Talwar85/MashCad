@@ -812,6 +812,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.spline_drag_cp_index = None  # Index des Kontrollpunkts
         self.selected_splines = []  # Ausgewählte Splines (Liste)
         self.hovered_spline_element = None  # (spline, cp_index, element_type)
+
+        # Direct Manipulation (Fusion/Onshape-ähnlich)
+        # Kreis/Polygon: Center-Drag und Radius-Drag direkt im SELECT-Modus.
+        self._direct_hover_handle = None
+        self._direct_edit_dragging = False
+        self._direct_edit_mode = None  # "center" | "radius"
+        self._direct_edit_circle = None
+        self._direct_edit_source = None  # "circle" | "polygon"
+        self._direct_edit_start_pos = QPointF()
+        self._direct_edit_start_center = QPointF()
+        self._direct_edit_start_radius = 0.0
+        self._direct_edit_anchor_angle = 0.0
+        self._direct_edit_drag_moved = False
         
         # Schwebende Optionen-Palette
         self.tool_options = ToolOptionsPopup(self)
@@ -3316,6 +3329,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.offset_start_pos = None
         self.offset_preview_lines = []
 
+        # Direct edit reset
+        self._direct_hover_handle = None
+        self._direct_edit_dragging = False
+        self._direct_edit_mode = None
+        self._direct_edit_circle = None
+        self._direct_edit_source = None
+        self._direct_edit_drag_moved = False
+
         # Constraint Highlight zurücksetzen
         self._clear_constraint_highlight()
 
@@ -3334,8 +3355,301 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self._constraint_highlighted_entity is not None:
             self._constraint_highlighted_entity = None
             self.request_update()
+
+    def _find_polygon_driver_circle_for_line(self, line):
+        """
+        Findet den Konstruktionskreis, der ein reguläres Polygon steuert.
+
+        Heuristik:
+        - Suche POINT_ON_CIRCLE Constraints für beide Linienendpunkte.
+        - Der häufigste Kreis-Kandidat ist der Treiberkreis.
+        """
+        if line is None:
+            return None
+
+        endpoint_ids = {
+            getattr(getattr(line, "start", None), "id", None),
+            getattr(getattr(line, "end", None), "id", None),
+        }
+        endpoint_ids.discard(None)
+        if not endpoint_ids:
+            return None
+
+        candidate_counts = {}
+        for c in self.sketch.constraints:
+            if c.type != ConstraintType.POINT_ON_CIRCLE or len(c.entities) < 2:
+                continue
+
+            point = c.entities[0]
+            circle = c.entities[1]
+
+            if not isinstance(circle, Circle2D):
+                continue
+            if getattr(point, "id", None) not in endpoint_ids:
+                continue
+
+            cid = id(circle)
+            if cid not in candidate_counts:
+                candidate_counts[cid] = [circle, 0]
+            candidate_counts[cid][1] += 1
+
+        if not candidate_counts:
+            return None
+
+        # Priorisiere Kreise, auf denen beide Endpunkte liegen (count >= 2).
+        best_circle, best_count = max(candidate_counts.values(), key=lambda item: item[1])
+        if best_count < 1:
+            return None
+        return best_circle
+
+    def _collect_driver_circles_for_lines(self, lines):
+        """Sammelt eindeutige Polygon-Treiberkreise aus einer Linienliste."""
+        circles = []
+        seen = set()
+        for line in lines or []:
+            circle = self._find_polygon_driver_circle_for_line(line)
+            if circle is None:
+                continue
+            cid = id(circle)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            circles.append(circle)
+        return circles
+
+    def _resolve_direct_edit_target_circle(self):
+        """
+        Ermittelt den aktuell bearbeitbaren Kreis:
+        - Direkt gehoverter Kreis
+        - Polygon-Treiberkreis unter gehoverter Linie
+        - Fallback auf Selektion (ein Kreis oder eine Polygon-Linie)
+        """
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Circle2D):
+            return hovered, "circle"
+
+        if isinstance(hovered, Line2D):
+            poly_circle = self._find_polygon_driver_circle_for_line(hovered)
+            if poly_circle is not None:
+                return poly_circle, "polygon"
+
+        if len(self.selected_circles) == 1:
+            return self.selected_circles[0], "circle"
+
+        if len(self.selected_lines) == 1:
+            poly_circle = self._find_polygon_driver_circle_for_line(self.selected_lines[0])
+            if poly_circle is not None:
+                return poly_circle, "polygon"
+
+        return None, None
+
+    def _get_direct_edit_handles_world(self):
+        """
+        Liefert Handle-Daten für Direct Manipulation in Weltkoordinaten.
+
+        Returns:
+            Dict mit circle, source, center, radius_point, angle oder None.
+        """
+        if self.current_tool != SketchTool.SELECT:
+            return None
+
+        if self._direct_edit_dragging and self._direct_edit_circle is not None:
+            circle = self._direct_edit_circle
+            source = self._direct_edit_source
+            if self._direct_edit_mode == "radius":
+                angle = self._direct_edit_anchor_angle
+            else:
+                dx = self.mouse_world.x() - circle.center.x
+                dy = self.mouse_world.y() - circle.center.y
+                angle = math.atan2(dy, dx) if (abs(dx) > 1e-9 or abs(dy) > 1e-9) else 0.0
+        else:
+            circle, source = self._resolve_direct_edit_target_circle()
+            if circle is None:
+                return None
+            dx = self.mouse_world.x() - circle.center.x
+            dy = self.mouse_world.y() - circle.center.y
+            angle = math.atan2(dy, dx) if (abs(dx) > 1e-9 or abs(dy) > 1e-9) else 0.0
+
+        center = QPointF(circle.center.x, circle.center.y)
+        radius_point = QPointF(
+            circle.center.x + circle.radius * math.cos(angle),
+            circle.center.y + circle.radius * math.sin(angle),
+        )
+
+        return {
+            "circle": circle,
+            "source": source,
+            "center": center,
+            "radius_point": radius_point,
+            "angle": angle,
+        }
+
+    def _pick_direct_edit_handle(self, world_pos):
+        """
+        Hit-Test für Center- und Radius-Handle.
+
+        Returns:
+            Dict mit mode + Handle-Daten oder None.
+        """
+        handles = self._get_direct_edit_handles_world()
+        if not handles:
+            return None
+
+        circle = handles["circle"]
+        center = handles["center"]
+        radius_point = handles["radius_point"]
+
+        hit_radius = max(8.0 / self.view_scale, (self.snap_radius / self.view_scale) * 0.55)
+
+        d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+        if d_center <= hit_radius:
+            return {**handles, "mode": "center"}
+
+        d_handle = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
+        if d_handle <= hit_radius:
+            return {**handles, "mode": "radius"}
+
+        # Komfort: Klick direkt auf Kreisbahn startet Radius-Drag.
+        d_ring = abs(math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) - circle.radius)
+        if d_ring <= hit_radius * 0.75:
+            return {**handles, "mode": "radius"}
+
+        return None
+
+    def _start_direct_edit_drag(self, handle_hit):
+        """Startet Circle/Polygon-Direct-Manipulation."""
+        if not handle_hit:
+            return
+
+        circle = handle_hit["circle"]
+        mode = handle_hit["mode"]
+
+        self._save_undo()
+
+        self._direct_edit_dragging = True
+        self._direct_edit_mode = mode
+        self._direct_edit_circle = circle
+        self._direct_edit_source = handle_hit.get("source")
+        self._direct_edit_start_pos = QPointF(self.mouse_world.x(), self.mouse_world.y())
+        self._direct_edit_start_center = QPointF(circle.center.x, circle.center.y)
+        self._direct_edit_start_radius = float(circle.radius)
+        self._direct_edit_anchor_angle = float(handle_hit.get("angle", 0.0))
+        self._direct_edit_drag_moved = False
+
+        if circle not in self.selected_circles:
+            self._clear_selection()
+            self.selected_circles = [circle]
+
+        self.setCursor(Qt.ClosedHandCursor)
+        self.request_update()
+
+    def _update_circle_radius_constraint(self, circle, new_radius: float):
+        """Synchronisiert Radius-Änderungen mit vorhandenen Radius/Diameter-Constraints."""
+        found = False
+        for c in self.sketch.constraints:
+            if circle not in c.entities:
+                continue
+            if c.type == ConstraintType.RADIUS:
+                c.value = float(new_radius)
+                found = True
+            elif c.type == ConstraintType.DIAMETER:
+                c.value = float(new_radius) * 2.0
+                found = True
+
+        circle.radius = float(new_radius)
+        if not found:
+            self.sketch.add_radius(circle, float(new_radius))
+
+    def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
+        """Aktualisiert Geometrie während des Drag-Vorgangs."""
+        if not self._direct_edit_dragging or self._direct_edit_circle is None:
+            return
+
+        circle = self._direct_edit_circle
+        mode = self._direct_edit_mode
+
+        if mode == "center":
+            dx = world_pos.x() - self._direct_edit_start_pos.x()
+            dy = world_pos.y() - self._direct_edit_start_pos.y()
+            if axis_lock:
+                if abs(dx) >= abs(dy):
+                    dy = 0.0
+                else:
+                    dx = 0.0
+
+            circle.center.x = self._direct_edit_start_center.x() + dx
+            circle.center.y = self._direct_edit_start_center.y() + dy
+
+        elif mode == "radius":
+            new_radius = math.hypot(world_pos.x() - circle.center.x, world_pos.y() - circle.center.y())
+            new_radius = max(0.01, new_radius)
+            self._direct_edit_anchor_angle = math.atan2(
+                world_pos.y() - circle.center.y,
+                world_pos.x() - circle.center.x,
+            )
+            self._update_circle_radius_constraint(circle, new_radius)
+
+        else:
+            return
+
+        self._direct_edit_drag_moved = True
+
+        # Live-Solve für visuelles Feedback (z.B. reguläres Polygon folgt sofort).
+        try:
+            self.sketch.solve()
+        except Exception as e:
+            logger.debug(f"Direct drag solve failed: {e}")
+
+        self.request_update()
+
+    def _finish_direct_edit_drag(self):
+        """Schließt Direct-Manipulation ab und propagiert UI-Updates."""
+        if not self._direct_edit_dragging:
+            return
+
+        moved = self._direct_edit_drag_moved
+        mode = self._direct_edit_mode
+        source = self._direct_edit_source or "circle"
+
+        self._direct_edit_dragging = False
+        self._direct_edit_mode = None
+        self._direct_edit_circle = None
+        self._direct_edit_source = None
+        self._direct_edit_drag_moved = False
+
+        if moved:
+            result = self.sketch.solve()
+            if not getattr(result, "success", True):
+                self._emit_solver_feedback(
+                    success=False,
+                    message=getattr(result, "message", "Solve failed"),
+                    dof=float(getattr(result, "dof", 0.0) or 0.0),
+                    status_name=self._solver_status_name(result),
+                    context="Direct edit",
+                    show_hud=True,
+                )
+            self._find_closed_profiles()
+            self.sketched_changed.emit()
+
+            if mode == "radius":
+                self.status_message.emit(f"{source.title()} radius updated")
+            elif mode == "center":
+                self.status_message.emit(f"{source.title()} moved")
+
+        self.request_update()
     
     def _update_cursor(self):
+        if self._direct_edit_dragging:
+            return
+
+        if self.current_tool == SketchTool.SELECT and self._direct_hover_handle:
+            if self._direct_hover_handle.get("mode") == "center":
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.SizeHorCursor)
+            return
+
         if self.current_tool == SketchTool.SELECT: self.setCursor(Qt.ArrowCursor)
         elif self.current_tool == SketchTool.MOVE: self.setCursor(Qt.SizeAllCursor)
         else: self.setCursor(Qt.CrossCursor)
@@ -3345,7 +3659,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
         
         hints = {
-            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Del=Delete"),
+            SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Circle/Polygon: Drag center or rim | Del=Delete"),
             SketchTool.LINE: tr("Click=Start | Tab=Length/Angle | RightClick=Finish"),
             SketchTool.RECTANGLE: tr("Rectangle") + f" ({tr('Center') if self.rect_mode else tr('2-Point')}) | " + tr("Click=Start"),
             SketchTool.RECTANGLE_CENTER: tr("Rectangle") + " (" + tr("Center") + ") | " + tr("Click=Start"),
@@ -4061,6 +4375,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.request_update()
                     return
 
+            # A1. Direct Manipulation Handle (Circle/Polygon) im SELECT-Modus
+            if self.current_tool == SketchTool.SELECT:
+                handle_hit = self._pick_direct_edit_handle(self.mouse_world)
+                if handle_hit:
+                    self._start_direct_edit_drag(handle_hit)
+                    return
+
             # A1.5. Canvas-Kalibrierung (hat höchste Priorität wenn aktiv)
             if self._canvas_calibrating:
                 if self._canvas_calibration_click(self.mouse_world):
@@ -4154,6 +4475,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.is_panning = False
             self._update_cursor()
         if event.button() == Qt.LeftButton:
+            if self._direct_edit_dragging:
+                self._finish_direct_edit_drag()
+                self._update_cursor()
+                self.request_update()
+                return
             # Spline-Dragging beenden
             if self.spline_dragging:
                 self._finish_spline_drag()
@@ -4310,6 +4636,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._canvas_update_drag(self.mouse_world)
             return
 
+        elif self._direct_edit_dragging:
+            self._apply_direct_edit_drag(
+                self.mouse_world,
+                axis_lock=bool(event.modifiers() & Qt.ShiftModifier),
+            )
+            return
+
         elif self.spline_dragging:
             self._drag_spline_element(event.modifiers() & Qt.ShiftModifier)
             # Dragging aktualisiert Update selber oder braucht Full Update
@@ -4383,6 +4716,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             # Cursor-Feedback
             if self.current_tool == SketchTool.SELECT:
+                prev_handle_sig = None
+                if self._direct_hover_handle:
+                    prev_handle_sig = (
+                        self._direct_hover_handle.get("mode"),
+                        id(self._direct_hover_handle.get("circle")),
+                    )
+                self._direct_hover_handle = self._pick_direct_edit_handle(self.mouse_world)
+                new_handle_sig = None
+                if self._direct_hover_handle:
+                    new_handle_sig = (
+                        self._direct_hover_handle.get("mode"),
+                        id(self._direct_hover_handle.get("circle")),
+                    )
+                if prev_handle_sig != new_handle_sig:
+                    needs_full_update = True
+
                 spline_elem = self._find_spline_element_at(self.mouse_world)
                 if spline_elem != self.hovered_spline_element:
                      # Spline Handle Hover changed -> Update Spline area
@@ -4392,10 +4741,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                      needs_full_update = True # Einfachheitshalber
                 
                 self.hovered_spline_element = spline_elem
-                if spline_elem:
+                if self._direct_hover_handle:
+                    if self._direct_hover_handle.get("mode") == "center":
+                        self.setCursor(Qt.OpenHandCursor)
+                    else:
+                        self.setCursor(Qt.SizeHorCursor)
+                elif spline_elem:
                     self.setCursor(Qt.OpenHandCursor)
                 else:
                     self._update_cursor()
+            else:
+                self._direct_hover_handle = None
                     
             # 3. Live-Werte (für Tooltips/HUD)
             self._update_live_values(snapped)
@@ -5629,6 +5985,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._draw_preview(p)
         self._draw_selection_box(p)
         self._draw_snap(p)
+        self._draw_direct_edit_handles(p)
         self._draw_snap_feedback_overlay(p)
         self._draw_live_dimensions(p)
         self._draw_hud(p)

@@ -53,7 +53,6 @@ from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverw
 from gui.log_panel import LogPanel
 from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget
 from gui.widgets.section_view_panel import SectionViewPanel
-from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
@@ -623,13 +622,6 @@ class MainWindow(QMainWindow):
         self.section_panel.close_requested.connect(self._toggle_section_view)
         self.section_panel.hide()  # Initially hidden
 
-        # Measure Panel (Inspect)
-        self.measure_panel = MeasureInputPanel(self)
-        self.measure_panel.pick_point_requested.connect(self._on_measure_pick_requested)
-        self.measure_panel.clear_requested.connect(self._clear_measure_points)
-        self.measure_panel.close_requested.connect(self._close_measure_panel)
-        self.measure_panel.hide()
-
         # Point-to-Point Move Panel
         self.p2p_panel = PointToPointMovePanel(self)
         self.p2p_panel.pick_body_requested.connect(self._on_p2p_pick_body_requested)
@@ -639,21 +631,7 @@ class MainWindow(QMainWindow):
         self._p2p_body_id = None
         self._p2p_repick_body = False
 
-        # BREP Cleanup Panel
-        self.brep_cleanup_panel = BRepCleanupPanel(self)
-        self.brep_cleanup_panel.feature_selected.connect(self._on_brep_cleanup_feature_selected)
-        self.brep_cleanup_panel.merge_requested.connect(self._on_brep_cleanup_merge)
-        self.brep_cleanup_panel.merge_all_requested.connect(self._on_brep_cleanup_merge_all)
-        self.brep_cleanup_panel.close_requested.connect(self._close_brep_cleanup)
-        self.brep_cleanup_panel.hide()  # Initially hidden
-        self._pending_brep_cleanup_mode = False
 
-        # BREP Cleanup Viewport Signals
-        self.viewport_3d.brep_cleanup_features_changed.connect(self.brep_cleanup_panel.set_features)
-        self.viewport_3d.brep_cleanup_selection_changed.connect(self.brep_cleanup_panel.update_selection)
-        self.viewport_3d.brep_cleanup_face_hovered.connect(
-            lambda idx, info: self.brep_cleanup_panel.update_face_info(info)
-        )
 
         # Edge Selection Signal verbinden
         self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
@@ -688,8 +666,6 @@ class MainWindow(QMainWindow):
         self._reposition_notifications()
         if hasattr(self, '_getting_started_overlay') and self._getting_started_overlay.isVisible():
             self._getting_started_overlay.center_on_parent()
-        if hasattr(self, "measure_panel") and self.measure_panel.isVisible():
-            self.measure_panel.show_at(self.viewport_3d)
         if hasattr(self, "p2p_panel") and self.p2p_panel.isVisible():
             self.p2p_panel.show_at(self.viewport_3d)
         if hasattr(self, "section_panel") and self.section_panel.isVisible():
@@ -975,9 +951,6 @@ class MainWindow(QMainWindow):
         # NEU: Body-Click für pending transform mode (Fix 1)
         if hasattr(self.viewport_3d, 'body_clicked'):
             self.viewport_3d.body_clicked.connect(self._on_viewport_body_clicked)
-
-        # Measure-Tool Signal
-        self.viewport_3d.measure_point_picked.connect(self._on_measure_point_picked)
 
         # NEU: Point-to-Point Move (CAD-Style)
         if hasattr(self.viewport_3d, 'point_to_point_move'):
@@ -1438,10 +1411,6 @@ class MainWindow(QMainWindow):
                 # Actually we can just key off names in a dict, but we used a list.
                 # Let's search actors in plotter.
                 
-                # Better: Keep a map if possible, but _stl_feature_actors is list
-                # Re-iterate and find by name?
-                # PyVista plotter.actors contains dictionary {name: actor} usually
-                
                 # Using viewport_3d.plotter.actors
                 if str(actor_name) in self.viewport_3d.plotter.actors:
                     self.viewport_3d.plotter.actors[str(actor_name)].SetVisibility(enabled)
@@ -1872,7 +1841,6 @@ class MainWindow(QMainWindow):
         'shell': ("Shell", tr("Select face to open, set thickness · Esc: cancel")),
         'hole': ("Hole", tr("Select planar face · Esc: cancel")),
         'draft': ("Draft", tr("Select faces, set angle · Esc: cancel")),
-        'measure': ("Measure", tr("Click two points or edges to measure")),
         'split_body': ("Split", tr("Select body, choose plane · Esc: cancel")),
         'pattern': ("Pattern", tr("Select body, set count/spacing · Esc: cancel")),
         'thread': ("Thread", tr("Select cylindrical face · Esc: cancel")),
@@ -1934,18 +1902,13 @@ class MainWindow(QMainWindow):
             'thread': self._thread_dialog,
             'sketch_agent': self._sketch_agent_dialog,
 
-            'measure': self._start_measure_mode,
             'mass_props': lambda: self._show_not_implemented("Masseeigenschaften"),
-            'geometry_check': self._geometry_check_dialog,
-            'surface_analysis': self._surface_analysis_dialog,
             'nsided_patch': self._nsided_patch_dialog,
-            'mesh_repair': self._mesh_repair_dialog,
             'hollow': self._hollow_dialog,
             'wall_thickness': self._wall_thickness_dialog,
             'lattice': self._start_lattice,
             'pattern': self._start_pattern,
             'convert_to_brep': self._convert_selected_body_to_brep,
-            'brep_cleanup': self._toggle_brep_cleanup,
         }
         
         if action in actions:
@@ -2396,11 +2359,6 @@ class MainWindow(QMainWindow):
         # Prüfe auf N-Sided Patch Pending Mode
         if getattr(self, '_pending_nsided_patch_mode', False):
             self._on_body_clicked_for_nsided_patch(body_id)
-            return
-
-        # Prüfe auf Geometry Check Pending Mode
-        if getattr(self, '_pending_geometry_check_mode', False):
-            self._on_body_clicked_for_geometry_check(body_id)
             return
 
         # Prüfe auf Mesh Repair Pending Mode
@@ -4244,60 +4202,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Nut generation failed: {e}")
 
-    def _mesh_repair_dialog(self):
-        """
-        Open mesh repair dialog with viewport selection support.
 
-        UX-Pattern (wie Fillet/Chamfer):
-        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
-        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
-        """
-        selected_bodies = self.browser.get_selected_bodies()
-
-        if not selected_bodies:
-            # Pending Mode aktivieren
-            self._pending_mesh_repair_mode = True
-            self.viewport_3d.setCursor(Qt.CrossCursor)
-
-            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-                self.viewport_3d.set_pending_transform_mode(True)
-
-            logger.info("Mesh Repair: Klicke auf einen Körper in der 3D-Ansicht")
-            return
-
-        # Body gewählt → direkt Dialog öffnen
-        body = selected_bodies[0]
-        self._open_mesh_repair_for_body(body)
-
-    def _on_body_clicked_for_mesh_repair(self, body_id: str):
-        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
-        self._pending_mesh_repair_mode = False
-        self.viewport_3d.setCursor(Qt.ArrowCursor)
-        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-            self.viewport_3d.set_pending_transform_mode(False)
-
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if not body:
-            logger.warning(f"Body {body_id} nicht gefunden")
-            return
-
-        self._open_mesh_repair_for_body(body)
-
-    def _open_mesh_repair_for_body(self, body):
-        """Öffnet den Mesh Repair Dialog für einen spezifischen Body."""
-        from gui.dialogs.mesh_repair_dialog import MeshRepairDialog
-
-        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
-            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
-            return
-
-        dlg = MeshRepairDialog(body, parent=self)
-        if dlg.exec() and dlg.repaired_solid is not None:
-            body._build123d_solid = dlg.repaired_solid
-            body.invalidate_mesh()
-            self._update_body_mesh(body)
-            self.browser.refresh()
-            logger.success("Geometry repair angewendet")
 
     def _nsided_patch_dialog(self):
         """
@@ -4380,7 +4285,7 @@ class MainWindow(QMainWindow):
 
         body = self._nsided_patch_target_body
 
-        # Kanten aus Edge-Selection holen
+        # Kanten aus Edge-Selektion holen
         selected_edges = []
         selected_edge_indices = []
         if hasattr(self.viewport_3d, 'get_selected_edges'):
@@ -4419,7 +4324,6 @@ class MainWindow(QMainWindow):
         )
 
         # TNP v4.0: ShapeIDs für ausgewählte Edges ermitteln/registrieren
-        edge_shape_ids = []
         shape_service = getattr(self.document, "_shape_naming_service", None)
         if shape_service:
             for idx, edge in enumerate(selected_edges):
@@ -4436,10 +4340,9 @@ class MainWindow(QMainWindow):
                             geometry_data=(ec.X, ec.Y, ec.Z, edge_len),
                         )
                     if shape_id is not None:
-                        edge_shape_ids.append(shape_id)
+                        feat.edge_shape_ids.append(shape_id)
                 except Exception as e:
                     logger.debug(f"N-Sided Patch: ShapeID-Auflösung fehlgeschlagen: {e}")
-        feat.edge_shape_ids = edge_shape_ids
 
         # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
         cmd = AddFeatureCommand(body, feat, self, description=f"N-Sided Patch ({len(selected_edges)} edges)")
@@ -4455,7 +4358,7 @@ class MainWindow(QMainWindow):
             self.browser.refresh()
             logger.success(
                 f"N-Sided Patch mit {len(selected_edges)} Kanten angewendet "
-                f"(TopoIdx: {len(selected_edge_indices)}, ShapeIDs: {len(edge_shape_ids)})"
+                f"(TopoIdx: {len(selected_edge_indices)}, ShapeIDs: {len(feat.edge_shape_ids)})"
             )
 
         # Mode beenden
@@ -4477,55 +4380,6 @@ class MainWindow(QMainWindow):
             self.viewport_3d.stop_edge_selection_mode()
 
         self.nsided_patch_panel.hide()
-
-    def _surface_analysis_dialog(self):
-        """
-        Open surface analysis dialog with viewport selection support.
-
-        UX-Pattern (wie Fillet/Chamfer):
-        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
-        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
-        """
-        selected_bodies = self.browser.get_selected_bodies()
-
-        if not selected_bodies:
-            # Pending Mode aktivieren
-            self._pending_surface_analysis_mode = True
-            self.viewport_3d.setCursor(Qt.CrossCursor)
-
-            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-                self.viewport_3d.set_pending_transform_mode(True)
-
-            logger.info("Surface Analysis: Klicke auf einen Körper in der 3D-Ansicht")
-            return
-
-        # Body gewählt → direkt Dialog öffnen
-        body = selected_bodies[0]
-        self._open_surface_analysis_for_body(body)
-
-    def _on_body_clicked_for_surface_analysis(self, body_id: str):
-        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
-        self._pending_surface_analysis_mode = False
-        self.viewport_3d.setCursor(Qt.ArrowCursor)
-        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-            self.viewport_3d.set_pending_transform_mode(False)
-
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if not body:
-            logger.warning(f"Body {body_id} nicht gefunden")
-            return
-
-        self._open_surface_analysis_for_body(body)
-
-    def _open_surface_analysis_for_body(self, body):
-        """Öffnet den Surface Analysis Dialog für einen spezifischen Body."""
-        from gui.dialogs.surface_analysis_dialog import SurfaceAnalysisDialog
-
-        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
-            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
-            return
-
-        SurfaceAnalysisDialog(body, self.viewport_3d, parent=self).exec()
 
     def _wall_thickness_dialog(self):
         """
@@ -4582,7 +4436,7 @@ class MainWindow(QMainWindow):
 
         UX-Pattern:
         - Falls Body ausgewählt → sofort Panel anzeigen
-        - Falls kein Body → Pending-Mode, warte auf Klick
+        - Falls kein Body → Pending-Modus, warte auf Klick
         """
         selected_bodies = self.browser.get_selected_bodies()
 
@@ -4602,7 +4456,7 @@ class MainWindow(QMainWindow):
         self._activate_lattice_for_body(body)
 
     def _on_body_clicked_for_lattice(self, body_id: str):
-        """Callback wenn im Pending-Mode ein Body für Lattice angeklickt wird."""
+        """Callback wenn im Pending-Modus ein Body für Lattice angeklickt wird."""
         self._pending_lattice_mode = False
 
         self.viewport_3d.setCursor(Qt.ArrowCursor)
@@ -4840,61 +4694,6 @@ class MainWindow(QMainWindow):
             self._update_body_from_build123d(body, body._build123d_solid)
             self._browser.refresh()
             logger.success(f"Hollow angewendet auf {body.name} (Wandstärke {dlg.wall_thickness}mm)")
-
-    def _geometry_check_dialog(self):
-        """
-        Open geometry validation/healing dialog with viewport selection support.
-
-        UX-Pattern (wie Fillet/Chamfer):
-        - Falls Body im Browser ausgewählt → sofort Dialog öffnen
-        - Falls kein Body → Pending-Mode, warte auf Viewport-Klick
-        """
-        selected_bodies = self.browser.get_selected_bodies()
-
-        if not selected_bodies:
-            # Pending Mode aktivieren
-            self._pending_geometry_check_mode = True
-            self.viewport_3d.setCursor(Qt.CrossCursor)
-
-            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-                self.viewport_3d.set_pending_transform_mode(True)
-
-            logger.info("Check Geometry: Klicke auf einen Körper in der 3D-Ansicht")
-            return
-
-        # Body gewählt → direkt Dialog öffnen
-        body = selected_bodies[0]
-        self._open_geometry_check_for_body(body)
-
-    def _on_body_clicked_for_geometry_check(self, body_id: str):
-        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
-        self._pending_geometry_check_mode = False
-        self.viewport_3d.setCursor(Qt.ArrowCursor)
-        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
-            self.viewport_3d.set_pending_transform_mode(False)
-
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if not body:
-            logger.warning(f"Body {body_id} nicht gefunden")
-            return
-
-        self._open_geometry_check_for_body(body)
-
-    def _open_geometry_check_for_body(self, body):
-        """Öffnet den Geometry Check Dialog für einen spezifischen Body."""
-        from gui.dialogs.geometry_check_dialog import GeometryCheckDialog
-
-        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
-            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
-            return
-
-        dialog = GeometryCheckDialog(body, parent=self)
-        if dialog.exec() and dialog.healed_solid is not None:
-            body._build123d_solid = dialog.healed_solid
-            body.invalidate_mesh()
-            self._update_body_from_build123d(body, dialog.healed_solid)
-            self.statusBar().showMessage(f"Geometry healed: {body.name}")
-            logger.success(f"Geometry healed for {body.name}")
 
     def _primitive_dialog(self, ptype="box"):
         """Create a primitive solid (Box, Cylinder, Sphere, Cone) as new body."""

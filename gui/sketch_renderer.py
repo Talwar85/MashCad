@@ -1921,6 +1921,73 @@ class SketchRendererMixin:
             p.setBrush(QBrush(QColor(0, 150, 255, 30)))
             p.drawRect(rect)
 
+    def _draw_direct_edit_handles(self, p):
+        """
+        Zeichnet direkte Manipulations-Handles für Circle/Polygon:
+        - Center-Handle (verschieben)
+        - Radius-Handle (Größe ändern)
+        """
+        if getattr(self, "current_tool", None) != SketchTool.SELECT:
+            return
+        if not hasattr(self, "_get_direct_edit_handles_world"):
+            return
+
+        handles = self._get_direct_edit_handles_world()
+        if not handles:
+            return
+
+        center_world = handles["center"]
+        radius_world = handles["radius_point"]
+        source = handles.get("source", "circle")
+
+        center_screen = self.world_to_screen(center_world)
+        radius_screen = self.world_to_screen(radius_world)
+
+        hover = getattr(self, "_direct_hover_handle", None)
+        hover_mode = hover.get("mode") if hover else None
+        drag_mode = getattr(self, "_direct_edit_mode", None) if getattr(self, "_direct_edit_dragging", False) else None
+
+        is_center_active = hover_mode == "center" or drag_mode == "center"
+        is_radius_active = hover_mode == "radius" or drag_mode == "radius"
+
+        # Helper-Linie vom Zentrum zur Radius-Handle
+        guide_color = QColor(120, 220, 255, 170) if source == "circle" else QColor(255, 190, 110, 170)
+        p.setPen(QPen(guide_color, 1.5, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(center_screen, radius_screen)
+
+        # Center-Handle
+        center_fill = QColor(30, 180, 255, 240) if is_center_active else QColor(20, 120, 200, 210)
+        center_stroke = QColor(255, 255, 255, 230)
+        center_size = 7 if is_center_active else 6
+
+        p.setPen(QPen(center_stroke, 1.5))
+        p.setBrush(QBrush(center_fill))
+        p.drawEllipse(center_screen, center_size, center_size)
+        p.setPen(QPen(QColor(255, 255, 255, 230), 1))
+        p.drawLine(
+            QPointF(center_screen.x() - 4, center_screen.y()),
+            QPointF(center_screen.x() + 4, center_screen.y()),
+        )
+        p.drawLine(
+            QPointF(center_screen.x(), center_screen.y() - 4),
+            QPointF(center_screen.x(), center_screen.y() + 4),
+        )
+
+        # Radius-Handle
+        radius_fill = QColor(255, 160, 70, 245) if is_radius_active else QColor(220, 130, 50, 215)
+        radius_stroke = QColor(255, 245, 220, 230)
+        radius_size = 6 if is_radius_active else 5
+        radius_rect = QRectF(
+            radius_screen.x() - radius_size,
+            radius_screen.y() - radius_size,
+            radius_size * 2,
+            radius_size * 2,
+        )
+        p.setPen(QPen(radius_stroke, 1.5))
+        p.setBrush(QBrush(radius_fill))
+        p.drawRect(radius_rect)
+
     @staticmethod
     def _unit_vec(dx: float, dy: float):
         n = math.hypot(dx, dy)

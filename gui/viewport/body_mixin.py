@@ -372,87 +372,9 @@ class BodyRenderingMixin:
         self.bodies.clear()
         ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
-    def show_scalar_analysis(self, body_id, scalars, scalar_name="Analysis",
-                             cmap="RdYlGn", clim=None, show_bar=True):
-        """
-        Zeigt eine farbkodierte Analyse auf einem Body.
 
-        Args:
-            body_id: Body ID
-            scalars: numpy array mit Skalarwerten (pro Punkt oder pro Zelle)
-            scalar_name: Name der Skala (für Colorbar)
-            cmap: Matplotlib colormap name
-            clim: (min, max) Wertebereich, oder None für auto
-            show_bar: Colorbar anzeigen
-        """
-        if body_id not in self.bodies:
-            return
 
-        mesh = self.bodies[body_id].get('mesh')
-        if mesh is None:
-            return
 
-        try:
-            n_mesh = f"body_{body_id}_m"
-
-            # Determine if point or cell scalars
-            if len(scalars) == mesh.n_points:
-                mesh.point_data[scalar_name] = scalars
-            elif len(scalars) == mesh.n_cells:
-                mesh.cell_data[scalar_name] = scalars
-            else:
-                logger.warning(f"Scalar length {len(scalars)} doesn't match points ({mesh.n_points}) or cells ({mesh.n_cells})")
-                return
-
-            self.plotter.add_mesh(
-                mesh, scalars=scalar_name, cmap=cmap, clim=clim,
-                name=n_mesh, show_edges=False, smooth_shading=True,
-                scalar_bar_args={"title": scalar_name} if show_bar else None,
-                show_scalar_bar=show_bar, pickable=True
-            )
-
-            if n_mesh in self.plotter.renderer.actors:
-                actor = self.plotter.renderer.actors[n_mesh]
-                mapper = actor.GetMapper()
-                mapper.SetInputData(mesh)
-                mapper.Modified()
-
-            self._analysis_active = True
-            self._analysis_body_id = body_id
-            request_render(self.plotter)
-            logger.info(f"Scalar analysis '{scalar_name}' applied to body {body_id}")
-
-        except Exception as e:
-            logger.error(f"Scalar analysis error: {e}")
-
-    def clear_analysis(self, body_id=None):
-        """Entfernt Analyse-Farbkodierung und stellt Original-Farbe wieder her."""
-        bid = body_id or getattr(self, '_analysis_body_id', None)
-        if bid is None:
-            return
-
-        if bid in self.bodies:
-            mesh = self.bodies[bid].get('mesh')
-            color = self.bodies[bid].get('color', (0.5, 0.5, 0.5))
-            if mesh is not None:
-                n_mesh = f"body_{bid}_m"
-                # Remove scalar data
-                for key in list(mesh.point_data.keys()):
-                    if key != "Normals":
-                        del mesh.point_data[key]
-                for key in list(mesh.cell_data.keys()):
-                    del mesh.cell_data[key]
-
-                has_normals = "Normals" in mesh.point_data
-                self.plotter.add_mesh(
-                    mesh, color=color, name=n_mesh, show_edges=False,
-                    smooth_shading=has_normals, pbr=not has_normals,
-                    metallic=0.1, roughness=0.6, pickable=True
-                )
-                request_render(self.plotter)
-
-        self._analysis_active = False
-        self._analysis_body_id = None
 
     def get_body_mesh(self, body_id):
         """Gibt das Mesh eines Körpers zurück"""

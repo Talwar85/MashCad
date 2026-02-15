@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
                                QFormLayout, QLineEdit, QDialogButtonBox, QDoubleSpinBox, 
                                QFontComboBox, QWidget, QLabel, QSpinBox, QCheckBox)
 
-from sketcher import Point2D, Line2D, Circle2D, Arc2D
+from sketcher import Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
 from i18n import tr
 try:
     from gui.sketch_feedback import (
@@ -400,6 +400,40 @@ class SketchHandlersMixin:
         elif snap_type == SnapType.ANGLE_45:
             logger.debug("Auto: ANGLE_45")
 
+    def _apply_center_snap_constraint(self, center_point, snap_type, snap_entity):
+        """
+        Uebertraegt Snap-Information auf einen Kreis-/Polygon-Mittelpunkt.
+        """
+        if center_point is None or snap_type == SnapType.NONE or snap_entity is None:
+            return
+
+        if snap_type == SnapType.ENDPOINT:
+            snapped_point = None
+            if hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+                d_start = math.hypot(center_point.x - snap_entity.start.x, center_point.y - snap_entity.start.y)
+                d_end = math.hypot(center_point.x - snap_entity.end.x, center_point.y - snap_entity.end.y)
+                snapped_point = snap_entity.start if d_start <= d_end else snap_entity.end
+            elif hasattr(snap_entity, "x") and hasattr(snap_entity, "y"):
+                snapped_point = snap_entity
+
+            if snapped_point and snapped_point is not center_point:
+                self.sketch.add_coincident(center_point, snapped_point)
+            return
+
+        if snap_type == SnapType.CENTER and hasattr(snap_entity, "center"):
+            if snap_entity.center is not center_point:
+                self.sketch.add_coincident(center_point, snap_entity.center)
+            return
+
+        if snap_type in (SnapType.EDGE, SnapType.PERPENDICULAR, SnapType.PARALLEL):
+            if hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+                self.sketch.add_point_on_line(center_point, snap_entity)
+            return
+
+        if snap_type == SnapType.MIDPOINT and hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+            self.sketch.add_midpoint(center_point, snap_entity)
+            return
+
     def _handle_line(self, pos, snap_type, snap_entity=None):
         """
         Erstellt Linien und nutzt die existierenden Constraint-Methoden des Sketch-Objekts.
@@ -522,34 +556,31 @@ class SketchHandlersMixin:
             self.sketched_changed.emit()
             
         self._cancel_tool()
-    
-    def _handle_circle(self, pos, snap_type):
-        """Kreis mit Modus-UnterstÃ¼tzung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt) und Auto-Constraints"""
+
+    def _handle_circle(self, pos, snap_type, snap_entity=None):
+        """Kreis mit Modus-Unterstuetzung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt)."""
         if self.circle_mode == 1:
-            # === 2-Punkt-Modus (Durchmesser) ===
+            # 2-Punkt-Modus (Durchmesser)
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
                 self.status_message.emit(tr("Second point (diameter)"))
             else:
                 p1, p2 = self.tool_points[0], pos
-                cx, cy = (p1.x()+p2.x())/2, (p1.y()+p2.y())/2
-                r = math.hypot(p2.x()-p1.x(), p2.y()-p1.y()) / 2
-                
+                cx, cy = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
+                r = math.hypot(p2.x() - p1.x(), p2.y() - p1.y()) / 2
+
                 if r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
                 self._cancel_tool()
-                
+
         elif self.circle_mode == 2:
-            # === 3-Punkt-Modus ===
+            # 3-Punkt-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
@@ -561,41 +592,41 @@ class SketchHandlersMixin:
             else:
                 p1, p2, p3 = self.tool_points[0], self.tool_points[1], pos
                 center, r = self._calc_circle_3points(p1, p2, p3)
-                
+
                 if center and r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(center.x(), center.y(), r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen (fixiert die GrÃ¶ÃŸe)
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
                 self._cancel_tool()
-                
+
         else:
-            # === Center-Radius-Modus (Standard) ===
+            # Center-Radius-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
+                self._circle_center_snap = (snap_type, snap_entity)
                 self.tool_step = 1
                 self.status_message.emit(tr("Radius | Tab=Input"))
             else:
                 c = self.tool_points[0]
-                r = math.hypot(pos.x()-c.x(), pos.y()-c.y())
-                
+                r = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+
                 if r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen
+                    center_snap_type, center_snap_entity = getattr(self, "_circle_center_snap", (SnapType.NONE, None))
+                    self._apply_center_snap_constraint(circle.center, center_snap_type, center_snap_entity)
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
-                self._cancel_tool()
 
+                if hasattr(self, "_circle_center_snap"):
+                    del self._circle_center_snap
+                self._cancel_tool()
+    
     def _calc_circle_3points(self, p1, p2, p3):
         """Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte"""
         x1, y1 = p1.x(), p1.y()
@@ -636,11 +667,12 @@ class SketchHandlersMixin:
                 self._find_closed_profiles()
             self._cancel_tool()
     
-    def _handle_polygon(self, pos, snap_type):
+    def _handle_polygon(self, pos, snap_type, snap_entity=None):
         """Erstellt ein parametrisches Polygon"""
         if self.tool_step == 0:
             # Erster Klick: Zentrum
             self.tool_points = [pos]
+            self._polygon_center_snap = (snap_type, snap_entity)
             self.tool_step = 1
             # Info-Text aktualisieren
             self.status_message.emit(tr("Radius") + f" ({self.polygon_sides} " + tr("sides") + ") | Tab")
@@ -666,6 +698,8 @@ class SketchHandlersMixin:
                 
                 # 2. Radius-BemaÃŸung hinzufÃ¼gen
                 # Das erlaubt dir, den Radius spÃ¤ter per Doppelklick zu Ã¤ndern!
+                center_snap_type, center_snap_entity = getattr(self, "_polygon_center_snap", (SnapType.NONE, None))
+                self._apply_center_snap_constraint(const_circle.center, center_snap_type, center_snap_entity)
                 self.sketch.add_radius(const_circle, r)
                 
                 # 3. LÃ¶sen
@@ -673,6 +707,8 @@ class SketchHandlersMixin:
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 
+            if hasattr(self, "_polygon_center_snap"):
+                del self._polygon_center_snap
             self._cancel_tool()
     
     def _handle_arc_3point(self, pos, snap_type):
@@ -912,6 +948,13 @@ class SketchHandlersMixin:
                     pt.x += dx
                     pt.y += dy
                     moved.add(pt.id)
+        # Reguläre Polygone: Treiberkreis mitbewegen, damit Polygon + Konstruktionskreis konsistent bleiben.
+        if hasattr(self, "_collect_driver_circles_for_lines"):
+            for driver_circle in self._collect_driver_circles_for_lines(self.selected_lines):
+                if driver_circle.center.id not in moved:
+                    driver_circle.center.x += dx
+                    driver_circle.center.y += dy
+                    moved.add(driver_circle.center.id)
         for c in self.selected_circles:
             if c.center.id not in moved:
                 c.center.x += dx
@@ -3274,11 +3317,12 @@ class SketchHandlersMixin:
 
     
 
-    def _handle_nut(self, pos, snap_type):
+    def _handle_nut(self, pos, snap_type, snap_entity=None):
         """Erstellt eine Sechskant-Muttern-Aussparung (M2-M14) mit Schraubenloch - 2 Schritte wie Polygon"""
         if self.tool_step == 0:
             # Schritt 1: Position setzen
             self.tool_points = [pos]
+            self._nut_center_snap = (snap_type, snap_entity)
             self.tool_step = 1
             size_name = self.nut_size_names[self.nut_size_index]
             self.status_message.emit(f"{size_name} " + tr("Nut") + " | " + tr("Rotate with mouse | Click to place"))
@@ -3305,6 +3349,8 @@ class SketchHandlersMixin:
                 angle_offset=angle_offset,
                 construction=self.construction_mode
             )
+            center_snap_type, center_snap_entity = getattr(self, "_nut_center_snap", (SnapType.NONE, None))
+            self._apply_center_snap_constraint(const_circle.center, center_snap_type, center_snap_entity)
             self.sketch.add_radius(const_circle, hex_radius)
             hole_circle = self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
             self.sketch.add_radius(hole_circle, hole_radius)
@@ -3315,6 +3361,8 @@ class SketchHandlersMixin:
             
             # Info anzeigen
             self.status_message.emit(f"{size_name} " + tr("Nut") + f" (SW {sw:.2f}mm, " + tr("Hole") + f" âŒ€{screw_diameter + self.nut_tolerance:.2f}mm)")
+            if hasattr(self, "_nut_center_snap"):
+                del self._nut_center_snap
             self._cancel_tool()
     
     def _handle_text(self, pos, snap_type):

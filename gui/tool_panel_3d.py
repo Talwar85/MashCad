@@ -217,12 +217,8 @@ class ToolPanel3D(QWidget):
         # --- Inspect ---
         self._add_group("Inspect", [
             (tr("Section View"), tr("Cut through body to inspect inside\nAdjust position with slider\nToggle: click again to close"), "section_view"),
-            (tr("Check Geometry"), tr("Find invalid topology\nSelect: body to check\nShows: errors + repair options"), "geometry_check"),
-            (tr("Surface Analysis"), tr("Visualize curvature and draft angles\nSelect: body to analyze\nModes: curvature, zebra, draft"), "surface_analysis"),
-            (tr("Mesh Repair"), tr("Fix mesh errors and gaps\nSelect: mesh body\nAuto-repair + manual tools"), "mesh_repair"),
             (tr("Wall Thickness"), tr("Check wall thickness for 3D printing\nSelect: body\nShows: thin areas in red"), "wall_thickness"),
             (tr("Measure"), tr("Measure distances, angles, areas\nClick: two points or edges\nResult shown in panel"), "measure"),
-            (tr("BREP Cleanup"), tr("Cleanup after mesh→BREP conversion\nMerge co-planar faces\nImproves fillet/chamfer quality"), "brep_cleanup"),
         ])
 
         # --- File ---
