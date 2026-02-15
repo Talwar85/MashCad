@@ -1297,6 +1297,7 @@ class Body:
                 "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
                 "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
                 "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
+                "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
             }
             return defaults.get(
                 error_code,
@@ -5948,6 +5949,18 @@ class Body:
         if use_incremental:
             self._dependency_graph.clear_dirty()
 
+        pre_finalize_snapshot = {
+            "solid": self._build123d_solid,
+            "shape": self.shape,
+            "mesh_cache": self._mesh_cache,
+            "edges_cache": self._edges_cache,
+            "mesh_cache_valid": self._mesh_cache_valid,
+            "mesh_vertices": list(self._mesh_vertices or []),
+            "mesh_triangles": list(self._mesh_triangles or []),
+            "last_error": self._last_operation_error,
+            "last_error_details": dict(self._last_operation_error_details or {}),
+        }
+
         if current_solid:
             # Phase 7: Validierung nach Rebuild
             validation = GeometryValidator.validate_solid(current_solid, ValidationLevel.NORMAL)
@@ -6035,28 +6048,60 @@ class Body:
                 except Exception as e:
                     logger.debug(f"UnifySameDomain Ã¼bersprungen: {e}")
 
-            self._build123d_solid = current_solid
-            if hasattr(current_solid, 'wrapped'):
-                self.shape = current_solid.wrapped
+            try:
+                self._build123d_solid = current_solid
+                if hasattr(current_solid, 'wrapped'):
+                    self.shape = current_solid.wrapped
 
-            # UPDATE MESH via Helper
-            self._update_mesh_from_solid(current_solid)
+                # UPDATE MESH via Helper
+                self._update_mesh_from_solid(current_solid)
 
-            # B-Rep Faces zÃ¤hlen (echte CAD-Faces, nicht Tessellations-Dreiecke)
-            from modeling.cad_tessellator import CADTessellator
-            n_faces = CADTessellator.count_brep_faces(current_solid)
-            if n_faces == 0:
-                # Fallback
-                n_faces = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
+                # B-Rep Faces zÃ¤hlen (echte CAD-Faces, nicht Tessellations-Dreiecke)
+                from modeling.cad_tessellator import CADTessellator
+                n_faces = CADTessellator.count_brep_faces(current_solid)
+                if n_faces == 0:
+                    # Fallback
+                    n_faces = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
 
-            # Phase 7: Validierungs-Status loggen
-            if validation.is_valid:
-                logger.debug(f"âœ“ {self.name}: BREP Valid ({n_faces} Faces)")
-            else:
-                logger.warning(f"âš ï¸ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
+                # Phase 7: Validierungs-Status loggen
+                if validation.is_valid:
+                    logger.debug(f"âœ“ {self.name}: BREP Valid ({n_faces} Faces)")
+                else:
+                    logger.warning(f"âš ï¸ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
 
-            # Phase 8.2: Automatische Referenz-Migration nach Rebuild
-            self._migrate_tnp_references(current_solid)
+                # Phase 8.2: Automatische Referenz-Migration nach Rebuild
+                self._migrate_tnp_references(current_solid)
+            except Exception as finalize_error:
+                rollback_from = _solid_metrics(current_solid)
+                rollback_to = _solid_metrics(pre_finalize_snapshot.get("solid"))
+
+                self._build123d_solid = pre_finalize_snapshot.get("solid")
+                self.shape = pre_finalize_snapshot.get("shape")
+                self._mesh_cache = pre_finalize_snapshot.get("mesh_cache")
+                self._edges_cache = pre_finalize_snapshot.get("edges_cache")
+                self._mesh_cache_valid = bool(pre_finalize_snapshot.get("mesh_cache_valid"))
+                self._mesh_vertices = list(pre_finalize_snapshot.get("mesh_vertices") or [])
+                self._mesh_triangles = list(pre_finalize_snapshot.get("mesh_triangles") or [])
+
+                self._last_operation_error = (
+                    f"Rebuild-Finalisierung fehlgeschlagen: {finalize_error}"
+                )
+                self._last_operation_error_details = self._build_operation_error_details(
+                    op_name="RebuildFinalize",
+                    code="rebuild_finalize_failed",
+                    message=self._last_operation_error,
+                )
+                self._last_operation_error_details["rollback"] = {
+                    "from": rollback_from,
+                    "to": rollback_to,
+                }
+
+                logger.error(self._last_operation_error)
+                logger.error(
+                    f"Rebuild-Failsafe Rollback: "
+                    f"{_format_metrics(rollback_from)} -> {_format_metrics(rollback_to)}"
+                )
+                raise
         else:
             logger.warning(f"Body '{self.name}' is empty after rebuild.")
             # Fix: Solid und Mesh auch bei leerem Rebuild aktualisieren

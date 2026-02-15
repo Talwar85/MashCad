@@ -1,3 +1,5 @@
+import pytest
+
 from modeling import Body, DraftFeature, FilletFeature, HoleFeature, PrimitiveFeature
 
 
@@ -100,3 +102,29 @@ def test_fillet_tnp_error_message_contains_reference_diagnostics():
     assert "refs:" in msg
     assert "edge_indices=[999]" in msg
     assert (fillet.status_details or {}).get("refs", {}).get("edge_indices") == [999]
+
+
+def test_rebuild_finalize_failure_rolls_back_to_previous_solid(monkeypatch):
+    body = _make_box_body("rebuild_finalize_failsafe")
+    previous_solid = body._build123d_solid
+    previous_shape = body.shape
+
+    # Zweites Feature erzwingt einen Rebuild-Durchlauf mit Finalisierung.
+    body.features.append(PrimitiveFeature(primitive_type="box", length=12.0, width=12.0, height=12.0))
+
+    def _fail_mesh_update(_solid):
+        raise RuntimeError("synthetic finalize mesh crash")
+
+    monkeypatch.setattr(body, "_update_mesh_from_solid", _fail_mesh_update)
+
+    with pytest.raises(RuntimeError, match="synthetic finalize mesh crash"):
+        body._rebuild()
+
+    details = body._last_operation_error_details or {}
+    rollback = details.get("rollback") or {}
+    assert body._build123d_solid is previous_solid
+    assert body.shape is previous_shape
+    assert details.get("code") == "rebuild_finalize_failed"
+    assert details.get("schema") == "error_envelope_v1"
+    assert rollback.get("from") is not None
+    assert rollback.get("to") is not None
