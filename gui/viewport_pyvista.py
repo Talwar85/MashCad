@@ -2848,9 +2848,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             # Face-Selection (für Extrude etc.)
             hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
 
+            # Multi-Select vorab prüfen (für beide Zweige)
+            is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
+
             if hit_id != -1:
-                # Multi-Select mit STRG/Shift
-                is_multi = QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
                 if not is_multi:
                     self.selected_face_ids.clear()
 
