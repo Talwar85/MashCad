@@ -1579,6 +1579,58 @@ def test_safe_operation_strict_blocks_topology_fallback(monkeypatch):
     assert (body._last_operation_error_details or {}).get("code") == "fallback_blocked_strict"
 
 
+def test_safe_operation_policy_blocks_topology_fallback_without_self_heal(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+
+    body = Body("strict_topology_policy_fallback_block")
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+    )
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", False)
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", True)
+
+    result, status = body._safe_operation(
+        "StrictTopologyPolicyBlock",
+        lambda: (_ for _ in ()).throw(ValueError("primary failed")),
+        fallback_func=lambda: object(),
+        feature=feature,
+    )
+
+    assert result is None
+    assert status == "ERROR"
+    assert (body._last_operation_error_details or {}).get("code") == "fallback_blocked_strict"
+
+
+def test_safe_operation_allows_fallback_when_strict_policies_disabled(monkeypatch):
+    from config.feature_flags import FEATURE_FLAGS
+
+    body = Body("fallback_allowed_without_strict_policies")
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+    )
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", False)
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", False)
+
+    result, status = body._safe_operation(
+        "FallbackAllowed",
+        lambda: (_ for _ in ()).throw(ValueError("primary failed")),
+        fallback_func=lambda: object(),
+        feature=feature,
+    )
+
+    assert result is not None
+    assert status == "WARNING"
+    assert (body._last_operation_error_details or {}).get("code") == "fallback_used"
+
+
 def test_rebuild_strict_self_heal_rolls_back_invalid_feature_result(monkeypatch):
     from config.feature_flags import FEATURE_FLAGS
     from modeling.geometry_validator import GeometryValidator, ValidationLevel, ValidationResult

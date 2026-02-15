@@ -1393,11 +1393,17 @@ class Body:
             
             if fallback_func:
                 strict_self_heal = is_enabled("self_heal_strict")
+                strict_topology_policy = is_enabled("strict_topology_fallback_policy")
                 has_topology_refs = self._feature_has_topological_references(feature) if feature is not None else False
-                if strict_self_heal and has_topology_refs:
+                if has_topology_refs and (strict_self_heal or strict_topology_policy):
+                    policy_reason = (
+                        "Strict Self-Heal"
+                        if strict_self_heal
+                        else "strict_topology_fallback_policy"
+                    )
                     self._last_operation_error = (
                         f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; "
-                        "Strict Self-Heal blockiert Fallback bei Topologie-Referenzen"
+                        f"{policy_reason} blockiert Fallback bei Topologie-Referenzen"
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
                         op_name=op_name,
@@ -1409,7 +1415,7 @@ class Body:
                     if isinstance(tnp_failure, dict):
                         self._last_operation_error_details["tnp_failure"] = tnp_failure
                     logger.error(
-                        f"Strict Self-Heal: Fallback fÃ¼r '{op_name}' blockiert "
+                        f"{policy_reason}: Fallback fÃ¼r '{op_name}' blockiert "
                         "(Topologie-Referenzen aktiv)."
                     )
                     return None, "ERROR"

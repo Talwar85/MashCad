@@ -47,6 +47,7 @@ Fallback-Policy (PI-003):
 - Neues Feature-Flag `strict_topology_fallback_policy` (Default `True`).
 - Bei `True`: Wenn Topologie-Referenzen vorhanden aber ungültig sind, kein Geometric-Selector-Fallback.
 - Bei `False`: Legacy-Recovery via Selector bleibt für Edge-Resolver möglich.
+- `_safe_operation(..., fallback_func=...)` blockiert bei Topologie-Referenzen jetzt auch dann, wenn `self_heal_strict=False` aber `strict_topology_fallback_policy=True`.
 
 Failsafe:
 - Wenn die Rebuild-Finalisierung (z. B. Mesh-Update) crasht, wird auf den Pre-Rebuild-Snapshot zurückgerollt.
@@ -74,7 +75,7 @@ conda run -n cad_env python -m pytest -q test/test_feature_error_status.py test/
 ```
 
 Resultat:
-- `192 passed, 2 skipped`
+- `194 passed, 2 skipped`
 
 ## Breaking Changes / Rest-Risiken
 - Kein API-Break auf Feature-Objekten.
