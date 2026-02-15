@@ -6389,6 +6389,7 @@ class Body:
         resolved_edge_indices = []
         resolved_edges_from_shape = []
         resolved_edges_from_index = []
+        shape_resolution_methods: Dict[str, str] = {}
 
         strict_edge_feature = isinstance(feature, (FilletFeature, ChamferFeature))
 
@@ -6474,6 +6475,7 @@ class Body:
                         solid,
                         log_unresolved=False,
                     )
+                    shape_resolution_methods[str(getattr(shape_id, "uuid", "") or "")] = str(method or "").strip().lower()
                     if resolved_ocp is None:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
@@ -6591,10 +6593,21 @@ class Body:
                         for idx_edge in resolved_edges_from_index
                     )
 
+                weak_shape_resolution = False
+                if shape_resolved and expected_shape_refs == 1:
+                    for sid in edge_shape_ids:
+                        sid_uuid = str(getattr(sid, "uuid", "") or "")
+                        if not sid_uuid:
+                            continue
+                        method = shape_resolution_methods.get(sid_uuid, "")
+                        weak_shape_resolution = method in {"geometric", "geometry_hash"}
+                        break
+
                 # single_ref_pair Regel:
                 # - Shape + Index beide da, aber verschieden -> strikt fehlschlagen
                 # - Shape fehlt, Index da -> robust auf Index weiterarbeiten (Redo/Incremental)
                 # - Sonst weiterhin strikt fehlschlagen
+                # - PI-008: bei schwacher Shape-AuflÃ¶sung (geometric/hash) und Konflikt -> Index bevorzugen + drift markieren
                 if index_resolved and (not shape_resolved):
                     resolved_edges = list(resolved_edges_from_index)
                     resolved_shape_ids = []
@@ -6606,6 +6619,27 @@ class Body:
                         logger.warning(
                             f"{feature_name}: single_ref_pair ShapeID nicht aufloesbar -> "
                             "verwende index-basierte Edge-Aufloesung."
+                        )
+                elif index_resolved and shape_resolved and pair_conflict and weak_shape_resolution:
+                    resolved_edges = list(resolved_edges_from_index)
+                    resolved_shape_ids = []
+                    unresolved_shape_ids.extend(
+                        sid for sid in edge_shape_ids if sid not in unresolved_shape_ids
+                    )
+                    strict_topology_mismatch = False
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="drift",
+                        reference_kind="edge",
+                        reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                        expected=max(len(valid_edge_indices), expected_shape_refs),
+                        resolved=len(resolved_edges),
+                        strict=False,
+                    )
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(
+                            f"{feature_name}: single_ref_pair Shape/Index-Konflikt mit schwacher "
+                            "Shape-Aufloesung (geometric/hash) -> index-basierte Edge-Aufloesung bevorzugt."
                         )
                 else:
                     if is_enabled("tnp_debug_logging"):
