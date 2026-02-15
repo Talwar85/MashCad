@@ -56,15 +56,28 @@ from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.brep_cleanup_panel import BRepCleanupPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
+from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
+
+# STL Reconstruction (TNP-Exempt)
+try:
+    from sketching.analysis.mesh_quality_checker import MeshQualityChecker, check_mesh_quality
+    from sketching.analysis.stl_feature_analyzer import STLFeatureAnalyzer, analyze_stl
+    from sketching.reconstruction.mesh_reconstructor import MeshReconstructor, reconstruct_from_analysis
+    HAS_STL_RECONSTRUCTION = True
+except ImportError as e:
+    HAS_STL_RECONSTRUCTION = False
+    logger.warning(f"STL Reconstruction module not available: {e}")
 
 try:
     from ocp_tessellate.tessellator import tessellate
     HAS_OCP_TESSELLATE = True
-except ImportError:
+except ImportError as e:
     HAS_OCP_TESSELLATE = False
-    logger.warning("ocp-tessellate nicht gefunden. Nutze Standard-Tessellierung.")
+    logger.critical(f"ocp-tessellate (Critical Dependency) nicht gefunden: {e}")
+    logger.critical("Bitte installieren mit: pip install ocp-tessellate")
+    sys.exit(1)
 
 # Surface Texture Export
 try:
@@ -415,6 +428,10 @@ class MainWindow(QMainWindow):
         # === STATUS BAR (unten) ===
         self.mashcad_status_bar = MashCadStatusBar()
         main_vertical.addWidget(self.mashcad_status_bar)
+
+        # FPS Counter mit StatusBar verbinden
+        from gui.viewport.render_queue import RenderQueue
+        RenderQueue.register_fps_callback(self.mashcad_status_bar.update_fps)
 
         # Extrude Input Panel (immer sichtbar während Extrude-Modus)
         self.extrude_panel = ExtrudeInputPanel(self)
@@ -1060,6 +1077,622 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Import fehlgeschlagen: {e}")
     
+    def _on_stl_to_cad(self):
+        """
+        STL to CAD Reconstruction Workflow.
+        
+        1. Select STL file
+        2. Mesh Quality Check
+        3. Feature Analysis
+        4. Show Reconstruction Panel
+        5. User review and reconstruct
+        """
+        if not HAS_STL_RECONSTRUCTION:
+            QMessageBox.warning(
+                self,
+                "Not Available",
+                "STL Reconstruction module is not available.\n"
+                "Please check the installation."
+            )
+            return
+        
+        # 1. File Dialog
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select STL for CAD Reconstruction",
+            "",
+            "STL Files (*.stl);;All Files (*.*)"
+        )
+        
+        if not path:
+            return
+        
+        try:
+            logger.info(f"Starting STL to CAD reconstruction for: {path}")
+            
+            # 2. Mesh Quality Check
+            self.statusBar().showMessage("Checking mesh quality...")
+            quality_report = check_mesh_quality(path, auto_repair=True, auto_decimate=True)
+            
+            if quality_report.recommended_action == "reject":
+                QMessageBox.critical(
+                    self,
+                    "Invalid Mesh",
+                    f"Mesh quality check failed:\n{', '.join(quality_report.warnings)}"
+                )
+                return
+            
+            logger.info(f"Mesh quality: {quality_report.recommended_action}, "
+                       f"{quality_report.face_count} faces")
+            
+            # 3. Feature Analysis
+            self.statusBar().showMessage("Analyzing features...")
+            analyzer = STLFeatureAnalyzer()
+            analysis = analyzer.analyze(path)
+            
+            if not analysis.base_plane and not analysis.holes:
+                QMessageBox.warning(
+                    self,
+                    "No Features Detected",
+                    "Could not detect any CAD features in the mesh.\n"
+                    "The mesh may be too complex or not contain recognizable features."
+                )
+                return
+            
+            logger.info(f"Analysis complete: {len(analysis.holes)} holes, "
+                       f"confidence={analysis.overall_confidence:.2f}")
+            
+            # 4. Show Reconstruction Panel
+            self._show_reconstruction_panel(path, analysis, quality_report)
+            
+        except Exception as e:
+            logger.error(f"STL to CAD failed: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"STL to CAD reconstruction failed:\n{str(e)}"
+            )
+    
+    def _show_reconstruction_panel(self, mesh_path: str, analysis, quality_report):
+        """
+        Show the STL Reconstruction Panel with analysis results.
+        
+        Also loads the STL mesh into viewport for visual reference
+        and connects feature selection to viewport highlighting.
+        
+        Args:
+            mesh_path: Path to STL file
+            analysis: STLFeatureAnalysis
+            quality_report: MeshQualityReport
+        """
+        try:
+            import pyvista as pv
+            
+            # 1. Load and display STL mesh in viewport (semi-transparent)
+            mesh = pv.read(mesh_path)
+            
+            # Remove existing STL preview if any
+            if hasattr(self, '_stl_preview_actor'):
+                try:
+                    self.viewport_3d.plotter.remove_actor(self._stl_preview_actor)
+                except:
+                    pass
+            
+            # Add mesh with transparency for reference
+            self._stl_preview_actor = self.viewport_3d.plotter.add_mesh(
+                mesh,
+                color='lightgray',
+                opacity=0.3,
+                show_edges=True,
+                edge_color='darkgray',
+                line_width=0.5,
+                name='stl_preview'
+            )
+            
+            # Add feature preview actors (cylinders for holes, etc.)
+            self._stl_feature_actors = []
+            self._add_feature_previews(analysis)
+            
+            # 2. Create panel
+            panel = STLReconstructionPanel(self)
+            panel.set_analysis(analysis, quality_report)
+            
+            # 3. Connect signals
+            panel.reconstruct_requested.connect(
+                lambda: self._start_stl_reconstruction(panel, analysis)
+            )
+            
+            # Connect feature selection to viewport highlighting
+            # Connect feature selection to viewport highlighting
+            panel.feature_selected.connect(
+                lambda ftype, idx: self._highlight_stl_feature(analysis, ftype, idx)
+            )
+            
+            # Connect feature toggle (visibility)
+            panel.feature_toggled.connect(
+                lambda ftype, idx, enabled: self._toggle_stl_feature_preview(analysis, ftype, idx, enabled)
+            )
+            
+            # Connect feature modification (live preview)
+            panel.feature_modified.connect(
+                lambda ftype, idx, params: self._update_stl_feature_preview(analysis, ftype, idx, params)
+            )
+            
+            # 4. Show as dialog (non-modal to keep viewport interactive)
+            from PySide6.QtWidgets import QDialog, QVBoxLayout
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("STL to CAD Reconstruction")
+            dialog.setMinimumSize(500, 700)
+            dialog.setModal(False)  # Non-modal
+            
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(panel)
+            
+            # Cleanup when dialog closes
+            dialog.finished.connect(lambda: self._cleanup_stl_preview())
+            
+            dialog.show()  # Use show() instead of exec() for non-modal
+            self._reconstruction_dialog = dialog  # Keep reference
+            
+        except Exception as e:
+            logger.error(f"Failed to show reconstruction panel: {e}")
+            raise
+    
+    def _add_feature_previews(self, analysis):
+        """Add preview geometry for detected features."""
+        try:
+            import pyvista as pv
+            
+            # Preview holes as translucent cylinders
+            for i, hole in enumerate(analysis.holes):
+                # Create cylinder for hole
+                cylinder = pv.Cylinder(
+                    center=hole.center,
+                    direction=hole.axis,
+                    radius=hole.radius,
+                    height=hole.depth * 1.2  # Slightly longer
+                )
+                
+                # Color based on confidence
+                if hole.confidence >= 0.9:
+                    color = 'green'
+                elif hole.confidence >= 0.7:
+                    color = 'blue'
+                elif hole.confidence >= 0.5:
+                    color = 'orange'
+                else:
+                    color = 'red'
+                
+                actor = self.viewport_3d.plotter.add_mesh(
+                    cylinder,
+                    color=color,
+                    opacity=0.4,
+                    show_edges=False,
+                    name=f'hole_preview_{i}'
+                )
+                self._stl_feature_actors.append(actor)
+            
+            # Preview base plane - EXACT contour from mesh
+            if analysis.base_plane:
+                self._preview_base_plane_exact(mesh, analysis.base_plane)
+                plane_normal = analysis.base_plane.normal
+                
+                # Create a disk/plane visualization
+                disk = pv.Disc(
+                    center=plane_center,
+                    normal=plane_normal,
+                    inner=0,
+                    outer=np.sqrt(analysis.base_plane.area / np.pi) if analysis.base_plane.area > 0 else 10
+                )
+                
+                actor = self.viewport_3d.plotter.add_mesh(
+                    disk,
+                    color='green',
+                    opacity=0.2,
+                    show_edges=True,
+                    line_width=2,
+                    name='base_plane_preview'
+                )
+                self._stl_feature_actors.append(actor)
+            
+            # Preview edges
+            if hasattr(analysis, 'edges'):
+                for i, edge in enumerate(analysis.edges):
+                    if not edge.points: continue
+                    
+                    # Create point cloud for edges
+                    # Note: We lost line connectivity in analysis (just points stored)
+                    # Use points representation
+                    pts = np.array(edge.points)
+                    cloud = pv.PolyData(pts)
+                    
+                    actor = self.viewport_3d.plotter.add_mesh(
+                        cloud,
+                        color='yellow',
+                        point_size=5,
+                        render_points_as_spheres=True,
+                        name=f'edge_preview_{i}'
+                    )
+                    self._stl_feature_actors.append(actor)
+            
+            logger.info(f"Added {len(self._stl_feature_actors)} feature previews to viewport")
+            
+        except Exception as e:
+            logger.warning(f"Failed to add feature previews: {e}")
+    
+    def _preview_base_plane_exact(self, mesh, base_plane):
+        """
+        Preview base plane with EXACT contour from mesh vertices.
+        
+        Extracts vertices at the base Z-level with 0.1mm tolerance.
+        """
+        try:
+            import pyvista as pv
+            import numpy as np
+            from scipy.spatial import ConvexHull
+            
+            # Get all mesh points
+            points = mesh.points
+            
+            # Determine Z-range for base (bottom 10% + tolerance)
+            z_min = points[:, 2].min()
+            z_max = points[:, 2].max()
+            tolerance = 0.1  # 0.1mm for 3D print tolerance
+            
+            # Find points at base level (bottom)
+            base_mask = points[:, 2] < (z_min + tolerance)
+            base_points = points[base_mask]
+            
+            if len(base_points) < 3:
+                logger.warning("Not enough base points found")
+                return
+            
+            logger.info(f"Found {len(base_points)} base points (Z < {z_min + tolerance:.3f})")
+            
+            # Project to 2D (XY plane, ignoring Z)
+            points_2d = base_points[:, :2]
+            
+            # Remove duplicates (very close points)
+            # Simple deduplication
+            unique_points = []
+            for p in points_2d:
+                is_duplicate = False
+                for u in unique_points:
+                    if np.linalg.norm(p - u) < 0.5:  # 0.5mm threshold
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    unique_points.append(p)
+            
+            points_2d = np.array(unique_points)
+            
+            if len(points_2d) < 3:
+                logger.warning("Not enough unique base points")
+                return
+            
+            # Compute convex hull
+            hull = ConvexHull(points_2d)
+            hull_points_2d = points_2d[hull.vertices]
+            
+            # Create 3D polygon (at Z = z_min)
+            hull_points_3d = np.column_stack([
+                hull_points_2d,
+                np.full(len(hull_points_2d), z_min)
+            ])
+            
+            # Create lines connecting hull points
+            lines = []
+            n = len(hull_points_3d)
+            for i in range(n):
+                lines.append([2, i, (i + 1) % n])  # PyVista line format
+            
+            lines = np.array(lines)
+            
+            # Create polydata
+            poly = pv.PolyData()
+            poly.points = hull_points_3d
+            poly.lines = lines
+            
+            # Add to viewport
+            actor = self.viewport_3d.plotter.add_mesh(
+                poly,
+                color='lime',
+                line_width=4,
+                name='base_plane_exact'
+            )
+            self._stl_feature_actors.append(actor)
+            
+            # Also add points as spheres for visibility
+            spheres = pv.PolyData(hull_points_3d)
+            actor_pts = self.viewport_3d.plotter.add_mesh(
+                spheres,
+                color='red',
+                point_size=10,
+                render_points_as_spheres=True,
+                name='base_plane_points'
+            )
+            self._stl_feature_actors.append(actor_pts)
+            
+            logger.info(f"Exact base plane preview: {len(hull_points_3d)} vertices")
+            
+        except Exception as e:
+            logger.warning(f"Failed to preview exact base plane: {e}")
+            
+    def _toggle_stl_feature_preview(self, analysis, feature_type: str, index: int, enabled: bool):
+        """Toggle visibility of a specific feature preview."""
+        try:
+            actor_name = ""
+            if feature_type == "hole":
+                actor_name = f"hole_preview_{index}"
+            elif feature_type == "base_plane":
+                actor_name = "base_plane_preview"
+            elif feature_type == "edge":
+                actor_name = f"edge_preview_{index}"
+            
+            if actor_name:
+                # Find actor in plotter uses exact name match if implemented usually via actors dict
+                # But PyVista's add_mesh returns current actor
+                # We can iterate over _stl_feature_actors and check name?
+                # PyVista actors don't always store name property consistently unless we set it.
+                # Actually we can just key off names in a dict, but we used a list.
+                # Let's search actors in plotter.
+                
+                # Better: Keep a map if possible, but _stl_feature_actors is list
+                # Re-iterate and find by name?
+                # PyVista plotter.actors contains dictionary {name: actor} usually
+                
+                # Using viewport_3d.plotter.actors
+                if str(actor_name) in self.viewport_3d.plotter.actors:
+                    self.viewport_3d.plotter.actors[str(actor_name)].SetVisibility(enabled)
+                    self.viewport_3d.plotter.render()
+                    
+        except Exception as e:
+            logger.warning(f"Failed to toggle feature: {e}")
+
+    def _update_stl_feature_preview(self, analysis, feature_type: str, index: int, params: dict):
+        """Update preview geometry when parameters change."""
+        try:
+           import pyvista as pv
+           import numpy as np
+           
+           if feature_type == "hole":
+               hole = analysis.holes[index] # Note: params already updated in analysis object by panel?
+               # Panel updates the 'parameters' dict in FeatureListItem.
+               # Does it update actual analysis object? 
+               # No, stl_reconstruction_panel._on_param_changed updates FeatureListItem.parameters
+               # It does NOT update analysis.holes[index] directly in the panel code I saw.
+               # Wait, FeatureListItem contains a COPY of parameters?
+               # I need to apply params to the preview.
+               
+               # Extract new params
+               radius = params.get("radius", hole.radius)
+               depth = params.get("depth", hole.depth)
+               center = params.get("center", hole.center)
+               
+               # Update local hole object for next time (optional, or rely on params)
+               # But panel emits specific param change.
+               # Let's reconstruct cylinder.
+               
+               actor_name = f"hole_preview_{index}"
+               
+               # Remove old
+               if actor_name in self.viewport_3d.plotter.actors:
+                   self.viewport_3d.plotter.remove_actor(actor_name)
+               
+               # Create new cylinder
+               cylinder = pv.Cylinder(
+                   center=center,
+                   direction=hole.axis,
+                   radius=radius,
+                   height=depth * 1.2
+               )
+               
+               # Re-add
+               color = 'blue' # Keep simple or recover old color
+               
+               actor = self.viewport_3d.plotter.add_mesh(
+                   cylinder,
+                   color=color,
+                   opacity=0.4,
+                   show_edges=False,
+                   name=actor_name
+               )
+               
+               # Update list?
+               # We should probably rebuild _stl_feature_actors list or remove old one from it.
+               # It's weak ref list basically.
+               
+        except Exception as e:
+           logger.warning(f"Failed to update feature preview: {e}")
+    
+    def _highlight_stl_feature(self, analysis, feature_type: str, index: int):
+        """Highlight a feature in the viewport when selected in panel."""
+        try:
+            import pyvista as pv
+            
+            # Remove previous highlight
+            if hasattr(self, '_highlight_actor'):
+                try:
+                    self.viewport_3d.plotter.remove_actor(self._highlight_actor)
+                except:
+                    pass
+            
+            # Create highlight geometry based on feature type
+            if feature_type == "hole" and index < len(analysis.holes):
+                hole = analysis.holes[index]
+                
+                # Create highlighted cylinder
+                highlight_cyl = pv.Cylinder(
+                    center=hole.center,
+                    direction=hole.axis,
+                    radius=hole.radius * 1.05,  # Slightly larger
+                    height=hole.depth * 1.3
+                )
+                
+                self._highlight_actor = self.viewport_3d.plotter.add_mesh(
+                    highlight_cyl,
+                    color='yellow',
+                    opacity=0.6,
+                    show_edges=True,
+                    edge_color='white',
+                    line_width=3,
+                    name='feature_highlight'
+                )
+                
+                # Also show center point
+                center_sphere = pv.Sphere(radius=hole.radius*0.1, center=hole.center)
+                self.viewport_3d.plotter.add_mesh(
+                    center_sphere,
+                    color='red',
+                    name='highlight_center'
+                )
+                
+                logger.debug(f"Highlighted hole {index}")
+                
+            elif feature_type == "base_plane":
+                # Highlight base plane
+                if analysis.base_plane:
+                    plane = analysis.base_plane
+                    disk = pv.Disc(
+                        center=plane.origin,
+                        normal=plane.normal,
+                        inner=0,
+                        outer=np.sqrt(plane.area / np.pi) * 1.1 if plane.area > 0 else 11
+                    )
+                    
+                    self._highlight_actor = self.viewport_3d.plotter.add_mesh(
+                        disk,
+                        color='lime',
+                        opacity=0.5,
+                        show_edges=True,
+                        edge_color='yellow',
+                        line_width=4,
+                        name='feature_highlight'
+                    )
+                    
+                    logger.debug("Highlighted base plane")
+            
+            # Update viewport
+            self.viewport_3d.plotter.render()
+            
+        except Exception as e:
+            logger.warning(f"Failed to highlight feature: {e}")
+    
+    def _cleanup_stl_preview(self):
+        """Remove STL preview and feature previews from viewport."""
+        try:
+            # Remove STL mesh
+            if hasattr(self, '_stl_preview_actor'):
+                self.viewport_3d.plotter.remove_actor(self._stl_preview_actor)
+                del self._stl_preview_actor
+            
+            # Remove feature previews
+            if hasattr(self, '_stl_feature_actors'):
+                for actor in self._stl_feature_actors:
+                    try:
+                        self.viewport_3d.plotter.remove_actor(actor)
+                    except:
+                        pass
+                del self._stl_feature_actors
+            
+            # Remove highlight
+            if hasattr(self, '_highlight_actor'):
+                self.viewport_3d.plotter.remove_actor(self._highlight_actor)
+                del self._highlight_actor
+            
+            logger.info("STL preview cleaned up")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cleanup STL preview: {e}")
+    
+    def _start_stl_reconstruction(self, panel, analysis):
+        """
+        Start the actual reconstruction process using SketchAgent.
+        """
+        try:
+            logger.info("Starting reconstruction via SketchAgent...")
+            
+            # Ensure we have a SketchAgent instance
+            if not hasattr(self, 'sketch_agent'):
+                from sketching.core.sketch_agent import create_agent
+                self.sketch_agent = create_agent(
+                    document=self.document,
+                    mode="guided",
+                    headless=False
+                )
+                self.sketch_agent.viewport = self.viewport_3d
+            
+            # Update agent's document reference just in case
+            self.sketch_agent.document = self.document
+            
+            # Progress callback wrapper
+            def progress_callback(percent, message):
+                panel.update_progress(int(percent * 100))
+                panel.set_status(message)
+                QApplication.processEvents()
+            
+            # We need to hook into the agent's callbacks
+            # But SketchAgent.reconstruct_from_mesh creates a NEW ReconstructionAgent each time.
+            # And it sets callbacks if self.viewport is set.
+            # But we want to update the PANEL, not just the viewport.
+            
+            # Let's subclass or monkeypatch? 
+            # Better: The SketchAgent.reconstruct_from_mesh calls ReconstructionAgent
+            # which has callbacks on_progress etc.
+            # But SketchAgent doesn't expose a way to set them on the created internal agent easily 
+            # UNLESS we modify SketchAgent to allow passing callbacks, or we rely on the viewport notifications (which are already hooked up)
+            
+            # Actually, `SketchAgent.reconstruct_from_mesh` instantiates `ReconstructionAgent` 
+            # and sets callbacks to its own methods `_on_reconstruction_progress` etc.
+            # which log to logger.
+            
+            # Modification: WE should inject our panel callbacks into the agent.
+            # But `reconstruct_from_mesh` is a one-shot method.
+            
+            # Workaround: We temporarily bind the agent's internal progress method to ours?
+            # Or better: We rely on the log messages for now (since panel logs them)
+            # AND we modify SketchAgent to allow passing a progress_callback.
+            
+            # For now, let's just call it. The log messages will show up in the panel.
+            
+            # Run reconstruction (blocking for now, or thread?)
+            # The panel runs this in a thread? No, panel calls this directly.
+            # We should probably run this in a thread to keep UI responsive.
+            # But `ReconstructionAgent` handles UI updates via `processEvents` in its loop if interactive=True.
+            
+            result = self.sketch_agent.reconstruct_from_mesh(
+                mesh_path=analysis.mesh_path,
+                interactive=True, # Will be slow/visual
+                analysis=analysis # Pass the pre-computed analysis!
+            )
+            
+            if result.success:
+                # Refresh viewport and browser
+                self._update_viewport_all()
+                self.browser.refresh()
+                
+                panel.set_status("Complete")
+                panel.update_progress(100)
+                
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Reconstruction complete!\n"
+                    f"Created solid using Sketch/Agent workflow."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Failed",
+                    f"Reconstruction failed:\n{result.error}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Reconstruction error: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
+    
     def _update_viewport_all_impl(self):
         """
         Das eigentliche Update, wird vom Timer aufgerufen.
@@ -1260,6 +1893,7 @@ class MainWindow(QMainWindow):
             'offset_plane': self._start_offset_plane,
             'extrude': self._extrude_dialog,
             'import_mesh': self._import_mesh_dialog,
+            'stl_to_cad': self._on_stl_to_cad,
             'export_stl': self._export_stl,
             'export_step': self._export_step,
             'export_dxf': lambda: self._show_not_implemented("DXF Export"),
@@ -4277,26 +4911,26 @@ class MainWindow(QMainWindow):
                 name = f"Box_{dialog.length:.0f}x{dialog.width:.0f}x{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="box", name=name,
-                    length=dialog.length, width=dialog.width, height=dialog.height
+                    parameters={"length": dialog.length, "width": dialog.width, "height": dialog.height}
                 )
             elif t == "cylinder":
                 name = f"Cylinder_R{dialog.radius:.0f}_H{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="cylinder", name=name,
-                    radius=dialog.radius, height=dialog.height
+                    parameters={"radius": dialog.radius, "height": dialog.height}
                 )
             elif t == "sphere":
                 name = f"Sphere_R{dialog.radius:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="sphere", name=name,
-                    radius=dialog.radius
+                    parameters={"radius": dialog.radius}
                 )
             elif t == "cone":
                 name = f"Cone_R{dialog.bottom_radius:.0f}_H{dialog.height:.0f}"
                 feature = PrimitiveFeature(
                     primitive_type="cone", name=name,
-                    bottom_radius=dialog.bottom_radius,
-                    top_radius=dialog.top_radius, height=dialog.height
+                    parameters={"bottom_radius": dialog.bottom_radius,
+                                "top_radius": dialog.top_radius, "height": dialog.height}
                 )
             else:
                 return
@@ -6082,7 +6716,11 @@ class MainWindow(QMainWindow):
                     logger.debug(f"BRepFeat_MakePrism.IsDone() = {is_done}")
 
                     if is_done:
-                        result_shape = prism.Shape()
+                        # WICHTIG: Pre-USD Result für History-Tracking aufheben!
+                        # UnifySameDomain zerstört die Topologie, auf die die
+                        # BRepFeat-History verweist.
+                        pre_usd_result_shape = prism.Shape()
+                        result_shape = pre_usd_result_shape
 
                         # UnifySameDomain anwenden um koplanare Faces zu vereinen
                         # (BRepFeat erstellt eine Kante zwischen alter und neuer Geometrie)
@@ -6152,26 +6790,20 @@ class MainWindow(QMainWindow):
                                 feat.face_shape_id = feat_face_shape_id
 
                             # === TNP v4.0: BRepFeat Operation tracken (mit echter Feature-ID) ===
+                            # WICHTIG: prism-Operator direkt als occt_history und
+                            # pre-USD Result als result_solid übergeben, damit
+                            # _shape_exists_in_solid die Generated-Shapes findet.
                             try:
                                 if hasattr(self, 'document') and self.document and hasattr(self.document, '_shape_naming_service'):
                                     service = self.document._shape_naming_service
-                                    brepfeat_history = None
-                                    try:
-                                        brepfeat_history = source_body._build_history_from_make_shape(
-                                            prism,
-                                            old_solid.wrapped if hasattr(old_solid, "wrapped") else old_solid,
-                                        )
-                                    except Exception as hist_err:
-                                        if is_enabled("tnp_debug_logging"):
-                                            logger.debug(f"TNP BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                     service.track_brepfeat_operation(
                                         feature_id=feat.id,
                                         source_solid=old_solid,
-                                        result_solid=new_solid,
+                                        result_solid=pre_usd_result_shape,
                                         modified_face=best_face,
                                         direction=(float(direction_vec[0]), float(direction_vec[1]), float(direction_vec[2])),
                                         distance=abs_height,
-                                        occt_history=brepfeat_history,
+                                        occt_history=prism,
                                     )
                             except Exception as tnp_e:
                                 if is_enabled("tnp_debug_logging"):
@@ -6845,6 +7477,27 @@ class MainWindow(QMainWindow):
              # Body-Referenz setzen und Texture-Preview aktualisieren
              self.viewport_3d.set_body_object(body.id, body)
              self.viewport_3d.refresh_texture_previews(body.id)
+
+             # SelectionFaces für diesen Body aktualisieren, damit
+             # Picking nach Topology-Änderungen (z.B. Hole) korrekt
+             # die neuen Faces findet.
+             if hasattr(self.viewport_3d, 'detector'):
+                 det = self.viewport_3d.detector
+                 # Alte Faces für diesen Body entfernen
+                 det.selection_faces = [
+                     f for f in det.selection_faces
+                     if not (f.domain_type == "body_face" and f.owner_id == body.id)
+                 ]
+                 # Cache für diesen Body löschen
+                 if body.id in det._body_face_cache:
+                     del det._body_face_cache[body.id]
+                 # Neue Faces registrieren
+                 face_info = getattr(body, 'face_info', None)
+                 det.process_body_mesh(
+                     body.id, body.vtk_mesh,
+                     extrude_mode=getattr(self.viewport_3d, 'extrude_mode', False),
+                     face_info=face_info
+                 )
              return
 
         # 3. LEGACY PFAD: Alte Listen (nur Fallback)

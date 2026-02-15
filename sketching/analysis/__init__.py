@@ -1,13 +1,26 @@
-"""Analysis Module"""
+"""
+STL Analysis Module for Feature Detection and Quality Checking.
+"""
 
-from sketching.analysis.mesh_analyzer import (
-    MeshAnalyzer,
-    ReconstructionStep
+from .mesh_quality_checker import MeshQualityChecker, MeshQualityReport
+from .stl_feature_analyzer import (
+    STLFeatureAnalyzer,
+    STLFeatureAnalysis,
+    HoleInfo,
+    PocketInfo,
+    PlaneInfo,
+    FilletInfo,
+    analyze_stl,
 )
-from sketching.analysis.reconstruction_agent import ReconstructionAgent
 
 __all__ = [
-    "MeshAnalyzer",
-    "ReconstructionAgent",
-    "ReconstructionStep",
+    'MeshQualityChecker',
+    'MeshQualityReport',
+    'STLFeatureAnalyzer',
+    'STLFeatureAnalysis',
+    'HoleInfo',
+    'PocketInfo',
+    'PlaneInfo',
+    'FilletInfo',
+    'analyze_stl',
 ]

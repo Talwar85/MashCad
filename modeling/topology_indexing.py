@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 
 HAS_OCP = False
 try:  # pragma: no cover - import guard
-    from OCP.TopExp import TopExp
+    from OCP.TopExp import TopExp, TopExp_Explorer
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
     from OCP.TopTools import TopTools_IndexedMapOfShape
     from OCP.TopoDS import TopoDS
@@ -33,16 +33,15 @@ def _shape_faces(shape_like) -> List:
         return []
 
     # Preferred path: build123d's canonical face ordering.
+    canonical = []
     if hasattr(shape_like, "faces"):
         try:
-            faces = list(shape_like.faces())
-            if faces:
-                return faces
+            canonical = list(shape_like.faces())
         except Exception:
             pass
 
     # Optional direct API hooks if a topology helper object is provided.
-    if hasattr(shape_like, "map_index_to_face"):
+    if not canonical and hasattr(shape_like, "map_index_to_face"):
         try:
             mapped_faces = []
             idx = 0
@@ -53,25 +52,52 @@ def _shape_faces(shape_like) -> List:
                 mapped_faces.append(face)
                 idx += 1
             if mapped_faces:
-                return mapped_faces
+                canonical = mapped_faces
         except Exception:
             pass
 
     if not HAS_OCP or Face is None:
-        return []
+        return canonical
 
-    ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+    # If no canonical strategy, fallback to IndexMap via MapShapes (normalized)
+    if not canonical:
+        ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+        try:
+            face_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(ocp_shape, TopAbs_FACE, face_map)
+            for one_based_idx in range(1, face_map.Extent() + 1):
+                canonical.append(Face(TopoDS.Face_s(face_map.FindKey(one_based_idx))))
+        except Exception as exc:
+            logger.debug(f"topology_indexing: face extraction failed: {exc}")
+            return []
 
+    # FIX: Restore correct orientation from Topology logic!
+    # build123d/.faces() or MapShapes normalizes orientation to Forward.
+    # We must match them back to the actual oriented faces in the solid for history to work.
     try:
-        face_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(ocp_shape, TopAbs_FACE, face_map)
+        ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+        oriented_faces = []
+        expl = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+        while expl.More():
+            oriented_faces.append(expl.Current())
+            expl.Next()
+        
+        # Match canonical (sorted) list to oriented instances
         result = []
-        for one_based_idx in range(1, face_map.Extent() + 1):
-            result.append(Face(TopoDS.Face_s(face_map.FindKey(one_based_idx))))
+        for face_obj in canonical:
+            mapped = face_obj
+            c_shape = face_obj.wrapped if hasattr(face_obj, "wrapped") else face_obj
+            for o_shape in oriented_faces:
+                if c_shape.IsSame(o_shape):
+                    # Found the oriented version of this face
+                    mapped = Face(TopoDS.Face_s(o_shape))
+                    break
+            result.append(mapped)
         return result
-    except Exception as exc:
-        logger.debug(f"topology_indexing: face extraction failed: {exc}")
-        return []
+
+    except Exception as e:
+        logger.warning(f"topology_indexing: orientation fix failed: {e}")
+        return canonical
 
 
 def _shape_edges(shape_like) -> List:
@@ -80,16 +106,15 @@ def _shape_edges(shape_like) -> List:
         return []
 
     # Preferred path: build123d's canonical edge ordering.
+    canonical = []
     if hasattr(shape_like, "edges"):
         try:
-            edges = list(shape_like.edges())
-            if edges:
-                return edges
+            canonical = list(shape_like.edges())
         except Exception:
             pass
 
     # Optional direct API hooks if a topology helper object is provided.
-    if hasattr(shape_like, "map_index_to_edge"):
+    if not canonical and hasattr(shape_like, "map_index_to_edge"):
         try:
             mapped_edges = []
             idx = 0
@@ -100,25 +125,45 @@ def _shape_edges(shape_like) -> List:
                 mapped_edges.append(edge)
                 idx += 1
             if mapped_edges:
-                return mapped_edges
+                canonical = mapped_edges
         except Exception:
             pass
 
     if not HAS_OCP or Edge is None:
-        return []
+        return canonical
 
-    ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+    if not canonical:
+        ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+        try:
+            edge_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(ocp_shape, TopAbs_EDGE, edge_map)
+            for one_based_idx in range(1, edge_map.Extent() + 1):
+                canonical.append(Edge(TopoDS.Edge_s(edge_map.FindKey(one_based_idx))))
+        except Exception:
+            return []
 
+    # FIX: Restore correct orientation
     try:
-        edge_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(ocp_shape, TopAbs_EDGE, edge_map)
+        ocp_shape = shape_like.wrapped if hasattr(shape_like, "wrapped") else shape_like
+        oriented_edges = []
+        expl = TopExp_Explorer(ocp_shape, TopAbs_EDGE)
+        while expl.More():
+            oriented_edges.append(expl.Current())
+            expl.Next()
+            
         result = []
-        for one_based_idx in range(1, edge_map.Extent() + 1):
-            result.append(Edge(TopoDS.Edge_s(edge_map.FindKey(one_based_idx))))
+        for edge_obj in canonical:
+            mapped = edge_obj
+            c_shape = edge_obj.wrapped if hasattr(edge_obj, "wrapped") else edge_obj
+            for o_shape in oriented_edges:
+                if c_shape.IsSame(o_shape):
+                    mapped = Edge(TopoDS.Edge_s(o_shape))
+                    break
+            result.append(mapped)
         return result
-    except Exception as exc:
-        logger.debug(f"topology_indexing: edge extraction failed: {exc}")
-        return []
+
+    except Exception as e:
+        return canonical
 
 
 def iter_faces_with_indices(shape_like) -> Iterator[Tuple[int, object]]:

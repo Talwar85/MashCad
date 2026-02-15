@@ -937,24 +937,24 @@ class Body:
 
                             # Alle Faces registrieren
                             try:
-                                from OCP.TopExp import TopExp_Explorer
-                                from OCP.TopAbs import TopAbs_FACE
+                                from OCP.TopTools import TopTools_IndexedMapOfShape
+                                from OCP.TopExp import TopExp
+                                from OCP.TopoDS import TopoDS
                                 from modeling.tnp_system import ShapeType
 
-                                face_idx = 0
-                                explorer = TopExp_Explorer(solid.wrapped, TopAbs_FACE)
-                                while explorer.More():
-                                    face_shape = explorer.Current()
+                                face_map = TopTools_IndexedMapOfShape()
+                                TopExp.MapShapes_s(solid.wrapped, TopAbs_FACE, face_map)
+
+                                for fi in range(1, face_map.Extent() + 1):
+                                    face_shape = TopoDS.Face_s(face_map.FindKey(fi))
                                     service.register_shape(
                                         ocp_shape=face_shape,
                                         shape_type=ShapeType.FACE,
                                         feature_id=feature_id,
-                                        local_index=face_idx
+                                        local_index=fi - 1
                                     )
-                                    face_idx += 1
-                                    explorer.Next()
 
-                                logger.info(f"  [TNP] {edge_count} Edges, {face_idx} Faces registriert")
+                                logger.info(f"  [TNP] {edge_count} Edges, {face_map.Extent()} Faces registriert")
                             except Exception as e:
                                 logger.debug(f"[TNP] Face-Registrierung fehlgeschlagen: {e}")
                 except Exception as e:
@@ -1387,24 +1387,56 @@ class Body:
 
         for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX):
             explorer = TopExp_Explorer(input_shape, shape_type)
+            count = 0
             while explorer.More():
+                count += 1
                 sub_shape = explorer.Current()
-                try:
-                    for s in make_shape_op.Generated(sub_shape):
-                        history.AddGenerated(sub_shape, s)
-                except Exception:
-                    pass
-                try:
-                    for s in make_shape_op.Modified(sub_shape):
-                        history.AddModified(sub_shape, s)
-                except Exception:
-                    pass
-                try:
-                    if make_shape_op.IsDeleted(sub_shape):
-                        history.Remove(sub_shape)
-                except Exception:
-                    pass
+                
+                # Helper to check history for a shape and its reverse
+                def _check_and_add(s):
+                    # Generated
+                    try:
+                        gen = list(make_shape_op.Generated(s))
+                        if gen:
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Generated for {s} (Ori={s.Orientation()}): {len(gen)} items")
+                            for res in gen:
+                                history.AddGenerated(sub_shape, res) # Always map FROM the original sub_shape
+                    except Exception:
+                        pass
+                    
+                    # Modified
+                    try:
+                        mod = list(make_shape_op.Modified(s))
+                        if mod:
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Modified for {s} (Ori={s.Orientation()}): {len(mod)} items")
+                            for res in mod:
+                                history.AddModified(sub_shape, res)
+                    except Exception:
+                        pass
+                        
+                    # Deleted
+                    try:
+                        if make_shape_op.IsDeleted(s):
+                            if is_enabled("tnp_debug_logging"):
+                                 logger.debug(f"TNP History: Deleted {s} (Ori={s.Orientation()})")
+                            history.Remove(sub_shape)
+                    except Exception:
+                        pass
+
+                _check_and_add(sub_shape)
+                if sub_shape.Orientation() != 0: # Check reverse only if orientation is not "EXTERNAL" (0)? TopAbs orientation is enum.
+                     # TopAbs_FORWARD=0, TopAbs_REVERSED=1. 
+                     # Safe to just check Reversed() always.
+                     _check_and_add(sub_shape.Reversed())
+                
                 explorer.Next()
+            
+            if is_enabled("tnp_debug_logging"):
+                 logger.debug(f"TNP History: Scanned {count} items of type {shape_type}")
+
+        return history
 
         return history
 
@@ -2808,14 +2840,29 @@ class Body:
                 raise ValueError("Hole: Countersink-Geometrie konnte nicht positioniert werden")
             hole_shape = hole_shape.fuse(cs_shape)
 
-        # Boolean Cut: Bohrung vom Koerper abziehen
-        result = current_solid.cut(hole_shape)
-        if result and hasattr(result, 'is_valid') and result.is_valid():
-            logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich")
-            return result
+        # Boolean Cut: Bohrung vom Koerper abziehen via BooleanEngineV4 (TNP-safe)
+        # Zuerst Tool-Shapes registrieren (damit sie ShapeIDs haben)
+        if self._document and hasattr(self._document, '_shape_naming_service'):
+            # Wir registrieren das Tool als temporäres Feature oder unter der Hole-ID
+            # Da das Hole-Feature das Tool "besitzt", ist es okay, die Faces des Tools
+            # unter der Feature-ID zu registrieren.
+            self._register_base_feature_shapes(feature, hole_shape)
 
-        detail = brepfeat_reason if brepfeat_reason else "Boolean-Cut war ungültig oder leer"
-        raise ValueError(f"Hole Boolean Cut fehlgeschlagen ({detail})")
+        # Boolean ausführen
+        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
+            current_solid, hole_shape, "Cut"
+        )
+
+        if bool_result.is_success:
+            result = bool_result.value
+            self._register_boolean_history(bool_result, feature, operation_name="Hole_Cut")
+            logger.debug(f"Hole {feature.hole_type} D={feature.diameter}mm erfolgreich (BooleanV4)")
+            return result
+        else:
+            logger.warning(f"Hole Boolean fehlgeschlagen: {bool_result.message}")
+            if brepfeat_reason:
+                 raise ValueError(f"Hole fehlgeschlagen. BRepFeat: {brepfeat_reason}. Boolean: {bool_result.message}")
+            raise ValueError(f"Hole Boolean fehlgeschlagen: {bool_result.message}")
 
     def _position_cylinder(self, cyl_solid, position, direction, depth):
         """Positioniert einen Zylinder an position entlang direction."""
@@ -2951,6 +2998,24 @@ class Body:
         if draft_op.IsDone():
             result_shape = draft_op.Shape()
             result_shape = self._fix_shape_ocp(result_shape)
+
+            # TNP v4.0: History Tracking für Draft
+            if self._document and hasattr(self._document, '_shape_naming_service'):
+                try:
+                    service = self._document._shape_naming_service
+                    feature_id = getattr(feature, 'id', None) or str(id(feature))
+                    
+                    # History tracken (Faces modified/generated)
+                    service.track_draft_operation(
+                        feature_id=feature_id,
+                        source_solid=shape,
+                        result_solid=result_shape,
+                        occt_history=draft_op,
+                        angle=feature.draft_angle
+                    )
+                except Exception as e:
+                    logger.warning(f"Draft TNP tracking fail: {e}")
+
             from build123d import Solid
             result = Solid(result_shape)
             logger.debug(f"Draft {feature.draft_angle}° auf {face_count} Flaechen erfolgreich")
@@ -3118,19 +3183,20 @@ class Body:
             raise ValueError("Thread: Depth muss > 0 sein")
         n_turns = depth / pitch
 
-        # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
+            # Thread groove depth (ISO 60° metric: H = 0.8660 * P, groove = 5/8 * H)
         H = 0.8660254 * pitch
         groove_depth = 0.625 * H
 
         return self._compute_thread_helix(
             shape, pos, direction, r, pitch, depth, n_turns,
-            groove_depth, feature.thread_type, feature.tolerance_offset
+            groove_depth, feature.thread_type, feature.tolerance_offset,
+            feature=feature
         )
 
     def _compute_thread_helix(self, shape, pos, direction, r, pitch, depth, n_turns,
-                               groove_depth, thread_type, tolerance_offset):
+                               groove_depth, thread_type, tolerance_offset, feature=None):
         """Echtes Gewinde via Helix + Sweep mit korrekter Profil-Orientierung.
-
+        
         Das Profil wird senkrecht zum Helix-Tangenten am Startpunkt platziert
         (nicht auf Plane.XZ!). Dadurch entsteht saubere Geometrie mit wenigen
         Faces/Edges → schnelle Tessellation ohne Lag.
@@ -3138,7 +3204,8 @@ class Body:
         import numpy as np
         from build123d import (Helix, Solid, Polyline, BuildSketch, BuildLine,
                                Plane, make_face, sweep, Vector)
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+        from modeling.boolean_engine_v4 import BooleanEngineV4
+        # BRepAlgoAPI direct import removed in favor of BooleanEngineV4
 
         logger.debug(f"[THREAD] Helix sweep: r={r:.2f}, pitch={pitch}, depth={depth}, "
                      f"type={thread_type}, groove={groove_depth:.3f}")
@@ -3180,19 +3247,31 @@ class Body:
         thread_solid = sweep(profile_sk.sketch, path=helix)
         thread_ocp = thread_solid.wrapped if hasattr(thread_solid, 'wrapped') else thread_solid
 
-        # 4. Boolean Operation
-        if thread_type == "external":
-            op = BRepAlgoAPI_Cut(shape, thread_ocp)
+        # 4. Boolean Operation via BooleanEngineV4 (TNP-safe)
+        bool_op_type = "Cut" if thread_type == "external" else "Fuse"
+
+        # Tool-Shapes registrieren (optional, aber gut für Debugging/Picking)
+        if feature and self._document and hasattr(self._document, '_shape_naming_service'):
+            try:
+                # Wir registrieren das Tool temporär unter der Feature-ID
+                self._register_base_feature_shapes(feature, thread_solid)
+            except Exception:
+                pass
+
+        current_solid_b123d = Solid(shape)
+        
+        bool_result = BooleanEngineV4.execute_boolean_on_shapes(
+            current_solid_b123d, thread_solid, bool_op_type
+        )
+
+        if bool_result.is_success:
+            result = bool_result.value
+            if feature:
+                self._register_boolean_history(bool_result, feature, operation_name=f"Thread_{bool_op_type}")
+            logger.debug(f"[THREAD] Helix sweep completed successfully (BooleanV4)")
+            return result
         else:
-            op = BRepAlgoAPI_Fuse(shape, thread_ocp)
-
-        op.Build()
-        if not op.IsDone():
-            raise RuntimeError("Thread boolean failed")
-
-        result_shape = self._fix_shape_ocp(op.Shape())
-        logger.debug(f"[THREAD] Helix sweep completed successfully")
-        return Solid(result_shape)
+            raise RuntimeError(f"Thread boolean via V4 failed: {bool_result.message}")
 
     def _profile_data_to_face(self, profile_data: dict):
         """
@@ -4183,7 +4262,28 @@ class Body:
 
                     # TNP v4.0: ShapeNamingService Record aktualisieren
                     if idx < len(edge_shape_ids):
-                        self._update_shape_naming_record(edge_shape_ids[idx], best_edge)
+                        old_sid = edge_shape_ids[idx]
+                        self._update_shape_naming_record(old_sid, best_edge)
+
+                        # Wenn UUID nach Rebuild-Invalidierung nicht mehr im
+                        # Registry ist, neue ShapeID registrieren und
+                        # edge_shape_ids aktualisieren.
+                        if (self._document
+                                and hasattr(self._document, '_shape_naming_service')):
+                            svc = self._document._shape_naming_service
+                            if hasattr(old_sid, 'uuid') and old_sid.uuid not in svc._shapes:
+                                new_sid = svc.register_shape(
+                                    ocp_shape=best_edge.wrapped if hasattr(best_edge, 'wrapped') else best_edge,
+                                    shape_type=ShapeType.EDGE,
+                                    feature_id=getattr(old_sid, 'feature_id', getattr(feature, 'id', '')),
+                                    local_index=getattr(old_sid, 'local_index', idx),
+                                )
+                                edge_shape_ids[idx] = new_sid
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(
+                                        f"ShapeID erneuert nach Rebuild: "
+                                        f"{old_sid.uuid[:8]} → {new_sid.uuid[:8]}"
+                                    )
 
                     # TNP v4.0: Topology-Index aktualisieren
                     try:
@@ -4284,7 +4384,7 @@ class Body:
 
     def _register_extrude_shapes(self, feature: 'ExtrudeFeature', solid) -> None:
         """
-        TNP v4.0: Registriert alle Edges eines Extrude-Solids im NamingService.
+        TNP v4.0: Registriert alle Edges und Faces eines Extrude-Solids im NamingService.
         Wird nach erfolgreicher Extrusion aufgerufen.
         """
         if not self._document or not hasattr(self._document, '_shape_naming_service'):
@@ -4314,6 +4414,25 @@ class Body:
                 )
                 shape_ids.append(shape_id)
             
+            # Faces registrieren
+            face_count = 0
+            try:
+                from OCP.TopTools import TopTools_IndexedMapOfShape
+                from OCP.TopExp import TopExp
+                from OCP.TopoDS import TopoDS
+
+                solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+                face_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(solid_wrapped, TopAbs_FACE, face_map)
+
+                for fi in range(1, face_map.Extent() + 1):
+                    face = TopoDS.Face_s(face_map.FindKey(fi))
+                    service.register_shape(face, ShapeType.FACE, feature.id, fi - 1)
+                    face_count += 1
+            except Exception as e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: Extrude Face-Registrierung fehlgeschlagen: {e}")
+
             # Operation aufzeichnen
             service.record_operation(
                 OperationRecord(
@@ -4326,15 +4445,15 @@ class Body:
             )
             
             if is_enabled("tnp_debug_logging"):
-                logger.info(f"TNP v4.0: {len(shape_ids)} Edges für Extrude '{feature.name}' registriert")
+                logger.info(f"TNP v4.0: {len(shape_ids)} Edges, {face_count} Faces für Extrude '{feature.name}' registriert")
             
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
                 logger.warning(f"TNP v4.0: Extrude-Registrierung fehlgeschlagen: {e}")
 
-    def _register_base_feature_edges(self, feature, solid) -> None:
+    def _register_base_feature_shapes(self, feature, solid) -> None:
         """
-        TNP v4.0: Registriert alle Edges eines neu erzeugten Solids fuer Basis-Features
+        TNP v4.0: Registriert alle Edges UND Faces eines neu erzeugten Solids fuer Basis-Features
         (Loft, Revolve, Sweep, Primitive, Import). Nur einmal pro Feature-ID.
         """
         if not self._document or not hasattr(self._document, '_shape_naming_service'):
@@ -4346,7 +4465,31 @@ class Body:
             service = self._document._shape_naming_service
             if service.get_shapes_by_feature(feature.id):
                 return
-            service.register_solid_edges(solid, feature.id)
+
+            # Edges registrieren
+            edge_count = service.register_solid_edges(solid, feature.id)
+
+            # Faces registrieren
+            face_count = 0
+            try:
+                from OCP.TopTools import TopTools_IndexedMapOfShape
+                from OCP.TopExp import TopExp
+                from OCP.TopoDS import TopoDS
+
+                solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+                face_map = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(solid_wrapped, TopAbs_FACE, face_map)
+
+                for i in range(1, face_map.Extent() + 1):
+                    face = TopoDS.Face_s(face_map.FindKey(i))
+                    service.register_shape(face, ShapeType.FACE, feature.id, i - 1)
+                    face_count += 1
+            except Exception as e:
+                if is_enabled("tnp_debug_logging"):
+                    logger.debug(f"TNP v4.0: Face-Registrierung fehlgeschlagen: {e}")
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Base-Feature '{feature.id[:8]}': {edge_count} Edges, {face_count} Faces registriert")
         except Exception as e:
             if is_enabled("tnp_debug_logging"):
                 logger.debug(f"TNP v4.0: Base-Feature Registrierung fehlgeschlagen: {e}")
@@ -4864,7 +5007,7 @@ class Body:
                     new_solid = base_solid
                     logger.info(f"PrimitiveFeature: {feature.primitive_type} erstellt")
                     if current_solid is None:
-                        self._register_base_feature_edges(feature, new_solid)
+                        self._register_base_feature_shapes(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"PrimitiveFeature: Erstellung fehlgeschlagen")
@@ -4877,7 +5020,7 @@ class Body:
                     new_solid = base_solid
                     logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
                     if current_solid is None:
-                        self._register_base_feature_edges(feature, new_solid)
+                        self._register_base_feature_shapes(feature, new_solid)
                 else:
                     status = "ERROR"
                     logger.error(f"ImportFeature: Konnte BREP nicht laden")
@@ -4977,6 +5120,31 @@ class Body:
                                 status = "ERROR"
                                 # Behalte current_solid (keine Änderung)
                                 continue
+
+            # ================= PUSHPULL =================
+            elif isinstance(feature, PushPullFeature):
+                # Push/Pull nutzt exakt dieselbe Logik wie Extrude (Join/Cut) auf Body-Face.
+                # Wir delegieren an _compute_extrude_part_brepfeat.
+                
+                def op_pushpull():
+                    return self._compute_extrude_part_brepfeat(feature, current_solid)
+
+                pushpull_result, status = self._safe_operation(
+                    f"PushPull_{i}",
+                    op_pushpull,
+                    feature=feature,
+                )
+
+                if pushpull_result and status == "SUCCESS":
+                    new_solid = pushpull_result
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"PushPullFeature: Erfolgreich ausgeführt ({feature.operation}, d={feature.distance})")
+                    
+                    self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
+                else:
+                    status = "ERROR"
+                    logger.error(f"PushPullFeature fehlgeschlagen: {self._last_operation_error}")
+                    new_solid = current_solid
 
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
@@ -5110,7 +5278,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5138,7 +5306,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -5166,7 +5334,7 @@ class Body:
                     if current_solid is None or feature.operation == "New Body":
                         new_solid = part_geometry
                         if current_solid is None:
-                            self._register_base_feature_edges(feature, new_solid)
+                            self._register_base_feature_shapes(feature, new_solid)
                     else:
                         bool_result = BooleanEngineV4.execute_boolean_on_shapes(
                             current_solid, part_geometry, feature.operation
@@ -7286,8 +7454,12 @@ class Body:
                         if not prism.IsDone():
                             raise ValueError("BRepFeat Operation fehlgeschlagen")
 
-                        result_shape = prism.Shape()
-                        result_shape = self._unify_same_domain(result_shape, "BRepFeat_MakePrism")
+                        # WICHTIG: Pre-USD Result für History-Tracking aufheben!
+                        # UnifySameDomain zerstört die Topologie, auf die die
+                        # BRepFeat-History verweist. Die History muss gegen
+                        # das pre-USD Solid geprüft werden.
+                        pre_usd_result_shape = prism.Shape()
+                        result_shape = self._unify_same_domain(pre_usd_result_shape, "BRepFeat_MakePrism")
                         result = Solid(result_shape)
 
                         is_valid = True
@@ -7328,23 +7500,21 @@ class Body:
                         _sync_feature_face_refs(candidate_face)
 
                         # === TNP v4.0: BRepFeat-Operation tracken ===
+                        # WICHTIG: Wir übergeben den prism-Operator direkt als
+                        # occt_history (wie Fillet/Chamfer), und das pre-USD
+                        # Result als result_solid. So findet _shape_exists_in_solid
+                        # die Generated-Shapes (die im pre-USD Solid leben).
                         try:
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 service = self._document._shape_naming_service
-                                brepfeat_history = None
-                                try:
-                                    brepfeat_history = self._build_history_from_make_shape(prism, shape)
-                                except Exception as hist_err:
-                                    if is_enabled("tnp_debug_logging"):
-                                        logger.debug(f"TNP v4.0 BRepFeat History-Extraction fehlgeschlagen: {hist_err}")
                                 service.track_brepfeat_operation(
                                     feature_id=feature.id,
                                     source_solid=current_solid,
-                                    result_solid=result,
+                                    result_solid=pre_usd_result_shape,
                                     modified_face=candidate_face,
                                     direction=(float(trial_normal[0]), float(trial_normal[1]), float(trial_normal[2])),
                                     distance=abs_dist,
-                                    occt_history=brepfeat_history,
+                                    occt_history=prism,
                                 )
                         except Exception as tnp_e:
                             if is_enabled("tnp_debug_logging"):

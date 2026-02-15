@@ -11,11 +11,14 @@ Date: 2026-02-10
 """
 
 import time
+import numpy as np
 from typing import Optional, List, Any, Callable
 from loguru import logger
 
 from sketching.core.result_types import ReconstructionResult, PartResult, MeshAnalysis
 from sketching.analysis.mesh_analyzer import MeshAnalyzer, ReconstructionStep
+from sketching.analysis.visual_mesh_analyzer import VisualMeshAnalyzer
+from sketching.analysis.cross_validator import FeatureCrossValidator
 
 
 class ReconstructionAgent:
@@ -30,16 +33,19 @@ class ReconstructionAgent:
 
     def __init__(
         self,
+        document=None,  # Added document
         viewport=None,
         slow_mode: bool = True,
         step_delay: float = 0.5
     ):
         """
         Args:
+            document: Target CAD Document
             viewport: PyVista Viewport für Visualisierung
             slow_mode: Ob Delays zwischen Schritten eingefügt werden
             step_delay: Delay in Sekunden zwischen Schritten
         """
+        self.document = document
         self.analyzer = MeshAnalyzer()
         self.viewport = viewport
         self.slow_mode = slow_mode
@@ -53,13 +59,14 @@ class ReconstructionAgent:
     def reconstruct_from_mesh(
         self,
         mesh_path: str,
-        interactive: bool = True
+        interactive: bool = True,
+        analysis: Optional[MeshAnalysis] = None  # Added analysis
     ) -> ReconstructionResult:
         """
         Rekonstruiert CAD aus Mesh.
 
         Ablauf (interaktiv):
-        1. Mesh analysieren
+        1. Mesh analysieren (oder existierende Analyse nutzen)
         2. Schritte planen
         3. Schritt-für-Schritt ausführen:
            - Sketch erstellen (User sieht)
@@ -69,6 +76,7 @@ class ReconstructionAgent:
         Args:
             mesh_path: Pfad zur STL/OBJ Datei
             interactive: Ob User zuschauen kann
+            analysis: Optional vor-analysiertes Mesh (z.B. aus UI)
 
         Returns:
             ReconstructionResult
@@ -81,30 +89,60 @@ class ReconstructionAgent:
         try:
             logger.info(f"[ReconstructionAgent] Rekonstruiere Mesh: {mesh_path}")
 
-            # 1. Mesh analysieren
-            if self.on_progress:
-                self.on_progress(0.1, "Analysiere Mesh...")
+            # 1. Mesh analysieren (wenn nicht übergeben)
+            if analysis is None:
+                if self.on_progress:
+                    self.on_progress(0.1, "Analysiere Mesh...")
 
-            self._notify("Starte Mesh-Analyse...")
-
-            analysis = self.analyzer.analyze(mesh_path)
+                self._notify("Starte Mesh-Analyse...")
+                analysis = self.analyzer.analyze(mesh_path)
+            else:
+                 logger.info("Verwende existierende Analyse")
 
             if self.slow_mode:
                 time.sleep(self.step_delay)
 
-            # 2. Schritte planen
+            # 2. Schritte planen (falls nötig, MeshAnalysis hat steps)
             if self.on_progress:
                 self.on_progress(0.3, "Plane Rekonstruktion...")
 
-            self._notify(f"Analyse abgeschlossen: {analysis.primitive_count} Primitives")
+            if hasattr(analysis, 'primitive_count'):
+                self._notify(f"Analyse abgeschlossen: {analysis.primitive_count} Primitives")
+            elif hasattr(analysis, 'holes'):
+                count = len(analysis.holes) + (1 if analysis.base_plane else 0)
+                self._notify(f"Analyse abgeschlossen: {count} Features (STL)")
+            else:
+                self._notify("Analyse abgeschlossen")
+
+            # 2. Schritte planen
+            step_data_list = []
+            
+            # Check if analysis is STLFeatureAnalysis (duck typing or check class name)
+            is_stl_analysis = hasattr(analysis, 'base_plane') and hasattr(analysis, 'holes')
+            
+            if is_stl_analysis:
+                logger.info("Konvertiere STLFeatureAnalysis in Rekonstruktions-Schritte")
+                step_data_list = self._convert_stl_analysis_to_steps(analysis)
+            elif hasattr(analysis, 'suggested_steps'):
+                 step_data_list = analysis.suggested_steps
+            else:
+                 logger.warning("Unbekanntes Analyse-Format")
+                 step_data_list = []
+            
+            if self.on_progress:
+                self.on_progress(0.3, f"Plane Rekonstruktion ({len(step_data_list)} Schritte)...")
 
             # 3. Schritte ausführen
             step_id = 0
-            total_steps = len(analysis.suggested_steps)
+            total_steps = len(step_data_list)
 
-            for step_data in analysis.suggested_steps:
-                step = ReconstructionStep(**step_data)
-
+            for step_data in step_data_list:
+                # Convert dict to ReconstructionStep if needed
+                if isinstance(step_data, dict):
+                    step = ReconstructionStep(**step_data)
+                else:
+                    step = step_data # Already a Step object?
+                
                 # Schritt-Start Callback
                 if self.on_step_start:
                     self.on_step_start(step)
@@ -169,6 +207,280 @@ class ReconstructionAgent:
                 duration_ms=duration_ms,
                 error=str(e)
             )
+
+    def reconstruct_from_mesh_visual(
+        self,
+        mesh_path: str,
+        interactive: bool = True,
+        analysis: Optional[MeshAnalysis] = None
+    ) -> ReconstructionResult:
+        """
+        Rekonstruiert CAD aus Mesh mit visuellen Algorithmen.
+
+        Verwendet:
+        1. VisualMeshAnalyzer für 2D-Projektionen und Kontur-Extraktion
+        2. Cross-Validation für Methoden-Vergleich
+        3. Echte Tiefe durch Ray-Casting (kein Raten!)
+
+        Args:
+            mesh_path: Pfad zur STL/OBJ Datei
+            interactive: Ob User zuschauen kann
+            analysis: Optional vor-analysiertes Mesh
+
+        Returns:
+            ReconstructionResult mit cross-validated features
+        """
+        start_time = time.time()
+        steps = []
+        solid = None
+        current_sketch = None
+
+        try:
+            logger.info(f"[VisualReconstruction] Analysiere mit visuellen Methoden: {mesh_path}")
+
+            # 1. Visual Mesh Analyzer erstellen
+            visual_analyzer = VisualMeshAnalyzer()
+            cross_validator = FeatureCrossValidator()
+
+            # Mesh laden
+            import pyvista as pv
+            mesh = pv.read(mesh_path)
+
+            # 2. Visuelle Analyse durchführen
+            if self.on_progress:
+                self.on_progress(0.1, "Erstelle 2D-Projektionen...")
+
+            self._notify("Starte visuelle Analyse...")
+
+            # 2D-Projektionen erstellen
+            projections = visual_analyzer.create_2d_projections(mesh)
+
+            if self.on_progress:
+                self.on_progress(0.2, "Extrahiere Konturen...")
+
+            # Konturen extrahieren
+            contours = visual_analyzer.extract_contours_from_all_projections()
+
+            # Base Plane mit visueller Methode
+            if self.on_progress:
+                self.on_progress(0.3, "Erkenne Base Plane (visuell)...")
+
+            base_plane_visual = visual_analyzer.detect_base_plane_visual(mesh)
+
+            # Alpha Shape für Vergleich
+            base_plane_alpha = visual_analyzer.detect_base_plane_alpha_shape(mesh)
+
+            # 3. Cross-Validation für Base Plane
+            if self.on_progress:
+                self.on_progress(0.4, "Cross-Validiere Base Plane...")
+
+            base_plane_validation = cross_validator.validate_base_plane(
+                mesh=mesh,
+                visual_result=base_plane_visual,
+                alpha_result=base_plane_alpha
+            )
+
+            logger.info(f"[VisualReconstruction] Base Plane Confidence: {base_plane_validation.final_confidence:.2f}")
+
+            # 4. Löcher mit Ray-Casting (echte Tiefe!)
+            if self.on_progress:
+                self.on_progress(0.5, "Erkenne Löcher mit Ray-Casting...")
+
+            holes_visual = visual_analyzer.detect_holes_ray_cast(mesh, base_plane_visual)
+
+            # 5. Cross-Validation für Löcher
+            if self.on_progress:
+                self.on_progress(0.6, "Cross-Validiere Löcher...")
+
+            holes_validation = cross_validator.validate_hole(
+                mesh=mesh,
+                visual_result=holes_visual,
+                base_plane=base_plane_visual
+            )
+
+            logger.info(f"[VisualReconstruction] Hole Confidence: {holes_validation.final_confidence:.2f}")
+
+            # 6. Schritte aus cross-validated results planen
+            if self.on_progress:
+                self.on_progress(0.7, "Plane Rekonstruktion...")
+
+            step_data_list = self._convert_validated_results_to_steps(
+                base_plane_validation,
+                holes_validation
+            )
+
+            # 7. Schritte ausführen
+            step_id = 0
+            total_steps = len(step_data_list)
+
+            for step_data in step_data_list:
+                if isinstance(step_data, dict):
+                    step = ReconstructionStep(**step_data)
+                else:
+                    step = step_data
+
+                if self.on_step_start:
+                    self.on_step_start(step)
+
+                self._notify(f"Schritt {step_id + 1}/{total_steps}: {step.description}")
+
+                result = self._execute_step_with_context(
+                    step,
+                    sketch=current_sketch,
+                    solid=solid
+                )
+
+                if step.operation == "create_profile" and result is not None:
+                    current_sketch = result
+                elif step.operation == "extrude" and result is not None:
+                    solid = result
+                    current_sketch = None
+                elif step.operation == "fillet" and result is not None:
+                    solid = result
+
+                if result:
+                    steps.append(step)
+
+                    if self.on_step_complete:
+                        self.on_step_complete(step, result)
+
+                progress = 0.7 + (0.3 * (step_id + 1) / total_steps)
+                if self.on_progress:
+                    self.on_progress(progress, f"Schritt {step_id + 1}/{total_steps}")
+
+                if self.slow_mode:
+                    time.sleep(self.step_delay)
+
+                step_id += 1
+
+            duration_ms = (time.time() - start_time) * 1000
+
+            return ReconstructionResult(
+                success=solid is not None,
+                solid=solid,
+                analysis=analysis,
+                executed_steps=[s.to_dict() for s in steps],
+                duration_ms=duration_ms,
+                error=None if solid is not None else "Visuelle Rekonstruktion ohne Solid-Ergebnis"
+            )
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"[VisualReconstruction] Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+
+            return ReconstructionResult(
+                success=False,
+                solid=None,
+                analysis=MeshAnalysis([], [], {}, {}, 0),
+                executed_steps=[],
+                duration_ms=duration_ms,
+                error=str(e)
+            )
+
+    def _convert_validated_results_to_steps(
+        self,
+        base_plane_validation,
+        holes_validation
+    ) -> List[dict]:
+        """
+        Konvertiert cross-validierte Ergebnisse in ReconstructionSteps.
+        """
+        steps = []
+        step_id = 0
+
+        # Base Plane aus merged result
+        if base_plane_validation.merged_result:
+            base_plane = base_plane_validation.merged_result
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_plane",
+                "description": f"Base-Plane (Cross-Validated, Confidence: {base_plane_validation.final_confidence:.2f})",
+                "params": {"plane": base_plane}
+            })
+            step_id += 1
+
+            # Base Profile
+            if hasattr(base_plane, 'boundary_points') and base_plane.boundary_points:
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_profile",
+                    "description": f"Base-Profil (visuell, {len(base_plane.boundary_points)} Punkte)",
+                    "params": {
+                        "type": "polygon",
+                        "points": base_plane.boundary_points,
+                        "plane_origin": base_plane.origin,
+                        "plane_normal": base_plane.normal
+                    }
+                })
+            else:
+                # Fallback: Rechteck
+                size = (base_plane.area ** 0.5) if hasattr(base_plane, 'area') else 20
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_profile",
+                    "description": "Base-Profil (Rechteck Fallback)",
+                    "params": {
+                        "type": "rectangle",
+                        "width": size,
+                        "height": size,
+                        "center": (0, 0),
+                        "plane_origin": base_plane.origin,
+                        "plane_normal": base_plane.normal
+                    }
+                })
+            step_id += 1
+
+            # Extrude Base
+            depth = 10.0
+            if holes_validation.merged_result:
+                depth = max(depth, holes_validation.merged_result.depth * 1.5)
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Extrudiere Base: {depth:.1f}mm",
+                "params": {
+                    "distance": depth,
+                    "operation": "New Body"
+                }
+            })
+            step_id += 1
+
+        # Löcher aus merged result
+        if holes_validation.merged_result:
+            hole = holes_validation.merged_result
+            i = 0
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_profile",
+                "description": f"Hole (Ray-Cast Tiefe: {hole.depth:.1f}mm, r={hole.radius:.1f}mm)",
+                "params": {
+                    "type": "circle",
+                    "radius": hole.radius,
+                    "center": (0, 0),
+                    "plane_origin": hole.center,
+                    "plane_normal": hole.axis
+                }
+            })
+            step_id += 1
+
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Hole Cut (echte Tiefe, d={hole.depth:.1f}mm)",
+                "params": {
+                    "distance": hole.depth,
+                    "operation": "Cut"
+                }
+            })
+            step_id += 1
+            i += 1
+
+        return steps
 
     def _execute_step(self, step: ReconstructionStep) -> Optional[Any]:
         """
@@ -262,6 +574,12 @@ class ReconstructionAgent:
             sketch_name = f"reconstruction_profile_{profile_type}"
 
             sketch = Sketch(sketch_name)
+            
+            # Set plane if provided
+            if "plane_origin" in params:
+                 sketch.plane_origin = params["plane_origin"]
+            if "plane_normal" in params:
+                 sketch.plane_normal = params["plane_normal"]
 
             if profile_type == "circle":
                 # Circle wird als Polygon mit vielen Seiten approximiert
@@ -281,10 +599,88 @@ class ReconstructionAgent:
                 sketch.add_rectangle(x, y, width, height)
 
             elif profile_type == "polygon":
-                sides = params.get("sides", 6)
-                radius = params.get("radius", 10)
-                center = params.get("center", (0, 0))
-                sketch.add_regular_polygon(center[0], center[1], radius, sides)
+                points = params.get("points")
+                if points:
+                    # Case 1: Explicit points (3D global)
+                    # We must project them to the sketch plane
+                    
+                    # Get Plane Info
+                    origin = np.array(params.get("plane_origin", (0,0,0)))
+                    normal = np.array(params.get("plane_normal", (0,0,1)))
+                    
+                    # Check if normal is valid
+                    if np.linalg.norm(normal) < 1e-6:
+                        normal = np.array((0,0,1))
+                    
+                    # Compute X/Y directions
+                    # X-Dir: Perpendicular to Normal
+                    if abs(normal[2]) < 0.99:
+                        x_dir = np.cross((0,0,1), normal)
+                    else:
+                        x_dir = np.cross((1,0,0), normal)
+                    x_dir = x_dir / np.linalg.norm(x_dir)
+                    
+                    # Y-Dir: Normal x X-Dir
+                    y_dir = np.cross(normal, x_dir)
+                    y_dir = y_dir / np.linalg.norm(y_dir)
+                    
+                    # Set Sketch Plane info explicitely
+                    sketch.plane_origin = tuple(origin)
+                    sketch.plane_normal = tuple(normal)
+                    sketch.plane_x_dir = tuple(x_dir)
+                    sketch.plane_y_dir = tuple(y_dir)
+                    
+                    # Project Points
+                    projected_points = []
+                    for p in points:
+                        vec = np.array(p) - origin
+                        u = np.dot(vec, x_dir)
+                        v = np.dot(vec, y_dir)
+                        projected_points.append((u, v))
+                        
+                    # Clean Polygon using Shapely
+                    try: 
+                        from shapely.geometry import Polygon as ShapelyPoly
+                        
+                        # 1. Create Polygon
+                        poly = ShapelyPoly(projected_points)
+                        
+                        # 2. Fix self-intersections (buffer 0)
+                        if not poly.is_valid:
+                            logger.info("[ReconstructionAgent] Fixing invalid polygon...")
+                            poly = poly.buffer(0)
+                            
+                        # 3. Simplify (remove RANSAC noise)
+                        # Tolerance 0.5mm is usually safe for base profiles
+                        poly: ShapelyPoly = poly.simplify(0.5, preserve_topology=True)
+                        
+                        # 4. Extract points
+                        if poly.is_empty:
+                             logger.warning("[ReconstructionAgent] Polygon is empty after cleaning!")
+                        else:
+                            # Handle MultiPolygon (if buffer splits it) - take largest
+                            if poly.geom_type == 'MultiPolygon':
+                                poly = max(poly.geoms, key=lambda p: p.area)
+                                
+                            # Get exterior coords
+                            cleaned_points = list(poly.exterior.coords)[:-1] # Remove duplicate end
+                            if len(cleaned_points) > 2:
+                                logger.info(f"[ReconstructionAgent] Polygon cleaned: {len(projected_points)} -> {len(cleaned_points)} points")
+                                projected_points = cleaned_points
+                            else:
+                                logger.warning("[ReconstructionAgent] Polygon collapsed to <3 points!")
+                                
+                    except Exception as e:
+                        logger.warning(f"[ReconstructionAgent] Polygon cleaning failed: {e}")
+
+                    sketch.add_polygon(projected_points)
+                    
+                else:
+                    # Case 2: Regular Polygon (sides/radius)
+                    sides = params.get("sides", 6)
+                    radius = params.get("radius", 10)
+                    center = params.get("center", (0, 0))
+                    sketch.add_regular_polygon(center[0], center[1], radius, sides)
 
             else:
                 logger.warning(f"[ReconstructionAgent] Unbekannter Profil-Typ: {profile_type}")
@@ -326,16 +722,31 @@ class ReconstructionAgent:
                 logger.warning("[ReconstructionAgent] Kein Sketch für Extrusion")
                 return None
 
-            # Document und Body erstellen
-            doc = Document("ReconstructionDoc")
-            body = Body("ReconstructionBody", document=doc)
-            doc.add_body(body)
+            # Document und Body erstellen/nutzen
+            if self.document:
+                doc = self.document
+                # Prüfen ob wir schon einen Body für dieses Part haben
+                # Für vereinfachte Rekonstruktion erstellen wir einen neuen
+                import uuid
+                body_name = f"Reconstructed_{uuid.uuid4().hex[:6]}"
+                body = Body(body_name, document=doc)
+                doc.add_body(body)
+                
+                # Sketch auch zum Doc hinzufügen falls noch nicht dort
+                if sketch not in doc.sketches:
+                    doc.sketches.append(sketch)
+            else:
+                # Standalone Mode
+                doc = Document("ReconstructionDoc")
+                body = Body("ReconstructionBody", document=doc)
+                doc.add_body(body)
 
             # ExtrudeFeature erstellen
+            op_str = params.get("operation", "New Body")
             feature = ExtrudeFeature(
                 sketch=sketch,
                 distance=distance,
-                operation="New Body"
+                operation=op_str
             )
             body.add_feature(feature)
 
@@ -414,6 +825,113 @@ class ReconstructionAgent:
         # Wenn Viewport verfügbar, zeige Nachricht
         if self.viewport and hasattr(self.viewport, 'show_notification'):
             self.viewport.show_notification(message)
+
+    def _convert_stl_analysis_to_steps(self, analysis: Any) -> List[Any]:
+        """
+        Konvertiert STLFeatureAnalysis in ReconstructionSteps.
+        """
+        steps = []
+        step_id = 0
+        
+        # 1. Base Plane
+        if analysis.base_plane:
+            # Check enabled status
+            if hasattr(analysis.base_plane, 'enabled') and not analysis.base_plane.enabled:
+                logger.info("Base Plane disabled by user - skipping")
+            else:
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "create_plane",
+                    "description": f"Base-Plane erkannt: {analysis.base_plane.area:.0f}mm²",
+                    "params": {"plane": analysis.base_plane}
+                })
+                step_id += 1
+                
+                # Base Sketch (Profil)
+                if analysis.base_plane.boundary_points:
+                    # Use extracted boundary
+                    steps.append({
+                        "step_id": step_id,
+                        "operation": "create_profile",
+                        "description": "Erstelle Base-Profil (Polygonal)",
+                        "params": {
+                            "type": "polygon",
+                            "points": analysis.base_plane.boundary_points,
+                            "plane_origin": analysis.base_plane.origin,
+                            "plane_normal": analysis.base_plane.normal
+                        }
+                    })
+                else:
+                    # Approximiere Rechteck aus Fläche
+                    size = (analysis.base_plane.area ** 0.5)
+                    steps.append({
+                        "step_id": step_id,
+                        "operation": "create_profile",
+                        "description": "Erstelle Base-Profil (Rechteck)",
+                        "params": {
+                            "type": "rectangle",
+                            "width": size,
+                            "height": size,
+                            "center": (0, 0), # Local center on plane
+                            "plane_origin": analysis.base_plane.origin,
+                            "plane_normal": analysis.base_plane.normal
+                        }
+                    })
+                step_id += 1
+                
+                # Extrude Base
+                # Höhe schätzen oder Default
+                # Verwende max Tiefe von Löchern/Pockets als Hinweis oder Default 10
+                depth = 10.0
+                if analysis.holes:
+                    max_hole_depth = max(h.depth for h in analysis.holes)
+                    if max_hole_depth > depth:
+                        depth = max_hole_depth
+                
+                steps.append({
+                    "step_id": step_id,
+                    "operation": "extrude",
+                    "description": f"Extrudiere Base: {depth:.1f}mm",
+                    "params": {
+                        "distance": depth,
+                        "operation": "New Body"
+                    }
+                })
+                step_id += 1
+            
+        # 2. Holes (als Cuts)
+        for i, hole in enumerate(analysis.holes):
+            if hasattr(hole, 'enabled') and not hole.enabled:
+                continue
+
+            # Sketch für Loch
+            steps.append({
+                "step_id": step_id,
+                "operation": "create_profile",
+                "description": f"Hole #{i+1} Profil (r={hole.radius:.1f}mm)",
+                "params": {
+                    "type": "circle",
+                    "radius": hole.radius,
+                    "center": (0, 0), # Local center
+                    "plane_origin": hole.center,
+                    "plane_normal": hole.axis
+                }
+            })
+            step_id += 1
+            
+            # Cut
+            steps.append({
+                "step_id": step_id,
+                "operation": "extrude",
+                "description": f"Hole #{i+1} Cut (d={hole.depth:.1f}mm)",
+                "params": {
+                    "distance": hole.depth,
+                    "operation": "Cut"
+                }
+            })
+            step_id += 1
+            
+        return steps
 
     def get_stats(self) -> dict:
         """Statistiken des ReconstructionAgent."""

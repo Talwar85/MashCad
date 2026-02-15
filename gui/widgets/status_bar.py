@@ -106,6 +106,19 @@ class MashCadStatusBar(QWidget):
         """)
         layout.addWidget(self.zoom_badge)
 
+        layout.addWidget(self._create_separator())
+
+        # FPS Counter
+        self.fps_badge = QLabel("-- FPS")
+        self.fps_badge.setStyleSheet(f"""
+            background: {elevated};
+            border-radius: 4px;
+            padding: 2px 8px;
+            color: {txt};
+            font-family: 'Consolas', monospace;
+        """)
+        layout.addWidget(self.fps_badge)
+
     def _create_separator(self):
         """Erstellt einen vertikalen Separator."""
         sep = QFrame()
@@ -162,6 +175,33 @@ class MashCadStatusBar(QWidget):
     def set_zoom(self, zoom_percent: int):
         """Setzt die Zoom-Anzeige."""
         self.zoom_badge.setText(f"{zoom_percent}%")
+
+    def update_fps(self, fps: float):
+        """Aktualisiert die FPS-Anzeige mit Farbcodierung."""
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+
+        if fps < 5:
+            # Idle – System rendert nur bei Bedarf (ist korrekt, kein Problem)
+            text = "idle"
+            color = DesignTokens.COLOR_TEXT_MUTED.name()
+        else:
+            fps_int = int(round(fps))
+            text = f"{fps_int} FPS"
+            if fps >= 50:
+                color = DesignTokens.COLOR_SUCCESS.name()       # Grün: gut
+            elif fps >= 30:
+                color = "#eab308"                                # Gelb: ok
+            else:
+                color = DesignTokens.COLOR_ERROR.name()          # Rot: schlecht
+
+        self.fps_badge.setText(text)
+        self.fps_badge.setStyleSheet(f"""
+            background: {elevated};
+            border-radius: 4px;
+            padding: 2px 8px;
+            color: {color};
+            font-family: 'Consolas', monospace;
+        """)
 
     def set_dof(self, dof: int, visible: bool = True):
         """

@@ -466,7 +466,8 @@ class SketchAgent:
     def reconstruct_from_mesh(
         self,
         mesh_path: str,
-        interactive: bool = True
+        interactive: bool = True,
+        analysis=None  # Added analysis
     ) -> ReconstructionResult:
         """
         Rekonstruiert CAD aus Mesh.
@@ -474,12 +475,11 @@ class SketchAgent:
         Args:
             mesh_path: Pfad zur STL/OBJ Datei
             interactive: Ob der User zuschauen kann
-
-        Returns:
-            ReconstructionResult
+            analysis: Optional vor-analysiertes Mesh
         """
         # Erstelle ReconstructionAgent für diesen Aufruf
         recon_agent = ReconstructionAgent(
+            document=self.document,  # Pass Document!
             viewport=getattr(self, 'viewport', None),
             slow_mode=interactive,
             step_delay=0.5 if interactive else 0.0
@@ -492,7 +492,7 @@ class SketchAgent:
             recon_agent.on_progress = self._on_reconstruction_progress
 
         # Rekonstruktion ausführen
-        return recon_agent.reconstruct_from_mesh(mesh_path, interactive)
+        return recon_agent.reconstruct_from_mesh(mesh_path, interactive, analysis=analysis)
 
     def _on_reconstruction_step_start(self, step):
         """Callback: Rekonstruktions-Schritt gestartet."""

@@ -29,7 +29,9 @@ Author: Claude (Phase 4 Performance)
 Date: 2026-01-23
 """
 
-from typing import Optional, Set
+import time
+from typing import Optional, Set, Callable, List
+from collections import deque
 from loguru import logger
 
 try:
@@ -61,6 +63,13 @@ class RenderQueue(QObject):
     _stats_rendered = 0
     _stats_skipped = 0
 
+    # FPS Tracking
+    _frame_times: deque = None       # Timestamps der letzten Frames
+    _fps: float = 0.0                # Aktueller FPS-Wert
+    _fps_callbacks: List[Callable] = None  # Listener für FPS-Updates
+    _fps_update_timer: Optional[QTimer] = None
+    FPS_WINDOW_SIZE = 60             # Frames für gleitenden Durchschnitt
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -75,9 +84,18 @@ class RenderQueue(QObject):
 
         RenderQueue._plotters = set()
         RenderQueue._timer = None
+        RenderQueue._frame_times = deque(maxlen=RenderQueue.FPS_WINDOW_SIZE)
+        RenderQueue._fps_callbacks = []
         RenderQueue._initialized = True
 
-        logger.debug("RenderQueue initialisiert")
+        # FPS-Update Timer (alle 500ms den FPS-Wert berechnen und broadcasten)
+        if HAS_QT:
+            RenderQueue._fps_update_timer = QTimer()
+            RenderQueue._fps_update_timer.setInterval(500)
+            RenderQueue._fps_update_timer.timeout.connect(RenderQueue._broadcast_fps)
+            RenderQueue._fps_update_timer.start()
+
+        logger.debug("RenderQueue initialisiert (mit FPS-Tracking)")
 
     @classmethod
     def request_render(cls, plotter, immediate: bool = False):
@@ -182,6 +200,80 @@ class RenderQueue(QObject):
         cls._stats_requested = 0
         cls._stats_rendered = 0
         cls._stats_skipped = 0
+
+    # ── FPS Counter ──────────────────────────────────────────
+
+    @classmethod
+    def record_frame(cls):
+        """Zeichnet einen gerenderten Frame auf (von VTK-Observer aufgerufen)."""
+        if cls._frame_times is not None:
+            cls._frame_times.append(time.perf_counter())
+
+    @classmethod
+    def attach_fps_observer(cls, plotter):
+        """
+        Hängt einen VTK EndRenderEvent-Observer an den Plotter,
+        damit ALLE Renders gezählt werden (nicht nur Queue-Renders).
+        """
+        try:
+            rw = None
+            if hasattr(plotter, 'render_window') and plotter.render_window:
+                rw = plotter.render_window
+            elif hasattr(plotter, 'ren_win') and plotter.ren_win:
+                rw = plotter.ren_win
+
+            if rw is not None:
+                rw.AddObserver('EndEvent', lambda obj, evt: cls.record_frame())
+                logger.debug("FPS-Observer an RenderWindow angehängt")
+            else:
+                logger.debug("FPS-Observer: kein RenderWindow gefunden")
+        except Exception as e:
+            logger.debug(f"FPS-Observer konnte nicht angehängt werden: {e}")
+
+    @classmethod
+    def get_fps(cls) -> float:
+        """Gibt aktuellen FPS-Wert zurück (gleitender Durchschnitt)."""
+        if cls._frame_times is None or len(cls._frame_times) < 2:
+            return 0.0
+        now = time.perf_counter()
+        # Nur Frames der letzten 2 Sekunden berücksichtigen
+        cutoff = now - 2.0
+        while cls._frame_times and cls._frame_times[0] < cutoff:
+            cls._frame_times.popleft()
+        if len(cls._frame_times) < 2:
+            return 0.0
+        elapsed = cls._frame_times[-1] - cls._frame_times[0]
+        if elapsed <= 0:
+            return 0.0
+        return (len(cls._frame_times) - 1) / elapsed
+
+    @classmethod
+    def register_fps_callback(cls, callback: Callable[[float], None]):
+        """Registriert Callback der bei FPS-Update aufgerufen wird."""
+        instance = cls()
+        if cls._fps_callbacks is None:
+            cls._fps_callbacks = []
+        cls._fps_callbacks.append(callback)
+
+    @classmethod
+    def unregister_fps_callback(cls, callback: Callable[[float], None]):
+        """Entfernt FPS-Callback."""
+        if cls._fps_callbacks:
+            try:
+                cls._fps_callbacks.remove(callback)
+            except ValueError:
+                pass
+
+    @classmethod
+    def _broadcast_fps(cls):
+        """Berechnet FPS und benachrichtigt alle Listener."""
+        cls._fps = cls.get_fps()
+        if cls._fps_callbacks:
+            for cb in cls._fps_callbacks:
+                try:
+                    cb(cls._fps)
+                except Exception:
+                    pass
 
 
 # Convenience-Funktion für einfachen Import

@@ -31,8 +31,9 @@ HAS_OCP_TESSELLATE = False
 try:
     from ocp_tessellate.tessellator import tessellate as ocp_tessellate
     HAS_OCP_TESSELLATE = True
-except ImportError:
-    pass
+except ImportError as e:
+    logger.critical(f"ocp-tessellate missing in CADTessellator: {e}")
+    raise ImportError(f"ocp-tessellate is required! Error: {e}")
 
 # OCP für echte Edge-Extraktion
 HAS_OCP = False

@@ -813,7 +813,7 @@ class GeometryDetector:
             sample_point = group_centers[0]
 
             # Sub-Mesh für Display extrahieren
-            group_mesh = vtk_mesh.extract_cells(cell_ids).extract_surface()
+            group_mesh = vtk_mesh.extract_cells(cell_ids).extract_surface(algorithm='dataset_surface')
 
             self._add_body_face_with_ocp_id(
                 body_id, center, final_normal, group_mesh, sample_point, int(ocp_face_id)
@@ -832,7 +832,7 @@ class GeometryDetector:
                 continue
 
             group_mesh_ugrid = vtk_mesh.extract_cells(cell_ids)
-            group_mesh = group_mesh_ugrid.extract_surface()
+            group_mesh = group_mesh_ugrid.extract_surface(algorithm='dataset_surface')
 
             try:
                 conn = group_mesh.connectivity(extraction_mode='all')
@@ -851,7 +851,7 @@ class GeometryDetector:
 
                 for i in range(int(min_id), int(max_id) + 1):
                     region = conn.threshold([i, i], scalars='RegionId')
-                    region_surf = region.extract_surface()
+                    region_surf = region.extract_surface(algorithm='dataset_surface')
 
                     if region_surf.n_points < 3:
                         continue

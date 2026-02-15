@@ -510,6 +510,24 @@ class ShapeNamingService:
             "direct", "history", "brepfeat", "geometric", "unresolved"
         """
         if shape_id.uuid not in self._shapes:
+            # Strategie 0: UUID nicht vorhanden → versuche geometry_hash-Lookup
+            # Dies kann passieren wenn Features invalidiert und neu gebaut werden
+            # (Rebuild), da BRepFeat neue UUIDs erzeugt. Die geometry_hash ist
+            # deterministisch und erlaubt Wiederauffinden.
+            ghash = getattr(shape_id, 'geometry_hash', None)
+            stype = getattr(shape_id, 'shape_type', None)
+            if ghash and stype is not None:
+                for _uuid, _rec in self._shapes.items():
+                    _sid = _rec.shape_id
+                    if _sid.geometry_hash == ghash and _sid.shape_type == stype:
+                        if _rec.is_valid and _rec.ocp_shape is not None:
+                            if self._shape_exists_in_solid(_rec.ocp_shape, current_solid):
+                                if is_enabled("tnp_debug_logging"):
+                                    logger.debug(
+                                        f"Shape {shape_id.uuid[:8]} via geometry_hash "
+                                        f"({ghash[:8]}) → {_uuid[:8]} aufgelöst"
+                                    )
+                                return _rec.ocp_shape, "geometry_hash"
             if log_unresolved:
                 logger.warning(f"Unbekannte ShapeID: {shape_id.uuid}")
             return None, "unresolved"
@@ -1137,7 +1155,7 @@ class ShapeNamingService:
             # Neue Geometrie-Daten berechnen
             geo_data = self._extract_geometry_data(new_shape, old_shape_id.shape_type)
             if not geo_data:  # Leeres Tuple bedeutet Fehler
-                logger.warning(f"TNP: Konnte Geometrie-Daten nicht berechnen für {old_shape_id.uuid[:8]}")
+                logger.debug(f"TNP: Konnte Geometrie-Daten nicht berechnen für {old_shape_id.uuid[:8]} (erwartet bei verbrauchten Edges)")
                 return False
 
             # ShapeID aktualisieren - neue Geometrie, gleiche UUID
@@ -1252,14 +1270,13 @@ class ShapeNamingService:
                         # Shape wurde nicht modifiziert (existiert noch)
                         continue
 
-                    # Die modifizierte Shape nehmen (erste)
-                    new_shape = modified[0]
-
-                    # ShapeID aktualisieren
-                    if self.update_shape_id_after_operation(
-                        old_shape, new_shape, feature_id, f"{operation_type}_history"
-                    ):
-                        updated_count += 1
+                    # Alle modifizierten Shapes berücksichtigen (1:N möglich bei Boolean)
+                    for new_shape in modified:
+                        if self.update_shape_id_after_operation(
+                            old_shape, new_shape, feature_id, f"{operation_type}_history"
+                        ):
+                            updated_count += 1
+                            break  # Erstes erfolgreiches Match gewinnt
 
             if is_enabled("tnp_debug_logging") and updated_count > 0:
                 logger.success(
@@ -1412,6 +1429,16 @@ class ShapeNamingService:
                 if query_fn is None:
                     continue
                 mapped = self._iter_history_shapes(query_fn(source_shape))
+                
+                # FIX BRepFeat: Auch Reversed Variante prüfen falls keine Mappings gefunden
+                # (Da BRepFeat/History-Building orientierungsabhängig ist)
+                if not mapped and hasattr(source_shape, "Reversed"):
+                    try:
+                        rev_mapped = self._iter_history_shapes(query_fn(source_shape.Reversed()))
+                        if rev_mapped:
+                            mapped = rev_mapped
+                    except Exception:
+                        pass
             except Exception:
                 mapped = []
 
@@ -1459,10 +1486,32 @@ class ShapeNamingService:
 
                 if op.manual_mappings and candidate_uuid in op.manual_mappings:
                     had_mapping = True
-                    for mapped_uuid in op.manual_mappings.get(candidate_uuid, []):
+                    mapped_uuids = op.manual_mappings.get(candidate_uuid, [])
+
+                    # Pass 1: Prefer same-type mappings (Edge→Edge, Face→Face)
+                    # BRepFeat stores both FACE and EDGE in manual_mappings for
+                    # a source Edge. We must prefer Edge matches to avoid
+                    # returning a Face when the caller expects an Edge.
+                    for mapped_uuid in mapped_uuids:
                         mapped_record = self._shapes.get(mapped_uuid)
                         if mapped_record is None or mapped_record.ocp_shape is None:
                             continue
+                        if mapped_record.shape_id.shape_type != shape_id.shape_type:
+                            continue  # Skip cross-type in first pass
+                        mapped_shape = mapped_record.ocp_shape
+                        if self._shape_exists_in_solid(mapped_shape, current_solid):
+                            return mapped_shape
+                        if next_shape is None:
+                            next_shape = mapped_shape
+                            next_uuid = mapped_uuid
+
+                    # Pass 2: Accept cross-type mappings as fallback
+                    for mapped_uuid in mapped_uuids:
+                        mapped_record = self._shapes.get(mapped_uuid)
+                        if mapped_record is None or mapped_record.ocp_shape is None:
+                            continue
+                        if mapped_record.shape_id.shape_type == shape_id.shape_type:
+                            continue  # Already checked in pass 1
                         mapped_shape = mapped_record.ocp_shape
                         if self._shape_exists_in_solid(mapped_shape, current_solid):
                             return mapped_shape
@@ -1519,12 +1568,22 @@ class ShapeNamingService:
                 return
             if shape_id.uuid in seen_uuids:
                 return
-            record = self._shapes.get(shape_id.uuid)
-            candidate_shape = record.ocp_shape if (record and record.ocp_shape is not None) else shape_obj
+            
+            # FIX: Prefer shape_obj (from current operation context) over record.ocp_shape!
+            # The BRepFeat history was built using shape_obj (the face/edge we passed to MakePrism).
+            # Using record.ocp_shape (registry cache) might point to a topologically equivalent
+            # but different TShape instance, causing History Lookup (Pointer Identity) to fail.
+            candidate_shape = shape_obj 
+
             if candidate_shape is None:
                 return
-            if not self._shape_exists_in_solid(candidate_shape, source_solid):
-                return
+            
+            # Additional check: If shape_obj is not in solid, maybe fall back?
+            # But BRepFeat ops usually work on valid sub-shapes.
+            # We skip _shape_exists_in_solid strict check for history candidates 
+            # because shape_obj MIGHT be from a "previous state" of the solid 
+            # passed down from the feature logic.
+            
             seen_uuids.add(shape_id.uuid)
             inputs.append((shape_id, candidate_shape))
 
@@ -1552,22 +1611,44 @@ class ShapeNamingService:
     ) -> Tuple[Dict[str, List[str]], List[ShapeID]]:
         """
         Erstellt Input->Output Mappings per OCCT History für BRepFeat.
+
+        BRepFeat-spezifisch: Generated(Edge) liefert eine FACE (Seitenfläche),
+        NICHT eine andere Edge. Wir extrahieren die Kind-Edges aus der
+        generierten Face, um korrekte Edge→Edge Mappings zu erstellen.
+        
+        Für Faces: IsDeleted(Face) kann True sein (die pushed Face wird
+        gelöscht und an neuer Position neu erzeugt).
         """
         from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
-
-        shape_type_to_topabs = {
-            ShapeType.EDGE: TopAbs_EDGE,
-            ShapeType.FACE: TopAbs_FACE,
-            ShapeType.VERTEX: TopAbs_VERTEX,
-        }
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
 
         local_index = max(0, int(start_local_index or 0))
         manual_mappings: Dict[str, List[str]] = {}
         new_shape_ids: List[ShapeID] = []
         registered_outputs: List[Tuple[Any, ShapeID]] = []
 
+        def _find_or_register(ocp_shape: Any, shape_type: ShapeType) -> ShapeID:
+            """Find existing registered output or register new."""
+            nonlocal local_index
+            for known_shape, known_shape_id in registered_outputs:
+                try:
+                    if known_shape.IsSame(ocp_shape):
+                        return known_shape_id
+                except Exception:
+                    continue
+            shape_id = self.register_shape(
+                ocp_shape=ocp_shape,
+                shape_type=shape_type,
+                feature_id=feature_id,
+                local_index=local_index,
+            )
+            registered_outputs.append((ocp_shape, shape_id))
+            new_shape_ids.append(shape_id)
+            local_index += 1
+            return shape_id
+
         for source_shape_id, source_shape in source_items:
-            expected_topabs = shape_type_to_topabs.get(source_shape_id.shape_type)
             history_outputs = self._history_outputs_for_shape(occt_history, source_shape)
             if not history_outputs:
                 continue
@@ -1575,34 +1656,49 @@ class ShapeNamingService:
             for mapped_shape in history_outputs:
                 if mapped_shape is None:
                     continue
+
+                mapped_type = None
                 try:
-                    if expected_topabs is not None and mapped_shape.ShapeType() != expected_topabs:
-                        continue
+                    mapped_type = mapped_shape.ShapeType()
                 except Exception:
+                    continue
+
+                # --- BRepFeat-spezifisch: Edge -> Face (erzeugte Seitenfläche) ---
+                if source_shape_id.shape_type == ShapeType.EDGE and mapped_type == TopAbs_FACE:
+                    if not self._shape_exists_in_solid(mapped_shape, result_solid):
+                        continue
+
+                    # Registriere die generierte Seitenfläche
+                    face_shape_id = _find_or_register(mapped_shape, ShapeType.FACE)
+                    bucket = manual_mappings.setdefault(source_shape_id.uuid, [])
+                    if face_shape_id.uuid not in bucket:
+                        bucket.append(face_shape_id.uuid)
+
+                    # Extrahiere Kind-Edges der generierten Face
+                    # und registriere sie als Edge-Mappings
+                    child_edge_exp = TopExp_Explorer(mapped_shape, TopAbs_EDGE)
+                    while child_edge_exp.More():
+                        child_edge = TopoDS.Edge_s(child_edge_exp.Current())
+                        if self._shape_exists_in_solid(child_edge, result_solid):
+                            edge_shape_id = _find_or_register(child_edge, ShapeType.EDGE)
+                            if edge_shape_id.uuid not in bucket:
+                                bucket.append(edge_shape_id.uuid)
+                        child_edge_exp.Next()
+                    continue
+
+                # --- Standard: Same-Type Mapping (Edge->Edge, Face->Face) ---
+                expected_topabs = {
+                    ShapeType.EDGE: TopAbs_EDGE,
+                    ShapeType.FACE: TopAbs_FACE,
+                    ShapeType.VERTEX: TopAbs_VERTEX,
+                }.get(source_shape_id.shape_type)
+
+                if expected_topabs is not None and mapped_type != expected_topabs:
                     continue
                 if not self._shape_exists_in_solid(mapped_shape, result_solid):
                     continue
 
-                mapped_shape_id: Optional[ShapeID] = None
-                for known_shape, known_shape_id in registered_outputs:
-                    try:
-                        if known_shape.IsSame(mapped_shape):
-                            mapped_shape_id = known_shape_id
-                            break
-                    except Exception:
-                        continue
-
-                if mapped_shape_id is None:
-                    mapped_shape_id = self.register_shape(
-                        ocp_shape=mapped_shape,
-                        shape_type=source_shape_id.shape_type,
-                        feature_id=feature_id,
-                        local_index=local_index,
-                    )
-                    registered_outputs.append((mapped_shape, mapped_shape_id))
-                    new_shape_ids.append(mapped_shape_id)
-                    local_index += 1
-
+                mapped_shape_id = _find_or_register(mapped_shape, source_shape_id.shape_type)
                 bucket = manual_mappings.setdefault(source_shape_id.uuid, [])
                 if mapped_shape_id.uuid not in bucket:
                     bucket.append(mapped_shape_id.uuid)
@@ -1853,7 +1949,8 @@ class ShapeNamingService:
 
             # 1. Finde alle Edges der modified_face vor der Operation
             old_face_edges = set()
-            face_edge_exp = TopExp_Explorer(modified_face.wrapped, TopAbs_EDGE)
+            mod_face_shape = modified_face.wrapped if hasattr(modified_face, 'wrapped') else modified_face
+            face_edge_exp = TopExp_Explorer(mod_face_shape, TopAbs_EDGE)
             while face_edge_exp.More():
                 edge = TopoDS.Edge_s(face_edge_exp.Current())
                 old_face_edges.add(edge)
@@ -1865,7 +1962,7 @@ class ShapeNamingService:
             
             # Extrahiere Centers von allen Edges der modified_face
             modified_face_centers = []
-            face_edge_exp = TopExp_Explorer(modified_face.wrapped, TopAbs_EDGE)
+            face_edge_exp = TopExp_Explorer(mod_face_shape, TopAbs_EDGE)
             while face_edge_exp.More():
                 edge = TopoDS.Edge_s(face_edge_exp.Current())
                 # Berechne Center dieser Edge
@@ -1935,8 +2032,28 @@ class ShapeNamingService:
             if is_enabled("tnp_debug_logging"):
                 logger.debug(f"TNP BRepFeat: {len(affected_shape_ids)}/{len(modified_face_centers)} betroffene Edges gefunden")
             
-            # 3. Extrahiere alle Edges vom neuen Solid
-            new_edges = list(result_solid.edges())
+            # 3. Extrahiere alle Edges vom neuen Solid (OCP-native)
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GProp import GProp_GProps
+            from OCP.BRepGProp import BRepGProp
+            
+            result_shape = result_solid.wrapped if hasattr(result_solid, 'wrapped') else result_solid
+            new_edges = []  # list of (ocp_edge, center_array, length)
+            edge_exp = TopExp_Explorer(result_shape, TopAbs_EDGE)
+            while edge_exp.More():
+                ocp_edge = TopoDS.Edge_s(edge_exp.Current())
+                try:
+                    adaptor = BRepAdaptor_Curve(ocp_edge)
+                    u_mid = (adaptor.FirstParameter() + adaptor.LastParameter()) / 2
+                    pnt = adaptor.Value(u_mid)
+                    props = GProp_GProps()
+                    BRepGProp.LinearProperties_s(ocp_edge, props)
+                    edge_length = props.Mass()
+                    edge_center = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+                    new_edges.append((ocp_edge, edge_center, edge_length))
+                except Exception:
+                    new_edges.append((ocp_edge, np.zeros(3), 0.0))
+                edge_exp.Next()
             
             # 4. Erstelle Mappings: Alte Edge → Neue Edge
             manual_mappings = {}  # {old_shape_uuid: [new_shape_uuid, ...]}
@@ -1959,15 +2076,9 @@ class ShapeNamingService:
                 best_match = None
                 best_score = float('inf')
                 
-                for i, new_edge in enumerate(new_edges):
+                for i, (ocp_edge, new_center, new_length) in enumerate(new_edges):
                     if i in used_new_edge_indices:
                         continue
-                    new_center = np.array([
-                        new_edge.center().X,
-                        new_edge.center().Y,
-                        new_edge.center().Z
-                    ])
-                    new_length = new_edge.length if hasattr(new_edge, 'length') else 0
                     
                     # Berechne erwartete neue Position
                     # Bei BRepFeat wird die Face verschoben, daher sind die 
@@ -1993,15 +2104,15 @@ class ShapeNamingService:
                     
                     if score < best_score and dist < 1.0:  # 1mm Toleranz
                         best_score = score
-                        best_match = (i, new_edge)
+                        best_match = (i, ocp_edge)
                 
                 if best_match:
-                    idx, matched_edge = best_match
+                    idx, matched_ocp_edge = best_match
                     used_new_edge_indices.add(idx)
                     
-                    # Erstelle neue ShapeID für die gematchte Edge
+                    # Erstelle neue ShapeID für die gematchte Edge (raw OCP)
                     new_shape_id = self.register_shape(
-                        ocp_shape=matched_edge.wrapped,
+                        ocp_shape=matched_ocp_edge,
                         shape_type=ShapeType.EDGE,
                         feature_id=feature_id,
                         local_index=len(new_shape_ids)
@@ -2515,6 +2626,105 @@ class ShapeNamingService:
                 logger.error(f"TNP v4.0: Chamfer Tracking fehlgeschlagen: {e}")
             import traceback
             traceback.print_exc()
+            return None
+
+    def track_draft_operation(
+        self,
+        feature_id: str,
+        source_solid: Any,
+        result_solid: Any,
+        occt_history: Optional[Any] = None,
+        angle: float = 0.0,
+    ) -> Optional[OperationRecord]:
+        """
+        TNP v4.0: Trackt eine BRepOffsetAPI_DraftAngle Operation.
+        
+        Draft modifiziert Faces. Wir tracken Modified() und Generated().
+        """
+        if not HAS_OCP:
+            return None
+
+        try:
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+            
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP v4.0: Tracke Draft Operation '{feature_id}'")
+
+            manual_mappings: Dict[str, List[str]] = {}
+            new_shape_ids: List[ShapeID] = []
+
+            # Kernel-first: OCCT History
+            if occt_history is not None:
+                # Iterate known FACES
+                for uuid, record in list(self._shapes.items()):
+                    if record.shape_id.shape_type != ShapeType.FACE:
+                        continue
+                    if record.ocp_shape is None:
+                        continue
+                        
+                    # Prüfe ob Face im Source-Solid (optional, Draft modifiziert eh nur selektierte)
+                    if not self._shape_exists_in_solid(record.ocp_shape, source_solid):
+                        continue
+
+                    modified_shapes = self._history_outputs_for_shape(occt_history, record.ocp_shape)
+                    
+                    if modified_shapes:
+                        input_shape_id = record.shape_id
+                        output_uuids = []
+                        
+                        for mod_shape in modified_shapes:
+                            # 1. Update existing ID if possible
+                            existing_id = self._find_exact_shape_id_by_ocp_shape(mod_shape)
+                            if existing_id:
+                                output_uuids.append(existing_id.uuid)
+                                if existing_id not in new_shape_ids:
+                                    new_shape_ids.append(existing_id)
+                            else:
+                                # 2. Update Geometry of existing ID
+                                if self.update_shape_id_after_operation(
+                                    old_shape=record.ocp_shape,
+                                    new_shape=mod_shape,
+                                    feature_id=feature_id,
+                                    operation_type=f"draft_{feature_id}"
+                                ):
+                                    output_uuids.append(record.shape_id.uuid)
+                                    if record.shape_id not in new_shape_ids:
+                                        new_shape_ids.append(record.shape_id)
+                                else:
+                                    # 3. Register New
+                                    new_id = self.register_shape(
+                                        ocp_shape=mod_shape,
+                                        shape_type=ShapeType.FACE,
+                                        feature_id=feature_id,
+                                        local_index=len(new_shape_ids)
+                                    )
+                                    new_shape_ids.append(new_id)
+                                    output_uuids.append(new_id.uuid)
+                        
+                        if output_uuids:
+                            manual_mappings[input_shape_id.uuid] = output_uuids
+
+            # OperationRecord
+            op_record = OperationRecord(
+                operation_type="DRAFT",
+                feature_id=feature_id,
+                input_shape_ids=[sid for sid in self._shapes.values() if sid.shape_id.uuid in manual_mappings],
+                output_shape_ids=new_shape_ids,
+                occt_history=occt_history,
+                manual_mappings=manual_mappings,
+                metadata={"angle": angle}
+            )
+            self.record_operation(op_record)
+            
+            # Edges registrieren (die sich vllt geändert haben)
+            self._register_unmapped_edges(result_solid, feature_id, existing_mappings=[])
+            
+            return op_record
+
+        except Exception as e:
+            logger.error(f"TNP Draft Tracking failed: {e}")
             return None
 
     def track_sketch_extrude(
