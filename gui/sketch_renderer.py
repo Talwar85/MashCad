@@ -397,7 +397,7 @@ class SketchRendererMixin:
         # Alle Endpunkte von Linien und Bögen sammeln
         endpoints = []
         for l in self.sketch.lines:
-            if not l.construction:
+            if not l.construction and not bool(getattr(l, "_suppress_endpoint_markers", False)):
                 endpoints.append(l.start)
                 endpoints.append(l.end)
         for a in self.sketch.arcs:
@@ -464,7 +464,7 @@ class SketchRendererMixin:
             # Liegt auf einer Linie (T-Kreuzung)?
             on_line = False
             for line in self.sketch.lines:
-                if not line.construction:
+                if not line.construction and not bool(getattr(line, "_suppress_endpoint_markers", False)):
                     # Nicht die eigene Linie prüfen
                     if pt != line.start and pt != line.end:
                         if point_on_line(pt, line, TOLERANCE):
@@ -551,6 +551,9 @@ class SketchRendererMixin:
             else:
                 path_normal.moveTo(p1)
                 path_normal.lineTo(p2)
+
+            if bool(getattr(line, "_suppress_endpoint_markers", False)):
+                continue
 
             for pt, screen_pt in [(line.start, p1), (line.end, p2)]:
                 if hasattr(pt, 'fixed') and pt.fixed:
@@ -718,11 +721,16 @@ class SketchRendererMixin:
 
             screen_pt = self.world_to_screen(QPointF(pt.x, pt.y))
             is_sel = pt in self.selected_points
+            is_hov = self.hovered_entity == pt
 
             # Farbe basierend auf Zustand
             if is_sel:
                 p.setPen(QPen(DesignTokens.COLOR_GEO_SELECTED, 2))
                 p.setBrush(DesignTokens.COLOR_GEO_SELECTED)
+                size = 5
+            elif is_hov:
+                p.setPen(QPen(DesignTokens.COLOR_GEO_HOVER, 2))
+                p.setBrush(DesignTokens.COLOR_GEO_HOVER)
                 size = 5
             elif getattr(pt, 'construction', False):
                 p.setPen(QPen(DesignTokens.COLOR_GEO_CONSTRUCTION, 2))
@@ -787,12 +795,28 @@ class SketchRendererMixin:
             p.setBrush(Qt.NoBrush)
             p.drawPath(spline_path)
             
-            if is_selected or is_dragging:
-                self._draw_spline_handles(p, spline)
+            # Zeichne Curvature Comb (falls aktiviert)
+            if getattr(spline, 'show_curvature', False):
+                self._draw_curvature_comb(p, spline)
+            
+            # Visibility Improvements (User Feedback)
+            # 1. Show Points ALWAYS (but smaller/subtle if not selected)
+            # 2. Show Handles only if selected or hovered
+            is_hovered = (spline == self._last_hovered_entity)
+            
+            if is_selected or is_dragging or is_hovered:
+                self._draw_spline_handles(p, spline, draw_handles=True)
+            else:
+                # Minimalistic view: just points, no handles
+                self._draw_spline_handles(p, spline, draw_handles=False)
     
-    def _draw_spline_handles(self, p, spline):
+    def _draw_spline_handles(self, p, spline, draw_handles=True):
         handle_color = QColor(100, 200, 100)
         point_color = QColor(255, 255, 255)
+        
+        # Unselected: More subtle
+        if not draw_handles:
+            point_color = QColor(DesignTokens.COLOR_GEO_BODY) # Same as line
         
         for i, cp in enumerate(spline.control_points):
             pt_screen = self.world_to_screen(QPointF(cp.point.x, cp.point.y))
@@ -800,9 +824,22 @@ class SketchRendererMixin:
             # Punkt
             p.setPen(QPen(point_color, 2))
             p.setBrush(QBrush(self.BG_COLOR))
-            p.drawEllipse(pt_screen, 4, 4)
+            # Smaller if unselected
+            size = 4 if draw_handles else 3
             
-            # Handles
+            # === Phase 19: Weight Visualization ===
+            # Visualize weight by scaling the point
+            if hasattr(cp, 'weight'):
+                 w_factor = math.sqrt(cp.weight)
+                 # Clamp size factor
+                 size *= max(0.5, min(4.0, w_factor))
+
+            p.drawEllipse(pt_screen, size, size)
+            
+            # Handles only if requested
+            if not draw_handles:
+                continue
+                
             p.setPen(QPen(handle_color, 1))
             p.setBrush(QBrush(handle_color))
             
@@ -1305,6 +1342,71 @@ class SketchRendererMixin:
                         p.drawEllipse(self.world_to_screen(pt), 5, 5)
                     p.setBrush(Qt.NoBrush)
             
+        elif self.current_tool == SketchTool.ELLIPSE and self.tool_step >= 1:
+            center = self.tool_points[0]
+
+            if self.tool_step == 1:
+                if use_dim_input and self.live_length > 0:
+                    major_radius = self.live_length
+                    angle_rad = math.radians(self.live_angle)
+                    major_end = QPointF(
+                        center.x() + major_radius * math.cos(angle_rad),
+                        center.y() + major_radius * math.sin(angle_rad),
+                    )
+                else:
+                    major_end = snap
+                    major_radius = math.hypot(major_end.x() - center.x(), major_end.y() - center.y())
+
+                if major_radius > 0.01:
+                    dx = major_end.x() - center.x()
+                    dy = major_end.y() - center.y()
+                    ux = dx / major_radius
+                    uy = dy / major_radius
+                    p_major_1 = QPointF(center.x() - ux * major_radius, center.y() - uy * major_radius)
+                    p_major_2 = QPointF(center.x() + ux * major_radius, center.y() + uy * major_radius)
+                    p.drawLine(self.world_to_screen(p_major_1), self.world_to_screen(p_major_2))
+
+            elif self.tool_step == 2:
+                major_end = self.tool_points[1]
+                dx = major_end.x() - center.x()
+                dy = major_end.y() - center.y()
+                major_radius = math.hypot(dx, dy)
+                if major_radius > 0.01:
+                    ux = dx / major_radius
+                    uy = dy / major_radius
+                    vx = -uy
+                    vy = ux
+
+                    if use_dim_input and self.live_radius > 0:
+                        minor_radius = self.live_radius
+                    else:
+                        rel_x = snap.x() - center.x()
+                        rel_y = snap.y() - center.y()
+                        minor_radius = abs(rel_x * vx + rel_y * vy)
+                    minor_radius = max(0.01, minor_radius)
+
+                    p_major_1 = QPointF(center.x() - ux * major_radius, center.y() - uy * major_radius)
+                    p_major_2 = QPointF(center.x() + ux * major_radius, center.y() + uy * major_radius)
+                    p_minor_1 = QPointF(center.x() - vx * minor_radius, center.y() - vy * minor_radius)
+                    p_minor_2 = QPointF(center.x() + vx * minor_radius, center.y() + vy * minor_radius)
+                    p.drawLine(self.world_to_screen(p_major_1), self.world_to_screen(p_major_2))
+                    p.drawLine(self.world_to_screen(p_minor_1), self.world_to_screen(p_minor_2))
+
+                    path = QPainterPath()
+                    n_pts = 64
+                    for i in range(n_pts + 1):
+                        t = (2.0 * math.pi * i) / float(n_pts)
+                        lx = major_radius * math.cos(t)
+                        ly = minor_radius * math.sin(t)
+                        x = center.x() + lx * ux + ly * vx
+                        y = center.y() + lx * uy + ly * vy
+                        sp = self.world_to_screen(QPointF(x, y))
+                        if i == 0:
+                            path.moveTo(sp)
+                        else:
+                            path.lineTo(sp)
+                    p.drawPath(path)
+
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             c = self.tool_points[0]
             if use_dim_input and self.live_radius > 0:
@@ -1407,7 +1509,7 @@ class SketchRendererMixin:
                         hw = width/2
                     
                     # Langloch-Form mit Halbkreisen an den Enden
-                    from PySide6.QtGui import QPainterPath
+                    # QPainterPath ist bereits global importiert
                     path = QPainterPath()
                     
                     # Start-Halbkreis (um p1)
@@ -1466,16 +1568,38 @@ class SketchRendererMixin:
                 p.drawEllipse(self.world_to_screen(pt), 4, 4)
         elif self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 1:
             for pt in self.tool_points:
+                p.setBrush(QBrush(QColor(0, 120, 215)))
                 p.drawEllipse(self.world_to_screen(pt), 4, 4)
-            if len(self.tool_points) >= 2:
+                p.setBrush(Qt.NoBrush)
+            
+            if len(self.tool_points) >= 1:
                 try:
-                    from gui.generators import generate_spline_points
-                    ctrl_pts = [(pt.x(), pt.y()) for pt in self.tool_points] + [(snap.x(), snap.y())]
-                    spline_pts = generate_spline_points(ctrl_pts, segments_per_span=6)
-                    for i in range(len(spline_pts) - 1):
-                        p.drawLine(self.world_to_screen(QPointF(spline_pts[i][0], spline_pts[i][1])), self.world_to_screen(QPointF(spline_pts[i+1][0], spline_pts[i+1][1])))
+                    # Zeichne Vorschau-Kurve durch alle Punkte + aktuellen Snap
+                    from sketcher.geometry import BezierSpline
+                    preview_spline = BezierSpline()
+                    for pt in self.tool_points:
+                        preview_spline.add_point(pt.x(), pt.y())
+                    
+                    # Aktueller Punkt (Snap)
+                    preview_spline.add_point(snap.x(), snap.y())
+                    
+                    # Kurve zeichnen
+                    pts = preview_spline.get_curve_points(segments_per_span=10)
+                    if pts:
+                        path = QPainterPath()
+                        path.moveTo(self.world_to_screen(QPointF(pts[0][0], pts[0][1])))
+                        for px, py in pts[1:]:
+                            path.lineTo(self.world_to_screen(QPointF(px, py)))
+                        
+                        p.setPen(QPen(self.PREVIEW_COLOR, 2, Qt.SolidLine)) # Solid line for better visibility
+                        p.drawPath(path)
+                        
+                        # Gummiband-Linie zum letzten Punkt (optional, aber hilfreich)
+                        # p.setPen(QPen(self.PREVIEW_COLOR, 1, Qt.DashLine))
+                        # p.drawLine(self.world_to_screen(self.tool_points[-1]), self.world_to_screen(snap))
+
                 except Exception as e:
-                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
+                    logger.debug(f"[sketch_renderer.py] Fehler Spline Preview: {e}")
         
         # === PREVIEW FÜR BEARBEITUNGSTOOLS ===
         
@@ -1870,6 +1994,73 @@ class SketchRendererMixin:
             p.setBrush(QBrush(QColor(0, 150, 255, 30)))
             p.drawRect(rect)
 
+    def _draw_direct_edit_handles(self, p):
+        """
+        Zeichnet direkte Manipulations-Handles für Circle/Polygon:
+        - Center-Handle (verschieben)
+        - Radius-Handle (Größe ändern)
+        """
+        if getattr(self, "current_tool", None) != SketchTool.SELECT:
+            return
+        if not hasattr(self, "_get_direct_edit_handles_world"):
+            return
+
+        handles = self._get_direct_edit_handles_world()
+        if not handles:
+            return
+
+        center_world = handles["center"]
+        radius_world = handles["radius_point"]
+        source = handles.get("source", "circle")
+
+        center_screen = self.world_to_screen(center_world)
+        radius_screen = self.world_to_screen(radius_world)
+
+        hover = getattr(self, "_direct_hover_handle", None)
+        hover_mode = hover.get("mode") if hover else None
+        drag_mode = getattr(self, "_direct_edit_mode", None) if getattr(self, "_direct_edit_dragging", False) else None
+
+        is_center_active = hover_mode == "center" or drag_mode == "center"
+        is_radius_active = hover_mode == "radius" or drag_mode == "radius"
+
+        # Helper-Linie vom Zentrum zur Radius-Handle
+        guide_color = QColor(120, 220, 255, 170) if source == "circle" else QColor(255, 190, 110, 170)
+        p.setPen(QPen(guide_color, 1.5, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(center_screen, radius_screen)
+
+        # Center-Handle
+        center_fill = QColor(30, 180, 255, 240) if is_center_active else QColor(20, 120, 200, 210)
+        center_stroke = QColor(255, 255, 255, 230)
+        center_size = 7 if is_center_active else 6
+
+        p.setPen(QPen(center_stroke, 1.5))
+        p.setBrush(QBrush(center_fill))
+        p.drawEllipse(center_screen, center_size, center_size)
+        p.setPen(QPen(QColor(255, 255, 255, 230), 1))
+        p.drawLine(
+            QPointF(center_screen.x() - 4, center_screen.y()),
+            QPointF(center_screen.x() + 4, center_screen.y()),
+        )
+        p.drawLine(
+            QPointF(center_screen.x(), center_screen.y() - 4),
+            QPointF(center_screen.x(), center_screen.y() + 4),
+        )
+
+        # Radius-Handle
+        radius_fill = QColor(255, 160, 70, 245) if is_radius_active else QColor(220, 130, 50, 215)
+        radius_stroke = QColor(255, 245, 220, 230)
+        radius_size = 6 if is_radius_active else 5
+        radius_rect = QRectF(
+            radius_screen.x() - radius_size,
+            radius_screen.y() - radius_size,
+            radius_size * 2,
+            radius_size * 2,
+        )
+        p.setPen(QPen(radius_stroke, 1.5))
+        p.setBrush(QBrush(radius_fill))
+        p.drawRect(radius_rect)
+
     @staticmethod
     def _unit_vec(dx: float, dy: float):
         n = math.hypot(dx, dy)
@@ -2019,8 +2210,58 @@ class SketchRendererMixin:
             p.drawLine(a, b)
         p.restore()
 
+    def _draw_curvature_comb(self, p: QPainter, spline):
+        """
+        Zeichnet eine Krümmungsanalyse (Curvature Comb) für den Spline.
+        """
+        try:
+            # Skalierung basierend auf Zoom-Level (damit die Kämme nicht riesig werden beim Rauszoomen)
+            # Experimenteller Faktor.
+            scale_factor = 1.0 / self.view_scale * 0.5 
+            
+            comb_data = spline.get_curvature_comb(num_samples=100, scale=scale_factor)
+            if not comb_data:
+                return
+
+            # Style
+            p.save()
+            # Kämme (Quills) in hellem Blau
+            p.setPen(QPen(QColor(0, 150, 255, 100), 1))
+            
+            # Pfad für die Oberschwingung (Top-Line)
+            top_line = QPainterPath()
+            
+            for i, (start, end, k) in enumerate(comb_data):
+                s = self.world_to_screen(QPointF(start.x, start.y))
+                e = self.world_to_screen(QPointF(end.x, end.y))
+                
+                # Zeichne Quill (Linie vom Kurvenpunkt zum Krümmungswert)
+                p.drawLine(s, e)
+                
+                # Sammle Punkte für Top-Line
+                if i == 0:
+                    top_line.moveTo(e)
+                else:
+                    top_line.lineTo(e)
+            
+            # Zeichne verbindende Linie oben drauf
+            p.setPen(QPen(QColor(0, 100, 200, 180), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(top_line)
+            
+            p.restore()
+        except Exception as e:
+            logger.debug(f"Failed to draw curvature comb: {e}")
+
     def _should_show_snap_label(self, snap_type, pos: QPointF) -> bool:
-        if self.current_tool != SketchTool.LINE or self.tool_step < 1:
+        # Define tools that should show snap labels
+        drawing_tools = [
+            SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE, SketchTool.ELLIPSE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
+        ]
+        
+        if self.current_tool not in drawing_tools or self.tool_step < 1:
             self._snap_label_key = None
             self._snap_label_since_ms = 0.0
             return False
@@ -2094,7 +2335,13 @@ class SketchRendererMixin:
         """
         Draws a compact confidence/info overlay close to the cursor while sketching.
         """
-        drawing_mode = self.current_tool == SketchTool.LINE and self.tool_step >= 1
+        drawing_tools = [
+            SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE, SketchTool.ELLIPSE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
+        ]
+        drawing_mode = self.current_tool in drawing_tools and self.tool_step >= 1
+        
         if not drawing_mode:
             return
 
@@ -2346,6 +2593,13 @@ class SketchRendererMixin:
             p.setPen(QPen(self.DIM_COLOR))
             diameter = self.live_radius * 2
             p.drawText(int(ctr.x())+10, int(ctr.y())-int(self.live_radius*self.view_scale)-8, f"R {self.live_radius:.1f} / Ø {diameter:.1f} mm")
+        elif self.current_tool == SketchTool.ELLIPSE and self.tool_step >= 1:
+            ctr = self.world_to_screen(self.tool_points[0])
+            p.setPen(QPen(self.DIM_COLOR))
+            if self.tool_step == 1:
+                p.drawText(int(ctr.x())+10, int(ctr.y())-8, f"Ra {self.live_length:.1f} @ {self.live_angle:.1f}°")
+            else:
+                p.drawText(int(ctr.x())+10, int(ctr.y())-8, f"Rb {self.live_radius:.1f} mm")
         elif self.current_tool == SketchTool.POLYGON and self.tool_step == 1:
             ctr = self.world_to_screen(self.tool_points[0])
             p.setPen(QPen(self.DIM_COLOR))
@@ -2362,8 +2616,8 @@ class SketchRendererMixin:
         p.drawText(12, 25, f"Tool: {tool_name}")
         
         # Tab-Hinweis für Zeichentools (dezent)
-        drawing_tools = [SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.CIRCLE, 
-                        SketchTool.POLYGON, SketchTool.SLOT, SketchTool.ARC_3POINT]
+        drawing_tools = [SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.CIRCLE,
+                        SketchTool.ELLIPSE, SketchTool.POLYGON, SketchTool.SLOT, SketchTool.ARC_3POINT]
         if self.current_tool in drawing_tools and self.tool_step >= 1:
             p.setFont(QFont("Arial", 10))
             p.setPen(QPen(QColor(100, 180, 255, 180)))

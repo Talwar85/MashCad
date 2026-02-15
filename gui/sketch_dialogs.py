@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QRectF
 from loguru import logger
 from PySide6.QtGui import QColor, QPalette, QPainter, QBrush, QPen, QFont
+import re
 
 try:
     from gui.design_tokens import DesignTokens
@@ -103,6 +104,9 @@ class DimensionInput(QFrame):
         self.field_order.clear()
         self.field_types.clear()
         self.locked_fields.clear()
+        self.error_fields.clear()
+        self.committed_values.clear()
+        self._last_validation_error = None
         
         for i, item in enumerate(fields):
             label_text, key = item[0], item[1]
@@ -347,9 +351,22 @@ class DimensionInput(QFrame):
             params = get_parameters()
             if params:
                 # Ist es ein Parameter-Name?
-                param_names = [p[0] for p in params.list_all()]
+                param_names = {p[0] for p in params.list_all()}
                 if text in param_names:
                     return params.get(text)
+
+                # Nur auswerten, wenn alle Namen bekannt sind.
+                # Verhindert Warn-Spam bei Zwischenständen wie "e" oder "width+".
+                if re.search(r'[\+\-\*/,(]\s*$', text):
+                    return None
+                if text.count('(') != text.count(')'):
+                    return None
+
+                identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', text)
+                math_names = set(getattr(params, "_math_funcs", {}).keys())
+                allowed_names = param_names | math_names
+                if any(name not in allowed_names for name in identifiers):
+                    return None
 
                 # Versuche als Formel zu evaluieren
                 try:

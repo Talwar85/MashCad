@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
                                QFormLayout, QLineEdit, QDialogButtonBox, QDoubleSpinBox, 
                                QFontComboBox, QWidget, QLabel, QSpinBox, QCheckBox)
 
-from sketcher import Point2D, Line2D, Circle2D, Arc2D
+from sketcher import Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
 from i18n import tr
 try:
     from gui.sketch_feedback import (
@@ -61,6 +61,35 @@ class SketchHandlersMixin:
     @staticmethod
     def _point_to_angle_deg(center: Point2D, point: Point2D) -> float:
         return math.degrees(math.atan2(point.y - center.y, point.x - center.x))
+
+    def _get_valid_formula_from_dim_input(self, key: str):
+        """Gibt nur dann Formeltext zurück, wenn er tatsächlich evaluierbar ist."""
+        if not hasattr(self, "dim_input") or self.dim_input is None:
+            return None
+
+        try:
+            raw = (self.dim_input.get_raw_texts().get(key, "") or "").strip()
+        except Exception:
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            float(raw.replace(',', '.'))
+            return None
+        except ValueError:
+            pass
+
+        evaluator = getattr(self.dim_input, "_evaluate_expression", None)
+        if callable(evaluator):
+            try:
+                if evaluator(raw) is None:
+                    return None
+            except Exception:
+                return None
+
+        return raw
 
     def _build_trim_preview_geometry(self, target, segment):
         """
@@ -277,21 +306,40 @@ class SketchHandlersMixin:
         return True, result
     
     def _handle_select(self, pos, snap_type):
-        hit = self._find_entity_at(pos)
-        if not (QApplication.keyboardModifiers() & Qt.ShiftModifier): self._clear_selection()
+        if hasattr(self, "_pick_select_hit"):
+            hit = self._pick_select_hit(pos)
+        else:
+            hit = self._find_entity_at(pos)
+
+        if not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
+            self._clear_selection()
+
         if hit:
             if isinstance(hit, Line2D):
-                if hit in self.selected_lines: self.selected_lines.remove(hit)
-                else: self.selected_lines.append(hit)
+                if hit in self.selected_lines:
+                    self.selected_lines.remove(hit)
+                else:
+                    self.selected_lines.append(hit)
             elif isinstance(hit, Circle2D):
-                if hit in self.selected_circles: self.selected_circles.remove(hit)
-                else: self.selected_circles.append(hit)
+                if hit in self.selected_circles:
+                    self.selected_circles.remove(hit)
+                else:
+                    self.selected_circles.append(hit)
             elif isinstance(hit, Arc2D):
-                if hit in self.selected_arcs: self.selected_arcs.remove(hit)
-                else: self.selected_arcs.append(hit)
+                if hit in self.selected_arcs:
+                    self.selected_arcs.remove(hit)
+                else:
+                    self.selected_arcs.append(hit)
             elif isinstance(hit, Point2D):
-                if hit in self.selected_points: self.selected_points.remove(hit)
-                else: self.selected_points.append(hit)
+                if hit in self.selected_points:
+                    self.selected_points.remove(hit)
+                else:
+                    self.selected_points.append(hit)
+            elif hasattr(hit, "control_points"):
+                if hit in self.selected_splines:
+                    self.selected_splines.remove(hit)
+                else:
+                    self.selected_splines.append(hit)
 
     def _add_point_constraint(self, point, pos, snap_type, snap_entity, new_line):
         """
@@ -399,6 +447,40 @@ class SketchHandlersMixin:
         # ANGLE_45: geometrische Inferenz fuer den Endpunkt (kein persistenter Constraint)
         elif snap_type == SnapType.ANGLE_45:
             logger.debug("Auto: ANGLE_45")
+
+    def _apply_center_snap_constraint(self, center_point, snap_type, snap_entity):
+        """
+        Uebertraegt Snap-Information auf einen Kreis-/Polygon-Mittelpunkt.
+        """
+        if center_point is None or snap_type == SnapType.NONE or snap_entity is None:
+            return
+
+        if snap_type == SnapType.ENDPOINT:
+            snapped_point = None
+            if hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+                d_start = math.hypot(center_point.x - snap_entity.start.x, center_point.y - snap_entity.start.y)
+                d_end = math.hypot(center_point.x - snap_entity.end.x, center_point.y - snap_entity.end.y)
+                snapped_point = snap_entity.start if d_start <= d_end else snap_entity.end
+            elif hasattr(snap_entity, "x") and hasattr(snap_entity, "y"):
+                snapped_point = snap_entity
+
+            if snapped_point and snapped_point is not center_point:
+                self.sketch.add_coincident(center_point, snapped_point)
+            return
+
+        if snap_type == SnapType.CENTER and hasattr(snap_entity, "center"):
+            if snap_entity.center is not center_point:
+                self.sketch.add_coincident(center_point, snap_entity.center)
+            return
+
+        if snap_type in (SnapType.EDGE, SnapType.PERPENDICULAR, SnapType.PARALLEL):
+            if hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+                self.sketch.add_point_on_line(center_point, snap_entity)
+            return
+
+        if snap_type == SnapType.MIDPOINT and hasattr(snap_entity, "start") and hasattr(snap_entity, "end"):
+            self.sketch.add_midpoint(center_point, snap_entity)
+            return
 
     def _handle_line(self, pos, snap_type, snap_entity=None):
         """
@@ -522,34 +604,31 @@ class SketchHandlersMixin:
             self.sketched_changed.emit()
             
         self._cancel_tool()
-    
-    def _handle_circle(self, pos, snap_type):
-        """Kreis mit Modus-UnterstÃ¼tzung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt) und Auto-Constraints"""
+
+    def _handle_circle(self, pos, snap_type, snap_entity=None):
+        """Kreis mit Modus-Unterstuetzung (0=Center-Radius, 1=2-Punkt, 2=3-Punkt)."""
         if self.circle_mode == 1:
-            # === 2-Punkt-Modus (Durchmesser) ===
+            # 2-Punkt-Modus (Durchmesser)
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
                 self.status_message.emit(tr("Second point (diameter)"))
             else:
                 p1, p2 = self.tool_points[0], pos
-                cx, cy = (p1.x()+p2.x())/2, (p1.y()+p2.y())/2
-                r = math.hypot(p2.x()-p1.x(), p2.y()-p1.y()) / 2
-                
+                cx, cy = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
+                r = math.hypot(p2.x() - p1.x(), p2.y() - p1.y()) / 2
+
                 if r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(cx, cy, r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
                 self._cancel_tool()
-                
+
         elif self.circle_mode == 2:
-            # === 3-Punkt-Modus ===
+            # 3-Punkt-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
                 self.tool_step = 1
@@ -561,41 +640,110 @@ class SketchHandlersMixin:
             else:
                 p1, p2, p3 = self.tool_points[0], self.tool_points[1], pos
                 center, r = self._calc_circle_3points(p1, p2, p3)
-                
+
                 if center and r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(center.x(), center.y(), r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen (fixiert die GrÃ¶ÃŸe)
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
                 self._cancel_tool()
-                
+
         else:
-            # === Center-Radius-Modus (Standard) ===
+            # Center-Radius-Modus
             if self.tool_step == 0:
                 self.tool_points = [pos]
+                self._circle_center_snap = (snap_type, snap_entity)
                 self.tool_step = 1
                 self.status_message.emit(tr("Radius | Tab=Input"))
             else:
                 c = self.tool_points[0]
-                r = math.hypot(pos.x()-c.x(), pos.y()-c.y())
-                
+                r = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+
                 if r > 0.01:
                     self._save_undo()
-                    # 1. Kreis erstellen
                     circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
-                    # 2. Radius Constraint hinzufÃ¼gen
+                    center_snap_type, center_snap_entity = getattr(self, "_circle_center_snap", (SnapType.NONE, None))
+                    self._apply_center_snap_constraint(circle.center, center_snap_type, center_snap_entity)
                     self.sketch.add_radius(circle, r)
-                    # 3. Solver
-                    self._solve_async() # Thread start
-                    self._find_closed_profiles() # Immediate visual feedback (pre-solve)
+                    self._solve_async()
+                    self._find_closed_profiles()
                     self.sketched_changed.emit()
+
+                if hasattr(self, "_circle_center_snap"):
+                    del self._circle_center_snap
                 self._cancel_tool()
 
+    def _handle_ellipse(self, pos, snap_type, snap_entity=None):
+        """
+        Ellipse im Fusion-ähnlichen 3-Schritt-Workflow:
+        1) Zentrum
+        2) Endpunkt der Hauptachse (Richtung + Major-Radius)
+        3) Minor-Radius (senkrecht zur Hauptachse)
+        """
+        if self.tool_step == 0:
+            self.tool_points = [pos]
+            self._ellipse_center_snap = (snap_type, snap_entity)
+            self.tool_step = 1
+            self.status_message.emit(tr("Major axis endpoint | Tab=Major/Angle"))
+            return
+
+        if self.tool_step == 1:
+            center = self.tool_points[0]
+            major_radius = math.hypot(pos.x() - center.x(), pos.y() - center.y())
+            if major_radius <= 0.01:
+                self.status_message.emit(tr("Major axis too short"))
+                return
+
+            self.tool_points.append(pos)
+            self.tool_step = 2
+            self.status_message.emit(tr("Minor radius | Tab=Minor"))
+            return
+
+        center = self.tool_points[0]
+        major_end = self.tool_points[1]
+        dx = major_end.x() - center.x()
+        dy = major_end.y() - center.y()
+        major_radius = math.hypot(dx, dy)
+        if major_radius <= 0.01:
+            self.status_message.emit(tr("Major axis too short"))
+            self._cancel_tool()
+            return
+
+        ux = dx / major_radius
+        uy = dy / major_radius
+        vx = -uy
+        vy = ux
+
+        rel_x = pos.x() - center.x()
+        rel_y = pos.y() - center.y()
+        minor_radius = abs(rel_x * vx + rel_y * vy)
+        minor_radius = max(0.01, minor_radius)
+        angle_deg = math.degrees(math.atan2(uy, ux))
+
+        self._save_undo()
+        _, _, _, center_point = self.sketch.add_ellipse(
+            cx=center.x(),
+            cy=center.y(),
+            major_radius=major_radius,
+            minor_radius=minor_radius,
+            angle_deg=angle_deg,
+            construction=self.construction_mode,
+            segments=max(24, int(getattr(self, "circle_segments", 64) * 0.5)),
+        )
+
+        center_snap_type, center_snap_entity = getattr(self, "_ellipse_center_snap", (SnapType.NONE, None))
+        self._apply_center_snap_constraint(center_point, center_snap_type, center_snap_entity)
+
+        self._solve_async()
+        self._find_closed_profiles()
+        self.sketched_changed.emit()
+
+        if hasattr(self, "_ellipse_center_snap"):
+            del self._ellipse_center_snap
+        self._cancel_tool()
+    
     def _calc_circle_3points(self, p1, p2, p3):
         """Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte"""
         x1, y1 = p1.x(), p1.y()
@@ -636,11 +784,12 @@ class SketchHandlersMixin:
                 self._find_closed_profiles()
             self._cancel_tool()
     
-    def _handle_polygon(self, pos, snap_type):
+    def _handle_polygon(self, pos, snap_type, snap_entity=None):
         """Erstellt ein parametrisches Polygon"""
         if self.tool_step == 0:
             # Erster Klick: Zentrum
             self.tool_points = [pos]
+            self._polygon_center_snap = (snap_type, snap_entity)
             self.tool_step = 1
             # Info-Text aktualisieren
             self.status_message.emit(tr("Radius") + f" ({self.polygon_sides} " + tr("sides") + ") | Tab")
@@ -666,6 +815,8 @@ class SketchHandlersMixin:
                 
                 # 2. Radius-BemaÃŸung hinzufÃ¼gen
                 # Das erlaubt dir, den Radius spÃ¤ter per Doppelklick zu Ã¤ndern!
+                center_snap_type, center_snap_entity = getattr(self, "_polygon_center_snap", (SnapType.NONE, None))
+                self._apply_center_snap_constraint(const_circle.center, center_snap_type, center_snap_entity)
                 self.sketch.add_radius(const_circle, r)
                 
                 # 3. LÃ¶sen
@@ -673,6 +824,8 @@ class SketchHandlersMixin:
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
                 
+            if hasattr(self, "_polygon_center_snap"):
+                del self._polygon_center_snap
             self._cancel_tool()
     
     def _handle_arc_3point(self, pos, snap_type):
@@ -807,7 +960,17 @@ class SketchHandlersMixin:
     
     
     def _handle_spline(self, pos, snap_type):
-        self.tool_points.append(pos)
+        # 3. Capture Snap Data for Constraint Creation
+        # We need to store not just the position, but what we snapped to.
+        # This allows _finish_spline to create Coincident constraints.
+        snapped, s_type, s_entity = self.snap_point(self.mouse_world)
+        
+        # Store tuple: (position, snap_type, snap_entity)
+        if not hasattr(self, 'spline_snap_data'):
+            self.spline_snap_data = []
+            
+        self.spline_snap_data.append((snapped, s_type, s_entity))
+        self.tool_points.append(snapped)
         self.tool_step = len(self.tool_points)
         self.status_message.emit(tr("Point {n} | Right=Finish | Tab=Input").format(n=len(self.tool_points)))
     
@@ -822,21 +985,45 @@ class SketchHandlersMixin:
             spline = BezierSpline()
             spline.construction = self.construction_mode
             
+            # Check for closure (if last point is close to first point)
+            first_pt = self.tool_points[0]
+            last_pt = self.tool_points[-1]
+            if len(self.tool_points) > 2 and math.hypot(first_pt.x()-last_pt.x(), first_pt.y()-last_pt.y()) < (self.snap_radius / self.view_scale):
+                spline.closed = True
+                # Remove last point as it duplicates the first
+                self.tool_points.pop()
+                if hasattr(self, 'spline_snap_data'):
+                    self.spline_snap_data.pop()
+            
+            # Add points to spline
             for p in self.tool_points:
                 spline.add_point(p.x(), p.y())
             
             # Spline zum Sketch hinzufÃ¼gen
             self.sketch.splines.append(spline)
             
+            # Apply Constraints
+            if hasattr(self, 'spline_snap_data'):
+                for i, (pos, s_type, s_entity) in enumerate(self.spline_snap_data):
+                    if i >= len(spline.control_points): break
+                    cp = spline.control_points[i]
+                    # We can't easily constrain the ControlPoint object itself directly 
+                    # because the solver likely expects Point2D objects.
+                    # However, BezierSpline.control_points are wrappers around Point2D (cp.point).
+                    # So we allow constraining cp.point.
+                    if s_entity:
+                        self._add_point_constraint(cp.point, pos, s_type, s_entity, spline)
+                
+                # Cleanup
+                del self.spline_snap_data
+
             # Auch als Linien fÃ¼r KompatibilitÃ¤t (Export etc.)
             lines = spline.to_lines(segments_per_span=10)
             spline._lines = lines  # Referenz speichern fÃ¼r spÃ¤teren Update
             
-            for line in lines:
-                self.sketch.lines.append(line)
-                self.sketch.points.append(line.start)
-            if lines:
-                self.sketch.points.append(lines[-1].end)
+            # We DON'T add these lines to self.sketch.lines anymore if we have native spline support!
+            # Adding them causes double rendering and selection issues.
+            # But the 'dxf_export' might need them. Let's keep them in spline._lines only.
             
             # Spline auswÃ¤hlen fÃ¼r sofortiges Editing
             self.selected_splines = [spline]
@@ -878,6 +1065,13 @@ class SketchHandlersMixin:
                     pt.x += dx
                     pt.y += dy
                     moved.add(pt.id)
+        # Reguläre Polygone: Treiberkreis mitbewegen, damit Polygon + Konstruktionskreis konsistent bleiben.
+        if hasattr(self, "_collect_driver_circles_for_lines"):
+            for driver_circle in self._collect_driver_circles_for_lines(self.selected_lines):
+                if driver_circle.center.id not in moved:
+                    driver_circle.center.x += dx
+                    driver_circle.center.y += dy
+                    moved.add(driver_circle.center.id)
         for c in self.selected_circles:
             if c.center.id not in moved:
                 c.center.x += dx
@@ -2166,6 +2360,9 @@ class SketchHandlersMixin:
         if self.dim_input_active:
              vals = self.dim_input.get_values()
              if 'value' in vals: new_val = vals['value']
+        if self.dim_input_active and hasattr(self.dim_input, "has_errors") and self.dim_input.has_errors():
+            self.status_message.emit(getattr(self.dim_input, "_last_validation_error", tr("Ungültiger Wert")))
+            return
         
         line = self._find_line_at(pos)
         if line:
@@ -2176,11 +2373,9 @@ class SketchHandlersMixin:
                  constraint = self.sketch.add_length(line, new_val)
                  # Formel-Binding: Rohtext speichern wenn kein reiner Float
                  if constraint:
-                     raw = self.dim_input.get_raw_texts().get('value', '')
-                     try:
-                         float(raw.replace(',', '.'))
-                     except ValueError:
-                         constraint.formula = raw
+                     formula = self._get_valid_formula_from_dim_input('value')
+                     if formula:
+                         constraint.formula = formula
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -2206,11 +2401,9 @@ class SketchHandlersMixin:
                  self._save_undo()
                  constraint = self.sketch.add_radius(circle, new_val)
                  if constraint:
-                     raw = self.dim_input.get_raw_texts().get('value', '')
-                     try:
-                         float(raw.replace(',', '.'))
-                     except ValueError:
-                         constraint.formula = raw
+                     formula = self._get_valid_formula_from_dim_input('value')
+                     if formula:
+                         constraint.formula = formula
                  self._solve_async()
                  self.sketched_changed.emit()
                  self._find_closed_profiles()
@@ -2293,16 +2486,17 @@ class SketchHandlersMixin:
                 if self.dim_input_active:
                      vals = self.dim_input.get_values()
                      if 'angle' in vals: new_val = vals['angle']
+                if self.dim_input_active and hasattr(self.dim_input, "has_errors") and self.dim_input.has_errors():
+                    self.status_message.emit(getattr(self.dim_input, "_last_validation_error", tr("Ungültiger Wert")))
+                    return
                 
                 if new_val is not None:
                     self._save_undo()
                     constraint = self.sketch.add_angle(l1, line, new_val)
                     if constraint:
-                        raw = self.dim_input.get_raw_texts().get('angle', '')
-                        try:
-                            float(raw.replace(',', '.'))
-                        except ValueError:
-                            constraint.formula = raw
+                        formula = self._get_valid_formula_from_dim_input('angle')
+                        if formula:
+                            constraint.formula = formula
                     self._solve_async()
                     self.sketched_changed.emit()
                     self._find_closed_profiles()
@@ -3240,11 +3434,12 @@ class SketchHandlersMixin:
 
     
 
-    def _handle_nut(self, pos, snap_type):
+    def _handle_nut(self, pos, snap_type, snap_entity=None):
         """Erstellt eine Sechskant-Muttern-Aussparung (M2-M14) mit Schraubenloch - 2 Schritte wie Polygon"""
         if self.tool_step == 0:
             # Schritt 1: Position setzen
             self.tool_points = [pos]
+            self._nut_center_snap = (snap_type, snap_entity)
             self.tool_step = 1
             size_name = self.nut_size_names[self.nut_size_index]
             self.status_message.emit(f"{size_name} " + tr("Nut") + " | " + tr("Rotate with mouse | Click to place"))
@@ -3271,6 +3466,8 @@ class SketchHandlersMixin:
                 angle_offset=angle_offset,
                 construction=self.construction_mode
             )
+            center_snap_type, center_snap_entity = getattr(self, "_nut_center_snap", (SnapType.NONE, None))
+            self._apply_center_snap_constraint(const_circle.center, center_snap_type, center_snap_entity)
             self.sketch.add_radius(const_circle, hex_radius)
             hole_circle = self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
             self.sketch.add_radius(hole_circle, hole_radius)
@@ -3281,6 +3478,8 @@ class SketchHandlersMixin:
             
             # Info anzeigen
             self.status_message.emit(f"{size_name} " + tr("Nut") + f" (SW {sw:.2f}mm, " + tr("Hole") + f" âŒ€{screw_diameter + self.nut_tolerance:.2f}mm)")
+            if hasattr(self, "_nut_center_snap"):
+                del self._nut_center_snap
             self._cancel_tool()
     
     def _handle_text(self, pos, snap_type):

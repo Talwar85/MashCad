@@ -66,6 +66,7 @@ class SmartSnapper:
     DENSE_ENTITY_THRESHOLD = 16
     DENSE_INFERENCE_PENALTY = 2
     DENSE_EXACT_SNAP_BOOST = 1
+    MAX_INTERSECTION_ENTITIES = 96
     
     PRIORITY_MAP = {
         SnapType.ENDPOINT: 20,
@@ -184,6 +185,7 @@ class SmartSnapper:
             SketchTool.RECTANGLE,
             SketchTool.RECTANGLE_CENTER,
             SketchTool.CIRCLE,
+            SketchTool.ELLIPSE,
             SketchTool.CIRCLE_2POINT,
             SketchTool.CIRCLE_3POINT,
             SketchTool.POLYGON,
@@ -437,6 +439,11 @@ class SmartSnapper:
 
         for entity in entities:
             if isinstance(entity, Line2D):
+                # Ellipse ist intern segmentiert; diese Hilfssegmente sollen
+                # keine Parallel/Perpendicular-Inferenz dominieren.
+                if bool(getattr(entity, "_ellipse_segment", False)):
+                    continue
+
                 self._add_parallel_inference_candidate(
                     line_start=line_start,
                     mouse_world=mouse_world,
@@ -597,7 +604,7 @@ class SmartSnapper:
                                 snap_radius * 10, snap_radius * 10)
             entities = self.editor.spatial_index.query(query_rect)
         else:
-            entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs
+            entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs + getattr(self.sketch, 'splines', [])
         self._is_dense_context = len(entities) >= self.DENSE_ENTITY_THRESHOLD
 
         # 0. Kontext-Inferenz fuer aktiven Linienzug.
@@ -615,10 +622,12 @@ class SmartSnapper:
         for entity in entities:
             # LINIE
             if hasattr(entity, 'start') and hasattr(entity, 'end'):
-                self._check_point(entity.start, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
-                self._check_point(entity.end, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
-                mid = Point2D((entity.start.x + entity.end.x)/2, (entity.start.y + entity.end.y)/2)
-                self._check_point(mid, mouse_world, snap_radius, SnapType.MIDPOINT, entity, candidates)
+                suppress_point_snaps = bool(getattr(entity, "_suppress_endpoint_markers", False))
+                if not suppress_point_snaps:
+                    self._check_point(entity.start, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                    self._check_point(entity.end, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                    mid = Point2D((entity.start.x + entity.end.x)/2, (entity.start.y + entity.end.y)/2)
+                    self._check_point(mid, mouse_world, snap_radius, SnapType.MIDPOINT, entity, candidates)
                 
                 # Nearest Point on Line (Edge)
                 closest = self._closest_point_on_segment(entity.start, entity.end, mouse_world)
@@ -639,11 +648,34 @@ class SmartSnapper:
                     closest_edge = self._closest_point_on_circle(entity, mouse_world)
                     self._check_point(closest_edge, mouse_world, snap_radius, SnapType.EDGE, entity, candidates)
 
+            # SPLINE (Neu: Snap to Control Points)
+            elif hasattr(entity, 'control_points'):
+                 # Endpunkte (falls Start/End properties existieren)
+                 if hasattr(entity, 'start_point'):
+                     self._check_point(entity.start_point, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                 if hasattr(entity, 'end_point'):
+                     self._check_point(entity.end_point, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                 
+                 # Control Points als "Endpoint" behandeln
+                 for pt in entity.control_points:
+                     # pt ist meist (x, y) Tuple oder Point2D
+                     if isinstance(pt, (tuple, list)) and len(pt) >= 2:
+                         p_obj = Point2D(pt[0], pt[1])
+                         self._check_point(p_obj, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                     elif hasattr(pt, 'x') and hasattr(pt, 'y'):
+                         self._check_point(pt, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+
         # 2. SCHNITTPUNKTE (Intersection)
         # Performance Optimization 1.6: Mit Cache (60-80% Reduktion!)
         # Das ist der teure Teil, daher nur berechnen, wenn wir grob in der Nähe sind
+        if len(entities) > self.MAX_INTERSECTION_ENTITIES:
+            entities = []
         for i, ent1 in enumerate(entities):
+            if self._skip_intersection_for_entity(ent1):
+                continue
             for ent2 in entities[i+1:]:
+                if self._skip_intersection_for_entity(ent2):
+                    continue
                 # Cache-Key (sortiert für Symmetrie)
                 e1_id = id(ent1)
                 e2_id = id(ent2)
@@ -842,9 +874,17 @@ class SmartSnapper:
 
         return []
 
+    @staticmethod
+    def _skip_intersection_for_entity(entity) -> bool:
+        """
+        Ellipsen werden intern als Proxy-Segmente modelliert.
+        Intersection-Snap auf diesen Segmenten erzeugt hohen O(n^2)-Overhead
+        bei geringem UX-Nutzen.
+        """
+        return bool(getattr(entity, "_ellipse_segment", False))
+
     def _calculate_grid_snap(self, pos):
         grid_sz = self.editor.grid_size
         x = round(pos.x() / grid_sz) * grid_sz
         y = round(pos.y() / grid_sz) * grid_sz
         return QPointF(x, y)
-
