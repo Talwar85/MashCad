@@ -787,12 +787,28 @@ class SketchRendererMixin:
             p.setBrush(Qt.NoBrush)
             p.drawPath(spline_path)
             
-            if is_selected or is_dragging:
-                self._draw_spline_handles(p, spline)
+            # Zeichne Curvature Comb (falls aktiviert)
+            if getattr(spline, 'show_curvature', False):
+                self._draw_curvature_comb(p, spline)
+            
+            # Visibility Improvements (User Feedback)
+            # 1. Show Points ALWAYS (but smaller/subtle if not selected)
+            # 2. Show Handles only if selected or hovered
+            is_hovered = (spline == self._last_hovered_entity)
+            
+            if is_selected or is_dragging or is_hovered:
+                self._draw_spline_handles(p, spline, draw_handles=True)
+            else:
+                # Minimalistic view: just points, no handles
+                self._draw_spline_handles(p, spline, draw_handles=False)
     
-    def _draw_spline_handles(self, p, spline):
+    def _draw_spline_handles(self, p, spline, draw_handles=True):
         handle_color = QColor(100, 200, 100)
         point_color = QColor(255, 255, 255)
+        
+        # Unselected: More subtle
+        if not draw_handles:
+            point_color = QColor(DesignTokens.COLOR_GEO_BODY) # Same as line
         
         for i, cp in enumerate(spline.control_points):
             pt_screen = self.world_to_screen(QPointF(cp.point.x, cp.point.y))
@@ -800,9 +816,22 @@ class SketchRendererMixin:
             # Punkt
             p.setPen(QPen(point_color, 2))
             p.setBrush(QBrush(self.BG_COLOR))
-            p.drawEllipse(pt_screen, 4, 4)
+            # Smaller if unselected
+            size = 4 if draw_handles else 3
             
-            # Handles
+            # === Phase 19: Weight Visualization ===
+            # Visualize weight by scaling the point
+            if hasattr(cp, 'weight'):
+                 w_factor = math.sqrt(cp.weight)
+                 # Clamp size factor
+                 size *= max(0.5, min(4.0, w_factor))
+
+            p.drawEllipse(pt_screen, size, size)
+            
+            # Handles only if requested
+            if not draw_handles:
+                continue
+                
             p.setPen(QPen(handle_color, 1))
             p.setBrush(QBrush(handle_color))
             
@@ -1407,7 +1436,7 @@ class SketchRendererMixin:
                         hw = width/2
                     
                     # Langloch-Form mit Halbkreisen an den Enden
-                    from PySide6.QtGui import QPainterPath
+                    # QPainterPath ist bereits global importiert
                     path = QPainterPath()
                     
                     # Start-Halbkreis (um p1)
@@ -1466,16 +1495,38 @@ class SketchRendererMixin:
                 p.drawEllipse(self.world_to_screen(pt), 4, 4)
         elif self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 1:
             for pt in self.tool_points:
+                p.setBrush(QBrush(QColor(0, 120, 215)))
                 p.drawEllipse(self.world_to_screen(pt), 4, 4)
-            if len(self.tool_points) >= 2:
+                p.setBrush(Qt.NoBrush)
+            
+            if len(self.tool_points) >= 1:
                 try:
-                    from gui.generators import generate_spline_points
-                    ctrl_pts = [(pt.x(), pt.y()) for pt in self.tool_points] + [(snap.x(), snap.y())]
-                    spline_pts = generate_spline_points(ctrl_pts, segments_per_span=6)
-                    for i in range(len(spline_pts) - 1):
-                        p.drawLine(self.world_to_screen(QPointF(spline_pts[i][0], spline_pts[i][1])), self.world_to_screen(QPointF(spline_pts[i+1][0], spline_pts[i+1][1])))
+                    # Zeichne Vorschau-Kurve durch alle Punkte + aktuellen Snap
+                    from sketcher.geometry import BezierSpline
+                    preview_spline = BezierSpline()
+                    for pt in self.tool_points:
+                        preview_spline.add_point(pt.x(), pt.y())
+                    
+                    # Aktueller Punkt (Snap)
+                    preview_spline.add_point(snap.x(), snap.y())
+                    
+                    # Kurve zeichnen
+                    pts = preview_spline.get_curve_points(segments_per_span=10)
+                    if pts:
+                        path = QPainterPath()
+                        path.moveTo(self.world_to_screen(QPointF(pts[0][0], pts[0][1])))
+                        for px, py in pts[1:]:
+                            path.lineTo(self.world_to_screen(QPointF(px, py)))
+                        
+                        p.setPen(QPen(self.PREVIEW_COLOR, 2, Qt.SolidLine)) # Solid line for better visibility
+                        p.drawPath(path)
+                        
+                        # Gummiband-Linie zum letzten Punkt (optional, aber hilfreich)
+                        # p.setPen(QPen(self.PREVIEW_COLOR, 1, Qt.DashLine))
+                        # p.drawLine(self.world_to_screen(self.tool_points[-1]), self.world_to_screen(snap))
+
                 except Exception as e:
-                    logger.debug(f"[sketch_renderer.py] Fehler: {e}")
+                    logger.debug(f"[sketch_renderer.py] Fehler Spline Preview: {e}")
         
         # === PREVIEW FÜR BEARBEITUNGSTOOLS ===
         
@@ -2019,8 +2070,58 @@ class SketchRendererMixin:
             p.drawLine(a, b)
         p.restore()
 
+    def _draw_curvature_comb(self, p: QPainter, spline):
+        """
+        Zeichnet eine Krümmungsanalyse (Curvature Comb) für den Spline.
+        """
+        try:
+            # Skalierung basierend auf Zoom-Level (damit die Kämme nicht riesig werden beim Rauszoomen)
+            # Experimenteller Faktor.
+            scale_factor = 1.0 / self.view_scale * 0.5 
+            
+            comb_data = spline.get_curvature_comb(num_samples=100, scale=scale_factor)
+            if not comb_data:
+                return
+
+            # Style
+            p.save()
+            # Kämme (Quills) in hellem Blau
+            p.setPen(QPen(QColor(0, 150, 255, 100), 1))
+            
+            # Pfad für die Oberschwingung (Top-Line)
+            top_line = QPainterPath()
+            
+            for i, (start, end, k) in enumerate(comb_data):
+                s = self.world_to_screen(QPointF(start.x, start.y))
+                e = self.world_to_screen(QPointF(end.x, end.y))
+                
+                # Zeichne Quill (Linie vom Kurvenpunkt zum Krümmungswert)
+                p.drawLine(s, e)
+                
+                # Sammle Punkte für Top-Line
+                if i == 0:
+                    top_line.moveTo(e)
+                else:
+                    top_line.lineTo(e)
+            
+            # Zeichne verbindende Linie oben drauf
+            p.setPen(QPen(QColor(0, 100, 200, 180), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(top_line)
+            
+            p.restore()
+        except Exception as e:
+            logger.debug(f"Failed to draw curvature comb: {e}")
+
     def _should_show_snap_label(self, snap_type, pos: QPointF) -> bool:
-        if self.current_tool != SketchTool.LINE or self.tool_step < 1:
+        # Define tools that should show snap labels
+        drawing_tools = [
+            SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
+        ]
+        
+        if self.current_tool not in drawing_tools or self.tool_step < 1:
             self._snap_label_key = None
             self._snap_label_since_ms = 0.0
             return False
@@ -2094,7 +2195,13 @@ class SketchRendererMixin:
         """
         Draws a compact confidence/info overlay close to the cursor while sketching.
         """
-        drawing_mode = self.current_tool == SketchTool.LINE and self.tool_step >= 1
+        drawing_tools = [
+            SketchTool.LINE, SketchTool.RECTANGLE, SketchTool.RECTANGLE_CENTER,
+            SketchTool.CIRCLE, SketchTool.ARC_3POINT, SketchTool.POLYGON, 
+            SketchTool.SLOT, SketchTool.SPLINE, SketchTool.NUT, SketchTool.STAR
+        ]
+        drawing_mode = self.current_tool in drawing_tools and self.tool_step >= 1
+        
         if not drawing_mode:
             return
 

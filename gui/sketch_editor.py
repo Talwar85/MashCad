@@ -4098,7 +4098,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if spline:
                     self._clear_selection()
                     self.selected_splines = [spline]
-                    self.status_message.emit(tr("Spline selected - drag points/handles"))
+                    
+                    # Body-Dragging initialisieren
+                    self.spline_dragging = True
+                    self.spline_drag_spline = spline
+                    self.spline_drag_cp_index = -1
+                    self.spline_drag_type = 'body'
+                    self.spline_drag_start_pos = self.mouse_world
+                    
+                    self.setCursor(Qt.ClosedHandCursor)
+                    self.status_message.emit(tr("Spline selected - drag to move"))
                     self.request_update()
                     return
                 
@@ -4128,9 +4137,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # 4. Rechtsklick (Abbrechen / Kontextmenü)
         elif event.button() == Qt.RightButton:
+            from loguru import logger
+            logger.debug(f"[MOUSE] Right Click at {pos} / World {self.mouse_world}")
+            
             if self.tool_step > 0: 
+                logger.debug("[MOUSE] Cancelling current tool step")
                 self._finish_current_operation()
             else: 
+                logger.debug("[MOUSE] Showing context menu")
                 self._show_context_menu(pos)
         
         self.request_update()
@@ -4447,16 +4461,105 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return None
 
 
+    def _find_spline_element_at(self, pos: QPointF, threshold=None):
+        """
+        Findet ein Spline-Element (Punkt, Handle) an der Position.
+        Returns: (spline, index, type_str) oder None
+        type_str: 'point', 'handle_in', 'handle_out'
+        """
+        if threshold is None:
+            # FIX: Größerer Threshold für bessere Usability (v.a. bei Handles)
+            threshold = 12.0 / self.view_scale
+            
+        px, py = pos.x(), pos.y()
+        
+        # Priority 1: Handles of selected splines
+        for spline in self.selected_splines:
+            for i, cp in enumerate(spline.control_points):
+                # Handle In
+                if i > 0 or spline.closed:
+                    hx, hy = cp.handle_in_abs
+                    if math.hypot(px - hx, py - hy) < threshold:
+                         return (spline, i, 'handle_in')
+                         
+                # Handle Out
+                if i < len(spline.control_points)-1 or spline.closed:
+                    hx, hy = cp.handle_out_abs
+                    if math.hypot(px - hx, py - hy) < threshold:
+                         return (spline, i, 'handle_out')
+        
+        # Priority 2: Control Points (all splines)
+        for spline in self.sketch.splines:
+            for i, cp in enumerate(spline.control_points):
+                if math.hypot(px - cp.point.x, py - cp.point.y) < threshold:
+                    return (spline, i, 'point')
+        return None
+
+    def _find_spline_at(self, pos: QPointF, threshold=None):
+        """Findet einen Spline an der gegebenen Position (World-Coordinates)."""
+        if threshold is None:
+            threshold = 8.0 / self.view_scale
+            
+        px, py = pos.x(), pos.y()
+        
+        for spline in self.sketch.splines:
+            # Wir nutzen die gecachten Linien oder generieren sie
+            lines = getattr(spline, '_lines', [])
+            if not lines:
+                lines = spline.to_lines(segments_per_span=10)
+                spline._lines = lines # Cache update
+                
+            for line in lines:
+                x1, y1 = line.start.x, line.start.y
+                x2, y2 = line.end.x, line.end.y
+                
+                dx = x2 - x1
+                dy = y2 - y1
+                l2 = dx*dx + dy*dy
+                if l2 == 0: continue
+                
+                t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / l2))
+                dist = math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+                
+                if dist < threshold:
+                    return spline       
+        return None
+
     def _drag_spline_element(self, shift_pressed):
         """Zieht ein Spline-Element und aktualisiert die Vorschau sofort"""
-        if not self.spline_drag_spline or self.spline_drag_cp_index is None:
+        if not self.spline_drag_spline:
             return
-        
+            
         spline = self.spline_drag_spline
+        
+        # === A. Body Dragging ===
+        if self.spline_drag_type == 'body':
+             # Delta berechnen
+             dx = self.mouse_world.x() - self.spline_drag_start_pos.x()
+             dy = self.mouse_world.y() - self.spline_drag_start_pos.y()
+             
+             # Alle Punkte verschieben
+             for cp in spline.control_points:
+                 cp.point.x += dx
+                 cp.point.y += dy
+                 
+             # Start-Pos für nächstes Event updaten
+             self.spline_drag_start_pos = self.mouse_world
+             
+             # Cache invalidieren und Linien neu berechnen
+             spline.invalidate_cache()
+             spline._lines = spline.to_lines(segments_per_span=10)
+             self.sketched_changed.emit()
+             self._find_closed_profiles()
+             self.request_update()
+             return
+
+        if self.spline_drag_cp_index is None: return
+        
         cp_idx = self.spline_drag_cp_index
         cp = spline.control_points[cp_idx]
         
-        snapped, _ = self.snap_point(self.mouse_world)
+        snapped, _, _ = self.snap_point(self.mouse_world)
         new_x, new_y = snapped.x(), snapped.y()
         
         # Positionen aktualisieren
@@ -4580,12 +4683,42 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def wheelEvent(self, event):
         pos = event.position()
-        world_before = self.screen_to_world(pos)
+        world_pos = self.screen_to_world(pos)
+        
+        # === Phase 19: NURBS Weight Editing ===
+        # Wenn Maus über einem Spline-Punkt ist -> Gewicht ändern statt Zoomen
+        spline_elem = self._find_spline_element_at(world_pos)
+        if spline_elem and spline_elem[2] == 'point':
+            spline, idx, _ = spline_elem
+            cp = spline.control_points[idx]
+            
+            delta = event.angleDelta().y()
+            if delta != 0:
+                factor = 1.1 if delta > 0 else 0.9
+                # Limit weight (0.1 bis 100.0)
+                new_weight = max(0.1, min(100.0, cp.weight * factor))
+                
+                if abs(new_weight - cp.weight) > 0.001:
+                    cp.weight = new_weight
+                    spline.invalidate_cache() # Kurve neu berechnen
+                    self.sketched_changed.emit()
+                    self.status_message.emit(f"Spline Point Weight: {new_weight:.2f}")
+                    self.request_update()
+            
+            event.accept()
+            return
+            
+        # Standard Zoom
+        world_before = world_pos
         factor = 1.15 if event.angleDelta().y() > 0 else 1/1.15
         self.view_scale = max(0.5, min(200, self.view_scale * factor))
         world_after = self.screen_to_world(pos)
-        self.view_offset += QPointF((world_after.x() - world_before.x()) * self.view_scale,
-                                   -(world_after.y() - world_before.y()) * self.view_scale)
+        
+        # Offset anpassen damit Zoom zur Mausposition geht
+        dx = (world_after.x() - world_before.x()) * self.view_scale
+        dy = -(world_after.y() - world_before.y()) * self.view_scale
+        self.view_offset += QPointF(dx, dy)
+        
         self.request_update()
     
     
@@ -5199,6 +5332,49 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             )
             menu.addSeparator()
 
+        # === Spline-Optionen ===
+        # WICHTIG: pos ist Screen-Coordinates, wir brauchen World-Coordinates für Detection
+        world_pos = self.screen_to_world(pos)
+        
+        # Prüfe ob Spline-Element unter Cursor
+        spline_elem = self._find_spline_element_at(world_pos)
+        if spline_elem:
+            spline, idx, elem_type = spline_elem
+            if elem_type == 'point':
+                menu.addAction("Spline-Punkt löschen", lambda: self._delete_spline_point(spline, idx))
+                menu.addSeparator()
+        
+        # Prüfe ob Spline-Kurve unter Cursor oder selektiert
+        hover_spline = self._find_spline_at(world_pos)
+        target_splines = set(self.selected_splines)
+        if hover_spline:
+            target_splines.add(hover_spline)
+        
+        if target_splines:
+            menu.addSection("Spline")
+            for sp in target_splines:
+                if sp.closed:
+                    menu.addAction("Spline öffnen", lambda s=sp: self._toggle_spline_closed(s, False))
+                else:
+                    menu.addAction("Spline schließen", lambda s=sp: self._toggle_spline_closed(s, True))
+            
+            if hover_spline:
+                 menu.addAction("Punkt einfügen", lambda: self._insert_spline_point(hover_spline, world_pos))
+
+            # Curvature Comb Toggle
+            any_curvature_visible = any(getattr(sp, 'show_curvature', False) for sp in target_splines)
+            curv_label = "Krümmungsanalyse ausblenden" if any_curvature_visible else "Krümmungsanalyse anzeigen"
+            
+            def toggle_curvature(splines=target_splines, state=not any_curvature_visible):
+                for sp in splines:
+                    setattr(sp, 'show_curvature', state)
+                self.request_update()
+            
+            menu.addAction(curv_label, toggle_curvature)
+            
+            menu.addSeparator()
+
+
         # === Standard-Aktionen ===
         if has_selection:
             menu.addAction("Löschen (Del)", self._delete_selected)
@@ -5212,30 +5388,119 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             menu.addSeparator()
             canvas_menu = menu.addMenu("🖼 Canvas")
 
-            vis_text = tr("Ausblenden") if self.canvas_visible else tr("Einblenden")
+            vis_text = "Ausblenden" if self.canvas_visible else "Einblenden"
             canvas_menu.addAction(vis_text, self._canvas_toggle_visible)
 
-            lock_text = tr("Entsperren") if self.canvas_locked else tr("Sperren")
+            lock_text = "Entsperren" if self.canvas_locked else "Sperren"
             canvas_menu.addAction(lock_text, self._canvas_toggle_locked)
 
             # Opacity sub-menu
-            opacity_menu = canvas_menu.addMenu(tr("Deckkraft"))
+            opacity_menu = canvas_menu.addMenu("Deckkraft")
             for pct in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
                 val = pct / 100.0
                 label = f"{pct}%" + (" ●" if abs(self.canvas_opacity - val) < 0.05 else "")
                 opacity_menu.addAction(label, lambda v=val: self.canvas_set_opacity(v))
 
             # Size sub-menu
-            size_menu = canvas_menu.addMenu(tr("Größe (mm)"))
+            size_menu = canvas_menu.addMenu("Größe (mm)")
             for sz in [50, 100, 150, 200, 300, 500]:
                 size_menu.addAction(f"{sz} mm", lambda s=sz: self.canvas_set_size(float(s)))
 
             canvas_menu.addSeparator()
-            canvas_menu.addAction(tr("Kalibrieren (2 Punkte)"), self.canvas_start_calibration)
+            canvas_menu.addAction("Kalibrieren (2 Punkte)", self.canvas_start_calibration)
             canvas_menu.addSeparator()
-            canvas_menu.addAction(tr("Entfernen"), self.canvas_remove)
+            canvas_menu.addAction("Entfernen", self.canvas_remove)
 
-        menu.exec(self.mapToGlobal(pos.toPoint()))
+        # Show menu at global position
+        from loguru import logger
+        global_pos = self.mapToGlobal(pos.toPoint())
+        logger.debug(f"[MENU] Showing Context Menu with {len(menu.actions())} actions at {global_pos} (Size: {menu.sizeHint()})")
+        menu.exec(global_pos)
+
+    def _delete_spline_point(self, spline, idx):
+        if len(spline.control_points) <= 2:
+            self.show_message("Spline muss mindestens 2 Punkte haben", 2000, QColor(255, 100, 100))
+            return
+        
+        self._save_undo()
+        spline.control_points.pop(idx)
+        # Re-calc lines
+        spline._lines = spline.to_lines(segments_per_span=10)
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self.request_update()
+        
+    def _toggle_spline_closed(self, spline, closed):
+        self._save_undo()
+        spline.closed = closed
+        # Re-calc lines
+        spline._lines = spline.to_lines(segments_per_span=10)
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self.request_update()
+
+    def _insert_spline_point(self, spline, pos):
+        # Finde besten Einfüge-Punkt (Index)
+        # Wir suchen das Segment, dem der Punkt am nächsten ist
+        pts = spline.get_curve_points(segments_per_span=10)
+        best_idx = -1
+        min_dist = self._safe_float('inf')
+        
+        px, py = pos.x(), pos.y()
+        
+        # Mapping von curve-points zu control-points ist nicht trivial bei Bezier.
+        # Einfacherer Ansatz: Finde den Control-Point, nach dem wir einfügen sollten.
+        # Wir iterieren durch die Segmente der Kurve.
+        
+        # Besser: Wir fügen den Punkt einfach da ein, wo er geometrisch am besten passt?
+        # Nein, bei Bezier splines ist die Reihenfolge wichtig.
+        
+        # Workaround: Wir suchen die nächstgelegene Stelle auf der Kurve (t-Wert) 
+        # und fügen dort einen Control Point ein?
+        # Das würde die Kurve verändern.
+        
+        # Einfachster UX-Ansatz:
+        # Finde Segment i -> i+1, das dem Klick am nächsten ist.
+        
+        for i in range(len(spline.control_points) - (0 if spline.closed else 1)):
+            p1 = spline.control_points[i].point
+            p2 = spline.control_points[(i + 1) % len(spline.control_points)].point
+            
+            # Prüfe Abstand zu Segment p1-p2 (als Linie genähert)
+            dx = p2.x - p1.x
+            dy = p2.y - p1.y
+            l2 = dx*dx + dy*dy
+            if l2 == 0: continue
+            
+            t = ((px - p1.x) * dx + (py - p1.y) * dy) / l2
+            t = max(0, min(1, t))
+            dist = math.hypot(px - (p1.x + t * dx), py - (p1.y + t * dy))
+            
+            if dist < min_dist:
+                min_dist = dist
+                best_idx = i
+        
+        if best_idx != -1:
+            self._save_undo()
+            
+            # Remove OLD lines from sketch to prevent "ghost lines"
+            # Note: spline._lines contains the objects that are currently in self.sketch.lines
+            if hasattr(spline, '_lines'):
+                for line in spline._lines:
+                    if line in self.sketch.lines:
+                        self.sketch.lines.remove(line)
+            
+            # Insert AFTER best_idx
+            spline.insert_point(best_idx + 1, px, py)
+            
+            # Generate NEW lines and add to sketch
+            new_lines = spline.to_lines(segments_per_span=10)
+            spline._lines = new_lines
+            self.sketch.lines.extend(new_lines)
+            
+            self.sketched_changed.emit()
+            self._find_closed_profiles()
+            self.request_update()
 
     def _get_constraints_for_selection(self):
         """Sammelt alle Constraints die zur aktuellen Auswahl gehören"""

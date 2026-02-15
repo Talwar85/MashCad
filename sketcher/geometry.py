@@ -546,6 +546,7 @@ class SplineControlPoint:
     handle_in: Tuple[float, float] = (0.0, 0.0)   # Eingehende Tangente
     handle_out: Tuple[float, float] = (0.0, 0.0)  # Ausgehende Tangente
     smooth: bool = True  # Handles gespiegelt (glatter Übergang)
+    weight: float = 1.0  # NURBS Gewichtung (1.0 = Standard)
     
     @property
     def handle_in_abs(self) -> Tuple[float, float]:
@@ -585,6 +586,14 @@ class BezierSpline:
     _cached_lines: List['Line2D'] = field(default_factory=list, init=False, repr=False)
     _cache_hash: int = field(default=0, init=False, repr=False)
     
+    def __hash__(self):
+        return hash(self.id)
+    
+    def __eq__(self, other):
+        if not isinstance(other, BezierSpline):
+            return False
+        return self.id == other.id
+    
     def invalidate_cache(self):
         """
         Performance Optimization 2.1: Invalidiert to_lines() Cache.
@@ -619,6 +628,46 @@ class BezierSpline:
 
         return cp
     
+    def insert_point(self, index: int, x: float, y: float) -> SplineControlPoint:
+        """Fügt einen neuen Kontrollpunkt an einem bestimmten Index ein"""
+        pt = Point2D(x, y)
+        cp = SplineControlPoint(point=pt)
+        
+        # Auto-Tangenten basierend auf Nachbarpunkten
+        if 0 < index < len(self.control_points):
+            prev = self.control_points[index-1]
+            next_cp = self.control_points[index]
+            
+            # Punkt liegt wsl. zwischen prev und next
+            # Tangenten: 1/3 der Strecke zum Nachbarn
+            dx_prev = (x - prev.point.x) / 3
+            dy_prev = (y - prev.point.y) / 3
+            cp.handle_in = (-dx_prev, -dy_prev)
+            
+            dx_next = (next_cp.point.x - x) / 3
+            dy_next = (next_cp.point.y - y) / 3
+            cp.handle_out = (dx_next, dy_next)
+        
+        elif index > 0:
+            # Am Ende einfügen -> analog add_point
+            prev = self.control_points[index-1]
+            dx = (prev.point.x - x) / 3
+            dy = (prev.point.y - y) / 3
+            cp.handle_in = (dx, dy)
+            cp.handle_out = (-dx, -dy)
+            
+        elif index == 0 and len(self.control_points) > 0:
+             # Am Anfang einfügen
+             next_cp = self.control_points[0]
+             dx = (next_cp.point.x - x) / 3
+             dy = (next_cp.point.y - y) / 3
+             cp.handle_out = (dx, dy)
+             cp.handle_in = (-dx, -dy)
+
+        self.control_points.insert(index, cp)
+        self.invalidate_cache()
+        return cp
+    
     def get_curve_points(self, segments_per_span: int = 10) -> List[Tuple[float, float]]:
         """Berechnet Punkte entlang der Kurve für Rendering"""
         if len(self.control_points) < 2:
@@ -640,13 +689,39 @@ class BezierSpline:
             x2, y2 = p1.handle_in_abs
             x3, y3 = p1.point.x, p1.point.y
             
+            # Rational Bezier (NURBS-like) Weights
+            w0 = p0.weight
+            w3 = p1.weight
+            # Tangenten-Gewichte: Üblicherweise 1.0 oder gemittelt, wir nehmen hier einfach 1.0 für smooth
+            # Für "echte" NURBS bräuchten wir Gewichte für innere Kontrollpunkte.
+            # Bei kubischen Beziers sind P1, P2 aber nur Handles.
+            # Wir interpolieren die Gewichte linear für die Handles, damit der Übergang weich ist.
+            w1 = (2*w0 + w3) / 3
+            w2 = (w0 + 2*w3) / 3
+
             # Punkte auf dem Segment
             for j in range(segments_per_span + 1):
                 t = j / segments_per_span
-                # Kubische Bézier-Formel
                 mt = 1 - t
-                x = mt*mt*mt*x0 + 3*mt*mt*t*x1 + 3*mt*t*t*x2 + t*t*t*x3
-                y = mt*mt*mt*y0 + 3*mt*mt*t*y1 + 3*mt*t*t*y2 + t*t*t*y3
+                
+                # Basis-Funktionen
+                b0 = mt*mt*mt
+                b1 = 3*mt*mt*t
+                b2 = 3*mt*t*t
+                b3 = t*t*t
+                
+                # Zähler (Weighted Points)
+                num_x = b0*w0*x0 + b1*w1*x1 + b2*w2*x2 + b3*w3*x3
+                num_y = b0*w0*y0 + b1*w1*y1 + b2*w2*y2 + b3*w3*y3
+                
+                # Nenner (Weights)
+                den = b0*w0 + b1*w1 + b2*w2 + b3*w3
+                
+                if abs(den) < 1e-9:
+                    x, y = x0, y0
+                else:
+                    x = num_x / den
+                    y = num_y / den
                 
                 # Duplikate vermeiden
                 if not points or (abs(x - points[-1][0]) > 1e-6 or abs(y - points[-1][1]) > 1e-6):
@@ -688,6 +763,73 @@ class BezierSpline:
         self._cache_hash = current_hash
 
         return lines
+
+    def get_curvature_comb(self, num_samples: int = 100, scale: float = 1.0) -> List[Tuple[Point2D, Point2D, float]]:
+        """
+        Berechnet Daten für Curvature Comb Visualisierung.
+        """
+        # Wir nutzen die existierende Tesselierung
+        # Ungefähr num_samples erreichen
+        spans = max(1, len(self.control_points) - 1)
+        segs = max(5, int(num_samples / spans))
+        points = self.get_curve_points(segments_per_span=segs)
+        
+        if len(points) < 3:
+            return []
+            
+        comb_data = []
+        
+        for i in range(len(points)):
+            p = points[i] # tuple (x, y)
+            
+            # Neighbors
+            prev_p = points[max(0, i-1)]
+            next_p = points[min(len(points)-1, i+1)]
+            
+            # Boundary conditions (forward/backward diff)
+            if i == 0:
+                p0, p1, p2 = p, next_p, points[min(len(points)-1, i+2)]
+            elif i == len(points) - 1:
+                p0, p1, p2 = points[max(0, i-2)], prev_p, p
+            else:
+                p0, p1, p2 = prev_p, p, next_p
+                
+            x0, y0 = p0
+            x1, y1 = p1
+            x2, y2 = p2
+            
+            # Centered first derivative at p1
+            dx = (x2 - x0) / 2
+            dy = (y2 - y0) / 2
+            
+            # Second derivative at p1
+            ddx = x2 - 2*x1 + x0
+            ddy = y2 - 2*y1 + y0
+            
+            denom = math.pow(dx*dx + dy*dy, 1.5)
+            if denom < 1e-9:
+                k = 0
+            else:
+                k = (dx * ddy - dy * ddx) / denom
+                
+            # Normal vector
+            len_n = math.hypot(dx, dy)
+            if len_n < 1e-9:
+                nx, ny = 0, 1
+            else:
+                nx = -dy / len_n
+                ny = dx / len_n
+                
+            px, py = points[i]
+            
+            vis_len = k * scale * 1000 
+            
+            end_x = px + nx * vis_len
+            end_y = py + ny * vis_len
+            
+            comb_data.append((Point2D(px, py), Point2D(end_x, end_y), k))
+            
+        return comb_data
 
 
 @dataclass
@@ -900,23 +1042,17 @@ class Spline2D:
                 mults_arr.SetValue(i + 1, m)
 
             # BSpline Kurve erstellen
-            ocp_curve = Geom_BSplineCurve(poles, weights, knots_arr, mults_arr, self.degree)
+            curve = Geom_BSplineCurve(poles, weights, knots_arr, mults_arr, self.degree)
+            return Edge.make_edge(curve)
 
-            # Edge erstellen
-            edge_builder = BRepBuilderAPI_MakeEdge(ocp_curve)
-            if not edge_builder.IsDone():
-                raise ValueError("Edge-Erstellung fehlgeschlagen")
+        except ImportError:
+            # Fallback: Polyline
+            pts = self.to_polyline_points(tolerance=0.01)
+            return Edge.make_polyline([
+                (p[0], p[1], 0) for p in pts
+            ])
 
-            return Edge(edge_builder.Edge())
 
-        except ImportError as e:
-            from loguru import logger
-            logger.warning(f"Build123d/OCP nicht verfügbar für native Spline: {e}")
-            return None
-        except Exception as e:
-            from loguru import logger
-            logger.warning(f"Spline zu Edge Konvertierung fehlgeschlagen: {e}")
-            return None
 
     def to_lines(self, segments: int = 50) -> List[Line2D]:
         """

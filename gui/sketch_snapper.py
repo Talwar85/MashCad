@@ -597,7 +597,7 @@ class SmartSnapper:
                                 snap_radius * 10, snap_radius * 10)
             entities = self.editor.spatial_index.query(query_rect)
         else:
-            entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs
+            entities = self.sketch.lines + self.sketch.circles + self.sketch.arcs + getattr(self.sketch, 'splines', [])
         self._is_dense_context = len(entities) >= self.DENSE_ENTITY_THRESHOLD
 
         # 0. Kontext-Inferenz fuer aktiven Linienzug.
@@ -638,6 +638,23 @@ class SmartSnapper:
                     # Nearest Point on Circle Edge
                     closest_edge = self._closest_point_on_circle(entity, mouse_world)
                     self._check_point(closest_edge, mouse_world, snap_radius, SnapType.EDGE, entity, candidates)
+
+            # SPLINE (Neu: Snap to Control Points)
+            elif hasattr(entity, 'control_points'):
+                 # Endpunkte (falls Start/End properties existieren)
+                 if hasattr(entity, 'start_point'):
+                     self._check_point(entity.start_point, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                 if hasattr(entity, 'end_point'):
+                     self._check_point(entity.end_point, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                 
+                 # Control Points als "Endpoint" behandeln
+                 for pt in entity.control_points:
+                     # pt ist meist (x, y) Tuple oder Point2D
+                     if isinstance(pt, (tuple, list)) and len(pt) >= 2:
+                         p_obj = Point2D(pt[0], pt[1])
+                         self._check_point(p_obj, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
+                     elif hasattr(pt, 'x') and hasattr(pt, 'y'):
+                         self._check_point(pt, mouse_world, snap_radius, SnapType.ENDPOINT, entity, candidates)
 
         # 2. SCHNITTPUNKTE (Intersection)
         # Performance Optimization 1.6: Mit Cache (60-80% Reduktion!)

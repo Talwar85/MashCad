@@ -807,7 +807,17 @@ class SketchHandlersMixin:
     
     
     def _handle_spline(self, pos, snap_type):
-        self.tool_points.append(pos)
+        # 3. Capture Snap Data for Constraint Creation
+        # We need to store not just the position, but what we snapped to.
+        # This allows _finish_spline to create Coincident constraints.
+        snapped, s_type, s_entity = self.snap_point(self.mouse_world)
+        
+        # Store tuple: (position, snap_type, snap_entity)
+        if not hasattr(self, 'spline_snap_data'):
+            self.spline_snap_data = []
+            
+        self.spline_snap_data.append((snapped, s_type, s_entity))
+        self.tool_points.append(snapped)
         self.tool_step = len(self.tool_points)
         self.status_message.emit(tr("Point {n} | Right=Finish | Tab=Input").format(n=len(self.tool_points)))
     
@@ -822,21 +832,45 @@ class SketchHandlersMixin:
             spline = BezierSpline()
             spline.construction = self.construction_mode
             
+            # Check for closure (if last point is close to first point)
+            first_pt = self.tool_points[0]
+            last_pt = self.tool_points[-1]
+            if len(self.tool_points) > 2 and math.hypot(first_pt.x()-last_pt.x(), first_pt.y()-last_pt.y()) < (self.snap_radius / self.view_scale):
+                spline.closed = True
+                # Remove last point as it duplicates the first
+                self.tool_points.pop()
+                if hasattr(self, 'spline_snap_data'):
+                    self.spline_snap_data.pop()
+            
+            # Add points to spline
             for p in self.tool_points:
                 spline.add_point(p.x(), p.y())
             
             # Spline zum Sketch hinzufÃ¼gen
             self.sketch.splines.append(spline)
             
+            # Apply Constraints
+            if hasattr(self, 'spline_snap_data'):
+                for i, (pos, s_type, s_entity) in enumerate(self.spline_snap_data):
+                    if i >= len(spline.control_points): break
+                    cp = spline.control_points[i]
+                    # We can't easily constrain the ControlPoint object itself directly 
+                    # because the solver likely expects Point2D objects.
+                    # However, BezierSpline.control_points are wrappers around Point2D (cp.point).
+                    # So we allow constraining cp.point.
+                    if s_entity:
+                        self._add_point_constraint(cp.point, pos, s_type, s_entity, spline)
+                
+                # Cleanup
+                del self.spline_snap_data
+
             # Auch als Linien fÃ¼r KompatibilitÃ¤t (Export etc.)
             lines = spline.to_lines(segments_per_span=10)
             spline._lines = lines  # Referenz speichern fÃ¼r spÃ¤teren Update
             
-            for line in lines:
-                self.sketch.lines.append(line)
-                self.sketch.points.append(line.start)
-            if lines:
-                self.sketch.points.append(lines[-1].end)
+            # We DON'T add these lines to self.sketch.lines anymore if we have native spline support!
+            # Adding them causes double rendering and selection issues.
+            # But the 'dxf_export' might need them. Let's keep them in spline._lines only.
             
             # Spline auswÃ¤hlen fÃ¼r sofortiges Editing
             self.selected_splines = [spline]
