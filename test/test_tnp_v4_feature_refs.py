@@ -1473,6 +1473,62 @@ def test_compute_sweep_profile_single_ref_pair_geometric_conflict_prefers_index(
     assert (drift_notice or {}).get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
 
 
+def test_safe_operation_emits_drift_warning_for_sweep_profile_single_ref_pair_geometric_conflict(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import face_from_index
+
+    doc = Document()
+    body = Body("safe_op_sweep_profile_single_ref_pair_geometric_conflict")
+    solid = Solid.make_box(10.0, 20.0, 30.0)
+    body._build123d_solid = solid
+    doc.add_body(body)
+
+    feature = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    feature.profile_face_index = 0
+    feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_geo_conflict_safe_op", 0)
+
+    mismatch_face = face_from_index(solid, 4)
+    assert mismatch_face is not None
+
+    def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
+        assert log_unresolved is True
+        return mismatch_face.wrapped, "geometric"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    monkeypatch.setattr(body, "_resolve_path", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        body,
+        "_move_profile_to_path_start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop_after_profile_resolution")),
+    )
+
+    def _op():
+        try:
+            body._compute_sweep(feature, solid)
+        except RuntimeError as e:
+            assert "stop_after_profile_resolution" in str(e)
+            return object()
+        return object()
+
+    result, status = body._safe_operation(
+        "SweepProfileSingleRefPairGeometricConflict",
+        _op,
+        feature=feature,
+    )
+
+    details = body._last_operation_error_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert result is not None
+    assert status == "WARNING"
+    assert details.get("code") == "tnp_ref_drift"
+    assert tnp_failure.get("category") == "drift"
+    assert tnp_failure.get("reference_kind") == "face"
+    assert tnp_failure.get("reason") == "single_ref_pair_geometric_shape_conflict_index_preferred"
+
+
 def test_update_face_selectors_uses_tnp_v4_resolver(monkeypatch):
     body = Body("resolver_delegate")
     hole = HoleFeature(face_selectors=[_face_selector()])
