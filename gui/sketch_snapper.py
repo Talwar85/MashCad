@@ -233,16 +233,31 @@ class SmartSnapper:
 
     def _active_line_start_point(self) -> Optional[Point2D]:
         """
-        Returns the active start point while the LINE tool is drawing segment n->n+1.
+        Returns the active anchor point for line-like inference tools.
         """
-        if getattr(self.editor, "current_tool", None) != SketchTool.LINE:
-            return None
-        if int(getattr(self.editor, "tool_step", 0)) < 1:
-            return None
+        tool = getattr(self.editor, "current_tool", None)
+        step = int(getattr(self.editor, "tool_step", 0))
         tool_points = getattr(self.editor, "tool_points", None) or []
         if not tool_points:
             return None
-        start = tool_points[-1]
+
+        # LINE: Polyline mode uses the last confirmed point as anchor.
+        if tool == SketchTool.LINE and step >= 1:
+            start = tool_points[-1]
+        # Other tools: first point acts as direction/inference anchor.
+        elif tool in {
+            SketchTool.RECTANGLE,
+            SketchTool.RECTANGLE_CENTER,
+            SketchTool.ELLIPSE,
+            SketchTool.POLYGON,
+            SketchTool.SLOT,
+            SketchTool.NUT,
+            SketchTool.STAR,
+        } and step == 1:
+            start = tool_points[0]
+        else:
+            return None
+
         try:
             if hasattr(start, "x") and callable(start.x):
                 return Point2D(float(start.x()), float(start.y()))
