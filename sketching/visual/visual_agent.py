@@ -11,6 +11,7 @@ Date: 2026-02-11
 """
 
 from typing import Optional, Any
+import time
 from loguru import logger
 
 from sketching.core.sketch_agent import SketchAgent

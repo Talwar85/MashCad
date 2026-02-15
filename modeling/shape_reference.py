@@ -22,6 +22,30 @@ Usage:
 
 import math
 from dataclasses import dataclass, field
+"""
+MashCad - Shape Reference System
+=================================
+
+Stable references to B-Rep shapes (faces, edges) that survive topology changes.
+
+Phase 7: TNP (Topological Naming Problem) solution.
+
+Usage:
+    from modeling.shape_reference import ShapeReference
+
+    # Create reference from a face
+    ref = ShapeReference.from_face(ocp_face)
+
+    # Serialize for persistence
+    data = ref.to_dict()
+
+    # Restore and resolve
+    ref = ShapeReference.from_dict(data)
+    resolved_face = ref.resolve(solid)
+"""
+
+import math
+from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Any, List
 from loguru import logger
 
@@ -30,6 +54,18 @@ from modeling.face_hash import (
     get_face_area, get_surface_type_name, faces_match_by_hash,
     HAS_OCP
 )
+
+# Definieren der Variablen im globalen Scope, um "possibly-used-before-assignment" zu vermeiden
+TopoDS_Face = None
+TopoDS_Shape = None
+TopoDS = None
+TopExp = None
+TopExp_Explorer = None
+TopAbs_FACE = None
+TopTools_IndexedMapOfShape = None
+BRepAdaptor_Surface = None
+BRepGProp = None
+GProp_GProps = None
 
 if HAS_OCP:
     from OCP.TopoDS import TopoDS_Face, TopoDS_Shape, TopoDS

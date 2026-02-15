@@ -105,8 +105,17 @@ class MainWindow(QMainWindow):
         self.document = Document("Projekt1")
         self._current_project_path = None  # Phase 8.2: Aktueller Projekt-Pfad
         
+        # Managers
+        from gui.managers.notification_manager import NotificationManager
+        from gui.managers.preview_manager import PreviewManager
+        from gui.managers.tnp_debug_manager import TNPDebugManager
+
+        self.notification_manager = NotificationManager(self)
+        self.preview_manager = PreviewManager(self)
+        self.tnp_debug_manager = TNPDebugManager(self)
+
         # TNP v4.0: Debug Callback für Edge-Auflösungs-Visualisierung
-        self._setup_tnp_debug_callback()
+        self.tnp_debug_manager.setup_callback()
 
         # NEU: Undo/Redo System
         from PySide6.QtGui import QUndoStack
@@ -149,8 +158,7 @@ class MainWindow(QMainWindow):
     def _handle_log_message(self, level, message):
         """
         Zentrale Stelle für alle Nachrichten.
-        1. Fügt IMMER einen Eintrag ins Log-Panel hinzu.
-        2. Zeigt NUR bei Success/Error/Warning ein Overlay an.
+        Delegiert an NotificationManager.
         """
         # 1. Ins persistente Log schreiben (nur wenn Panel existiert)
         if hasattr(self, 'log_panel') and self.log_panel:
@@ -165,231 +173,44 @@ class MainWindow(QMainWindow):
             show_overlay = True
             
         if show_overlay:
-            self._show_toast_overlay(level, message)
+            self.notification_manager.show_toast_overlay(level, message)
             
     def _show_toast_overlay(self, level, message):
-        """Erstellt das Toast-Popup (ehemals _show_notification)"""
-        # Mapping von Loguru levels für Style
-        if level in ["critical", "error"]: style = "error"
-        elif level == "warning": style = "warning"
-        elif level == "success": style = "success"
-        else: style = "info"
-
-        # Widget erstellen
-        notif = NotificationWidget(message, style, self)
-        self.notifications.append(notif)
-        self._reposition_notifications()
+        """Delegiert an NotificationManager."""
+        self.notification_manager.show_toast_overlay(level, message)
 
     def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000):
-        """
-        Zeigt eine Toast-Notification an (für Result-Pattern Integration)
-
-        Args:
-            title: Titel der Notification (wird in message integriert)
-            message: Haupt-Nachricht
-            level: "info", "success", "warning", "error"
-            duration: Dauer in ms (wird aktuell nicht verwendet, da NotificationWidget Auto-Close hat)
-        """
-        # Kombiniere Title und Message
-        if title:
-            full_message = f"{title}: {message}"
-        else:
-            full_message = message
-
-        # Nutze bestehende Toast-Overlay Methode
-        self._show_toast_overlay(level, full_message)
+        """Delegiert an NotificationManager."""
+        self.notification_manager.show_notification(title, message, level, duration)
 
     def _preview_track_actor(self, group: str, actor_name: str):
-        """Registriert einen Preview-Aktor in einer Gruppe für konsistentes Cleanup."""
-        if not group or not actor_name:
-            return
-        if not hasattr(self, "_preview_actor_groups") or not isinstance(self._preview_actor_groups, dict):
-            self._preview_actor_groups = {}
-        group_actors = self._preview_actor_groups.setdefault(group, set())
-        group_actors.add(actor_name)
+        """Delegiert an PreviewManager."""
+        self.preview_manager.track_actor(group, actor_name)
 
     def _preview_clear_group(self, group: str, *, render: bool = True):
-        """Entfernt alle Preview-Aktoren einer Gruppe."""
-        if not group:
-            return
-        groups = getattr(self, "_preview_actor_groups", {})
-        names = list(groups.get(group, set()))
-        if not names:
-            return
-
-        plotter = getattr(getattr(self, "viewport_3d", None), "plotter", None)
-        removed_any = False
-        if plotter:
-            for actor_name in names:
-                try:
-                    plotter.remove_actor(actor_name)
-                    removed_any = True
-                except Exception:
-                    pass
-
-        groups[group] = set()
-        if removed_any and render and plotter:
-            try:
-                request_render(plotter)
-            except Exception:
-                pass
+        """Delegiert an PreviewManager."""
+        self.preview_manager.clear_group(group, render=render)
 
     def _preview_clear_all(self, *, render: bool = True):
-        """Entfernt alle registrierten Preview-Aktoren."""
-        groups = getattr(self, "_preview_actor_groups", {})
-        if not groups:
-            return
-
-        for group in list(groups.keys()):
-            self._preview_clear_group(group, render=False)
-
-        if render:
-            plotter = getattr(getattr(self, "viewport_3d", None), "plotter", None)
-            if plotter:
-                try:
-                    request_render(plotter)
-                except Exception:
-                    pass
+        """Delegiert an PreviewManager."""
+        self.preview_manager.clear_all(render=render)
 
     def _clear_transient_previews(self, reason: str = "", *, clear_interaction_modes: bool = False):
-        """
-        Zentrales Cleanup für flüchtige Previews/Highlights beim Tool- oder Mode-Wechsel.
-
-        Entfernt sowohl MainWindow-seitig registrierte Preview-Aktoren als auch
-        viewport-interne Vorschauen (Extrude/Revolve/Hole/Thread/Draft/Split/Offset).
-        """
-        if reason:
-            logger.debug(f"[preview] clear transient previews: {reason}")
-
-        self._preview_clear_all(render=False)
-
-        viewport = getattr(self, "viewport_3d", None)
-        if viewport is None:
-            return
-
-        clear_methods = (
-            "clear_draft_preview",
-            "clear_split_preview_meshes",
-            "clear_revolve_preview",
-            "clear_hole_preview",
-            "clear_thread_preview",
-            "clear_offset_plane_preview",
-            "_clear_preview",
-        )
-        for method_name in clear_methods:
-            method = getattr(viewport, method_name, None)
-            if callable(method):
-                try:
-                    method()
-                except Exception:
-                    pass
-
-        if clear_interaction_modes:
-            mode_calls = (
-                ("set_pending_transform_mode", False),
-                ("set_plane_select_mode", False),
-                ("set_offset_plane_mode", False),
-                ("set_split_mode", False),
-                ("set_draft_mode", False),
-                ("set_revolve_mode", False),
-                ("set_hole_mode", False),
-                ("set_thread_mode", False),
-            )
-            for method_name, value in mode_calls:
-                method = getattr(viewport, method_name, None)
-                if callable(method):
-                    try:
-                        method(value)
-                    except Exception:
-                        pass
-
-            set_extrude_mode = getattr(viewport, "set_extrude_mode", None)
-            if callable(set_extrude_mode):
-                try:
-                    set_extrude_mode(False)
-                except Exception:
-                    pass
-
-            for method_name in ("stop_sketch_path_mode", "stop_edge_selection_mode", "stop_texture_face_mode"):
-                method = getattr(viewport, method_name, None)
-                if callable(method):
-                    try:
-                        method()
-                    except Exception:
-                        pass
-
-            try:
-                viewport.measure_mode = False
-            except Exception:
-                pass
-
-        plotter = getattr(viewport, "plotter", None)
-        if plotter:
-            try:
-                request_render(plotter)
-            except Exception:
-                pass
+        """Delegiert an PreviewManager."""
+        self.preview_manager.clear_transient_previews(reason, clear_interaction_modes=clear_interaction_modes)
 
 
 
     def _cleanup_notification(self, notif):
-        if notif in self.notifications:
-            self.notifications.remove(notif)
-        notif.deleteLater()
-        # Nach dem Löschen die anderen aufrücken lassen
-        # (Optional, hier vereinfacht lassen wir sie stehen bis sie verschwinden)
+        self.notification_manager.cleanup_notification(notif)
 
     def _setup_tnp_debug_callback(self):
-        """
-        TNP v4.0: Registriert Callback für Edge-Auflösungs-Visualisierung.
-        Zeigt gefundene Kanten in GRÜN, nicht gefundene in ROT.
-        """
-        def tnp_debug_callback(resolved_edges, unresolved_shape_ids, body_id):
-            if hasattr(self, 'viewport_3d') and self.viewport_3d:
-                try:
-                    if is_enabled("tnp_debug_logging"):
-                        logger.info(f"TNP Debug: {len(resolved_edges)} resolved, {len(unresolved_shape_ids)} unresolved")
-                    # Debug-Visualisierung deaktiviert (grüne/rote Linien)
-                    # self.viewport_3d.debug_visualize_edge_resolution(
-                    #     resolved_edges, unresolved_shape_ids, body_id
-                    # )
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-        
-        # Callback im Document registrieren (immer setzen)
-        if self.document:
-            self.document._tnp_debug_callback = tnp_debug_callback
-        pass
+        """Delegiert an TNPDebugManager."""
+        self.tnp_debug_manager.setup_callback()
 
     def _reposition_notifications(self):
-        """Berechnet Positionen und startet Animationen"""
-        top_margin = 90
-        spacing = 10
-        y_pos = top_margin
-        
-        # Iteriere über alle aktiven Notifications
-        for notif in self.notifications:
-            if not notif.isVisible() and not notif.target_pos:
-                # Neue Notification (noch nicht animiert)
-                # Zentrieren
-                x = (self.width() - notif.width()) // 2
-                
-                # Cleanup Signal verbinden
-                notif.anim.finished.connect(
-                    lambda n=notif: self._cleanup_notification(n) if n.anim.direction() == QPropertyAnimation.Backward else None
-                )
-                
-                # Animation starten
-                notif.show_anim(QPoint(x, y_pos))
-            
-            elif notif.isVisible():
-                # Bereits sichtbare Notifications verschieben wir nicht (einfacher Stack)
-                # Oder wir könnten sie hier updaten, wenn sich Fenstergröße ändert
-                pass
-            
-            # Platz für die nächste berechnen
-            y_pos += notif.height() + spacing
+        """Delegiert an NotificationManager."""
+        self.notification_manager.reposition_notifications()
             
     def _apply_theme(self):
         from gui.design_tokens import DesignTokens

@@ -1185,6 +1185,20 @@ class ShapeNamingService:
             logger.warning(f"TNP: update_shape_id_after_operation fehlgeschlagen: {e}")
             return False
 
+    def _get_shape_center(self, shape: Any) -> Optional[Tuple[float, float, float]]:
+        """Berechnet das Zentrum eines Shapes für den Spatial Index."""
+        if not HAS_OCP or shape is None:
+            return None
+        try:
+            from OCP.GProp import GProp_GProps
+            from OCP.BRepGProp import BRepGProp
+            props = GProp_GProps()
+            BRepGProp.LinearProperties_s(shape, props)
+            p = props.CentreOfMass()
+            return (p.X(), p.Y(), p.Z())
+        except Exception:
+            return None
+
     def update_shape_ids_from_history(
         self,
         source_solid: Any,
@@ -1784,49 +1798,53 @@ class ShapeNamingService:
                         start_local_index=0,
                     )
 
-                    edge_output_ids = [sid for sid in new_shape_ids if sid.shape_type == ShapeType.EDGE]
-                    max_edge_local_index = max(
-                        (int(sid.local_index) for sid in edge_output_ids),
-                        default=-1,
-                    )
-
-                    mappings_for_unmapped = []
-                    for new_shape_id in edge_output_ids:
-                        mappings_for_unmapped.append(
-                            type("Mapping", (), {"new_shape_uuid": new_shape_id.uuid})()
+                    if manual_mappings:
+                        edge_output_ids = [sid for sid in new_shape_ids if sid.shape_type == ShapeType.EDGE]
+                        max_edge_local_index = max(
+                            (int(sid.local_index) for sid in edge_output_ids),
+                            default=-1,
                         )
 
-                    new_edge_count = self._register_unmapped_edges(
-                        result_solid=result_solid,
-                        feature_id=feature_id,
-                        existing_mappings=mappings_for_unmapped,
-                        start_local_index=max_edge_local_index + 1,
-                    )
+                        mappings_for_unmapped = []
+                        for new_shape_id in edge_output_ids:
+                            mappings_for_unmapped.append(
+                                type("Mapping", (), {"new_shape_uuid": new_shape_id.uuid})()
+                            )
 
-                    input_shape_ids = [sid for sid, _shape in source_items]
-                    op_record = OperationRecord(
-                        operation_type="BREPFEAT_PRISM",
-                        feature_id=feature_id,
-                        input_shape_ids=input_shape_ids,
-                        output_shape_ids=new_shape_ids,
-                        occt_history=occt_history,
-                        manual_mappings=manual_mappings,
-                        metadata={
-                            "direction": direction,
-                            "distance": distance,
-                            "mappings_count": len(manual_mappings),
-                            "new_edges_registered": int(new_edge_count),
-                            "mapping_mode": "history",
-                        },
-                    )
-                    self.record_operation(op_record)
+                        new_edge_count = self._register_unmapped_edges(
+                            result_solid=result_solid,
+                            feature_id=feature_id,
+                            existing_mappings=mappings_for_unmapped,
+                            start_local_index=max_edge_local_index + 1,
+                        )
 
+                        input_shape_ids = [sid for sid, _shape in source_items]
+                        op_record = OperationRecord(
+                            operation_type="BREPFEAT_PRISM",
+                            feature_id=feature_id,
+                            input_shape_ids=input_shape_ids,
+                            output_shape_ids=new_shape_ids,
+                            occt_history=occt_history,
+                            manual_mappings=manual_mappings,
+                            metadata={
+                                "direction": direction,
+                                "distance": distance,
+                                "mappings_count": len(manual_mappings),
+                                "new_edges_registered": int(new_edge_count),
+                                "mapping_mode": "history",
+                            },
+                        )
+                        self.record_operation(op_record)
+
+                        if is_enabled("tnp_debug_logging"):
+                            logger.success(
+                                "TNP v4.0: BRepFeat kernel-history getrackt - "
+                                f"{len(manual_mappings)} mappings + {new_edge_count} neue Edges"
+                            )
+                        return op_record
+                    
                     if is_enabled("tnp_debug_logging"):
-                        logger.success(
-                            "TNP v4.0: BRepFeat kernel-history getrackt - "
-                            f"{len(manual_mappings)} mappings + {new_edge_count} neue Edges"
-                        )
-                    return op_record
+                        logger.warning("TNP v4.0: BRepFeat History hatte Source-Inputs aber 0 Mappings. Fallback auf Heuristik.")
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(
                         "TNP v4.0: BRepFeat kernel-history ohne Source-Inputs, "

@@ -1,0 +1,21 @@
+[MASTER]
+extension-pkg-allow-list=PySide6,pydantic,numpy,shiboken6,ocp_tessellate,build123d,ocp
+init-hook='import sys; sys.path.append("c:\\LiteCad")'
+
+[MESSAGES CONTROL]
+disable=
+    C0111, ; missing-docstring
+    C0103, ; invalid-name
+    C0301, ; line-too-long
+    R0902, ; too-many-instance-attributes
+    R0903, ; too-few-public-methods
+    R0913, ; too-many-arguments
+    R0914, ; too-many-locals
+    R0915, ; too-many-statements
+    W0613, ; unused-argument
+
+[TYPECHECK]
+ignored-modules=build123d,ocp,OCP
+
+[FORMAT]
+max-line-length=120

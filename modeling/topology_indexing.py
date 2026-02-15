@@ -1,11 +1,10 @@
+
 """
 Utilities for stable face index mapping.
 
 This module centralizes "index -> face object" resolution so all call sites use
 the same contract. Primary strategy is build123d's `shape.faces()[index]`.
 """
-
-from __future__ import annotations
 
 from typing import Dict, Iterator, List, Optional, Tuple
 

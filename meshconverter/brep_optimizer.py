@@ -15,9 +15,20 @@ from typing import Optional, List, Dict, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from loguru import logger
-from scipy.optimize import minimize, least_squares
-from scipy.spatial import ConvexHull
-from sklearn.decomposition import PCA
+try:
+    from scipy.optimize import minimize, least_squares
+    from scipy.spatial import ConvexHull
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+    logger.warning("Scipy nicht verfügbar (Optimierung eingeschränkt)")
+
+try:
+    from sklearn.decomposition import PCA
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+    logger.warning("Sklearn nicht verfügbar (PCA eingeschränkt)")
 
 try:
     from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Face, TopoDS_Edge, TopoDS_Solid, TopoDS_Shell, TopoDS_Compound, TopoDS_Wire
@@ -163,6 +174,9 @@ class PrimitiveDetector:
         if len(points) < 10:
             return None
 
+        if not HAS_SKLEARN:
+            return None
+
         try:
             # Schritt 1: Finde Achse via PCA auf Punkten
             # Bei einem Zylinder ist die größte Varianz entlang der Achse
@@ -306,6 +320,9 @@ class PrimitiveDetector:
         """
         Verfeinert Zylinder-Fit via Levenberg-Marquardt.
         """
+        if not HAS_SCIPY:
+            return initial
+
         def residual(params):
             cx, cy, cz, ax, ay, az, r = params
             center = np.array([cx, cy, cz])
@@ -448,6 +465,9 @@ class NURBSFitter:
 
         Verwendet PCA für lokales Koordinatensystem.
         """
+        if not HAS_SKLEARN:
+            return None
+
         try:
             # PCA für lokales 2D Koordinatensystem
             pca = PCA(n_components=2)
@@ -1208,6 +1228,9 @@ class BRepOptimizer:
         Bei Mesh-Daten sind Normalen oft ungenau, daher lockere Normalen-Checks.
         """
         if len(centroids) < 5:
+            return None
+
+        if not HAS_SKLEARN:
             return None
 
         try:
