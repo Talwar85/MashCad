@@ -876,6 +876,60 @@ def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     assert wire is None
 
 
+def test_rebuild_sweep_invalid_path_sets_tnp_missing_ref_error_code():
+    body = Body("sweep_invalid_path_tnp_missing_ref")
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    sweep = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [999]},
+    )
+    sweep.profile_face_index = 0
+    body.features = [base, sweep]
+
+    body._rebuild()
+
+    details = sweep.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert sweep.status == "ERROR"
+    assert details.get("code") == "tnp_ref_missing"
+    assert tnp_failure.get("category") == "missing_ref"
+    assert tnp_failure.get("reference_kind") == "edge"
+
+
+def test_rebuild_sweep_path_shape_index_mismatch_sets_tnp_mismatch_code(monkeypatch):
+    from build123d import Solid
+    from modeling.topology_indexing import edge_from_index
+
+    doc = Document()
+    body = Body("sweep_path_mismatch_tnp_code")
+    body._build123d_solid = Solid.make_box(10.0, 20.0, 30.0)
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    sweep = SweepFeature(
+        profile_data={"type": "body_face"},
+        path_data={"type": "body_edge", "edge_indices": [0]},
+    )
+    sweep.profile_face_index = 0
+    sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_status_mismatch", 0)
+    body.features = [base, sweep]
+
+    def _resolve_shape(_shape_id, solid, *, log_unresolved=True):
+        mismatch_edge = edge_from_index(solid, 4)
+        assert mismatch_edge is not None
+        return mismatch_edge.wrapped, "direct"
+
+    monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
+    body._rebuild()
+
+    details = sweep.status_details or {}
+    tnp_failure = details.get("tnp_failure") or {}
+    assert sweep.status == "ERROR"
+    assert details.get("code") == "tnp_ref_mismatch"
+    assert tnp_failure.get("category") == "mismatch"
+    assert tnp_failure.get("reference_kind") == "edge"
+
+
 def test_compute_nsided_patch_blocks_selector_fallback_when_topology_refs_break(monkeypatch):
     from build123d import Solid
     from modeling.geometric_selector import GeometricEdgeSelector

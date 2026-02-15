@@ -2021,11 +2021,29 @@ class Body:
 
         if has_profile_shape_ref and profile_face_index is not None:
             if profile_face_from_index is None or profile_face_from_shape is None:
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="missing_ref",
+                    reference_kind="face",
+                    reason="sweep_profile_unresolved_topology_reference",
+                    expected=2,
+                    resolved=int(profile_face_from_index is not None) + int(profile_face_from_shape is not None),
+                    strict=True,
+                )
                 raise ValueError(
                     "Sweep: Profil-Referenz ist inkonsistent "
                     "(profile_shape_id/profile_face_index). Bitte Profil neu auswÃ¤hlen."
                 )
             if not _is_same_face(profile_face_from_index, profile_face_from_shape):
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="mismatch",
+                    reference_kind="face",
+                    reason="sweep_profile_shape_index_mismatch",
+                    expected=2,
+                    resolved=2,
+                    strict=True,
+                )
                 raise ValueError(
                     "Sweep: Profil-Referenz ist inkonsistent "
                     "(profile_shape_id != profile_face_index). Bitte Profil neu auswÃ¤hlen."
@@ -2036,6 +2054,15 @@ class Body:
             logger.warning(
                 "Sweep: TNP-Profilreferenz konnte nicht aufgelÃ¶st werden "
                 "(profile_shape_id/profile_face_index). Kein Geometric-Fallback."
+            )
+            self._record_tnp_failure(
+                feature=feature,
+                category="missing_ref",
+                reference_kind="face",
+                reason="sweep_profile_unresolved_topology_reference",
+                expected=1,
+                resolved=0,
+                strict=True,
             )
             raise ValueError("Sweep: Profil-Referenz ist ungÃ¼ltig. Bitte Profil neu auswÃ¤hlen.")
 
@@ -3617,6 +3644,15 @@ class Body:
                         "Sweep: TNP-Pfadreferenz ist inkonsistent "
                         "(path_shape_id != path_data.edge_indices). Kein Geometric-Fallback."
                     )
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="mismatch",
+                        reference_kind="edge",
+                        reason="sweep_path_shape_index_mismatch",
+                        expected=max(1, len(edge_indices)),
+                        resolved=int(bool(resolved_shape_edge)) + int(bool(resolved_index_edges)),
+                        strict=True,
+                    )
                     return None
 
                 if resolved_index_edges:
@@ -3631,6 +3667,15 @@ class Body:
                     logger.warning(
                         "Sweep: TNP-Pfadreferenz konnte nicht aufgelÃ¶st werden "
                         "(ShapeID/edge_indices). Kein Geometric-Fallback."
+                    )
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="missing_ref",
+                        reference_kind="edge",
+                        reason="sweep_path_unresolved_topology_reference",
+                        expected=max(1, len(edge_indices)),
+                        resolved=0,
+                        strict=True,
                     )
                     return None
 

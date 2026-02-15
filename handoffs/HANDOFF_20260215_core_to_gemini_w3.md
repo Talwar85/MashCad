@@ -9,6 +9,7 @@
 Core hat PI-001/PI-002 nachgezogen:
 - TNP-Fehler werden jetzt taxonomisch klassifiziert statt nur `operation_failed`.
 - Referenzauflösung (Face/Edge) wird stabil kanonisch sortiert persisted.
+- Sweep-Profil/Pfad-Toporeferenzen melden ebenfalls taxonomische `tnp_ref_*` Codes.
 
 Damit ist der Kernel konsistenter, aber UI muss die neuen Fehlercodes sauber anzeigen.
 
@@ -64,7 +65,7 @@ conda run -n cad_env python -m pytest -q test/test_feature_error_status.py test/
 ```
 
 Resultat:
-- `157 passed, 2 skipped`
+- `159 passed, 2 skipped`
 
 ## Breaking Changes / Rest-Risiken
 - Kein API-Break auf Feature-Objekten.
