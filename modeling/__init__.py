@@ -519,6 +519,7 @@ class Body:
         self._mesh_edges = []
         self._last_operation_error = ""
         self._last_operation_error_details = {}
+        self._pending_tnp_failure = None
 
     def _get_face_center(self, face):
         """Helper for TNP registration."""
@@ -1206,6 +1207,73 @@ class Body:
 
         return payload
 
+    def _record_tnp_failure(
+        self,
+        *,
+        feature,
+        category: str,
+        reference_kind: str,
+        reason: str,
+        expected: Optional[int] = None,
+        resolved: Optional[int] = None,
+        strict: bool = False,
+    ) -> None:
+        """Merkt die letzte TNP-Fehlerkategorie, damit _safe_operation sie envelope-n kann."""
+        if feature is None:
+            self._pending_tnp_failure = None
+            return
+
+        category_norm = str(category or "").strip().lower() or "missing_ref"
+        if category_norm not in {"missing_ref", "mismatch", "drift"}:
+            category_norm = "missing_ref"
+
+        kind_norm = str(reference_kind or "").strip().lower() or "reference"
+        next_action_map = {
+            "missing_ref": f"{kind_norm.capitalize()}-Referenz neu waehlen und Feature erneut ausfuehren.",
+            "mismatch": f"{kind_norm.capitalize()}-ShapeID und Index stimmen nicht ueberein. Referenz neu waehlen.",
+            "drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
+        }
+
+        payload = {
+            "category": category_norm,
+            "reference_kind": kind_norm,
+            "reason": str(reason or "").strip() or "unspecified",
+            "strict": bool(strict),
+            "next_action": next_action_map.get(
+                category_norm,
+                "Referenzen pruefen und Feature erneut ausfuehren.",
+            ),
+            "feature_id": getattr(feature, "id", ""),
+            "feature_name": getattr(feature, "name", ""),
+            "feature_class": feature.__class__.__name__,
+        }
+        if expected is not None:
+            try:
+                payload["expected"] = max(0, int(expected))
+            except Exception:
+                pass
+        if resolved is not None:
+            try:
+                payload["resolved"] = max(0, int(resolved))
+            except Exception:
+                pass
+        self._pending_tnp_failure = payload
+
+    def _consume_tnp_failure(self, feature=None) -> Optional[dict]:
+        """Liefert und leert die letzte TNP-Fehlerkategorie (feature-gebunden)."""
+        pending = self._pending_tnp_failure
+        self._pending_tnp_failure = None
+        if not pending:
+            return None
+        if feature is None:
+            return dict(pending)
+
+        pending_feature_id = str(pending.get("feature_id") or "")
+        feature_id = str(getattr(feature, "id", "") or "")
+        if pending_feature_id and feature_id and pending_feature_id != feature_id:
+            return None
+        return dict(pending)
+
     def _build_operation_error_details(
         self,
         *,
@@ -1226,6 +1294,9 @@ class Body:
                 "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
                 "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
                 "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
+                "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
+                "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
+                "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
             }
             return defaults.get(
                 error_code,
@@ -1263,6 +1334,7 @@ class Body:
         try:
             self._last_operation_error = ""
             self._last_operation_error_details = {}
+            self._pending_tnp_failure = None
             result = op_func()
             
             if result is None:
@@ -1279,12 +1351,30 @@ class Body:
             if ref_diag and "refs:" not in err_msg:
                 err_msg = f"{err_msg} | refs: {ref_diag}"
             self._last_operation_error = err_msg
+            tnp_failure = self._consume_tnp_failure(feature)
+            tnp_code_by_category = {
+                "missing_ref": "tnp_ref_missing",
+                "mismatch": "tnp_ref_mismatch",
+                "drift": "tnp_ref_drift",
+            }
+            tnp_category = (
+                str((tnp_failure or {}).get("category") or "").strip().lower()
+                if isinstance(tnp_failure, dict)
+                else ""
+            )
+            error_code = tnp_code_by_category.get(tnp_category, "operation_failed")
+            tnp_hint = ""
+            if isinstance(tnp_failure, dict):
+                tnp_hint = str(tnp_failure.get("next_action") or "").strip()
             self._last_operation_error_details = self._build_operation_error_details(
                 op_name=op_name,
-                code="operation_failed",
+                code=error_code,
                 message=err_msg,
                 feature=feature,
+                hint=tnp_hint,
             )
+            if isinstance(tnp_failure, dict):
+                self._last_operation_error_details["tnp_failure"] = tnp_failure
             logger.warning(f"Feature '{op_name}' fehlgeschlagen: {err_msg}")
             
             if fallback_func:
@@ -1302,6 +1392,8 @@ class Body:
                         feature=feature,
                         hint="Feature neu referenzieren oder Parameter reduzieren.",
                     )
+                    if isinstance(tnp_failure, dict):
+                        self._last_operation_error_details["tnp_failure"] = tnp_failure
                     logger.error(
                         f"Strict Self-Heal: Fallback fÃ¼r '{op_name}' blockiert "
                         "(Topologie-Referenzen aktiv)."
@@ -4015,6 +4107,15 @@ class Body:
                 f"{feature.name}: Face-Referenz ist ungÃ¼ltig (ShapeID/face_indices). "
                 f"Kein Geometric-Fallback.{mismatch_hint}"
             )
+            self._record_tnp_failure(
+                feature=feature,
+                category="mismatch" if strict_topology_mismatch else "missing_ref",
+                reference_kind="face",
+                reason="shape_index_mismatch" if strict_topology_mismatch else "unresolved_topology_reference",
+                expected=max(len(valid_face_indices), expected_shape_refs),
+                resolved=max(len(resolved_face_indices), len(resolved_shape_ids)),
+                strict=bool(strict_face_feature),
+            )
             return []
 
         need_selector_recovery = (not has_topological_refs) and (not resolved_faces)
@@ -4060,6 +4161,64 @@ class Body:
 
         if not resolved_faces:
             return []
+
+        def _face_sort_key(face_obj):
+            face_idx = _face_index(face_obj)
+            if face_idx is not None:
+                return (0, int(face_idx))
+            try:
+                center = face_obj.center()
+                area = float(face_obj.area if hasattr(face_obj, "area") else 0.0)
+                return (
+                    1,
+                    round(float(center.X), 6),
+                    round(float(center.Y), 6),
+                    round(float(center.Z), 6),
+                    round(area, 6),
+                )
+            except Exception:
+                return (2, str(face_obj))
+
+        resolved_faces = sorted(resolved_faces, key=_face_sort_key)
+        resolved_face_indices = sorted(
+            {
+                int(idx)
+                for idx in resolved_face_indices
+                if isinstance(idx, int) and int(idx) >= 0
+            }
+        )
+
+        # PI-002: ShapeIDs in derselben stabilen Reihenfolge wie Face-Indizes persistieren.
+        if service is not None and resolved_faces:
+            canonical_shape_ids = []
+            for local_idx, face_obj in enumerate(resolved_faces):
+                shape_id = None
+                try:
+                    shape_id = service.find_shape_id_by_face(face_obj, require_exact=True)
+                except Exception:
+                    shape_id = None
+                if shape_id is None:
+                    try:
+                        shape_id = service.find_shape_id_by_face(face_obj)
+                    except Exception:
+                        shape_id = None
+                if shape_id is None and hasattr(face_obj, "wrapped"):
+                    try:
+                        fc = face_obj.center()
+                        area = face_obj.area if hasattr(face_obj, "area") else 0.0
+                        shape_id = service.register_shape(
+                            ocp_shape=face_obj.wrapped,
+                            shape_type=ShapeType.FACE,
+                            feature_id=feature.id,
+                            local_index=local_idx,
+                            geometry_data=(fc.X, fc.Y, fc.Z, area),
+                        )
+                    except Exception:
+                        shape_id = None
+                if shape_id is not None:
+                    canonical_shape_ids.append(shape_id)
+            if canonical_shape_ids:
+                resolved_shape_ids = canonical_shape_ids
 
         # Persistiere aktualisierte Referenzen zurÃ¼ck ins Feature
         try:
@@ -6293,6 +6452,15 @@ class Body:
                         logger.warning(
                             f"{feature_name}: {reason} -> Abbruch ohne Fallback."
                         )
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="mismatch",
+                        reference_kind="edge",
+                        reason="single_ref_pair_conflict" if pair_conflict else "strict_single_ref_pair_mismatch",
+                        expected=max(len(valid_edge_indices), expected_shape_refs),
+                        resolved=max(len(resolved_edge_indices), len(resolved_shape_ids)),
+                        strict=bool(strict_edge_feature),
+                    )
                     return []
             else:
                 if is_enabled("tnp_debug_logging"):
@@ -6300,6 +6468,15 @@ class Body:
                         f"{feature_name}: ShapeID/Index-Mismatch in strict_dual_edge_refs "
                         "→ Abbruch ohne Fallback."
                     )
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="mismatch",
+                    reference_kind="edge",
+                    reason="strict_dual_edge_refs_mismatch",
+                    expected=max(len(valid_edge_indices), expected_shape_refs),
+                    resolved=max(len(resolved_edge_indices), len(resolved_shape_ids)),
+                    strict=bool(strict_edge_feature),
+                )
                 return []
 
         # TNP v4.1: Bei Topology-Mismatch zuerst Geometric-Fallback probieren
@@ -6309,6 +6486,15 @@ class Body:
             logger.warning(
                 f"{feature_name}: Topologie-Referenzen ungÃ¼ltig{mismatch_hint}. "
                 f"Versuche Geometric-Fallback ({len(geometric_selectors)} Selektoren)..."
+            )
+            self._record_tnp_failure(
+                feature=feature,
+                category="mismatch" if strict_topology_mismatch else "missing_ref",
+                reference_kind="edge",
+                reason="shape_index_mismatch" if strict_topology_mismatch else "unresolved_topology_reference",
+                expected=max(len(valid_edge_indices), expected_shape_refs),
+                resolved=max(len(resolved_edge_indices), len(resolved_shape_ids)),
+                strict=bool(strict_edge_feature),
             )
             # Don't return here - try geometric recovery first!
 
@@ -6343,6 +6529,25 @@ class Body:
                 recovered = edges_after_geo - edges_before_geo
                 logger.success(f"  Geometric-Fallback: {recovered}/{len(geometric_selectors)} Edges wiederhergestellt")
 
+        def _edge_sort_key(edge_obj):
+            edge_idx = _edge_index_of(edge_obj)
+            if edge_idx is not None:
+                return (0, int(edge_idx))
+            try:
+                center = edge_obj.center()
+                edge_len = float(edge_obj.length if hasattr(edge_obj, "length") else 0.0)
+                return (
+                    1,
+                    round(float(center.X), 6),
+                    round(float(center.Y), 6),
+                    round(float(center.Z), 6),
+                    round(edge_len, 6),
+                )
+            except Exception:
+                return (2, str(edge_obj))
+
+        resolved_edges = sorted(resolved_edges, key=_edge_sort_key)
+
         # 4) Referenzen konsolidieren (indices + optional ShapeIDs)
         resolved_indices = []
         for edge in resolved_edges:
@@ -6351,7 +6556,7 @@ class Body:
                     resolved_indices.append(edge_idx)
                     break
         if resolved_indices:
-            feature.edge_indices = resolved_indices
+            feature.edge_indices = sorted({int(idx) for idx in resolved_indices if int(idx) >= 0})
 
         if service is not None and resolved_edges:
             new_shape_ids = []
