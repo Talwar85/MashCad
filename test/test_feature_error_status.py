@@ -1,10 +1,18 @@
 import pytest
 
-from modeling import Body, DraftFeature, FilletFeature, HoleFeature, PrimitiveFeature
+from modeling import Body, Document, DraftFeature, FilletFeature, HoleFeature, PrimitiveFeature
 
 
 def _make_box_body(name: str = "error_status_body") -> Body:
     body = Body(name)
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0))
+    return body
+
+
+def _make_box_body_with_document(name: str = "error_status_doc_body") -> Body:
+    doc = Document(f"{name}_doc")
+    body = Body(name, document=doc)
+    doc.add_body(body)
     body.add_feature(PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0))
     return body
 
@@ -152,3 +160,46 @@ def test_safe_operation_maps_ocp_import_errors_to_dependency_code():
     assert details.get("code") == "ocp_api_unavailable"
     assert dep.get("kind") == "ocp_api"
     assert dep.get("exception") == "ImportError"
+
+
+def test_failed_fillet_exposes_rollback_metrics_in_error_envelope():
+    body = _make_box_body_with_document("fillet_error_rollback")
+    base_volume = float(body._build123d_solid.volume)
+    fillet = FilletFeature(radius=0.8, edge_indices=[0, 1, 2, 3])
+    body.add_feature(fillet)
+    assert fillet.status == "SUCCESS"
+
+    fillet.radius = 50.0
+    body._rebuild()
+
+    details = fillet.status_details or {}
+    rollback = details.get("rollback") or {}
+
+    assert fillet.status == "ERROR"
+    assert details.get("code") == "operation_failed"
+    assert rollback.get("from") is not None
+    assert rollback.get("to") is not None
+    assert float(body._build123d_solid.volume) == pytest.approx(base_volume, rel=1e-6, abs=1e-6)
+
+
+def test_failed_hole_exposes_rollback_metrics_in_error_envelope():
+    body = _make_box_body_with_document("hole_error_rollback")
+    pre_volume = float(body._build123d_solid.volume)
+
+    hole = HoleFeature(
+        hole_type="simple",
+        diameter=0.0,
+        depth=5.0,
+        position=(0.0, 0.0, 10.0),
+        direction=(0.0, 0.0, -1.0),
+    )
+    body.add_feature(hole)
+
+    details = hole.status_details or {}
+    rollback = details.get("rollback") or {}
+
+    assert hole.status == "ERROR"
+    assert details.get("code") == "operation_failed"
+    assert rollback.get("from") is not None
+    assert rollback.get("to") is not None
+    assert float(body._build123d_solid.volume) == pytest.approx(pre_volume, rel=1e-6, abs=1e-6)

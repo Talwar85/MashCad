@@ -5152,6 +5152,15 @@ class Body:
                 f"diag={diag_text}mm"
             )
 
+        def _ensure_rollback_details(details: dict, rollback_from, rollback_to) -> dict:
+            payload = dict(details or {})
+            if "rollback" not in payload:
+                payload["rollback"] = {
+                    "from": rollback_from,
+                    "to": rollback_to,
+                }
+            return payload
+
         def _is_local_modifier_feature(feat) -> bool:
             return isinstance(feat, (ChamferFeature, FilletFeature))
 
@@ -5309,11 +5318,17 @@ class Body:
                 )
                 feature.status = "ERROR"
                 feature.status_message = blocked_msg
-                feature.status_details = self._build_operation_error_details(
+                blocked_details = self._build_operation_error_details(
                     op_name=f"Blocked_{i}",
                     code="blocked_by_upstream_error",
                     message=blocked_msg,
                     feature=feature,
+                )
+                rollback_metrics = _solid_metrics(current_solid)
+                feature.status_details = _ensure_rollback_details(
+                    blocked_details,
+                    rollback_metrics,
+                    rollback_metrics,
                 )
                 continue
 
@@ -5955,6 +5970,20 @@ class Body:
             else:
                 feature.status_message = ""
                 feature.status_details = {}
+
+            if status == "ERROR":
+                rollback_from = _solid_metrics(new_solid if new_solid is not None else current_solid)
+                rollback_to = _solid_metrics(solid_before_feature)
+                feature.status_details = _ensure_rollback_details(
+                    feature.status_details,
+                    rollback_from,
+                    rollback_to,
+                )
+                self._last_operation_error_details = _ensure_rollback_details(
+                    self._last_operation_error_details,
+                    rollback_from,
+                    rollback_to,
+                )
 
             # === Geometry Delta (Transparenz fÃ¼r Endanwender) ===
             # Berechnet den Geometrie-Unterschied vor/nach jeder Feature-Anwendung.
