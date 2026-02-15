@@ -299,7 +299,22 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             self._split_dragging = False
             self.setCursor(Qt.ArrowCursor)
 
-        self.request_render()
+        self._safe_request_render()
+
+    def _safe_request_render(self, immediate: bool = False):
+        """
+        Queue a viewport render only when the plotter is available.
+        Avoid direct render calls in high-frequency abort paths.
+        """
+        if not HAS_PYVISTA:
+            return
+        plotter = getattr(self, "plotter", None)
+        if plotter is None:
+            return
+        try:
+            request_render(plotter, immediate=immediate)
+        except Exception as e:
+            logger.debug(f"[viewport] Render request skipped: {e}")
 
     def clear_selection(self):
         """
@@ -324,10 +339,7 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
                 self.selection_manager.clear_selection()
 
         # 4. Trigger Repaint
-        if hasattr(self, 'request_render'):
-            self.request_render()
-        elif hasattr(self, 'plotter'):
-            self.plotter.render()
+        self._safe_request_render()
             
         logger.debug("[Viewport] Selection cleared via Abort/Escape")
 
@@ -3031,12 +3043,10 @@ class PyVistaViewport(QWidget, ExtrudeMixin, PickingMixin, BodyRenderingMixin, T
             else:
                 # Kein Face getroffen -> Background Click
                 if not is_multi:
-                    # 1. Face Selection clearen
-                    if self.selected_face_ids:
-                        self.selected_face_ids.clear()
-                        self._draw_selectable_faces_from_detector()
-                        self.face_selected.emit(-1)
-                    
+                    # 1. Alle Selections clearen (konsistent mit abort logic)
+                    self.clear_selection()
+                    self._draw_selectable_faces_from_detector()
+
                     # 2. Body Selection clearen (via Signal)
                     self.background_clicked.emit()
 

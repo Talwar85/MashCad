@@ -1,6 +1,10 @@
 
+import os
 import pytest
 import sys
+import time
+
+os.environ.setdefault("QT_OPENGL", "software")
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
@@ -49,9 +53,6 @@ class TestAbortLogic:
         QTest.qWaitForWindowExposed(main_window.hole_panel)
 
         # 2. Press Escape
-        # Focus might be lost if we just send to main_window, so send to panel or app focus
-        # But Abort logic is in MainWindow.eventFilter or keyPressEvent.
-        # MainWindow installs event filter on app or itself.
         QTest.keyClick(main_window, Qt.Key_Escape)
 
         # 3. Verify Panel Closed and Mode Reset
@@ -68,14 +69,12 @@ class TestAbortLogic:
     def test_priority_2_input_focus_clear(self, main_window):
         """Test that Escape clears focus from input fields (Priority 2b)."""
         # 1. Focus an input field
-        # We need a visible input. Transform panel is good.
         main_window.transform_panel.show()
         input_field = main_window.transform_panel.x_input
         input_field.setFocus()
         QTest.qWait(50)
         QApplication.processEvents()
 
-        # In headless/CI OpenGL setups focus assignment can fail nondeterministically.
         if input_field.hasFocus() is False:
             pytest.xfail("Headless focus acquisition is unreliable in this environment")
 
@@ -84,7 +83,7 @@ class TestAbortLogic:
 
         # 3. Verify Focus Lost
         assert input_field.hasFocus() is False
-        # Panel should still be visible (Priority 2 is Clear Focus > Close Panel)
+        # Panel should still be visible
         assert main_window.transform_panel.isVisible() is True
 
     def test_priority_3_sketch_tool_cancellation(self, main_window):
@@ -111,7 +110,6 @@ class TestAbortLogic:
         main_window._set_mode("3d")
         viewport = main_window.viewport_3d
         
-        # Mocking selection state manually
         viewport.selected_faces = ["face_1"]
         viewport.selected_edges = []
 
@@ -134,17 +132,97 @@ class TestAbortLogic:
         # Setup Panel Open (Medium Priority)
         main_window._hole_mode = True
         main_window.hole_panel.show()
-        main_window.setFocus() # Ensure focus is on main window so event filter catches it
+        main_window.setFocus()
+        QTest.qWait(50)
 
         # 2. Press Escape ONCE
         QTest.keyClick(main_window, Qt.Key_Escape)
 
         # 3. Assertion: Panel closed (Priority 2), Selection REMAINS (Priority 4 not reached)
         assert main_window._hole_mode is False
-        assert len(viewport.selected_faces) == 1 # Still selected!
+        assert len(viewport.selected_faces) == 1
 
         # 4. Press Escape AGAIN
         QTest.keyClick(main_window, Qt.Key_Escape)
 
         # 5. Assertion: Selection now cleared
         assert len(viewport.selected_faces) == 0
+
+    def test_right_click_cancels_drag(self, main_window):
+        """Test that Right-Click (Press) cancels an active drag (Priority 1)."""
+        viewport = main_window.viewport_3d
+        viewport.is_dragging = True
+        
+        # Simulate Right Button Press on Viewport
+        center = viewport.rect().center()
+        QTest.mousePress(viewport, Qt.RightButton, Qt.NoModifier, center)
+        
+        assert viewport.is_dragging is False
+
+    def test_right_click_background_clears_selection(self, main_window, monkeypatch):
+        """Test that Right-Click (Click) on empty space clears selection (Priority 4)."""
+        viewport = main_window.viewport_3d
+        viewport.selected_faces = ["face_1"]
+        
+        # Mock pick to return -1 (Background)
+        monkeypatch.setattr(viewport, 'pick', lambda x, y, selection_filter=None: -1)
+        
+        # Simulate Right Click (Press + Release short duration)
+        center = viewport.rect().center()
+        QTest.mousePress(viewport, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50) # Short wait < 300ms
+        QTest.mouseRelease(viewport, Qt.RightButton, Qt.NoModifier, center)
+        
+        assert len(viewport.selected_faces) == 0
+
+    def test_combined_drag_and_panel(self, main_window):
+        """
+        Test combined state: Dragging while Panel is open.
+        Escape should cancel Drag first, then Panel.
+        """
+        viewport = main_window.viewport_3d
+        viewport.is_dragging = True
+        
+        main_window._hole_mode = True
+        main_window.hole_panel.show()
+        main_window.setFocus()
+        QTest.qWait(50)
+        
+        # 1. Escape -> Cancel Drag
+        QTest.keyClick(main_window, Qt.Key_Escape)
+        assert viewport.is_dragging is False
+        assert main_window._hole_mode is True
+        assert main_window.hole_panel.isVisible() is True
+        
+        # 2. Escape -> Close Panel
+        QTest.keyClick(main_window, Qt.Key_Escape)
+        assert main_window._hole_mode is False
+        assert main_window.hole_panel.isVisible() is False
+
+    def test_repeated_escape_to_idle(self, main_window):
+        """
+        Test repeated escape sequence from deep state to idle.
+        Tool > Selection > Idle
+        """
+        # Setup: Extrude Mode Active AND Selection existing
+        main_window._set_mode("3d")
+        viewport = main_window.viewport_3d
+        viewport.selected_faces = ["face_1"]
+        
+        # Activate Extrude Panel (Priority 2)
+        viewport.extrude_mode = True
+        main_window.setFocus()
+        QTest.qWait(50)
+        
+        # 1. Escape -> Cancel Extrude
+        QTest.keyClick(main_window, Qt.Key_Escape)
+        assert viewport.extrude_mode is False
+        assert len(viewport.selected_faces) == 1
+        
+        # 2. Escape -> Clear Selection
+        QTest.keyClick(main_window, Qt.Key_Escape)
+        assert len(viewport.selected_faces) == 0
+        
+        # 3. Escape -> Idle (No Op, No Crash)
+        QTest.keyClick(main_window, Qt.Key_Escape)
+        assert True # Survived
