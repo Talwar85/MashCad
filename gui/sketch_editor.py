@@ -748,6 +748,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # W16 Paket B: Discoverability v2 - Navigation und Tutorial-Modus
         self._peek_3d_active = False  # True wenn 3D-Peek aktiv (Space gehalten)
         self._tutorial_mode_enabled = False  # Tutorial-Modus für neue Nutzer
+        self._tutorial_mode = self._tutorial_mode_enabled  # API-Alias für W17 Tests
         self._hint_priority_levels = {
             'CRITICAL': 3,   # Errors, Blockierende Hinweise
             'WARNING': 2,    # Wichtige Warnungen
@@ -4521,13 +4522,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         else:
             return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
     
-    def _get_tutorial_hint_for_tool(self):
+    def _get_tutorial_hint_for_tool(self, tool=None):
         """
         W16 Paket B: Liefert Tutorial-Hinweise für den aktuellen Tool-Modus.
+        
+        Args:
+            tool: Optional Tool-Constant (default: current_tool)
         
         Returns:
             str: Tutorial-Hinweis oder leerer String
         """
+        target_tool = tool if tool is not None else self.current_tool
         tutorial_hints = {
             SketchTool.SELECT: tr("Tipp: Ziehe Kreise am Rand um den Radius zu ändern"),
             SketchTool.LINE: tr("Tipp: Nutze Tab für exakte Längen/Winkeleingabe"),
@@ -4536,7 +4541,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.DIMENSION: tr("Tipp: Dimensionen schränken die Geometrie ein"),
             SketchTool.FILLET_2D: tr("Tipp: Ziehe nacheinander zwei Linien für eine Rundung"),
         }
-        return tutorial_hints.get(self.current_tool, "")
+        return tutorial_hints.get(target_tool, "")
     
     def set_tutorial_mode(self, enabled: bool):
         """
@@ -4546,6 +4551,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             enabled: True für Tutorial-Modus aktiviert
         """
         self._tutorial_mode_enabled = enabled
+        self._tutorial_mode = enabled  # API-Alias synchronisieren
         self._show_tool_hint()  # Sofort aktualisieren
         if enabled:
             self.show_message(tr("Tutorial-Modus aktiviert - Erweiterte Hinweise werden angezeigt"), 3000)

@@ -9,7 +9,7 @@
 # W11: Extended test suite for Error UX v2 Product Flows, Selection-State Lifecycle, Discoverability v5 Context
 # W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert, UI-Gate läuft stabil durch
 # W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
-# W14: Paket A-F - SU-006 Abort-State-Machine, SU-009 Discoverability, UX-003 Error UX v2 E2E Wiring
+# W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
 
 param(
     [switch]$VerboseOutput = $false
@@ -19,16 +19,25 @@ $ErrorActionPreference = "Continue"
 $UI_TESTS = @(
     "test/test_ui_abort_logic.py",
     "test/harness/test_interaction_consistency.py",
+    "test/harness/test_interaction_direct_manipulation_w17.py",
     "test/test_selection_state_unified.py",
     "test/test_browser_tooltip_formatting.py",
     "test/test_discoverability_hints.py",
+    "test/test_discoverability_hints_w17.py",
     "test/test_error_ux_v2_integration.py",
-    "test/test_feature_commands_atomic.py"
+    "test/test_error_ux_v2_e2e.py",
+    "test/test_feature_commands_atomic.py",
+    "test/test_sketch_controller.py",
+    "test/test_export_controller.py",
+    "test/test_feature_controller.py"
 )
 
-Write-Host "=== UI-Gate Started ===" -ForegroundColor Cyan
+Write-Host "=== UI-Gate Started (W18 RECOVERY) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Tests: $($UI_TESTS.Count) suites"
+Write-Host "Max Duration: 600s (10 min timeout per shard)"
+Write-Host "Retry Policy: 3 attempts on BLOCKED_INFRA"
+Write-Host "W18 Status: Recovery/Closeout for W17 gaps"
 Write-Host ""
 
 $start = Get-Date

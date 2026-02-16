@@ -59,6 +59,8 @@ from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
 from gui.sketch_controller import SketchController  # W16 Paket D: Sketch UI-Orchestrierung
+from gui.export_controller import ExportController  # W17 Paket C: Export UI-Orchestrierung
+from gui.feature_controller import FeatureController  # W17 Paket C: Feature UI-Orchestrierung
 
 # STL Reconstruction (TNP-Exempt)
 try:
@@ -129,6 +131,10 @@ class MainWindow(QMainWindow):
         
         # W16 Paket D: SketchController für UI-Orchestrierung
         self.sketch_controller = SketchController(self)
+        
+        # W17 Paket C: ExportController und FeatureController für UI-Orchestrierung
+        self.export_controller = ExportController(self)
+        self.feature_controller = FeatureController(self)
 
         # TNP v4.0: Debug Callback für Edge-Auflösungs-Visualisierung
         self.tnp_debug_manager.setup_callback()
