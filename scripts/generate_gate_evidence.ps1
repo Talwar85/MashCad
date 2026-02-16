@@ -150,6 +150,7 @@ $coreTests = @(
     "test/test_tnp_stability.py",
     "test/test_feature_edit_robustness.py",
     "test/test_project_roundtrip_persistence.py",
+    "test/test_showstopper_red_flag_pack.py",
     "test/test_parametric_reference_modelset.py"
 )
 

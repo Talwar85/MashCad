@@ -1274,6 +1274,50 @@ class Body:
             return None
         return dict(pending)
 
+    @staticmethod
+    def _classify_error_code(error_code: str) -> tuple[str, str]:
+        """Mappt Error-Code auf stabile Envelope-Klassen fuer UI/QA."""
+        code_norm = str(error_code or "").strip().lower()
+        warning_codes = {
+            "fallback_used",
+            "tnp_ref_drift",
+        }
+        blocked_codes = {
+            "blocked_by_upstream_error",
+            "fallback_blocked_strict",
+        }
+        critical_codes = {
+            "rebuild_finalize_failed",
+        }
+        if code_norm in critical_codes:
+            return "CRITICAL", "critical"
+        if code_norm in warning_codes:
+            return "WARNING_RECOVERABLE", "warning"
+        if code_norm in blocked_codes:
+            return "BLOCKED", "blocked"
+        return "ERROR", "error"
+
+    @classmethod
+    def _normalize_status_details_for_load(cls, status_details: Any) -> dict:
+        """
+        Backward-Compat fuer persistierte status_details.
+
+        Legacy-Dateien koennen `code` ohne `status_class`/`severity` enthalten.
+        Beim Laden werden diese Felder deterministisch nachgezogen.
+        """
+        if not isinstance(status_details, dict):
+            return {}
+
+        normalized = dict(status_details)
+        code = str(normalized.get("code", "") or "").strip()
+        has_status_class = bool(str(normalized.get("status_class", "") or "").strip())
+        has_severity = bool(str(normalized.get("severity", "") or "").strip())
+        if code and (not has_status_class or not has_severity):
+            status_class, severity = cls._classify_error_code(code)
+            normalized.setdefault("status_class", status_class)
+            normalized.setdefault("severity", severity)
+        return normalized
+
     def _build_operation_error_details(
         self,
         *,
@@ -1287,6 +1331,7 @@ class Body:
         def _default_next_action(error_code: str) -> str:
             defaults = {
                 "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
+                "fallback_used": "Ergebnis wurde via Fallback erzeugt. Geometrie pruefen und Parameter/Referenz ggf. nachziehen.",
                 "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
                 "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
                 "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
@@ -1305,11 +1350,14 @@ class Body:
                 "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
             )
 
+        status_class, severity = self._classify_error_code(code)
         details = {
             "schema": "error_envelope_v1",
             "code": code,
             "operation": op_name,
             "message": message,
+            "status_class": status_class,
+            "severity": severity,
         }
         if feature is not None:
             details["feature"] = {
@@ -1389,9 +1437,21 @@ class Body:
             )
             error_code = tnp_code_by_category.get(tnp_category, "operation_failed")
             dependency_error = None
-            if error_code == "operation_failed" and isinstance(e, (ImportError, ModuleNotFoundError)):
+            if error_code == "operation_failed":
                 dep_msg = str(e).strip() or e.__class__.__name__
-                if "OCP" in dep_msg or "No module named 'OCP" in dep_msg or "cannot import name" in dep_msg:
+                dep_msg_lower = dep_msg.lower()
+                is_direct_dep_error = isinstance(e, (ImportError, ModuleNotFoundError, AttributeError))
+                ocp_markers = (
+                    "ocp",
+                    "no module named 'ocp",
+                    "cannot import name",
+                    "has no attribute",
+                )
+                is_ocp_dependency_error = is_direct_dep_error and any(marker in dep_msg_lower for marker in ocp_markers)
+                if (not is_ocp_dependency_error) and any(marker in dep_msg_lower for marker in ("cannot import name", "no module named", "has no attribute")):
+                    # Wrapped dependency error (e.g. RuntimeError with import text)
+                    is_ocp_dependency_error = "ocp" in dep_msg_lower
+                if is_ocp_dependency_error:
                     error_code = "ocp_api_unavailable"
                     dependency_error = {
                         "kind": "ocp_api",
@@ -9612,7 +9672,9 @@ class Body:
                 "suppressed": feat_dict.get("suppressed", False),
                 "status": feat_dict.get("status", "OK"),
                 "status_message": feat_dict.get("status_message", ""),
-                "status_details": feat_dict.get("status_details", {}),
+                "status_details": cls._normalize_status_details_for_load(
+                    feat_dict.get("status_details", {})
+                ),
             }
 
             feat = None
@@ -10489,7 +10551,7 @@ class Document:
             self.root_component: Component = Component(name="Root")
             self.root_component.is_active = True
             self._active_component: Optional[Component] = self.root_component
-            logger.info(f"[ASSEMBLY] Component-System aktiviert fÃ¼r '{name}'")
+            logger.info(f"[ASSEMBLY] Component-System aktiviert fuer '{name}'")
         else:
             # Legacy: Direkte Listen (fÃ¼r Backward-Compatibility)
             self.root_component = None
