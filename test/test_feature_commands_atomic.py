@@ -66,6 +66,72 @@ def test_add_feature_command_redo_rolls_back_on_new_feature_error(monkeypatch):
     assert "new feature errors" in ui.notifications[0][1]
 
 
+def test_add_feature_command_detects_envelope_error_even_if_status_is_ok(monkeypatch):
+    body = _make_body_with_box("add_feature_error_envelope_status_ok")
+    ui = _DummyMainWindow()
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        name="Push/Pull (Join)",
+    )
+    before_feature_ids = [feat.id for feat in body.features]
+
+    def _failing_add_feature(feat, rebuild=True):
+        body.features.append(feat)
+        feat.status = "OK"
+        feat.status_message = "synthetic status mismatch"
+        feat.status_details = {
+            "code": "operation_failed",
+            "status_class": "ERROR",
+            "severity": "error",
+        }
+
+    monkeypatch.setattr(body, "add_feature", _failing_add_feature)
+
+    cmd = AddFeatureCommand(body, feature, ui)
+    cmd.redo()
+
+    assert [feat.id for feat in body.features] == before_feature_ids
+    assert feature not in body.features
+    assert len(ui.notifications) > 0
+    assert ui.notifications[0][0] == "Rollback"
+    assert "new feature errors" in ui.notifications[0][1]
+
+
+def test_add_feature_command_keeps_recoverable_warning_without_rollback(monkeypatch):
+    body = _make_body_with_box("add_feature_recoverable_warning")
+    ui = _DummyMainWindow()
+    feature = ExtrudeFeature(
+        sketch=None,
+        distance=5.0,
+        operation="Join",
+        face_index=0,
+        name="Push/Pull (Join)",
+    )
+    before_feature_ids = [feat.id for feat in body.features]
+
+    def _warning_add_feature(feat, rebuild=True):
+        body.features.append(feat)
+        feat.status = "WARNING"
+        feat.status_message = "synthetic recoverable warning"
+        feat.status_details = {
+            "code": "fallback_used",
+            "status_class": "WARNING_RECOVERABLE",
+            "severity": "warning",
+        }
+
+    monkeypatch.setattr(body, "add_feature", _warning_add_feature)
+
+    cmd = AddFeatureCommand(body, feature, ui)
+    cmd.redo()
+
+    assert len(body.features) == len(before_feature_ids) + 1
+    assert feature in body.features
+    assert len(ui.notifications) == 0
+
+
 def test_delete_feature_command_redo_rolls_back_on_rebuild_regression(monkeypatch):
     body = _make_body_with_box("delete_feature_rollback")
     second = PrimitiveFeature(primitive_type="box", length=8.0, width=8.0, height=8.0)

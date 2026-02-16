@@ -28,11 +28,45 @@ def _solid_signature_safe(body) -> dict:
 
 
 def _collect_error_feature_ids(body) -> set:
-    """Collect all feature IDs currently marked as ERROR."""
+    """Collect feature IDs currently in a blocking/error state."""
+
+    def _is_feature_error_state(feature) -> bool:
+        status = str(getattr(feature, "status", "") or "").strip().upper()
+        if status == "ERROR":
+            return True
+
+        details = getattr(feature, "status_details", {}) or {}
+        if not isinstance(details, dict):
+            return False
+
+        status_class = str(details.get("status_class", "") or "").strip().upper()
+        if status_class in {"ERROR", "CRITICAL", "BLOCKED"}:
+            return True
+
+        severity = str(details.get("severity", "") or "").strip().lower()
+        if severity in {"error", "critical", "blocked"}:
+            return True
+
+        # Legacy fallback when status_class/severity are not yet present.
+        code = str(details.get("code", "") or "").strip().lower()
+        legacy_error_codes = {
+            "operation_failed",
+            "fallback_failed",
+            "tnp_ref_missing",
+            "tnp_ref_mismatch",
+            "rebuild_finalize_failed",
+            "ocp_api_unavailable",
+            "blocked_by_upstream_error",
+            "fallback_blocked_strict",
+            "self_heal_rollback_invalid_result",
+            "self_heal_rollback_geometry_drift",
+        }
+        return code in legacy_error_codes
+
     return {
         feat.id
         for feat in getattr(body, "features", [])
-        if getattr(feat, "status", "") == "ERROR"
+        if _is_feature_error_state(feat)
     }
 
 
