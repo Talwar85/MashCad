@@ -1,9 +1,11 @@
 """
-Discoverability v3 Production Tests (Paket C)
+Discoverability v4 Production Tests (Paket C)
 ==============================================
 Validiert dass Discoverability-Hinweise sichtbar, aber nicht störend sind.
 
-Author: GLM 4. (UX/WORKFLOW + QA Integration Cell)
+W10 Paket C: Erweitert um Anti-Spam Features (Cooldown, Priority, No-Repeat).
+
+Author: GLM 4.7 (UX/WORKFLOW + QA Integration Cell)
 Date: 2026-02-16
 Branch: feature/v1-ux-aiB
 """
@@ -203,3 +205,202 @@ class TestDiscoverabilityHints:
         assert editor is not None
         # Letzte Nachricht sollte gesetzt sein
         assert "Nachricht" in editor._hud_message
+
+    # =========================================================================
+    # W10 Paket C: Discoverability v4 Anti-Spam Tests
+    # =========================================================================
+
+    def test_hint_cooldown_prevents_duplicate_within_window(self, main_window):
+        """
+        C-W10-R1: Hint-Cooldown verhindert Duplikate innerhalb des Cooldown-Fensters.
+
+        Stellt sicher dass derselbe Hinweis nicht mehrfach innerhalb des
+        Cooldown-Fensters (5s) angezeigt wird.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Ersten Hinweis anzeigen
+        result1 = editor.show_message("Cooldown Test", duration=1000)
+        assert result1 is True  # Erster Hinweis sollte angezeigt werden
+
+        # Sofort wieder derselbe Hinweis (sollte unterdrückt werden)
+        QTest.qWait(50)
+        result2 = editor.show_message("Cooldown Test", duration=1000)
+        assert result2 is False  # Zweiter Hinweis sollte unterdrückt werden
+
+        # History sollte den Hinweis enthalten
+        hint_texts = [text for text, _ in editor._hint_history]
+        assert "Cooldown Test" in hint_texts
+
+    def test_hint_cooldown_allows_after_duration(self, main_window):
+        """
+        C-W10-R2: Hint-Cooldown erlaubt gleichen Hinweis nach Ablauf der Dauer.
+
+        Stellt sicher dass nach Ablauf der Cooldown-Dauer der Hinweis
+        wieder angezeigt werden kann.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Cooldown auf kurze Dauer setzen für Test
+        editor._hint_cooldown_ms = 200
+
+        # Ersten Hinweis anzeigen
+        result1 = editor.show_message("Cooldown Test 2", duration=100)
+        assert result1 is True
+
+        # Warten bis Cooldown abgelaufen
+        QTest.qWait(250)
+
+        # Gleichfalls wieder anzeigen (sollte jetzt erlaubt sein)
+        result2 = editor.show_message("Cooldown Test 2", duration=100)
+        assert result2 is True  # Nach Cooldown sollte erlaubt sein
+
+    def test_hint_force_parameter_ignores_cooldown(self, main_window):
+        """
+        C-W10-R3: force=True ignoriert Cooldown.
+
+        Stellt sicher dass wichtige Hinweise mit force=True
+        auch während Cooldown angezeigt werden.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Ersten Hinweis anzeigen
+        result1 = editor.show_message("Force Test", duration=1000)
+        assert result1 is True
+
+        # Sofort wieder mit force=True (sollte angezeigt werden)
+        QTest.qWait(50)
+        result2 = editor.show_message("Force Test", duration=1000, force=True)
+        assert result2 is True  # force=True sollte Cooldown ignorieren
+
+    def test_hint_priority_overrides_cooldown(self, main_window):
+        """
+        C-W10-R4: Priority überschreibt Cooldown.
+
+        Stellt sicher dass Hinweise mit hoher Priority (priority > 0)
+        auch während Cooldown angezeigt werden.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Ersten Hinweis mit Priority 0 anzeigen
+        result1 = editor.show_message("Priority Test", duration=1000, priority=0)
+        assert result1 is True
+
+        # Sofort wieder mit höherer Priority (sollte angezeigt werden)
+        QTest.qWait(50)
+        result2 = editor.show_message("Priority Test", duration=1000, priority=1)
+        assert result2 is True  # priority=1 sollte Cooldown brechen
+
+    def test_hint_no_repeat_within_cooldown(self, main_window):
+        """
+        C-W10-R5: No-Repeat verhindert identische Hinweise im Cooldown.
+
+        Stellt sicher dass die Hint-History Duplikate erkennt und
+        denselben Text nicht mehrfach speichert.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Derselbe Hinweis mehrfach
+        editor.show_message("No Repeat Test", duration=100)
+        QTest.qWait(50)
+        editor.show_message("No Repeat Test", duration=100)
+        QTest.qWait(50)
+        editor.show_message("No Repeat Test", duration=100)
+
+        # History sollte nur einen Eintrag für diesen Text haben
+        hint_texts = [text for text, _ in editor._hint_history]
+        count = hint_texts.count("No Repeat Test")
+        assert count == 1  # Nur ein Eintrag, keine Duplikate
+
+    def test_hint_different_messages_allowed(self, main_window):
+        """
+        C-W10-R6: Verschiedene Hinweise sind nicht vom Cooldown betroffen.
+
+        Stellt sicher dass unterschiedliche Hinweise sofort angezeigt werden,
+        auch wenn ein anderer Hinweis erst kürzlich gezeigt wurde.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Ersten Hinweis anzeigen
+        result1 = editor.show_message("Message 1", duration=1000)
+        assert result1 is True
+
+        # Anderer Hinweis sofort (sollte erlaubt sein)
+        QTest.qWait(50)
+        result2 = editor.show_message("Message 2", duration=1000)
+        assert result2 is True  # Unterschiedlicher Text sollte erlaubt sein
+
+    def test_hint_history_max_length(self, main_window):
+        """
+        C-W10-R7: Hint-History begrenzt auf Max-Länge.
+
+        Stellt sicher dass die Hint-History nicht unendlich wächst
+        sondern auf _hint_max_history begrenzt ist.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Max-Länge auf 5 setzen für Test
+        editor._hint_max_history = 5
+
+        # Mehr Hinweise als Max-Länge anzeigen
+        for i in range(10):
+            editor.show_message(f"Hint {i}", duration=100, force=True)
+            QTest.qWait(20)
+
+        # History sollte nicht größer sein als Max-Länge
+        assert len(editor._hint_history) <= editor._hint_max_history
+
+        # Die letzten 5 Hinweise sollten vorhanden sein
+        hint_texts = [text for text, _ in editor._hint_history]
+        for i in range(5, 10):
+            assert f"Hint {i}" in hint_texts
+
+    def test_hint_return_value_indicates_display(self, main_window):
+        """
+        C-W10-R8: show_message Rückgabewert zeigt ob Hinweis angezeigt wurde.
+
+        Stellt sicher dass show_message True zurückgibt wenn der Hinweis
+        angezeigt wurde, und False wenn er unterdrückt wurde.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Erster Hinweis sollte angezeigt werden
+        result1 = editor.show_message("Return Value Test", duration=1000)
+        assert result1 is True
+
+        # Sofort wieder sollte unterdrückt werden
+        result2 = editor.show_message("Return Value Test", duration=1000)
+        assert result2 is False
+
+        # Anderer Hinweis sollte angezeigt werden
+        result3 = editor.show_message("Different Message", duration=1000)
+        assert result3 is True
+
+    def test_rapid_hints_no_spam_with_cooldown(self, main_window):
+        """
+        C-W10-R9: Rapid-Hints erzeugen keinen Spam mit Cooldown.
+
+        Stellt sicher dass schnelle wiederholte Hinweise durch das
+        Cooldown-System nicht spammen.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Derselbe Hinweis schnell mehrfach
+        displayed_count = 0
+        for i in range(10):
+            result = editor.show_message("Spam Test", duration=100)
+            if result:
+                displayed_count += 1
+            QTest.qWait(20)
+
+        # Nur der erste sollte angezeigt worden sein
+        assert displayed_count == 1

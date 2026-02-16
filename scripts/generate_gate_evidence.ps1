@@ -1,9 +1,10 @@
 #!/usr/bin/env powershell
-# Gate-Evidence Generator - W9
+# Gate-Evidence Generator - W10
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
 # W9: Extended UI-Test suite for Discoverability hints, Selection-State Final Convergence
+# W10: Extended UI-Test suite for Error UX v2 Integration, Discoverability v4 Anti-Spam
 
 param(
     [switch]$StrictHygiene = $false,
@@ -12,16 +13,16 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# Default output prefix if not specified (W9)
+# Default output prefix if not specified (W10)
 if (-not $OutPrefix) {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W9_$timestamp"
+    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W10_$timestamp"
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 
-Write-Host "=== Gate-Evidence Generator (W9) ===" -ForegroundColor Cyan
+Write-Host "=== Gate-Evidence Generator (W10) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Prefix: $OutPrefix"
 Write-Host "StrictHygiene: $StrictHygiene"
@@ -197,6 +198,7 @@ $uiTests = @(
     "test/test_selection_state_unified.py",
     "test/test_browser_tooltip_formatting.py",
     "test/test_discoverability_hints.py",
+    "test/test_error_ux_v2_integration.py",
     "test/test_feature_commands_atomic.py"
 )
 

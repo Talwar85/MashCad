@@ -187,13 +187,31 @@ class MainWindow(QMainWindow):
         if show_overlay:
             self.notification_manager.show_toast_overlay(level, message)
             
-    def _show_toast_overlay(self, level, message):
-        """Delegiert an NotificationManager."""
-        self.notification_manager.show_toast_overlay(level, message)
+    def _show_toast_overlay(self, level, message, status_class="", severity=""):
+        """
+        Delegiert an NotificationManager.
 
-    def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000):
-        """Delegiert an NotificationManager."""
-        self.notification_manager.show_notification(title, message, level, duration)
+        W10 Paket B: Erweitert um status_class/severity Parameter.
+        """
+        self.notification_manager.show_toast_overlay(level, message, status_class=status_class, severity=severity)
+
+    def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000,
+                         status_class: str = "", severity: str = ""):
+        """
+        Zeigt eine Toast-Notification an.
+
+        W10 Paket B: Erweitert um status_class/severity Parameter aus Error-Envelope v2.
+
+        Args:
+            title: Titel der Notification
+            message: Nachricht der Notification
+            level: Legacy level (info/warning/error/success/critical)
+            duration: Anzeigedauer in ms
+            status_class: status_class aus Error-Envelope v2 (WARNING_RECOVERABLE, BLOCKED, CRITICAL, ERROR)
+            severity: severity aus Error-Envelope v2 (warning, blocked, critical, error)
+        """
+        self.notification_manager.show_notification(title, message, level, duration,
+                                                     status_class=status_class, severity=severity)
 
     def _preview_track_actor(self, group: str, actor_name: str):
         """Delegiert an PreviewManager."""

@@ -739,6 +739,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._hud_message_time = 0
         self._hud_duration = 3000
         self._hud_color = QColor(255, 255, 255)
+
+        # W10 Paket C: Discoverability v4 Anti-Spam - Hint-Tracking
+        self._hint_history = []  # Liste von (text, timestamp_ms) Tupeln
+        self._hint_cooldown_ms = 5000  # Cooldown zwischen gleichen Hinweisen (5s)
+        self._hint_max_history = 10  # Max Anzahl gespeicherter Hinweise
         
         self.selection_box_start = None
         self.selection_box_end = None
@@ -1423,25 +1428,63 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         logger.debug(f"[Sketch] View rotation: {self.view_rotation}°")
         self.request_update()
 
-    def show_message(self, text: str, duration: int = 3000, color: QColor = None):
+    def show_message(self, text: str, duration: int = 3000, color: QColor = None,
+                    force: bool = False, priority: int = 0):
         """
         Zeigt eine HUD-Nachricht als zentralen Toast an.
+
+        W10 Paket C: Erweitert um Anti-Spam Hint-Tracking.
 
         Args:
             text: Die anzuzeigende Nachricht
             duration: Anzeigedauer in ms (Standard: 3000)
             color: Textfarbe (Standard: weiß)
+            force: Wenn True, wird Cooldown ignoriert (für wichtige Hinweise)
+            priority: Priority-Level (höher = wichtiger, überschreibt niedrigere während Cooldown)
+
+        Returns:
+            True wenn Nachricht angezeigt wurde, False wenn unterdrückt (Cooldown)
         """
         import time
+
+        current_time_ms = time.time() * 1000
+
+        # W10 Paket C: Hint-Tracking und Cooldown-Logik
+        if not force:
+            # Prüfen ob derselbe Hinweis kürzlich angezeigt wurde
+            for hint_text, hint_time_ms in self._hint_history:
+                if hint_text == text:
+                    # Cooldown prüfen
+                    time_since_last = current_time_ms - hint_time_ms
+                    if time_since_last < self._hint_cooldown_ms:
+                        # Hinweis ist noch im Cooldown - prüfe Priority
+                        if priority <= 0:
+                            # Niedrige Priority: Nicht anzeigen
+                            return False
+                        # Hohe Priority: Cooldown brechen
+
+        # Hinweis anzeigen
         self._hud_message = text
-        self._hud_message_time = time.time() * 1000
+        self._hud_message_time = current_time_ms
         self._hud_duration = duration
         self._hud_color = color if color else QColor(255, 255, 255)
+
+        # Hint-Trackung aktualisieren
+        # Alten Eintrag für denselben Text entfernen (um Duplikate zu vermeiden)
+        self._hint_history = [(t, tm) for t, tm in self._hint_history if t != text]
+        # Neuen Eintrag hinzufügen
+        self._hint_history.append((text, current_time_ms))
+        # History auf Max-Länge begrenzen
+        if len(self._hint_history) > self._hint_max_history:
+            self._hint_history = self._hint_history[-self._hint_max_history:]
+
         self.request_update()
 
         # Timer für Refresh während Fade-out
         QTimer.singleShot(duration - 500, self.update)
         QTimer.singleShot(duration, self.update)
+
+        return True
 
     # PAKET B W6: Alias für Konsistenz mit bestehendem Code
     _show_hud = show_message
