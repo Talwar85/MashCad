@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# UI-Gate Runner - W13 Unskip + Retest Edition
+# UI-Gate Runner - W14 Megapack Edition
 # Usage: .\scripts\gate_ui.ps1
 # Exit Codes: 0 = PASS/BLOCKED_INFRA, 1 = FAIL
 # Ensures own result summary even if conda run fails
@@ -9,6 +9,7 @@
 # W11: Extended test suite for Error UX v2 Product Flows, Selection-State Lifecycle, Discoverability v5 Context
 # W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert, UI-Gate läuft stabil durch
 # W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
+# W14: Paket A-F - SU-006 Abort-State-Machine, SU-009 Discoverability, UX-003 Error UX v2 E2E Wiring
 
 param(
     [switch]$VerboseOutput = $false

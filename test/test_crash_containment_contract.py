@@ -77,18 +77,104 @@ class TestGateRunnerContractW14:
     """W14 gate/evidence scripts include latest generation markers."""
 
     def test_gate_ui_has_modern_header(self):
+        """Gate UI Script hat W14 Header."""
         gate_file = "scripts/gate_ui.ps1"
         with open(gate_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        assert ("W14" in content or "W13" in content or "W12" in content)
+        assert "W14" in content, "Gate UI Script should have W14 header"
 
     def test_gate_evidence_has_modern_header(self):
+        """Gate Evidence Script hat W14 Header."""
         evidence_file = "scripts/generate_gate_evidence.ps1"
         with open(evidence_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        assert ("W14" in content or "W13" in content or "W12" in content)
+        assert "W14" in content, "Gate Evidence Script should have W14 header"
+
+    def test_gate_evidence_w14_version(self):
+        """Gate Evidence hat W14 Version 4.0."""
+        evidence_file = "scripts/generate_gate_evidence.ps1"
+        with open(evidence_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert "evidence_version" in content
+        assert '"4.0"' in content or "'4.0'" in content or "4.0" in content
+
+
+class TestAbortLogicContractW14:
+    """W14 contracts fuer SU-006 Abort-State-Machine."""
+
+    def test_abort_logic_tests_include_new_w14_tests(self):
+        """Abort-Logic-Tests enthalten W14 Test-Erweiterungen."""
+        test_file = "test/test_ui_abort_logic.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 spezifische Tests
+        assert "W14-A-R1" in content or "W14-A-R2" in content
+        assert "right_click_empty_clears_dim_input" in content
+        assert "test_abort_logic_no_stuck_state_after_sequence" in content
+
+    def test_abort_logic_tests_min_12_new_assertions(self):
+        """W14: Mindestens 12 neue Abort-Logic Assertions."""
+        test_file = "test/test_ui_abort_logic.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 Marker und mindestens 12 neue Tests
+        w14_a_count = content.count("W14-A-R")
+        assert w14_a_count >= 12, f"Expected at least 12 W14-A tests, found {w14_a_count}"
+
+
+class TestDiscoverabilityContractW14:
+    """W14 contracts fuer SU-009 Discoverability ohne Spam."""
+
+    def test_discoverability_tests_include_new_w14_tests(self):
+        """Discoverability-Tests enthalten W14 Test-Erweiterungen."""
+        test_file = "test/test_discoverability_hints.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 spezifische Tests
+        assert "W14-B-R1" in content or "W14-B-R2" in content
+        assert "test_rotation_hint_visible_in_sketch_mode" in content
+        assert "test_hint_cooldown_blocks_duplicate_rapid_calls" in content
+
+    def test_discoverability_tests_min_12_new_assertions(self):
+        """W14: Mindestens 12 neue Discoverability Assertions."""
+        test_file = "test/test_discoverability_hints.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 Marker und mindestens 12 neue Tests
+        w14_b_count = content.count("W14-B-R")
+        assert w14_b_count >= 12, f"Expected at least 12 W14-B tests, found {w14_b_count}"
+
+
+class TestErrorUXContractW14:
+    """W14 contracts fuer UX-003 / CH-008 Error UX v2 End-to-End Wiring."""
+
+    def test_error_ux_tests_include_new_w14_tests(self):
+        """Error-UX-Tests enthalten W14 Test-Erweiterungen."""
+        test_file = "test/test_error_ux_v2_integration.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 spezifische Tests
+        assert "W14-C-R1" in content or "W14-C-R2" in content
+        assert "test_feature_edit_failure_shows_warning_recoverable" in content
+        assert "test_status_class_overrides_severity_in_status_bar" in content
+
+    def test_error_ux_tests_min_15_new_assertions(self):
+        """W14: Mindestens 15 neue Error-UX Assertions."""
+        test_file = "test/test_error_ux_v2_integration.py"
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # W14 Marker und mindestens 15 neue Tests
+        w14_c_count = content.count("W14-C-R")
+        assert w14_c_count >= 15, f"Expected at least 15 W14-C tests, found {w14_c_count}"
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ import os
 os.environ["QT_OPENGL"] = "software"
 
 import pytest
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt, QPoint, QPointF
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
@@ -562,3 +562,363 @@ class TestAbortLogic:
         # Cleanup
         for notif in main_window.notification_manager.notifications[:]:
             main_window.notification_manager.cleanup_notification(notif)
+
+    # =========================================================================
+    # W14 Paket A: SU-006 Abort-State-Machine Vollendung (12+ neue Assertions)
+    # =========================================================================
+
+    def test_right_click_empty_clears_dim_input(self, main_window):
+        """
+        W14-A-R1: Rechtsklick ins Leere bricht Dim-Input ab.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Dim-Input aktivieren (benötigt aktives Tool und tool_step)
+        editor.set_tool(SketchTool.RECTANGLE)
+        editor.tool_step = 1  # Mittendrin beim Erstellen
+        editor._show_dimension_input()
+        assert editor.dim_input_active is True
+
+        # Rechtsklick ins Leere simulieren
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Dim-Input ist deaktiviert
+        assert editor.dim_input_active is False
+
+    def test_right_click_empty_cancels_canvas_calibration(self, main_window):
+        """
+        W14-A-R2: Rechtsklick ins Leere bricht Canvas-Kalibrierung ab.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Canvas-Kalibrierung starten
+        editor._canvas_calibrating = True
+        editor._canvas_calib_points = []
+        editor.request_update()
+        QApplication.processEvents()
+
+        # Rechtsklick ins Leere
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Kalibrierung abgebrochen
+        assert editor._canvas_calibrating is False
+
+    def test_right_click_empty_cancels_selection_box(self, main_window):
+        """
+        W14-A-R3: Rechtsklick ins Leere bricht Selektions-Box ab.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Selektions-Box starten
+        editor.selection_box_start = QPointF(100, 100)
+        editor.selection_box_end = QPointF(200, 200)
+
+        # Rechtsklick ins Leere
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Box abgebrochen
+        assert editor.selection_box_start is None
+        assert editor.selection_box_end is None
+
+    def test_right_click_empty_cancels_tool_step(self, main_window):
+        """
+        W14-A-R4: Rechtsklick ins Leere bricht tool_step ab.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Line Tool aktivieren und tool_step setzen
+        from gui.sketch_tools import SketchTool
+        editor.set_tool(SketchTool.LINE)
+        editor.tool_step = 1  # Mittendrin im Linie-Zeichnen
+
+        # Rechtsklick ins Leere
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: tool_step abgebrochen
+        assert editor.tool_step == 0
+
+    def test_right_click_empty_deactivates_non_select_tool(self, main_window):
+        """
+        W14-A-R5: Rechtsklick ins Leere deaktiviert nicht-SELECT Tools.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+
+        # Line Tool aktivieren
+        from gui.sketch_tools import SketchTool
+        editor.set_tool(SketchTool.LINE)
+        assert editor.current_tool == SketchTool.LINE
+
+        # Rechtsklick ins Leere
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Tool zu SELECT gewechselt
+        assert editor.current_tool == SketchTool.SELECT
+
+    def test_right_click_empty_clears_selection(self, main_window):
+        """
+        W14-A-R6: Rechtsklick ins Leere löscht Selektion.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # In SELECT-Modus gehen und etwas selektieren
+        editor.set_tool(SketchTool.SELECT)
+        editor.selected_lines = [editor.sketch.lines[0]] if editor.sketch.lines else []
+        editor.selected_points = [editor.sketch.points[0]] if editor.sketch.points else []
+
+        # Rechtsklick ins Leere
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Selektion geleert
+        assert len(editor.selected_lines) == 0
+        assert len(editor.selected_points) == 0
+
+    def test_escape_and_right_click_same_endstate(self, main_window):
+        """
+        W14-A-R7: Escape und Rechtsklick haben gleichen Endstate für tool_step.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Test mit Escape - rufe _handle_escape_logic direkt auf
+        editor.set_tool(SketchTool.LINE)
+        editor.tool_step = 1
+        editor._handle_escape_logic()
+        escape_tool = editor.current_tool
+        escape_step = editor.tool_step
+
+        # Test mit Rechtsklick - rufe _cancel_right_click_empty_action direkt auf
+        editor.set_tool(SketchTool.LINE)
+        editor.tool_step = 1
+        # Voraussetzungen sicherstellen
+        editor.selection_box_start = None
+        editor.selection_box_end = None
+        editor._canvas_calibrating = False
+        editor.dim_input_active = False
+        assert editor.tool_step == 1, "tool_step sollte 1 sein vor Abort"
+        editor._cancel_right_click_empty_action()
+        rightclick_tool = editor.current_tool
+        rightclick_step = editor.tool_step
+
+        # Verify: Gleicher Endstate (beide resetten tool_step, behalten tool)
+        assert escape_tool == rightclick_tool
+        assert escape_step == rightclick_step
+        assert escape_step == 0  # Beide sollten tool_step auf 0 setzen
+
+    def test_escape_and_right_click_same_for_dim_input(self, main_window):
+        """
+        W14-A-R8: Escape und Rechtsklick haben gleichen Endstate für Dim-Input.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Test mit Escape - direkt aufrufen
+        editor.set_tool(SketchTool.RECTANGLE)
+        editor.tool_step = 1
+        editor._show_dimension_input()
+        assert editor.dim_input_active is True, "Dim-Input sollte aktiv sein"
+        editor._handle_escape_logic()
+        escape_active = editor.dim_input_active
+
+        # Test mit Rechtsklick - direkt aufrufen
+        editor.set_tool(SketchTool.RECTANGLE)
+        editor.tool_step = 1
+        editor._show_dimension_input()
+        assert editor.dim_input_active is True, "Dim-Input sollte aktiv sein"
+        editor._cancel_right_click_empty_action()
+        rightclick_active = editor.dim_input_active
+
+        # Verify: Beide deaktivieren Dim-Input
+        assert escape_active is False
+        assert rightclick_active is False
+
+    def test_right_click_empty_with_active_direct_edit_drag(self, main_window):
+        """
+        W14-A-R9: Rechtsklick bricht Direct-Edit-Drag nicht ab (nur Links-Release).
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+        from sketcher import Circle2D
+
+        # Circle erstellen und direkten Edit-Drag simulieren
+        editor.set_tool(SketchTool.SELECT)
+        circle = editor.sketch.add_circle(0, 0, 10.0)
+        editor.selected_circles = [circle]
+        editor._direct_edit_dragging = True
+
+        # Rechtsklick sollte Drag NICHT abbrechen (nur Release tut das)
+        center = editor.rect().center()
+        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        QTest.qWait(50)
+
+        # Verify: Drag noch aktiv (erst Release beendet)
+        assert editor._direct_edit_dragging is True
+
+    def test_escape_clears_direct_edit_drag_state(self, main_window):
+        """
+        W14-A-R10: Escape bricht Direct-Edit-Drag ab (Behavior-Proof).
+        
+        Verifiziert dass Escape während Direct-Edit-Drag:
+        1. ALLE Drag-Status-Flags zurücksetzt
+        2. Die Geometrie unverändert lässt (do-no-harm)
+        3. Der Solver weiterhin funktionsfähig bleibt
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+        from sketcher import Circle2D
+
+        # === PHASE 1: ESTABLISH PRECONDITION ===
+        editor.set_tool(SketchTool.SELECT)
+        circle = editor.sketch.add_circle(0, 0, 10.0)
+        original_radius = circle.radius
+        editor.selected_circles = [circle]
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "radius"
+        editor._direct_edit_circle = circle
+        editor._direct_edit_source = "test"
+        editor._direct_edit_drag_moved = True
+        editor._direct_edit_radius_constraints = []
+        editor._direct_edit_line = None
+        editor._direct_edit_line_context = None
+        editor._direct_edit_line_length_constraints = []
+        editor._direct_edit_live_solve = True
+        editor._direct_edit_pending_solve = False
+        editor._direct_edit_last_live_solve_ts = 0.0
+
+        # PRECONDITION GUARD: Alle Flags müssen gesetzt sein
+        assert editor._direct_edit_dragging is True, "PRECONDITION FAILED: _direct_edit_dragging should be True"
+        assert editor._direct_edit_mode == "radius", "PRECONDITION FAILED: _direct_edit_mode should be 'radius'"
+        assert editor._direct_edit_circle is circle, "PRECONDITION FAILED: _direct_edit_circle should be set"
+        assert editor._direct_edit_source == "test", "PRECONDITION FAILED: _direct_edit_source should be 'test'"
+
+        # === PHASE 2: EXECUTE ACTION ===
+        QTest.keyClick(editor, Qt.Key_Escape)
+        QTest.qWait(50)  # Kurze Wartezeit für State-Update
+
+        # === PHASE 3: VERIFY POSTCONDITIONS ===
+        # PROOF 1: Drag-Status muss vollständig zurückgesetzt sein
+        assert editor._direct_edit_dragging is False, "POSTCONDITION FAILED: _direct_edit_dragging should be False after Escape"
+        assert editor._direct_edit_mode is None, "POSTCONDITION FAILED: _direct_edit_mode should be None after Escape"
+        assert editor._direct_edit_circle is None, "POSTCONDITION FAILED: _direct_edit_circle should be None after Escape"
+        assert editor._direct_edit_source is None, "POSTCONDITION FAILED: _direct_edit_source should be None after Escape"
+        
+        # PROOF 2: Geometrie muss unverändert sein (do-no-harm)
+        assert circle.radius == original_radius, "POSTCONDITION FAILED: Circle radius should not change during abort"
+        
+        # PROOF 3: Solver muss weiterhin funktionsfähig sein
+        result = editor.sketch.solve()
+        assert result.success is True, "POSTCONDITION FAILED: Solver should still be healthy after abort"
+        
+        # PROOF 4: Negativ-Assertion - Drag-Modus darf nicht aktiv sein
+        assert not hasattr(editor, '_direct_edit_drag_moved') or editor._direct_edit_drag_moved is False, \
+            "POSTCONDITION FAILED: _direct_edit_drag_moved should be reset"
+
+    def test_abort_logic_with_partial_input_line(self, main_window):
+        """
+        W14-A-R11: Abort mit partieller Line-Eingabe (Startpunkt gesetzt).
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Line Tool starten und Startpunkt setzen
+        editor.set_tool(SketchTool.LINE)
+        editor.tool_step = 1
+        editor.tool_points = [editor.sketch.add_point(0, 0)]
+
+        # Erster Escape: tool_step abbrechen
+        editor._handle_escape_logic()
+        assert editor.tool_step == 0, "Erster Escape sollte tool_step auf 0 setzen"
+        assert editor.current_tool == SketchTool.LINE, "Tool sollte noch LINE sein"
+
+        # Zweiter Escape: Tool deaktivieren
+        editor._handle_escape_logic()
+        assert editor.current_tool == SketchTool.SELECT, "Zweiter Escape sollte zu SELECT wechseln"
+
+    def test_abort_logic_with_partial_input_rectangle(self, main_window):
+        """
+        W14-A-R12: Abort mit partieller Rectangle-Eingabe (erster Eckpunkt gesetzt).
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Rectangle Tool starten und ersten Punkt setzen
+        editor.set_tool(SketchTool.RECTANGLE)
+        editor.tool_step = 1
+        editor.tool_points = [editor.sketch.add_point(-10, -5)]
+
+        # Erster Rechtsklick: tool_step abbrechen (direkter Methodenaufruf)
+        # Voraussetzungen sicherstellen
+        editor.selection_box_start = None
+        editor.selection_box_end = None
+        editor._canvas_calibrating = False
+        editor.dim_input_active = False
+        assert editor.tool_step == 1, "tool_step sollte 1 sein vor Abort"
+        editor._cancel_right_click_empty_action()
+        assert editor.tool_step == 0, "Erster Rechtsklick sollte tool_step auf 0 setzen"
+        assert editor.current_tool == SketchTool.RECTANGLE, "Tool sollte noch RECTANGLE sein"
+
+        # Zweiter Rechtsklick: Tool deaktivieren
+        editor._cancel_right_click_empty_action()
+        assert editor.current_tool == SketchTool.SELECT, "Zweiter Rechtsklick sollte zu SELECT wechseln"
+
+    def test_abort_logic_no_stuck_state_after_sequence(self, main_window):
+        """
+        W14-A-R13: Kein "stuck tool state" nach Abort-Sequenz.
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        from gui.sketch_tools import SketchTool
+
+        # Komplexe Sequenz: Tool → Partial Input → Abort → Tool → Abort
+        editor.set_tool(SketchTool.CIRCLE)
+        editor.tool_step = 1
+        editor._handle_escape_logic()  # Erster Abort
+        editor._handle_escape_logic()  # Zweiter Abort (verlässt Tool)
+
+        editor.set_tool(SketchTool.LINE)
+        editor.tool_step = 1
+        # Voraussetzungen sicherstellen für Rechtsklick
+        editor.selection_box_start = None
+        editor.selection_box_end = None
+        editor._canvas_calibrating = False
+        editor.dim_input_active = False
+        editor._cancel_right_click_empty_action()  # Erster Abort
+        # Voraussetzungen wieder sicherstellen
+        editor.selection_box_start = None
+        editor.selection_box_end = None
+        editor._canvas_calibrating = False
+        editor.dim_input_active = False
+        editor._cancel_right_click_empty_action()  # Zweiter Abort (verlässt Tool)
+
+        # Verify: Kein stuck state, immer noch funktionsfähig
+        assert editor.tool_step == 0
+        assert editor.current_tool == SketchTool.SELECT
+
+        # Verify: Kann wieder ein Tool starten
+        editor.set_tool(SketchTool.POLYGON)
+        assert editor.current_tool == SketchTool.POLYGON

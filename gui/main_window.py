@@ -58,6 +58,7 @@ from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
+from gui.sketch_controller import SketchController  # W16 Paket D: Sketch UI-Orchestrierung
 
 # STL Reconstruction (TNP-Exempt)
 try:
@@ -125,6 +126,9 @@ class MainWindow(QMainWindow):
         self.notification_manager = NotificationManager(self)
         self.preview_manager = PreviewManager(self)
         self.tnp_debug_manager = TNPDebugManager(self)
+        
+        # W16 Paket D: SketchController für UI-Orchestrierung
+        self.sketch_controller = SketchController(self)
 
         # TNP v4.0: Debug Callback für Edge-Auflösungs-Visualisierung
         self.tnp_debug_manager.setup_callback()
@@ -2989,6 +2993,10 @@ class MainWindow(QMainWindow):
                 )
 
     def _set_mode(self, mode):
+        """
+        Wechselt zwischen 3D- und Sketch-Modus.
+        W16 Paket D: Delegiert an SketchController für Sketch-bezogene UI.
+        """
         prev_mode = getattr(self, "mode", None)
         if prev_mode != mode:
             self._clear_transient_previews(
@@ -2996,37 +3004,34 @@ class MainWindow(QMainWindow):
                 clear_interaction_modes=True,
             )
         self.mode = mode
+        
+        # W16 Paket D: Delegation an SketchController
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller.set_mode(mode, prev_mode)
+        else:
+            # Fallback für frühe Initialisierung
+            self._set_mode_fallback(mode)
+    
+    def _set_mode_fallback(self, mode):
+        """Fallback-Implementierung wenn SketchController noch nicht verfügbar."""
         if mode == "3d":
-            # 3D-Modus
-            self.tool_stack.setCurrentIndex(0)  # 3D-ToolPanel
-            self.center_stack.setCurrentIndex(0)  # Viewport
+            self.tool_stack.setCurrentIndex(0)
+            self.center_stack.setCurrentIndex(0)
             self.right_stack.setVisible(False)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(True)
-            # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("3D")
         else:
-            # Sketch-Modus
-            self.tool_stack.setCurrentIndex(1)  # 2D-ToolPanel
-            self.center_stack.setCurrentIndex(1)  # Sketch Editor
-            self.right_stack.setCurrentIndex(1)  # 2D Properties
+            self.tool_stack.setCurrentIndex(1)
+            self.center_stack.setCurrentIndex(1)
+            self.right_stack.setCurrentIndex(1)
             self.right_stack.setVisible(True)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(False)
             self.sketch_editor.setFocus()
-            # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("2D")
-            if prev_mode != mode:
-                nav_hint = tr("Sketch-Navigation: Shift+R dreht Ansicht | Space halten fuer 3D-Peek")
-                self.statusBar().showMessage(nav_hint, 7000)
-                if hasattr(self, "sketch_editor") and hasattr(self.sketch_editor, "show_message"):
-                    self.sketch_editor.show_message(
-                        tr("Shift+R Ansicht drehen | Space halten fuer 3D-Peek"),
-                        duration=2600,
-                        color=QColor(110, 180, 255),
-                    )
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
@@ -3173,7 +3178,11 @@ class MainWindow(QMainWindow):
             # Reset after use
             self.viewport_3d._last_picked_body_id = None
         
+        # W16 Paket D: Aktiven Sketch setzen (Controller + MainWindow)
         self.active_sketch = s
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller._active_sketch = s
+        
         self.sketch_editor.sketch = s
         
         # Bodies als Referenz übergeben (für Snapping auf Kanten)
@@ -3428,14 +3437,15 @@ class MainWindow(QMainWindow):
         # DOF-Anzeige ausblenden
         self.mashcad_status_bar.set_dof(0, visible=False)
 
-        self.active_sketch = None
-        self._set_mode("3d")
-        
-        # Browser Refresh triggert Visibility-Check
-        self.browser.refresh()
-        
-        # WICHTIG: Explizit Update anstoßen für sauberen Statuswechsel
-        self._trigger_viewport_update()
+        # W16 Paket D: Delegation an SketchController
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller.finish_sketch()
+        else:
+            # Fallback
+            self.active_sketch = None
+            self._set_mode("3d")
+            self.browser.refresh()
+            self._trigger_viewport_update()
 
     def _rotate_sketch_view(self):
         """Rotiert die Sketch-Ansicht um 90°."""
@@ -3445,26 +3455,29 @@ class MainWindow(QMainWindow):
     def _on_peek_3d(self, show_3d: bool):
         """
         Temporär 3D-Viewport zeigen während Space gedrückt (Peek-Modus).
-        Hilft zur Orientierung im Sketch.
+        W16 Paket D: Delegiert an SketchController.
         """
-        if show_3d:
-            # Zeige 3D-Viewport
-            self._peek_3d_active = True
-            self.center_stack.setCurrentIndex(0)
-            self.statusBar().showMessage(tr("3D-Vorschau (Space loslassen für Sketch)"), 0)
-
-            # grabKeyboard() auf MainWindow - fängt ALLE Key-Events ab (plattformübergreifend)
-            self.grabKeyboard()
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller.set_peek_3d(show_3d)
         else:
-            # Zurück zum Sketch
-            self._peek_3d_active = False
-            self.releaseKeyboard()
-            self.center_stack.setCurrentIndex(1)
-            self.sketch_editor.setFocus()
-            self.statusBar().clearMessage()
+            # Fallback
+            self._peek_3d_active = show_3d
+            if show_3d:
+                self.center_stack.setCurrentIndex(0)
+                self.statusBar().showMessage(tr("3D-Vorschau (Space loslassen für Sketch)"), 0)
+                self.grabKeyboard()
+            else:
+                self.center_stack.setCurrentIndex(1)
+                self.sketch_editor.setFocus()
+                self.statusBar().clearMessage()
+                self.releaseKeyboard()
 
     def keyReleaseEvent(self, event):
-        """Key-Release Handler für 3D-Peek (grabKeyboard leitet hierher)."""
+        """Key-Release Handler für 3D-Peek."""
+        # W16 Paket D: Delegation an SketchController
+        if hasattr(self, 'sketch_controller') and self.sketch_controller.handle_key_release(event):
+            return
+        # Fallback für alte _peek_3d_active Logik
         if getattr(self, '_peek_3d_active', False):
             if event.key() == Qt.Key_Space and not event.isAutoRepeat():
                 self._on_peek_3d(False)

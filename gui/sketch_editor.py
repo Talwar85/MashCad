@@ -745,6 +745,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._hint_cooldown_ms = 5000  # Cooldown zwischen gleichen Hinweisen (5s)
         self._hint_max_history = 10  # Max Anzahl gespeicherter Hinweise
         
+        # W16 Paket B: Discoverability v2 - Navigation und Tutorial-Modus
+        self._peek_3d_active = False  # True wenn 3D-Peek aktiv (Space gehalten)
+        self._tutorial_mode_enabled = False  # Tutorial-Modus für neue Nutzer
+        self._hint_priority_levels = {
+            'CRITICAL': 3,   # Errors, Blockierende Hinweise
+            'WARNING': 2,    # Wichtige Warnungen
+            'INFO': 1,       # Normale Hinweise
+            'TUTORIAL': 0,   # Tutorial-Hinweise (niedrigste Priorität)
+        }
+        self._current_hint_priority = 0  # Aktuelle angezeigte Priorität
+        self._hint_context = 'sketch'  # 'sketch', 'peek_3d', 'direct_edit'
+        
         self.selection_box_start = None
         self.selection_box_end = None
         self.current_snap = None
@@ -3527,6 +3539,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
+        
+        # W16 Paket B: Kontext zurücksetzen und Navigation-Hint aktualisieren
+        self._hint_context = 'sketch'
+        self._show_tool_hint()
 
         # Constraint Highlight zurücksetzen
         self._clear_constraint_highlight()
@@ -3943,6 +3959,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_drag_moved = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
+        
+        # W16 Paket B: Kontext für Navigation-Hints aktualisieren
+        self._hint_context = 'direct_edit'
+        self._show_tool_hint()  # Sofort Navigation-Hint aktualisieren
 
         # Reset mode-specific caches
         self._direct_edit_circle = None
@@ -4470,11 +4490,67 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.CANVAS: tr("Canvas") + " | " + tr("Click to place image reference"),
         }
         tool_hint = hints.get(self.current_tool, "")
-        nav_hint = tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+        
+        # W16 Paket B: Kontext-sensitive Navigation-Hints
+        nav_hint = self._get_navigation_hints_for_context()
+        
+        # Tutorial-Modus: Erweiterte Hinweise für neue Nutzer
+        if self._tutorial_mode_enabled and not self._peek_3d_active:
+            tutorial_hint = self._get_tutorial_hint_for_tool()
+            if tutorial_hint:
+                tool_hint = f"{tool_hint} | {tutorial_hint}" if tool_hint else tutorial_hint
+        
         if tool_hint:
             self.status_message.emit(f"{tool_hint} | {nav_hint}")
         else:
             self.status_message.emit(nav_hint)
+    
+    def _get_navigation_hints_for_context(self):
+        """
+        W16 Paket B: Liefert kontext-sensitive Navigation-Hinweise.
+        
+        Returns:
+            str: Navigation-Hinweis passend zum aktuellen Kontext
+        """
+        if self._peek_3d_active:
+            return tr("Space loslassen=Zurück zum Sketch | Maus bewegen=Ansicht rotieren")
+        elif self._direct_edit_dragging:
+            return tr("Esc=Abbrechen | Drag=Ändern | Enter=Bestätigen")
+        elif self._tutorial_mode_enabled:
+            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | F1=Tutorial aus")
+        else:
+            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+    
+    def _get_tutorial_hint_for_tool(self):
+        """
+        W16 Paket B: Liefert Tutorial-Hinweise für den aktuellen Tool-Modus.
+        
+        Returns:
+            str: Tutorial-Hinweis oder leerer String
+        """
+        tutorial_hints = {
+            SketchTool.SELECT: tr("Tipp: Ziehe Kreise am Rand um den Radius zu ändern"),
+            SketchTool.LINE: tr("Tipp: Nutze Tab für exakte Längen/Winkeleingabe"),
+            SketchTool.CIRCLE: tr("Tipp: Ziehe vom Mittelpunkt aus für exakten Radius"),
+            SketchTool.RECTANGLE: tr("Tipp: Rechteck-Ecken können nach dem Zeichnen verschoben werden"),
+            SketchTool.DIMENSION: tr("Tipp: Dimensionen schränken die Geometrie ein"),
+            SketchTool.FILLET_2D: tr("Tipp: Ziehe nacheinander zwei Linien für eine Rundung"),
+        }
+        return tutorial_hints.get(self.current_tool, "")
+    
+    def set_tutorial_mode(self, enabled: bool):
+        """
+        W16 Paket B: Aktiviert/Deaktiviert den Tutorial-Modus.
+        
+        Args:
+            enabled: True für Tutorial-Modus aktiviert
+        """
+        self._tutorial_mode_enabled = enabled
+        self._show_tool_hint()  # Sofort aktualisieren
+        if enabled:
+            self.show_message(tr("Tutorial-Modus aktiviert - Erweiterte Hinweise werden angezeigt"), 3000)
+        else:
+            self.show_message(tr("Tutorial-Modus deaktiviert"), 2000)
     
     def _show_dimension_input(self):
         fields = []
@@ -6246,6 +6322,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # Space: 3D-Peek (zeigt temporär 3D-Viewport)
         if key == Qt.Key_Space and not event.isAutoRepeat():
+            self._peek_3d_active = True
+            self._hint_context = 'peek_3d'
             self.peek_3d_requested.emit(True)
             return
 
@@ -6347,13 +6425,36 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         """
         Hierarchisches Beenden von Aktionen (CAD-Style).
         Jeder Escape bricht nur EINE Ebene ab:
-        0. Canvas-Kalibrierung abbrechen
-        1. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)
-        2. Aktives Tool beenden → SELECT
-        3. Auswahl aufheben
-        4. Signal an main_window → Sketch verlassen
+        0. Direct-Edit-Drag abbrechen (W14 Fixup)
+        1. Canvas-Kalibrierung abbrechen
+        2. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)
+        3. Aktives Tool beenden → SELECT
+        4. Auswahl aufheben
+        5. Signal an main_window → Sketch verlassen
         """
-        # Level 0: Canvas-Kalibrierung abbrechen
+        # Level 0: Direct-Edit-Drag abbrechen (W14 Fixup)
+        if self._direct_edit_dragging:
+            self._direct_edit_dragging = False
+            self._direct_edit_mode = None
+            self._direct_edit_circle = None
+            self._direct_edit_source = None
+            self._direct_edit_drag_moved = False
+            self._direct_edit_radius_constraints = []
+            self._direct_edit_line = None
+            self._direct_edit_line_context = None
+            self._direct_edit_line_length_constraints = []
+            self._direct_edit_live_solve = False
+            self._direct_edit_pending_solve = False
+            self._direct_edit_last_live_solve_ts = 0.0
+            self._update_cursor()
+            self._show_hud(tr("Direktes Bearbeiten abgebrochen"))
+            # W16 Paket B: Kontext zurücksetzen und Navigation-Hint aktualisieren
+            self._hint_context = 'sketch'
+            self._show_tool_hint()
+            self.request_update()
+            return
+
+        # Level 1: Canvas-Kalibrierung abbrechen
         if self._canvas_calibrating:
             self._canvas_calibrating = False
             self._canvas_calib_points = []
@@ -6361,26 +6462,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
             return
 
-        # Level 1: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
+        # Level 2: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
         if self.tool_step > 0:
             self._cancel_tool()
             self.status_message.emit(tr("Aktion abgebrochen"))
             return
 
-        # Level 2: Aktives Tool beenden (zurück zu Select)
+        # Level 3: Aktives Tool beenden (zurück zu Select)
         if self.current_tool != SketchTool.SELECT:
             self.set_tool(SketchTool.SELECT)
             self.status_message.emit(tr("Werkzeug deaktiviert"))
             return
 
-        # Level 3: Selektion aufheben
+        # Level 4: Selektion aufheben
         if (self.selected_lines or self.selected_points or self.selected_circles
                 or self.selected_arcs or self.selected_constraints or self.selected_splines):
             self._clear_selection()
             self.request_update()
             return
 
-        # Level 4: Sketch verlassen — Signal an main_window
+        # Level 5: Sketch verlassen — Signal an main_window
         self.exit_requested.emit()
             
     def _finish_current_operation(self):
@@ -6410,6 +6511,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def keyReleaseEvent(self, event):
         """Handle key release - z.B. für 3D-Peek (Space loslassen)."""
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self._peek_3d_active = False
+            self._hint_context = 'sketch'
             self.peek_3d_requested.emit(False)  # Zurück zum Sketch
             return
         super().keyReleaseEvent(event)

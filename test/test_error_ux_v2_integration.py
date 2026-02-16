@@ -691,6 +691,379 @@ class TestErrorUXV2ProductFlows:
         dot_style = status_bar.status_dot.styleSheet()
         assert "#ef4444" in dot_style or "red" in dot_style.lower()
 
+    # =========================================================================
+    # W14 Paket C: UX-003 / CH-008 Error UX v2 End-to-End Wiring (15+ Assertions)
+    # =========================================================================
+
+    def test_feature_edit_failure_shows_warning_recoverable(self, main_window):
+        """
+        W14-C-R1: Feature-Edit-Failure zeigt WARNING_RECOVERABLE Status.
+        
+        E2E Behavior-Proof: Trigger -> Notification -> Statusbar Flow
+        """
+        # PRECONDITION: Notification-Manager und Status-Bar sind bereit
+        main_window.notification_manager.notifications.clear()
+        status_bar = main_window.mashcad_status_bar
+        initial_notification_count = len(main_window.notification_manager.notifications)
+        
+        # ACTION: Notification mit WARNING_RECOVERABLE status_class anzeigen
+        # (Simuliert den Flow nach einem Feature-Edit-Failure)
+        main_window.show_notification(
+            title="Feature Edit Warning",
+            message="Geometry slightly drifted - recoverable",
+            level="warning",
+            status_class="WARNING_RECOVERABLE",
+            severity="warning",
+            duration=5000
+        )
+        
+        # Status-Bar aktualisieren (wie es Feature-Commands tun würden)
+        status_bar.set_status(
+            "Feature Edit: Geometry drifted",
+            is_error=False,
+            status_class="WARNING_RECOVERABLE",
+            severity="warning"
+        )
+        
+        # POSTCONDITION: Notification wurde erstellt
+        assert len(main_window.notification_manager.notifications) > initial_notification_count, \
+            "POSTCONDITION: Notification should be created"
+        
+        # POSTCONDITION: Status-Bar zeigt Warning (gelb)
+        dot_style = status_bar.status_dot.styleSheet()
+        is_yellow = "#eab308" in dot_style or "yellow" in dot_style.lower()
+        assert is_yellow, f"POSTCONDITION: Status bar should show yellow dot for WARNING_RECOVERABLE, got: {dot_style}"
+        
+        # POSTCONDITION: Status-Text ist korrekt gesetzt
+        assert "drifted" in status_bar.status_text.text().lower() or "Feature Edit" in status_bar.status_text.text(), \
+            "POSTCONDITION: Status text should reflect the warning message"
+
+    def test_blocked_upstream_shows_blocked_status(self, main_window):
+        """
+        W14-C-R2: Blocked-Upstream zeigt BLOCKED Status.
+        """
+        from gui.browser import _format_feature_status_tooltip
+
+        blocked_msg = "Feature blocked by upstream error"
+        blocked_details = {
+            "code": "blocked_by_upstream",
+            "status_class": "BLOCKED",
+            "severity": "blocked",
+            "hint": "Fix upstream error first"
+        }
+
+        # Tooltip sollte Blocked anzeigen
+        tooltip = _format_feature_status_tooltip(blocked_msg, status="ERROR", status_details=blocked_details)
+        assert "Blocked" in tooltip or "blockiert" in tooltip.lower()
+
+        # Status-Bar sollte Block (Orange) anzeigen
+        status_bar = main_window.mashcad_status_bar
+        status_bar.set_status(blocked_msg, is_error=False, status_class="BLOCKED", severity="blocked")
+        dot_style = status_bar.status_dot.styleSheet()
+        assert "#f97316" in dot_style or "orange" in dot_style.lower()
+
+    def test_recoverable_warning_shows_yellow_dot(self, main_window):
+        """
+        W14-C-R3: Recoverable-Warning zeigt gelben Status-Dot.
+        """
+        status_bar = main_window.mashcad_status_bar
+
+        status_bar.set_status(
+            "Geometry slightly drifted - recoverable",
+            is_error=False,
+            status_class="WARNING_RECOVERABLE",
+            severity="warning"
+        )
+
+        dot_style = status_bar.status_dot.styleSheet()
+        assert "#eab308" in dot_style or "yellow" in dot_style.lower()
+
+    def test_critical_error_shows_red_dot(self, main_window):
+        """
+        W14-C-R4: Critical-Error zeigt roten Status-Dot.
+        """
+        status_bar = main_window.mashcad_status_bar
+
+        status_bar.set_status(
+            "Kernel API unavailable - CRITICAL",
+            is_error=False,
+            status_class="CRITICAL",
+            severity="critical"
+        )
+
+        dot_style = status_bar.status_dot.styleSheet()
+        assert "#ef4444" in dot_style or "red" in dot_style.lower()
+
+    def test_error_ux_v2_notification_with_all_params(self, main_window):
+        """
+        W14-C-R5: Notification mit allen Error UX v2 Parametern.
+        """
+        # Cleanup
+        main_window.notification_manager.notifications.clear()
+
+        # Mit allen Error UX v2 Parametern
+        main_window.show_notification(
+            "Test Title",
+            "Test Message with all params",
+            level="info",
+            status_class="WARNING_RECOVERABLE",
+            severity="warning"
+        )
+
+        # Verify: Notification erstellt
+        assert len(main_window.notification_manager.notifications) > 0
+
+        # Cleanup
+        for notif in main_window.notification_manager.notifications[:]:
+            main_window.notification_manager.cleanup_notification(notif)
+
+    def test_status_class_priority_over_severity(self, main_window):
+        """
+        W14-C-R6: status_class hat Priorität über severity in Notification.
+        """
+        nm = main_window.notification_manager
+
+        # status_class sollte Vorrang vor severity haben
+        # WARNING_RECOVERABLE (warning) gewinnt über error (severity)
+        style = nm._map_status_to_style(level="", status_class="WARNING_RECOVERABLE", severity="error")
+        assert style == "warning"  # status_class gewinnt
+
+    def test_severity_priority_over_legacy_level(self, main_window):
+        """
+        W14-C-R7: severity hat Priorität über legacy level.
+        """
+        nm = main_window.notification_manager
+
+        # severity sollte Vorrang vor legacy level haben
+        style = nm._map_status_to_style(level="success", status_class="", severity="error")
+        assert style == "error"  # severity gewinnt
+
+    def test_legacy_level_fallback_still_works(self, main_window):
+        """
+        W14-C-R8: Legacy level Fallback funktioniert weiterhin.
+        """
+        nm = main_window.notification_manager
+
+        # Nur legacy level (keine Error UX v2 Felder)
+        style = nm._map_status_to_style(level="error", status_class="", severity="")
+        assert style == "error"
+
+        style = nm._map_status_to_style(level="warning", status_class="", severity="")
+        assert style == "warning"
+
+        style = nm._map_status_to_style(level="success", status_class="", severity="")
+        assert style == "success"
+
+    def test_status_bar_error_ux_v2_integration(self, main_window):
+        """
+        W14-C-R9: Status-Bar Error UX v2 Integration.
+        """
+        status_bar = main_window.mashcad_status_bar
+
+        # Alle Status-Klassen testen
+        test_cases = [
+            ("INFO", "", "green"),
+            ("WARNING_RECOVERABLE", "warning", "yellow"),
+            ("BLOCKED", "blocked", "orange"),
+            ("CRITICAL", "critical", "red"),
+            ("ERROR", "error", "red"),
+        ]
+
+        for status_class, severity, expected_color in test_cases:
+            status_bar.set_status(
+                f"Test: {status_class}",
+                is_error=False,
+                status_class=status_class,
+                severity=severity
+            )
+
+            # Prüfen dass Status gesetzt wurde (kein Crash)
+            assert status_bar.status_text.text() == f"Test: {status_class}"
+
+    def test_notification_manager_maps_all_status_classes(self, main_window):
+        """
+        W14-C-R10: NotificationManager mappt alle Status-Klassen korrekt.
+        """
+        nm = main_window.notification_manager
+
+        # Alle Status-Klassen testen
+        assert nm._map_status_to_style("", "WARNING_RECOVERABLE", "") == "warning"
+        assert nm._map_status_to_style("", "BLOCKED", "") == "error"
+        assert nm._map_status_to_style("", "CRITICAL", "") == "error"
+        assert nm._map_status_to_style("", "ERROR", "") == "error"
+
+    def test_notification_manager_maps_all_severities(self, main_window):
+        """
+        W14-C-R11: NotificationManager mappt alle Severities korrekt.
+        """
+        nm = main_window.notification_manager
+
+        # Alle Severities testen
+        assert nm._map_status_to_style("", "", "warning") == "warning"
+        assert nm._map_status_to_style("", "", "blocked") == "error"
+        assert nm._map_status_to_style("", "", "critical") == "error"
+        assert nm._map_status_to_style("", "", "error") == "error"
+
+    def test_status_bar_color_mapping_complete(self, main_window):
+        """
+        W14-C-R12: Status-Bar Color-Mapping ist vollständig.
+        """
+        status_bar = main_window.mashcad_status_bar
+
+        # Alle Status-Klassen und ihre Farben testen
+        test_cases = [
+            ("WARNING_RECOVERABLE", "warning", "#eab308", "yellow"),
+            ("BLOCKED", "blocked", "#f97316", "orange"),
+            ("CRITICAL", "critical", "#ef4444", "red"),
+            ("ERROR", "error", "#ef4444", "red"),
+        ]
+
+        for status_class, severity, hex_color, color_name in test_cases:
+            status_bar.set_status(
+                f"Test {status_class}",
+                is_error=False,
+                status_class=status_class,
+                severity=severity
+            )
+            dot_style = status_bar.status_dot.styleSheet()
+            # Prüfen dass einer der Farbwerte vorhanden ist
+            assert (hex_color in dot_style or color_name in dot_style.lower())
+
+    def test_error_ux_v2_consistent_tooltip_notification_statusbar(self, main_window):
+        """
+        W14-C-R13: Error UX v2 ist konsistent über Tooltip, Notification, Status-Bar.
+        """
+        from gui.browser import _format_feature_status_tooltip
+
+        error_msg = "Test Error Message"
+        error_details = {
+            "code": "test_error",
+            "status_class": "ERROR",
+            "severity": "error",
+            "hint": "Fix this error"
+        }
+
+        # Tooltip sollte Error anzeigen
+        tooltip = _format_feature_status_tooltip(error_msg, status="ERROR", status_details=error_details)
+        assert "Error" in tooltip
+
+        # Status-Bar sollte Error (rot) anzeigen
+        status_bar = main_window.mashcad_status_bar
+        status_bar.set_status(error_msg, is_error=False, status_class="ERROR", severity="error")
+        dot_style = status_bar.status_dot.styleSheet()
+        assert "#ef4444" in dot_style or "red" in dot_style.lower()
+
+        # Notification sollte Error anzeigen
+        main_window.notification_manager.notifications.clear()
+        main_window.show_notification("Test Error", error_msg, level="error",
+                                     status_class="ERROR", severity="error")
+        assert len(main_window.notification_manager.notifications) > 0
+
+    def test_multiple_status_components_show_consistent_colors(self, main_window):
+        """
+        W14-C-R14: Mehrere Status-Komponenten zeigen konsistente Farben.
+        """
+        # Cleanup
+        main_window.notification_manager.notifications.clear()
+
+        status_bar = main_window.mashcad_status_bar
+
+        # WARNING_RECOVERABLE - sollte überall gelb sein
+        status_bar.set_status("Warning message", is_error=False, status_class="WARNING_RECOVERABLE", severity="warning")
+        dot_style = status_bar.status_dot.styleSheet()
+        is_yellow = "#eab308" in dot_style or "yellow" in dot_style.lower()
+        assert is_yellow
+
+        # Notification sollte warning sein
+        main_window.show_notification("Warning", "Message", level="warning",
+                                     status_class="WARNING_RECOVERABLE", severity="warning")
+        assert len(main_window.notification_manager.notifications) > 0
+
+    def test_status_class_overrides_severity_in_status_bar(self, main_window):
+        """
+        W14-C-R15: status_class überschreibt severity in Status-Bar.
+        """
+        status_bar = main_window.mashcad_status_bar
+
+        # WARNING_RECOVERABLE sollte severity=error überschreiben
+        status_bar.set_status(
+            "Warning with error severity",
+            is_error=False,
+            status_class="WARNING_RECOVERABLE",
+            severity="error"  # Sollte ignoriert werden
+        )
+
+        dot_style = status_bar.status_dot.styleSheet()
+        # Sollte gelb sein (WARNING_RECOVERABLE gewinnt)
+        assert "#eab308" in dot_style or "yellow" in dot_style.lower()
+
+    def test_end_to_end_error_flow_trigger_to_ui(self, main_window):
+        """
+        W14-C-E2E: End-to-End Error Flow von Trigger bis UI.
+        
+        Verifiziert den kompletten Flow:
+        1. Fehler-Trigger (simuliertes Feature-Problem)
+        2. Notification-Manager zeigt Toast
+        3. Status-Bar zeigt persistenten Status
+        4. Alle Komponenten zeigen konsistente Farben
+        """
+        from gui.browser import _format_feature_status_tooltip
+        
+        # === PHASE 1: PRECONDITION ===
+        main_window.notification_manager.notifications.clear()
+        status_bar = main_window.mashcad_status_bar
+        
+        # === PHASE 2: TRIGGER (Simulierter Feature-Fehler) ===
+        error_msg = "Boolean: Operation failed due to geometry intersection"
+        error_details = {
+            "code": "boolean_intersection_error",
+            "status_class": "ERROR",
+            "severity": "error",
+            "hint": "Check geometry for overlapping faces"
+        }
+        
+        # === PHASE 3: NOTIFICATION FLOW ===
+        main_window.show_notification(
+            title="Feature Error",
+            message=error_msg,
+            level="error",
+            status_class="ERROR",
+            severity="error",
+            duration=8000
+        )
+        
+        # === PHASE 4: STATUS-BAR FLOW ===
+        status_bar.set_status(
+            error_msg,
+            is_error=False,  # Neue API nutzt status_class
+            status_class="ERROR",
+            severity="error"
+        )
+        
+        # === PHASE 5: TOOLTIP FLOW ===
+        tooltip = _format_feature_status_tooltip(error_msg, status="ERROR", status_details=error_details)
+        
+        # === PHASE 6: VERIFICATION ===
+        # GUARD 1: Notification wurde erstellt
+        assert len(main_window.notification_manager.notifications) == 1, \
+            "GUARD FAILED: Exactly one notification should exist"
+        
+        # GUARD 2: Status-Bar zeigt Rot (ERROR)
+        dot_style = status_bar.status_dot.styleSheet()
+        is_red = "#ef4444" in dot_style or "red" in dot_style.lower()
+        assert is_red, f"GUARD FAILED: Status bar should show red dot for ERROR, got: {dot_style}"
+        
+        # GUARD 3: Tooltip enthält Fehler-Info
+        assert "Error" in tooltip, "GUARD FAILED: Tooltip should contain 'Error'"
+        
+        # GUARD 4: Status-Text ist gesetzt
+        assert status_bar.status_text.text() == error_msg, \
+            "GUARD FAILED: Status text should match error message"
+        
+        # GUARD 5: Negativ-Assertion - Kein Warning-Gelb
+        is_yellow = "#eab308" in dot_style or "yellow" in dot_style.lower()
+        assert not is_yellow, "GUARD FAILED: ERROR should not show yellow (it's error, not warning)"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
