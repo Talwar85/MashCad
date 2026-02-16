@@ -24,7 +24,7 @@ from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 3
 from gui.design_tokens import DesignTokens  # NEU: Single Source of Truth
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame, QLabel, QToolButton, QApplication
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPoint
 from PySide6.QtGui import QCursor, QColor
 
@@ -3463,10 +3463,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                     self._draw_selectable_faces()
             else:
                 # Klick: Toggle Auswahl
-                if best_idx in self.selected_faces: 
-                    self.selected_faces.remove(best_idx)
-                else: 
-                    self.selected_faces.add(best_idx)
+                # W8 PAKET B: Use Unified Selection API toggle_face_selection()
+                # Check modifiers for multi-select
+                is_multi = QApplication.keyboardModifiers() & Qt.ControlModifier
+                self.toggle_face_selection(best_idx, is_multi=is_multi)
                 self._draw_selectable_faces()
                 self.face_selected.emit(best_idx)
         elif hover_only and self.hovered_face != -1:

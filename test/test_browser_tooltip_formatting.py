@@ -89,7 +89,69 @@ def test_browser_tooltip_shows_warning_for_drift():
     
     # Even if status is ERROR, we expect Warning text due to drift mapping
     tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
-    
+
     assert "Warning (Recoverable)" in tooltip
     assert "[Geometrie-Drift]" in tooltip or "[drift]" in tooltip
     assert "Code: tnp_ref_drift" in tooltip
+
+def test_browser_tooltip_status_class_blocked():
+    """W8 PAKET D: Verify BLOCKED status_class is formatted correctly."""
+    msg = "Extrude: Operation blockiert durch vorgelagerten Fehler"
+    details = {
+        "code": "blocked_by_upstream_error",
+        "status_class": "BLOCKED",
+        "severity": "blocked",
+        "next_action": "Behebe den Fehler im vorherigen Feature"
+    }
+
+    tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
+
+    assert "Blocked" in tooltip
+    assert "Code: blocked_by_upstream_error" in tooltip
+    assert "Behebe den Fehler im vorherigen Feature" in tooltip
+
+def test_browser_tooltip_status_class_critical():
+    """W8 PAKET D: Verify CRITICAL status_class is formatted correctly."""
+    msg = "Boolean: Finalize fehlgeschlagen"
+    details = {
+        "code": "rebuild_finalize_failed",
+        "status_class": "CRITICAL",
+        "severity": "critical",
+        "next_action": "Feature löschen und neu erstellen"
+    }
+
+    tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
+
+    assert "Critical" in tooltip
+    assert "Code: rebuild_finalize_failed" in tooltip
+    assert "Feature löschen und neu erstellen" in tooltip
+
+def test_browser_tooltip_status_class_warning_recoverable():
+    """W8 PAKET D: Verify WARNING_RECOVERABLE status_class is formatted correctly."""
+    msg = "Fillet: Geometrie leicht verschoben (TNP Drift)"
+    details = {
+        "code": "tnp_ref_drift",
+        "status_class": "WARNING_RECOVERABLE",
+        "severity": "warning",
+        "next_action": "Fillet-Parameter anpassen"
+    }
+
+    tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
+
+    assert "Warning (Recoverable)" in tooltip
+    assert "Code: tnp_ref_drift" in tooltip
+    assert "Fillet-Parameter anpassen" in tooltip
+
+def test_browser_tooltip_legacy_fallback_without_status_class():
+    """W8 PAKET D: Verify Legacy fallback works when status_class is missing."""
+    msg = "Draft: Ungültige Pull-Richtung"
+    details = {
+        "code": "invalid_pull_direction"
+        # No status_class or severity - Legacy fallback
+    }
+
+    tooltip = _format_feature_status_tooltip(msg, status="ERROR", status_details=details)
+
+    # Should still show error based on legacy status parameter
+    assert ("Error" in tooltip) or ("Fehler" in tooltip)
+    assert "Code: invalid_pull_direction" in tooltip

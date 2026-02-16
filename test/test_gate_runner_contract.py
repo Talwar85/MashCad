@@ -87,6 +87,14 @@ class TestGateRunnerContract:
         assert "Status:" in output, "Missing status"
         assert "Exit Code:" in output, "Missing exit code"
 
+    def test_gate_core_includes_golden_harness_suite(self):
+        """gate_core.ps1 must include the golden model regression harness suite."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test/test_golden_model_regression_harness.py" in content, (
+            "Core gate must include the golden model regression harness suite"
+        )
+
     def test_gate_ui_output_schema_w3(self):
         """gate_ui.ps1 W3: must output structured result with blocker_type."""
         result = self._run_script("gate_ui.ps1")
