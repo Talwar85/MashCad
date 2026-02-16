@@ -4016,22 +4016,29 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 ConstraintType.COINCIDENT,
                 ConstraintType.LENGTH,
             }
-            involved_lines = {
+            involved_lines = [
                 line_context.get("edge"),
                 line_context.get("adj_start"),
                 line_context.get("adj_end"),
                 line_context.get("opposite"),
-            }
-            involved_lines.discard(None)
-            involved_points = set()
+            ]
+            involved_lines = [line for line in involved_lines if line is not None]
+            involved_line_ids = {id(line) for line in involved_lines}
+
+            involved_points = []
             for line in involved_lines:
-                involved_points.add(getattr(line, "start", None))
-                involved_points.add(getattr(line, "end", None))
-            involved_points.discard(None)
+                start = getattr(line, "start", None)
+                end = getattr(line, "end", None)
+                if start is not None:
+                    involved_points.append(start)
+                if end is not None:
+                    involved_points.append(end)
+            involved_point_ids = {id(point) for point in involved_points}
 
             for c in self.sketch.constraints:
-                entities = set(getattr(c, "entities", ()))
-                if not entities.intersection(involved_lines) and not entities.intersection(involved_points):
+                entities = tuple(getattr(c, "entities", ()) or ())
+                entity_ids = {id(entity) for entity in entities}
+                if not entity_ids.intersection(involved_line_ids) and not entity_ids.intersection(involved_point_ids):
                     continue
                 if c.type in allowed_types:
                     continue
@@ -4044,8 +4051,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             line = line_context.get("line")
             if line is None:
                 return False
-            line_points = {getattr(line, "start", None), getattr(line, "end", None)}
-            line_points.discard(None)
+            line_points = [getattr(line, "start", None), getattr(line, "end", None)]
+            line_points = [point for point in line_points if point is not None]
+            line_point_ids = {id(point) for point in line_points}
             allowed_types = {
                 ConstraintType.HORIZONTAL,
                 ConstraintType.VERTICAL,
@@ -4057,8 +4065,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 ConstraintType.COINCIDENT,
             }
             for c in self.sketch.constraints:
-                entities = set(getattr(c, "entities", ()))
-                if line not in entities and not entities.intersection(line_points):
+                entities = tuple(getattr(c, "entities", ()) or ())
+                entity_ids = {id(entity) for entity in entities}
+                if id(line) not in entity_ids and not entity_ids.intersection(line_point_ids):
                     continue
                 if c.type in allowed_types:
                     continue
