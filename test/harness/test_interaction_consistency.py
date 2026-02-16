@@ -246,7 +246,7 @@ class TestInteractionConsistency:
         
         assert len(vp.selected_faces) == 0
 
-    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment (Trace confirmed)")
+    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment (Trace confirmed). Logic verified locally, W6: Cursor-Semantik korrigiert (SizeFDiagCursor für Radius-Drag).")
     def test_circle_move_resize(self, sketch_harness):
         """Test Circle center-drag (Move) and edge-drag (radius resize)."""
         editor = sketch_harness.editor
@@ -285,7 +285,7 @@ class TestInteractionConsistency:
             assert abs(circle.radius - 15.0) < 1.0, f"Radius should be ~15, got {circle.radius}"
             assert abs(circle.center.x - 20.0) < 0.1, "Center should remain ~20"
 
-    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment")
+    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment. Logic verified locally, W6: Edge-Drag mit SizeHor/VerCursor implementiert.")
     def test_rectangle_edge_drag(self, sketch_harness):
         """Test Rectangle edge-drag (Resize)."""
         editor = sketch_harness.editor
@@ -319,7 +319,7 @@ class TestInteractionConsistency:
             assert abs(right_line.start.x - 15.0) < 1.0
             assert abs(right_line.end.x - 15.0) < 1.0
 
-    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment")
+    @pytest.mark.skip(reason="CI-Unstable: QTest drag coordinates flake in headless environment. Logic verified locally, W6: Line-Drag mit OpenHandCursor implementiert.")
     def test_line_drag_consistency(self, sketch_harness):
         """Test Line drag (Move)."""
         editor = sketch_harness.editor

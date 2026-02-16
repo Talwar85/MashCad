@@ -324,17 +324,13 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """
         Clears all current selections (faces, edges, etc.)
         Used by Abort Logic (Escape).
+
+        W7 PAKET B: Uses Unified Selection API (clear_all_selection).
         """
-        # 1. Clear Face Selection
-        self.selected_faces.clear()
-        if hasattr(self, 'selected_face_ids'):
-            self.selected_face_ids.clear()
+        # W7: Unified API - Single Source of Truth
+        self.clear_all_selection()  # Clears both selected_face_ids and legacy wrappers
         self.face_selected.emit(-1) # Notify UI (-1 = none)
-        
-        # 2. Clear Edge Selection
-        if hasattr(self, 'selected_edges'):
-            self.selected_edges.clear()
-            self.edge_selection_changed.emit(0)
+        self.edge_selection_changed.emit(0)
 
         # 3. Clear TNP Selection Manager
         if hasattr(self, 'selection_manager'):
@@ -344,7 +340,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         # 4. Trigger Repaint
         self._safe_request_render()
-            
+
         logger.debug("[Viewport] Selection cleared via Abort/Escape")
 
     def _get_picker(self, tolerance_type: str = "standard"):
@@ -3414,7 +3410,11 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
    
         
     def _handle_selection_click(self, x, y, is_multi):
-        """CAD-Selection über GeometryDetector"""
+        """
+        CAD-Selection über GeometryDetector
+
+        W7 PAKET B: Uses Unified Selection API (toggle_face_selection).
+        """
         ray_o, ray_d = self.get_ray_from_click(x, y)
 
         # WICHTIG: self.pick nutzen
@@ -3425,16 +3425,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         )
 
         if face_id != -1:
-            if is_multi:
-                # Toggle Selection
-                if face_id in self.selected_faces:
-                    self.selected_faces.remove(face_id)
-                else:
-                    self.selected_faces.add(face_id)
-            else:
-                if face_id not in self.selected_faces:
-                    self.selected_faces.clear()
-                    self.selected_faces.add(face_id)
+            # W7: Unified API - toggle_face_selection handles multi/single select
+            self.toggle_face_selection(face_id, is_multi=is_multi)
 
             self._draw_selectable_faces()
             self.face_selected.emit(face_id)
@@ -3443,7 +3435,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         else:
             # Background Click → Deselect
             if not is_multi:
-                self.selected_faces.clear()
+                self.clear_face_selection()
                 self._draw_selectable_faces()
 
     def _on_face_clicked(self, point, hover_only=False):
@@ -6458,8 +6450,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         }
 
         # Markiere als ausgewählt
-        self.selected_faces.clear()
-        self.selected_faces.add(-1)  # Special marker für Body-Face
+        # W7 PAKET B: Use Unified API
+        self.clear_face_selection()
+        self.selected_face_ids.add(-1)  # Special marker für Body-Face
 
         logger.info(f"Body face selected: body={body_id}, normal={normal}, pos={pos}")
 

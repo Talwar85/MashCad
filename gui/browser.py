@@ -23,6 +23,8 @@ def _format_feature_status_tooltip(status_msg: str, status: str = "", status_det
     """
     Formatiert Feature-Statusmeldungen für den Browser-Tooltip.
 
+    W7: Nutzt status_class/severity aus Error-Envelope v2 für konsistente Klassifikation.
+
     Erkennt den technischen Suffix `| refs: ...` und stellt Referenzen
     als eigene Liste dar, damit gebrochene TNP-Referenzen direkt lesbar sind.
     """
@@ -48,10 +50,28 @@ def _format_feature_status_tooltip(status_msg: str, status: str = "", status_det
         base_msg = str(details.get("message", "") or "").strip()
 
     lines = []
-    # W5: Drift UX
-    is_drift = details.get("code") == "tnp_ref_drift" or details.get("tnp_failure", {}).get("category") == "drift"
 
-    if status == "ERROR":
+    # W7: PAKET C - Priorisiere status_class/severity aus Error-Envelope v2
+    status_class = details.get("status_class", "")
+    severity = details.get("severity", "")
+
+    # Fallback: code-basierte Erkennung (W5-Compat)
+    is_drift = (status_class == "WARNING_RECOVERABLE" or
+                severity == "warning" or
+                details.get("code") == "tnp_ref_drift" or
+                details.get("tnp_failure", {}).get("category") == "drift")
+
+    # Mapping status_class -> Anzeige-Text
+    if status_class == "WARNING_RECOVERABLE":
+        lines.append(tr("Warning (Recoverable)"))
+    elif status_class == "BLOCKED":
+        lines.append(tr("Blocked"))
+    elif status_class == "CRITICAL":
+        lines.append(tr("Critical Error"))
+    elif status_class == "ERROR":
+        lines.append(tr("Error"))
+    # Fallback: Legacy status-basiert
+    elif status == "ERROR":
         if is_drift:
             lines.append(tr("Warning (Recoverable)"))
         else:
@@ -557,13 +577,27 @@ class ProjectBrowser(QFrame):
                     prefix = "↳" if not rolled_back else "⊘"
                     color = "#777" if not rolled_back else "#444"
                     if hasattr(f, 'status') and f.status == "ERROR":
-                        # W5: Drift UX - Treat as recoverable warning
+                        # W7: PAKET C - Color basierend auf status_class (Error-Envelope v2)
                         details = getattr(f, "status_details", {}) or {}
-                        tnp = details.get("tnp_failure", {})
-                        if details.get("code") == "tnp_ref_drift" or tnp.get("category") == "drift":
-                            color = "#e0a030"  # Orange for drift/recoverable
+                        status_class = details.get("status_class", "")
+                        severity = details.get("severity", "")
+
+                        # Priority 1: status_class mapping
+                        if status_class == "WARNING_RECOVERABLE" or severity == "warning":
+                            color = "#e0a030"  # Orange for recoverable warnings
+                        elif status_class == "BLOCKED" or severity == "blocked":
+                            color = "#aa5500"  # Dark orange for blocked
+                        elif status_class == "CRITICAL" or severity == "critical":
+                            color = "#ff0000"  # Bright red for critical
+                        elif status_class == "ERROR" or severity == "error":
+                            color = "#cc5555"  # Red for standard errors
                         else:
-                            color = "#cc5555"  # Red for hard errors
+                            # Fallback: W5 code-basierte Erkennung
+                            tnp = details.get("tnp_failure", {})
+                            if details.get("code") == "tnp_ref_drift" or tnp.get("category") == "drift":
+                                color = "#e0a030"  # Orange for drift/recoverable
+                            else:
+                                color = "#cc5555"  # Red for hard errors
 
                     # Geometry Badge: zeigt Volume-Delta und Edge-Erfolgsrate
                     badge = ""

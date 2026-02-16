@@ -1443,6 +1443,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         QTimer.singleShot(duration - 500, self.update)
         QTimer.singleShot(duration, self.update)
 
+    # PAKET B W6: Alias für Konsistenz mit bestehendem Code
+    _show_hud = show_message
+
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         self.reference_bodies = []
         self.sketch_plane_normal = plane_normal
@@ -4345,6 +4348,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self.setCursor(Qt.SizeAllCursor)
             elif mode == "line_move":
                 self.setCursor(Qt.OpenHandCursor)
+            elif mode == "radius":
+                # PAKET A W6: Radius-Drag uses diagonal cursor (scaling action)
+                self.setCursor(Qt.SizeFDiagCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -5780,6 +5786,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             self.setCursor(Qt.SizeAllCursor)
                     elif mode == "line_move":
                         self.setCursor(Qt.OpenHandCursor)
+                    elif mode == "radius":
+                        # PAKET A W6: Radius-Drag uses diagonal cursor (scaling action)
+                        self.setCursor(Qt.SizeFDiagCursor)
                     else:
                         self.setCursor(Qt.SizeHorCursor)
                 elif spline_elem:
@@ -7325,12 +7334,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return True
 
     def _cancel_right_click_empty_action(self) -> bool:
-        """Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab."""
+        """
+        Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab.
+        PAKET B W6: HUD-Feedback für alle Abbruch-Fälle hinzugefügt.
+        """
         if self.dim_input_active and self.dim_input.isVisible():
             self.dim_input.hide()
             self.dim_input.unlock_all()
             self.dim_input_active = False
             self.setFocus()
+            self._show_hud(tr("Eingabe abgebrochen"))
             return True
 
         if self._canvas_calibrating:
@@ -7342,21 +7355,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.selection_box_start:
             self.selection_box_start = None
             self.selection_box_end = None
+            # Kein HUD nötig für Box-Abbruch (passiert oft versehentlich)
             return True
 
         if self.tool_step > 0:
             self._cancel_tool()
-            self.status_message.emit(tr("Aktion abgebrochen"))
+            self._show_hud(tr("Aktion abgebrochen"))
             return True
 
         if self.current_tool != SketchTool.SELECT:
             self.set_tool(SketchTool.SELECT)
-            self.status_message.emit(tr("Werkzeug deaktiviert"))
+            self._show_hud(tr("Werkzeug deaktiviert"))
             return True
 
         if (self.selected_lines or self.selected_points or self.selected_circles
                 or self.selected_arcs or self.selected_constraints or self.selected_splines):
             self._clear_selection()
+            # PAKET B W6: HUD-Feedback für Selektion-Clear
+            self._show_hud(tr("Selektion aufgehoben"))
             return True
 
         return False
