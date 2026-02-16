@@ -76,6 +76,24 @@ def test_feature_status_load_mirrors_legacy_hint_to_next_action():
     assert details.get("next_action") == "Expliziter Legacy-Hinweis"
 
 
+def test_feature_status_load_mirrors_legacy_next_action_to_hint():
+    body = Body("legacy_next_action_to_hint")
+    feat = PrimitiveFeature(primitive_type="box", length=7.0, width=7.0, height=7.0)
+    feat.status = "ERROR"
+    feat.status_message = "Legacy next_action only"
+    feat.status_details = {
+        "code": "operation_failed",
+        "next_action": "Legacy next action text",
+    }
+    body.features = [feat]
+
+    restored = Body.from_dict(body.to_dict())
+    details = restored.features[0].status_details or {}
+
+    assert details.get("next_action") == "Legacy next action text"
+    assert details.get("hint") == "Legacy next action text"
+
+
 def test_hole_invalid_diameter_sets_feature_error_message():
     body = _make_box_body("hole_error_body")
     hole = HoleFeature(
