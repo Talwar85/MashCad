@@ -1333,6 +1333,8 @@ class Body:
 
         normalized = dict(status_details)
         code = str(normalized.get("code", "") or "").strip()
+        if code:
+            normalized.setdefault("schema", "error_envelope_v1")
         has_status_class = bool(str(normalized.get("status_class", "") or "").strip())
         has_severity = bool(str(normalized.get("severity", "") or "").strip())
         if code and (not has_status_class or not has_severity):

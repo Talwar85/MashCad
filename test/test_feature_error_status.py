@@ -94,6 +94,25 @@ def test_feature_status_load_mirrors_legacy_next_action_to_hint():
     assert details.get("hint") == "Legacy next action text"
 
 
+def test_feature_status_load_adds_schema_for_legacy_code_payload():
+    body = Body("legacy_schema_migration")
+    feat = PrimitiveFeature(primitive_type="box", length=9.0, width=9.0, height=9.0)
+    feat.status = "ERROR"
+    feat.status_message = "Legacy payload without schema"
+    feat.status_details = {
+        "code": "operation_failed",
+    }
+    body.features = [feat]
+
+    restored = Body.from_dict(body.to_dict())
+    details = restored.features[0].status_details or {}
+
+    assert details.get("schema") == "error_envelope_v1"
+    assert details.get("status_class") == "ERROR"
+    assert details.get("severity") == "error"
+    assert details.get("next_action")
+
+
 def test_hole_invalid_diameter_sets_feature_error_message():
     body = _make_box_body("hole_error_body")
     hole = HoleFeature(
