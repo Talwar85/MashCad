@@ -204,3 +204,31 @@ powershell -ExecutionPolicy Bypass -File scripts/generate_core_ops_dashboard.ps1
 ### Ergebnis
 - Gate-Laufhistorie wird reproduzierbar versioniert, inklusive bounded retention.
 - Aggregator kann bei Bedarf direkt nach jedem Lauf archivieren.
+
+---
+
+## Paket C-W9K (DONE, P1): Archive Validation + Dashboard
+
+### Scope
+- neues Script: `scripts/validate_gate_summary_archive.ps1`
+  - validiert `index.json` (`gate_summary_archive_index_v1`) aus dem Archive-Ordner,
+  - prueft Referenzintegritaet (entry file + latest.file),
+  - prueft Sortierung/Bounds (`entries <= max_files`),
+  - optional JSON-Report (`gate_summary_archive_validation_v1`).
+- neues Script: `scripts/generate_gate_archive_dashboard.ps1`
+  - erstellt Dashboard aus Archive-Index,
+  - erzeugt JSON + MD (`gate_summary_archive_dashboard_v1`) mit:
+    - retention usage,
+    - overall/core status counts,
+    - core-profile Verteilung,
+    - latest snapshot.
+- neue Seed-Suite: `test/test_gate_archive_dashboard_seed.py`
+  - validation pass + json report,
+  - validation fail bei missing archive file,
+  - dashboard output contract.
+- Contract-Suite erweitert:
+  - script-existence fuer validator + dashboard generator.
+
+### Ergebnis
+- Archive-Qualitaet ist nicht nur erzeugbar, sondern auch maschinell pruefbar.
+- Release-Readiness bekommt eine direkte Historien-Sicht auf Archive-Ebene.

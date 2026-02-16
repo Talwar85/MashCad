@@ -106,6 +106,16 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "archive_gate_summary.ps1"
         assert script_path.exists(), f"archive_gate_summary.ps1 not found at {script_path}"
 
+    def test_validate_gate_summary_archive_script_exists(self):
+        """validate_gate_summary_archive.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "validate_gate_summary_archive.ps1"
+        assert script_path.exists(), f"validate_gate_summary_archive.ps1 not found at {script_path}"
+
+    def test_generate_gate_archive_dashboard_script_exists(self):
+        """generate_gate_archive_dashboard.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "generate_gate_archive_dashboard.ps1"
+        assert script_path.exists(), f"generate_gate_archive_dashboard.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================
