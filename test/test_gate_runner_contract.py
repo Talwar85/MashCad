@@ -277,6 +277,7 @@ class TestGateRunnerContract:
         assert "CoreProfile" in content
         assert "ValidateEvidence" in content
         assert "FailOnEvidenceWarning" in content
+        assert "JsonOut" in content
 
     def test_gate_all_contains_evidence_contract_step(self):
         """gate_all.ps1 should contain optional evidence-contract execution step."""
@@ -284,6 +285,13 @@ class TestGateRunnerContract:
         content = script_path.read_text(encoding="utf-8")
         assert "Evidence-Contract" in content
         assert "validate_gate_evidence.ps1" in content
+
+    def test_gate_all_contains_json_summary_contract(self):
+        """gate_all.ps1 should support machine-readable JSON summary export."""
+        script_path = self.SCRIPT_DIR / "gate_all.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "gate_all_summary_v1" in content
+        assert "JSON written:" in content
 
     def test_gate_all_shows_blocker_type_w3(self):
         """gate_all.ps1 W3: must show blocker_type for BLOCKED_INFRA."""

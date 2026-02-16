@@ -94,13 +94,23 @@ powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile paral
 
 ---
 
+## Paket C-W9E (DONE, P0): Gate Summary JSON Contract v1
+
+### Scope
+- `scripts/gate_all.ps1` erweitert um optionales `-JsonOut`.
+- Aggregator schreibt maschinenlesbare Zusammenfassung mit Schema:
+  - `gate_all_summary_v1`.
+- Config/Gate/Overall Sektionen sind enthalten.
+
+### Ergebnis
+- Gate-All-Output ist sowohl menschenlesbar als auch maschinenlesbar verwendbar.
+
+---
+
 ## Naechste Grosspakete (W9 Folge)
 
-1. **C-W9E (P0): Gate Summary JSON Contract v1**
-- `gate_all.ps1` und `gate_ui.ps1` bekommen optionales JSON-Output mit stabiler Schema-Version.
-
-2. **C-W9F (P1): Core Red-Flag Profile**
+1. **C-W9F (P1): Core Red-Flag Profile**
 - dediziertes Profil fuer Showstopper/CH-010 mit schnellen Fail-Fast-Checks.
 
-3. **C-W9G (P1): Core-Gate Trend Capture**
+2. **C-W9G (P1): Core-Gate Trend Capture**
 - automatischer Laufvergleich (last-good vs current) fuer Passrate/Dauer pro Profil.

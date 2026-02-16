@@ -13,7 +13,8 @@ param(
     [ValidateSet("full", "parallel_safe", "kernel_only")]
     [string]$CoreProfile = "full",
     [switch]$ValidateEvidence = $false,
-    [switch]$FailOnEvidenceWarning = $false
+    [switch]$FailOnEvidenceWarning = $false,
+    [string]$JsonOut = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -31,6 +32,9 @@ Write-Host "CoreProfile: $CoreProfile"
 Write-Host "ValidateEvidence: $ValidateEvidence"
 if ($ValidateEvidence) {
     Write-Host "FailOnEvidenceWarning: $FailOnEvidenceWarning"
+}
+if ($JsonOut) {
+    Write-Host "JsonOut: $JsonOut"
 }
 Write-Host ""
 
@@ -358,5 +362,45 @@ if ($ValidateEvidence) {
 
 Write-Host ""
 Write-Host "Exit Code: $overallExit"
+
+$summary = @{
+    metadata = @{
+        generated_at = (Get-Date).ToString("s")
+        schema = "gate_all_summary_v1"
+    }
+    config = @{
+        strict_hygiene = [bool]$StrictHygiene
+        enforce_core_budget = [bool]$EnforceCoreBudget
+        max_core_duration_seconds = $MaxCoreDurationSeconds
+        min_core_pass_rate = $MinCorePassRate
+        core_profile = $CoreProfile
+        validate_evidence = [bool]$ValidateEvidence
+        fail_on_evidence_warning = [bool]$FailOnEvidenceWarning
+    }
+    gates = @($results | ForEach-Object {
+        @{
+            name = $_.Name
+            status = $_.Status
+            exit_code = $_.ExitCode
+            duration_seconds = [math]::Round([double]$_.Duration, 2)
+            pass_rate = $_.PassRate
+            blocker_type = $_.BlockerType
+            profile = $_.Profile
+            evidence_pass = $_.Pass
+            evidence_warn = $_.Warn
+            evidence_fail = $_.Fail
+        }
+    })
+    overall = @{
+        status = if ($overallExit -eq 0) { "PASS" } else { "FAIL" }
+        exit_code = $overallExit
+        duration_seconds = [math]::Round($overallDuration, 2)
+    }
+}
+
+if ($JsonOut) {
+    $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+    Write-Host "JSON written: $JsonOut"
+}
 
 exit $overallExit
