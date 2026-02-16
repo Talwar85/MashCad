@@ -22,7 +22,8 @@ class _DummyMainWindow:
     def _update_body_from_build123d(self, _body, _solid):
         return None
 
-    def show_notification(self, title, message, level="info"):
+    def show_notification(self, title, message, level="info", duration=3000,
+                         status_class="", severity=""):
         self.notifications.append((title, message, level))
 
 

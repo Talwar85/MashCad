@@ -27,6 +27,7 @@ os.environ["QT_OPENGL"] = "software"
 import pytest
 import sys
 import math
+import time
 
 from PySide6.QtCore import Qt, QPoint, QPointF
 from PySide6.QtWidgets import QApplication
@@ -351,7 +352,7 @@ class TestInteractionConsistency:
         
         assert len(vp.selected_faces) == 0
 
-    @pytest.mark.skip(reason="W9 FLAKE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Mitigation: drag_element_stable() mit 15 steps + flush_events(). Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI. Logic verified locally, W6: Cursor-Semantik korrigiert (SizeFDiagCursor für Radius-Drag).")
+    @pytest.mark.xfail(strict=True, reason="W11 KNOWN_FAILURE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Blocker-Signature: VTK_RENDER_CONTEXT_DETERMINISM. Logic verified locally, drag_element_stable() mit 15 steps + flush_events() nicht ausreichend für CI. Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI (erfordert Core-Änderungen). Owner: Core (VTK Integration), ETA: TBD.")
     def test_circle_move_resize(self, sketch_harness):
         """Test Circle center-drag (Move) and edge-drag (radius resize)."""
         editor = sketch_harness.editor
@@ -390,7 +391,7 @@ class TestInteractionConsistency:
             assert abs(circle.radius - 15.0) < 1.0, f"Radius should be ~15, got {circle.radius}"
             assert abs(circle.center.x - 20.0) < 0.1, "Center should remain ~20"
 
-    @pytest.mark.skip(reason="W9 FLAKE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Mitigation: drag_element_stable() mit 15 steps + flush_events(). Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI. Logic verified locally, W6: Edge-Drag mit SizeHor/VerCursor implementiert.")
+    @pytest.mark.xfail(strict=True, reason="W11 KNOWN_FAILURE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Blocker-Signature: VTK_RENDER_CONTEXT_DETERMINISM. Logic verified locally, drag_element_stable() mit 15 steps + flush_events() nicht ausreichend für CI. Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI (erfordert Core-Änderungen). Owner: Core (VTK Integration), ETA: TBD.")
     def test_rectangle_edge_drag(self, sketch_harness):
         """Test Rectangle edge-drag (Resize)."""
         editor = sketch_harness.editor
@@ -424,7 +425,7 @@ class TestInteractionConsistency:
             assert abs(right_line.start.x - 15.0) < 1.0
             assert abs(right_line.end.x - 15.0) < 1.0
 
-    @pytest.mark.skip(reason="W9 FLAKE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Mitigation: drag_element_stable() mit 15 steps + flush_events(). Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI. Logic verified locally, W6: Line-Drag mit OpenHandCursor implementiert.")
+    @pytest.mark.xfail(strict=True, reason="W11 KNOWN_FAILURE: QTest drag coordinates flake in headless environment. Root Cause: world_to_screen Mapping abhängig von View-Transformation + headless OpenGL context. Blocker-Signature: VTK_RENDER_CONTEXT_DETERMINISM. Logic verified locally, drag_element_stable() mit 15 steps + flush_events() nicht ausreichend für CI. Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI (erfordert Core-Änderungen). Owner: Core (VTK Integration), ETA: TBD.")
     def test_line_drag_consistency(self, sketch_harness):
         """Test Line drag (Move)."""
         editor = sketch_harness.editor

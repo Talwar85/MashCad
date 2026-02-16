@@ -277,7 +277,9 @@ class AddFeatureCommand(QUndoCommand):
                     self.main_window.show_notification(
                         tr("Rollback"),
                         f"{tr('Operation prevented')}: {reason}",
-                        level="warning"
+                        level="warning",
+                        status_class="WARNING_RECOVERABLE",
+                        severity="warning"
                     )
 
             CADTessellator.notify_body_changed()
@@ -299,7 +301,9 @@ class AddFeatureCommand(QUndoCommand):
                 self.main_window.show_notification(
                     tr("Operation Failed"),
                     str(e),
-                    level="error"
+                    level="error",
+                    status_class="ERROR",
+                    severity="error"
                 )
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)
@@ -384,7 +388,9 @@ class DeleteFeatureCommand(QUndoCommand):
                     self.main_window.show_notification(
                         tr("Rollback"),
                         f"{tr('Deletion prevented')}: {reason}",
-                        level="warning"
+                        level="warning",
+                        status_class="WARNING_RECOVERABLE",
+                        severity="warning"
                     )
 
             CADTessellator.notify_body_changed()
@@ -456,7 +462,9 @@ class EditFeatureCommand(QUndoCommand):
                     self.main_window.show_notification(
                         tr("Rollback"),
                         f"{tr('Change prevented')}: {reason}",
-                        level="warning"
+                        level="warning",
+                        status_class="WARNING_RECOVERABLE",
+                        severity="warning"
                     )
 
             CADTessellator.notify_body_changed()
@@ -469,7 +477,9 @@ class EditFeatureCommand(QUndoCommand):
                 self.main_window.show_notification(
                     tr("Update Failed"),
                     str(e),
-                    level="error"
+                    level="error",
+                    status_class="ERROR",
+                    severity="error"
                 )
             CADTessellator.notify_body_changed()
             _update_body_ui(self.main_window, self.body)

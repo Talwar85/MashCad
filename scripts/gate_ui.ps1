@@ -1,11 +1,12 @@
 #!/usr/bin/env powershell
-# UI-Gate Runner - Hardened W10
+# UI-Gate Runner - Hardened W11
 # Usage: .\scripts\gate_ui.ps1
 # Exit Codes: 0 = PASS/BLOCKED_INFRA, 1 = FAIL
 # Ensures own result summary even if conda run fails
 # W3: Added BLOCKED_INFRA classification for VTK OpenGL/Access Violation errors
 # W9: Extended test suite for Discoverability hints, Selection-State Final Convergence
 # W10: Extended test suite for Error UX v2 Integration, Discoverability v4 Anti-Spam
+# W11: Extended test suite for Error UX v2 Product Flows, Selection-State Lifecycle, Discoverability v5 Context
 
 param(
     [switch]$VerboseOutput = $false
