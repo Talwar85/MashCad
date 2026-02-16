@@ -96,6 +96,11 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "generate_core_gate_trend.ps1"
         assert script_path.exists(), f"generate_core_gate_trend.ps1 not found at {script_path}"
 
+    def test_core_ops_dashboard_script_exists(self):
+        """generate_core_ops_dashboard.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "generate_core_ops_dashboard.ps1"
+        assert script_path.exists(), f"generate_core_ops_dashboard.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================

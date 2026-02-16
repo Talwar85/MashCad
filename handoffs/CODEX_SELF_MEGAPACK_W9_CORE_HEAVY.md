@@ -83,23 +83,29 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
 conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_output_schema test/test_gate_runner_contract.py::TestGateRunnerContract::test_exit_code_contract_core test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_has_core_budget_parameter_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_budget_script_has_stable_defaults
 conda run -n cad_env python -m pytest -q test/test_core_profile_matrix_seed.py test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists
 conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_core_profile_matrix_seed.py test/test_core_gate_trend_seed.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_gate_trend_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_has_core_budget_parameter_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_contains_json_summary_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_budget_script_has_stable_defaults
+conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_core_profile_matrix_seed.py test/test_core_gate_trend_seed.py test/test_core_ops_dashboard_seed.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_gate_trend_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_ops_dashboard_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter
 
 powershell -ExecutionPolicy Bypass -File scripts/check_core_gate_budget.ps1 -CoreProfile parallel_safe
 powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile parallel_safe -ValidateEvidence
 powershell -ExecutionPolicy Bypass -File scripts/check_core_gate_budget.ps1 -CoreProfile red_flag
 powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile red_flag -ValidateEvidence -JsonOut gate_all_summary_red_flag.json
 powershell -ExecutionPolicy Bypass -File scripts/generate_core_gate_trend.ps1 -EvidenceDir . -Pattern "gate_all_summary_red_flag.json" -OutPrefix core_gate_trend_red_flag
+powershell -ExecutionPolicy Bypass -File scripts/generate_core_profile_matrix.ps1 -OutPrefix core_profile_matrix_live
+powershell -ExecutionPolicy Bypass -File scripts/generate_core_gate_trend.ps1 -EvidenceDir . -Pattern "gate_all_summary_red_flag_live.json" -OutPrefix core_gate_trend_live
+powershell -ExecutionPolicy Bypass -File scripts/generate_core_ops_dashboard.ps1 -MatrixJson core_profile_matrix_live.json -TrendJson core_gate_trend_live.json -OutPrefix core_ops_dashboard_live
 ```
 
 **Observed:**
 - Contract-Tests gruen
 - Matrix-Seed-Tests gruen
 - Trend-Seed-Tests gruen
+- Ops-Dashboard-Seed-Tests gruen
 - Budget-Check gruen (`parallel_safe`)
 - `gate_all` mit `-CoreProfile parallel_safe -ValidateEvidence` -> `ALL GATES PASSED` (UI als `BLOCKED_INFRA`, nicht FAIL)
 - Budget-Check gruen (`red_flag`)
 - `gate_all` mit `-CoreProfile red_flag -ValidateEvidence -JsonOut ...` -> `ALL GATES PASSED`
 - `generate_core_gate_trend.ps1` erzeugt `core_gate_trend_v1` JSON+MD artefakt.
+- `generate_core_ops_dashboard.ps1` erzeugt `core_ops_dashboard_v1` JSON+MD artefakt.
 
 ---
 
@@ -155,3 +161,18 @@ powershell -ExecutionPolicy Bypass -File scripts/generate_core_gate_trend.ps1 -E
 
 2. **C-W9I (P1): Trend Fusion Dashboard**
 - Core-Profile-Matrix + Core-Gate-Trend in konsolidierte Dashboard-Sicht ueberfuehren.
+
+---
+
+## Paket C-W9I (DONE, P1): Trend Fusion Dashboard Seed
+
+### Scope
+- neues Script: `scripts/generate_core_ops_dashboard.ps1`
+  - fusioniert `core_profile_matrix_v1` + `core_gate_trend_v1`,
+  - erzeugt Dashboard JSON+MD (`core_ops_dashboard_v1`).
+- neue Suite: `test/test_core_ops_dashboard_seed.py`
+- Gate-Runner-Contract erweitert:
+  - `test_core_ops_dashboard_script_exists`
+
+### Ergebnis
+- kombiniertes Core-Ops-Dashboard als Seed fuer Release-Readiness Tracking vorhanden.
