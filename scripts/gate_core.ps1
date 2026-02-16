@@ -3,6 +3,10 @@
 # Usage: .\scripts\gate_core.ps1
 # Exit Codes: 0 = PASS, 1 = FAIL
 
+param(
+    [switch]$SkipUxBoundSuites = $false
+)
+
 $ErrorActionPreference = "Continue"
 
 $CORE_TESTS = @(
@@ -24,8 +28,13 @@ $CORE_TESTS = @(
     "test/test_parametric_reference_modelset.py"
 )
 
+if ($SkipUxBoundSuites) {
+    $CORE_TESTS = @($CORE_TESTS | Where-Object { $_ -ne "test/test_feature_commands_atomic.py" })
+}
+
 Write-Host "=== Core-Gate Started ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Host "SkipUxBoundSuites: $SkipUxBoundSuites"
 Write-Host "Tests: $($CORE_TESTS.Count) suites"
 Write-Host ""
 

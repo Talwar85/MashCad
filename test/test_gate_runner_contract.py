@@ -134,6 +134,12 @@ class TestGateRunnerContract:
             "Core gate must include stability dashboard seed suite"
         )
 
+    def test_gate_core_has_parallel_mode_parameter(self):
+        """gate_core.ps1 should expose SkipUxBoundSuites for parallel UX work."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "SkipUxBoundSuites" in content
+
     def test_core_budget_script_has_stable_defaults(self):
         """check_core_gate_budget.ps1 should define stable baseline defaults."""
         script_path = self.SCRIPT_DIR / "check_core_gate_budget.ps1"
