@@ -150,7 +150,7 @@ def xfail_on_crash(
         blocker_type: Blocker signature type for documentation
 
     Raises:
-        pytest.xfail: If crash detected with strict=True
+        pytest.xfail: If crash detected
     """
     if crash_signature is not None:
         blocker_info = BLOCKER_SIGNATURES.get(blocker_type, crash_signature)
@@ -164,7 +164,7 @@ def xfail_on_crash(
             f"Exit-Strategy: Stabilere coordinate mapping oder VTK-mocking für headless CI."
         )
 
-        pytest.xfail(strict=True, reason=reason)
+        pytest.xfail(reason=reason)
 
 
 def assert_or_xfail_on_crash(

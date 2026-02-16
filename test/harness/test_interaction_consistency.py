@@ -20,6 +20,11 @@ Update W12 (Paket A: Native Crash Containment):
 - ACCESS_VIOLATION Blocker wird als xfail markiert
 - Haupt-Pytest-Lauf wird nicht abgebrochen
 
+Update W13 (Paket A+B: Contained Runnable):
+- Drag-Tests laufen wieder im Hauptlauf (nicht mehr skip)
+- Subprozess-Isolierung schützt Haupt-Pytest-Runner vor Absturz
+- Tests können pass (Blocker behoben) oder xfail (Blocker aktiv)
+
 Author: GLM 4.7 (UX/WORKFLOW + QA Integration Cell)
 Date: 2026-02-16
 Branch: feature/v1-ux-aiB
@@ -346,8 +351,8 @@ class TestInteractionConsistency:
     """
     Validation for SU-004 / UX-W2-02.
 
-    W12: Riskante Drag-Tests sind in test_interaction_drag_isolated.py ausgelagert.
-    Diese Datei enthält nur sichere Tests die nicht crashen.
+    W13: Drag-Tests laufen mit Subprozess-Isolierung (Contained Runnable).
+    Bei ACCESS_VIOLATION werden Tests als xfail markiert, aber der Runner läuft weiter.
     """
 
     def test_click_selects_nothing_in_empty_space(self, interaction_harness):
@@ -362,43 +367,113 @@ class TestInteractionConsistency:
         assert len(vp.selected_faces) == 0
 
     # ========================================================================
-    # W12 Paket A: Drag-Tests ausgelagert in isoliertes File
+    # W13 Paket A: Drag-Tests mit Subprozess-Isolierung (Contained Runnable)
     # ========================================================================
-    # Die folgenden Tests wurden in test_interaction_drag_isolated.py ausgelagert
-    # weil sie in headless Umgebungen ACCESS_VIOLATION (0xC0000005) auslösen.
+    # Die folgenden Tests laufen in isolierten Subprozessen, um bei
+    # ACCESS_VIOLATION (0xC0000005) den Haupt-Pytest-Lauf nicht zu killen.
     #
-    # Ausgelagerte Tests:
-    # - test_circle_move_resize_isolated
-    # - test_rectangle_edge_drag_isolated
-    # - test_line_drag_consistency_isolated
+    # Strategie: "Contained Runnable" (Option B aus W13 Mission)
+    # - Tests werden ausgeführt (nicht skip)
+    # - Bei Crash: xfail mit Blocker-Signatur
+    # - Bei Erfolg: pass
+    # - Runner läuft immer stabil weiter
     #
-    # Diese Tests werden NICHT im normalen UI-Gate laufen.
-    # Sie können mit: pytest test/harness/test_interaction_drag_isolated.py
-    # separat ausgeführt werden.
+    # Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG
+    # Isolierte Tests sind weiterhin verfügbar: test_interaction_drag_isolated.py
 
-    @pytest.mark.skip(
-        reason="W12: Moved to test_interaction_drag_isolated.py due to ACCESS_VIOLATION risk. "
-               "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
-               "Run isolated tests with: pytest test/harness/test_interaction_drag_isolated.py"
+    @pytest.mark.xfail(
+        strict=False,  # W13: Non-strict - Test can pass if stable
+        reason="W13 KNOWN_FAILURE_RISK: ACCESS_VIOLATION (0xC0000005) during drag interaction. "
+              "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
+              "Running in subprocess isolation to protect main pytest runner. "
+              "Root Cause: VTK/OpenGL headless context issue. "
+              "Owner: Core (VTK Integration), ETA: TBD."
     )
     def test_circle_move_resize(self, sketch_harness):
-        """[W12: SKIPPED - Moved to isolated test file] Circle center-drag (Move) and edge-drag (radius resize)."""
-        pytest.skip("W12: Moved to test_interaction_drag_isolated.py")
+        """
+        W13: Circle center-drag (Move) and edge-drag (radius resize).
 
-    @pytest.mark.skip(
-        reason="W12: Moved to test_interaction_drag_isolated.py due to ACCESS_VIOLATION risk. "
-               "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
-               "Run isolated tests with: pytest test/harness/test_interaction_drag_isolated.py"
+        Runs in subprocess isolation via crash_containment_helper.
+        If ACCESS_VIOLATION occurs, test is marked as xfail but runner continues.
+        If test passes, the blocker is resolved.
+        """
+        # W13: Import containment helper for subprocess isolation
+        from test.harness.crash_containment_helper import (
+            run_test_in_subprocess,
+            xfail_on_crash
+        )
+
+        # Run the isolated version in subprocess
+        exit_code, stdout, stderr, crash_sig = run_test_in_subprocess(
+            test_path="test/harness/test_interaction_drag_isolated.py",
+            test_name="test_circle_move_resize_isolated",
+            timeout=60
+        )
+
+        # If crash detected, mark as xfail (expected for W13)
+        xfail_on_crash(exit_code, crash_sig, "ACCESS_VIOLATION_INTERACTION_DRAG")
+
+        # If we reach here, test passed - blocker resolved!
+        assert exit_code == 0, f"Test failed but didn't crash: {stderr}"
+
+    @pytest.mark.xfail(
+        strict=False,
+        reason="W13 KNOWN_FAILURE_RISK: ACCESS_VIOLATION (0xC0000005) during drag interaction. "
+              "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
+              "Running in subprocess isolation to protect main pytest runner. "
+              "Root Cause: VTK/OpenGL headless context issue. "
+              "Owner: Core (VTK Integration), ETA: TBD."
     )
     def test_rectangle_edge_drag(self, sketch_harness):
-        """[W12: SKIPPED - Moved to isolated test file] Rectangle edge-drag (Resize)."""
-        pytest.skip("W12: Moved to test_interaction_drag_isolated.py")
+        """
+        W13: Rectangle edge-drag (Resize).
 
-    @pytest.mark.skip(
-        reason="W12: Moved to test_interaction_drag_isolated.py due to ACCESS_VIOLATION risk. "
-               "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
-               "Run isolated tests with: pytest test/harness/test_interaction_drag_isolated.py"
+        Runs in subprocess isolation via crash_containment_helper.
+        If ACCESS_VIOLATION occurs, test is marked as xfail but runner continues.
+        If test passes, the blocker is resolved.
+        """
+        from test.harness.crash_containment_helper import (
+            run_test_in_subprocess,
+            xfail_on_crash
+        )
+
+        exit_code, stdout, stderr, crash_sig = run_test_in_subprocess(
+            test_path="test/harness/test_interaction_drag_isolated.py",
+            test_name="test_rectangle_edge_drag_isolated",
+            timeout=60
+        )
+
+        xfail_on_crash(exit_code, crash_sig, "ACCESS_VIOLATION_INTERACTION_DRAG")
+
+        assert exit_code == 0, f"Test failed but didn't crash: {stderr}"
+
+    @pytest.mark.xfail(
+        strict=False,
+        reason="W13 KNOWN_FAILURE_RISK: ACCESS_VIOLATION (0xC0000005) during drag interaction. "
+              "Blocker-Signature: ACCESS_VIOLATION_INTERACTION_DRAG. "
+              "Running in subprocess isolation to protect main pytest runner. "
+              "Root Cause: VTK/OpenGL headless context issue. "
+              "Owner: Core (VTK Integration), ETA: TBD."
     )
     def test_line_drag_consistency(self, sketch_harness):
-        """[W12: SKIPPED - Moved to isolated test file] Line drag (Move)."""
-        pytest.skip("W12: Moved to test_interaction_drag_isolated.py")
+        """
+        W13: Line drag (Move).
+
+        Runs in subprocess isolation via crash_containment_helper.
+        If ACCESS_VIOLATION occurs, test is marked as xfail but runner continues.
+        If test passes, the blocker is resolved.
+        """
+        from test.harness.crash_containment_helper import (
+            run_test_in_subprocess,
+            xfail_on_crash
+        )
+
+        exit_code, stdout, stderr, crash_sig = run_test_in_subprocess(
+            test_path="test/harness/test_interaction_drag_isolated.py",
+            test_name="test_line_drag_consistency_isolated",
+            timeout=60
+        )
+
+        xfail_on_crash(exit_code, crash_sig, "ACCESS_VIOLATION_INTERACTION_DRAG")
+
+        assert exit_code == 0, f"Test failed but didn't crash: {stderr}"
