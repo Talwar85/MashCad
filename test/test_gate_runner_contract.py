@@ -71,6 +71,11 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "hygiene_check.ps1"
         assert script_path.exists(), f"hygiene_check.ps1 not found at {script_path}"
 
+    def test_core_budget_check_script_exists(self):
+        """check_core_gate_budget.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "check_core_gate_budget.ps1"
+        assert script_path.exists(), f"check_core_gate_budget.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================
@@ -94,6 +99,21 @@ class TestGateRunnerContract:
         assert "test/test_golden_model_regression_harness.py" in content, (
             "Core gate must include the golden model regression harness suite"
         )
+
+    def test_gate_core_includes_cross_platform_contract_suite(self):
+        """gate_core.ps1 must include cross-platform core contract suite."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test/test_core_cross_platform_contract.py" in content, (
+            "Core gate must include cross-platform contract suite"
+        )
+
+    def test_core_budget_script_has_stable_defaults(self):
+        """check_core_gate_budget.ps1 should define stable baseline defaults."""
+        script_path = self.SCRIPT_DIR / "check_core_gate_budget.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "MaxDurationSeconds = 150.0" in content
+        assert "MinPassRate = 99.0" in content
 
     def test_gate_ui_output_schema_w3(self):
         """gate_ui.ps1 W3: must output structured result with blocker_type."""
@@ -204,6 +224,14 @@ class TestGateRunnerContract:
         # Should show StrictHygiene status
         assert "StrictHygiene" in output or "strict" in output.lower(), \
             "Must show StrictHygiene status"
+
+    def test_gate_all_has_core_budget_parameter_contract(self):
+        """gate_all.ps1 must expose core budget enforcement parameters."""
+        script_path = self.SCRIPT_DIR / "gate_all.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "EnforceCoreBudget" in content
+        assert "MaxCoreDurationSeconds" in content
+        assert "MinCorePassRate" in content
 
     def test_gate_all_shows_blocker_type_w3(self):
         """gate_all.ps1 W3: must show blocker_type for BLOCKED_INFRA."""

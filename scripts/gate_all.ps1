@@ -6,7 +6,10 @@
 # W3: Added BLOCKED_INFRA distinction in summary
 
 param(
-    [switch]$StrictHygiene = $false
+    [switch]$StrictHygiene = $false,
+    [switch]$EnforceCoreBudget = $false,
+    [double]$MaxCoreDurationSeconds = 150.0,
+    [double]$MinCorePassRate = 99.0
 )
 
 $ErrorActionPreference = "Continue"
@@ -16,6 +19,10 @@ Write-Host "       MashCAD Gate Runner Suite        " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "StrictHygiene: $StrictHygiene"
+Write-Host "EnforceCoreBudget: $EnforceCoreBudget"
+if ($EnforceCoreBudget) {
+    Write-Host "Core Budget: Duration <= $MaxCoreDurationSeconds s, Pass-Rate >= $MinCorePassRate%"
+}
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -29,10 +36,23 @@ $coreResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\gate_core.p
 $coreExit = $LASTEXITCODE
 $coreEnd = Get-Date
 $coreDuration = ($coreEnd - $coreStart).TotalSeconds
+$corePassRate = $null
+$coreStatus = "UNKNOWN"
+foreach ($line in $coreResult) {
+    $lineStr = $line.ToString()
+    if ($lineStr -match "Pass-Rate:\s+([\d.]+)%") {
+        $corePassRate = [double]$matches[1]
+    }
+    if ($lineStr -match "Status:\s+(\S+)") {
+        $coreStatus = $matches[1]
+    }
+}
 $results += @{
     Name = "Core-Gate"
     ExitCode = $coreExit
     Duration = $coreDuration
+    Status = $coreStatus
+    PassRate = $corePassRate
 }
 
 Write-Host ""
@@ -109,6 +129,7 @@ foreach ($result in $results) {
     $duration = $result.Duration
     $status = if ($result.Status) { $result.Status } else { $null }
     $blockerType = if ($result.BlockerType) { $result.BlockerType } else { $null }
+    $passRate = if ($result.PassRate) { $result.PassRate } else { $null }
 
     # Determine display status (W3: Extended with BLOCKED_INFRA, ASCII-only)
     $displayStatus = ""
@@ -143,6 +164,10 @@ foreach ($result in $results) {
     Write-Host "$name ($([math]::Round($duration, 2))s): " -NoNewline
     Write-Host $displayStatus -ForegroundColor $color
 
+    if ($name -eq "Core-Gate" -and $passRate -ne $null) {
+        Write-Host "  Pass-Rate: $passRate%" -ForegroundColor Cyan
+    }
+
     # W3: Show blocker type if present
     if ($blockerType) {
         Write-Host "  Blocker-Type: $blockerType" -ForegroundColor Red
@@ -159,6 +184,20 @@ $coreGate = $results | Where-Object { $_.Name -eq "Core-Gate" } | Select-Object 
 $corePassed = $coreGate -and $coreGate.ExitCode -eq 0
 if (-not $corePassed) {
     $overallExit = 1
+}
+
+# Optional Core budget enforcement
+if ($EnforceCoreBudget -and $coreGate) {
+    $coreDurationFail = $coreGate.Duration -gt $MaxCoreDurationSeconds
+    $corePassRateFail = $false
+    if ($coreGate.PassRate -ne $null) {
+        $corePassRateFail = $coreGate.PassRate -lt $MinCorePassRate
+    } else {
+        $corePassRateFail = $true
+    }
+    if ($coreDurationFail -or $corePassRateFail) {
+        $overallExit = 1
+    }
 }
 
 # UI: BLOCKED_INFRA is not a FAIL, only actual FAIL (logic error) blocks
@@ -196,6 +235,9 @@ Write-Host ""
 if (-not $StrictHygiene) {
     Write-Host "Note: Hygiene violations treated as WARNING only (StrictHygiene=false)" -ForegroundColor Yellow
     Write-Host "      Use -StrictHygiene to treat hygiene violations as fatal" -ForegroundColor Yellow
+}
+if ($EnforceCoreBudget) {
+    Write-Host "Note: Core budget enforcement active (duration/pass-rate thresholds are mandatory)." -ForegroundColor Yellow
 }
 
 Write-Host ""

@@ -33,7 +33,7 @@ Ein großer eigener Lieferblock mit Fokus auf Produktionsreife:
 
 ---
 
-## Paket C-W7B (NEXT, P0): QA-007 Cross-Platform Baseline Contract
+## Paket C-W7B (DONE, P0): QA-007 Cross-Platform Baseline Contract
 
 ### Ziel
 Cross-Platform-Mindestvertrag explizit machen (auch wenn lokal nur Win verfügbar ist).
@@ -49,9 +49,15 @@ Cross-Platform-Mindestvertrag explizit machen (auch wenn lokal nur Win verfügba
 - neue Contract-Doku in `roadmap_ctp/`
 - mindestens 1 neuer Contract-Test oder Marker-Guard im Test-Stack
 
+### Ergebnis
+- Neue Suite: `test/test_core_cross_platform_contract.py`
+- Core-Gate Integration aktiv
+- Win32 Baseline + Plattform-Invarianten dokumentiert
+- Doku: `roadmap_ctp/CROSS_PLATFORM_CORE_CONTRACT_W7_20260216.md`
+
 ---
 
-## Paket C-W7C (NEXT, P0): QA-006 Performance Regression Gate Baseline
+## Paket C-W7C (IN_PROGRESS, P0): QA-006 Performance Regression Gate Baseline
 
 ### Ziel
 Eine erste harte Baseline für Laufzeiten kritischer Core-Suiten.
@@ -67,6 +73,11 @@ Eine erste harte Baseline für Laufzeiten kritischer Core-Suiten.
 ### Abnahme
 - Budget-Doku + reproduzierbarer Check-Command
 - kein false-positive Dauerrauschen
+
+### Aktueller Lieferstand
+- Runner: `scripts/check_core_gate_budget.ps1`
+- Aggregator-Unterstützung: `scripts/gate_all.ps1 -EnforceCoreBudget`
+- Doku: `roadmap_ctp/CORE_GATE_BUDGET_BASELINE_W7_20260216.md`
 
 ---
 
@@ -95,4 +106,3 @@ Stabilitätsmetriken werden standardisiert gesammelt, nicht ad-hoc.
 
 Regel:
 - Keine P1-Eskalation, bevor C-W7B/C-W7C baseline-stabil sind.
-

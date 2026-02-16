@@ -178,12 +178,35 @@ class MashCadStatusBar(QWidget):
         """Setzt den aktuellen Modus (2D/3D)."""
         self.mode_label.setText(f"Modus: {mode}")
 
-    def set_status(self, status: str, is_error: bool = False):
-        """Setzt den Status-Text und -Farbe."""
+    def set_status(self, status: str, is_error: bool = False, status_class: str = "", severity: str = ""):
+        """
+        Setzt den Status-Text und -Farbe.
+
+        W9 Paket D: Error UX v2 - Unterstützt status_class/severity aus Error-Envelope v2.
+
+        Args:
+            status: Der Status-Text
+            is_error: Legacy Parameter (True = Error, False = Success)
+            status_class: status_class aus Error-Envelope v2 (WARNING_RECOVERABLE, BLOCKED, CRITICAL, ERROR)
+            severity: severity aus Error-Envelope v2 (warning, blocked, critical, error)
+        """
         self.status_text.setText(status)
-        if is_error:
+
+        # W9: Priorisiere status_class/severity über legacy is_error
+        if status_class == "WARNING_RECOVERABLE" or severity == "warning":
+            # Gelb für Recoverable Warnings
+            self.status_dot.setStyleSheet(f"color: #eab308; font-size: 10px;")  # Gelb
+        elif status_class == "BLOCKED" or severity == "blocked":
+            # Orange für Blocked
+            self.status_dot.setStyleSheet(f"color: #f97316; font-size: 10px;")  # Orange
+        elif status_class == "CRITICAL" or severity == "critical":
+            # Rot für Critical
+            self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 10px;")
+        elif status_class == "ERROR" or severity == "error" or is_error:
+            # Rot für Error
             self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 10px;")
         else:
+            # Grün für Success/Ready
             self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 10px;")
 
     def set_grid(self, grid_size: float):

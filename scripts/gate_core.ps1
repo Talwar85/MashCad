@@ -18,6 +18,7 @@ $CORE_TESTS = @(
     "test/test_project_roundtrip_persistence.py",
     "test/test_showstopper_red_flag_pack.py",
     "test/test_golden_model_regression_harness.py",
+    "test/test_core_cross_platform_contract.py",
     "test/test_parametric_reference_modelset.py"
 )
 

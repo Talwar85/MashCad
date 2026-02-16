@@ -1,8 +1,9 @@
 #!/usr/bin/env powershell
-# Gate-Evidence Generator - W3
+# Gate-Evidence Generator - W9
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
+# W9: Extended UI-Test suite for Discoverability hints, Selection-State Final Convergence
 
 param(
     [switch]$StrictHygiene = $false,
@@ -11,16 +12,16 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# Default output prefix if not specified (W3)
+# Default output prefix if not specified (W9)
 if (-not $OutPrefix) {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W3_$timestamp"
+    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W9_$timestamp"
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 
-Write-Host "=== Gate-Evidence Generator (W3) ===" -ForegroundColor Cyan
+Write-Host "=== Gate-Evidence Generator (W9) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Prefix: $OutPrefix"
 Write-Host "StrictHygiene: $StrictHygiene"
@@ -153,6 +154,7 @@ $coreTests = @(
     "test/test_project_roundtrip_persistence.py",
     "test/test_showstopper_red_flag_pack.py",
     "test/test_golden_model_regression_harness.py",
+    "test/test_core_cross_platform_contract.py",
     "test/test_parametric_reference_modelset.py"
 )
 
@@ -184,14 +186,18 @@ $results += @{
 Write-Host "  Result: $($coreParsed.passed) passed, $($coreParsed.failed) failed, $($coreParsed.skipped) skipped - $coreStatusClass"
 
 # ============================================================================
-# 2. UI-Gate (W3: BLOCKED_INFRA detection)
+# 2. UI-Gate (W9: BLOCKED_INFRA detection, extended test suite)
 # ============================================================================
 
 Write-Host "[2/4] Running UI-Gate..." -ForegroundColor Yellow
 $uiStart = Get-Date
 $uiTests = @(
     "test/test_ui_abort_logic.py",
-    "test/harness/test_interaction_consistency.py"
+    "test/harness/test_interaction_consistency.py",
+    "test/test_selection_state_unified.py",
+    "test/test_browser_tooltip_formatting.py",
+    "test/test_discoverability_hints.py",
+    "test/test_feature_commands_atomic.py"
 )
 
 $uiOutput = @()
