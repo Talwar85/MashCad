@@ -176,3 +176,31 @@ powershell -ExecutionPolicy Bypass -File scripts/generate_core_ops_dashboard.ps1
 
 ### Ergebnis
 - kombiniertes Core-Ops-Dashboard als Seed fuer Release-Readiness Tracking vorhanden.
+
+---
+
+## Paket C-W9J (DONE, P1): Gate Summary Archive + Retention
+
+### Scope
+- neues Script finalisiert: `scripts/archive_gate_summary.ps1`
+  - validiert Eingabe-Schema `gate_all_summary_v1`,
+  - archiviert Summary JSON in `roadmap_ctp/gate_history` (oder custom dir),
+  - enforced Retention (`-MaxFiles`),
+  - erzeugt `index.json` mit Schema `gate_summary_archive_index_v1`,
+  - optional `index.md` via `-WriteMarkdownIndex`.
+- `scripts/gate_all.ps1` erweitert um optionale Auto-Archivierung:
+  - `-ArchiveSummary`
+  - `-ArchiveDir`
+  - `-ArchiveMaxFiles`
+  - `-ArchiveMarkdownIndex`
+- neue Seed-Suite: `test/test_gate_summary_archive_seed.py`
+  - index/md generation,
+  - retention behavior,
+  - schema rejection.
+- Contract-Suite erweitert:
+  - `test_archive_gate_summary_script_exists`
+  - archive-step parameter contract + integration marker in `gate_all.ps1`.
+
+### Ergebnis
+- Gate-Laufhistorie wird reproduzierbar versioniert, inklusive bounded retention.
+- Aggregator kann bei Bedarf direkt nach jedem Lauf archivieren.

@@ -14,7 +14,11 @@ param(
     [string]$CoreProfile = "full",
     [switch]$ValidateEvidence = $false,
     [switch]$FailOnEvidenceWarning = $false,
-    [string]$JsonOut = ""
+    [string]$JsonOut = "",
+    [switch]$ArchiveSummary = $false,
+    [string]$ArchiveDir = "roadmap_ctp/gate_history",
+    [int]$ArchiveMaxFiles = 50,
+    [switch]$ArchiveMarkdownIndex = $false
 )
 
 $ErrorActionPreference = "Continue"
@@ -35,6 +39,12 @@ if ($ValidateEvidence) {
 }
 if ($JsonOut) {
     Write-Host "JsonOut: $JsonOut"
+}
+Write-Host "ArchiveSummary: $ArchiveSummary"
+if ($ArchiveSummary) {
+    Write-Host "ArchiveDir: $ArchiveDir"
+    Write-Host "ArchiveMaxFiles: $ArchiveMaxFiles"
+    Write-Host "ArchiveMarkdownIndex: $ArchiveMarkdownIndex"
 }
 Write-Host ""
 
@@ -361,8 +371,6 @@ if ($ValidateEvidence) {
 }
 
 Write-Host ""
-Write-Host "Exit Code: $overallExit"
-
 $summary = @{
     metadata = @{
         generated_at = (Get-Date).ToString("s")
@@ -376,6 +384,10 @@ $summary = @{
         core_profile = $CoreProfile
         validate_evidence = [bool]$ValidateEvidence
         fail_on_evidence_warning = [bool]$FailOnEvidenceWarning
+        archive_summary = [bool]$ArchiveSummary
+        archive_dir = $ArchiveDir
+        archive_max_files = $ArchiveMaxFiles
+        archive_markdown_index = [bool]$ArchiveMarkdownIndex
     }
     gates = @($results | ForEach-Object {
         @{
@@ -398,9 +410,64 @@ $summary = @{
     }
 }
 
+$summaryOutPath = $null
+$cleanupTempSummary = $false
+
 if ($JsonOut) {
     $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+    $summaryOutPath = $JsonOut
     Write-Host "JSON written: $JsonOut"
 }
+
+if ($ArchiveSummary) {
+    if ($ArchiveMaxFiles -lt 1) {
+        Write-Host "Archive step failed: ArchiveMaxFiles must be >= 1." -ForegroundColor Red
+        $overallExit = 1
+    } else {
+        if (-not $summaryOutPath) {
+            $tempName = "gate_all_summary_runtime_{0}.json" -f ([guid]::NewGuid().ToString("N"))
+            $summaryOutPath = Join-Path ([System.IO.Path]::GetTempPath()) $tempName
+            $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $summaryOutPath -Encoding UTF8
+            $cleanupTempSummary = $true
+        }
+
+        $archiveArgs = @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", "$scriptDir\archive_gate_summary.ps1",
+            "-InputJson", $summaryOutPath,
+            "-ArchiveDir", $ArchiveDir,
+            "-MaxFiles", "$ArchiveMaxFiles"
+        )
+        if ($ArchiveMarkdownIndex) {
+            $archiveArgs += "-WriteMarkdownIndex"
+        }
+
+        $archiveResult = & powershell @archiveArgs 2>&1
+        $archiveExit = $LASTEXITCODE
+        foreach ($line in $archiveResult) {
+            Write-Host ("  [Archive] {0}" -f $line.ToString())
+        }
+
+        if ($archiveExit -ne 0) {
+            Write-Host "Archive step failed; forcing overall FAIL." -ForegroundColor Red
+            $overallExit = 1
+        } else {
+            Write-Host "Archive step: PASS" -ForegroundColor Green
+        }
+    }
+}
+
+if ($cleanupTempSummary -and $summaryOutPath -and (Test-Path -Path $summaryOutPath -PathType Leaf)) {
+    Remove-Item -Path $summaryOutPath -Force -ErrorAction SilentlyContinue
+}
+
+$summary.overall.status = if ($overallExit -eq 0) { "PASS" } else { "FAIL" }
+$summary.overall.exit_code = $overallExit
+if ($JsonOut) {
+    $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+}
+
+Write-Host ""
+Write-Host "Exit Code: $overallExit"
 
 exit $overallExit

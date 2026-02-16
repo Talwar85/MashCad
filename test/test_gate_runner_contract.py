@@ -101,6 +101,11 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "generate_core_ops_dashboard.ps1"
         assert script_path.exists(), f"generate_core_ops_dashboard.ps1 not found at {script_path}"
 
+    def test_archive_gate_summary_script_exists(self):
+        """archive_gate_summary.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "archive_gate_summary.ps1"
+        assert script_path.exists(), f"archive_gate_summary.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================
@@ -289,6 +294,10 @@ class TestGateRunnerContract:
         assert "ValidateEvidence" in content
         assert "FailOnEvidenceWarning" in content
         assert "JsonOut" in content
+        assert "ArchiveSummary" in content
+        assert "ArchiveDir" in content
+        assert "ArchiveMaxFiles" in content
+        assert "ArchiveMarkdownIndex" in content
 
     def test_gate_all_contains_evidence_contract_step(self):
         """gate_all.ps1 should contain optional evidence-contract execution step."""
@@ -296,6 +305,13 @@ class TestGateRunnerContract:
         content = script_path.read_text(encoding="utf-8")
         assert "Evidence-Contract" in content
         assert "validate_gate_evidence.ps1" in content
+
+    def test_gate_all_contains_archive_step_contract(self):
+        """gate_all.ps1 should contain optional archive step integration."""
+        script_path = self.SCRIPT_DIR / "gate_all.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "archive_gate_summary.ps1" in content
+        assert "Archive step" in content
 
     def test_gate_all_contains_json_summary_contract(self):
         """gate_all.ps1 should support machine-readable JSON summary export."""
