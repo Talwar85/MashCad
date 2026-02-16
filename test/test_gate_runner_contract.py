@@ -92,11 +92,12 @@ class TestGateRunnerContract:
 
     def test_gate_core_output_schema(self):
         """gate_core.ps1 must output structured result with required fields."""
-        result = self._run_script("gate_core.ps1", timeout=120)
+        result = self._run_script("gate_core.ps1", args=["-Profile", "parallel_safe"], timeout=120)
         output = result.stdout
 
         # Required fields must be present
         assert "=== Core-Gate Result ===" in output, "Missing result header"
+        assert "Profile:" in output, "Missing profile output"
         assert re.search(r"Duration: \d+\.?\d*s", output), "Missing duration"
         assert re.search(r"Tests: \d+ passed", output), "Missing passed count"
         assert "Status:" in output, "Missing status"
@@ -135,10 +136,13 @@ class TestGateRunnerContract:
         )
 
     def test_gate_core_has_parallel_mode_parameter(self):
-        """gate_core.ps1 should expose SkipUxBoundSuites for parallel UX work."""
+        """gate_core.ps1 should expose profile/parallel switches for UX-parallel operation."""
         script_path = self.SCRIPT_DIR / "gate_core.ps1"
         content = script_path.read_text(encoding="utf-8")
         assert "SkipUxBoundSuites" in content
+        assert "Profile" in content
+        assert "parallel_safe" in content
+        assert "kernel_only" in content
 
     def test_core_budget_script_has_stable_defaults(self):
         """check_core_gate_budget.ps1 should define stable baseline defaults."""
@@ -146,6 +150,7 @@ class TestGateRunnerContract:
         content = script_path.read_text(encoding="utf-8")
         assert "MaxDurationSeconds = 150.0" in content
         assert "MinPassRate = 99.0" in content
+        assert "CoreProfile" in content
 
     def test_gate_ui_output_schema_w3(self):
         """gate_ui.ps1 W3: must output structured result with blocker_type."""
@@ -264,6 +269,7 @@ class TestGateRunnerContract:
         assert "EnforceCoreBudget" in content
         assert "MaxCoreDurationSeconds" in content
         assert "MinCorePassRate" in content
+        assert "CoreProfile" in content
         assert "ValidateEvidence" in content
         assert "FailOnEvidenceWarning" in content
 
@@ -302,7 +308,7 @@ class TestGateRunnerContract:
 
     def test_exit_code_contract_core(self):
         """gate_core.ps1: exit 0 = PASS, exit 1 = FAIL."""
-        result = self._run_script("gate_core.ps1", timeout=120)
+        result = self._run_script("gate_core.ps1", args=["-Profile", "parallel_safe"], timeout=120)
         output = result.stdout
 
         # Exit code should match status

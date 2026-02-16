@@ -4,12 +4,16 @@
 # Exit Codes: 0 = PASS, 1 = FAIL
 
 param(
-    [switch]$SkipUxBoundSuites = $false
+    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [string]$Profile = "full",
+    [switch]$SkipUxBoundSuites = $false,
+    [switch]$DryRun = $false,
+    [string]$JsonOut = ""
 )
 
 $ErrorActionPreference = "Continue"
 
-$CORE_TESTS = @(
+$CORE_TESTS_FULL = @(
     "test/test_feature_error_status.py",
     "test/test_tnp_v4_feature_refs.py",
     "test/test_trust_gate_core_workflow.py",
@@ -28,15 +32,67 @@ $CORE_TESTS = @(
     "test/test_parametric_reference_modelset.py"
 )
 
+$UX_BOUND_SUITES = @(
+    "test/test_feature_commands_atomic.py"
+)
+
+$NON_KERNEL_CONTRACT_SUITES = @(
+    "test/test_gate_evidence_contract.py",
+    "test/test_stability_dashboard_seed.py"
+)
+
+$CORE_TESTS = @($CORE_TESTS_FULL)
+if ($Profile -eq "parallel_safe") {
+    $CORE_TESTS = @($CORE_TESTS | Where-Object { $_ -notin $UX_BOUND_SUITES })
+} elseif ($Profile -eq "kernel_only") {
+    $excludeSuites = @($UX_BOUND_SUITES + $NON_KERNEL_CONTRACT_SUITES)
+    $CORE_TESTS = @($CORE_TESTS | Where-Object { $_ -notin $excludeSuites })
+}
+
 if ($SkipUxBoundSuites) {
     $CORE_TESTS = @($CORE_TESTS | Where-Object { $_ -ne "test/test_feature_commands_atomic.py" })
 }
 
 Write-Host "=== Core-Gate Started ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Host "Profile: $Profile"
 Write-Host "SkipUxBoundSuites: $SkipUxBoundSuites"
+Write-Host "DryRun: $DryRun"
 Write-Host "Tests: $($CORE_TESTS.Count) suites"
 Write-Host ""
+
+if ($DryRun) {
+    Write-Host "Selected Suites:" -ForegroundColor Cyan
+    $idx = 1
+    foreach ($suite in $CORE_TESTS) {
+        Write-Host ("  [{0}] {1}" -f $idx, $suite)
+        $idx += 1
+    }
+    if ($JsonOut) {
+        $drySummary = @{
+            profile = $Profile
+            skip_ux_bound_suites = [bool]$SkipUxBoundSuites
+            dry_run = $true
+            suites = @($CORE_TESTS)
+            counts = @{
+                passed = 0
+                failed = 0
+                skipped = 0
+                errors = 0
+                total = 0
+            }
+            duration_seconds = 0
+            pass_rate = 0
+            status = "DRY_RUN"
+            exit_code = 0
+        }
+        $drySummary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+        Write-Host "JSON written: $JsonOut"
+    }
+    Write-Host ""
+    Write-Host "Exit Code: 0"
+    exit 0
+}
 
 $start = Get-Date
 
@@ -115,5 +171,26 @@ if ($failingTests.Count -gt 0) {
 
 Write-Host ""
 Write-Host "Exit Code: $exitCode"
+
+$jsonSummary = @{
+    profile = $Profile
+    skip_ux_bound_suites = [bool]$SkipUxBoundSuites
+    suites = @($CORE_TESTS)
+    counts = @{
+        passed = $passed
+        failed = $failed
+        skipped = $skipped
+        errors = $errors
+        total = $total
+    }
+    duration_seconds = [math]::Round($duration, 2)
+    pass_rate = $passRate
+    status = $status
+    exit_code = $exitCode
+}
+if ($JsonOut) {
+    $jsonSummary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+    Write-Host "JSON written: $JsonOut"
+}
 
 exit $exitCode

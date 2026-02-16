@@ -5,7 +5,9 @@
 
 param(
     [double]$MaxDurationSeconds = 150.0,
-    [double]$MinPassRate = 99.0
+    [double]$MinPassRate = 99.0,
+    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [string]$CoreProfile = "full"
 )
 
 $ErrorActionPreference = "Continue"
@@ -16,9 +18,10 @@ $gateScript = Join-Path $scriptDir "gate_core.ps1"
 Write-Host "=== Core-Gate Budget Check ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Budget: Duration <= $MaxDurationSeconds s, Pass-Rate >= $MinPassRate%"
+Write-Host "CoreProfile: $CoreProfile"
 Write-Host ""
 
-$result = & powershell -ExecutionPolicy Bypass -File $gateScript 2>&1
+$result = & powershell -ExecutionPolicy Bypass -File $gateScript -Profile $CoreProfile 2>&1
 $gateExit = $LASTEXITCODE
 
 $duration = $null

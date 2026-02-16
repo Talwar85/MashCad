@@ -10,6 +10,8 @@ param(
     [switch]$EnforceCoreBudget = $false,
     [double]$MaxCoreDurationSeconds = 150.0,
     [double]$MinCorePassRate = 99.0,
+    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [string]$CoreProfile = "full",
     [switch]$ValidateEvidence = $false,
     [switch]$FailOnEvidenceWarning = $false
 )
@@ -25,6 +27,7 @@ Write-Host "EnforceCoreBudget: $EnforceCoreBudget"
 if ($EnforceCoreBudget) {
     Write-Host "Core Budget: Duration <= $MaxCoreDurationSeconds s, Pass-Rate >= $MinCorePassRate%"
 }
+Write-Host "CoreProfile: $CoreProfile"
 Write-Host "ValidateEvidence: $ValidateEvidence"
 if ($ValidateEvidence) {
     Write-Host "FailOnEvidenceWarning: $FailOnEvidenceWarning"
@@ -40,12 +43,18 @@ $step = 1
 # Run Core-Gate
 Write-Host "[$step/$totalSteps] Running Core-Gate..." -ForegroundColor Yellow
 $coreStart = Get-Date
-$coreResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\gate_core.ps1" 2>&1
+$coreArgs = @(
+    "-ExecutionPolicy", "Bypass",
+    "-File", "$scriptDir\gate_core.ps1",
+    "-Profile", $CoreProfile
+)
+$coreResult = & powershell @coreArgs 2>&1
 $coreExit = $LASTEXITCODE
 $coreEnd = Get-Date
 $coreDuration = ($coreEnd - $coreStart).TotalSeconds
 $corePassRate = $null
 $coreStatus = "UNKNOWN"
+$coreResolvedProfile = $CoreProfile
 foreach ($line in $coreResult) {
     $lineStr = $line.ToString()
     if ($lineStr -match "Pass-Rate:\s+([\d.]+)%") {
@@ -54,6 +63,9 @@ foreach ($line in $coreResult) {
     if ($lineStr -match "Status:\s+(\S+)") {
         $coreStatus = $matches[1]
     }
+    if ($lineStr -match "Profile:\s+(\S+)") {
+        $coreResolvedProfile = $matches[1]
+    }
 }
 $results += @{
     Name = "Core-Gate"
@@ -61,6 +73,7 @@ $results += @{
     Duration = $coreDuration
     Status = $coreStatus
     PassRate = $corePassRate
+    Profile = $coreResolvedProfile
 }
 
 Write-Host ""
@@ -197,6 +210,7 @@ foreach ($result in $results) {
     $status = if ($result.Status) { $result.Status } else { $null }
     $blockerType = if ($result.BlockerType) { $result.BlockerType } else { $null }
     $passRate = if ($result.PassRate) { $result.PassRate } else { $null }
+    $coreProfileDisplay = if ($result.Profile) { $result.Profile } else { $null }
     $evidenceWarn = if ($result.Warn -ne $null) { $result.Warn } else { $null }
     $evidenceFail = if ($result.Fail -ne $null) { $result.Fail } else { $null }
 
@@ -241,6 +255,9 @@ foreach ($result in $results) {
 
     if ($name -eq "Core-Gate" -and $passRate -ne $null) {
         Write-Host "  Pass-Rate: $passRate%" -ForegroundColor Cyan
+        if ($coreProfileDisplay) {
+            Write-Host "  Profile: $coreProfileDisplay" -ForegroundColor Cyan
+        }
     }
 
     # W3: Show blocker type if present
