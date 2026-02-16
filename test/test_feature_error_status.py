@@ -351,3 +351,41 @@ def test_blocked_feature_exposes_rollback_metrics_in_error_envelope():
     assert rollback.get("from") is not None
     assert rollback.get("to") is not None
     assert float(body._build123d_solid.volume) == pytest.approx(base_volume, rel=1e-6, abs=1e-6)
+
+
+def test_strict_self_heal_geometry_drift_exposes_drift_payload(monkeypatch):
+    from build123d import Solid
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.ocp_helpers import OCPFilletHelper
+
+    body = _make_box_body_with_document("strict_self_heal_geometry_drift")
+    base_volume = float(body._build123d_solid.volume)
+    fillet = FilletFeature(radius=0.4, edge_indices=[0])
+
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", True)
+    monkeypatch.setattr(
+        OCPFilletHelper,
+        "fillet",
+        staticmethod(lambda **_kwargs: Solid.make_box(200.0, 200.0, 200.0)),
+    )
+
+    body.add_feature(fillet)
+
+    details = fillet.status_details or {}
+    rollback = details.get("rollback") or {}
+    drift = details.get("geometry_drift") or {}
+    reasons = drift.get("reasons") or []
+
+    assert fillet.status == "ERROR"
+    assert details.get("code") == "self_heal_rollback_geometry_drift"
+    assert details.get("status_class") == "ERROR"
+    assert details.get("severity") == "error"
+    assert "Chamfer/Fillet" in str(details.get("next_action") or "")
+    assert rollback.get("from") is not None
+    assert rollback.get("to") is not None
+    assert drift.get("feature") == "Fillet"
+    assert drift.get("magnitude") == pytest.approx(0.4, rel=1e-6, abs=1e-6)
+    assert (drift.get("limits") or {}).get("max_axis_grow") is not None
+    assert (drift.get("observed") or {}).get("diag_grow") is not None
+    assert len(reasons) > 0
+    assert float(body._build123d_solid.volume) == pytest.approx(base_volume, rel=1e-6, abs=1e-6)
