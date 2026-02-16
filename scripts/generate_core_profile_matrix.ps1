@@ -28,7 +28,7 @@ Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "OutPrefix: $OutPrefix"
 Write-Host ""
 
-$profiles = @("full", "parallel_safe", "kernel_only")
+$profiles = @("full", "parallel_safe", "kernel_only", "red_flag")
 $runs = @{}
 
 foreach ($profile in $profiles) {
@@ -63,9 +63,11 @@ foreach ($profile in $profiles) {
 $fullSuites = @($runs["full"].suites)
 $parallelSuites = @($runs["parallel_safe"].suites)
 $kernelSuites = @($runs["kernel_only"].suites)
+$redFlagSuites = @($runs["red_flag"].suites)
 
 $removedParallel = @($fullSuites | Where-Object { $_ -notin $parallelSuites })
 $removedKernel = @($fullSuites | Where-Object { $_ -notin $kernelSuites })
+$removedRedFlag = @($fullSuites | Where-Object { $_ -notin $redFlagSuites })
 
 $matrix = @{
     metadata = @{
@@ -77,10 +79,12 @@ $matrix = @{
         full = $runs["full"]
         parallel_safe = $runs["parallel_safe"]
         kernel_only = $runs["kernel_only"]
+        red_flag = $runs["red_flag"]
     }
     deltas = @{
         removed_from_full_parallel_safe = @($removedParallel)
         removed_from_full_kernel_only = @($removedKernel)
+        removed_from_full_red_flag = @($removedRedFlag)
     }
 }
 
@@ -104,6 +108,12 @@ $removedKernelRows = if ($removedKernel.Count -gt 0) {
     "- (none)"
 }
 
+$removedRedFlagRows = if ($removedRedFlag.Count -gt 0) {
+    ($removedRedFlag | ForEach-Object { "- $_" }) -join "`r`n"
+} else {
+    "- (none)"
+}
+
 $md = @"
 # Core Profile Matrix
 **Generated:** $($matrix.metadata.generated_at)
@@ -122,6 +132,9 @@ $removedParallelRows
 
 ### kernel_only
 $removedKernelRows
+
+### red_flag
+$removedRedFlagRows
 "@
 
 $md | Out-File -FilePath $mdOut -Encoding UTF8

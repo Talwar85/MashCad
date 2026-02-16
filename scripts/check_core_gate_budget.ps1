@@ -6,7 +6,7 @@
 param(
     [double]$MaxDurationSeconds = 150.0,
     [double]$MinPassRate = 99.0,
-    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [ValidateSet("full", "parallel_safe", "kernel_only", "red_flag")]
     [string]$CoreProfile = "full"
 )
 

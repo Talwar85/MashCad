@@ -10,7 +10,7 @@ param(
     [switch]$EnforceCoreBudget = $false,
     [double]$MaxCoreDurationSeconds = 150.0,
     [double]$MinCorePassRate = 99.0,
-    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [ValidateSet("full", "parallel_safe", "kernel_only", "red_flag")]
     [string]$CoreProfile = "full",
     [switch]$ValidateEvidence = $false,
     [switch]$FailOnEvidenceWarning = $false,

@@ -36,10 +36,13 @@ def test_generate_core_profile_matrix_outputs_json_and_md(tmp_path):
     full_count = payload["profiles"]["full"]["suite_count"]
     parallel_count = payload["profiles"]["parallel_safe"]["suite_count"]
     kernel_count = payload["profiles"]["kernel_only"]["suite_count"]
-    assert full_count >= parallel_count >= kernel_count
+    red_flag_count = payload["profiles"]["red_flag"]["suite_count"]
+    assert full_count >= parallel_count >= kernel_count >= red_flag_count
 
     removed_parallel = payload["deltas"]["removed_from_full_parallel_safe"]
     removed_kernel = payload["deltas"]["removed_from_full_kernel_only"]
+    removed_red_flag = payload["deltas"]["removed_from_full_red_flag"]
     assert "test/test_feature_commands_atomic.py" in removed_parallel
     assert "test/test_gate_evidence_contract.py" in removed_kernel
     assert "test/test_stability_dashboard_seed.py" in removed_kernel
+    assert "test/test_showstopper_red_flag_pack.py" not in removed_red_flag

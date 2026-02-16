@@ -17,7 +17,7 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
 
 ### Scope
 - `scripts/gate_core.ps1` erweitert um:
-  - `-Profile full|parallel_safe|kernel_only`
+  - `-Profile full|parallel_safe|kernel_only|red_flag`
   - `-DryRun`
   - `-JsonOut`
   - bestehender `-SkipUxBoundSuites` bleibt kompatibel.
@@ -26,6 +26,7 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
 - `full`: kompletter Core-Gate-Stack
 - `parallel_safe`: UX-gebundene Suite ausgeklammert (`test/test_feature_commands_atomic.py`)
 - `kernel_only`: zusaetzlich nicht-kernelnahe Contract-Suiten ausgeklammert
+- `red_flag`: fail-fast Showstopper/Parametrik-Profil fuer schnelle Kernfreigabe
 
 ### Ergebnis
 - deterministische Profilauswahl + schnelle Dry-Run-Inspektion.
@@ -72,7 +73,7 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
   - `test_core_profile_matrix_script_exists`
 
 ### Ergebnis
-- reproduzierbarer Profilvergleich fuer `full`, `parallel_safe`, `kernel_only`.
+- reproduzierbarer Profilvergleich fuer `full`, `parallel_safe`, `kernel_only`, `red_flag`.
 
 ---
 
@@ -81,16 +82,24 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
 ```powershell
 conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_output_schema test/test_gate_runner_contract.py::TestGateRunnerContract::test_exit_code_contract_core test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_has_core_budget_parameter_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_budget_script_has_stable_defaults
 conda run -n cad_env python -m pytest -q test/test_core_profile_matrix_seed.py test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists
+conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_core_profile_matrix_seed.py test/test_core_gate_trend_seed.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_gate_trend_script_exists test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_has_core_budget_parameter_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_contains_json_summary_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_budget_script_has_stable_defaults
 
 powershell -ExecutionPolicy Bypass -File scripts/check_core_gate_budget.ps1 -CoreProfile parallel_safe
 powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile parallel_safe -ValidateEvidence
+powershell -ExecutionPolicy Bypass -File scripts/check_core_gate_budget.ps1 -CoreProfile red_flag
+powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile red_flag -ValidateEvidence -JsonOut gate_all_summary_red_flag.json
+powershell -ExecutionPolicy Bypass -File scripts/generate_core_gate_trend.ps1 -EvidenceDir . -Pattern "gate_all_summary_red_flag.json" -OutPrefix core_gate_trend_red_flag
 ```
 
 **Observed:**
 - Contract-Tests gruen
 - Matrix-Seed-Tests gruen
+- Trend-Seed-Tests gruen
 - Budget-Check gruen (`parallel_safe`)
 - `gate_all` mit `-CoreProfile parallel_safe -ValidateEvidence` -> `ALL GATES PASSED` (UI als `BLOCKED_INFRA`, nicht FAIL)
+- Budget-Check gruen (`red_flag`)
+- `gate_all` mit `-CoreProfile red_flag -ValidateEvidence -JsonOut ...` -> `ALL GATES PASSED`
+- `generate_core_gate_trend.ps1` erzeugt `core_gate_trend_v1` JSON+MD artefakt.
 
 ---
 
@@ -107,10 +116,42 @@ powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile paral
 
 ---
 
+## Paket C-W9F (DONE, P1): Core Red-Flag Profile
+
+### Scope
+- `red_flag` Profil im Core-Gate, Budget-Check und Aggregator aktivierbar.
+- Fokus auf schnelle Kernindikatoren:
+  - `test/test_showstopper_red_flag_pack.py`
+  - `test/test_feature_error_status.py`
+  - `test/test_tnp_v4_feature_refs.py`
+  - `test/test_feature_edit_robustness.py`
+  - `test/test_project_roundtrip_persistence.py`
+  - `test/test_parametric_reference_modelset.py`
+
+### Ergebnis
+- signifikanter Laufzeitgewinn fuer schnelle Kern-Freigabechecks
+  (budget-run mit `CoreProfile=red_flag` im Bereich ~20s gemessen).
+
+---
+
+## Paket C-W9G (DONE, P1): Core-Gate Trend Capture Seed
+
+### Scope
+- neues Script: `scripts/generate_core_gate_trend.ps1`
+  - aggregiert gate-summary JSONs,
+  - erzeugt trend JSON + MD (`core_gate_trend_v1`).
+- neue Suite: `test/test_core_gate_trend_seed.py`
+  - validiert Trend-Schema und Kernmetriken.
+
+### Ergebnis
+- erster reproduzierbarer Trend-Pfad fuer Core-Gate-Verlaeufe vorhanden.
+
+---
+
 ## Naechste Grosspakete (W9 Folge)
 
-1. **C-W9F (P1): Core Red-Flag Profile**
-- dediziertes Profil fuer Showstopper/CH-010 mit schnellen Fail-Fast-Checks.
+1. **C-W9H (P0): UI-Gate JSON Summary Contract**
+- `gate_ui.ps1` und `generate_gate_evidence.ps1` auf dieselbe JSON-Kontraktbasis bringen.
 
-2. **C-W9G (P1): Core-Gate Trend Capture**
-- automatischer Laufvergleich (last-good vs current) fuer Passrate/Dauer pro Profil.
+2. **C-W9I (P1): Trend Fusion Dashboard**
+- Core-Profile-Matrix + Core-Gate-Trend in konsolidierte Dashboard-Sicht ueberfuehren.

@@ -58,3 +58,12 @@ def test_gate_core_dry_run_json_manifest(tmp_path):
     assert payload["dry_run"] is True
     assert payload["status"] == "DRY_RUN"
     assert "test/test_feature_commands_atomic.py" not in payload["suites"]
+
+
+def test_gate_core_dry_run_red_flag_profile_contains_showstopper_pack():
+    result = _run_gate_core("-Profile", "red_flag", "-DryRun")
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert "Profile: red_flag" in result.stdout
+    assert "test/test_showstopper_red_flag_pack.py" in result.stdout
+    assert "test/test_feature_error_status.py" in result.stdout
+    assert "test/test_feature_commands_atomic.py" not in result.stdout

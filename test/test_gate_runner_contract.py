@@ -91,6 +91,11 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "generate_core_profile_matrix.ps1"
         assert script_path.exists(), f"generate_core_profile_matrix.ps1 not found at {script_path}"
 
+    def test_core_gate_trend_script_exists(self):
+        """generate_core_gate_trend.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "generate_core_gate_trend.ps1"
+        assert script_path.exists(), f"generate_core_gate_trend.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================
@@ -148,6 +153,7 @@ class TestGateRunnerContract:
         assert "Profile" in content
         assert "parallel_safe" in content
         assert "kernel_only" in content
+        assert "red_flag" in content
 
     def test_core_budget_script_has_stable_defaults(self):
         """check_core_gate_budget.ps1 should define stable baseline defaults."""

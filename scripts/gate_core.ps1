@@ -4,7 +4,7 @@
 # Exit Codes: 0 = PASS, 1 = FAIL
 
 param(
-    [ValidateSet("full", "parallel_safe", "kernel_only")]
+    [ValidateSet("full", "parallel_safe", "kernel_only", "red_flag")]
     [string]$Profile = "full",
     [switch]$SkipUxBoundSuites = $false,
     [switch]$DryRun = $false,
@@ -32,6 +32,15 @@ $CORE_TESTS_FULL = @(
     "test/test_parametric_reference_modelset.py"
 )
 
+$CORE_TESTS_RED_FLAG = @(
+    "test/test_showstopper_red_flag_pack.py",
+    "test/test_feature_error_status.py",
+    "test/test_tnp_v4_feature_refs.py",
+    "test/test_feature_edit_robustness.py",
+    "test/test_project_roundtrip_persistence.py",
+    "test/test_parametric_reference_modelset.py"
+)
+
 $UX_BOUND_SUITES = @(
     "test/test_feature_commands_atomic.py"
 )
@@ -42,7 +51,9 @@ $NON_KERNEL_CONTRACT_SUITES = @(
 )
 
 $CORE_TESTS = @($CORE_TESTS_FULL)
-if ($Profile -eq "parallel_safe") {
+if ($Profile -eq "red_flag") {
+    $CORE_TESTS = @($CORE_TESTS_RED_FLAG)
+} elseif ($Profile -eq "parallel_safe") {
     $CORE_TESTS = @($CORE_TESTS | Where-Object { $_ -notin $UX_BOUND_SUITES })
 } elseif ($Profile -eq "kernel_only") {
     $excludeSuites = @($UX_BOUND_SUITES + $NON_KERNEL_CONTRACT_SUITES)
