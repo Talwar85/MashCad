@@ -86,6 +86,11 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "validate_gate_evidence.ps1"
         assert script_path.exists(), f"validate_gate_evidence.ps1 not found at {script_path}"
 
+    def test_core_profile_matrix_script_exists(self):
+        """generate_core_profile_matrix.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "generate_core_profile_matrix.ps1"
+        assert script_path.exists(), f"generate_core_profile_matrix.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================

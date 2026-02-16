@@ -60,10 +60,27 @@ Ein grosser, zusammenhaengender Core/QA-Block fuer parallele Multi-Agent-Entwick
 
 ---
 
+## Paket C-W9D (DONE, P1): Core Profile Matrix Seed
+
+### Scope
+- neues Script: `scripts/generate_core_profile_matrix.ps1`
+  - fuehrt `gate_core` dry-run je Profil aus,
+  - erzeugt Vergleich als JSON + MD.
+- neue Test-Suite: `test/test_core_profile_matrix_seed.py`
+  - validiert Schema + Profil-Deltas.
+- Gate-Runner-Contract erweitert:
+  - `test_core_profile_matrix_script_exists`
+
+### Ergebnis
+- reproduzierbarer Profilvergleich fuer `full`, `parallel_safe`, `kernel_only`.
+
+---
+
 ## Validierung
 
 ```powershell
 conda run -n cad_env python -m pytest -q test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_has_parallel_mode_parameter test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_core_output_schema test/test_gate_runner_contract.py::TestGateRunnerContract::test_exit_code_contract_core test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_has_core_budget_parameter_contract test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_budget_script_has_stable_defaults
+conda run -n cad_env python -m pytest -q test/test_core_profile_matrix_seed.py test/test_core_gate_profiles_contract.py test/test_gate_runner_contract.py::TestGateRunnerContract::test_core_profile_matrix_script_exists
 
 powershell -ExecutionPolicy Bypass -File scripts/check_core_gate_budget.ps1 -CoreProfile parallel_safe
 powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile parallel_safe -ValidateEvidence
@@ -71,6 +88,7 @@ powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile paral
 
 **Observed:**
 - Contract-Tests gruen
+- Matrix-Seed-Tests gruen
 - Budget-Check gruen (`parallel_safe`)
 - `gate_all` mit `-CoreProfile parallel_safe -ValidateEvidence` -> `ALL GATES PASSED` (UI als `BLOCKED_INFRA`, nicht FAIL)
 
@@ -78,11 +96,11 @@ powershell -ExecutionPolicy Bypass -File scripts/gate_all.ps1 -CoreProfile paral
 
 ## Naechste Grosspakete (W9 Folge)
 
-1. **C-W9D (P0): Gate Summary JSON Contract v1**
+1. **C-W9E (P0): Gate Summary JSON Contract v1**
 - `gate_all.ps1` und `gate_ui.ps1` bekommen optionales JSON-Output mit stabiler Schema-Version.
 
-2. **C-W9E (P1): Core Red-Flag Profile**
+2. **C-W9F (P1): Core Red-Flag Profile**
 - dediziertes Profil fuer Showstopper/CH-010 mit schnellen Fail-Fast-Checks.
 
-3. **C-W9F (P1): Core-Gate Trend Capture**
+3. **C-W9G (P1): Core-Gate Trend Capture**
 - automatischer Laufvergleich (last-good vs current) fuer Passrate/Dauer pro Profil.
