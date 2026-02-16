@@ -76,6 +76,16 @@ class TestGateRunnerContract:
         script_path = self.SCRIPT_DIR / "check_core_gate_budget.ps1"
         assert script_path.exists(), f"check_core_gate_budget.ps1 not found at {script_path}"
 
+    def test_stability_dashboard_script_exists(self):
+        """generate_stability_dashboard.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "generate_stability_dashboard.ps1"
+        assert script_path.exists(), f"generate_stability_dashboard.ps1 not found at {script_path}"
+
+    def test_validate_gate_evidence_script_exists(self):
+        """validate_gate_evidence.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "validate_gate_evidence.ps1"
+        assert script_path.exists(), f"validate_gate_evidence.ps1 not found at {script_path}"
+
     # =========================================================================
     # Output Schema Tests
     # =========================================================================
@@ -106,6 +116,22 @@ class TestGateRunnerContract:
         content = script_path.read_text(encoding="utf-8")
         assert "test/test_core_cross_platform_contract.py" in content, (
             "Core gate must include cross-platform contract suite"
+        )
+
+    def test_gate_core_includes_evidence_contract_suite(self):
+        """gate_core.ps1 must include evidence schema contract suite."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test/test_gate_evidence_contract.py" in content, (
+            "Core gate must include evidence schema contract suite"
+        )
+
+    def test_gate_core_includes_stability_seed_suite(self):
+        """gate_core.ps1 must include stability dashboard seed suite."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test/test_stability_dashboard_seed.py" in content, (
+            "Core gate must include stability dashboard seed suite"
         )
 
     def test_core_budget_script_has_stable_defaults(self):

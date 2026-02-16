@@ -57,7 +57,7 @@ Cross-Platform-Mindestvertrag explizit machen (auch wenn lokal nur Win verfügba
 
 ---
 
-## Paket C-W7C (IN_PROGRESS, P0): QA-006 Performance Regression Gate Baseline
+## Paket C-W7C (DONE, P0): QA-006 Performance Regression Gate Baseline
 
 ### Ziel
 Eine erste harte Baseline für Laufzeiten kritischer Core-Suiten.
@@ -81,7 +81,7 @@ Eine erste harte Baseline für Laufzeiten kritischer Core-Suiten.
 
 ---
 
-## Paket C-W7D (NEXT, P1): CH-009 Stability Dashboard Seed
+## Paket C-W7D (DONE, P1): CH-009 Stability Dashboard Seed
 
 ### Ziel
 Stabilitätsmetriken werden standardisiert gesammelt, nicht ad-hoc.
@@ -96,6 +96,11 @@ Stabilitätsmetriken werden standardisiert gesammelt, nicht ad-hoc.
 
 ### Abnahme
 - dashboard_seed Doku + Beispielartefakt
+
+### Ergebnis
+- Generator: `scripts/generate_stability_dashboard.ps1`
+- Tests: `test/test_stability_dashboard_seed.py`
+- Doku: `roadmap_ctp/STABILITY_DASHBOARD_SEED_W7_20260216.md`
 
 ---
 
