@@ -1297,6 +1297,29 @@ class Body:
             return "BLOCKED", "blocked"
         return "ERROR", "error"
 
+    @staticmethod
+    def _default_next_action_for_code(error_code: str) -> str:
+        defaults = {
+            "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
+            "fallback_used": "Ergebnis wurde via Fallback erzeugt. Geometrie pruefen und Parameter/Referenz ggf. nachziehen.",
+            "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
+            "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
+            "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
+            "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
+            "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
+            "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
+            "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
+            "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
+            "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
+            "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
+            "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
+            "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
+        }
+        return defaults.get(
+            error_code,
+            "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
+        )
+
     @classmethod
     def _normalize_status_details_for_load(cls, status_details: Any) -> dict:
         """
@@ -1316,6 +1339,20 @@ class Body:
             status_class, severity = cls._classify_error_code(code)
             normalized.setdefault("status_class", status_class)
             normalized.setdefault("severity", severity)
+
+        hint = str(normalized.get("hint", "") or "").strip()
+        next_action = str(normalized.get("next_action", "") or "").strip()
+        if hint and not next_action:
+            normalized["next_action"] = hint
+            next_action = hint
+        if next_action and not hint:
+            normalized["hint"] = next_action
+            hint = next_action
+        if code and not hint and not next_action:
+            action = cls._default_next_action_for_code(code)
+            if action:
+                normalized["hint"] = action
+                normalized["next_action"] = action
         return normalized
 
     def _build_operation_error_details(
@@ -1328,28 +1365,6 @@ class Body:
         hint: str = "",
         fallback_error: str = "",
     ) -> dict:
-        def _default_next_action(error_code: str) -> str:
-            defaults = {
-                "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
-                "fallback_used": "Ergebnis wurde via Fallback erzeugt. Geometrie pruefen und Parameter/Referenz ggf. nachziehen.",
-                "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
-                "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
-                "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
-                "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
-                "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
-                "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
-                "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
-                "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
-                "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
-                "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
-                "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
-                "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
-            }
-            return defaults.get(
-                error_code,
-                "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
-            )
-
         status_class, severity = self._classify_error_code(code)
         details = {
             "schema": "error_envelope_v1",
@@ -1368,7 +1383,7 @@ class Body:
         refs = self._collect_feature_reference_payload(feature)
         if refs:
             details["refs"] = refs
-        next_action = hint or _default_next_action(code)
+        next_action = hint or self._default_next_action_for_code(code)
         if next_action:
             details["hint"] = next_action
             details["next_action"] = next_action

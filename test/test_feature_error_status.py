@@ -35,6 +35,45 @@ def test_feature_status_message_roundtrip():
     assert (details.get("refs") or {}).get("edge_indices") == [1, 2]
     assert details.get("status_class") == "ERROR"
     assert details.get("severity") == "error"
+    assert details.get("next_action")
+    assert details.get("hint")
+
+
+def test_feature_status_load_migrates_next_action_for_legacy_code():
+    body = Body("legacy_status_action_migration")
+    feat = PrimitiveFeature(primitive_type="box", length=8.0, width=8.0, height=8.0)
+    feat.status = "ERROR"
+    feat.status_message = "Legacy envelope"
+    feat.status_details = {"code": "tnp_ref_drift"}
+    body.features = [feat]
+
+    restored = Body.from_dict(body.to_dict())
+    details = restored.features[0].status_details or {}
+
+    assert details.get("status_class") == "WARNING_RECOVERABLE"
+    assert details.get("severity") == "warning"
+    assert details.get("next_action")
+    assert details.get("hint")
+    assert details.get("next_action") == details.get("hint")
+    assert "gedriftet" in str(details.get("next_action"))
+
+
+def test_feature_status_load_mirrors_legacy_hint_to_next_action():
+    body = Body("legacy_hint_to_next_action")
+    feat = PrimitiveFeature(primitive_type="box", length=6.0, width=6.0, height=6.0)
+    feat.status = "ERROR"
+    feat.status_message = "Legacy hint only"
+    feat.status_details = {
+        "code": "operation_failed",
+        "hint": "Expliziter Legacy-Hinweis",
+    }
+    body.features = [feat]
+
+    restored = Body.from_dict(body.to_dict())
+    details = restored.features[0].status_details or {}
+
+    assert details.get("hint") == "Expliziter Legacy-Hinweis"
+    assert details.get("next_action") == "Expliziter Legacy-Hinweis"
 
 
 def test_hole_invalid_diameter_sets_feature_error_message():
