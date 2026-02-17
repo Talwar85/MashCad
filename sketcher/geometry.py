@@ -279,6 +279,51 @@ class Arc2D:
 
 
 @dataclass
+class Ellipse2D:
+    """2D-Ellipse mit separaten Achsen und Rotation in Grad."""
+    center: Point2D
+    radius_x: float = 10.0
+    radius_y: float = 5.0
+    rotation: float = 0.0
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    construction: bool = False
+
+    def point_on_major_axis(self) -> Point2D:
+        rad = math.radians(self.rotation)
+        return Point2D(
+            self.center.x + self.radius_x * math.cos(rad),
+            self.center.y + self.radius_x * math.sin(rad),
+        )
+
+    def point_on_minor_axis(self) -> Point2D:
+        rad = math.radians(self.rotation)
+        return Point2D(
+            self.center.x - self.radius_y * math.sin(rad),
+            self.center.y + self.radius_y * math.cos(rad),
+        )
+
+
+@dataclass
+class Polygon2D:
+    """2D-Polygon als Punktliste."""
+    points: List[Point2D] = field(default_factory=list)
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    construction: bool = False
+    closed: bool = True
+
+    def vertex_count(self) -> int:
+        return len(self.points)
+
+    def centroid(self) -> Point2D:
+        if not self.points:
+            return Point2D(0.0, 0.0)
+        sx = sum(p.x for p in self.points)
+        sy = sum(p.y for p in self.points)
+        n = len(self.points)
+        return Point2D(sx / n, sy / n)
+
+
+@dataclass
 class Rectangle2D:
     """2D-Rechteck (Hilfskonstrukt aus 4 Linien)"""
     corner: Point2D  # Untere linke Ecke

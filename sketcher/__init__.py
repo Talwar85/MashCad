@@ -3,7 +3,7 @@ LiteCAD Sketcher Module
 """
 
 from .geometry import (
-    Point2D, Line2D, Circle2D, Arc2D, Rectangle2D, Spline2D,
+    Point2D, Line2D, Circle2D, Arc2D, Ellipse2D, Polygon2D, Rectangle2D, Spline2D,
     GeometryType,
     line_line_intersection, circle_line_intersection,
     points_are_coincident, lines_are_parallel, lines_are_perpendicular

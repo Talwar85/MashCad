@@ -62,7 +62,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from i18n import tr
-from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
+from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Ellipse2D, Polygon2D, Constraint, ConstraintType
 try:
     from gui.sketch_feedback import format_solver_failure_message
 except ImportError:
@@ -713,6 +713,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_lines = []
         self.selected_circles = []
         self.selected_arcs = []
+        self.selected_ellipses = []
+        self.selected_polygons = []
         self.selected_points = []  # Standalone Punkte
         self.selected_constraints = []  # Für Constraint-Selektion
         self.hovered_entity = None
@@ -870,6 +872,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_live_solve_interval_s = 1.0 / 30.0
+        # W20 P1: Arc Direct Edit State
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        # W25: Ellipse/Polygon Direct Edit State
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
         
         # Schwebende Optionen-Palette
         self.tool_options = ToolOptionsPopup(self)
@@ -3540,6 +3554,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
+        # W20 P1: Arc Direct Edit Cleanup
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
         
         # W16 Paket B: Kontext zurücksetzen und Navigation-Hint aktualisieren
         self._hint_context = 'sketch'
@@ -3844,6 +3862,61 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         return None, None
 
+    def _resolve_direct_edit_target_arc(self):
+        """
+        W20 P1: Ermittelt den aktuell bearbeitbaren Arc.
+        
+        Returns:
+            Tuple (Arc2D, source) oder (None, None)
+        """
+        hovered = self._last_hovered_entity
+        
+        if isinstance(hovered, Arc2D):
+            return hovered, "arc"
+        
+        if len(self.selected_arcs) == 1:
+            return self.selected_arcs[0], "arc"
+        
+        return None, None
+
+    def _resolve_direct_edit_target_ellipse(self):
+        """
+        Ermittelt die aktuell bearbeitbare Ellipse.
+        Unterstützt auch Test-Harness-Objekte via _test_selected_ellipse.
+        """
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Ellipse2D):
+            return hovered, "ellipse"
+
+        if len(self.selected_ellipses) == 1:
+            return self.selected_ellipses[0], "ellipse"
+
+        test_sel = getattr(self, "_test_selected_ellipse", None)
+        if isinstance(test_sel, Ellipse2D):
+            return test_sel, "ellipse"
+
+        return None, None
+
+    def _resolve_direct_edit_target_polygon(self):
+        """
+        Ermittelt das aktuell bearbeitbare Polygon.
+        Unterstützt auch Test-Harness-Objekte via _test_selected_polygon.
+        """
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Polygon2D):
+            return hovered, "polygon"
+
+        if len(self.selected_polygons) == 1:
+            return self.selected_polygons[0], "polygon"
+
+        test_sel = getattr(self, "_test_selected_polygon", None)
+        if isinstance(test_sel, Polygon2D):
+            return test_sel, "polygon"
+
+        return None, None
+
     def _get_direct_edit_handles_world(self):
         """
         Liefert Handle-Daten für Direct Manipulation in Weltkoordinaten.
@@ -3941,6 +4014,122 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     "context": context,
                 }
 
+        # W20 P1: Arc Direct Manipulation Handles
+        arc, arc_source = self._resolve_direct_edit_target_arc()
+        if arc is not None:
+            center = QPointF(arc.center.x, arc.center.y)
+            
+            # Center Handle
+            d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+            if d_center <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "center",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                }
+            
+            # Radius Handle (auf dem Arc)
+            mid_angle = (arc.start_angle + arc.end_angle) / 2
+            radius_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(mid_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(mid_angle)),
+            )
+            d_radius = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
+            if d_radius <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "radius",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "radius_point": radius_point,
+                    "angle": mid_angle,
+                }
+            
+            # Start Angle Handle
+            start_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle)),
+            )
+            d_start = math.hypot(world_pos.x() - start_point.x(), world_pos.y() - start_point.y())
+            if d_start <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "start_angle",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle_point": start_point,
+                }
+            
+            # End Angle Handle
+            end_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle)),
+            )
+            d_end = math.hypot(world_pos.x() - end_point.x(), world_pos.y() - end_point.y())
+            if d_end <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "end_angle",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle_point": end_point,
+                }
+            
+            # Komfort: Klick auf Arc-Bahn startet Radius-Drag
+            d_to_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+            if abs(d_to_center - arc.radius) <= hit_radius * 0.75:
+                angle = math.degrees(math.atan2(world_pos.y() - center.y(), world_pos.x() - center.x()))
+                return {
+                    "kind": "arc",
+                    "mode": "radius",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle": angle,
+                }
+
+        # W25: Ellipse Direct Manipulation Handles
+        ellipse, ellipse_source = self._resolve_direct_edit_target_ellipse()
+        if ellipse is not None:
+            center = QPointF(ellipse.center.x, ellipse.center.y)
+            rotation_rad = math.radians(float(getattr(ellipse, "rotation", 0.0)))
+            ux, uy = math.cos(rotation_rad), math.sin(rotation_rad)
+            vx, vy = -math.sin(rotation_rad), math.cos(rotation_rad)
+
+            rx = max(0.01, float(getattr(ellipse, "radius_x", 0.01)))
+            ry = max(0.01, float(getattr(ellipse, "radius_y", 0.01)))
+
+            x_handle = QPointF(center.x() + rx * ux, center.y() + rx * uy)
+            y_handle = QPointF(center.x() + ry * vx, center.y() + ry * vy)
+            rot_handle = QPointF(center.x() + (rx * 1.2) * ux, center.y() + (rx * 1.2) * uy)
+
+            if math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "center", "ellipse": ellipse, "source": ellipse_source}
+            if math.hypot(world_pos.x() - x_handle.x(), world_pos.y() - x_handle.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "radius_x", "ellipse": ellipse, "source": ellipse_source}
+            if math.hypot(world_pos.x() - y_handle.x(), world_pos.y() - y_handle.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "radius_y", "ellipse": ellipse, "source": ellipse_source}
+            if math.hypot(world_pos.x() - rot_handle.x(), world_pos.y() - rot_handle.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "rotation", "ellipse": ellipse, "source": ellipse_source}
+
+        # W25: Polygon Direct Manipulation Handles (Vertex)
+        polygon, polygon_source = self._resolve_direct_edit_target_polygon()
+        if polygon is not None:
+            for idx, pt in enumerate(getattr(polygon, "points", [])):
+                if math.hypot(world_pos.x() - pt.x, world_pos.y() - pt.y) <= hit_radius:
+                    return {
+                        "kind": "polygon",
+                        "mode": "vertex",
+                        "polygon": polygon,
+                        "source": polygon_source,
+                        "vertex_idx": idx,
+                    }
+
         return None
 
     def _start_direct_edit_drag(self, handle_hit):
@@ -3971,6 +4160,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_line = None
         self._direct_edit_line_context = None
         self._direct_edit_line_length_constraints = []
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
 
         if kind == "line" and mode in ("line_edge", "line_move"):
             line = handle_hit.get("line")
@@ -3991,6 +4190,78 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if line not in self.selected_lines:
                 self._clear_selection()
                 self.selected_lines = [line]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # W20 P1: Arc Direct Edit
+        if kind == "arc":
+            arc = handle_hit.get("arc")
+            if arc is None:
+                self._direct_edit_dragging = False
+                return
+            
+            # Store arc for dragging
+            self._direct_edit_arc = arc
+            self._direct_edit_start_center = QPointF(arc.center.x, arc.center.y)
+            self._direct_edit_start_radius = float(arc.radius)
+            self._direct_edit_start_start_angle = float(arc.start_angle)
+            self._direct_edit_start_end_angle = float(arc.end_angle)
+            
+            if mode == "center":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "radius":
+                self._direct_edit_anchor_angle = math.radians(handle_hit.get("angle", 0.0))
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("start_angle", "end_angle"):
+                self.setCursor(Qt.SizeAllCursor)
+            
+            if arc not in self.selected_arcs:
+                self._clear_selection()
+                self.selected_arcs = [arc]
+            
+            self.request_update()
+            return
+
+        # Ellipse direct edit
+        if kind == "ellipse":
+            ellipse = handle_hit.get("ellipse")
+            if ellipse is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_ellipse = ellipse
+            self._direct_edit_start_center = QPointF(float(ellipse.center.x), float(ellipse.center.y))
+            self._direct_edit_start_radius_x = float(getattr(ellipse, "radius_x", 0.0))
+            self._direct_edit_start_radius_y = float(getattr(ellipse, "radius_y", 0.0))
+            self._direct_edit_start_rotation = float(getattr(ellipse, "rotation", 0.0))
+
+            if ellipse not in self.selected_ellipses:
+                self._clear_selection()
+                self.selected_ellipses = [ellipse]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # Polygon direct edit
+        if kind == "polygon" and mode == "vertex":
+            polygon = handle_hit.get("polygon")
+            vertex_idx = int(handle_hit.get("vertex_idx", -1))
+            points = getattr(polygon, "points", None)
+            if polygon is None or points is None or vertex_idx < 0 or vertex_idx >= len(points):
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_polygon = polygon
+            self._direct_edit_polygon_vertex_idx = vertex_idx
+            pt = points[vertex_idx]
+            self._direct_edit_polygon_vertex_start = QPointF(float(pt.x), float(pt.y))
+
+            if polygon not in self.selected_polygons:
+                self._clear_selection()
+                self.selected_polygons = [polygon]
 
             self.setCursor(Qt.ClosedHandCursor)
             self.request_update()
@@ -4295,6 +4566,103 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._apply_direct_edit_line_move_drag(world_pos, axis_lock=axis_lock)
             return
 
+        # W20 P1: Arc Direct Edit Dragging
+        if hasattr(self, '_direct_edit_arc') and self._direct_edit_arc is not None:
+            arc = self._direct_edit_arc
+            mode = self._direct_edit_mode
+            
+            if mode == "center":
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+                arc.center.x = self._direct_edit_start_center.x() + dx
+                arc.center.y = self._direct_edit_start_center.y() + dy
+                
+            elif mode == "radius":
+                new_radius = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
+                arc.radius = max(0.01, new_radius)
+                
+            elif mode == "start_angle":
+                angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                arc.start_angle = angle
+                
+            elif mode == "end_angle":
+                angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                arc.end_angle = angle
+            
+            self._direct_edit_drag_moved = True
+            self.request_update()
+            return
+
+        # Ellipse direct edit
+        if self._direct_edit_ellipse is not None:
+            ellipse = self._direct_edit_ellipse
+            mode = self._direct_edit_mode
+
+            if mode == "center":
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+                ellipse.center.x = self._direct_edit_start_center.x() + dx
+                ellipse.center.y = self._direct_edit_start_center.y() + dy
+            elif mode == "radius_x":
+                rot = math.radians(self._direct_edit_start_rotation)
+                ux, uy = math.cos(rot), math.sin(rot)
+                vx = world_pos.x() - ellipse.center.x
+                vy = world_pos.y() - ellipse.center.y
+                proj = (vx * ux) + (vy * uy)
+                ellipse.radius_x = max(0.01, abs(float(proj)))
+            elif mode == "radius_y":
+                rot = math.radians(self._direct_edit_start_rotation)
+                px, py = -math.sin(rot), math.cos(rot)
+                vx = world_pos.x() - ellipse.center.x
+                vy = world_pos.y() - ellipse.center.y
+                proj = (vx * px) + (vy * py)
+                ellipse.radius_y = max(0.01, abs(float(proj)))
+            elif mode == "rotation":
+                angle = math.degrees(
+                    math.atan2(world_pos.y() - ellipse.center.y, world_pos.x() - ellipse.center.x)
+                )
+                ellipse.rotation = float(angle)
+            else:
+                return
+
+            self._direct_edit_drag_moved = True
+            self.request_update()
+            return
+
+        # Polygon direct edit
+        if self._direct_edit_polygon is not None and self._direct_edit_mode == "vertex":
+            polygon = self._direct_edit_polygon
+            vertex_idx = self._direct_edit_polygon_vertex_idx
+            points = getattr(polygon, "points", None)
+            if points is None or vertex_idx < 0 or vertex_idx >= len(points):
+                return
+
+            dx = world_pos.x() - self._direct_edit_start_pos.x()
+            dy = world_pos.y() - self._direct_edit_start_pos.y()
+            if axis_lock:
+                if abs(dx) >= abs(dy):
+                    dy = 0.0
+                else:
+                    dx = 0.0
+
+            pt = points[vertex_idx]
+            pt.x = self._direct_edit_polygon_vertex_start.x() + dx
+            pt.y = self._direct_edit_polygon_vertex_start.y() + dy
+
+            self._direct_edit_drag_moved = True
+            self.request_update()
+            return
+
         if self._direct_edit_circle is None:
             return
 
@@ -4354,18 +4722,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
 
-        self._direct_edit_dragging = False
-        self._direct_edit_mode = None
-        self._direct_edit_circle = None
-        self._direct_edit_source = None
-        self._direct_edit_drag_moved = False
-        self._direct_edit_radius_constraints = []
-        self._direct_edit_line = None
-        self._direct_edit_line_context = None
-        self._direct_edit_line_length_constraints = []
-        self._direct_edit_live_solve = False
-        self._direct_edit_pending_solve = False
-        self._direct_edit_last_live_solve_ts = 0.0
+        # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
+        self._reset_direct_edit_state()
 
         if moved:
             result = self.sketch.solve()
@@ -4389,6 +4747,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(tr("Rectangle size updated"))
             elif mode == "line_move":
                 self.status_message.emit(tr("Line moved"))
+            elif mode in ("radius_x", "radius_y"):
+                self.status_message.emit(tr("Ellipse axis updated"))
+            elif mode == "rotation":
+                self.status_message.emit(tr("Ellipse rotation updated"))
+            elif mode == "vertex":
+                self.status_message.emit(tr("Polygon vertex moved"))
 
         self.request_update()
 
@@ -4401,6 +4765,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         kind = handle.get("kind", "circle")
         if kind == "line":
             return (mode, kind, id(handle.get("line")), handle.get("orientation"))
+        if kind == "arc":
+            return (mode, kind, id(handle.get("arc")))
+        if kind == "ellipse":
+            return (mode, kind, id(handle.get("ellipse")))
+        if kind == "polygon":
+            return (mode, kind, id(handle.get("polygon")), handle.get("vertex_idx"))
         return (mode, kind, id(handle.get("circle")))
     
     def _update_cursor(self):
@@ -4424,6 +4794,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             elif mode == "radius":
                 # PAKET A W6: Radius-Drag uses diagonal cursor (scaling action)
                 self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("radius_x", "radius_y"):
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode == "rotation":
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "vertex":
+                self.setCursor(Qt.OpenHandCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -6438,24 +6814,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         4. Auswahl aufheben
         5. Signal an main_window → Sketch verlassen
         """
-        # Level 0: Direct-Edit-Drag abbrechen (W14 Fixup)
+        # Level 0: Direct-Edit-Drag abbrechen (W14 Fixup, W25: Zentralisiert)
         if self._direct_edit_dragging:
-            self._direct_edit_dragging = False
-            self._direct_edit_mode = None
-            self._direct_edit_circle = None
-            self._direct_edit_source = None
-            self._direct_edit_drag_moved = False
-            self._direct_edit_radius_constraints = []
-            self._direct_edit_line = None
-            self._direct_edit_line_context = None
-            self._direct_edit_line_length_constraints = []
-            self._direct_edit_live_solve = False
-            self._direct_edit_pending_solve = False
-            self._direct_edit_last_live_solve_ts = 0.0
+            self._reset_direct_edit_state()
             self._update_cursor()
             self._show_hud(tr("Direktes Bearbeiten abgebrochen"))
-            # W16 Paket B: Kontext zurücksetzen und Navigation-Hint aktualisieren
-            self._hint_context = 'sketch'
             self._show_tool_hint()
             self.request_update()
             return
@@ -6541,6 +6904,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_lines.clear()
         self.selected_circles.clear()
         self.selected_arcs.clear()
+        self.selected_ellipses.clear()
+        self.selected_polygons.clear()
         self.selected_points.clear()
         self.selected_constraints.clear()
         self.selected_splines.clear()
@@ -7390,6 +7755,95 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         cx, cy = (minx+maxx)/2, (miny+maxy)/2
         self.view_offset = QPointF(self.width()/2 - cx*self.view_scale, self.height()/2 + cy*self.view_scale)
         self.request_update()
+
+    def _draw_direct_edit_handles(self, painter):
+        """
+        W20 P1: Zeichnet Direct-Edit Handles für Circle, Arc, Line, Rectangle.
+        """
+        if self.current_tool != SketchTool.SELECT:
+            return
+        
+        handle_radius = 6
+        
+        # Circle Handles
+        circle, source = self._resolve_direct_edit_target_circle()
+        if circle is not None:
+            center_screen = self.world_to_screen(circle.center)
+            
+            # Center Handle (green square)
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 128))
+            painter.drawRect(int(center_screen.x() - handle_radius), 
+                           int(center_screen.y() - handle_radius),
+                           handle_radius * 2, handle_radius * 2)
+            
+            # Radius Handle (blue circle)
+            dx = self.mouse_world.x() - circle.center.x
+            dy = self.mouse_world.y() - circle.center.y
+            angle = math.atan2(dy, dx) if (abs(dx) > 1e-9 or abs(dy) > 1e-9) else 0.0
+            radius_point = Point2D(
+                circle.center.x + circle.radius * math.cos(angle),
+                circle.center.y + circle.radius * math.sin(angle)
+            )
+            radius_screen = self.world_to_screen(radius_point)
+            
+            painter.setPen(QPen(QColor(0, 128, 255), 2))
+            painter.setBrush(QColor(0, 128, 255, 128))
+            painter.drawEllipse(int(radius_screen.x() - handle_radius),
+                              int(radius_screen.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
+        
+        # W20 P1: Arc Handles
+        arc, arc_source = self._resolve_direct_edit_target_arc()
+        if arc is not None:
+            center_screen = self.world_to_screen(arc.center)
+            
+            # Center Handle (green square)
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 128))
+            painter.drawRect(int(center_screen.x() - handle_radius),
+                           int(center_screen.y() - handle_radius),
+                           handle_radius * 2, handle_radius * 2)
+            
+            # Radius Handle (cyan circle on arc mid)
+            mid_angle = math.radians((arc.start_angle + arc.end_angle) / 2)
+            radius_point = Point2D(
+                arc.center.x + arc.radius * math.cos(mid_angle),
+                arc.center.y + arc.radius * math.sin(mid_angle)
+            )
+            radius_screen = self.world_to_screen(radius_point)
+            
+            painter.setPen(QPen(QColor(0, 255, 255), 2))
+            painter.setBrush(QColor(0, 255, 255, 128))
+            painter.drawEllipse(int(radius_screen.x() - handle_radius),
+                              int(radius_screen.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
+            
+            # Start Angle Handle (orange)
+            start_point = Point2D(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle))
+            )
+            start_screen = self.world_to_screen(start_point)
+            
+            painter.setPen(QPen(QColor(255, 165, 0), 2))
+            painter.setBrush(QColor(255, 165, 0, 128))
+            painter.drawEllipse(int(start_screen.x() - handle_radius),
+                              int(start_screen.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
+            
+            # End Angle Handle (magenta)
+            end_point = Point2D(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
+            )
+            end_screen = self.world_to_screen(end_point)
+            
+            painter.setPen(QPen(QColor(255, 0, 255), 2))
+            painter.setBrush(QColor(255, 0, 255, 128))
+            painter.drawEllipse(int(end_screen.x() - handle_radius),
+                              int(end_screen.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
     
     def paintEvent(self, event):
         # 1. QPainter initialisieren
@@ -7498,7 +7952,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         """
         Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab.
         PAKET B W6: HUD-Feedback für alle Abbruch-Fälle hinzugefügt.
+        W25: Direct-Edit-Drag Abbruch hinzugefügt für Konsistenz mit ESC.
         """
+        # W25: Level 0 - Direct-Edit-Drag abbrechen (Konsistenz mit _handle_escape_logic)
+        if self._direct_edit_dragging:
+            self._reset_direct_edit_state()
+            self._show_hud(tr("Direktes Bearbeiten abgebrochen"))
+            self._update_cursor()
+            self.request_update()
+            return True
+
         if self.dim_input_active and self.dim_input.isVisible():
             self.dim_input.hide()
             self.dim_input.unlock_all()
@@ -7537,3 +8000,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return True
 
         return False
+
+    def _reset_direct_edit_state(self):
+        """
+        W25: Zentralisierte Methode zum Zurücksetzen aller Direct-Edit-Zustände.
+        Sorgt für konsistente Zustandsbereinigung nach ESC/Finish/Rechtsklick.
+        """
+        self._direct_edit_dragging = False
+        self._direct_edit_mode = None
+        self._direct_edit_circle = None
+        self._direct_edit_source = None
+        self._direct_edit_drag_moved = False
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
+        self._direct_edit_live_solve = False
+        self._direct_edit_pending_solve = False
+        self._direct_edit_last_live_solve_ts = 0.0
+        # W25: Kontext zurücksetzen für korrekte Navigation-Hints
+        self._hint_context = 'sketch'
