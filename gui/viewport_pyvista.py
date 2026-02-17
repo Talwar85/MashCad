@@ -264,6 +264,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._right_click_start_pos = None
         self._right_click_start_global_pos = None
         self._right_click_start_time = 0.0
+        self._trace_hint_face_id = None
+        self._trace_hint_label = None
+        self._projection_preview_label = None
+        self._projection_preview_actor_names = []
 
         # PERFORMANCE: Reusable cell picker (avoid creating new picker per hover)
         self._body_cell_picker = None  # Lazy init on first use
@@ -524,6 +528,25 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         self.hover_face_id = face_id
 
+        # Trace assist only for body faces in neutral 3D context.
+        trace_face_id = None
+        if self._is_trace_assist_allowed() and face_id not in (-1, None):
+            try:
+                if hasattr(self, "detector") and self.detector is not None:
+                    face = next(
+                        (f for f in self.detector.selection_faces if getattr(f, "id", -1) == face_id),
+                        None,
+                    )
+                    if face and getattr(face, "domain_type", "") == "body_face":
+                        trace_face_id = int(face_id)
+            except Exception:
+                trace_face_id = None
+
+        if trace_face_id is not None:
+            self.show_trace_hint(trace_face_id)
+        else:
+            self.clear_trace_hint()
+
         # Zeichnen aktualisieren (das kümmert sich jetzt um Hover UND Selection)
         self._draw_selectable_faces_from_detector()
         
@@ -609,6 +632,40 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.btn_home.move(20, 20)
         self.btn_home.raise_()
         self.btn_home.show()
+
+        # Trace assist hint overlay
+        self._trace_hint_label = QLabel(self)
+        self._trace_hint_label.setStyleSheet(
+            """
+            QLabel {
+                background-color: rgba(24, 24, 27, 220);
+                color: #d4d4d8;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            """
+        )
+        self._trace_hint_label.hide()
+        self._trace_hint_label.raise_()
+
+        # Projection preview hint overlay
+        self._projection_preview_label = QLabel(self)
+        self._projection_preview_label.setStyleSheet(
+            """
+            QLabel {
+                background-color: rgba(20, 38, 32, 220);
+                color: #9ef7c4;
+                border: 1px solid #2f7a5a;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            """
+        )
+        self._projection_preview_label.hide()
+        self._projection_preview_label.raise_()
         
         self._viewcube_created = True
         
@@ -664,9 +721,122 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if hasattr(self, 'btn_home'):
             self.btn_home.move(20, 20)
             self.btn_home.raise_()
+        if hasattr(self, '_trace_hint_label') and self._trace_hint_label is not None:
+            self._trace_hint_label.move(20, 60)
+            self._trace_hint_label.raise_()
+        if hasattr(self, '_projection_preview_label') and self._projection_preview_label is not None:
+            self._projection_preview_label.move(20, 90)
+            self._projection_preview_label.raise_()
         if hasattr(self, '_filter_bar'):
             self._filter_bar.move((self.width() - self._filter_bar.width()) // 2, 10)
             self._filter_bar.raise_()
+
+    def _is_trace_assist_allowed(self) -> bool:
+        """Trace-Hinweis nur im neutralen 3D-Arbeitszustand anzeigen."""
+        return not any(
+            (
+                self.extrude_mode,
+                self.measure_mode,
+                self.revolve_mode,
+                self.hole_mode,
+                self.thread_mode,
+                self.draft_mode,
+                self.split_mode,
+                self.offset_plane_mode,
+                self.point_to_point_mode,
+                self.sketch_path_mode,
+                self.texture_face_mode,
+                self.edge_select_mode,
+                self.pending_transform_mode,
+                self.plane_select_mode,
+            )
+        )
+
+    def _resolve_trace_assist_face_id(self, body_id: str, pos) -> Optional[int]:
+        """Bestimmt die naechste SelectionFace-ID fuer Trace-Assist."""
+        if not hasattr(self, "detector") or self.detector is None:
+            return None
+        faces = [
+            f for f in getattr(self.detector, "selection_faces", [])
+            if getattr(f, "domain_type", "") == "body_face" and getattr(f, "owner_id", None) == body_id
+        ]
+        if not faces:
+            return None
+        clicked_pos = np.array(pos, dtype=float)
+        best_face = min(
+            faces,
+            key=lambda f: float(np.linalg.norm(clicked_pos - np.array(getattr(f, "plane_origin", (0, 0, 0)), dtype=float))),
+        )
+        return int(getattr(best_face, "id", -1)) if getattr(best_face, "id", None) is not None else None
+
+    def show_trace_hint(self, face_id: int):
+        """Zeigt den Trace-Assist-Hinweis fuer eine gehoverte Flaeche."""
+        if face_id is None or int(face_id) < 0:
+            self.clear_trace_hint()
+            return
+        self._trace_hint_face_id = int(face_id)
+        if self._trace_hint_label is not None:
+            self._trace_hint_label.setText("T: Auf Sketch-Ebene nachzeichnen")
+            self._trace_hint_label.adjustSize()
+            self._trace_hint_label.show()
+            self._trace_hint_label.raise_()
+
+    def clear_trace_hint(self):
+        """Entfernt den Trace-Assist-Hinweis."""
+        self._trace_hint_face_id = None
+        if self._trace_hint_label is not None:
+            self._trace_hint_label.hide()
+
+    def show_projection_preview(self, edges: list, target_plane=None):
+        """Zeigt eine leichte Projection-Preview (Overlay + optionale Linien)."""
+        self.clear_projection_preview()
+        edge_count = len(edges) if edges else 0
+        plane_label = f" ({target_plane})" if target_plane else ""
+        if self._projection_preview_label is not None:
+            self._projection_preview_label.setText(f"Projection Preview: {edge_count} edges{plane_label}")
+            self._projection_preview_label.adjustSize()
+            self._projection_preview_label.show()
+            self._projection_preview_label.raise_()
+
+        if not HAS_PYVISTA or not edges:
+            return
+
+        try:
+            for idx, edge in enumerate(edges):
+                if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+                    continue
+                p0, p1 = edge
+                if len(p0) < 3 or len(p1) < 3:
+                    continue
+                pts = np.array([p0[:3], p1[:3]], dtype=float)
+                line = pv.lines_from_points(pts)
+                actor_name = f"projection_preview_{idx}"
+                self.plotter.add_mesh(
+                    line,
+                    color="#00e0a4",
+                    line_width=2.0,
+                    name=actor_name,
+                    pickable=False,
+                    render_lines_as_tubes=True,
+                )
+                self._projection_preview_actor_names.append(actor_name)
+            self._safe_request_render()
+        except Exception as e:
+            logger.debug(f"[viewport] projection preview draw failed: {e}")
+
+    def clear_projection_preview(self):
+        """Entfernt Projection-Preview Overlay und Linien."""
+        if self._projection_preview_label is not None:
+            self._projection_preview_label.hide()
+        if HAS_PYVISTA:
+            for actor_name in self._projection_preview_actor_names:
+                try:
+                    self.plotter.remove_actor(actor_name, render=False)
+                except Exception:
+                    pass
+            if self._projection_preview_actor_names:
+                self._safe_request_render()
+        self._projection_preview_actor_names = []
 
     def _toggle_wireframe(self):
         """Togglet zwischen Wireframe und Surface Modus für alle Meshes."""
@@ -2277,6 +2447,16 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if not HAS_PYVISTA: return False
         from PySide6.QtCore import QEvent, Qt, QPoint
         from PySide6.QtWidgets import QApplication
+
+        if self._trace_hint_face_id is not None and not self._is_trace_assist_allowed():
+            self.clear_trace_hint()
+
+        # Trace Assist Shortcut: T startet direkt "Create Sketch" auf gehoverter Face.
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_T:
+            if self._trace_hint_face_id is not None and self._is_trace_assist_allowed():
+                self.create_sketch_requested.emit(int(self._trace_hint_face_id))
+                self.clear_trace_hint()
+                return True
 
         # Phase 4: Globales Mouse-Move Throttling (max 60 FPS)
         if event.type() == QEvent.MouseMove:
@@ -6138,6 +6318,15 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                             self._draw_full_face_hover(body_id, rounded_normal, normal, cell_id)
                         else:
                             self._draw_body_face_highlight(pos, normal)
+
+                    if self._is_trace_assist_allowed():
+                        trace_face_id = self._resolve_trace_assist_face_id(body_id, pos)
+                        if trace_face_id is not None:
+                            self.show_trace_hint(trace_face_id)
+                        else:
+                            self.clear_trace_hint()
+                    else:
+                        self.clear_trace_hint()
                     return
 
             # Update cache for miss
@@ -6146,6 +6335,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             if self.hovered_body_face is not None:
                 self.hovered_body_face = None
                 self._clear_body_face_highlight()
+            self.clear_trace_hint()
 
         except Exception:
             pass
@@ -6335,6 +6525,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """Klick auf Body-Face - bereitet Extrusion oder Texture-Selektion vor"""
         if self.hovered_body_face is None:
             return
+        self.clear_trace_hint()
 
         body_id, cell_id, normal, pos = self.hovered_body_face
 
@@ -6782,10 +6973,12 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         from PySide6.QtGui import QAction
         
         # Picken was unter der Maus ist (Face oder Body)
-        x, y = int(pos.x()), int(pos.y())
+        local_pos = pos.toPoint() if hasattr(pos, "toPoint") else pos
+        x, y = int(local_pos.x()), int(local_pos.y())
         hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
         
         menu = QMenu(self)
+        menu.aboutToHide.connect(self.clear_trace_hint)
         
         # 1. Sketch auf Face erstellen
         if hit_id != -1:
@@ -6793,9 +6986,16 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
              if hasattr(self, 'detector') and self.detector and self.detector.selection_faces:
                  face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
                  if face:
-                     action = QAction("✏️ Create Sketch", self)
-                     # Lambda muss Argument binden damit es nicht überschrieben wird
-                     action.triggered.connect(lambda chk=False, fid=hit_id: self.create_sketch_requested.emit(fid))
+                     if getattr(face, "domain_type", "") == "body_face" and self._is_trace_assist_allowed():
+                         self.show_trace_hint(hit_id)
+
+                     action = QAction("Create Sketch (T)", self)
+
+                     def _request_create_sketch(fid=hit_id):
+                         self.create_sketch_requested.emit(fid)
+                         self.clear_trace_hint()
+
+                     action.triggered.connect(_request_create_sketch)
                      menu.addAction(action)
                      
                      menu.addSeparator()
@@ -6810,7 +7010,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         menu.addAction(action_fit)
 
         # Show Menu
-        global_pos = self.mapToGlobal(pos.toPoint())
+        global_pos = self.mapToGlobal(local_pos)
         menu.exec(global_pos)
 
 

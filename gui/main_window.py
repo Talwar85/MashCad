@@ -7878,6 +7878,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
 
+        # Workflow cleanup: component switch should not carry transient preview/mode state.
+        self._clear_transient_previews(reason="component_activated", clear_interaction_modes=True)
+        if hasattr(self, "viewport_3d"):
+            if hasattr(self.viewport_3d, "clear_trace_hint"):
+                self.viewport_3d.clear_trace_hint()
+            if hasattr(self.viewport_3d, "clear_projection_preview"):
+                self.viewport_3d.clear_projection_preview()
+
         from gui.commands.component_commands import ActivateComponentCommand
 
         # Aktuelle Component merken für Undo
@@ -11899,6 +11907,13 @@ class MainWindow(QMainWindow):
 
     def _on_create_sketch_requested(self, face_id: int):
         """Handler for Context Menu -> Create Sketch"""
+        self._clear_transient_previews(reason="create_sketch_requested", clear_interaction_modes=True)
+        if hasattr(self, "viewport_3d"):
+            if hasattr(self.viewport_3d, "clear_trace_hint"):
+                self.viewport_3d.clear_trace_hint()
+            if hasattr(self.viewport_3d, "clear_projection_preview"):
+                self.viewport_3d.clear_projection_preview()
+
         # Access face from viewport detector
         # Note: SketchEditor usually expects a selected face object
         

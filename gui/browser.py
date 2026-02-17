@@ -1302,12 +1302,23 @@ class ProjectBrowser(QFrame):
 
     def _activate_component(self, component):
         """Aktiviert eine Component (macht sie zur aktiven Bearbeitungs-Component)."""
+        self._activate_component_safe(component)
+
+    def _activate_component_safe(self, component):
+        """Aktiviert eine Component mit robusten Guards."""
         if not self._assembly_enabled or not self.document:
-            return
+            return False
+        if component is None:
+            return False
 
         # Signal emittieren - MainWindow handhabt die Aktivierung
-        self.component_activated.emit(component)
-        logger.debug(f"[BROWSER] Component aktivieren: {component.name}")
+        try:
+            self.component_activated.emit(component)
+            logger.debug(f"[BROWSER] Component aktivieren: {component.name}")
+            return True
+        except Exception as e:
+            logger.warning(f"[BROWSER] Component-Aktivierung fehlgeschlagen: {e}")
+            return False
 
     def _create_sub_component(self, parent_component):
         """Erstellt eine neue Sub-Component."""
