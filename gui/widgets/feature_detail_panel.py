@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 
+from datetime import datetime
 from loguru import logger
 from i18n import tr
 from gui.design_tokens import DesignTokens
@@ -77,9 +78,17 @@ class FeatureDetailPanel(QFrame):
 
     Signals:
         highlight_edges_requested(list): Edge-Indices zum Highlighten im Viewport.
+        recovery_action_requested(str, object): (action, feature) - W26 Recovery Aktion.
+        edit_feature_requested(object): Feature zur Bearbeitung angefordert.
+        rebuild_feature_requested(object): Feature Rebuild angefordert.
+        delete_feature_requested(object): Feature Löschung angefordert.
     """
 
     highlight_edges_requested = Signal(list)
+    recovery_action_requested = Signal(str, object)
+    edit_feature_requested = Signal(object)
+    rebuild_feature_requested = Signal(object)
+    delete_feature_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -165,6 +174,62 @@ class FeatureDetailPanel(QFrame):
         layout.addWidget(self._tnp_method)
         layout.addWidget(self._tnp_quality)
 
+        # W26 PAKET F2: Recovery Actions Section
+        self._recovery_header = QLabel(f"── {tr('Recovery-Aktionen')} ──")
+        self._recovery_header.setStyleSheet("color: #f59e0b; font-size: 9px; margin-top: 6px; font-weight: bold;")
+        layout.addWidget(self._recovery_header)
+
+        self._recovery_layout = QHBoxLayout()
+        self._recovery_layout.setSpacing(4)
+
+        # Recovery Buttons (dynamisch gefüllt basierend auf Error-Code)
+        self._btn_reselect_ref = QPushButton(tr("🔄 Referenz neu wählen"))
+        self._btn_reselect_ref.setFixedHeight(22)
+        self._btn_reselect_ref.setStyleSheet(
+            "QPushButton { background: #2d3748; color: #90cdf4; border: 1px solid #4299e1; border-radius: 3px; font-size: 10px; padding: 2px 8px; }"
+            "QPushButton:hover { background: #3182ce; color: white; }"
+        )
+        self._btn_reselect_ref.clicked.connect(lambda: self._on_recovery_action("reselect_ref"))
+        self._recovery_layout.addWidget(self._btn_reselect_ref)
+
+        self._btn_edit_feature = QPushButton(tr("✏️ Feature editieren"))
+        self._btn_edit_feature.setFixedHeight(22)
+        self._btn_edit_feature.setStyleSheet(
+            "QPushButton { background: #2d3748; color: #9ae6b4; border: 1px solid #48bb78; border-radius: 3px; font-size: 10px; padding: 2px 8px; }"
+            "QPushButton:hover { background: #38a169; color: white; }"
+        )
+        self._btn_edit_feature.clicked.connect(lambda: self._on_recovery_action("edit"))
+        self._recovery_layout.addWidget(self._btn_edit_feature)
+
+        self._btn_rebuild = QPushButton(tr("🔄 Rebuild"))
+        self._btn_rebuild.setFixedHeight(22)
+        self._btn_rebuild.setStyleSheet(
+            "QPushButton { background: #2d3748; color: #fbd38d; border: 1px solid #ed8936; border-radius: 3px; font-size: 10px; padding: 2px 8px; }"
+            "QPushButton:hover { background: #dd6b20; color: white; }"
+        )
+        self._btn_rebuild.clicked.connect(lambda: self._on_recovery_action("rebuild"))
+        self._recovery_layout.addWidget(self._btn_rebuild)
+
+        self._btn_accept_drift = QPushButton(tr("✓ Drift akzeptieren"))
+        self._btn_accept_drift.setFixedHeight(22)
+        self._btn_accept_drift.setStyleSheet(
+            "QPushButton { background: #2d3748; color: #9ae6b4; border: 1px solid #48bb78; border-radius: 3px; font-size: 10px; padding: 2px 8px; }"
+            "QPushButton:hover { background: #38a169; color: white; }"
+        )
+        self._btn_accept_drift.clicked.connect(lambda: self._on_recovery_action("accept_drift"))
+        self._recovery_layout.addWidget(self._btn_accept_drift)
+
+        self._btn_check_deps = QPushButton(tr("🔍 Dependencies prüfen"))
+        self._btn_check_deps.setFixedHeight(22)
+        self._btn_check_deps.setStyleSheet(
+            "QPushButton { background: #2d3748; color: #d6bcfa; border: 1px solid #9f7aea; border-radius: 3px; font-size: 10px; padding: 2px 8px; }"
+            "QPushButton:hover { background: #805ad5; color: white; }"
+        )
+        self._btn_check_deps.clicked.connect(lambda: self._on_recovery_action("check_deps"))
+        self._recovery_layout.addWidget(self._btn_check_deps)
+
+        layout.addLayout(self._recovery_layout)
+
         # W21 PAKET B: Actions mit Copy Diagnostics Button
         btn_row = QHBoxLayout()
         self._btn_copy_diag = QPushButton(tr("📋 Diagnostics"))
@@ -209,6 +274,13 @@ class FeatureDetailPanel(QFrame):
         self._tnp_quality.hide()
         self._btn_show_edges.hide()
         self._btn_copy_diag.hide()
+        # W26: Recovery Section verstecken
+        self._recovery_header.hide()
+        self._btn_reselect_ref.hide()
+        self._btn_edit_feature.hide()
+        self._btn_rebuild.hide()
+        self._btn_accept_drift.hide()
+        self._btn_check_deps.hide()
 
     def show_feature(self, feature, body=None, doc=None):
         """Zeigt Details für das ausgewählte Feature."""
@@ -289,12 +361,22 @@ class FeatureDetailPanel(QFrame):
 
             # Copy-Button zeigen
             self._btn_copy_diag.show()
+
+            # W26 PAKET F2: Recovery-Buttons basierend auf Error-Code anzeigen
+            self._update_recovery_actions(code, category)
         else:
             self._diag_header.hide()
             self._diag_code.hide()
             self._diag_category.hide()
             self._diag_hint.hide()
             self._btn_copy_diag.hide()
+            # W26: Recovery Section verstecken wenn keine Diagnose
+            self._recovery_header.hide()
+            self._btn_reselect_ref.hide()
+            self._btn_edit_feature.hide()
+            self._btn_rebuild.hide()
+            self._btn_accept_drift.hide()
+            self._btn_check_deps.hide()
 
         # Geometry Delta
         gd = getattr(feature, '_geometry_delta', None)
@@ -493,6 +575,92 @@ class FeatureDetailPanel(QFrame):
         self._tnp_quality.show()
         self._tnp_header.show()
 
+    def _update_recovery_actions(self, code: str, category: str):
+        """
+        W26 PAKET F2: Zeigt/versteckt Recovery-Buttons basierend auf Error-Code.
+
+        Args:
+            code: Error-Code aus status_details
+            category: TNP-Fehler-Kategorie
+        """
+        # Standard: Alle verstecken
+        self._btn_reselect_ref.hide()
+        self._btn_edit_feature.hide()
+        self._btn_rebuild.hide()
+        self._btn_accept_drift.hide()
+        self._btn_check_deps.hide()
+
+        if not code and not category:
+            self._recovery_header.hide()
+            return
+
+        self._recovery_header.show()
+
+        # Mapping: Error-Code -> sinnvolle Recovery-Aktionen
+        if code == "tnp_ref_missing" or category == "missing_ref":
+            # Referenz verloren -> Neu wählen oder Feature editieren
+            self._btn_reselect_ref.show()
+            self._btn_edit_feature.show()
+            self._btn_check_deps.show()
+
+        elif code == "tnp_ref_mismatch" or category == "mismatch":
+            # Formkonflikt -> Editieren oder Dependencies prüfen
+            self._btn_edit_feature.show()
+            self._btn_check_deps.show()
+            self._btn_rebuild.show()
+
+        elif code == "tnp_ref_drift" or category == "drift":
+            # Geometrie-Drift -> Akzeptieren oder Editieren
+            self._btn_accept_drift.show()
+            self._btn_edit_feature.show()
+
+        elif code == "rebuild_finalize_failed":
+            # Rebuild fehlgeschlagen -> Rebuild wiederholen oder Editieren
+            self._btn_rebuild.show()
+            self._btn_edit_feature.show()
+
+        elif code == "ocp_api_unavailable":
+            # OCP nicht verfügbar -> Dependencies prüfen oder Rebuild
+            self._btn_check_deps.show()
+            self._btn_rebuild.show()
+
+        else:
+            # Fallback: Editieren und Rebuild anbieten
+            self._btn_edit_feature.show()
+            self._btn_rebuild.show()
+
+    def _on_recovery_action(self, action: str):
+        """
+        W26 PAKET F2: Handler für Recovery-Aktionen.
+
+        Args:
+            action: Auszuführende Aktion
+        """
+        if not self._current_feature:
+            return
+
+        logger.debug(f"[FEATURE_PANEL] Recovery action '{action}' für Feature '{self._current_feature.name}'")
+
+        # Signal emittieren für externe Handler
+        self.recovery_action_requested.emit(action, self._current_feature)
+
+        # Direkte Aktionen
+        if action == "edit":
+            self.edit_feature_requested.emit(self._current_feature)
+        elif action == "rebuild":
+            self.rebuild_feature_requested.emit(self._current_feature)
+        elif action == "reselect_ref":
+            # Wird vom externen Handler behandelt
+            pass
+        elif action == "accept_drift":
+            # Drift akzeptieren -> Status zurücksetzen
+            if hasattr(self._current_feature, 'status_details'):
+                self._current_feature.status_details = {}
+            if hasattr(self._current_feature, 'status'):
+                self._current_feature.status = "OK"
+            # Panel aktualisieren
+            self.show_feature(self._current_feature, self._current_body, self._current_doc)
+
     def _on_show_edges(self):
         """Emittet Signal zum Highlighten der Feature-Kanten im Viewport."""
         if self._current_feature:
@@ -502,57 +670,117 @@ class FeatureDetailPanel(QFrame):
 
     def _on_copy_diagnostics(self):
         """
-        W21 PAKET B: Kopiert die Diagnostics in die Zwischenablage.
+        W26 PAKET F2: Kopiert strukturierte Diagnostics in die Zwischenablage.
 
-        Erstellt einen strukturierten Text mit allen relevanten Informationen
-        für Support/Debug.
+        Erstellt einen JSON-ähnlichen Text mit allen relevanten Informationen
+        für Support/Debug, inkl. Recovery-Vorschlägen.
         """
         if not self._current_feature:
             return
 
         feature = self._current_feature
         lines = []
-        lines.append(f"=== Feature Diagnostics ===")
-        lines.append(f"Feature: {feature.name}")
-        lines.append(f"Type: {type(feature).__name__}")
+        lines.append(f"{'='*50}")
+        lines.append(f"FEATURE DIAGNOSTICS REPORT")
+        lines.append(f"Generated: {datetime.now().isoformat()}")
+        lines.append(f"{'='*50}")
+        lines.append("")
+
+        # Feature Info
+        lines.append(f"[FEATURE]")
+        lines.append(f"  Name: {feature.name}")
+        lines.append(f"  Type: {type(feature).__name__}")
+        lines.append(f"  ID: {getattr(feature, 'id', 'N/A')}")
         lines.append("")
 
         # Status
         status = getattr(feature, "status", "OK")
         details = getattr(feature, "status_details", {}) or {}
-        lines.append(f"Status: {status}")
+        status_class = details.get("status_class", "") if isinstance(details, dict) else ""
+        severity = details.get("severity", "") if isinstance(details, dict) else ""
+        code = details.get("code", "") if isinstance(details, dict) else ""
 
-        if details:
-            lines.append("Details:")
-            for key, value in details.items():
-                if key == "tnp_failure" and isinstance(value, dict):
-                    lines.append(f"  tnp_failure:")
-                    for tk, tv in value.items():
-                        lines.append(f"    {tk}: {tv}")
-                else:
-                    lines.append(f"  {key}: {value}")
+        lines.append(f"[STATUS]")
+        lines.append(f"  Status: {status}")
+        lines.append(f"  Status Class: {status_class or 'N/A'}")
+        lines.append(f"  Severity: {severity or 'N/A'}")
+        lines.append(f"  Error Code: {code or 'N/A'}")
+        lines.append("")
 
+        # TNP Failure Details
+        tnp_failure = details.get("tnp_failure", {}) if isinstance(details, dict) else {}
+        if tnp_failure:
+            lines.append(f"[TNP FAILURE]")
+            for key, value in tnp_failure.items():
+                lines.append(f"  {key}: {value}")
+            lines.append("")
+
+        # Hint / Next Action
+        hint = details.get("hint", "") or details.get("next_action", "") if isinstance(details, dict) else ""
+        if hint:
+            lines.append(f"[HINT]")
+            lines.append(f"  {hint}")
+            lines.append("")
+
+        # W26: Recovery Vorschläge
+        lines.append(f"[RECOVERY OPTIONS]")
+        if code == "tnp_ref_missing":
+            lines.append(f"  1. Referenz neu wählen: Edge/Face neu auswählen")
+            lines.append(f"  2. Feature editieren: Geometrie anpassen")
+            lines.append(f"  3. Dependencies prüfen: Vorgänger-Features validieren")
+        elif code == "tnp_ref_mismatch":
+            lines.append(f"  1. Feature editieren: Geometrie korrigieren")
+            lines.append(f"  2. Konflikt isolieren: Body separat bearbeiten")
+            lines.append(f"  3. Rebuild wiederholen: Nach Anpassungen")
+        elif code == "tnp_ref_drift":
+            lines.append(f"  1. Drift akzeptieren: Warnung bestätigen (wenn OK)")
+            lines.append(f"  2. Manuell korrigieren: Referenz neu setzen")
+            lines.append(f"  3. Feature editieren: Geometrie anpassen")
+        elif code == "rebuild_finalize_failed":
+            lines.append(f"  1. Rebuild wiederholen: Automatische Korrektur versuchen")
+            lines.append(f"  2. Feature editieren: Parameter prüfen")
+            lines.append(f"  3. Feature löschen: Neu erstellen falls defekt")
+        elif code == "ocp_api_unavailable":
+            lines.append(f"  1. OCP-Status prüfen: Backend-Verfügbarkeit")
+            lines.append(f"  2. Dependencies prüfen: Feature-Abhängigkeiten")
+            lines.append(f"  3. Fallback verwenden: Alternative Operation wählen")
+        else:
+            lines.append(f"  1. Feature editieren: Parameter prüfen")
+            lines.append(f"  2. Rebuild wiederholen: Automatische Korrektur")
         lines.append("")
 
         # Geometry
+        lines.append(f"[GEOMETRY DELTA]")
         gd = getattr(feature, '_geometry_delta', None)
-        if gd:
-            lines.append("Geometry Delta:")
-            lines.append(f"  Volume: {gd.get('volume_before', '?')} → {gd.get('volume_after', '?')}")
+        if gd and isinstance(gd, dict):
+            lines.append(f"  Volume: {gd.get('volume_before', '?')} → {gd.get('volume_after', '?')} mm³")
+            lines.append(f"  Change: {gd.get('volume_pct', 0):.1f}%")
             lines.append(f"  Faces: {gd.get('faces_before', '?')} → {gd.get('faces_after', '?')}")
             lines.append(f"  Edges: {gd.get('edges_before', '?')} → {gd.get('edges_after', '?')}")
+        else:
+            lines.append(f"  No geometry data available")
+        lines.append("")
 
         # Edge References
         edge_indices = getattr(feature, 'edge_indices', None)
         if edge_indices:
-            lines.append(f"")
-            lines.append(f"Edge References: {edge_indices}")
+            lines.append(f"[EDGE REFERENCES]")
+            lines.append(f"  Count: {len(edge_indices)}")
+            lines.append(f"  Indices: {list(edge_indices)[:20]}")  # Max 20 anzeigen
+            if len(edge_indices) > 20:
+                lines.append(f"  ... and {len(edge_indices) - 20} more")
+            lines.append("")
 
         # Body Info
         if self._current_body:
-            lines.append(f"")
-            lines.append(f"Body: {self._current_body.name}")
-            lines.append(f"Body ID: {self._current_body.id}")
+            lines.append(f"[BODY]")
+            lines.append(f"  Name: {self._current_body.name}")
+            lines.append(f"  ID: {getattr(self._current_body, 'id', 'N/A')}")
+            lines.append("")
+
+        lines.append(f"{'='*50}")
+        lines.append(f"END DIAGNOSTICS")
+        lines.append(f"{'='*50}")
 
         diagnostics_text = "\n".join(lines)
 

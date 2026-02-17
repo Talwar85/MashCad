@@ -41,6 +41,105 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
+# W26 PAKET F3: Severity Levels für konsistente Darstellung
+class SeverityLevel:
+    """Konsistente Severity-Levels für alle UI-Komponenten."""
+    CRITICAL = "critical"      # System-kritisch, sofortige Aktion erforderlich
+    BLOCKED = "blocked"        # Blockiert weitere Arbeit
+    ERROR = "error"            # Fehler, aber nicht blockierend
+    WARNING = "warning"        # Warnung, Arbeit möglich
+    SUCCESS = "success"        # Erfolgreich
+    INFO = "info"              # Information
+
+
+# W26 PAKET F3: Severity Mapping aus Error-Envelope v2
+def map_to_severity(status: str = "", status_class: str = "", severity: str = "") -> str:
+    """
+    Mappt verschiedene Status-Formate auf konsistente Severity-Levels.
+
+    Priority: status_class > severity > legacy status
+
+    Returns:
+        SeverityLevel-Wert
+    """
+    # Priority 1: status_class (Error-Envelope v2)
+    if status_class == "CRITICAL":
+        return SeverityLevel.CRITICAL
+    elif status_class == "BLOCKED":
+        return SeverityLevel.BLOCKED
+    elif status_class == "ERROR":
+        return SeverityLevel.ERROR
+    elif status_class == "WARNING_RECOVERABLE":
+        return SeverityLevel.WARNING
+
+    # Priority 2: severity (Error-Envelope v2)
+    if severity == "critical":
+        return SeverityLevel.CRITICAL
+    elif severity == "blocked":
+        return SeverityLevel.BLOCKED
+    elif severity == "error":
+        return SeverityLevel.ERROR
+    elif severity == "warning":
+        return SeverityLevel.WARNING
+
+    # Priority 3: legacy status
+    if status == "ERROR":
+        return SeverityLevel.ERROR
+    elif status == "WARNING":
+        return SeverityLevel.WARNING
+    elif status == "OK" or status == "SUCCESS":
+        return SeverityLevel.SUCCESS
+
+    return SeverityLevel.INFO
+
+
+# W26 PAKET F3: Severity-Konfiguration (Farben, Icons, Dauer)
+_SEVERITY_CONFIG = {
+    SeverityLevel.CRITICAL: {
+        "color": "#dc2626",  # Rot 600
+        "icon": "🚨",
+        "accent": "#ef4444",
+        "duration_ms": 15000,
+        "recoverable": False,
+    },
+    SeverityLevel.BLOCKED: {
+        "color": "#ea580c",  # Orange 600
+        "icon": "🚫",
+        "accent": "#f97316",
+        "duration_ms": 12000,
+        "recoverable": False,
+    },
+    SeverityLevel.ERROR: {
+        "color": "#ef4444",  # Rot 500
+        "icon": "✕",
+        "accent": "#ef4444",
+        "duration_ms": 10000,
+        "recoverable": False,
+    },
+    SeverityLevel.WARNING: {
+        "color": "#f59e0b",  # Gelb 500
+        "icon": "⚠",
+        "accent": "#f59e0b",
+        "duration_ms": 8000,
+        "recoverable": True,
+    },
+    SeverityLevel.SUCCESS: {
+        "color": "#22c55e",  # Grün 500
+        "icon": "✓",
+        "accent": "#22c55e",
+        "duration_ms": 5000,
+        "recoverable": True,
+    },
+    SeverityLevel.INFO: {
+        "color": "#60a5fa",  # Blau 400
+        "icon": "ℹ",
+        "accent": "#60a5fa",
+        "duration_ms": 5000,
+        "recoverable": True,
+    },
+}
+
+
 # Farbpalette konsistent mit DesignTokens / notification.py
 _COLORS = {
     "success": "#22c55e",
@@ -149,6 +248,8 @@ class OperationSummaryWidget(QFrame):
                      feature=None, parent_widget=None, parent=None):
         """Zeigt Operation-Summary an.
 
+        W26 PAKET F3: Konsistente Severity-Darstellung mit Error-Envelope v2.
+
         Args:
             operation_name: z.B. "Chamfer D=0.8mm"
             pre_sig: {'volume': float, 'faces': int, 'edges': int} vor Operation
@@ -156,27 +257,25 @@ class OperationSummaryWidget(QFrame):
             feature: Optional Feature-Objekt für Status/Edge-Info
             parent_widget: Widget für Positionierung (z.B. MainWindow)
         """
-        # Status ermitteln (mit status_class Unterstützung)
+        # W26 PAKET F3: Status ermitteln mit konsistentem Severity-Mapping
         status = getattr(feature, "status", "OK") if feature else "OK"
         details = getattr(feature, "status_details", {}) or {}
         status_class = details.get("status_class", "") if isinstance(details, dict) else ""
         severity = details.get("severity", "") if isinstance(details, dict) else ""
 
-        # Error UX v2: status_class > status
-        is_error = status == "ERROR" or status_class in ("ERROR", "BLOCKED", "CRITICAL") or \
-                   severity in ("error", "blocked", "critical")
-        is_warning = status == "WARNING" or status_class == "WARNING_RECOVERABLE" or \
-                     severity == "warning"
+        # W26: Einheitliches Severity-Mapping
+        severity_level = map_to_severity(status, status_class, severity)
+        config = _SEVERITY_CONFIG[severity_level]
 
-        if is_error:
-            accent = _COLORS["error"]
-            icon = "✕"
-        elif is_warning:
-            accent = _COLORS["warning"]
-            icon = "⚠"
-        else:
-            accent = _COLORS["success"]
-            icon = "✓"
+        # W26: Severity-basierte Darstellung
+        accent = config["accent"]
+        icon = config["icon"]
+        duration_ms = config["duration_ms"]
+        is_recoverable = config["recoverable"]
+
+        # Legacy-Kompatibilität für bestehende Logik
+        is_error = severity_level in (SeverityLevel.CRITICAL, SeverityLevel.BLOCKED, SeverityLevel.ERROR)
+        is_warning = severity_level == SeverityLevel.WARNING
 
         self._apply_style(accent)
         self._icon_label.setText(icon)
@@ -242,6 +341,10 @@ class OperationSummaryWidget(QFrame):
             hint = details.get("hint", "")
             if hint and is_error:
                 edge_info = f"{edge_info}\n{hint}" if edge_info else hint
+
+        # W26 PAKET F3: Recoverable-Hinweis für Warning-Level
+        if is_recoverable and severity_level == SeverityLevel.WARNING:
+            edge_info = f"{edge_info}\n💡 Weiterarbeiten möglich" if edge_info else "💡 Weiterarbeiten möglich"
 
         if edge_info:
             self._extra_label.setText(edge_info)
@@ -310,11 +413,9 @@ class OperationSummaryWidget(QFrame):
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.start()
 
-        # Auto-Close (längere Anzeigedauer für bessere Lesbarkeit)
-        # Timer stoppen falls bereits aktiv und neu starten
+        # W26 PAKET F3: Auto-Close mit severity-basierter Dauer
         self._timer.stop()
-        duration = 10000 if is_error else 8000
-        self._timer.start(duration)
+        self._timer.start(duration_ms)
 
     def _close_anim(self):
         if not self._target_pos:

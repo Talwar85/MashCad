@@ -18,8 +18,8 @@ from gui.widgets import NotificationWidget
 # W21 Paket D: Prioritätsordnung für Notifications (höchste zuerst)
 _PRIORITY_ORDER = {
     "critical": 0,
-    "error": 1,
-    "blocked": 2,
+    "blocked": 1,   # W26: BLOCKED als eigener Level
+    "error": 2,
     "warning": 3,
     "info": 4,
     "success": 5,
@@ -87,42 +87,24 @@ class NotificationManager:
 
     def _map_status_to_style(self, level: str = "", status_class: str = "", severity: str = "") -> str:
         """
-        W10 Paket B + W21 Paket D: Mappt Error UX v2 status_class/severity zu Notification-Styles.
+        W26 PAKET F3: Konsistentes Severity-Mapping für alle UI-Komponenten.
 
         Priority: status_class > severity > level
 
         Args:
             level: Legacy level (info/warning/error/success/critical)
-            status_class: status_class aus Error-Envelope v2 (WARNING_RECOVERABLE, BLOCKED, CRITICAL, ERROR)
-            severity: severity aus Error-Envelope v2 (warning, blocked, critical, error)
+            status_class: status_class aus Error-Envelope v2
+            severity: severity aus Error-Envelope v2
 
         Returns:
             Notification style (info/warning/error/success)
         """
-        # Zuerst status_class prüfen (höchste Priority)
-        if status_class == "WARNING_RECOVERABLE":
-            return "warning"
-        elif status_class == "BLOCKED":
+        # W26: Einheitliches Mapping - CRITICAL/BLOCKED/ERROR alle auf "error"
+        if status_class in ("CRITICAL", "BLOCKED", "ERROR") or \
+           severity in ("critical", "blocked", "error") or \
+           level in ("critical", "error"):
             return "error"
-        elif status_class == "CRITICAL":
-            return "error"
-        elif status_class == "ERROR":
-            return "error"
-
-        # Dann severity prüfen (mittlere Priority)
-        if severity == "warning":
-            return "warning"
-        elif severity == "blocked":
-            return "error"
-        elif severity == "critical":
-            return "error"
-        elif severity == "error":
-            return "error"
-
-        # Legacy level fallback (niedrigste Priority)
-        if level in ["critical", "error"]:
-            return "error"
-        elif level == "warning":
+        elif status_class == "WARNING_RECOVERABLE" or severity == "warning" or level == "warning":
             return "warning"
         elif level == "success":
             return "success"
@@ -133,13 +115,19 @@ class NotificationManager:
         """
         Erstellt das Toast-Popup mit Deduplication und Queue-Support.
 
+        W26 PAKET F3: Konsistente Severity-Darstellung.
+
         W21 Paket D:
         - Deduplication im 5-Sekunden-Fenster
         - Priority-basierte Queue bei Burst
         - Pin-Option für wichtige Meldungen
         """
-        # Mapping von Loguru levels für Style
+        # W26: Einheitliches Severity-Mapping
         style = self._map_status_to_style(level, status_class, severity)
+
+        # W26: Recoverable-Hinweis für Warning-Level
+        if style == "warning" and "Weiterarbeiten" not in message:
+            message = f"{message}\n💡 Weiterarbeiten möglich"
 
         # W21 Paket D: Deduplication-Check
         entry = NotificationEntry(message, style, pinned=pinned)

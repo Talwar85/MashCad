@@ -180,6 +180,7 @@ class DraggableTreeWidget(QTreeWidget):
 
     Phase 6 Assembly: Ermöglicht Drag & Drop von Bodies/Sketches zu anderen Components.
     W21 Product Leap: Keyboard-first Navigation, Status-Badges, Filter-Support.
+    W26 Product Leap: Problem-First Navigation mit Priorisierung, Multi-Select Batch-Aktionen.
 
     Keyboard Shortcuts:
     - Enter: Component/Feature aktivieren
@@ -187,8 +188,11 @@ class DraggableTreeWidget(QTreeWidget):
     - F2: Umbenennen
     - Ctrl+Down: Nächstes Item mit Fehler
     - Ctrl+Up: Vorheriges Item mit Fehler
+    - Ctrl+Shift+Down: Nächstes kritisches Problem (CRITICAL > BLOCKED > ERROR > WARNING)
+    - Ctrl+Shift+Up: Vorheriges kritisches Problem
     - Ctrl+N: Nächstes Item selektieren
     - Ctrl+P: Vorheriges Item selektieren
+    - Ctrl+A: Alle Problem-Features selektieren
     """
 
     # Signal wenn Item gedroppt wird: (item_type, item, source_comp, target_comp)
@@ -439,31 +443,170 @@ class DraggableTreeWidget(QTreeWidget):
 
         return False
 
+    def _get_problem_priority(self, item: QTreeWidgetItem) -> int:
+        """
+        W26: Gibt die Priorität eines Problem-Items zurück (niedriger = höhere Priorität).
+
+        Prioritätsordnung: CRITICAL (0) > BLOCKED (1) > ERROR (2) > WARNING (3)
+        """
+        try:
+            data = item.data(0, Qt.UserRole)
+        except (TypeError, AttributeError):
+            return 999
+        if not data or len(data) < 2:
+            return 999
+
+        item_type = data[0]
+        if item_type != 'feature':
+            return 999
+
+        feature = data[1]
+        details = _safe_details(getattr(feature, 'status_details', None))
+        status_class = str(details.get('status_class', '') or '')
+        severity = str(details.get('severity', '') or '')
+
+        # W26: Prioritätsordnung für Problem-First Navigation
+        if status_class == 'CRITICAL' or severity == 'critical':
+            return 0
+        elif status_class == 'BLOCKED' or severity == 'blocked':
+            return 1
+        elif status_class == 'ERROR' or severity == 'error':
+            return 2
+        elif status_class == 'WARNING_RECOVERABLE' or severity == 'warning':
+            return 3
+        else:
+            return 4
+
+    def navigate_to_next_critical_problem(self):
+        """W26: Navigiert zum nächsten kritischen Problem (CRITICAL > BLOCKED > ERROR > WARNING)."""
+        items = self._get_all_items()
+        current = self.currentItem()
+        found_current = False
+
+        # Sammle alle Problem-Items mit ihrer Priorität
+        problem_items = []
+        for item in items:
+            if item.isHidden():
+                continue
+            priority = self._get_problem_priority(item)
+            if priority < 999:
+                problem_items.append((item, priority))
+
+        if not problem_items:
+            return
+
+        # Sortiere nach Priorität (niedrigste zuerst)
+        problem_items.sort(key=lambda x: x[1])
+
+        # Finde aktuelle Position
+        current_idx = -1
+        for idx, (item, _) in enumerate(problem_items):
+            if item == current:
+                current_idx = idx
+                break
+
+        # Nächstes Item (Wrap-around)
+        next_idx = (current_idx + 1) % len(problem_items)
+        next_item = problem_items[next_idx][0]
+
+        self.setCurrentItem(next_item)
+        self.scrollToItem(next_item)
+
+    def navigate_to_prev_critical_problem(self):
+        """W26: Navigiert zum vorherigen kritischen Problem."""
+        items = self._get_all_items()
+        current = self.currentItem()
+
+        problem_items = []
+        for item in items:
+            if item.isHidden():
+                continue
+            priority = self._get_problem_priority(item)
+            if priority < 999:
+                problem_items.append((item, priority))
+
+        if not problem_items:
+            return
+
+        # Sortiere nach Priorität
+        problem_items.sort(key=lambda x: x[1])
+
+        # Finde aktuelle Position
+        current_idx = -1
+        for idx, (item, _) in enumerate(problem_items):
+            if item == current:
+                current_idx = idx
+                break
+
+        # Vorheriges Item (Wrap-around)
+        prev_idx = (current_idx - 1) % len(problem_items)
+        prev_item = problem_items[prev_idx][0]
+
+        self.setCurrentItem(prev_item)
+        self.scrollToItem(prev_item)
+
+    def select_all_problem_items(self):
+        """W26: Selektiert alle Problem-Features (Multi-Select)."""
+        items = self._get_all_items()
+        problem_items = []
+
+        for item in items:
+            if not item.isHidden() and self._is_problem_item(item):
+                problem_items.append(item)
+
+        if problem_items:
+            self.clearSelection()
+            for item in problem_items:
+                item.setSelected(True)
+            # Setze Fokus auf erstes Problem
+            self.setCurrentItem(problem_items[0])
+            self.scrollToItem(problem_items[0])
+
     def keyPressEvent(self, event):
-        """Keyboard Shortcuts für Component-Operationen und W21 Navigation."""
+        """Keyboard Shortcuts für Component-Operationen und W21/W26 Navigation."""
         item = self.currentItem()
         data = item.data(0, Qt.UserRole) if item else None
+        modifiers = event.modifiers()
+
+        # W26: Ctrl+Shift+Down - Nächstes kritisches Problem (CRITICAL > BLOCKED > ERROR > WARNING)
+        if (event.key() == Qt.Key_Down and
+            modifiers & Qt.ControlModifier and
+            modifiers & Qt.ShiftModifier):
+            self.navigate_to_next_critical_problem()
+            return
+
+        # W26: Ctrl+Shift+Up - Vorheriges kritisches Problem
+        if (event.key() == Qt.Key_Up and
+            modifiers & Qt.ControlModifier and
+            modifiers & Qt.ShiftModifier):
+            self.navigate_to_prev_critical_problem()
+            return
+
+        # W26: Ctrl+A - Alle Problem-Features selektieren
+        if event.key() == Qt.Key_A and modifiers & Qt.ControlModifier:
+            self.select_all_problem_items()
+            return
 
         # W21: Ctrl+Down - Nächstes Problem-Item
-        if event.key() == Qt.Key_Down and event.modifiers() & Qt.ControlModifier:
+        if event.key() == Qt.Key_Down and modifiers & Qt.ControlModifier:
             self.navigate_to_next_problem()
             self.next_problem_item.emit()
             return
 
         # W21: Ctrl+Up - Vorheriges Problem-Item
-        if event.key() == Qt.Key_Up and event.modifiers() & Qt.ControlModifier:
+        if event.key() == Qt.Key_Up and modifiers & Qt.ControlModifier:
             self.navigate_to_prev_problem()
             self.prev_problem_item.emit()
             return
 
         # W21: Ctrl+N - Nächstes Item
-        if event.key() == Qt.Key_N and event.modifiers() & Qt.ControlModifier:
+        if event.key() == Qt.Key_N and modifiers & Qt.ControlModifier:
             self.navigate_to_next_item()
             self.next_item.emit()
             return
 
         # W21: Ctrl+P - Vorheriges Item
-        if event.key() == Qt.Key_P and event.modifiers() & Qt.ControlModifier:
+        if event.key() == Qt.Key_P and modifiers & Qt.ControlModifier:
             self.navigate_to_prev_item()
             self.prev_item.emit()
             return
@@ -627,6 +770,11 @@ class ProjectBrowser(QFrame):
 
     # W21: Filter- und Navigation-Signale
     filter_changed = Signal(str)  # Filter-Modus hat sich geändert
+
+    # W26: Batch-Aktionen für Problem-Features
+    batch_retry_rebuild = Signal(list)     # List[(feature, body)] - Retry rebuild für ausgewählte Features
+    batch_open_diagnostics = Signal(list)  # List[(feature, body)] - Öffne Diagnostik für ausgewählte Features
+    batch_isolate_bodies = Signal(list)    # List[body] - Isoliere Bodies mit Problemen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1191,11 +1339,24 @@ class ProjectBrowser(QFrame):
                 menu.addAction(tr("New Sketch"), lambda: self.plane_selected.emit('xy'))
 
         elif data[0] == 'feature':
-            # NEU: Feature-Kontext-Menü (Edit, Delete)
+            # NEU: Feature-Kontext-Menü (Edit, Delete, W26 Batch-Aktionen)
             feature = data[1]
             body = data[2]
 
+            # W26: Prüfe ob Problem-Feature
+            is_problem = self.tree._is_problem_item(item)
+
             menu.addAction(tr("Edit"), lambda: self.feature_double_clicked.emit(data))
+
+            # W26: Recovery-Aktionen für Problem-Features
+            if is_problem:
+                menu.addSeparator()
+                recovery_menu = menu.addMenu(tr("🩹 Recovery"))
+                recovery_menu.addAction(tr("Retry Rebuild"), self.batch_retry_selected)
+                recovery_menu.addAction(tr("Open Diagnostics"), self.batch_open_selected_diagnostics)
+                if body:
+                    recovery_menu.addAction(tr("Isolate Body"), self.batch_isolate_selected_bodies)
+
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_feature(feature, body))
 
@@ -1535,6 +1696,75 @@ class ProjectBrowser(QFrame):
 
         return bodies
 
+    def get_selected_features(self):
+        """
+        W26: Gibt Liste aller selektierten Features zurück.
+
+        Returns:
+            List[(feature, body)]: Liste von (Feature, Body) Tupeln
+        """
+        selected_items = self.tree.selectedItems()
+        features = []
+
+        for item in selected_items:
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'feature':
+                feature = data[1]
+                body = data[2] if len(data) > 2 else None
+                features.append((feature, body))
+
+        return features
+
+    def get_selected_problem_features(self):
+        """
+        W26: Gibt Liste aller selektierten Problem-Features zurück.
+
+        Returns:
+            List[(feature, body)]: Liste von (Feature, Body) Tupeln mit Problem-Status
+        """
+        features = self.get_selected_features()
+        problem_features = []
+
+        for feature, body in features:
+            status = str(getattr(feature, 'status', 'OK') or 'OK')
+            details = _safe_details(getattr(feature, 'status_details', None))
+            status_class = str(details.get('status_class', '') or '')
+            severity = str(details.get('severity', '') or '')
+
+            if status in ('ERROR', 'WARNING') or \
+               status_class in ('ERROR', 'WARNING_RECOVERABLE', 'BLOCKED', 'CRITICAL') or \
+               severity in ('error', 'warning', 'blocked', 'critical'):
+                problem_features.append((feature, body))
+
+        return problem_features
+
+    def batch_retry_selected(self):
+        """W26: Löst Batch-Retry-Rebuild für alle selektierten Problem-Features aus."""
+        problem_features = self.get_selected_problem_features()
+        if problem_features:
+            self.batch_retry_rebuild.emit(problem_features)
+            logger.debug(f"[BROWSER] Batch retry rebuild für {len(problem_features)} Features")
+
+    def batch_open_selected_diagnostics(self):
+        """W26: Löst Batch-Open-Diagnostics für alle selektierten Problem-Features aus."""
+        problem_features = self.get_selected_problem_features()
+        if problem_features:
+            self.batch_open_diagnostics.emit(problem_features)
+            logger.debug(f"[BROWSER] Batch open diagnostics für {len(problem_features)} Features")
+
+    def batch_isolate_selected_bodies(self):
+        """W26: Isoliert alle Bodies mit selektierten Problem-Features."""
+        problem_features = self.get_selected_problem_features()
+        bodies = set()
+
+        for _, body in problem_features:
+            if body:
+                bodies.add(body)
+
+        if bodies:
+            self.batch_isolate_bodies.emit(list(bodies))
+            logger.debug(f"[BROWSER] Batch isolate {len(bodies)} Bodies")
+
     def show_rollback_bar(self, body):
         """Show rollback slider for a body with features."""
         if not body or not hasattr(body, 'features') or not body.features:
@@ -1683,16 +1913,25 @@ class ProjectBrowser(QFrame):
             self._update_problem_badge()
 
     def refresh(self):
-        """W21 Paket A: Verbesserte refresh() mit Filter-Support."""
-        # W21: Updates-Blocker für Flackern-freien Refresh
+        """W26 Paket F1: Verbesserte refresh() mit Anti-Flicker und Performance-Optimierung."""
+        # W26: Anti-Flicker durch Updates-Blocker
         self.tree.setUpdatesEnabled(False)
+        # W26: Scroll-Position merken für konsistentes UX
+        scroll_pos = self.tree.verticalScrollBar().value() if self.tree.verticalScrollBar() else 0
+
         try:
             self._do_tree_build()
         finally:
-            self.tree.setUpdatesEnabled(True)
-            # Filter nach dem Build erneut anwenden
+            # W26: Filter nach dem Build erneut anwenden
             if hasattr(self.tree, '_filter_mode'):
                 self.tree._apply_filter()
+            # W26: Scroll-Position wiederherstellen
+            if self.tree.verticalScrollBar():
+                self.tree.verticalScrollBar().setValue(scroll_pos)
+            self.tree.setUpdatesEnabled(True)
+
+        # W26: Problembadge aktualisieren
+        self._update_problem_badge()
 
     def _do_tree_build(self):
         """Interne Methode für den Tree-Aufbau (von refresh() aufgerufen)."""
