@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# UI-Gate Runner - W14 Megapack Edition
+# UI-Gate Runner - W22 TOTALPACK Edition (W19+W20+W21+Recovery)
 # Usage: .\scripts\gate_ui.ps1
 # Exit Codes: 0 = PASS/BLOCKED_INFRA, 1 = FAIL
 # Ensures own result summary even if conda run fails
@@ -10,6 +10,7 @@
 # W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert, UI-Gate läuft stabil durch
 # W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
 # W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
+# W22 TOTALPACK: All Workpackages A-H (140 Points Target)
 
 param(
     [switch]$VerboseOutput = $false
@@ -32,12 +33,12 @@ $UI_TESTS = @(
     "test/test_feature_controller.py"
 )
 
-Write-Host "=== UI-Gate Started (W18 RECOVERY) ===" -ForegroundColor Cyan
+Write-Host "=== UI-Gate Started (W22 TOTALPACK) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Tests: $($UI_TESTS.Count) suites"
 Write-Host "Max Duration: 600s (10 min timeout per shard)"
 Write-Host "Retry Policy: 3 attempts on BLOCKED_INFRA"
-Write-Host "W18 Status: Recovery/Closeout for W17 gaps"
+Write-Host "W22 Target: 95+/140 Points (WP-A through WP-H)"
 Write-Host ""
 
 $start = Get-Date

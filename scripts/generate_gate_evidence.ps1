@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env powershell
-# Gate-Evidence Generator - W14 Megapack Edition
+# Gate-Evidence Generator - W22 TOTALPACK Edition (W19+W20+W21+Recovery)
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
@@ -9,6 +9,7 @@
 # W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert (test_interaction_drag_isolated.py)
 # W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
 # W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
+# W22 TOTALPACK: All Workpackages A-H (140 Points Target)
 
 param(
     [switch]$StrictHygiene = $false,
@@ -17,16 +18,16 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# Default output prefix if not specified (W14)
+# Default output prefix if not specified (W22 TOTALPACK)
 if (-not $OutPrefix) {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W17_$timestamp"
+    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W22_TOTALPACK_$timestamp"
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 
-Write-Host "=== Gate-Evidence Generator (W18 RECOVERY) ===" -ForegroundColor Cyan
+Write-Host "=== Gate-Evidence Generator (W22 TOTALPACK) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Prefix: $OutPrefix"
 Write-Host "StrictHygiene: $StrictHygiene"
