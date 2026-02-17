@@ -755,7 +755,11 @@ class TestAbortLogic:
 
     def test_right_click_empty_with_active_direct_edit_drag(self, main_window):
         """
-        W14-A-R9: Rechtsklick bricht Direct-Edit-Drag nicht ab (nur Links-Release).
+        W25: Rechtsklick bricht Direct-Edit-Drag ab (Konsistent mit ESC).
+        
+        Verifiziert dass Rechtsklick während Direct-Edit-Drag:
+        1. ALLE Drag-Status-Flags zurücksetzt (wie ESC)
+        2. Die Geometrie unverändert lässt (do-no-harm)
         """
         main_window._set_mode("sketch")
         editor = main_window.sketch_editor
@@ -765,16 +769,24 @@ class TestAbortLogic:
         # Circle erstellen und direkten Edit-Drag simulieren
         editor.set_tool(SketchTool.SELECT)
         circle = editor.sketch.add_circle(0, 0, 10.0)
+        original_radius = circle.radius
         editor.selected_circles = [circle]
         editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "radius"
+        editor._direct_edit_circle = circle
 
-        # Rechtsklick sollte Drag NICHT abbrechen (nur Release tut das)
-        center = editor.rect().center()
-        QTest.mousePress(editor, Qt.RightButton, Qt.NoModifier, center)
+        # Rechtsklick sollte Drag abbrechen (W25: Konsistent mit ESC)
+        result = editor._cancel_right_click_empty_action()
         QTest.qWait(50)
 
-        # Verify: Drag noch aktiv (erst Release beendet)
-        assert editor._direct_edit_dragging is True
+        # Verify: Drag wurde abgebrochen
+        assert result is True, "Rechtsklick sollte Direct-Edit abbrechen"
+        assert editor._direct_edit_dragging is False, "Drag sollte inaktiv sein"
+        assert editor._direct_edit_mode is None, "Mode sollte None sein"
+        assert editor._direct_edit_circle is None, "Circle sollte None sein"
+        
+        # Verify: Geometrie unverändert (do-no-harm)
+        assert circle.radius == original_radius, "Radius sollte unverändert sein"
 
     def test_escape_clears_direct_edit_drag_state(self, main_window):
         """

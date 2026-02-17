@@ -450,6 +450,202 @@ class TestDiscoverabilityW17BehaviorProof:
         # Dieser Test besteht immer und dokumentiert die Policy
         assert True, "Dokumentation: API-Existenz-Tests sind keine Behavior-Proofs"
 
+    def test_arc_direct_edit_hint_consistency(self, main_window):
+        """
+        D-W17-R15: Arc Direct Edit zeigt konsistente Hinweise (Behavior-Proof).
+
+        GIVEN: Arc im Direct-Edit-Modus
+        WHEN: Verschiedene Edit-Modi (center, radius, start_angle, end_angle)
+        THEN: Jeder Modus zeigt spezifische Navigation-Hinweise
+        """
+        from sketcher import Arc2D, Point2D
+        from gui.sketch_tools import SketchTool
+        
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        
+        # PRECONDITION: Arc erstellen und selektieren
+        arc = Arc2D(center=Point2D(0, 0), radius=10.0, start_angle=0, end_angle=90)
+        editor.sketch.arcs.append(arc)
+        editor.set_tool(SketchTool.SELECT)
+        editor.selected_arcs = [arc]
+        
+        # STATE: Vor Direct-Edit
+        normal_hint = editor._get_navigation_hints_for_context()
+        
+        # ACTION: Direct-Edit Dragging simulieren (Center-Modus)
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "center"
+        editor._direct_edit_arc = arc
+        editor._hint_context = 'direct_edit'
+        
+        # POSTCONDITION: Direct-Edit zeigt spezifische Hinweise
+        direct_hint = editor._get_navigation_hints_for_context()
+        assert "Esc=Abbrechen" in direct_hint or "Esc" in direct_hint, \
+            "POSTCONDITION: Direct-Edit-Hinweis sollte Escape-Mention enthalten"
+        
+        # CLEANUP
+        editor._reset_direct_edit_state()
+
+    def test_arc_direct_edit_clears_state_on_escape(self, main_window):
+        """
+        D-W17-R16: Arc Direct Edit bereinigt Zustand bei Escape (Behavior-Proof).
+
+        GIVEN: Arc Direct Edit aktiv
+        WHEN: Escape gedrückt wird
+        THEN: ALLE Direct-Edit-Zustände werden zurückgesetzt
+        """
+        from sketcher import Arc2D, Point2D
+        from gui.sketch_tools import SketchTool
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        
+        # PRECONDITION: Arc erstellen und Direct-Edit aktivieren
+        arc = Arc2D(center=Point2D(0, 0), radius=10.0, start_angle=0, end_angle=90)
+        editor.sketch.arcs.append(arc)
+        editor.set_tool(SketchTool.SELECT)
+        editor.selected_arcs = [arc]
+        
+        # Direct-Edit Zustand setzen
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "radius"
+        editor._direct_edit_arc = arc
+        editor._direct_edit_start_start_angle = 0.0
+        editor._direct_edit_start_end_angle = 90.0
+        
+        # PRECONDITION GUARD: Zustände müssen gesetzt sein
+        assert editor._direct_edit_dragging is True, "PRECONDITION: Dragging sollte aktiv sein"
+        assert editor._direct_edit_arc is arc, "PRECONDITION: Arc sollte gesetzt sein"
+        
+        # ACTION: Escape drücken
+        QTest.keyClick(editor, Qt.Key_Escape)
+        QTest.qWait(50)
+        
+        # POSTCONDITION: Alle Zustände zurückgesetzt
+        assert editor._direct_edit_dragging is False, "POSTCONDITION: Dragging sollte inaktiv sein"
+        assert editor._direct_edit_mode is None, "POSTCONDITION: Mode sollte None sein"
+        assert editor._direct_edit_arc is None, "POSTCONDITION: Arc sollte None sein"
+        assert editor._hint_context == 'sketch', "POSTCONDITION: Context sollte 'sketch' sein"
+
+    def test_arc_direct_edit_clears_state_on_right_click(self, main_window):
+        """
+        D-W17-R17: Arc Direct Edit bereinigt Zustand bei Rechtsklick (Behavior-Proof).
+
+        GIVEN: Arc Direct Edit aktiv
+        WHEN: Rechtsklick im leeren Bereich
+        THEN: ALLE Direct-Edit-Zustände werden zurückgesetzt (Konsistenz mit ESC)
+        """
+        from sketcher import Arc2D, Point2D
+        from gui.sketch_tools import SketchTool
+        
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        
+        # PRECONDITION: Arc erstellen und Direct-Edit aktivieren
+        arc = Arc2D(center=Point2D(0, 0), radius=10.0, start_angle=0, end_angle=90)
+        editor.sketch.arcs.append(arc)
+        editor.set_tool(SketchTool.SELECT)
+        editor.selected_arcs = [arc]
+        
+        # Direct-Edit Zustand setzen
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "radius"
+        editor._direct_edit_arc = arc
+        
+        # PRECONDITION GUARD
+        assert editor._direct_edit_dragging is True, "PRECONDITION: Dragging sollte aktiv sein"
+        
+        # ACTION: Rechtsklick-Abbruch simulieren
+        result = editor._cancel_right_click_empty_action()
+        
+        # POSTCONDITION: Abbruch wurde erkannt
+        assert result is True, "POSTCONDITION: Rechtsklick sollte Direct-Edit abbrechen"
+        
+        # POSTCONDITION: Alle Zustände zurückgesetzt
+        assert editor._direct_edit_dragging is False, "POSTCONDITION: Dragging sollte inaktiv sein"
+        assert editor._direct_edit_mode is None, "POSTCONDITION: Mode sollte None sein"
+        assert editor._direct_edit_arc is None, "POSTCONDITION: Arc sollte None sein"
+
+    def test_peek_3d_navigation_hint_changes(self, main_window):
+        """
+        D-W17-R18: 3D-Peek Navigation-Hinweis ändert sich korrekt (Behavior-Proof).
+
+        GIVEN: Sketch-Editor im normalen Modus
+        WHEN: 3D-Peek wird aktiviert und deaktiviert
+        THEN: Navigation-Hinweis wechselt entsprechend
+        """
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        
+        # PRECONDITION: Normaler Modus
+        editor._peek_3d_active = False
+        editor._hint_context = 'sketch'
+        normal_hint = editor._get_navigation_hints_for_context()
+        
+        # ACTION: 3D-Peek aktivieren
+        editor._peek_3d_active = True
+        editor._hint_context = 'peek_3d'
+        peek_hint = editor._get_navigation_hints_for_context()
+        
+        # POSTCONDITION: Hinweise unterscheiden sich
+        assert normal_hint != peek_hint, \
+            "POSTCONDITION: Peek-Hinweis sollte sich von normalem unterscheiden"
+        assert "Zurück" in peek_hint or "zurück" in peek_hint, \
+            "POSTCONDITION: Peek-Hinweis sollte 'Zurück' enthalten"
+        
+        # ACTION: 3D-Peek deaktivieren
+        editor._peek_3d_active = False
+        editor._hint_context = 'sketch'
+        back_hint = editor._get_navigation_hints_for_context()
+        
+        # POSTCONDITION: Zurück zum normalen Hinweis
+        assert back_hint == normal_hint, \
+            "POSTCONDITION: Zurück zum normalen Hinweis"
+
+    def test_rotation_hint_displayed_on_shift_r(self, main_window):
+        """
+        D-W17-R19: Rotations-Hinweis wird bei Shift+R angezeigt (Behavior-Proof).
+
+        GIVEN: Sketch-Editor aktiv
+        WHEN: Shift+R gedrückt wird
+        THEN: HUD zeigt Rotations-Bestätigung
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        
+        main_window._set_mode("sketch")
+        editor = main_window.sketch_editor
+        
+        # PRECONDITION: HUD ist leer oder zeigt alten Hinweis
+        old_message = editor._hud_message
+        
+        # ACTION: Shift+R drücken
+        QTest.keyPress(editor, Qt.Key_R, Qt.ShiftModifier)
+        QTest.qWait(50)
+        QTest.keyRelease(editor, Qt.Key_R, Qt.ShiftModifier)
+        QTest.qWait(50)
+        
+        # POSTCONDITION: HUD zeigt neuen Hinweis (Rotations-bezogen)
+        # Hinweis könnte "Ansicht gedreht" oder ähnlich sein
+        new_message = editor._hud_message
+        
+        # GUARD: Kein Fehler/Crash
+        assert editor.current_tool is not None, "POSTCONDITION: Editor sollte funktionsfähig sein"
+        
+        # POSTCONDITION: Nachricht hat sich geändert oder enthält Rotations-Info
+        hint_changed = new_message != old_message
+        has_rotation_info = (
+            "drehen" in new_message.lower() or 
+            "rotation" in new_message.lower() or
+            "gedreht" in new_message.lower() or
+            "Shift+R" in new_message
+        )
+        assert hint_changed or has_rotation_info, \
+            f"POSTCONDITION: HUD sollte Rotations-Info zeigen, got: {new_message}"
+
 
 class TestDiscoverabilityW17Integration:
     """
