@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 *$py.class
 *.so
 .Python
@@ -58,6 +59,10 @@ Thumbs.db
 exports/
 temp/
 *.log
+test_output*.txt
+test/debug_*.py
+test/test_debug_*.py
+test/_debug_*.py
 
 # PyInstaller
 # Note: MashCAD.spec is intentionally tracked as it's our build configuration
