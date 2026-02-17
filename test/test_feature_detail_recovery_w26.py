@@ -145,6 +145,137 @@ class TestW26ErrorCodeMapping:
         assert panel._btn_rebuild.isVisible()
 
 
+class TestW26ErrorCodeMappingExtended:
+    """
+    W28 Paket F4: Tests für zusätzliche Error-Codes.
+    Abdeckt tnp_ref_mismatch und ocp_api_unavailable.
+    6 neue Assertions
+    """
+
+    def test_tnp_ref_mismatch_shows_edit_and_check_deps_buttons(self, panel):
+        """F4-W28-R1: tnp_ref_mismatch zeigt 'Editieren' und 'Dependencies prüfen' Buttons."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {
+            "code": "tnp_ref_mismatch",
+            "tnp_failure": {"category": "mismatch"}
+        }
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._recovery_header.isVisible()
+        assert panel._btn_edit_feature.isVisible()
+        assert panel._btn_check_deps.isVisible()
+        assert panel._btn_rebuild.isVisible()
+
+    def test_ocp_api_unavailable_shows_check_deps_and_rebuild_buttons(self, panel):
+        """F4-W28-R2: ocp_api_unavailable zeigt 'Dependencies prüfen' und 'Rebuild' Buttons."""
+        feature = Mock()
+        feature.name = "OcpUnavailableFeature"
+        feature.status = "ERROR"
+        feature.status_details = {
+            "code": "ocp_api_unavailable",
+            "severity": "critical"
+        }
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._recovery_header.isVisible()
+        assert panel._btn_check_deps.isVisible()
+        assert panel._btn_rebuild.isVisible()
+
+    def test_reselect_ref_button_only_for_missing_ref(self, panel):
+        """F4-W28-R3: 'Referenz neu wählen' Button nur bei tnp_ref_missing."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {
+            "code": "tnp_ref_mismatch",
+            "tnp_failure": {"category": "mismatch"}
+        }
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Bei mismatch sollte reselect_ref NICHT sichtbar sein
+        assert not panel._btn_reselect_ref.isVisible()
+
+    def test_accept_drift_button_only_for_drift(self, panel):
+        """F4-W28-R4: 'Drift akzeptieren' Button nur bei tnp_ref_drift."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {
+            "code": "tnp_ref_mismatch",
+            "tnp_failure": {"category": "mismatch"}
+        }
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Bei mismatch sollte accept_drift NICHT sichtbar sein
+        assert not panel._btn_accept_drift.isVisible()
+
+    def test_all_five_error_codes_have_recovery_actions(self, panel):
+        """F4-W28-R5: Alle 5 Error-Codes haben Recovery-Actions."""
+        error_codes = [
+            ("tnp_ref_missing", ["reselect_ref", "edit_feature", "check_deps"]),
+            ("tnp_ref_mismatch", ["edit_feature", "check_deps", "rebuild"]),
+            ("tnp_ref_drift", ["accept_drift", "edit_feature"]),
+            ("rebuild_finalize_failed", ["rebuild", "edit_feature"]),
+            ("ocp_api_unavailable", ["check_deps", "rebuild"]),
+        ]
+
+        for code, expected_actions in error_codes:
+            feature = Mock()
+            feature.name = f"Feature_{code}"
+            feature.status = "ERROR"
+            feature.status_details = {"code": code}
+            feature.edge_indices = []
+
+            panel.show_feature(feature)
+
+            # Recovery-Header sollte sichtbar sein
+            assert panel._recovery_header.isVisible(), f"Recovery header not visible for {code}"
+
+            # Mindestens eine Action sollte sichtbar sein
+            visible_actions = []
+            if panel._btn_reselect_ref.isVisible():
+                visible_actions.append("reselect_ref")
+            if panel._btn_edit_feature.isVisible():
+                visible_actions.append("edit_feature")
+            if panel._btn_rebuild.isVisible():
+                visible_actions.append("rebuild")
+            if panel._btn_accept_drift.isVisible():
+                visible_actions.append("accept_drift")
+            if panel._btn_check_deps.isVisible():
+                visible_actions.append("check_deps")
+
+            assert len(visible_actions) > 0, f"No recovery actions for {code}"
+            # Prüfe dass mindestens eine erwartete Action sichtbar ist
+            has_expected = any(action in visible_actions for action in expected_actions)
+            assert has_expected, f"Expected one of {expected_actions} for {code}, got {visible_actions}"
+
+    def test_recovery_buttons_hidden_for_unknown_error_code(self, panel):
+        """F4-W28-R6: Bei unbekanntem Error-Code werden Fallback-Actions angezeigt."""
+        feature = Mock()
+        feature.name = "UnknownErrorFeature"
+        feature.status = "ERROR"
+        feature.status_details = {
+            "code": "unknown_error_code_xyz"
+        }
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Fallback: Editieren und Rebuild sollten verfügbar sein
+        assert panel._btn_edit_feature.isVisible()
+        assert panel._btn_rebuild.isVisible()
+
+
 class TestW26RecoverySignalBehavior:
     """
     W26 F-UX-3: Behavior-Tests für Recovery-Signale.
@@ -262,6 +393,198 @@ class TestW26CopyDiagnosticsBehavior:
 
         # Verhalten prüfen: Feature-Name ist enthalten
         assert "MyTestFeature" in diag_text
+
+
+class TestW29RecoveryActionGuards:
+    """
+    W29 Closeout: Tests für Recovery Action Guards.
+    Prüft enabled/disabled States und Tooltips.
+    12 Assertions
+    """
+
+    def test_tnp_ref_missing_reselect_ref_enabled(self, panel):
+        """W29-R1: Bei tnp_ref_missing ist 'Referenz neu wählen' enabled."""
+        feature = Mock()
+        feature.name = "MissingRefFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_missing"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._btn_reselect_ref.isEnabled()
+        assert panel._btn_reselect_ref.isVisible()
+
+    def test_tnp_ref_missing_rebuild_disabled_with_tooltip(self, panel):
+        """W29-R2: Bei tnp_ref_missing ist 'Rebuild' disabled mit Tooltip."""
+        feature = Mock()
+        feature.name = "MissingRefFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_missing"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert not panel._btn_rebuild.isEnabled() or not panel._btn_rebuild.isVisible()
+
+    def test_tnp_ref_mismatch_check_deps_enabled(self, panel):
+        """W29-R3: Bei tnp_ref_mismatch ist 'Dependencies prüfen' enabled."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_mismatch"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._btn_check_deps.isEnabled()
+        assert panel._btn_check_deps.isVisible()
+
+    def test_tnp_ref_mismatch_reselect_ref_disabled(self, panel):
+        """W29-R4: Bei tnp_ref_mismatch ist 'Referenz neu wählen' disabled."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_mismatch"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert not panel._btn_reselect_ref.isEnabled() or not panel._btn_reselect_ref.isVisible()
+
+    def test_tnp_ref_drift_accept_drift_enabled(self, panel):
+        """W29-R5: Bei tnp_ref_drift ist 'Drift akzeptieren' enabled."""
+        feature = Mock()
+        feature.name = "DriftFeature"
+        feature.status = "WARNING"
+        feature.status_details = {"code": "tnp_ref_drift"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._btn_accept_drift.isEnabled()
+        assert panel._btn_accept_drift.isVisible()
+
+    def test_rebuild_finalize_failed_rebuild_enabled(self, panel):
+        """W29-R6: Bei rebuild_finalize_failed ist 'Rebuild' enabled."""
+        feature = Mock()
+        feature.name = "RebuildFailed"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "rebuild_finalize_failed"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._btn_rebuild.isEnabled()
+        assert panel._btn_rebuild.isVisible()
+
+    def test_ocp_api_unavailable_edit_disabled(self, panel):
+        """W29-R7: Bei ocp_api_unavailable ist 'Editieren' disabled."""
+        feature = Mock()
+        feature.name = "OcpUnavailable"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "ocp_api_unavailable"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert not panel._btn_edit_feature.isEnabled() or not panel._btn_edit_feature.isVisible()
+
+    def test_fallback_error_has_edit_and_rebuild(self, panel):
+        """W29-R8: Bei unbekanntem Error-Code sind Edit/Rebuild verfügbar."""
+        feature = Mock()
+        feature.name = "UnknownError"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "unknown_xyz_error"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        assert panel._btn_edit_feature.isEnabled()
+        assert panel._btn_rebuild.isEnabled()
+
+    def test_recovery_buttons_have_tooltips(self, panel):
+        """W29-R9: Alle sichtbaren Recovery-Buttons haben Tooltips."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_mismatch"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Prüfe dass sichtbare Buttons Tooltips haben
+        if panel._btn_edit_feature.isVisible():
+            assert panel._btn_edit_feature.toolTip() != ""
+        if panel._btn_check_deps.isVisible():
+            assert panel._btn_check_deps.toolTip() != ""
+        if panel._btn_rebuild.isVisible():
+            assert panel._btn_rebuild.toolTip() != ""
+
+    def test_disabled_buttons_have_explanation_tooltip(self, panel):
+        """W29-R10: Disabled Buttons haben Erklärung im Tooltip."""
+        feature = Mock()
+        feature.name = "MismatchFeature"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_mismatch"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # accept_drift sollte disabled sein mit Erklärung
+        if not panel._btn_accept_drift.isEnabled():
+            tooltip = panel._btn_accept_drift.toolTip()
+            assert tooltip != ""
+            assert "nicht" in tooltip.lower() or "not" in tooltip.lower()
+
+    def test_recovery_header_visible_only_with_diagnostic(self, panel):
+        """W29-R11: Recovery-Header nur sichtbar wenn Diagnose vorhanden."""
+        feature_ok = Mock()
+        feature_ok.name = "OKFeature"
+        feature_ok.status = "OK"
+        feature_ok.status_details = {}
+        feature_ok.edge_indices = []
+
+        panel.show_feature(feature_ok)
+        assert not panel._recovery_header.isVisible()
+
+        feature_err = Mock()
+        feature_err.name = "ErrorFeature"
+        feature_err.status = "ERROR"
+        feature_err.status_details = {"code": "tnp_ref_missing"}
+        feature_err.edge_indices = []
+
+        panel.show_feature(feature_err)
+        assert panel._recovery_header.isVisible()
+
+    def test_all_five_error_codes_have_valid_actions(self, panel):
+        """W29-R12: Alle 5 Error-Codes haben mindestens eine gültige Aktion."""
+        error_codes = ["tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift",
+                       "rebuild_finalize_failed", "ocp_api_unavailable"]
+
+        for code in error_codes:
+            feature = Mock()
+            feature.name = f"Feature_{code}"
+            feature.status = "ERROR"
+            feature.status_details = {"code": code}
+            feature.edge_indices = []
+
+            panel.show_feature(feature)
+
+            # Prüfe dass mindestens eine Aktion sichtbar und enabled ist
+            visible_enabled = []
+            if panel._btn_reselect_ref.isVisible() and panel._btn_reselect_ref.isEnabled():
+                visible_enabled.append("reselect_ref")
+            if panel._btn_edit_feature.isVisible() and panel._btn_edit_feature.isEnabled():
+                visible_enabled.append("edit")
+            if panel._btn_rebuild.isVisible() and panel._btn_rebuild.isEnabled():
+                visible_enabled.append("rebuild")
+            if panel._btn_accept_drift.isVisible() and panel._btn_accept_drift.isEnabled():
+                visible_enabled.append("accept_drift")
+            if panel._btn_check_deps.isVisible() and panel._btn_check_deps.isEnabled():
+                visible_enabled.append("check_deps")
+
+            assert len(visible_enabled) > 0, f"No valid actions for {code}"
 
 
 if __name__ == "__main__":

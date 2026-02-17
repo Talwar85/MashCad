@@ -578,6 +578,7 @@ class FeatureDetailPanel(QFrame):
     def _update_recovery_actions(self, code: str, category: str):
         """
         W26 PAKET F2: Zeigt/versteckt Recovery-Buttons basierend auf Error-Code.
+        W29 Closeout: Buttons mit Guards - enabled/disabled mit Tooltips.
 
         Args:
             code: Error-Code aus status_details
@@ -596,38 +597,108 @@ class FeatureDetailPanel(QFrame):
 
         self._recovery_header.show()
 
-        # Mapping: Error-Code -> sinnvolle Recovery-Aktionen
+        # W29: Alle Buttons erst zeigen, dann guards anwenden
+        self._btn_reselect_ref.show()
+        self._btn_edit_feature.show()
+        self._btn_rebuild.show()
+        self._btn_accept_drift.show()
+        self._btn_check_deps.show()
+
+        # W29: Mapping: Error-Code -> sinnvolle Recovery-Aktionen mit Guards
         if code == "tnp_ref_missing" or category == "missing_ref":
             # Referenz verloren -> Neu wählen oder Feature editieren
-            self._btn_reselect_ref.show()
-            self._btn_edit_feature.show()
-            self._btn_check_deps.show()
+            self._btn_reselect_ref.setEnabled(True)
+            self._btn_reselect_ref.setToolTip(tr("Neue Edge/Face auswählen um Referenz wiederherzustellen"))
+            self._btn_edit_feature.setEnabled(True)
+            self._btn_edit_feature.setToolTip(tr("Feature-Parameter anpassen"))
+            self._btn_check_deps.setEnabled(True)
+            self._btn_check_deps.setToolTip(tr("Vorgänger-Features auf Gültigkeit prüfen"))
+            # Nicht verfügbar für diesen Error-Typ
+            self._btn_rebuild.setEnabled(False)
+            self._btn_rebuild.setToolTip(tr("Rebuild nicht möglich bei fehlender Referenz"))
+            self._btn_accept_drift.setEnabled(False)
+            self._btn_accept_drift.setToolTip(tr("Drift-Akzeptanz nicht verfügbar bei fehlender Referenz"))
 
         elif code == "tnp_ref_mismatch" or category == "mismatch":
             # Formkonflikt -> Editieren oder Dependencies prüfen
-            self._btn_edit_feature.show()
-            self._btn_check_deps.show()
-            self._btn_rebuild.show()
+            self._btn_edit_feature.setEnabled(True)
+            self._btn_edit_feature.setToolTip(tr("Geometrie korrigieren um Konflikt zu beheben"))
+            self._btn_check_deps.setEnabled(True)
+            self._btn_check_deps.setToolTip(tr("Abhängige Features auf Konsistenz prüfen"))
+            self._btn_rebuild.setEnabled(True)
+            self._btn_rebuild.setToolTip(tr("Feature nach Korrektur neu berechnen"))
+            # Nicht verfügbar für diesen Error-Typ
+            self._btn_reselect_ref.setEnabled(False)
+            self._btn_reselect_ref.setToolTip(tr("Neuwahl nicht möglich bei Formkonflikt"))
+            self._btn_accept_drift.setEnabled(False)
+            self._btn_accept_drift.setToolTip(tr("Drift-Akzeptanz nicht verfügbar bei Formkonflikt"))
 
         elif code == "tnp_ref_drift" or category == "drift":
             # Geometrie-Drift -> Akzeptieren oder Editieren
-            self._btn_accept_drift.show()
-            self._btn_edit_feature.show()
+            self._btn_accept_drift.setEnabled(True)
+            self._btn_accept_drift.setToolTip(tr("Warnung bestätigen und Status zurücksetzen"))
+            self._btn_edit_feature.setEnabled(True)
+            self._btn_edit_feature.setToolTip(tr("Referenz manuell korrigieren"))
+            # Nicht verfügbar für diesen Error-Typ
+            self._btn_reselect_ref.setEnabled(False)
+            self._btn_reselect_ref.setToolTip(tr("Neuwahl nicht nötig bei Drift"))
+            self._btn_rebuild.setEnabled(False)
+            self._btn_rebuild.setToolTip(tr("Rebuild nicht notwendig bei Drift"))
+            self._btn_check_deps.setEnabled(False)
+            self._btn_check_deps.setToolTip(tr("Dependencies-Prüfung nicht notwendig bei Drift"))
 
         elif code == "rebuild_finalize_failed":
             # Rebuild fehlgeschlagen -> Rebuild wiederholen oder Editieren
-            self._btn_rebuild.show()
-            self._btn_edit_feature.show()
+            self._btn_rebuild.setEnabled(True)
+            self._btn_rebuild.setToolTip(tr("Erneuten Rebuildversuch starten"))
+            self._btn_edit_feature.setEnabled(True)
+            self._btn_edit_feature.setToolTip(tr("Feature-Parameter überprüfen und anpassen"))
+            # Nicht verfügbar für diesen Error-Typ
+            self._btn_reselect_ref.setEnabled(False)
+            self._btn_reselect_ref.setToolTip(tr("Referenz-Neuwahl hilft nicht bei Rebuild-Fehler"))
+            self._btn_accept_drift.setEnabled(False)
+            self._btn_accept_drift.setToolTip(tr("Drift-Akzeptanz nicht verfügbar bei Rebuild-Fehler"))
+            self._btn_check_deps.setEnabled(False)
+            self._btn_check_deps.setToolTip(tr("Dependencies-Prüfung nicht relevant bei Rebuild-Fehler"))
 
         elif code == "ocp_api_unavailable":
             # OCP nicht verfügbar -> Dependencies prüfen oder Rebuild
-            self._btn_check_deps.show()
-            self._btn_rebuild.show()
+            self._btn_check_deps.setEnabled(True)
+            self._btn_check_deps.setToolTip(tr("Backend-Verfügbarkeit und Abhängigkeiten prüfen"))
+            self._btn_rebuild.setEnabled(True)
+            self._btn_rebuild.setToolTip(tr("Rebuild nach Verfügbarkeitsprüfung wiederholen"))
+            # Nicht verfügbar für diesen Error-Typ
+            self._btn_reselect_ref.setEnabled(False)
+            self._btn_reselect_ref.setToolTip(tr("Referenz-Neuwahl nicht möglich bei OCP-Fehler"))
+            self._btn_edit_feature.setEnabled(False)
+            self._btn_edit_feature.setToolTip(tr("Feature-Editierung nicht möglich bei OCP-Ausfall"))
+            self._btn_accept_drift.setEnabled(False)
+            self._btn_accept_drift.setToolTip(tr("Drift-Akzeptanz nicht verfügbar bei OCP-Fehler"))
 
         else:
-            # Fallback: Editieren und Rebuild anbieten
-            self._btn_edit_feature.show()
-            self._btn_rebuild.show()
+            # Fallback: Editieren und Rebuild anbieten, andere deaktivieren
+            self._btn_edit_feature.setEnabled(True)
+            self._btn_edit_feature.setToolTip(tr("Feature-Parameter prüfen"))
+            self._btn_rebuild.setEnabled(True)
+            self._btn_rebuild.setToolTip(tr("Feature neu berechnen"))
+            self._btn_reselect_ref.setEnabled(False)
+            self._btn_reselect_ref.setToolTip(tr("Nicht verfügbar für diesen Fehler-Typ"))
+            self._btn_accept_drift.setEnabled(False)
+            self._btn_accept_drift.setToolTip(tr("Nicht verfügbar für diesen Fehler-Typ"))
+            self._btn_check_deps.setEnabled(False)
+            self._btn_check_deps.setToolTip(tr("Nicht verfügbar für diesen Fehler-Typ"))
+
+        # W29: Verstecke Buttons die explizit deaktiviert sind (besseres UX)
+        if not self._btn_reselect_ref.isEnabled():
+            self._btn_reselect_ref.hide()
+        if not self._btn_edit_feature.isEnabled():
+            self._btn_edit_feature.hide()
+        if not self._btn_rebuild.isEnabled():
+            self._btn_rebuild.hide()
+        if not self._btn_accept_drift.isEnabled():
+            self._btn_accept_drift.hide()
+        if not self._btn_check_deps.isEnabled():
+            self._btn_check_deps.hide()
 
     def _on_recovery_action(self, action: str):
         """

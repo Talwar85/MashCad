@@ -775,6 +775,8 @@ class ProjectBrowser(QFrame):
     batch_retry_rebuild = Signal(list)     # List[(feature, body)] - Retry rebuild für ausgewählte Features
     batch_open_diagnostics = Signal(list)  # List[(feature, body)] - Öffne Diagnostik für ausgewählte Features
     batch_isolate_bodies = Signal(list)    # List[body] - Isoliere Bodies mit Problemen
+    batch_unhide_bodies = Signal(list)     # List[body] - Mache versteckte Bodies sichtbar
+    batch_focus_features = Signal(list)    # List[(feature, body)] - Fokus auf Features im Viewport
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1268,14 +1270,28 @@ class ProjectBrowser(QFrame):
         item = self.tree.itemAt(pos)
         if not item:
             return
-        
+
         data = item.data(0, Qt.UserRole)
         if not data:
             return
-        
+
+        # W29: Selektierte Items für Batch-Kontext ermitteln
+        selected_items = self.tree.selectedItems()
+        selected_count = len(selected_items)
+
+        # W29: Prüfe ob Selektion gemischt ist (Features + Bodies + andere)
+        has_features = any(
+            i.data(0, Qt.UserRole) and i.data(0, Qt.UserRole)[0] == 'feature'
+            for i in selected_items
+        )
+        has_bodies = any(
+            i.data(0, Qt.UserRole) and i.data(0, Qt.UserRole)[0] == 'body'
+            for i in selected_items
+        )
+
         menu = QMenu(self)
         menu.setStyleSheet(DesignTokens.stylesheet_browser())
-        
+
         if data[0] == 'sketch':
             sketch = data[1]
             menu.addAction(tr("Edit"), lambda: self.feature_double_clicked.emit(data))
@@ -1289,11 +1305,24 @@ class ProjectBrowser(QFrame):
 
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_sketch(sketch))
-            
+
         elif data[0] == 'body':
             body = data[1]
             vis = self.body_visibility.get(body.id, True)
             menu.addAction(tr("Hide") if vis else tr("Show"), lambda: self._toggle_vis(body, 'body'))
+
+            # W29: Batch unhide nur wenn versteckte Bodies existieren
+            if self.document:
+                try:
+                    all_bodies = self.document.get_all_bodies()
+                    has_hidden = any(
+                        not self.body_visibility.get(b.id, True)
+                        for b in all_bodies
+                    )
+                    if has_hidden:
+                        menu.addAction(tr("📦 Alle einblenden"), self.batch_unhide_selected_bodies)
+                except Exception:
+                    pass
 
             # Phase 6: Move to Component submenu
             move_menu = self._create_move_to_component_menu(body, 'body')
@@ -1302,7 +1331,7 @@ class ProjectBrowser(QFrame):
 
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_body(body))
-            
+
         elif data[0] == 'construction_plane':
             cp = data[1]
             vis = self.plane_visibility.get(cp.id, True)
@@ -1313,7 +1342,7 @@ class ProjectBrowser(QFrame):
 
         elif data[0] == 'plane':
             menu.addAction(tr("New Sketch"), lambda: self.plane_selected.emit(data[1]))
-            
+
         elif data[0] == 'component':
             comp = data[1]
             if comp is not None:
@@ -1348,14 +1377,31 @@ class ProjectBrowser(QFrame):
 
             menu.addAction(tr("Edit"), lambda: self.feature_double_clicked.emit(data))
 
-            # W26: Recovery-Aktionen für Problem-Features
-            if is_problem:
+            # W26: Recovery-Aktionen für Problem-Features (nur bei Einzel-Selektion)
+            if is_problem and selected_count == 1:
                 menu.addSeparator()
                 recovery_menu = menu.addMenu(tr("🩹 Recovery"))
                 recovery_menu.addAction(tr("Retry Rebuild"), self.batch_retry_selected)
                 recovery_menu.addAction(tr("Open Diagnostics"), self.batch_open_selected_diagnostics)
                 if body:
                     recovery_menu.addAction(tr("Isolate Body"), self.batch_isolate_selected_bodies)
+
+            # W29: Batch-Aktionen nur bei Multi-Select ohne gemischte Typen
+            if selected_count > 1 and has_features and not has_bodies:
+                menu.addSeparator()
+                batch_menu = menu.addMenu(tr("📦 Batch"))
+
+                # Nur Focus-Aktion wenn alle Features sind
+                batch_menu.addAction(tr("Focus Features"), self.batch_focus_selected_features)
+
+                # Recovery-Aktionen wenn Problem-Features selektiert
+                problem_count = sum(
+                    1 for i in selected_items
+                    if self.tree._is_problem_item(i)
+                )
+                if problem_count > 0:
+                    batch_menu.addAction(tr(f"Retry Rebuild ({problem_count})"), self.batch_retry_selected)
+                    batch_menu.addAction(tr(f"Open Diagnostics ({problem_count})"), self.batch_open_selected_diagnostics)
 
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_feature(feature, body))
@@ -1765,6 +1811,38 @@ class ProjectBrowser(QFrame):
             self.batch_isolate_bodies.emit(list(bodies))
             logger.debug(f"[BROWSER] Batch isolate {len(bodies)} Bodies")
 
+    def batch_unhide_selected_bodies(self):
+        """W28: Macht alle versteckten Bodies sichtbar."""
+        all_bodies = []
+        if self.document:
+            try:
+                all_bodies = self.document.get_all_bodies()
+            except Exception:
+                all_bodies = []
+
+        # Finde alle versteckten Bodies
+        hidden_bodies = []
+        for body in all_bodies:
+            if body and not self.body_visibility.get(body.id, True):
+                hidden_bodies.append(body)
+
+        if hidden_bodies:
+            # Mache alle sichtbar
+            for body in hidden_bodies:
+                self.body_visibility[body.id] = True
+            self.batch_unhide_bodies.emit(hidden_bodies)
+            self.refresh()
+            self.visibility_changed.emit()
+            logger.debug(f"[BROWSER] Batch unhide {len(hidden_bodies)} Bodies")
+
+    def batch_focus_selected_features(self):
+        """W28: Fokus auf alle selektierten Features im Viewport."""
+        selected_features = self.get_selected_features()
+
+        if selected_features:
+            self.batch_focus_features.emit(selected_features)
+            logger.debug(f"[BROWSER] Batch focus {len(selected_features)} Features")
+
     def show_rollback_bar(self, body):
         """Show rollback slider for a body with features."""
         if not body or not hasattr(body, 'features') or not body.features:
@@ -1801,13 +1879,40 @@ class ProjectBrowser(QFrame):
 
         Wendet den gewählten Filter auf den Tree an und aktualisiert
         das Problembadge.
+
+        W29 Closeout: Bereinigt Batch-State bei Filterwechsel um Korruption zu vermeiden.
         """
+        # W29: Batch-State bereinigen vor Filterwechsel
+        self._clear_batch_state_on_filter_change()
+
         mode_data = self.filter_combo.itemData(index)
         if mode_data:
             self.tree.set_filter_mode(mode_data)
             self.filter_changed.emit(mode_data)
             self._update_problem_badge()
             logger.debug(f"[BROWSER] Filter geändert zu: {mode_data}")
+
+    def _clear_batch_state_on_filter_change(self):
+        """
+        W29 Closeout: Bereinigt Batch-State bei Filterwechsel.
+
+        Verhindert dass ausgeblendete Items im Batch-State verbleiben
+        was zu inkonsistentem Verhalten führen würde.
+        """
+        # Selektion bereinigen: Nur sichtbare Items dürfen selektiert bleiben
+        selected_items = self.tree.selectedItems()
+        if not selected_items:
+            return
+
+        # Deselektiere alle versteckten Items
+        for item in selected_items:
+            if item.isHidden():
+                item.setSelected(False)
+
+        # Wenn nach Bereinigung keine Selektion mehr übrig, Status aktualisieren
+        remaining_selected = self.tree.selectedItems()
+        if not remaining_selected and selected_items:
+            logger.debug("[BROWSER] Batch-State bereinigt: Alle selektierten Items wurden durch Filter ausgeblendet")
 
     def _update_problem_badge(self):
         """W21 Paket A: Aktualisiert das Problembadge mit der Anzahl der Problem-Features."""
