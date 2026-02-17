@@ -1360,6 +1360,62 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             2.0 * r_screen,
         )
         return rect.adjusted(-28.0, -28.0, 28.0, 28.0)
+
+    # W28: Dirty-Rect Methoden für Arc, Ellipse, Polygon Direct-Manipulation
+    def _get_arc_dirty_rect(self, arc) -> QRectF:
+        """
+        Screen-Dirty-Rect für Arc-Direct-Edit.
+        Enthält Arc, Selection-Glow, Handles und Sicherheitsreserve.
+        """
+        from sketcher import Arc2D
+        if not isinstance(arc, Arc2D):
+            return QRectF()
+        
+        center_screen = self.world_to_screen(QPointF(float(arc.center.x), float(arc.center.y)))
+        r_screen = max(1.0, float(arc.radius) * float(self.view_scale))
+        rect = QRectF(
+            center_screen.x() - r_screen,
+            center_screen.y() - r_screen,
+            2.0 * r_screen,
+            2.0 * r_screen,
+        )
+        return rect.adjusted(-32.0, -32.0, 32.0, 32.0)
+
+    def _get_ellipse_dirty_rect(self, ellipse) -> QRectF:
+        """
+        Screen-Dirty-Rect für Ellipse-Direct-Edit.
+        Enthält Ellipse, Selection-Glow, Handles und Sicherheitsreserve.
+        """
+        center_screen = self.world_to_screen(QPointF(float(ellipse.center.x), float(ellipse.center.y)))
+        rx = max(0.01, float(getattr(ellipse, "radius_x", 0.01)))
+        ry = max(0.01, float(getattr(ellipse, "radius_y", 0.01)))
+        rx_screen = max(1.0, rx * float(self.view_scale))
+        ry_screen = max(1.0, ry * float(self.view_scale))
+        rect = QRectF(
+            center_screen.x() - rx_screen,
+            center_screen.y() - ry_screen,
+            2.0 * rx_screen,
+            2.0 * ry_screen,
+        )
+        return rect.adjusted(-32.0, -32.0, 32.0, 32.0)
+
+    def _get_polygon_dirty_rect(self, polygon) -> QRectF:
+        """
+        Screen-Dirty-Rect für Polygon-Direct-Edit.
+        Enthält alle Vertices, Selection-Glow und Sicherheitsreserve.
+        """
+        points = getattr(polygon, "points", [])
+        if not points:
+            return QRectF()
+        
+        rect = QRectF()
+        for pt in points:
+            p_screen = self.world_to_screen(QPointF(float(pt.x), float(pt.y)))
+            if rect.isEmpty():
+                rect = QRectF(p_screen.x() - 10, p_screen.y() - 10, 20, 20)
+            else:
+                rect = rect.united(QRectF(p_screen.x() - 10, p_screen.y() - 10, 20, 20))
+        return rect.adjusted(-28.0, -28.0, 28.0, 28.0)
     
     def _calculate_plane_axes(self, normal_vec):
         """
@@ -4582,9 +4638,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
 
         # W20 P1: Arc Direct Edit Dragging
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
         if hasattr(self, '_direct_edit_arc') and self._direct_edit_arc is not None:
             arc = self._direct_edit_arc
             mode = self._direct_edit_mode
+            
+            # Dirty-Rect für Arc
+            dirty_old = self._get_arc_dirty_rect(arc)
             
             if mode == "center":
                 dx = world_pos.x() - self._direct_edit_start_pos.x()
@@ -4598,25 +4658,49 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 arc.center.y = self._direct_edit_start_center.y() + dy
                 
             elif mode == "radius":
+                # W28: SHIFT-Lock für Radius auf 45°-Inkremente
+                angle = math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x)
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle_deg = math.degrees(angle)
+                    angle_deg = round(angle_deg / 45.0) * 45.0
+                    angle = math.radians(angle_deg)
                 new_radius = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
                 arc.radius = max(0.01, new_radius)
                 
             elif mode == "start_angle":
                 angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
                 arc.start_angle = angle
                 
             elif mode == "end_angle":
                 angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
                 arc.end_angle = angle
             
             self._direct_edit_drag_moved = True
-            self.request_update()
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_arc_dirty_rect(arc)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
             return
 
         # Ellipse direct edit
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
         if self._direct_edit_ellipse is not None:
             ellipse = self._direct_edit_ellipse
             mode = self._direct_edit_mode
+
+            # Dirty-Rect für Ellipse
+            dirty_old = self._get_ellipse_dirty_rect(ellipse)
 
             if mode == "center":
                 dx = world_pos.x() - self._direct_edit_start_pos.x()
@@ -4634,33 +4718,61 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 vx = world_pos.x() - ellipse.center.x
                 vy = world_pos.y() - ellipse.center.y
                 proj = (vx * ux) + (vy * uy)
-                ellipse.radius_x = max(0.01, abs(float(proj)))
+                new_rx = max(0.01, abs(float(proj)))
+                # W28: SHIFT-Lock für proportionalen Resize beider Achsen
+                if axis_lock:
+                    ratio = self._direct_edit_start_radius_x / self._direct_edit_start_radius_y if self._direct_edit_start_radius_y > 0 else 1.0
+                    ellipse.radius_x = new_rx
+                    ellipse.radius_y = new_rx / ratio if ratio > 0 else new_rx
+                else:
+                    ellipse.radius_x = new_rx
             elif mode == "radius_y":
                 rot = math.radians(self._direct_edit_start_rotation)
                 px, py = -math.sin(rot), math.cos(rot)
                 vx = world_pos.x() - ellipse.center.x
                 vy = world_pos.y() - ellipse.center.y
                 proj = (vx * px) + (vy * py)
-                ellipse.radius_y = max(0.01, abs(float(proj)))
+                new_ry = max(0.01, abs(float(proj)))
+                # W28: SHIFT-Lock für proportionalen Resize beider Achsen
+                if axis_lock:
+                    ratio = self._direct_edit_start_radius_x / self._direct_edit_start_radius_y if self._direct_edit_start_radius_y > 0 else 1.0
+                    ellipse.radius_y = new_ry
+                    ellipse.radius_x = new_ry * ratio
+                else:
+                    ellipse.radius_y = new_ry
             elif mode == "rotation":
                 angle = math.degrees(
                     math.atan2(world_pos.y() - ellipse.center.y, world_pos.x() - ellipse.center.x)
                 )
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
                 ellipse.rotation = float(angle)
             else:
                 return
 
             self._direct_edit_drag_moved = True
-            self.request_update()
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_ellipse_dirty_rect(ellipse)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
             return
 
         # Polygon direct edit
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
         if self._direct_edit_polygon is not None and self._direct_edit_mode == "vertex":
             polygon = self._direct_edit_polygon
             vertex_idx = self._direct_edit_polygon_vertex_idx
             points = getattr(polygon, "points", None)
             if points is None or vertex_idx < 0 or vertex_idx >= len(points):
                 return
+
+            # Dirty-Rect für Polygon
+            dirty_old = self._get_polygon_dirty_rect(polygon)
 
             dx = world_pos.x() - self._direct_edit_start_pos.x()
             dy = world_pos.y() - self._direct_edit_start_pos.y()
@@ -4675,7 +4787,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             pt.y = self._direct_edit_polygon_vertex_start.y() + dy
 
             self._direct_edit_drag_moved = True
-            self.request_update()
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_polygon_dirty_rect(polygon)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
             return
 
         if self._direct_edit_circle is None:
@@ -4789,25 +4908,52 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return (mode, kind, id(handle.get("circle")))
     
     def _update_cursor(self):
+        # W28: Direct-Manipulation Parity - konsistente Cursor für alle Handle-Typen
         if self._direct_edit_dragging:
+            # Während Drag: Cursor basierend auf Modus
+            mode = self._direct_edit_mode
+            if mode == "center":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "line_edge":
+                orientation = getattr(self, '_direct_edit_line_context', {}).get("orientation")
+                if orientation == "horizontal":
+                    self.setCursor(Qt.SizeVerCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeHorCursor)
+                else:
+                    self.setCursor(Qt.SizeAllCursor)
+            elif mode == "line_move":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "radius":
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("radius_x", "radius_y"):
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode == "rotation":
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "vertex":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode in ("start_angle", "end_angle"):
+                self.setCursor(Qt.SizeAllCursor)
+            else:
+                self.setCursor(Qt.ClosedHandCursor)
             return
 
         if self.current_tool == SketchTool.SELECT and self._direct_hover_handle:
             mode = self._direct_hover_handle.get("mode")
+            kind = self._direct_hover_handle.get("kind", "circle")
             if mode == "center":
                 self.setCursor(Qt.OpenHandCursor)
             elif mode == "line_edge":
                 orientation = self._direct_hover_handle.get("orientation")
                 if orientation == "horizontal":
-                    self.setCursor(Qt.SizeHorCursor)
-                elif orientation == "vertical":
                     self.setCursor(Qt.SizeVerCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeHorCursor)
                 else:
                     self.setCursor(Qt.SizeAllCursor)
             elif mode == "line_move":
                 self.setCursor(Qt.OpenHandCursor)
             elif mode == "radius":
-                # PAKET A W6: Radius-Drag uses diagonal cursor (scaling action)
                 self.setCursor(Qt.SizeFDiagCursor)
             elif mode in ("radius_x", "radius_y"):
                 self.setCursor(Qt.SizeFDiagCursor)
@@ -4815,6 +4961,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.setCursor(Qt.SizeAllCursor)
             elif mode == "vertex":
                 self.setCursor(Qt.OpenHandCursor)
+            elif mode in ("start_angle", "end_angle"):
+                # Arc angle handles
+                self.setCursor(Qt.SizeAllCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return

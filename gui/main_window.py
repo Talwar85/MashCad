@@ -979,6 +979,10 @@ class MainWindow(QMainWindow):
         self.browser.batch_open_diagnostics.connect(self._on_batch_open_diagnostics)
         self.browser.batch_isolate_bodies.connect(self._on_batch_isolate_bodies)
         
+        # W29 E2E Closeout: Browser Batch-Signale für Unhide/Focus
+        self.browser.batch_unhide_bodies.connect(self._on_batch_unhide_bodies)
+        self.browser.batch_focus_features.connect(self._on_batch_focus_features)
+        
         # W26 F-UX-1: FeatureDetailPanel Recovery-Signale
         self.feature_detail_panel.recovery_action_requested.connect(self._on_recovery_action_requested)
         self.feature_detail_panel.edit_feature_requested.connect(self._on_edit_feature_requested)
@@ -3047,6 +3051,7 @@ class MainWindow(QMainWindow):
         """
         Wechselt zwischen 3D- und Sketch-Modus.
         W16 Paket D: Delegiert an SketchController für Sketch-bezogene UI.
+        W28 Megapack: Robustere Null-Handling und sauberere Transitions.
         """
         prev_mode = getattr(self, "mode", None)
         if prev_mode != mode:
@@ -3055,32 +3060,43 @@ class MainWindow(QMainWindow):
                 clear_interaction_modes=True,
             )
         self.mode = mode
-        
+
         # W16 Paket D: Delegation an SketchController
-        if hasattr(self, 'sketch_controller'):
+        # W28: Prüfe auf None statt nur hasattr
+        if hasattr(self, 'sketch_controller') and self.sketch_controller is not None:
             self.sketch_controller.set_mode(mode, prev_mode)
         else:
-            # Fallback für frühe Initialisierung
+            # Fallback für frühe Initialisierung oder Test-Environment
             self._set_mode_fallback(mode)
     
     def _set_mode_fallback(self, mode):
-        """Fallback-Implementierung wenn SketchController noch nicht verfügbar."""
+        """
+        Fallback-Implementierung wenn SketchController noch nicht verfügbar.
+        W28: Robust für Test-Umgebungen mit Mock-Objekten.
+        """
         if mode == "3d":
-            self.tool_stack.setCurrentIndex(0)
-            self.center_stack.setCurrentIndex(0)
-            self.right_stack.setVisible(False)
+            if hasattr(self, 'tool_stack'):
+                self.tool_stack.setCurrentIndex(0)
+            if hasattr(self, 'center_stack'):
+                self.center_stack.setCurrentIndex(0)
+            if hasattr(self, 'right_stack'):
+                self.right_stack.setVisible(False)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(True)
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("3D")
         else:
-            self.tool_stack.setCurrentIndex(1)
-            self.center_stack.setCurrentIndex(1)
-            self.right_stack.setCurrentIndex(1)
-            self.right_stack.setVisible(True)
+            if hasattr(self, 'tool_stack'):
+                self.tool_stack.setCurrentIndex(1)
+            if hasattr(self, 'center_stack'):
+                self.center_stack.setCurrentIndex(1)
+            if hasattr(self, 'right_stack'):
+                self.right_stack.setCurrentIndex(1)
+                self.right_stack.setVisible(True)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(False)
-            self.sketch_editor.setFocus()
+            if hasattr(self, 'sketch_editor'):
+                self.sketch_editor.setFocus()
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("2D")
 
@@ -12085,6 +12101,87 @@ class MainWindow(QMainWindow):
         # Viewport und Browser aktualisieren
         self.browser.refresh()
         self._trigger_viewport_update()
+
+    def _on_batch_unhide_bodies(self, bodies):
+        """
+        W29 E2E Closeout: Handler für Batch Unhide Bodies.
+        
+        Args:
+            bodies: List[Body] - Sichtbar zu machende Bodies
+        """
+        if not bodies:
+            self.statusBar().showMessage(tr("Keine Bodies ausgewählt"))
+            return
+        
+        # Alle ausgewählten Bodies sichtbar machen
+        for body in bodies:
+            self.browser.body_visibility[body.id] = True
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Eingeblendet: {len(bodies)} Bodies")
+        
+        # Notification
+        self.notification_manager.show_toast_overlay(
+            "success", 
+            f"{len(bodies)} Bodies eingeblendet"
+        )
+        
+        # Viewport und Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+        
+        logger.debug(f"[W29] Batch unhide: {len(bodies)} bodies")
+
+    def _on_batch_focus_features(self, feature_body_pairs):
+        """
+        W29 E2E Closeout: Handler für Batch Focus Features.
+        
+        Fokussiert die Viewport-Kamera auf die ausgewählten Features.
+        
+        Args:
+            feature_body_pairs: List[(feature, body)] - Zu fokussierende Features
+        """
+        if not feature_body_pairs:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        # Extrahiere Bodies für Bounding-Box-Berechnung
+        bodies_to_focus = set()
+        for feature, body in feature_body_pairs:
+            if body:
+                bodies_to_focus.add(body)
+        
+        if not bodies_to_focus:
+            self.statusBar().showMessage(tr("Keine gültigen Bodies für Focus"))
+            return
+        
+        # Viewport auf Bodies fokussieren
+        body_list = list(bodies_to_focus)
+        try:
+            if hasattr(self.viewport_3d, 'focus_on_bodies'):
+                self.viewport_3d.focus_on_bodies(body_list)
+            elif hasattr(self.viewport_3d, 'reset_camera'):
+                # Fallback: Reset camera und zeige alle
+                self.viewport_3d.reset_camera()
+            
+            # Status-Bar Update
+            feature_count = len(feature_body_pairs)
+            body_count = len(body_list)
+            self.statusBar().showMessage(
+                f"Fokus: {feature_count} Features in {body_count} Bodies"
+            )
+            
+            # Notification
+            self.notification_manager.show_toast_overlay(
+                "info", 
+                f"Fokus auf {feature_count} Features"
+            )
+            
+            logger.debug(f"[W29] Batch focus: {feature_count} features, {body_count} bodies")
+            
+        except Exception as e:
+            logger.warning(f"[W29] Focus failed: {e}")
+            self.statusBar().showMessage(tr("Fokus nicht möglich"))
 
     def _on_recovery_action_requested(self, action, feature):
         """

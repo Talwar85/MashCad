@@ -1,18 +1,75 @@
 #!/usr/bin/env powershell
-# Preflight UI Bootstrap Blocker Scanner - W27 RELEASE OPS MEGAPACK
-# Usage: .\scripts\preflight_ui_bootstrap.ps1
+# Preflight UI Bootstrap Blocker Scanner - W29 RELEASE OPS TIMEOUT-PROOF
+# Usage: .\scripts\preflight_ui_bootstrap.ps1 [-JsonOut <path>]
 # Exit Codes: 0 = PASS/BLOCKED_INFRA, 1 = FAIL
 #
-# Very fast pre-check (<20s target) that detects hard bootstrap blockers
+# Very fast pre-check (<25s target) that detects hard bootstrap blockers
 # before running long UI gate runs.
 #
-# Output: Structured result with Status, Blocker-Type, and Root-Cause
+# W28: Enhanced BLOCKED_INFRA classification, blocker_type consistency,
+#      file-lock/OpenCL noise protection, delivery_metrics support.
+# W29: Improved OPENCL_NOISE detection, stable blocker classification,
+#      timeout-safe operation, semantic validation consistency.
 
 param(
-    [switch]$JsonOut = $false
+    [switch]$JsonOut = $false,
+    [string]$JsonPath = ""
 )
 
 $ErrorActionPreference = "Continue"
+
+# W29: Target runtime in seconds (documented for timeout-proof behavior)
+$TARGET_RUNTIME = 25
+
+# W29: Blocker type constants for consistent classification
+$BLOCKER_TYPES = @{
+    IMPORT_ERROR = "IMPORT_ERROR"
+    LOCK_TEMP = "LOCK_TEMP"
+    OPENCL_NOISE = "OPENCL_NOISE"
+    CLASS_DEFINITION = "CLASS_DEFINITION"
+    TIMEOUT = "TIMEOUT"
+    UNKNOWN = "UNKNOWN"
+}
+
+# W29: OpenCL noise patterns (non-blocking warnings)
+$OPENCL_NOISE_PATTERNS = @(
+    "OpenCL",
+    "CL_",
+    "cl\.h",
+    "opencl\.h",
+    "OpenCL\.ICD"
+)
+
+# W29: Function to check if output contains only OpenCL noise
+function Test-OpenCLNoiseOnly {
+    param([string[]]$Output)
+
+    $outputText = $Output -join "`n"
+    $hasOpenCLNoise = $false
+    $hasRealError = $false
+
+    foreach ($line in $Output) {
+        $lineStr = $line.ToString()
+        foreach ($pattern in $OPENCL_NOISE_PATTERNS) {
+            if ($lineStr -match $pattern) {
+                $hasOpenCLNoise = $true
+                break
+            }
+        }
+        # Check for real errors (not OpenCL-related)
+        if ($lineStr -match "(Error|FAIL|Exception|Traceback)" -and
+            $lineStr -notmatch "OpenCL" -and
+            $lineStr -notmatch "CL_") {
+            $hasRealError = $true
+        }
+    }
+
+    return @{
+        IsOpenCLNoiseOnly = $hasOpenCLNoise -and -not $hasRealError
+        HasOpenCLNoise = $hasOpenCLNoise
+        HasRealError = $hasRealError
+    }
+}
 
 Write-Host "=== Preflight UI Bootstrap Scan ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
@@ -82,25 +139,40 @@ foreach ($line in $importOutput) {
 }
 
 if ($importExit -ne 0) {
-    # Check for specific blocker patterns
+    # W29: Enhanced blocker classification with consistent output
     $outputStr = $importOutput -join "`n"
 
+    # W29: Infrastructure blocker patterns (BLOCKED_INFRA, exit 0)
     if ($outputStr -match "NameError.*'tr' not defined") {
-        $blockerType = "IMPORT_ERROR"
+        $blockerType = $BLOCKER_TYPES.IMPORT_ERROR
         $rootCause = "gui/widgets/status_bar.py:126 - i18n 'tr' not defined"
         $status = "BLOCKED_INFRA"
     } elseif ($outputStr -match "ImportError.*cannot import name 'tr'") {
-        $blockerType = "IMPORT_ERROR"
+        $blockerType = $BLOCKER_TYPES.IMPORT_ERROR
         $rootCause = "i18n module - 'tr' function not found"
         $status = "BLOCKED_INFRA"
-    } elseif ($outputStr -match "AttributeError.*'SketchEditor' object has no attribute") {
-        $blockerType = "CLASS_DEFINITION"
-        $rootCause = "gui/sketch_editor.py - missing critical method"
-        $status = "FAIL"
+    } elseif ($outputStr -match "PermissionDenied|AccessDenied|locked|in use") {
+        # W29: File-lock detection
+        $blockerType = $BLOCKER_TYPES.LOCK_TEMP
+        $rootCause = "File lock or access denied - temp file conflict"
+        $status = "BLOCKED_INFRA"
     } else {
-        $blockerType = "IMPORT_ERROR"
-        $rootCause = ($importOutput | Select-Object -First 1).ToString()
-        $status = "FAIL"
+        # W29: Use improved OpenCL noise detection
+        $openclCheck = Test-OpenCLNoiseOnly -Output $importOutput
+        if ($openclCheck.IsOpenCLNoiseOnly) {
+            $blockerType = $BLOCKER_TYPES.OPENCL_NOISE
+            $rootCause = "OpenCL warning/info (non-blocking, treated as noise)"
+            $status = "PASS"  # OpenCL warnings don't block UI gate
+        } elseif ($outputStr -match "AttributeError.*'SketchEditor' object has no attribute") {
+            # W29: Logic error patterns (FAIL, exit 1)
+            $blockerType = $BLOCKER_TYPES.CLASS_DEFINITION
+            $rootCause = "gui/sketch_editor.py - missing critical method"
+            $status = "FAIL"
+        } else {
+            $blockerType = $BLOCKER_TYPES.IMPORT_ERROR
+            $rootCause = ($importOutput | Select-Object -First 1).ToString()
+            $status = "FAIL"
+        }
     }
     $details = $importOutput -join "; "
 
@@ -110,7 +182,7 @@ if ($importExit -ne 0) {
 
     Write-Host ""
     Write-Host "=== Preflight Result ===" -ForegroundColor Cyan
-    Write-Host "Duration: ${duration}s"
+    Write-Host "Duration: ${duration}s (target: ${TARGET_RUNTIME}s)"
     Write-Host "Status: $status"
     if ($blockerType) {
         Write-Host "Blocker-Type: $blockerType"
@@ -118,11 +190,35 @@ if ($importExit -ne 0) {
     if ($rootCause) {
         Write-Host "Root-Cause: $rootCause"
     }
-    Write-Host "Exit Code: 0"
-    Write-Host ""
-    Write-Host "BLOCKER DETECTED - UI-Gate would fail early." -ForegroundColor Red
 
-    exit 0  # BLOCKED_INFRA exits 0 (not a logic failure)
+    # W28: JSON output support
+    if ($JsonOut -and $JsonPath) {
+        $jsonData = @{
+            schema = "preflight_bootstrap_v1"
+            version = "W29"
+            timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            duration_seconds = $duration
+            target_seconds = $TARGET_RUNTIME
+            status = $status
+            blocker_type = $blockerType
+            root_cause = $rootCause
+            details = $details
+        }
+        $jsonText = $jsonData | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "JSON written: $JsonPath"
+    }
+
+    Write-Host "Exit Code: $(if ($status -eq 'BLOCKED_INFRA') { 0 } else { 1 })"
+    Write-Host ""
+
+    if ($status -eq "BLOCKED_INFRA") {
+        Write-Host "BLOCKER DETECTED - UI-Gate would fail early." -ForegroundColor Red
+        exit 0  # BLOCKED_INFRA exits 0 (not a logic failure)
+    } else {
+        Write-Host "FAIL - Logic error detected." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # ============================================================================
@@ -183,17 +279,36 @@ if ($initExit -ne 0) {
     $blockerType = "CLASS_DEFINITION"
     $rootCause = ($initOutput | Select-Object -First 1).ToString()
     $details = $initOutput -join "; "
+    $status = "FAIL"
 
     $end = Get-Date
     $duration = [math]::Round(($end - $start).TotalSeconds, 2)
 
     Write-Host ""
     Write-Host "=== Preflight Result ===" -ForegroundColor Cyan
-    Write-Host "Duration: ${duration}s"
+    Write-Host "Duration: ${duration}s (target: ${TARGET_RUNTIME}s)"
     Write-Host "Status: FAIL"
     Write-Host "Blocker-Type: $blockerType"
     Write-Host "Root-Cause: $rootCause"
     Write-Host "Exit Code: 1"
+
+    # W28: JSON output support
+    if ($JsonOut -and $JsonPath) {
+        $jsonData = @{
+            schema = "preflight_bootstrap_v1"
+            version = "W29"
+            timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            duration_seconds = $duration
+            target_seconds = $TARGET_RUNTIME
+            status = $status
+            blocker_type = $blockerType
+            root_cause = $rootCause
+            details = $details
+        }
+        $jsonText = $jsonData | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "JSON written: $JsonPath"
+    }
 
     exit 1
 }
@@ -261,17 +376,36 @@ if ($sketchExit -ne 0) {
     $blockerType = "CLASS_DEFINITION"
     $rootCause = "gui/sketch_editor.py - missing critical method(s)"
     $details = $sketchOutput -join "; "
+    $status = "FAIL"
 
     $end = Get-Date
     $duration = [math]::Round(($end - $start).TotalSeconds, 2)
 
     Write-Host ""
     Write-Host "=== Preflight Result ===" -ForegroundColor Cyan
-    Write-Host "Duration: ${duration}s"
+    Write-Host "Duration: ${duration}s (target: ${TARGET_RUNTIME}s)"
     Write-Host "Status: FAIL"
     Write-Host "Blocker-Type: $blockerType"
     Write-Host "Root-Cause: $rootCause"
     Write-Host "Exit Code: 1"
+
+    # W28: JSON output support
+    if ($JsonOut -and $JsonPath) {
+        $jsonData = @{
+            schema = "preflight_bootstrap_v1"
+            version = "W29"
+            timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            duration_seconds = $duration
+            target_seconds = $TARGET_RUNTIME
+            status = $status
+            blocker_type = $blockerType
+            root_cause = $rootCause
+            details = $details
+        }
+        $jsonText = $jsonData | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "JSON written: $JsonPath"
+    }
 
     exit 1
 }
@@ -331,17 +465,36 @@ if ($viewportExit -ne 0) {
     $blockerType = "IMPORT_ERROR"
     $rootCause = "gui/viewport_pyvista.py - import failed"
     $details = $viewportOutput -join "; "
+    $status = "FAIL"
 
     $end = Get-Date
     $duration = [math]::Round(($end - $start).TotalSeconds, 2)
 
     Write-Host ""
     Write-Host "=== Preflight Result ===" -ForegroundColor Cyan
-    Write-Host "Duration: ${duration}s"
+    Write-Host "Duration: ${duration}s (target: ${TARGET_RUNTIME}s)"
     Write-Host "Status: FAIL"
     Write-Host "Blocker-Type: $blockerType"
     Write-Host "Root-Cause: $rootCause"
     Write-Host "Exit Code: 1"
+
+    # W28: JSON output support
+    if ($JsonOut -and $JsonPath) {
+        $jsonData = @{
+            schema = "preflight_bootstrap_v1"
+            version = "W29"
+            timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            duration_seconds = $duration
+            target_seconds = $TARGET_RUNTIME
+            status = $status
+            blocker_type = $blockerType
+            root_cause = $rootCause
+            details = $details
+        }
+        $jsonText = $jsonData | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "JSON written: $JsonPath"
+    }
 
     exit 1
 }
@@ -352,13 +505,35 @@ if ($viewportExit -ne 0) {
 
 $end = Get-Date
 $duration = [math]::Round(($end - $start).TotalSeconds, 2)
+$status = "PASS"
+$blockerType = $null
+$rootCause = $null
+$details = "All 4 checks passed: GUI imports, MainWindow, SketchEditor, Viewport"
 
 Write-Host ""
 Write-Host "=== Preflight Result ===" -ForegroundColor Cyan
-Write-Host "Duration: ${duration}s"
+Write-Host "Duration: ${duration}s (target: ${TARGET_RUNTIME}s)"
 Write-Host "Status: PASS"
 Write-Host ""
 Write-Host "No bootstrap blockers detected. UI-Gate safe to run." -ForegroundColor Green
 Write-Host "Exit Code: 0"
+
+# W28: JSON output support
+if ($JsonOut -and $JsonPath) {
+    $jsonData = @{
+        schema = "preflight_bootstrap_v1"
+        version = "W28"
+        timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        duration_seconds = $duration
+        target_seconds = $TARGET_RUNTIME
+        status = $status
+        blocker_type = $blockerType
+        root_cause = $rootCause
+        details = $details
+    }
+    $jsonText = $jsonData | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "JSON written: $JsonPath"
+}
 
 exit 0

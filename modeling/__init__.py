@@ -4603,6 +4603,163 @@ class Body:
 
         return self._resolve_feature_faces(feature, solid)
 
+    def _canonicalize_sweep_refs(self, feature: 'SweepFeature') -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Sweep.
+        
+        Returns kanonisch sortierte Referenzen für:
+        - profile_face_index + profile_shape_id
+        - path edge_indices + path_shape_id
+        
+        Returns:
+            Dict mit kanonisch sortierten Referenzen für Idempotenz-Checks.
+        """
+        result = {
+            "profile_canonical": None,
+            "path_canonical": None,
+        }
+        
+        # Profile Referenzen kanonisieren
+        profile_index = getattr(feature, 'profile_face_index', None)
+        profile_shape_id = getattr(feature, 'profile_shape_id', None)
+        if profile_index is not None or profile_shape_id is not None:
+            result["profile_canonical"] = {
+                "index": int(profile_index) if profile_index is not None else None,
+                "shape_id_uuid": str(profile_shape_id.uuid) if hasattr(profile_shape_id, 'uuid') else None,
+            }
+        
+        # Path Referenzen kanonisieren
+        path_data = getattr(feature, 'path_data', {}) or {}
+        edge_indices = list(path_data.get('edge_indices', []) or [])
+        path_shape_id = getattr(feature, 'path_shape_id', None)
+        
+        # Edge-Indizes deterministisch sortieren (keine Duplikate, aufsteigend)
+        canonical_indices = sorted({int(idx) for idx in edge_indices if isinstance(idx, (int, float)) and int(idx) >= 0})
+        
+        if canonical_indices or path_shape_id is not None:
+            result["path_canonical"] = {
+                "edge_indices": canonical_indices,
+                "shape_id_uuid": str(path_shape_id.uuid) if hasattr(path_shape_id, 'uuid') else None,
+            }
+        
+        return result
+
+    def _canonicalize_loft_section_refs(self, feature: 'LoftFeature') -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Loft.
+        
+        Loft sections können durch face_indices oder section_shape_ids referenziert werden.
+        Diese Methode stellt sicher, dass die Reihenfolge deterministisch ist.
+        
+        Returns:
+            Dict mit kanonisch sortierten Section-Referenzen.
+        """
+        result = {
+            "sections_canonical": [],
+        }
+        
+        section_indices = list(getattr(feature, 'section_indices', []) or [])
+        section_shape_ids = list(getattr(feature, 'section_shape_ids', []) or [])
+        
+        # Paare von (index, shape_id) erstellen
+        section_pairs = []
+        for i, idx in enumerate(section_indices):
+            shape_id = section_shape_ids[i] if i < len(section_shape_ids) else None
+            section_pairs.append((int(idx) if idx is not None else -1, shape_id))
+        
+        # Nach Index sortieren für deterministische Reihenfolge
+        section_pairs.sort(key=lambda x: x[0])
+        
+        for idx, shape_id in section_pairs:
+            result["sections_canonical"].append({
+                "index": idx if idx >= 0 else None,
+                "shape_id_uuid": str(shape_id.uuid) if hasattr(shape_id, 'uuid') else None,
+            })
+        
+        return result
+
+    def _canonicalize_edge_refs(self, feature) -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Edge Features.
+        
+        Kanonische Sortierung für Fillet/Chamfer Edge-Referenzen.
+        
+        Returns:
+            Dict mit kanonisch sortierten Edge-Referenzen.
+        """
+        result = {
+            "edge_indices_canonical": [],
+            "shape_ids_canonical": [],
+        }
+        
+        edge_indices = list(getattr(feature, 'edge_indices', []) or [])
+        edge_shape_ids = list(getattr(feature, 'edge_shape_ids', []) or [])
+        
+        # Edge-Indizes deterministisch sortieren
+        result["edge_indices_canonical"] = sorted({
+            int(idx) for idx in edge_indices 
+            if isinstance(idx, (int, float)) and int(idx) >= 0
+        })
+        
+        # Shape-IDs in stabiler Reihenfolge
+        for shape_id in edge_shape_ids:
+            if hasattr(shape_id, 'uuid'):
+                result["shape_ids_canonical"].append(str(shape_id.uuid))
+        
+        result["shape_ids_canonical"].sort()
+        
+        return result
+
+    def _canonicalize_face_refs(self, feature) -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Face Features.
+        
+        Kanonische Sortierung für Features mit Face-Referenzen.
+        
+        Returns:
+            Dict mit kanonisch sortierten Face-Referenzen.
+        """
+        result = {
+            "face_indices_canonical": [],
+            "shape_ids_canonical": [],
+        }
+        
+        # Verschiedene Attribut-Namen für Face-Features
+        face_indices_attrs = ['face_indices', 'opening_face_indices']
+        face_shape_ids_attrs = ['face_shape_ids', 'opening_face_shape_ids']
+        
+        face_indices = []
+        face_shape_ids = []
+        
+        for attr in face_indices_attrs:
+            if hasattr(feature, attr):
+                val = getattr(feature, attr)
+                if val is not None:
+                    face_indices = list(val) if not isinstance(val, (int, float)) else [val]
+                    break
+        
+        for attr in face_shape_ids_attrs:
+            if hasattr(feature, attr):
+                val = getattr(feature, attr)
+                if val is not None:
+                    face_shape_ids = list(val) if not isinstance(val, (int, float)) else [val]
+                    break
+        
+        # Face-Indizes deterministisch sortieren
+        result["face_indices_canonical"] = sorted({
+            int(idx) for idx in face_indices 
+            if isinstance(idx, (int, float)) and int(idx) >= 0
+        })
+        
+        # Shape-IDs in stabiler Reihenfolge
+        for shape_id in face_shape_ids:
+            if hasattr(shape_id, 'uuid'):
+                result["shape_ids_canonical"].append(str(shape_id.uuid))
+        
+        result["shape_ids_canonical"].sort()
+        
+        return result
+
     def _update_edge_selectors_after_operation(self, solid, current_feature_index: int = -1):
         """
         Aktualisiert Edge-Selektoren in Fillet/Chamfer Features nach Geometrie-Operation.

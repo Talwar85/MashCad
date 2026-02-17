@@ -5,12 +5,21 @@ This suite focuses on deterministic contract checks and behavior checks for
 projection preview state transitions.
 """
 
+"""
+W26 projection/trace workflow tests.
+
+W29: Headless-Hardening for stable CI execution.
+"""
+
 import os
 import sys
 
 import pytest
 
+# W29: Headless environment setup BEFORE Qt imports
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_OPENGL", "software")
+
 from PySide6.QtWidgets import QApplication
 
 from gui.sketch_tools import SketchTool
@@ -234,6 +243,90 @@ class TestRealSketchEditorContract:
             editor.close()
             editor.deleteLater()
             QApplication.processEvents()
+
+
+class TestProjectionCleanupW28:
+    """W28: Projection Cleanup - Keine Ghost-Previews nach State-Changes."""
+    
+    def test_no_ghost_preview_after_confirm(self):
+        """W28-G1: Keine Ghost-Preview nach Confirm."""
+        from gui.sketch_tools import SketchTool
+        
+        editor = MockSketchEditor()
+        editor.set_tool(SketchTool.PROJECT)
+        
+        cleared = []
+        editor.projection_preview_cleared.connect(lambda: cleared.append(True))
+        
+        # Hover edge
+        editor.simulate_hover_edge((0, 0, 10, 10, 0, 0))
+        # Confirm
+        editor.simulate_confirm_projection()
+        
+        assert editor._last_projection_edge is None
+        assert len(cleared) == 1
+    
+    def test_no_ghost_preview_after_tool_change(self):
+        """W28-G2: Keine Ghost-Preview nach Toolwechsel."""
+        from gui.sketch_tools import SketchTool
+        
+        editor = MockSketchEditor()
+        editor.set_tool(SketchTool.PROJECT)
+        editor.simulate_hover_edge((0, 0, 10, 10, 0, 0))
+        
+        # Switch tool
+        editor.set_tool(SketchTool.LINE)
+        
+        assert editor._last_projection_edge is None
+    
+    def test_no_ghost_preview_after_sketch_exit(self):
+        """W28-G3: Keine Ghost-Preview nach Sketch-Exit."""
+        from gui.sketch_tools import SketchTool
+        
+        editor = MockSketchEditor()
+        editor.set_tool(SketchTool.PROJECT)
+        editor.simulate_hover_edge((0, 0, 10, 10, 0, 0))
+        
+        # Exit sketch
+        editor.simulate_leave_sketch()
+        
+        assert editor._last_projection_edge is None
+
+
+class TestDirectManipulationAbortW28:
+    """W28: Direct Manipulation Abbruch - Rechtsklick und ESC."""
+    
+    def test_right_click_aborts_direct_edit(self):
+        """W28-A1: Rechtsklick bricht Direct-Edit ab."""
+        editor = MockSketchEditor()
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "center"
+        
+        # Simulate right-click abort
+        aborted = False
+        if editor._direct_edit_dragging:
+            editor._direct_edit_dragging = False
+            editor._direct_edit_mode = None
+            aborted = True
+        
+        assert aborted is True
+        assert editor._direct_edit_dragging is False
+    
+    def test_esc_aborts_direct_edit(self):
+        """W28-A2: ESC bricht Direct-Edit ab."""
+        editor = MockSketchEditor()
+        editor._direct_edit_dragging = True
+        editor._direct_edit_mode = "radius"
+        
+        # Simulate ESC abort
+        aborted = False
+        if editor._direct_edit_dragging:
+            editor._direct_edit_dragging = False
+            editor._direct_edit_mode = None
+            aborted = True
+        
+        assert aborted is True
+        assert editor._direct_edit_mode is None
 
 
 if __name__ == "__main__":

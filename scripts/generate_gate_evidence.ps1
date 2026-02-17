@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env powershell
-# Gate-Evidence Generator - W27 RELEASE OPS MEGAPACK Edition
+# Gate-Evidence Generator - W29 RELEASE OPS TIMEOUT-PROOF Edition
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
@@ -11,6 +11,8 @@
 # W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
 # W22 TOTALPACK: All Workpackages A-H (140 Points Target)
 # W27: Added delivery_completion_ratio, validation_runtime_seconds, blocker_type, failed_suite_count, error_suite_count
+# W28: Enhanced delivery_metrics with missing field detection, clearer error output
+# W29: Timeout-proof contract tests, improved suite count metrics, version bump
 
 param(
     [switch]$StrictHygiene = $false,
@@ -350,7 +352,7 @@ Write-Host "=== Evidence Generation Complete ===" -ForegroundColor Cyan
 Write-Host "Total Duration: $([math]::Round($overallDuration, 2))s"
 
 # ============================================================================
-# W27: Calculate delivery metrics
+# W29: Calculate delivery metrics with improved validation
 # ============================================================================
 
 # Count failed/error suites (each pytest file is a suite)
@@ -367,7 +369,23 @@ if ($pi10Parsed.errors -gt 0) { $errorSuiteCount++ }
 # Calculate delivery completion ratio (passed / total tests)
 $totalTests = $coreParsed.total + $uiParsed.total + $pi10Parsed.total
 $totalPassed = $coreParsed.passed + $uiParsed.passed + $pi10Parsed.passed
-$deliveryCompletionRatio = if ($totalTests -gt 0) { [math]::Round($totalPassed / $totalTests, 3) } else { 0 }
+$deliveryCompletionRatio = if ($totalTests -gt 0) { [math]::Round($totalPassed / $totalTests, 3) } else { 0.0 }
+
+# W29: Blocker type consistency - normalize null/empty
+$normalizedBlockerType = if ($uiBlockerInfo.Type) { $uiBlockerInfo.Type } else { $null }
+
+# W29: Validation for delivery metrics (warn if inconsistent)
+if ($totalTests -eq 0 -and $deliveryCompletionRatio -eq 0) {
+    Write-Host "[WARN] No tests found - delivery_metrics may be incomplete" -ForegroundColor Yellow
+}
+
+# W29: Calculate suite counts (total gates run)
+$totalSuiteCount = 4  # core, ui, pi010, hygiene
+$passedSuiteCount = 0
+if ($coreParsed.failed -eq 0 -and $coreParsed.errors -eq 0) { $passedSuiteCount++ }
+if ($uiParsed.failed -eq 0 -and $uiParsed.errors -eq 0) { $passedSuiteCount++ }
+if ($pi10Parsed.failed -eq 0 -and $pi10Parsed.errors -eq 0) { $passedSuiteCount++ }
+if ($hygieneStatusClass -eq "CLEAN" -or $hygieneStatusClass -eq "PASS") { $passedSuiteCount++ }
 
 # ============================================================================
 # Generate JSON Evidence (W27: Extended schema with delivery metrics)
@@ -380,23 +398,30 @@ $jsonData = @{
         time = (Get-Date -Format "HH:mm:ss")
         branch = "feature/v1-ux-aiB"
         qa_cell = "AI-LARGE-H-RELEASE-OPS"
-        evidence_level = "W27 RELEASE OPS MEGAPACK"
-        evidence_version = "6.0"  # W27: Release Ops Megapack
+        evidence_level = "W29 RELEASE OPS TIMEOUT-PROOF"
+        evidence_version = "7.0"  # W29: Timeout-proof release ops
         toolchain = @{
             python = "3.11.14"
             pytest = "9.0.2"
             platform = "win32"
         }
     }
-    # W27: Extended delivery metrics section
+    # W29: Extended delivery metrics section with enhanced validation
     delivery_metrics = @{
+        # Core delivery metrics (W27+)
         delivery_completion_ratio = $deliveryCompletionRatio
         validation_runtime_seconds = [math]::Round($overallDuration, 2)
-        blocker_type = $uiBlockerInfo.Type
+        blocker_type = $normalizedBlockerType
         failed_suite_count = $failedSuiteCount
         error_suite_count = $errorSuiteCount
         total_tests = $totalTests
         total_passed = $totalPassed
+        # W29: Additional suite counts for better visibility
+        total_suite_count = $totalSuiteCount
+        passed_suite_count = $passedSuiteCount
+        # W29: Target metrics for comparison
+        target_completion_ratio = 0.99  # 99% target
+        target_runtime_seconds = 300.0   # 5 min target
     }
     summary = @{
         core_gate = @{

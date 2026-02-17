@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# Fast Feedback Gate - W27 RELEASE OPS MEGAPACK Edition
+# Fast Feedback Gate - W29 RELEASE OPS TIMEOUT-PROOF Edition
 # Usage: .\scripts\gate_fast_feedback.ps1 [-Profile smoke|ui_quick|core_quick|ui_ultraquick|ops_quick] [-JsonOut <path>]
 # Exit Codes: 0 = PASS, 1 = FAIL
 #
@@ -7,6 +7,8 @@
 # Designed for <60s turnaround in inner dev loops.
 #
 # W27: Added ui_ultraquick (<30s target) and ops_quick (<20s target) profiles.
+# W28: Optimized profiles - ui_ultraquick <15s, ops_quick <12s, no recursive gate calls.
+# W29: Timeout-proof profiles, static contract tests integration, version bump.
 
 param(
     [ValidateSet("smoke", "ui_quick", "core_quick", "ui_ultraquick", "ops_quick")]
@@ -20,10 +22,14 @@ $ErrorActionPreference = "Continue"
 # Profile Definitions
 # ============================================================================
 
+# W29: Profile Definitions - Timeout-proof, no recursive gate calls
+# Target times: ui_ultraquick <15s, ops_quick <12s, smoke <45s, ui_quick <60s, core_quick <60s
+# IMPORTANT: None of these profiles run tests that call gate_fast_feedback.ps1
+# Static contract tests (TestStaticGateContractW29) validate without subprocess calls.
 $PROFILES = @{
     "smoke" = @(
         "test/test_workflow_product_leaps_w25.py",
-        "test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_script_exists"
+        "test/test_gate_evidence_contract.py::test_validate_gate_evidence_passes_on_valid_schema"
     )
     "ui_quick" = @(
         "test/test_ui_abort_logic.py",
@@ -33,16 +39,16 @@ $PROFILES = @{
         "test/test_feature_error_status.py",
         "test/test_tnp_v4_feature_refs.py"
     )
-    # W27: Ultra-quick UI profile (<30s target).
-    # Use a tiny, non-recursive contract subset (do not run whole
-    # test_gate_runner_contract.py because that file also tests this script).
+    # W28: Ultra-quick UI profile (<15s target).
+    # Uses only non-recursive, lightweight contract tests.
+    # Excludes tests that call gate_fast_feedback.ps1 to avoid recursion.
     "ui_ultraquick" = @(
-        "test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_ui_script_exists",
-        "test/test_gate_runner_contract.py::TestGateRunnerContract::test_gate_all_script_exists"
+        "test/test_gate_evidence_contract.py::test_validate_gate_evidence_passes_on_valid_schema",
+        "test/test_gate_evidence_contract.py::test_validate_gate_evidence_fails_on_core_status_semantic_mismatch"
     )
-    # W27: Ops/Contract quick profile (<20s target) - script/contract-lastig
+    # W28: Ops/Contract quick profile (<12s target) - evidence contract validation only
     "ops_quick" = @(
-        "test/test_gate_evidence_contract.py"
+        "test/test_gate_evidence_contract.py::test_validate_gate_evidence_passes_on_valid_schema"
     )
 }
 
@@ -163,10 +169,19 @@ Write-Host "Exit Code: $exitCode"
 
 if ($JsonOut) {
     $jsonData = @{
-        schema   = "fast_feedback_gate_v1"
+        schema   = "fast_feedback_gate_v2"
+        version  = "W29"
         profile  = $Profile
         timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         duration_seconds = $duration
+        target_seconds = switch ($Profile) {
+            "ui_ultraquick" { 15 }
+            "ops_quick"     { 12 }
+            "smoke"         { 45 }
+            "ui_quick"      { 60 }
+            "core_quick"    { 60 }
+            default         { 60 }
+        }
         passed   = $passed
         failed   = $failed
         skipped  = $skipped

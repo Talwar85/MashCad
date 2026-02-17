@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# Gate-Evidence Schema Validator (W27 RELEASE OPS MEGAPACK)
+# Gate-Evidence Schema Validator (W29 RELEASE OPS TIMEOUT-PROOF)
 # Usage:
 #   .\scripts\validate_gate_evidence.ps1
 #   .\scripts\validate_gate_evidence.ps1 -EvidenceDir roadmap_ctp -Pattern "QA_EVIDENCE_W*.json"
@@ -8,6 +8,8 @@
 #   0 = PASS (or WARN when -FailOnWarning is not set)
 #   1 = FAIL (schema/data violations) or WARN with -FailOnWarning
 # W27: Added validation for delivery_metrics section
+# W28: Robust validation for old and new payloads, clearer error output
+# W29: Extended semantic checks, suite count validation, timeout-safe operations
 
 param(
     [string]$EvidencePath = "",
@@ -161,18 +163,22 @@ function Validate-DeliveryMetrics {
     )
 
     if ($null -eq $Metrics) {
-        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_metrics_missing" -Message "delivery_metrics section is missing (W27)"
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_metrics_missing" -Message "delivery_metrics section is missing (W27+)"
         return
     }
 
     # W27: Validate delivery_completion_ratio (0.0 to 1.0)
     if (Has-Prop -Obj $Metrics -Name "delivery_completion_ratio") {
-        $ratio = [double]$Metrics.delivery_completion_ratio
-        if ($ratio -lt 0 -or $ratio -gt 1) {
-            Add-Issue -Issues $Issues -Severity "FAIL" -Code "delivery_ratio_invalid" -Message "delivery_completion_ratio must be between 0 and 1"
+        try {
+            $ratio = [double]$Metrics.delivery_completion_ratio
+            if ($ratio -lt 0 -or $ratio -gt 1) {
+                Add-Issue -Issues $Issues -Severity "FAIL" -Code "delivery_ratio_invalid" -Message "delivery_completion_ratio must be between 0 and 1, got: $ratio"
+            }
+        } catch {
+            Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_ratio_parse_error" -Message "delivery_completion_ratio is not a valid number"
         }
     } else {
-        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_ratio_missing" -Message "delivery_completion_ratio missing"
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_ratio_missing" -Message "delivery_completion_ratio missing (W27+ field)"
     }
 
     # W27: Validate validation_runtime_seconds
@@ -180,13 +186,15 @@ function Validate-DeliveryMetrics {
         if (-not (Test-NonNegativeNumber -Value $Metrics.validation_runtime_seconds)) {
             Add-Issue -Issues $Issues -Severity "FAIL" -Code "validation_runtime_invalid" -Message "validation_runtime_seconds must be >= 0"
         }
+    } else {
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "validation_runtime_missing" -Message "validation_runtime_seconds missing (W27+ field)"
     }
 
     # W27: Validate blocker_type
     if (Has-Prop -Obj $Metrics -Name "blocker_type") {
-        $allowedTypes = @("OPENGL_CONTEXT", "ACCESS_VIOLATION", "FATAL_ERROR", "IMPORT_ERROR", "LOCK_TEMP", $null, "")
+        $allowedTypes = @("OPENGL_CONTEXT", "ACCESS_VIOLATION", "FATAL_ERROR", "IMPORT_ERROR", "LOCK_TEMP", "OPENCL_NOISE", $null, "")
         if ($Metrics.blocker_type -notin $allowedTypes) {
-            Add-Issue -Issues $Issues -Severity "WARN" -Code "blocker_type_unknown" -Message "Unknown blocker_type: $($Metrics.blocker_type)"
+            Add-Issue -Issues $Issues -Severity "WARN" -Code "blocker_type_unknown" -Message "Unknown blocker_type: '$($Metrics.blocker_type)'"
         }
     }
 
@@ -195,12 +203,37 @@ function Validate-DeliveryMetrics {
         if (-not (Test-NonNegativeInt -Value $Metrics.failed_suite_count)) {
             Add-Issue -Issues $Issues -Severity "FAIL" -Code "failed_suite_count_invalid" -Message "failed_suite_count must be a non-negative integer"
         }
+    } else {
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "failed_suite_count_missing" -Message "failed_suite_count missing (W27+ field)"
     }
 
     # W27: Validate error_suite_count
     if (Has-Prop -Obj $Metrics -Name "error_suite_count") {
         if (-not (Test-NonNegativeInt -Value $Metrics.error_suite_count)) {
             Add-Issue -Issues $Issues -Severity "FAIL" -Code "error_suite_count_invalid" -Message "error_suite_count must be a non-negative integer"
+        }
+    } else {
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "error_suite_count_missing" -Message "error_suite_count missing (W27+ field)"
+    }
+
+    # W28: Validate total_suite_count and passed_suite_count (optional, new)
+    if (Has-Prop -Obj $Metrics -Name "total_suite_count") {
+        if (-not (Test-NonNegativeInt -Value $Metrics.total_suite_count)) {
+            Add-Issue -Issues $Issues -Severity "WARN" -Code "total_suite_count_invalid" -Message "total_suite_count must be a non-negative integer"
+        }
+    }
+
+    if (Has-Prop -Obj $Metrics -Name "passed_suite_count") {
+        if (-not (Test-NonNegativeInt -Value $Metrics.passed_suite_count)) {
+            Add-Issue -Issues $Issues -Severity "WARN" -Code "passed_suite_count_invalid" -Message "passed_suite_count must be a non-negative integer"
+        }
+        # W28: Semantic check - passed cannot exceed total
+        if (Has-Prop -Obj $Metrics -Name "total_suite_count") {
+            $total = [int]$Metrics.total_suite_count
+            $passed = [int]$Metrics.passed_suite_count
+            if ($passed -gt $total -and $total -gt 0) {
+                Add-Issue -Issues $Issues -Severity "FAIL" -Code "suite_count_semantic_error" -Message "passed_suite_count ($passed) cannot exceed total_suite_count ($total)"
+            }
         }
     }
 }
