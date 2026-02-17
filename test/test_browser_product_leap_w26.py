@@ -19,7 +19,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 from PySide6.QtCore import Qt
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 
 from gui.browser import ProjectBrowser, DraggableTreeWidget
 from modeling import Document, Body, Component
@@ -188,44 +188,95 @@ class TestW26BrowserProblemFirstNavigation:
 class TestW26BrowserMultiSelectBatchActions:
     """
     W26 Paket F1: Tests für Multi-Select Batch-Aktionen.
-    (Zusätzliche 5 Assertions)
+    Verhaltenstests mit echten Signal-Payloads.
     """
 
-    def test_batch_retry_selected_emits_signal(self, qt_app):
-        """F1-W26-R8: batch_retry_selected emittiert Signal."""
+    def test_batch_retry_selected_emits_signal_with_payload(self, qt_app):
+        """F1-W26-R8: batch_retry_selected emittiert Signal mit korrektem Payload."""
         browser = ProjectBrowser()
-        received = []
-        browser.batch_retry_rebuild.connect(lambda x: received.append(x))
+        received_payloads = []
+        browser.batch_retry_rebuild.connect(lambda x: received_payloads.append(x))
 
-        # Ohne Selektion sollte nichts emittiert werden
+        # Mock selektierte Problem-Features
+        mock_features = [("feature1", "body1"), ("feature2", "body2")]
+        browser.get_selected_problem_features = lambda: mock_features
+
+        # Aktion ausführen
         browser.batch_retry_selected()
-        assert len(received) == 0
 
-    def test_batch_open_selected_diagnostics_method_exists(self, qt_app):
-        """F1-W26-R9: batch_open_selected_diagnostics Methode existiert."""
+        # Verhalten prüfen: Signal wurde mit Payload emittiert
+        assert len(received_payloads) == 1
+        assert received_payloads[0] == mock_features
+
+    def test_batch_retry_selected_noop_when_empty_selection(self, qt_app):
+        """F1-W26-R9: batch_retry_selected emitiert NICHT bei leerer Selektion."""
         browser = ProjectBrowser()
-        assert hasattr(browser, 'batch_open_selected_diagnostics')
-        assert callable(getattr(browser, 'batch_open_selected_diagnostics'))
+        received_payloads = []
+        browser.batch_retry_rebuild.connect(lambda x: received_payloads.append(x))
 
-    def test_batch_open_selected_diagnostics_emits_signal(self, qt_app):
-        """F1-W26-R10: batch_open_selected_diagnostics emittiert batch_open_diagnostics Signal."""
+        # Leere Selektion
+        browser.get_selected_problem_features = lambda: []
+
+        # Aktion ausführen
+        browser.batch_retry_selected()
+
+        # Verhalten prüfen: Kein Signal wurde emittiert
+        assert len(received_payloads) == 0
+
+    def test_batch_open_selected_diagnostics_emits_signal_with_payload(self, qt_app):
+        """F1-W26-R10: batch_open_selected_diagnostics emittiert Signal mit Payload."""
         browser = ProjectBrowser()
-        received = []
-        browser.batch_open_diagnostics.connect(lambda payload: received.append(payload))
-        browser.get_selected_problem_features = lambda: [("feature1", "body1")]
+        received_payloads = []
+        browser.batch_open_diagnostics.connect(lambda x: received_payloads.append(x))
 
+        # Mock selektierte Problem-Features
+        mock_features = [("feature1", "body1")]
+        browser.get_selected_problem_features = lambda: mock_features
+
+        # Aktion ausführen
         browser.batch_open_selected_diagnostics()
-        assert len(received) == 1
-        assert received[0] == [("feature1", "body1")]
 
-    def test_batch_isolate_bodies_emits_signal(self, qt_app):
-        """F1-W26-R11: batch_isolate_bodies emittiert Signal."""
+        # Verhalten prüfen
+        assert len(received_payloads) == 1
+        assert received_payloads[0] == mock_features
+
+    def test_batch_isolate_bodies_emits_signal_with_bodies(self, qt_app):
+        """F1-W26-R11: batch_isolate_bodies emittiert Signal mit Body-Liste."""
         browser = ProjectBrowser()
-        received = []
-        browser.batch_isolate_bodies.connect(lambda x: received.append(x))
+        received_payloads = []
+        browser.batch_isolate_bodies.connect(lambda x: received_payloads.append(x))
 
+        # Mock selektierte Problem-Features mit Bodies
+        mock_body1 = Mock()
+        mock_body1.id = "body1"
+        mock_body2 = Mock()
+        mock_body2.id = "body2"
+        mock_features = [("feature1", mock_body1), ("feature2", mock_body2)]
+        browser.get_selected_problem_features = lambda: mock_features
+
+        # Aktion ausführen
         browser.batch_isolate_selected_bodies()
-        assert len(received) == 0  # Ohne Selektion
+
+        # Verhalten prüfen: Signal wurde mit Body-Liste emittiert
+        assert len(received_payloads) == 1
+        assert len(received_payloads[0]) == 2
+        assert mock_body1 in received_payloads[0]
+        assert mock_body2 in received_payloads[0]
+
+    def test_batch_isolate_bodies_noop_when_no_bodies(self, qt_app):
+        """F1-W26-R12: batch_isolate_bodies emitiert NICHT wenn keine Bodies."""
+        browser = ProjectBrowser()
+        received_payloads = []
+        browser.batch_isolate_bodies.connect(lambda x: received_payloads.append(x))
+
+        # Leere Selektion
+        browser.get_selected_problem_features = lambda: []
+
+        # Aktion ausführen
+        browser.batch_isolate_selected_bodies()
+
+        # Verhalten prüfen: Kein Signal wurde emittiert
+        assert len(received_payloads) == 0
 
 
 class TestW26BrowserRefreshStability:
@@ -234,7 +285,7 @@ class TestW26BrowserRefreshStability:
     """
 
     def test_refresh_preserves_scroll_position(self, qt_app, mock_document_with_critical_errors):
-        """F1-W26-R12: refresh() erhält Scroll-Position."""
+        """F1-W26-R13: refresh() erhält Scroll-Position."""
         browser = ProjectBrowser()
         browser.set_document(mock_document_with_critical_errors)
 
@@ -243,13 +294,61 @@ class TestW26BrowserRefreshStability:
         assert True  # Kein Exception
 
     def test_refresh_updates_problem_badge(self, qt_app, mock_document_with_critical_errors):
-        """F1-W26-R13: refresh() aktualisiert Problembadge."""
+        """F1-W26-R14: refresh() aktualisiert Problembadge."""
         browser = ProjectBrowser()
         browser.set_document(mock_document_with_critical_errors)
 
         browser.refresh()
         # Badge sollte sichtbar sein bei Problemen
         assert browser.problem_badge is not None
+
+
+class TestW26GuardrailsApiCollision:
+    """
+    W26 F-UX-2: Guardrails gegen API-Kollisionen.
+    Verhindert Namenskollisionen zwischen Signalen und Methoden.
+    """
+
+    def test_no_signal_method_name_collision_batch_retry(self, qt_app):
+        """F1-W26-R15: batch_retry_rebuild Signal hat keine Namenskollision."""
+        browser = ProjectBrowser()
+        
+        # Signal und Methode müssen unterschiedliche Namen haben
+        signal_name = "batch_retry_rebuild"
+        method_name = "batch_retry_selected"
+        
+        # Signal existiert
+        assert hasattr(browser, signal_name)
+        # Methode existiert
+        assert hasattr(browser, method_name)
+        # Sie sind verschiedene Attribute
+        assert getattr(browser, signal_name) is not getattr(browser, method_name)
+
+    def test_no_signal_method_name_collision_batch_open(self, qt_app):
+        """F1-W26-R16: batch_open_diagnostics Signal hat keine Namenskollision."""
+        browser = ProjectBrowser()
+        
+        signal_name = "batch_open_diagnostics"
+        method_name = "batch_open_selected_diagnostics"
+        
+        # Signal existiert
+        assert hasattr(browser, signal_name)
+        # Methode existiert
+        assert hasattr(browser, method_name)
+        # Sie sind verschiedene Attribute
+        assert getattr(browser, signal_name) is not getattr(browser, method_name)
+
+    def test_signal_emit_callable(self, qt_app):
+        """F1-W26-R17: Alle Batch-Signale sind emittierbar."""
+        browser = ProjectBrowser()
+        
+        # Teste dass emit() aufgerufen werden kann
+        try:
+            browser.batch_retry_rebuild.emit([])
+            browser.batch_open_diagnostics.emit([])
+            browser.batch_isolate_bodies.emit([])
+        except Exception as e:
+            pytest.fail(f"Signal emit failed: {e}")
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ from config.feature_flags import is_enabled  # Performance Plan Phase 5+
 from config.recent_files import get_recent_files, add_recent_file
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
-from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget
+from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget, FeatureDetailPanel
 from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
@@ -341,6 +341,11 @@ class MainWindow(QMainWindow):
         self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
         self.operation_summary = OperationSummaryWidget()
+        
+        # W26 F-UX-1: Feature Detail Panel für Recovery-Actions
+        self.feature_detail_panel = FeatureDetailPanel()
+        self.feature_detail_panel.setMinimumWidth(250)
+        self.feature_detail_panel.setMaximumWidth(350)
 
         self.left_tabs.addTab(self.browser, "Browser")
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
@@ -451,6 +456,21 @@ class MainWindow(QMainWindow):
         
         self.right_stack.setVisible(False)
         layout.addWidget(self.right_stack)
+
+        # W26 F-UX-1: Feature Detail Panel als DockWidget
+        self.feature_detail_dock = QDockWidget(tr("Feature Details"), self)
+        self.feature_detail_dock.setWidget(self.feature_detail_panel)
+        self.feature_detail_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.feature_detail_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.feature_detail_dock.setStyleSheet("""
+            QDockWidget { color: #ccc; font-size: 11px; }
+            QDockWidget::title {
+                background: #252526; padding: 4px 8px;
+                border-bottom: 1px solid #333;
+            }
+        """)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.feature_detail_dock)
+        self.feature_detail_dock.hide()  # Initial versteckt
 
         # === STATUS BAR (unten) ===
         self.mashcad_status_bar = MashCadStatusBar()
@@ -681,6 +701,10 @@ class MainWindow(QMainWindow):
         self.sketch_editor.exit_requested.connect(self._finish_sketch)
         self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
         self.sketch_editor.solver_finished_signal.connect(self._on_solver_dof_updated)
+        
+        # W26 FIX: Projection-Preview Signals
+        self.sketch_editor.projection_preview_requested.connect(self._on_projection_preview_requested)
+        self.sketch_editor.projection_preview_cleared.connect(self._on_projection_preview_cleared)
         # Toolbar entfernt - war nutzlos laut User
      
     def showEvent(self, event):
@@ -949,6 +973,18 @@ class MainWindow(QMainWindow):
         # Phase 6: Body/Sketch verschieben zwischen Components
         self.browser.body_moved_to_component.connect(self._on_body_moved_to_component)
         self.browser.sketch_moved_to_component.connect(self._on_sketch_moved_to_component)
+        
+        # W26 F-UX-1: Browser Batch-Signale für Problem-Features
+        self.browser.batch_retry_rebuild.connect(self._on_batch_retry_rebuild)
+        self.browser.batch_open_diagnostics.connect(self._on_batch_open_diagnostics)
+        self.browser.batch_isolate_bodies.connect(self._on_batch_isolate_bodies)
+        
+        # W26 F-UX-1: FeatureDetailPanel Recovery-Signale
+        self.feature_detail_panel.recovery_action_requested.connect(self._on_recovery_action_requested)
+        self.feature_detail_panel.edit_feature_requested.connect(self._on_edit_feature_requested)
+        self.feature_detail_panel.rebuild_feature_requested.connect(self._on_rebuild_feature_requested)
+        self.feature_detail_panel.delete_feature_requested.connect(self._on_delete_feature_requested)
+        self.feature_detail_panel.highlight_edges_requested.connect(self._on_highlight_edges_requested)
         
         # Viewport Signale
         self.viewport_3d.plane_clicked.connect(self._on_plane_selected)
@@ -2166,6 +2202,8 @@ class MainWindow(QMainWindow):
                     self._highlighted_body_id = body.id
                 self._update_tnp_stats(body)
                 self.browser.show_rollback_bar(body)
+                # W26 F-UX-1: FeatureDetailPanel verstecken bei Body-Selektion
+                self.feature_detail_dock.hide()
             elif data[0] == 'feature' and len(data) >= 3:
                 feature = data[1]
                 body = data[2]
@@ -2177,11 +2215,18 @@ class MainWindow(QMainWindow):
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats(body)
+                # W26 F-UX-1: FeatureDetailPanel anzeigen und aktualisieren
+                self.feature_detail_panel.show_feature(feature, body, self.document)
+                self.feature_detail_dock.show()
+                self.feature_detail_dock.raise_()
             else:
                 self.statusBar().showMessage("Ready")
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats()
+                self.feature_detail_dock.hide()
+        else:
+            self.feature_detail_dock.hide()
     
     def _start_transform_mode(self, mode):
         """
@@ -11936,3 +11981,235 @@ class MainWindow(QMainWindow):
                      self.tool_panel.show_sketch_tools()
                      
                  logger.info(f"Sketch created on Face {face_id}")
+
+    # ========================================================================
+    # W26 F-UX-1: Batch- und Recovery-Action Handler
+    # ========================================================================
+
+    def _on_batch_retry_rebuild(self, problem_features):
+        """
+        W26 F-UX-1: Handler für Batch Retry Rebuild.
+        
+        Args:
+            problem_features: List[(feature, body)] - Zu rebuildende Features
+        """
+        if not problem_features:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        success_count = 0
+        failed_count = 0
+        
+        for feature, body in problem_features:
+            try:
+                # Retry rebuild durchführen
+                if hasattr(body, '_rebuild_from_feature'):
+                    body._rebuild_from_feature(feature)
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                logger.error(f"[BATCH_RETRY] Fehler bei Feature {feature.name}: {e}")
+                failed_count += 1
+        
+        # Status-Bar Update
+        msg = f"Rebuild: {success_count} erfolgreich"
+        if failed_count > 0:
+            msg += f", {failed_count} fehlgeschlagen"
+        self.statusBar().showMessage(msg)
+        
+        # Toast-Notification
+        if success_count > 0:
+            self.notification_manager.show_toast_overlay(
+                "success", 
+                f"{success_count} Features rebuilt"
+            )
+        
+        # Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+    def _on_batch_open_diagnostics(self, problem_features):
+        """
+        W26 F-UX-1: Handler für Batch Open Diagnostics.
+        
+        Args:
+            problem_features: List[(feature, body)] - Features zur Diagnose
+        """
+        if not problem_features:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        # Erstes Feature im DetailPanel anzeigen
+        feature, body = problem_features[0]
+        self.feature_detail_panel.show_feature(feature, body, self.document)
+        self.feature_detail_dock.show()
+        self.feature_detail_dock.raise_()
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Diagnostics: {len(problem_features)} Features")
+        
+        # Log-Panel öffnen für detaillierte Infos
+        self.log_dock.show()
+        self.log_dock.raise_()
+
+    def _on_batch_isolate_bodies(self, bodies):
+        """
+        W26 F-UX-1: Handler für Batch Isolate Bodies.
+        
+        Args:
+            bodies: List[Body] - Zu isolierende Bodies
+        """
+        if not bodies:
+            self.statusBar().showMessage(tr("Keine Bodies ausgewählt"))
+            return
+        
+        # Alle anderen Bodies verstecken
+        body_ids_to_keep = {b.id for b in bodies}
+        
+        for body in self.document.get_all_bodies():
+            if body.id in body_ids_to_keep:
+                self.browser.body_visibility[body.id] = True
+            else:
+                self.browser.body_visibility[body.id] = False
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Isoliert: {len(bodies)} Bodies")
+        
+        # Notification
+        self.notification_manager.show_toast_overlay(
+            "info", 
+            f"{len(bodies)} Bodies isoliert"
+        )
+        
+        # Viewport und Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+    def _on_recovery_action_requested(self, action, feature):
+        """
+        W26 F-UX-1: Handler für Recovery-Actions aus dem FeatureDetailPanel.
+        
+        Args:
+            action: str - Die angeforderte Aktion
+            feature: Feature - Das betroffene Feature
+        """
+        logger.info(f"[RECOVERY_ACTION] {action} für Feature {feature.name}")
+        
+        if action == "reselect_ref":
+            self.statusBar().showMessage(tr("Referenz neu wählen: Feature editieren..."))
+            # Feature editieren starten
+            self._edit_feature(('feature', feature, None))
+            
+        elif action == "edit":
+            self.statusBar().showMessage(tr("Feature editieren..."))
+            self._edit_feature(('feature', feature, None))
+            
+        elif action == "rebuild":
+            self.statusBar().showMessage(tr("Feature rebuild..."))
+            # Finde den Body für dieses Feature
+            for body in self.document.get_all_bodies():
+                if feature in body.features:
+                    try:
+                        body._rebuild_from_feature(feature)
+                        self.notification_manager.show_toast_overlay(
+                            "success", 
+                            f"Feature {feature.name} rebuilt"
+                        )
+                    except Exception as e:
+                        self.notification_manager.show_toast_overlay(
+                            "error", 
+                            f"Rebuild fehlgeschlagen: {e}"
+                        )
+                    break
+            self.browser.refresh()
+            self._trigger_viewport_update()
+            
+        elif action == "accept_drift":
+            self.statusBar().showMessage(tr("Drift akzeptiert"))
+            # Status zurücksetzen
+            if hasattr(feature, 'status_details'):
+                feature.status_details = {}
+            if hasattr(feature, 'status'):
+                feature.status = "OK"
+            self.notification_manager.show_toast_overlay(
+                "success", 
+                f"Drift für {feature.name} akzeptiert"
+            )
+            self.browser.refresh()
+            
+        elif action == "check_deps":
+            self.statusBar().showMessage(tr("Dependencies prüfen..."))
+            # TNP Stats Panel öffnen
+            self.left_tabs.setCurrentIndex(1)  # TNP Tab
+            self.notification_manager.show_toast_overlay(
+                "info", 
+                f"Dependencies für {feature.name} in TNP-Tab"
+            )
+
+    def _on_edit_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Edit Feature Request."""
+        self._edit_feature(('feature', feature, None))
+
+    def _on_rebuild_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Rebuild Feature Request."""
+        self._on_recovery_action_requested("rebuild", feature)
+
+    def _on_delete_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Delete Feature Request."""
+        # Finde den Body für dieses Feature
+        for body in self.document.get_all_bodies():
+            if feature in body.features:
+                self._on_feature_deleted(feature, body)
+                break
+
+    def _on_highlight_edges_requested(self, edge_indices):
+        """
+        W26 F-UX-1: Handler für Highlight Edges Request.
+        
+        Args:
+            edge_indices: List[int] - Indizes der zu highlightenden Edges
+        """
+        if edge_indices and hasattr(self.viewport_3d, 'highlight_edges'):
+            self.viewport_3d.highlight_edges(edge_indices)
+            self.statusBar().showMessage(f"{len(edge_indices)} Kanten highlightet")
+
+    # ========================================================================
+    # W26 FIX: Projection-Preview Handler
+    # ========================================================================
+
+    def _on_projection_preview_requested(self, edge_tuple, projection_type):
+        """
+        W26 FIX: Handler für Projection-Preview Signal.
+        
+        Args:
+            edge_tuple: (x1, y1, x2, y2, d1, d2) - 2D line coordinates + depth values
+            projection_type: "edge" | "silhouette" | "intersection" | "mesh_outline"
+        """
+        if not edge_tuple or len(edge_tuple) < 4:
+            return
+        
+        try:
+            x1, y1, x2, y2 = edge_tuple[0], edge_tuple[1], edge_tuple[2], edge_tuple[3]
+            
+            # Adapter: Konvertiere zu Viewport-Format
+            # Das Viewport erwartet edges als Liste von ((x1,y1,z1), (x2,y2,z2)) Tupeln
+            edge_line = ((x1, y1, 0), (x2, y2, 0))
+            
+            # Zeige Preview im Viewport
+            if hasattr(self.viewport_3d, 'show_projection_preview'):
+                self.viewport_3d.show_projection_preview([edge_line], projection_type)
+            
+            logger.debug(f"[PROJECTION_PREVIEW] {projection_type}: ({x1},{y1})->({x2},{y2})")
+            
+        except Exception as e:
+            logger.error(f"[PROJECTION_PREVIEW] Error: {e}")
+
+    def _on_projection_preview_cleared(self):
+        """W26 FIX: Clear projection preview when mouse leaves edge."""
+        try:
+            if hasattr(self.viewport_3d, 'clear_projection_preview'):
+                self.viewport_3d.clear_projection_preview()
+            logger.debug("[PROJECTION_PREVIEW] Cleared")
+        except Exception as e:
+            logger.error(f"[PROJECTION_PREVIEW_CLEAR] Error: {e}")

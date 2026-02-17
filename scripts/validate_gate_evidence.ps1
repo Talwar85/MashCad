@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# Gate-Evidence Schema Validator (W8)
+# Gate-Evidence Schema Validator (W27 RELEASE OPS MEGAPACK)
 # Usage:
 #   .\scripts\validate_gate_evidence.ps1
 #   .\scripts\validate_gate_evidence.ps1 -EvidenceDir roadmap_ctp -Pattern "QA_EVIDENCE_W*.json"
@@ -7,6 +7,7 @@
 # Exit Codes:
 #   0 = PASS (or WARN when -FailOnWarning is not set)
 #   1 = FAIL (schema/data violations) or WARN with -FailOnWarning
+# W27: Added validation for delivery_metrics section
 
 param(
     [string]$EvidencePath = "",
@@ -153,6 +154,57 @@ function Validate-GateCommon {
     }
 }
 
+function Validate-DeliveryMetrics {
+    param(
+        $Metrics,
+        [ref]$Issues
+    )
+
+    if ($null -eq $Metrics) {
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_metrics_missing" -Message "delivery_metrics section is missing (W27)"
+        return
+    }
+
+    # W27: Validate delivery_completion_ratio (0.0 to 1.0)
+    if (Has-Prop -Obj $Metrics -Name "delivery_completion_ratio") {
+        $ratio = [double]$Metrics.delivery_completion_ratio
+        if ($ratio -lt 0 -or $ratio -gt 1) {
+            Add-Issue -Issues $Issues -Severity "FAIL" -Code "delivery_ratio_invalid" -Message "delivery_completion_ratio must be between 0 and 1"
+        }
+    } else {
+        Add-Issue -Issues $Issues -Severity "WARN" -Code "delivery_ratio_missing" -Message "delivery_completion_ratio missing"
+    }
+
+    # W27: Validate validation_runtime_seconds
+    if (Has-Prop -Obj $Metrics -Name "validation_runtime_seconds") {
+        if (-not (Test-NonNegativeNumber -Value $Metrics.validation_runtime_seconds)) {
+            Add-Issue -Issues $Issues -Severity "FAIL" -Code "validation_runtime_invalid" -Message "validation_runtime_seconds must be >= 0"
+        }
+    }
+
+    # W27: Validate blocker_type
+    if (Has-Prop -Obj $Metrics -Name "blocker_type") {
+        $allowedTypes = @("OPENGL_CONTEXT", "ACCESS_VIOLATION", "FATAL_ERROR", "IMPORT_ERROR", "LOCK_TEMP", $null, "")
+        if ($Metrics.blocker_type -notin $allowedTypes) {
+            Add-Issue -Issues $Issues -Severity "WARN" -Code "blocker_type_unknown" -Message "Unknown blocker_type: $($Metrics.blocker_type)"
+        }
+    }
+
+    # W27: Validate failed_suite_count
+    if (Has-Prop -Obj $Metrics -Name "failed_suite_count") {
+        if (-not (Test-NonNegativeInt -Value $Metrics.failed_suite_count)) {
+            Add-Issue -Issues $Issues -Severity "FAIL" -Code "failed_suite_count_invalid" -Message "failed_suite_count must be a non-negative integer"
+        }
+    }
+
+    # W27: Validate error_suite_count
+    if (Has-Prop -Obj $Metrics -Name "error_suite_count") {
+        if (-not (Test-NonNegativeInt -Value $Metrics.error_suite_count)) {
+            Add-Issue -Issues $Issues -Severity "FAIL" -Code "error_suite_count_invalid" -Message "error_suite_count must be a non-negative integer"
+        }
+    }
+}
+
 function Validate-EvidenceFile {
     param([System.IO.FileInfo]$File)
 
@@ -193,6 +245,13 @@ function Validate-EvidenceFile {
         Validate-GateCommon -GateName "ui_gate" -Gate $data.summary.ui_gate -Issues ([ref]$issues) -RequireTestCounters $true
         Validate-GateCommon -GateName "pi010_gate" -Gate $data.summary.pi010_gate -Issues ([ref]$issues) -RequireTestCounters $true
         Validate-GateCommon -GateName "hygiene_gate" -Gate $data.summary.hygiene_gate -Issues ([ref]$issues) -RequireTestCounters $false
+    }
+
+    # W27: Validate delivery_metrics section
+    if (Has-Prop -Obj $data -Name "delivery_metrics") {
+        Validate-DeliveryMetrics -Metrics $data.delivery_metrics -Issues ([ref]$issues)
+    } else {
+        Add-Issue -Issues ([ref]$issues) -Severity "WARN" -Code "delivery_metrics_missing" -Message "delivery_metrics section missing (W27)"
     }
 
     $failCount = @($issues | Where-Object { $_.severity -eq "FAIL" }).Count

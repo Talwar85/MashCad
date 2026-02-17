@@ -38,6 +38,15 @@ def _valid_payload() -> dict:
             "time": "23:59:00",
             "branch": "feature/v1-ux-aiB",
         },
+        "delivery_metrics": {
+            "delivery_completion_ratio": 0.95,
+            "validation_runtime_seconds": 120.0,
+            "blocker_type": None,
+            "failed_suite_count": 0,
+            "error_suite_count": 0,
+            "total_tests": 132,
+            "total_passed": 125,
+        },
         "summary": {
             "core_gate": {
                 "status": "PASS",

@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env powershell
-# Gate-Evidence Generator - W22 TOTALPACK Edition (W19+W20+W21+Recovery)
+# Gate-Evidence Generator - W27 RELEASE OPS MEGAPACK Edition
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
@@ -10,6 +10,7 @@
 # W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
 # W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
 # W22 TOTALPACK: All Workpackages A-H (140 Points Target)
+# W27: Added delivery_completion_ratio, validation_runtime_seconds, blocker_type, failed_suite_count, error_suite_count
 
 param(
     [switch]$StrictHygiene = $false,
@@ -349,7 +350,27 @@ Write-Host "=== Evidence Generation Complete ===" -ForegroundColor Cyan
 Write-Host "Total Duration: $([math]::Round($overallDuration, 2))s"
 
 # ============================================================================
-# Generate JSON Evidence (W3: Extended schema)
+# W27: Calculate delivery metrics
+# ============================================================================
+
+# Count failed/error suites (each pytest file is a suite)
+$failedSuiteCount = 0
+$errorSuiteCount = 0
+
+if ($coreParsed.failed -gt 0) { $failedSuiteCount++ }
+if ($coreParsed.errors -gt 0) { $errorSuiteCount++ }
+if ($uiParsed.failed -gt 0) { $failedSuiteCount++ }
+if ($uiParsed.errors -gt 0) { $errorSuiteCount++ }
+if ($pi10Parsed.failed -gt 0) { $failedSuiteCount++ }
+if ($pi10Parsed.errors -gt 0) { $errorSuiteCount++ }
+
+# Calculate delivery completion ratio (passed / total tests)
+$totalTests = $coreParsed.total + $uiParsed.total + $pi10Parsed.total
+$totalPassed = $coreParsed.passed + $uiParsed.passed + $pi10Parsed.passed
+$deliveryCompletionRatio = if ($totalTests -gt 0) { [math]::Round($totalPassed / $totalTests, 3) } else { 0 }
+
+# ============================================================================
+# Generate JSON Evidence (W27: Extended schema with delivery metrics)
 # ============================================================================
 
 $jsonPath = "$OutPrefix.json"
@@ -358,14 +379,24 @@ $jsonData = @{
         date = (Get-Date -Format "yyyy-MM-dd")
         time = (Get-Date -Format "HH:mm:ss")
         branch = "feature/v1-ux-aiB"
-        qa_cell = "GLM 4.7 (UX/Workflow Recovery)"
-        evidence_level = "recovery-closeout W18"
-        evidence_version = "5.1"  # W18: RECOVERY - W17 Blocker-Kill, API Stabilisierung, Controller Integration
+        qa_cell = "AI-LARGE-H-RELEASE-OPS"
+        evidence_level = "W27 RELEASE OPS MEGAPACK"
+        evidence_version = "6.0"  # W27: Release Ops Megapack
         toolchain = @{
             python = "3.11.14"
             pytest = "9.0.2"
             platform = "win32"
         }
+    }
+    # W27: Extended delivery metrics section
+    delivery_metrics = @{
+        delivery_completion_ratio = $deliveryCompletionRatio
+        validation_runtime_seconds = [math]::Round($overallDuration, 2)
+        blocker_type = $uiBlockerInfo.Type
+        failed_suite_count = $failedSuiteCount
+        error_suite_count = $errorSuiteCount
+        total_tests = $totalTests
+        total_passed = $totalPassed
     }
     summary = @{
         core_gate = @{

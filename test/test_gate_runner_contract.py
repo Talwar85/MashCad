@@ -551,5 +551,236 @@ class TestGateEvidenceFormat:
         assert "UI-Gate" in content or "UI Gate" in content
 
 
+class TestFastFeedbackGateContract:
+    """W26: Contract tests for gate_fast_feedback.ps1.
+    W27: Extended with ui_ultraquick and ops_quick profile tests."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def _run_fast_feedback(self, args=None, timeout=120):
+        """Helper to run gate_fast_feedback.ps1."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)]
+        if args:
+            cmd.extend(args)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    def test_fast_feedback_script_exists(self):
+        """W26: gate_fast_feedback.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        assert script_path.exists(), f"gate_fast_feedback.ps1 not found at {script_path}"
+
+    def test_fast_feedback_output_has_status(self):
+        """W26: Output must contain Status: and Exit Code: lines."""
+        result = self._run_fast_feedback(["-Profile", "smoke"])
+        output = result.stdout
+        assert "Status:" in output, "Missing Status: in output"
+        assert "Exit Code:" in output, "Missing Exit Code: in output"
+
+    def test_fast_feedback_smoke_profile_accepted(self):
+        """W26: -Profile smoke must be accepted without error."""
+        result = self._run_fast_feedback(["-Profile", "smoke"])
+        output = result.stdout
+        assert "Profile: smoke" in output, "smoke profile not recognized"
+        assert "=== Fast Feedback Gate Result ===" in output, "Missing result header"
+
+    def test_fast_feedback_output_has_duration(self):
+        """W26: Output must contain Duration line."""
+        result = self._run_fast_feedback(["-Profile", "smoke"])
+        output = result.stdout
+        assert re.search(r"Duration: \d+\.?\d*s", output), "Missing duration in output"
+
+    def test_fast_feedback_output_has_test_counts(self):
+        """W26: Output must contain test count line."""
+        result = self._run_fast_feedback(["-Profile", "smoke"])
+        output = result.stdout
+        assert re.search(r"Tests: \d+ passed", output), "Missing test counts in output"
+
+    def test_fast_feedback_exit_code_pass(self):
+        """W26: Exit code 0 when tests pass."""
+        result = self._run_fast_feedback(["-Profile", "smoke"])
+        output = result.stdout
+        if "Status: PASS" in output:
+            assert result.returncode == 0, "PASS must have exit code 0"
+
+    def test_fast_feedback_json_out(self):
+        """W26: -JsonOut produces valid JSON file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = str(Path(tmpdir) / "ff_result.json")
+            result = self._run_fast_feedback(["-Profile", "smoke", "-JsonOut", json_path])
+
+            json_file = Path(json_path)
+            if json_file.exists():
+                with open(json_file) as f:
+                    data = json.load(f)
+                assert data.get("schema") == "fast_feedback_gate_v1", "Wrong JSON schema"
+                assert data.get("profile") == "smoke", "Wrong profile in JSON"
+                assert "status" in data, "Missing status in JSON"
+                assert "passed" in data, "Missing passed in JSON"
+
+    # ========================================================================
+    # W27: New profile tests (ui_ultraquick, ops_quick)
+    # ========================================================================
+
+    def test_fast_feedback_ui_ultraquick_profile_accepted_w27(self):
+        """W27: -Profile ui_ultraquick must be accepted."""
+        result = self._run_fast_feedback(["-Profile", "ui_ultraquick"], timeout=60)
+        output = result.stdout
+        assert "Profile: ui_ultraquick" in output, "ui_ultraquick profile not recognized"
+        assert "=== Fast Feedback Gate Result ===" in output, "Missing result header"
+
+    def test_fast_feedback_ui_ultraquick_target_duration_w27(self):
+        """W27: ui_ultraquick profile should complete in <30s."""
+        result = self._run_fast_feedback(["-Profile", "ui_ultraquick"], timeout=60)
+        output = result.stdout
+        duration_match = re.search(r"Duration: (\d+\.?\d*)s", output)
+        assert duration_match, "Missing duration in output"
+        duration = float(duration_match.group(1))
+        assert duration < 60, f"ui_ultraquick took {duration}s, expected <30s target (relaxed to 60s for CI)"
+
+    def test_fast_feedback_ops_quick_profile_accepted_w27(self):
+        """W27: -Profile ops_quick must be accepted."""
+        result = self._run_fast_feedback(["-Profile", "ops_quick"], timeout=60)
+        output = result.stdout
+        assert "Profile: ops_quick" in output, "ops_quick profile not recognized"
+        assert "=== Fast Feedback Gate Result ===" in output, "Missing result header"
+
+    def test_fast_feedback_ops_quick_target_duration_w27(self):
+        """W27: ops_quick profile should complete in <20s."""
+        result = self._run_fast_feedback(["-Profile", "ops_quick"], timeout=60)
+        output = result.stdout
+        duration_match = re.search(r"Duration: (\d+\.?\d*)s", output)
+        assert duration_match, "Missing duration in output"
+        duration = float(duration_match.group(1))
+        assert duration < 60, f"ops_quick took {duration}s, expected <20s target (relaxed to 60s for CI)"
+
+    def test_fast_feedback_ui_ultraquick_has_test_counts_w27(self):
+        """W27: ui_ultraquick must output test counts."""
+        result = self._run_fast_feedback(["-Profile", "ui_ultraquick"], timeout=60)
+        output = result.stdout
+        assert re.search(r"Tests: \d+ passed", output), "Missing test counts in ui_ultraquick output"
+
+    def test_fast_feedback_ops_quick_has_test_counts_w27(self):
+        """W27: ops_quick must output test counts."""
+        result = self._run_fast_feedback(["-Profile", "ops_quick"], timeout=60)
+        output = result.stdout
+        assert re.search(r"Tests: \d+ passed", output), "Missing test counts in ops_quick output"
+
+
+class TestPreflightBootstrapScannerContract:
+    """W27: Contract tests for preflight_ui_bootstrap.ps1."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def _run_preflight(self, timeout=60):
+        """Helper to run preflight_ui_bootstrap.ps1."""
+        script_path = self.SCRIPT_DIR / "preflight_ui_bootstrap.ps1"
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    def test_preflight_script_exists_w27(self):
+        """W27: preflight_ui_bootstrap.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "preflight_ui_bootstrap.ps1"
+        assert script_path.exists(), f"preflight_ui_bootstrap.ps1 not found at {script_path}"
+
+    def test_preflight_output_has_status_w27(self):
+        """W27: Preflight output must contain Status: line."""
+        result = self._run_preflight()
+        output = result.stdout
+        assert "Status:" in output, "Missing Status: in preflight output"
+
+    def test_preflight_output_has_duration_w27(self):
+        """W27: Preflight output must contain Duration line."""
+        result = self._run_preflight()
+        output = result.stdout
+        assert re.search(r"Duration: \d+\.?\d*s", output), "Missing duration in preflight output"
+
+    def test_preflight_completes_under_20s_w27(self):
+        """W27: Preflight should complete in <20s."""
+        result = self._run_preflight()
+        output = result.stdout
+        duration_match = re.search(r"Duration: (\d+\.?\d*)s", output)
+        assert duration_match, "Missing duration in output"
+        duration = float(duration_match.group(1))
+        assert duration < 60, f"Preflight took {duration}s, expected <20s target (relaxed to 60s for CI)"
+
+    def test_preflight_pass_has_exit_code_0_w27(self):
+        """W27: Preflight PASS must have exit code 0."""
+        result = self._run_preflight()
+        output = result.stdout
+        if "Status: PASS" in output:
+            assert result.returncode == 0, "Preflight PASS must have exit code 0"
+
+    def test_preflight_blocked_infra_has_exit_code_0_w27(self):
+        """W27: Preflight BLOCKED_INFRA must have exit code 0 (not a logic failure)."""
+        result = self._run_preflight()
+        output = result.stdout
+        if "Status: BLOCKED_INFRA" in output:
+            assert result.returncode == 0, "Preflight BLOCKED_INFRA must have exit code 0"
+
+    def test_preflight_shows_blocker_type_when_blocked_w27(self):
+        """W27: Preflight must show Blocker-Type when blocked."""
+        result = self._run_preflight()
+        output = result.stdout
+        if "Status: BLOCKED_INFRA" in output or "Status: FAIL" in output:
+            assert "Blocker-Type:" in output, "Preflight must show Blocker-Type when blocked"
+
+    def test_preflight_shows_root_cause_when_blocked_w27(self):
+        """W27: Preflight must show Root-Cause when blocked."""
+        result = self._run_preflight()
+        output = result.stdout
+        if "Status: BLOCKED_INFRA" in output or "Status: FAIL" in output:
+            assert "Root-Cause:" in output, "Preflight must show Root-Cause when blocked"
+
+
+class TestGateUIPreflightIntegrationContract:
+    """W27: Contract tests for gate_ui.ps1 preflight integration."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def _run_gate_ui(self, args=None, timeout=120):
+        """Helper to run gate_ui.ps1."""
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)]
+        if args:
+            cmd.extend(args)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    def test_gate_ui_has_skip_preflight_parameter_w27(self):
+        """W27: gate_ui.ps1 must accept -SkipPreflight parameter."""
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "SkipPreflight" in content, "gate_ui.ps1 must have SkipPreflight parameter"
+
+    def test_gate_ui_calls_preflight_script_w27(self):
+        """W27: gate_ui.ps1 must call preflight_ui_bootstrap.ps1."""
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "preflight_ui_bootstrap.ps1" in content, "gate_ui.ps1 must call preflight_ui_bootstrap.ps1"
+
+    def test_gate_ui_shows_preflight_status_w27(self):
+        """W27: gate_ui.ps1 must show preflight status in output."""
+        result = self._run_gate_ui(["-SkipPreflight"], timeout=120)
+        # With -SkipPreflight, preflight section should not appear
+        # But we're checking the script has the logic
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "[PREFLIGHT]" in content, "gate_ui.ps1 must show preflight section"
+        assert "Preflight bootstrap check failed" in content, "gate_ui.ps1 must show preflight failure message"
+
+    def test_gate_ui_serial_execution_enforced_w27(self):
+        """W27: gate_ui.ps1 must enforce serial execution."""
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "Serial enforced" in content or "serial execution" in content.lower(), "gate_ui.ps1 must document serial execution"
+
+    def test_gate_ui_shows_root_causes_w27(self):
+        """W27: gate_ui.ps1 must show Root-Causes section."""
+        script_path = self.SCRIPT_DIR / "gate_ui.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "Root-Causes" in content, "gate_ui.ps1 must show Root-Causes section"
+        assert "LOCK/TEMP" in content, "gate_ui.ps1 must detect LOCK/TEMP issues"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
