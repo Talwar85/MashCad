@@ -1126,7 +1126,7 @@ class SketchHandlersMixin:
             logger.error(f"Spline error: {e}")
         self._cancel_tool()
     
-    def _handle_move(self, pos, snap_type):
+    def _handle_move(self, pos, snap_type, snap_entity=None):
         """Verschieben: Basispunkt â†’ Zielpunkt (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
@@ -1170,7 +1170,7 @@ class SketchHandlersMixin:
                 moved.add(c.center.id)
         self._solve_async()
     
-    def _handle_copy(self, pos, snap_type):
+    def _handle_copy(self, pos, snap_type, snap_entity=None):
         """Kopieren: Basispunkt â†’ Zielpunkt (INKLUSIVE CONSTRAINTS)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
@@ -1248,7 +1248,11 @@ class SketchHandlersMixin:
         # 4. Constraints kopieren (Der wichtige Teil!)
         # Wir durchsuchen alle existierenden Constraints
         constraints_added = 0
-        for c in self.sketch.constraints:
+        constraint_cls = globals().get("Constraint")
+        if constraint_cls is None:
+            from sketcher.constraints import Constraint as constraint_cls
+
+        for c in list(self.sketch.constraints):
             # PrÃ¼fen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
             # Das bedeutet, der Constraint bezieht sich nur auf kopierte Elemente (intern).
             # Beispiel: Rechteck-SeitenlÃ¤nge (intern) -> Kopieren.
@@ -1268,10 +1272,15 @@ class SketchHandlersMixin:
             
             if is_internal:
                 # Constraint klonen
-                new_c = Constraint(
+                new_c = constraint_cls(
                     type=c.type,
                     entities=new_entities,
-                    value=c.value
+                    value=c.value,
+                    formula=getattr(c, "formula", None),
+                    driving=getattr(c, "driving", True),
+                    priority=getattr(c, "priority", None),
+                    group=getattr(c, "group", None),
+                    enabled=getattr(c, "enabled", True),
                 )
                 self.sketch.constraints.append(new_c)
                 constraints_added += 1
@@ -1286,7 +1295,7 @@ class SketchHandlersMixin:
         if constraints_added > 0:
             msg += f", {constraints_added} constraints"
         self.status_message.emit(msg)
-    def _handle_rotate(self, pos, snap_type):
+    def _handle_rotate(self, pos, snap_type, snap_entity=None):
         """Drehen: Zentrum â†’ Winkel (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
@@ -1368,7 +1377,7 @@ class SketchHandlersMixin:
         
         self._solve_async()
     
-    def _handle_mirror(self, pos, snap_type):
+    def _handle_mirror(self, pos, snap_type, snap_entity=None):
         """Spiegeln: Achse durch 2 Punkte (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
@@ -1608,7 +1617,7 @@ class SketchHandlersMixin:
         self.status_message.emit(f"Circular Pattern: {created_count} elements.")
         self._cancel_tool()
     
-    def _handle_scale(self, pos, snap_type):
+    def _handle_scale(self, pos, snap_type, snap_entity=None):
         """Skalieren: Zentrum â†’ Faktor (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
