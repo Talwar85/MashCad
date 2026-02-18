@@ -7924,19 +7924,59 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points and not self.selected_splines:
             return
         self._save_undo()
+        
+        # W34-fix: Wenn Polygon-Linien gelöscht werden, auch den Treiberkreis und Punkte löschen
+        # Sammle alle Treiberkreise der zu löschenden Linien
+        driver_circles_to_delete = set()
+        for line in self.selected_lines:
+            driver_circle = self._find_polygon_driver_circle_for_line(line)
+            if driver_circle is not None:
+                driver_circles_to_delete.add(id(driver_circle))
+        
+        # Sammle alle Polygon-Punkte (Punkte mit POINT_ON_CIRCLE zu diesen Kreisen)
+        polygon_points_to_delete = set()
+        for c in self.sketch.constraints:
+            if c.type.name == "POINT_ON_CIRCLE" and len(c.entities) >= 2:
+                point_entity = c.entities[0]
+                circle_entity = c.entities[1]
+                if id(circle_entity) in driver_circles_to_delete:
+                    polygon_points_to_delete.add(id(point_entity))
+        
         deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points) + len(self.selected_splines)
+        
+        # Lösche Linien
         for line in self.selected_lines[:]:
             self.sketch.delete_line(line)
-        for circle in self.selected_circles[:]:
+        
+        # Lösche Kreise (inkl. Polygon-Treiberkreise)
+        circles_to_delete = list(self.selected_circles)
+        for circle in self.sketch.circles:
+            if id(circle) in driver_circles_to_delete:
+                if circle not in circles_to_delete:
+                    circles_to_delete.append(circle)
+        for circle in circles_to_delete:
             self.sketch.delete_circle(circle)
+        
         for arc in self.selected_arcs[:]:
             self.sketch.delete_arc(arc)
-        for pt in self.selected_points[:]:
+        
+        # Lösche ausgewählte Punkte + Polygon-Punkte
+        points_to_delete = list(self.selected_points)
+        for pt in self.sketch.points:
+            if id(pt) in polygon_points_to_delete:
+                if pt not in points_to_delete:
+                    points_to_delete.append(pt)
+        for pt in points_to_delete:
             if pt in self.sketch.points:
                 self.sketch.points.remove(pt)
+        
         for spline in self.selected_splines[:]:
             if spline in self.sketch.splines:
                 self.sketch.splines.remove(spline)
+        
+        # Update count with deleted polygon elements (circles + points from driver circles)
+        deleted_count += len(driver_circles_to_delete) + len(polygon_points_to_delete)
+        
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
