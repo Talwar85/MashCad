@@ -27,6 +27,7 @@ def format_zoom_label(view_scale: float) -> str:
         return f"{int(view_scale)}x"
     return f"{view_scale:.1f}x"
 from typing import Optional, List, Tuple, Set
+import inspect
 import math
 import time
 import sys
@@ -6369,17 +6370,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             if handler:
                 try:
-                    # Versuche, das Entity mit zu übergeben (für _handle_line notwendig)
-                    handler(snapped, snap_type, snap_entity)
-                except TypeError:
-                    # Fallback: Falls andere Tools (z.B. Rect) noch nicht aktualisiert wurden
-                    # und keine 3 Argumente akzeptieren, rufen wir sie klassisch auf.
+                    # Signaturbasiert dispatchen, damit interne TypeError im Handler
+                    # nicht als "falsche Argumentzahl" maskiert werden.
+                    expects_snap_entity = False
                     try:
+                        expects_snap_entity = len(inspect.signature(handler).parameters) >= 3
+                    except Exception:
+                        expects_snap_entity = False
+
+                    if expects_snap_entity:
+                        handler(snapped, snap_type, snap_entity)
+                    else:
                         handler(snapped, snap_type)
-                    except Exception as e:
-                        logger.error(f"Handler {handler_name} failed: {e}")
-                        import traceback
-                        traceback.print_exc()
+                except Exception as e:
+                    logger.error(f"Handler {handler_name} failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         # 4. Rechtsklick (Abbrechen / Kontextmenü)
         elif event.button() == Qt.RightButton:
