@@ -92,8 +92,56 @@ if ($tempFiles.Count -gt 0) {
 
 Write-Host ""
 
-# Check 4: .gitignore coverage
-Write-Host "[Check 4] .gitignore coverage..."
+# Check 4: Backup artifact files (.bak, .bak2, .bak_final, etc.)
+Write-Host "[Check 4] Backup artifact files (*.bak*)..."
+$backupFiles = Get-ChildItem -Path "." -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -match '\.bak([0-9]+)?($|\.)|\.bak_final$'
+} | Select-Object -First 100
+
+if ($backupFiles.Count -gt 0) {
+    Write-Host "  [VIOLATION] Found $($backupFiles.Count) backup artifacts:" -ForegroundColor Yellow
+    foreach ($file in $backupFiles) {
+        Write-Host "    - $($file.FullName)" -ForegroundColor Yellow
+        $HYGIENE_VIOLATIONS += $file.FullName
+        $VIOLATION_DETAILS += @{
+            File = $file.FullName
+            Type = "Backup-Artifact"
+            Recommendation = "Delete backup artifact and keep only canonical source file"
+            Owner = "Dev-Team"
+        }
+    }
+} else {
+    Write-Host "  [OK] No backup artifacts found" -ForegroundColor Green
+}
+
+Write-Host ""
+
+# Check 5: Temp helper scripts (temp_*)
+Write-Host "[Check 5] Temp helper scripts (temp_*)..."
+$tempHelperFiles = Get-ChildItem -Path "." -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.BaseName -like "temp_*"
+} | Select-Object -First 100
+
+if ($tempHelperFiles.Count -gt 0) {
+    Write-Host "  [VIOLATION] Found $($tempHelperFiles.Count) temp helper files:" -ForegroundColor Yellow
+    foreach ($file in $tempHelperFiles) {
+        Write-Host "    - $($file.FullName)" -ForegroundColor Yellow
+        $HYGIENE_VIOLATIONS += $file.FullName
+        $VIOLATION_DETAILS += @{
+            File = $file.FullName
+            Type = "Temp-Helper"
+            Recommendation = "Delete temp helper file or move to a dedicated scratch area outside repo"
+            Owner = "Dev-Team"
+        }
+    }
+} else {
+    Write-Host "  [OK] No temp helper files found" -ForegroundColor Green
+}
+
+Write-Host ""
+
+# Check 6: .gitignore coverage
+Write-Host "[Check 6] .gitignore coverage..."
 $gitignorePath = ".gitignore"
 $missingPatterns = @()
 

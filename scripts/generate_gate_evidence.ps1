@@ -1,8 +1,18 @@
-#!/usr/bin/env powershell
-# Gate-Evidence Generator - W3
+﻿#!/usr/bin/env powershell
+# Gate-Evidence Generator - W29 RELEASE OPS TIMEOUT-PROOF Edition
 # Usage: .\scripts\generate_gate_evidence.ps1 [-StrictHygiene] [-OutPrefix <prefix>]
 # Generates automated QA evidence (MD + JSON) for all gates
 # W3: Added status_class, blocker_signature, BLOCKED_INFRA classification
+# W9: Extended UI-Test suite for Discoverability hints, Selection-State Final Convergence
+# W10: Extended UI-Test suite for Error UX v2 Integration, Discoverability v4 Anti-Spam
+# W11: Extended UI-Test suite for Error UX v2 Product Flows, Selection-State Lifecycle, Discoverability v5 Context
+# W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert (test_interaction_drag_isolated.py)
+# W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
+# W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
+# W22 TOTALPACK: All Workpackages A-H (140 Points Target)
+# W27: Added delivery_completion_ratio, validation_runtime_seconds, blocker_type, failed_suite_count, error_suite_count
+# W28: Enhanced delivery_metrics with missing field detection, clearer error output
+# W29: Timeout-proof contract tests, improved suite count metrics, version bump
 
 param(
     [switch]$StrictHygiene = $false,
@@ -11,16 +21,16 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# Default output prefix if not specified (W3)
+# Default output prefix if not specified (W22 TOTALPACK)
 if (-not $OutPrefix) {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W3_$timestamp"
+    $OutPrefix = "roadmap_ctp/QA_EVIDENCE_W22_TOTALPACK_$timestamp"
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 
-Write-Host "=== Gate-Evidence Generator (W3) ===" -ForegroundColor Cyan
+Write-Host "=== Gate-Evidence Generator (W22 TOTALPACK) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Prefix: $OutPrefix"
 Write-Host "StrictHygiene: $StrictHygiene"
@@ -149,7 +159,11 @@ $coreTests = @(
     "test/test_feature_flags.py",
     "test/test_tnp_stability.py",
     "test/test_feature_edit_robustness.py",
+    "test/test_feature_commands_atomic.py",
     "test/test_project_roundtrip_persistence.py",
+    "test/test_showstopper_red_flag_pack.py",
+    "test/test_golden_model_regression_harness.py",
+    "test/test_core_cross_platform_contract.py",
     "test/test_parametric_reference_modelset.py"
 )
 
@@ -181,14 +195,19 @@ $results += @{
 Write-Host "  Result: $($coreParsed.passed) passed, $($coreParsed.failed) failed, $($coreParsed.skipped) skipped - $coreStatusClass"
 
 # ============================================================================
-# 2. UI-Gate (W3: BLOCKED_INFRA detection)
+# 2. UI-Gate (W9: BLOCKED_INFRA detection, extended test suite)
 # ============================================================================
 
 Write-Host "[2/4] Running UI-Gate..." -ForegroundColor Yellow
 $uiStart = Get-Date
 $uiTests = @(
     "test/test_ui_abort_logic.py",
-    "test/harness/test_interaction_consistency.py"
+    "test/harness/test_interaction_consistency.py",
+    "test/test_selection_state_unified.py",
+    "test/test_browser_tooltip_formatting.py",
+    "test/test_discoverability_hints.py",
+    "test/test_error_ux_v2_integration.py",
+    "test/test_feature_commands_atomic.py"
 )
 
 $uiOutput = @()
@@ -333,7 +352,43 @@ Write-Host "=== Evidence Generation Complete ===" -ForegroundColor Cyan
 Write-Host "Total Duration: $([math]::Round($overallDuration, 2))s"
 
 # ============================================================================
-# Generate JSON Evidence (W3: Extended schema)
+# W29: Calculate delivery metrics with improved validation
+# ============================================================================
+
+# Count failed/error suites (each pytest file is a suite)
+$failedSuiteCount = 0
+$errorSuiteCount = 0
+
+if ($coreParsed.failed -gt 0) { $failedSuiteCount++ }
+if ($coreParsed.errors -gt 0) { $errorSuiteCount++ }
+if ($uiParsed.failed -gt 0) { $failedSuiteCount++ }
+if ($uiParsed.errors -gt 0) { $errorSuiteCount++ }
+if ($pi10Parsed.failed -gt 0) { $failedSuiteCount++ }
+if ($pi10Parsed.errors -gt 0) { $errorSuiteCount++ }
+
+# Calculate delivery completion ratio (passed / total tests)
+$totalTests = $coreParsed.total + $uiParsed.total + $pi10Parsed.total
+$totalPassed = $coreParsed.passed + $uiParsed.passed + $pi10Parsed.passed
+$deliveryCompletionRatio = if ($totalTests -gt 0) { [math]::Round($totalPassed / $totalTests, 3) } else { 0.0 }
+
+# W29: Blocker type consistency - normalize null/empty
+$normalizedBlockerType = if ($uiBlockerInfo.Type) { $uiBlockerInfo.Type } else { $null }
+
+# W29: Validation for delivery metrics (warn if inconsistent)
+if ($totalTests -eq 0 -and $deliveryCompletionRatio -eq 0) {
+    Write-Host "[WARN] No tests found - delivery_metrics may be incomplete" -ForegroundColor Yellow
+}
+
+# W29: Calculate suite counts (total gates run)
+$totalSuiteCount = 4  # core, ui, pi010, hygiene
+$passedSuiteCount = 0
+if ($coreParsed.failed -eq 0 -and $coreParsed.errors -eq 0) { $passedSuiteCount++ }
+if ($uiParsed.failed -eq 0 -and $uiParsed.errors -eq 0) { $passedSuiteCount++ }
+if ($pi10Parsed.failed -eq 0 -and $pi10Parsed.errors -eq 0) { $passedSuiteCount++ }
+if ($hygieneStatusClass -eq "CLEAN" -or $hygieneStatusClass -eq "PASS") { $passedSuiteCount++ }
+
+# ============================================================================
+# Generate JSON Evidence (W27: Extended schema with delivery metrics)
 # ============================================================================
 
 $jsonPath = "$OutPrefix.json"
@@ -342,14 +397,31 @@ $jsonData = @{
         date = (Get-Date -Format "yyyy-MM-dd")
         time = (Get-Date -Format "HH:mm:ss")
         branch = "feature/v1-ux-aiB"
-        qa_cell = "AI-3 (GLM 4.7)"
-        evidence_level = "release-hardened W3"
-        evidence_version = "3.0"
+        qa_cell = "AI-LARGE-H-RELEASE-OPS"
+        evidence_level = "W29 RELEASE OPS TIMEOUT-PROOF"
+        evidence_version = "7.0"  # W29: Timeout-proof release ops
         toolchain = @{
             python = "3.11.14"
             pytest = "9.0.2"
             platform = "win32"
         }
+    }
+    # W29: Extended delivery metrics section with enhanced validation
+    delivery_metrics = @{
+        # Core delivery metrics (W27+)
+        delivery_completion_ratio = $deliveryCompletionRatio
+        validation_runtime_seconds = [math]::Round($overallDuration, 2)
+        blocker_type = $normalizedBlockerType
+        failed_suite_count = $failedSuiteCount
+        error_suite_count = $errorSuiteCount
+        total_tests = $totalTests
+        total_passed = $totalPassed
+        # W29: Additional suite counts for better visibility
+        total_suite_count = $totalSuiteCount
+        passed_suite_count = $passedSuiteCount
+        # W29: Target metrics for comparison
+        target_completion_ratio = 0.99  # 99% target
+        target_runtime_seconds = 300.0   # 5 min target
     }
     summary = @{
         core_gate = @{
@@ -409,7 +481,7 @@ $jsonData = @{
         }
     })
     signatures = @{
-        sha256_equivalent = "$($coreParsed.passed)p$($coreParsed.skipped)s_$($pi10Parsed.passed)p_$($uiParsed.errors)e$($hygieneViolations)v_w3_$(Get-Date -Format 'yyyyMMdd')"
+        sha256_equivalent = "$($coreParsed.passed)p$($coreParsed.skipped)s_$($pi10Parsed.passed)p_$($uiParsed.errors)e$($hygieneViolations)v_w14_$(Get-Date -Format 'yyyyMMdd')"
     }
 }
 
@@ -426,23 +498,23 @@ $mdPath = "$OutPrefix.md"
 function Get-StatusDisplay {
     param($status, $gate)
 
-    if ($gate -eq "Hygiene" -and $status -eq "CLEAN") { return "✅ CLEAN" }
-    if ($gate -eq "Hygiene" -and $status -eq "WARNING") { return "⚠️ VIOLATIONS" }
-    if ($status -eq "PASS") { return "✅ PASS" }
-    if ($status -eq "BLOCKED_INFRA") { return "🔴 BLOCKED_INFRA" }
-    if ($status -eq "BLOCKED") { return "🔴 BLOCKED" }
-    if ($status -eq "FAIL") { return "❌ FAIL" }
-    return "⚠️ $status"
+    if ($gate -eq "Hygiene" -and $status -eq "CLEAN") { return "[CLEAN]" }
+    if ($gate -eq "Hygiene" -and $status -eq "WARNING") { return "[VIOLATIONS]" }
+    if ($status -eq "PASS") { return "[PASS]" }
+    if ($status -eq "BLOCKED_INFRA") { return "[BLOCKED_INFRA]" }
+    if ($status -eq "BLOCKED") { return "[BLOCKED]" }
+    if ($status -eq "FAIL") { return "[FAIL]" }
+    return "[WARN] $status"
 }
 
 $mdContent = @"
-# QA Evidence W3
+# QA Evidence W18 RECOVERY
 **Date:** $($jsonData.metadata.date)
 **Time:** $($jsonData.metadata.time)
 **Branch:** feature/v1-ux-aiB
 **QA Cell:** AI-3 (GLM 4.7)
-**Evidence Level:** Release-Hardened W3
-**Evidence Version:** 3.0
+**Evidence Level:** Recovery-Closeout W18
+**Evidence Version:** 5.1 (W18: RECOVERY - W17 Blocker-Kill, API Stabilisierung, Controller)
 
 ---
 
@@ -516,14 +588,14 @@ $($uiParsed.passed) passed, $($uiParsed.errors) errors, $($uiParsed.skipped) ski
 **Status:** $(Get-StatusDisplay $uiStatusClass "UI")
 
 $(if ($uiBlockerInfo.Type) {
-@*
+@"
 
 **Blocker-Type:** $($uiBlockerInfo.Type)
 **Blocker-Signature:** $($uiBlockerInfo.Signature)
 **Blocker-Location:** $($uiBlockerInfo.Location)
 **First Affected Test:** $($uiBlockerInfo.FirstAffectedTest)
 
-*@
+"@
 })
 
 ---
@@ -549,7 +621,7 @@ Status: $hygieneStatusClass
 
 $(if ($blockers.Count -gt 0) {
     $blockers | ForEach-Object {
-        @*
+        @"
 
 ### $($_.Gate) - $($_.Type)
 - **Signature:** `$($_.Signature)`
@@ -557,14 +629,14 @@ $(if ($blockers.Count -gt 0) {
 - **First Affected Test:** `$($_.FirstAffectedTest)`
 - **Owner:** $($_.Owner)
 
-*@
+"@
     }
 } else {
-    @*
+    @"
 
 **No blockers (Core clean)**
 
-*@
+"@
 })
 
 ---
@@ -572,7 +644,7 @@ $(if ($blockers.Count -gt 0) {
 ## Recommendations
 
 $(if ($uiStatusClass -eq "BLOCKED_INFRA" -and $uiBlockerInfo.Type -eq "OPENGL_CONTEXT") {
-    @*
+    @"
 
 ### UI VTK OpenGL Context Issue
 The UI-Gate is blocked by VTK OpenGL Context failures. This is an infrastructure issue
@@ -581,21 +653,21 @@ related to Windows OpenGL context management in the VTK rendering pipeline.
 **Recommended Action:** Investigate VTK context lifecycle in `gui/viewport_pyvista.py`.
 Consider adding explicit context cleanup or using offscreen rendering for tests.
 
-*@
+"@
 } elseif ($coreParsed.passed -lt 248) {
-    @*
+    @"
 
 ### Core-Gate Below Expected (248 expected, $($coreParsed.passed) actual)
 The Core-Gate is below the expected baseline. Investigate failed/skipped tests.
 
-*@
+"@
 } else {
-    @*
+    @"
 
 ### All Core Gates Green
 Core functionality is stable. Focus on resolving UI infrastructure blocker.
 
-*@
+"@
 })
 
 ---
@@ -608,9 +680,9 @@ $($jsonData.signatures.sha256_equivalent)
 
 ---
 
-**Generated by:** AI-3 (GLM 4.7) QA Cell - **Automated W3**
+**Generated by:** GLM 4.7 (UX/Workflow Recovery) - **Automated W18 RECOVERY**
 **Validated on:** $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-**Next Update:** After UI blocker resolution
+**Next Update:** After W15 implementation
 "@
 
 $mdContent | Out-File -FilePath $mdPath -Encoding UTF8
@@ -621,7 +693,7 @@ Write-Host "MD written: $mdPath"
 # ============================================================================
 
 Write-Host ""
-Write-Host "=== Evidence Files Generated (W3) ===" -ForegroundColor Green
+Write-Host "=== Evidence Files Generated (W14) ===" -ForegroundColor Green
 Write-Host "JSON: $jsonPath"
 Write-Host "MD:   $mdPath"
 Write-Host ""
@@ -629,7 +701,7 @@ Write-Host ""
 # Overall status
 $overallPass = ($coreStatusClass -eq "PASS") -and ($pi10StatusClass -eq "PASS")
 $overallColor = if ($overallPass) { "Green" } else { "Red" }
-$overallText = if ($overallPass) { "✅ Core Gates PASSED" } else { "❌ Core Gates FAILED" }
+$overallText = if ($overallPass) { "[PASS] Core Gates PASSED" } else { "[FAIL] Core Gates FAILED" }
 
 Write-Host "Overall Core: " -NoNewline
 Write-Host $overallText -ForegroundColor $overallColor

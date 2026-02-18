@@ -147,6 +147,37 @@ def _solid_metrics(solid):
         return None
 
 
+def _canonicalize_indices(indices):
+    """
+    Normalisiert Topologie-Indizes fuer Determinismus.
+
+    EPIC X2: Stellt sicher dass edge_indices, face_indices etc.
+    immer sortiert und entdupliziert sind. Dies ist kritisch fuer:
+    - Rebuild-Idempotenz
+    - Save/Load Konsistenz
+    - TNP Reference Stability
+
+    Args:
+        indices: Liste von Indizes (int, float, oder andere)
+
+    Returns:
+        Sorted list of unique non-negative integers
+    """
+    if not indices:
+        return []
+
+    canonical = set()
+    for idx in indices:
+        try:
+            i = int(idx)
+            if i >= 0:
+                canonical.add(i)
+        except (ValueError, TypeError):
+            continue
+
+    return sorted(canonical)
+
+
 # ==================== DATENSTRUKTUREN ====================
 
 # Refactored: Feature classes moved to modeling/features/ and modeling/construction.py
@@ -1274,6 +1305,89 @@ class Body:
             return None
         return dict(pending)
 
+    @staticmethod
+    def _classify_error_code(error_code: str) -> tuple[str, str]:
+        """Mappt Error-Code auf stabile Envelope-Klassen fuer UI/QA."""
+        code_norm = str(error_code or "").strip().lower()
+        warning_codes = {
+            "fallback_used",
+            "tnp_ref_drift",
+        }
+        blocked_codes = {
+            "blocked_by_upstream_error",
+            "fallback_blocked_strict",
+        }
+        critical_codes = {
+            "rebuild_finalize_failed",
+        }
+        if code_norm in critical_codes:
+            return "CRITICAL", "critical"
+        if code_norm in warning_codes:
+            return "WARNING_RECOVERABLE", "warning"
+        if code_norm in blocked_codes:
+            return "BLOCKED", "blocked"
+        return "ERROR", "error"
+
+    @staticmethod
+    def _default_next_action_for_code(error_code: str) -> str:
+        defaults = {
+            "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
+            "fallback_used": "Ergebnis wurde via Fallback erzeugt. Geometrie pruefen und Parameter/Referenz ggf. nachziehen.",
+            "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
+            "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
+            "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
+            "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
+            "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
+            "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
+            "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
+            "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
+            "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
+            "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
+            "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
+            "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
+        }
+        return defaults.get(
+            error_code,
+            "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
+        )
+
+    @classmethod
+    def _normalize_status_details_for_load(cls, status_details: Any) -> dict:
+        """
+        Backward-Compat fuer persistierte status_details.
+
+        Legacy-Dateien koennen `code` ohne `status_class`/`severity` enthalten.
+        Beim Laden werden diese Felder deterministisch nachgezogen.
+        """
+        if not isinstance(status_details, dict):
+            return {}
+
+        normalized = dict(status_details)
+        code = str(normalized.get("code", "") or "").strip()
+        if code:
+            normalized.setdefault("schema", "error_envelope_v1")
+        has_status_class = bool(str(normalized.get("status_class", "") or "").strip())
+        has_severity = bool(str(normalized.get("severity", "") or "").strip())
+        if code and (not has_status_class or not has_severity):
+            status_class, severity = cls._classify_error_code(code)
+            normalized.setdefault("status_class", status_class)
+            normalized.setdefault("severity", severity)
+
+        hint = str(normalized.get("hint", "") or "").strip()
+        next_action = str(normalized.get("next_action", "") or "").strip()
+        if hint and not next_action:
+            normalized["next_action"] = hint
+            next_action = hint
+        if next_action and not hint:
+            normalized["hint"] = next_action
+            hint = next_action
+        if code and not hint and not next_action:
+            action = cls._default_next_action_for_code(code)
+            if action:
+                normalized["hint"] = action
+                normalized["next_action"] = action
+        return normalized
+
     def _build_operation_error_details(
         self,
         *,
@@ -1284,32 +1398,14 @@ class Body:
         hint: str = "",
         fallback_error: str = "",
     ) -> dict:
-        def _default_next_action(error_code: str) -> str:
-            defaults = {
-                "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
-                "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
-                "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
-                "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
-                "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
-                "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
-                "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
-                "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
-                "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
-                "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
-                "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
-                "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
-                "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
-            }
-            return defaults.get(
-                error_code,
-                "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
-            )
-
+        status_class, severity = self._classify_error_code(code)
         details = {
             "schema": "error_envelope_v1",
             "code": code,
             "operation": op_name,
             "message": message,
+            "status_class": status_class,
+            "severity": severity,
         }
         if feature is not None:
             details["feature"] = {
@@ -1320,7 +1416,7 @@ class Body:
         refs = self._collect_feature_reference_payload(feature)
         if refs:
             details["refs"] = refs
-        next_action = hint or _default_next_action(code)
+        next_action = hint or self._default_next_action_for_code(code)
         if next_action:
             details["hint"] = next_action
             details["next_action"] = next_action
@@ -1389,9 +1485,21 @@ class Body:
             )
             error_code = tnp_code_by_category.get(tnp_category, "operation_failed")
             dependency_error = None
-            if error_code == "operation_failed" and isinstance(e, (ImportError, ModuleNotFoundError)):
+            if error_code == "operation_failed":
                 dep_msg = str(e).strip() or e.__class__.__name__
-                if "OCP" in dep_msg or "No module named 'OCP" in dep_msg or "cannot import name" in dep_msg:
+                dep_msg_lower = dep_msg.lower()
+                is_direct_dep_error = isinstance(e, (ImportError, ModuleNotFoundError, AttributeError))
+                ocp_markers = (
+                    "ocp",
+                    "no module named 'ocp",
+                    "cannot import name",
+                    "has no attribute",
+                )
+                is_ocp_dependency_error = is_direct_dep_error and any(marker in dep_msg_lower for marker in ocp_markers)
+                if (not is_ocp_dependency_error) and any(marker in dep_msg_lower for marker in ("cannot import name", "no module named", "has no attribute")):
+                    # Wrapped dependency error (e.g. RuntimeError with import text)
+                    is_ocp_dependency_error = "ocp" in dep_msg_lower
+                if is_ocp_dependency_error:
                     error_code = "ocp_api_unavailable"
                     dependency_error = {
                         "kind": "ocp_api",
@@ -4525,6 +4633,163 @@ class Body:
             feature.opening_face_selectors = list(face_selectors)
 
         return self._resolve_feature_faces(feature, solid)
+
+    def _canonicalize_sweep_refs(self, feature: 'SweepFeature') -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Sweep.
+        
+        Returns kanonisch sortierte Referenzen für:
+        - profile_face_index + profile_shape_id
+        - path edge_indices + path_shape_id
+        
+        Returns:
+            Dict mit kanonisch sortierten Referenzen für Idempotenz-Checks.
+        """
+        result = {
+            "profile_canonical": None,
+            "path_canonical": None,
+        }
+        
+        # Profile Referenzen kanonisieren
+        profile_index = getattr(feature, 'profile_face_index', None)
+        profile_shape_id = getattr(feature, 'profile_shape_id', None)
+        if profile_index is not None or profile_shape_id is not None:
+            result["profile_canonical"] = {
+                "index": int(profile_index) if profile_index is not None else None,
+                "shape_id_uuid": str(profile_shape_id.uuid) if hasattr(profile_shape_id, 'uuid') else None,
+            }
+        
+        # Path Referenzen kanonisieren
+        path_data = getattr(feature, 'path_data', {}) or {}
+        edge_indices = list(path_data.get('edge_indices', []) or [])
+        path_shape_id = getattr(feature, 'path_shape_id', None)
+        
+        # Edge-Indizes deterministisch sortieren (keine Duplikate, aufsteigend)
+        canonical_indices = sorted({int(idx) for idx in edge_indices if isinstance(idx, (int, float)) and int(idx) >= 0})
+        
+        if canonical_indices or path_shape_id is not None:
+            result["path_canonical"] = {
+                "edge_indices": canonical_indices,
+                "shape_id_uuid": str(path_shape_id.uuid) if hasattr(path_shape_id, 'uuid') else None,
+            }
+        
+        return result
+
+    def _canonicalize_loft_section_refs(self, feature: 'LoftFeature') -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Loft.
+        
+        Loft sections können durch face_indices oder section_shape_ids referenziert werden.
+        Diese Methode stellt sicher, dass die Reihenfolge deterministisch ist.
+        
+        Returns:
+            Dict mit kanonisch sortierten Section-Referenzen.
+        """
+        result = {
+            "sections_canonical": [],
+        }
+        
+        section_indices = list(getattr(feature, 'section_indices', []) or [])
+        section_shape_ids = list(getattr(feature, 'section_shape_ids', []) or [])
+        
+        # Paare von (index, shape_id) erstellen
+        section_pairs = []
+        for i, idx in enumerate(section_indices):
+            shape_id = section_shape_ids[i] if i < len(section_shape_ids) else None
+            section_pairs.append((int(idx) if idx is not None else -1, shape_id))
+        
+        # Nach Index sortieren für deterministische Reihenfolge
+        section_pairs.sort(key=lambda x: x[0])
+        
+        for idx, shape_id in section_pairs:
+            result["sections_canonical"].append({
+                "index": idx if idx >= 0 else None,
+                "shape_id_uuid": str(shape_id.uuid) if hasattr(shape_id, 'uuid') else None,
+            })
+        
+        return result
+
+    def _canonicalize_edge_refs(self, feature) -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Edge Features.
+        
+        Kanonische Sortierung für Fillet/Chamfer Edge-Referenzen.
+        
+        Returns:
+            Dict mit kanonisch sortierten Edge-Referenzen.
+        """
+        result = {
+            "edge_indices_canonical": [],
+            "shape_ids_canonical": [],
+        }
+        
+        edge_indices = list(getattr(feature, 'edge_indices', []) or [])
+        edge_shape_ids = list(getattr(feature, 'edge_shape_ids', []) or [])
+        
+        # Edge-Indizes deterministisch sortieren
+        result["edge_indices_canonical"] = sorted({
+            int(idx) for idx in edge_indices 
+            if isinstance(idx, (int, float)) and int(idx) >= 0
+        })
+        
+        # Shape-IDs in stabiler Reihenfolge
+        for shape_id in edge_shape_ids:
+            if hasattr(shape_id, 'uuid'):
+                result["shape_ids_canonical"].append(str(shape_id.uuid))
+        
+        result["shape_ids_canonical"].sort()
+        
+        return result
+
+    def _canonicalize_face_refs(self, feature) -> dict:
+        """
+        Task 1: Deterministic Reference Canonicalization for Face Features.
+        
+        Kanonische Sortierung für Features mit Face-Referenzen.
+        
+        Returns:
+            Dict mit kanonisch sortierten Face-Referenzen.
+        """
+        result = {
+            "face_indices_canonical": [],
+            "shape_ids_canonical": [],
+        }
+        
+        # Verschiedene Attribut-Namen für Face-Features
+        face_indices_attrs = ['face_indices', 'opening_face_indices']
+        face_shape_ids_attrs = ['face_shape_ids', 'opening_face_shape_ids']
+        
+        face_indices = []
+        face_shape_ids = []
+        
+        for attr in face_indices_attrs:
+            if hasattr(feature, attr):
+                val = getattr(feature, attr)
+                if val is not None:
+                    face_indices = list(val) if not isinstance(val, (int, float)) else [val]
+                    break
+        
+        for attr in face_shape_ids_attrs:
+            if hasattr(feature, attr):
+                val = getattr(feature, attr)
+                if val is not None:
+                    face_shape_ids = list(val) if not isinstance(val, (int, float)) else [val]
+                    break
+        
+        # Face-Indizes deterministisch sortieren
+        result["face_indices_canonical"] = sorted({
+            int(idx) for idx in face_indices 
+            if isinstance(idx, (int, float)) and int(idx) >= 0
+        })
+        
+        # Shape-IDs in stabiler Reihenfolge
+        for shape_id in face_shape_ids:
+            if hasattr(shape_id, 'uuid'):
+                result["shape_ids_canonical"].append(str(shape_id.uuid))
+        
+        result["shape_ids_canonical"].sort()
+        
+        return result
 
     def _update_edge_selectors_after_operation(self, solid, current_feature_index: int = -1):
         """
@@ -9612,7 +9877,9 @@ class Body:
                 "suppressed": feat_dict.get("suppressed", False),
                 "status": feat_dict.get("status", "OK"),
                 "status_message": feat_dict.get("status_message", ""),
-                "status_details": feat_dict.get("status_details", {}),
+                "status_details": cls._normalize_status_details_for_load(
+                    feat_dict.get("status_details", {})
+                ),
             }
 
             feat = None
@@ -10489,7 +10756,7 @@ class Document:
             self.root_component: Component = Component(name="Root")
             self.root_component.is_active = True
             self._active_component: Optional[Component] = self.root_component
-            logger.info(f"[ASSEMBLY] Component-System aktiviert fÃ¼r '{name}'")
+            logger.info(f"[ASSEMBLY] Component-System aktiviert fuer '{name}'")
         else:
             # Legacy: Direkte Listen (fÃ¼r Backward-Compatibility)
             self.root_component = None

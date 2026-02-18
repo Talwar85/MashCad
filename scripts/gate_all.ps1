@@ -6,7 +6,19 @@
 # W3: Added BLOCKED_INFRA distinction in summary
 
 param(
-    [switch]$StrictHygiene = $false
+    [switch]$StrictHygiene = $false,
+    [switch]$EnforceCoreBudget = $false,
+    [double]$MaxCoreDurationSeconds = 150.0,
+    [double]$MinCorePassRate = 99.0,
+    [ValidateSet("full", "parallel_safe", "kernel_only", "red_flag")]
+    [string]$CoreProfile = "full",
+    [switch]$ValidateEvidence = $false,
+    [switch]$FailOnEvidenceWarning = $false,
+    [string]$JsonOut = "",
+    [switch]$ArchiveSummary = $false,
+    [string]$ArchiveDir = "roadmap_ctp/gate_history",
+    [int]$ArchiveMaxFiles = 50,
+    [switch]$ArchiveMarkdownIndex = $false
 )
 
 $ErrorActionPreference = "Continue"
@@ -16,29 +28,73 @@ Write-Host "       MashCAD Gate Runner Suite        " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "StrictHygiene: $StrictHygiene"
+Write-Host "EnforceCoreBudget: $EnforceCoreBudget"
+if ($EnforceCoreBudget) {
+    Write-Host "Core Budget: Duration <= $MaxCoreDurationSeconds s, Pass-Rate >= $MinCorePassRate%"
+}
+Write-Host "CoreProfile: $CoreProfile"
+Write-Host "ValidateEvidence: $ValidateEvidence"
+if ($ValidateEvidence) {
+    Write-Host "FailOnEvidenceWarning: $FailOnEvidenceWarning"
+}
+if ($JsonOut) {
+    Write-Host "JsonOut: $JsonOut"
+}
+Write-Host "ArchiveSummary: $ArchiveSummary"
+if ($ArchiveSummary) {
+    Write-Host "ArchiveDir: $ArchiveDir"
+    Write-Host "ArchiveMaxFiles: $ArchiveMaxFiles"
+    Write-Host "ArchiveMarkdownIndex: $ArchiveMarkdownIndex"
+}
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $results = @()
 $overallStart = Get-Date
+$totalSteps = if ($ValidateEvidence) { 4 } else { 3 }
+$step = 1
 
 # Run Core-Gate
-Write-Host "[1/3] Running Core-Gate..." -ForegroundColor Yellow
+Write-Host "[$step/$totalSteps] Running Core-Gate..." -ForegroundColor Yellow
 $coreStart = Get-Date
-$coreResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\gate_core.ps1" 2>&1
+$coreArgs = @(
+    "-ExecutionPolicy", "Bypass",
+    "-File", "$scriptDir\gate_core.ps1",
+    "-Profile", $CoreProfile
+)
+$coreResult = & powershell @coreArgs 2>&1
 $coreExit = $LASTEXITCODE
 $coreEnd = Get-Date
 $coreDuration = ($coreEnd - $coreStart).TotalSeconds
+$corePassRate = $null
+$coreStatus = "UNKNOWN"
+$coreResolvedProfile = $CoreProfile
+foreach ($line in $coreResult) {
+    $lineStr = $line.ToString()
+    if ($lineStr -match "Pass-Rate:\s+([\d.]+)%") {
+        $corePassRate = [double]$matches[1]
+    }
+    if ($lineStr -match "Status:\s+(\S+)") {
+        $coreStatus = $matches[1]
+    }
+    if ($lineStr -match "Profile:\s+(\S+)") {
+        $coreResolvedProfile = $matches[1]
+    }
+}
 $results += @{
     Name = "Core-Gate"
     ExitCode = $coreExit
     Duration = $coreDuration
+    Status = $coreStatus
+    PassRate = $corePassRate
+    Profile = $coreResolvedProfile
 }
 
 Write-Host ""
+$step += 1
 
 # Run UI-Gate
-Write-Host "[2/3] Running UI-Gate..." -ForegroundColor Yellow
+Write-Host "[$step/$totalSteps] Running UI-Gate..." -ForegroundColor Yellow
 $uiStart = Get-Date
 $uiResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\gate_ui.ps1" 2>&1
 $uiExit = $LASTEXITCODE
@@ -67,9 +123,10 @@ $results += @{
 }
 
 Write-Host ""
+$step += 1
 
 # Run Hygiene-Gate
-Write-Host "[3/3] Running Hygiene-Gate..." -ForegroundColor Yellow
+Write-Host "[$step/$totalSteps] Running Hygiene-Gate..." -ForegroundColor Yellow
 $hygieneStart = Get-Date
 if ($StrictHygiene) {
     $hygieneResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\hygiene_check.ps1" -FailOnUntracked 2>&1
@@ -93,6 +150,63 @@ $results += @{
     Status = $hygieneStatus
 }
 
+$step += 1
+
+# Optional: Run Evidence-Contract Validation
+if ($ValidateEvidence) {
+    Write-Host ""
+    Write-Host "[$step/$totalSteps] Running Evidence-Contract..." -ForegroundColor Yellow
+
+    $evidenceStart = Get-Date
+    $evidenceArgs = @(
+        "-ExecutionPolicy", "Bypass",
+        "-File", "$scriptDir\validate_gate_evidence.ps1",
+        "-EvidenceDir", "roadmap_ctp",
+        "-Pattern", "QA_EVIDENCE_W*.json"
+    )
+    if ($FailOnEvidenceWarning) {
+        $evidenceArgs += "-FailOnWarning"
+    }
+    $evidenceResult = & powershell @evidenceArgs 2>&1
+    $evidenceExit = $LASTEXITCODE
+    $evidenceEnd = Get-Date
+    $evidenceDuration = ($evidenceEnd - $evidenceStart).TotalSeconds
+
+    $evidencePass = 0
+    $evidenceWarn = 0
+    $evidenceFail = 0
+    foreach ($line in $evidenceResult) {
+        $lineStr = $line.ToString()
+        if ($lineStr -match "^PASS:\s+(\d+)") {
+            $evidencePass = [int]$matches[1]
+        }
+        if ($lineStr -match "^WARN:\s+(\d+)") {
+            $evidenceWarn = [int]$matches[1]
+        }
+        if ($lineStr -match "^FAIL:\s+(\d+)") {
+            $evidenceFail = [int]$matches[1]
+        }
+    }
+
+    $evidenceStatus = if ($evidenceFail -gt 0 -or $evidenceExit -ne 0) {
+        "FAIL"
+    } elseif ($evidenceWarn -gt 0) {
+        "WARNING"
+    } else {
+        "PASS"
+    }
+
+    $results += @{
+        Name = "Evidence-Contract"
+        ExitCode = $evidenceExit
+        Duration = $evidenceDuration
+        Status = $evidenceStatus
+        Pass = $evidencePass
+        Warn = $evidenceWarn
+        Fail = $evidenceFail
+    }
+}
+
 $overallEnd = Get-Date
 $overallDuration = ($overallEnd - $overallStart).TotalSeconds
 
@@ -109,6 +223,10 @@ foreach ($result in $results) {
     $duration = $result.Duration
     $status = if ($result.Status) { $result.Status } else { $null }
     $blockerType = if ($result.BlockerType) { $result.BlockerType } else { $null }
+    $passRate = if ($result.PassRate) { $result.PassRate } else { $null }
+    $coreProfileDisplay = if ($result.Profile) { $result.Profile } else { $null }
+    $evidenceWarn = if ($result.Warn -ne $null) { $result.Warn } else { $null }
+    $evidenceFail = if ($result.Fail -ne $null) { $result.Fail } else { $null }
 
     # Determine display status (W3: Extended with BLOCKED_INFRA, ASCII-only)
     $displayStatus = ""
@@ -129,6 +247,12 @@ foreach ($result in $results) {
     } elseif ($name -eq "UI-Gate" -and $status -eq "BLOCKED") {
         $displayStatus = "[BLOCKED]"
         $color = "Red"
+    } elseif ($name -eq "Evidence-Contract" -and $status -eq "WARNING") {
+        $displayStatus = "[WARNING]"
+        $color = "Yellow"
+    } elseif ($name -eq "Evidence-Contract" -and $status -eq "FAIL") {
+        $displayStatus = "[FAIL]"
+        $color = "Red"
     } elseif ($name -eq "UI-Gate" -and $status -eq "FAIL") {
         $displayStatus = "[FAIL]"
         $color = "Red"
@@ -143,9 +267,20 @@ foreach ($result in $results) {
     Write-Host "$name ($([math]::Round($duration, 2))s): " -NoNewline
     Write-Host $displayStatus -ForegroundColor $color
 
+    if ($name -eq "Core-Gate" -and $passRate -ne $null) {
+        Write-Host "  Pass-Rate: $passRate%" -ForegroundColor Cyan
+        if ($coreProfileDisplay) {
+            Write-Host "  Profile: $coreProfileDisplay" -ForegroundColor Cyan
+        }
+    }
+
     # W3: Show blocker type if present
     if ($blockerType) {
         Write-Host "  Blocker-Type: $blockerType" -ForegroundColor Red
+    }
+
+    if ($name -eq "Evidence-Contract" -and $evidenceWarn -ne $null -and $evidenceFail -ne $null) {
+        Write-Host "  Summary: WARN=$evidenceWarn FAIL=$evidenceFail" -ForegroundColor Cyan
     }
 }
 
@@ -159,6 +294,20 @@ $coreGate = $results | Where-Object { $_.Name -eq "Core-Gate" } | Select-Object 
 $corePassed = $coreGate -and $coreGate.ExitCode -eq 0
 if (-not $corePassed) {
     $overallExit = 1
+}
+
+# Optional Core budget enforcement
+if ($EnforceCoreBudget -and $coreGate) {
+    $coreDurationFail = $coreGate.Duration -gt $MaxCoreDurationSeconds
+    $corePassRateFail = $false
+    if ($coreGate.PassRate -ne $null) {
+        $corePassRateFail = $coreGate.PassRate -lt $MinCorePassRate
+    } else {
+        $corePassRateFail = $true
+    }
+    if ($coreDurationFail -or $corePassRateFail) {
+        $overallExit = 1
+    }
 }
 
 # UI: BLOCKED_INFRA is not a FAIL, only actual FAIL (logic error) blocks
@@ -185,6 +334,20 @@ if ($StrictHygiene) {
     }
 }
 
+# Optional evidence contract enforcement
+if ($ValidateEvidence) {
+    $evidenceGate = $results | Where-Object { $_.Name -eq "Evidence-Contract" } | Select-Object -First 1
+    if ($evidenceGate) {
+        if ($evidenceGate.ExitCode -ne 0 -or $evidenceGate.Status -eq "FAIL") {
+            $overallExit = 1
+        } elseif ($FailOnEvidenceWarning -and $evidenceGate.Status -eq "WARNING") {
+            $overallExit = 1
+        }
+    } else {
+        $overallExit = 1
+    }
+}
+
 $overallStatus = if ($overallExit -eq 0) { "[ALL GATES PASSED]" } else { "[SOME GATES FAILED]" }
 $overallColor = if ($overallExit -eq 0) { "Green" } else { "Red" }
 
@@ -196,6 +359,112 @@ Write-Host ""
 if (-not $StrictHygiene) {
     Write-Host "Note: Hygiene violations treated as WARNING only (StrictHygiene=false)" -ForegroundColor Yellow
     Write-Host "      Use -StrictHygiene to treat hygiene violations as fatal" -ForegroundColor Yellow
+}
+if ($EnforceCoreBudget) {
+    Write-Host "Note: Core budget enforcement active (duration/pass-rate thresholds are mandatory)." -ForegroundColor Yellow
+}
+if ($ValidateEvidence) {
+    Write-Host "Note: Evidence contract validation is active." -ForegroundColor Yellow
+    if (-not $FailOnEvidenceWarning) {
+        Write-Host "      Use -FailOnEvidenceWarning to make warnings fatal." -ForegroundColor Yellow
+    }
+}
+
+Write-Host ""
+$summary = @{
+    metadata = @{
+        generated_at = (Get-Date).ToString("s")
+        schema = "gate_all_summary_v1"
+    }
+    config = @{
+        strict_hygiene = [bool]$StrictHygiene
+        enforce_core_budget = [bool]$EnforceCoreBudget
+        max_core_duration_seconds = $MaxCoreDurationSeconds
+        min_core_pass_rate = $MinCorePassRate
+        core_profile = $CoreProfile
+        validate_evidence = [bool]$ValidateEvidence
+        fail_on_evidence_warning = [bool]$FailOnEvidenceWarning
+        archive_summary = [bool]$ArchiveSummary
+        archive_dir = $ArchiveDir
+        archive_max_files = $ArchiveMaxFiles
+        archive_markdown_index = [bool]$ArchiveMarkdownIndex
+    }
+    gates = @($results | ForEach-Object {
+        @{
+            name = $_.Name
+            status = $_.Status
+            exit_code = $_.ExitCode
+            duration_seconds = [math]::Round([double]$_.Duration, 2)
+            pass_rate = $_.PassRate
+            blocker_type = $_.BlockerType
+            profile = $_.Profile
+            evidence_pass = $_.Pass
+            evidence_warn = $_.Warn
+            evidence_fail = $_.Fail
+        }
+    })
+    overall = @{
+        status = if ($overallExit -eq 0) { "PASS" } else { "FAIL" }
+        exit_code = $overallExit
+        duration_seconds = [math]::Round($overallDuration, 2)
+    }
+}
+
+$summaryOutPath = $null
+$cleanupTempSummary = $false
+
+if ($JsonOut) {
+    $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
+    $summaryOutPath = $JsonOut
+    Write-Host "JSON written: $JsonOut"
+}
+
+if ($ArchiveSummary) {
+    if ($ArchiveMaxFiles -lt 1) {
+        Write-Host "Archive step failed: ArchiveMaxFiles must be >= 1." -ForegroundColor Red
+        $overallExit = 1
+    } else {
+        if (-not $summaryOutPath) {
+            $tempName = "gate_all_summary_runtime_{0}.json" -f ([guid]::NewGuid().ToString("N"))
+            $summaryOutPath = Join-Path ([System.IO.Path]::GetTempPath()) $tempName
+            $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $summaryOutPath -Encoding UTF8
+            $cleanupTempSummary = $true
+        }
+
+        $archiveArgs = @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", "$scriptDir\archive_gate_summary.ps1",
+            "-InputJson", $summaryOutPath,
+            "-ArchiveDir", $ArchiveDir,
+            "-MaxFiles", "$ArchiveMaxFiles"
+        )
+        if ($ArchiveMarkdownIndex) {
+            $archiveArgs += "-WriteMarkdownIndex"
+        }
+
+        $archiveResult = & powershell @archiveArgs 2>&1
+        $archiveExit = $LASTEXITCODE
+        foreach ($line in $archiveResult) {
+            Write-Host ("  [Archive] {0}" -f $line.ToString())
+        }
+
+        if ($archiveExit -ne 0) {
+            Write-Host "Archive step failed; forcing overall FAIL." -ForegroundColor Red
+            $overallExit = 1
+        } else {
+            Write-Host "Archive step: PASS" -ForegroundColor Green
+        }
+    }
+}
+
+if ($cleanupTempSummary -and $summaryOutPath -and (Test-Path -Path $summaryOutPath -PathType Leaf)) {
+    Remove-Item -Path $summaryOutPath -Force -ErrorAction SilentlyContinue
+}
+
+$summary.overall.status = if ($overallExit -eq 0) { "PASS" } else { "FAIL" }
+$summary.overall.exit_code = $overallExit
+if ($JsonOut) {
+    $summary | ConvertTo-Json -Depth 8 | Out-File -FilePath $JsonOut -Encoding UTF8
 }
 
 Write-Host ""

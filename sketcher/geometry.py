@@ -34,13 +34,28 @@ class Point2D:
         FIREWALL: Wandelt alles sofort in native Python-Floats um.
         Schützt vor Abstürzen durch Solver-Rückgabewerte (NumPy).
         """
+        def _coerce_scalar(value, fallback=0.0):
+            try:
+                # Falls versehentlich eine gebundene Methode uebergeben wurde (z.B. QPointF.y)
+                if callable(value):
+                    value = value()
+
+                # NumPy-Skalare: .item() nur nutzen, wenn wirklich aufrufbar
+                item_attr = getattr(value, "item", None)
+                if callable(item_attr):
+                    value = item_attr()
+
+                # Manche Wrapper liefern erneut callables
+                if callable(value):
+                    value = value()
+
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+
         try:
-            # .item() wandelt numpy-skalare extrem schnell in python-types
-            if hasattr(self.x, 'item'): self.x = self.x.item()
-            else: self.x = float(self.x)
-            
-            if hasattr(self.y, 'item'): self.y = self.y.item()
-            else: self.y = float(self.y)
+            self.x = _coerce_scalar(self.x, 0.0)
+            self.y = _coerce_scalar(self.y, 0.0)
         except (TypeError, ValueError):
             self.x = 0.0
             self.y = 0.0
@@ -276,6 +291,51 @@ class Arc2D:
 
     def __repr__(self):
         return f"Arc(center={self.center}, r={self.radius:.2f}, {self.start_angle:.1f}°-{self.end_angle:.1f}°)"
+
+
+@dataclass
+class Ellipse2D:
+    """2D-Ellipse mit separaten Achsen und Rotation in Grad."""
+    center: Point2D
+    radius_x: float = 10.0
+    radius_y: float = 5.0
+    rotation: float = 0.0
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    construction: bool = False
+
+    def point_on_major_axis(self) -> Point2D:
+        rad = math.radians(self.rotation)
+        return Point2D(
+            self.center.x + self.radius_x * math.cos(rad),
+            self.center.y + self.radius_x * math.sin(rad),
+        )
+
+    def point_on_minor_axis(self) -> Point2D:
+        rad = math.radians(self.rotation)
+        return Point2D(
+            self.center.x - self.radius_y * math.sin(rad),
+            self.center.y + self.radius_y * math.cos(rad),
+        )
+
+
+@dataclass
+class Polygon2D:
+    """2D-Polygon als Punktliste."""
+    points: List[Point2D] = field(default_factory=list)
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    construction: bool = False
+    closed: bool = True
+
+    def vertex_count(self) -> int:
+        return len(self.points)
+
+    def centroid(self) -> Point2D:
+        if not self.points:
+            return Point2D(0.0, 0.0)
+        sx = sum(p.x for p in self.points)
+        sy = sum(p.y for p in self.points)
+        n = len(self.points)
+        return Point2D(sx / n, sy / n)
 
 
 @dataclass

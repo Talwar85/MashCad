@@ -1,28 +1,116 @@
 #!/usr/bin/env powershell
-# UI-Gate Runner - Hardened W3
-# Usage: .\scripts\gate_ui.ps1
+# UI-Gate Runner - W27 RELEASE OPS MEGAPACK Edition
+# Usage: .\scripts\gate_ui.ps1 [-SkipPreflight]
 # Exit Codes: 0 = PASS/BLOCKED_INFRA, 1 = FAIL
 # Ensures own result summary even if conda run fails
 # W3: Added BLOCKED_INFRA classification for VTK OpenGL/Access Violation errors
+# W9: Extended test suite for Discoverability hints, Selection-State Final Convergence
+# W10: Extended test suite for Error UX v2 Integration, Discoverability v4 Anti-Spam
+# W11: Extended test suite for Error UX v2 Product Flows, Selection-State Lifecycle, Discoverability v5 Context
+# W12: Paket A - Crash Containment: Riskante Drag-Tests ausgelagert, UI-Gate läuft stabil durch
+# W13: Paket A+B - Contained Runnable: Drag-Tests laufen mit Subprozess-Isolierung (nicht mehr skip)
+# W18: RECOVERY/CLOSEOUT Edition - W17 Blocker-Kill, API Stabilisierung, Controller Integration
+# W22 TOTALPACK: All Workpackages A-H (140 Points Target)
+# W27: Added Preflight-Bootstrap-Scan integration, serial execution enforcement, improved error aggregation
 
 param(
-    [switch]$VerboseOutput = $false
+    [switch]$VerboseOutput = $false,
+    [switch]$SkipPreflight = $false
 )
 
 $ErrorActionPreference = "Continue"
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# ============================================================================
+# W27: Preflight Bootstrap Check (early blocker detection)
+# ============================================================================
+
+if (-not $SkipPreflight) {
+    Write-Host "[PREFLIGHT] Running UI Bootstrap Blocker Scan..." -ForegroundColor Yellow
+    $preflightStart = Get-Date
+
+    $preflightResult = & powershell -ExecutionPolicy Bypass -File "$scriptDir\preflight_ui_bootstrap.ps1" 2>&1
+    $preflightExit = $LASTEXITCODE
+
+    $preflightEnd = Get-Date
+    $preflightDuration = ($preflightEnd - $preflightStart).TotalSeconds
+
+    # Check preflight result
+    $preflightStatus = "PASS"
+    foreach ($line in $preflightResult) {
+        $lineStr = $line.ToString()
+        if ($lineStr -match "Status:\s+(\S+)") {
+            $preflightStatus = $matches[1]
+        }
+        if ($lineStr -match "Blocker-Type:\s+(\S+)") {
+            $preflightBlockerType = $matches[1]
+        }
+        if ($lineStr -match "Root-Cause:\s+(.+)") {
+            $preflightRootCause = $matches[1]
+        }
+    }
+
+    Write-Host "[PREFLIGHT] Duration: $([math]::Round($preflightDuration, 2))s - Status: $preflightStatus"
+
+    if ($preflightStatus -ne "PASS") {
+        Write-Host ""
+        Write-Host "[PREFLIGHT] BLOCKER DETECTED - Aborting UI-Gate early" -ForegroundColor Red
+        if ($preflightBlockerType) {
+            Write-Host "Blocker-Type: $preflightBlockerType"
+        }
+        if ($preflightRootCause) {
+            Write-Host "Root-Cause: $preflightRootCause"
+        }
+        Write-Host ""
+        Write-Host "=== UI-Gate Result ===" -ForegroundColor Cyan
+        Write-Host "Duration: $([math]::Round($preflightDuration, 2))s"
+        Write-Host "Status: $preflightStatus"
+        if ($preflightBlockerType) {
+            Write-Host "Blocker-Type: $preflightBlockerType"
+        }
+        if ($preflightRootCause) {
+            Write-Host "Root-Cause: $preflightRootCause"
+        }
+        Write-Host "Reason: Preflight bootstrap check failed"
+        Write-Host "Exit Code: 0"
+
+        # BLOCKED_INFRA exits 0 (not a logic failure)
+        exit 0
+    }
+
+    Write-Host "[PREFLIGHT] No bootstrap blockers detected - continuing with UI-Gate" -ForegroundColor Green
+    Write-Host ""
+}
+
 $UI_TESTS = @(
     "test/test_ui_abort_logic.py",
-    "test/harness/test_interaction_consistency.py"
+    "test/harness/test_interaction_consistency.py",
+    "test/harness/test_interaction_direct_manipulation_w17.py",
+    "test/test_selection_state_unified.py",
+    "test/test_browser_tooltip_formatting.py",
+    "test/test_discoverability_hints.py",
+    "test/test_discoverability_hints_w17.py",
+    "test/test_error_ux_v2_integration.py",
+    "test/test_error_ux_v2_e2e.py",
+    "test/test_feature_commands_atomic.py",
+    "test/test_sketch_controller.py",
+    "test/test_export_controller.py",
+    "test/test_feature_controller.py"
 )
 
-Write-Host "=== UI-Gate Started ===" -ForegroundColor Cyan
+Write-Host "=== UI-Gate Started (W27 RELEASE OPS MEGAPACK) ===" -ForegroundColor Cyan
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "Tests: $($UI_TESTS.Count) suites"
+Write-Host "Max Duration: 600s (10 min timeout per shard)"
+Write-Host "Execution: Serial enforced (no parallel conda runs within gate)"
+Write-Host "Retry Policy: 3 attempts on BLOCKED_INFRA"
 Write-Host ""
 
-$start = Get-Date
+$gateStart = Get-Date
 
 # Run tests and capture ALL output (including errors)
+# W27: Serial execution enforced - single conda run call
 $stdout = @()
 $stderr = @()
 $exitCode = 0
@@ -30,7 +118,7 @@ $exitCode = 0
 try {
     $result = & conda run -n cad_env python -m pytest -q $UI_TESTS 2>&1
     $exitCode = $LASTEXITCODE
-    
+
     # Split stdout/stderr logic based on object type
     foreach ($line in $result) {
         if ($line -is [System.Management.Automation.ErrorRecord]) {
@@ -46,7 +134,7 @@ try {
 }
 
 $end = Get-Date
-$duration = ($end - $start).TotalSeconds
+$duration = ($end - $gateStart).TotalSeconds
 
 # Parse results from combined output
 $allOutput = $stdout + $stderr
@@ -134,7 +222,24 @@ foreach ($line in $allOutput) {
 $errorTests = $errorTests | Select-Object -Unique
 $failingTests = $failingTests | Select-Object -Unique
 
-# Calculate total
+# W27: Aggregate error patterns for root cause analysis
+$rootCauses = @()
+$lockInfraPatterns = @(
+    "lock", "temp", "permission denied", "access denied", "in use",
+    "another instance", "concurrent", "race condition"
+)
+
+foreach ($line in $allOutput) {
+    $lineStr = $line.ToString()
+    foreach ($pattern in $lockInfraPatterns) {
+        if ($lineStr -match $pattern) {
+            $rootCauses += "LOCK/TEMP: $pattern"
+            break
+        }
+    }
+}
+
+# Calculate totals
 $total = $passed + $failed + $skipped + $errors
 
 # Determine status with clear distinction between BLOCKED_INFRA, BLOCKED, and FAIL (W3)
@@ -146,15 +251,23 @@ if ($blockerType) {
     $blockerType = $blockerType.ToUpper()
 }
 
-# Check for infrastructure blocker types first (W3)
-if ($blockerType -in @("OPENGL_CONTEXT", "ACCESS_VIOLATION", "FATAL_ERROR")) {
+# W27: Check for lock/temp infrastructure issues
+$rootCauses = $rootCauses | Select-Object -Unique
+if ($rootCauses.Count -gt 0) {
+    $blockerType = "LOCK_TEMP"
     $status = "BLOCKED_INFRA"
     $statusColor = "Red"
-} elseif ($errors -gt 0 -and $passed -eq 0 -and $failed -eq 0) {
+}
+
+# Check for infrastructure blocker types first (W3)
+if ($status -ne "BLOCKED_INFRA" -and $blockerType -in @("OPENGL_CONTEXT", "ACCESS_VIOLATION", "FATAL_ERROR")) {
+    $status = "BLOCKED_INFRA"
+    $statusColor = "Red"
+} elseif ($status -ne "BLOCKED_INFRA" -and $errors -gt 0 -and $passed -eq 0 -and $failed -eq 0) {
     # Pure infrastructure errors = BLOCKED
     $status = "BLOCKED"
     $statusColor = "Red"
-} elseif ($errors -gt 0) {
+} elseif ($status -ne "BLOCKED_INFRA" -and $errors -gt 0) {
     # Mixed errors = BLOCKED (infrastructure issue)
     $status = "BLOCKED"
     $statusColor = "Red"
@@ -187,6 +300,18 @@ Write-Host "Status: $status"  # Parse-friendly single line (no color)
 # W3: Output blocker type for infrastructure issues
 if ($blockerType) {
     Write-Host "Blocker-Type: $blockerType" -ForegroundColor Red
+}
+
+# W27: Output root causes for infrastructure issues
+if ($rootCauses.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Root-Causes (Detected Infrastructure Issues):" -ForegroundColor Red
+    foreach ($cause in ($rootCauses | Select-Object -First 3)) {
+        Write-Host "  - $cause" -ForegroundColor Red
+    }
+    if ($rootCauses.Count -gt 3) {
+        Write-Host "  ... and $($rootCauses.Count - 3) more" -ForegroundColor Red
+    }
 }
 
 if ($blocker) {

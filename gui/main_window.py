@@ -51,13 +51,16 @@ from config.feature_flags import is_enabled  # Performance Plan Phase 5+
 from config.recent_files import get_recent_files, add_recent_file
 from config.version import APP_NAME, VERSION, COPYRIGHT  # Zentrale Versionsverwaltung
 from gui.log_panel import LogPanel
-from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget
+from gui.widgets import NotificationWidget, QtLogHandler, TNPStatsPanel, OperationSummaryWidget, FeatureDetailPanel
 from gui.widgets.section_view_panel import SectionViewPanel
 from gui.widgets.status_bar import MashCadStatusBar
 from gui.dialogs import VectorInputDialog, BooleanDialog
 from gui.dialogs.stl_reconstruction_panel import STLReconstructionPanel
 from gui.parameter_dialog import ParameterDialog
 from gui.transform_state import TransformState
+from gui.sketch_controller import SketchController  # W16 Paket D: Sketch UI-Orchestrierung
+from gui.export_controller import ExportController  # W17 Paket C: Export UI-Orchestrierung
+from gui.feature_controller import FeatureController  # W17 Paket C: Feature UI-Orchestrierung
 
 # STL Reconstruction (TNP-Exempt)
 try:
@@ -125,6 +128,13 @@ class MainWindow(QMainWindow):
         self.notification_manager = NotificationManager(self)
         self.preview_manager = PreviewManager(self)
         self.tnp_debug_manager = TNPDebugManager(self)
+        
+        # W16 Paket D: SketchController für UI-Orchestrierung
+        self.sketch_controller = SketchController(self)
+        
+        # W17 Paket C: ExportController und FeatureController für UI-Orchestrierung
+        self.export_controller = ExportController(self)
+        self.feature_controller = FeatureController(self)
 
         # TNP v4.0: Debug Callback für Edge-Auflösungs-Visualisierung
         self.tnp_debug_manager.setup_callback()
@@ -187,13 +197,31 @@ class MainWindow(QMainWindow):
         if show_overlay:
             self.notification_manager.show_toast_overlay(level, message)
             
-    def _show_toast_overlay(self, level, message):
-        """Delegiert an NotificationManager."""
-        self.notification_manager.show_toast_overlay(level, message)
+    def _show_toast_overlay(self, level, message, status_class="", severity=""):
+        """
+        Delegiert an NotificationManager.
 
-    def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000):
-        """Delegiert an NotificationManager."""
-        self.notification_manager.show_notification(title, message, level, duration)
+        W10 Paket B: Erweitert um status_class/severity Parameter.
+        """
+        self.notification_manager.show_toast_overlay(level, message, status_class=status_class, severity=severity)
+
+    def show_notification(self, title: str, message: str, level: str = "info", duration: int = 3000,
+                         status_class: str = "", severity: str = ""):
+        """
+        Zeigt eine Toast-Notification an.
+
+        W10 Paket B: Erweitert um status_class/severity Parameter aus Error-Envelope v2.
+
+        Args:
+            title: Titel der Notification
+            message: Nachricht der Notification
+            level: Legacy level (info/warning/error/success/critical)
+            duration: Anzeigedauer in ms
+            status_class: status_class aus Error-Envelope v2 (WARNING_RECOVERABLE, BLOCKED, CRITICAL, ERROR)
+            severity: severity aus Error-Envelope v2 (warning, blocked, critical, error)
+        """
+        self.notification_manager.show_notification(title, message, level, duration,
+                                                     status_class=status_class, severity=severity)
 
     def _preview_track_actor(self, group: str, actor_name: str):
         """Delegiert an PreviewManager."""
@@ -313,6 +341,11 @@ class MainWindow(QMainWindow):
         self.log_panel = LogPanel()
         self.tnp_stats_panel = TNPStatsPanel()
         self.operation_summary = OperationSummaryWidget()
+        
+        # W26 F-UX-1: Feature Detail Panel für Recovery-Actions
+        self.feature_detail_panel = FeatureDetailPanel()
+        self.feature_detail_panel.setMinimumWidth(250)
+        self.feature_detail_panel.setMaximumWidth(350)
 
         self.left_tabs.addTab(self.browser, "Browser")
         self.left_tabs.addTab(self.tnp_stats_panel, "TNP")
@@ -423,6 +456,21 @@ class MainWindow(QMainWindow):
         
         self.right_stack.setVisible(False)
         layout.addWidget(self.right_stack)
+
+        # W26 F-UX-1: Feature Detail Panel als DockWidget
+        self.feature_detail_dock = QDockWidget(tr("Feature Details"), self)
+        self.feature_detail_dock.setWidget(self.feature_detail_panel)
+        self.feature_detail_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.feature_detail_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.feature_detail_dock.setStyleSheet("""
+            QDockWidget { color: #ccc; font-size: 11px; }
+            QDockWidget::title {
+                background: #252526; padding: 4px 8px;
+                border-bottom: 1px solid #333;
+            }
+        """)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.feature_detail_dock)
+        self.feature_detail_dock.hide()  # Initial versteckt
 
         # === STATUS BAR (unten) ===
         self.mashcad_status_bar = MashCadStatusBar()
@@ -653,6 +701,15 @@ class MainWindow(QMainWindow):
         self.sketch_editor.exit_requested.connect(self._finish_sketch)
         self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
         self.sketch_editor.solver_finished_signal.connect(self._on_solver_dof_updated)
+        
+        # W32: Live zoom badge
+        self.sketch_editor.zoom_changed.connect(self.mashcad_status_bar.set_zoom)
+        self.mashcad_status_bar.zoom_preset_requested.connect(self.sketch_editor.set_zoom_to)
+        self.mashcad_status_bar.zoom_fit_requested.connect(self.sketch_editor._fit_view)
+        
+        # W26 FIX: Projection-Preview Signals
+        self.sketch_editor.projection_preview_requested.connect(self._on_projection_preview_requested)
+        self.sketch_editor.projection_preview_cleared.connect(self._on_projection_preview_cleared)
         # Toolbar entfernt - war nutzlos laut User
      
     def showEvent(self, event):
@@ -921,6 +978,22 @@ class MainWindow(QMainWindow):
         # Phase 6: Body/Sketch verschieben zwischen Components
         self.browser.body_moved_to_component.connect(self._on_body_moved_to_component)
         self.browser.sketch_moved_to_component.connect(self._on_sketch_moved_to_component)
+        
+        # W26 F-UX-1: Browser Batch-Signale für Problem-Features
+        self.browser.batch_retry_rebuild.connect(self._on_batch_retry_rebuild)
+        self.browser.batch_open_diagnostics.connect(self._on_batch_open_diagnostics)
+        self.browser.batch_isolate_bodies.connect(self._on_batch_isolate_bodies)
+        
+        # W29 E2E Closeout: Browser Batch-Signale für Unhide/Focus
+        self.browser.batch_unhide_bodies.connect(self._on_batch_unhide_bodies)
+        self.browser.batch_focus_features.connect(self._on_batch_focus_features)
+        
+        # W26 F-UX-1: FeatureDetailPanel Recovery-Signale
+        self.feature_detail_panel.recovery_action_requested.connect(self._on_recovery_action_requested)
+        self.feature_detail_panel.edit_feature_requested.connect(self._on_edit_feature_requested)
+        self.feature_detail_panel.rebuild_feature_requested.connect(self._on_rebuild_feature_requested)
+        self.feature_detail_panel.delete_feature_requested.connect(self._on_delete_feature_requested)
+        self.feature_detail_panel.highlight_edges_requested.connect(self._on_highlight_edges_requested)
         
         # Viewport Signale
         self.viewport_3d.plane_clicked.connect(self._on_plane_selected)
@@ -2138,6 +2211,8 @@ class MainWindow(QMainWindow):
                     self._highlighted_body_id = body.id
                 self._update_tnp_stats(body)
                 self.browser.show_rollback_bar(body)
+                # W26 F-UX-1: FeatureDetailPanel verstecken bei Body-Selektion
+                self.feature_detail_dock.hide()
             elif data[0] == 'feature' and len(data) >= 3:
                 feature = data[1]
                 body = data[2]
@@ -2149,11 +2224,18 @@ class MainWindow(QMainWindow):
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats(body)
+                # W26 F-UX-1: FeatureDetailPanel anzeigen und aktualisieren
+                self.feature_detail_panel.show_feature(feature, body, self.document)
+                self.feature_detail_dock.show()
+                self.feature_detail_dock.raise_()
             else:
                 self.statusBar().showMessage("Ready")
                 self.body_properties.clear()
                 self._hide_transform_ui()
                 self._update_tnp_stats()
+                self.feature_detail_dock.hide()
+        else:
+            self.feature_detail_dock.hide()
     
     def _start_transform_mode(self, mode):
         """
@@ -2971,6 +3053,11 @@ class MainWindow(QMainWindow):
                 )
 
     def _set_mode(self, mode):
+        """
+        Wechselt zwischen 3D- und Sketch-Modus.
+        W16 Paket D: Delegiert an SketchController für Sketch-bezogene UI.
+        W28 Megapack: Robustere Null-Handling und sauberere Transitions.
+        """
         prev_mode = getattr(self, "mode", None)
         if prev_mode != mode:
             self._clear_transient_previews(
@@ -2978,37 +3065,46 @@ class MainWindow(QMainWindow):
                 clear_interaction_modes=True,
             )
         self.mode = mode
+
+        # W16 Paket D: Delegation an SketchController
+        # W28: Prüfe auf None statt nur hasattr
+        if hasattr(self, 'sketch_controller') and self.sketch_controller is not None:
+            self.sketch_controller.set_mode(mode, prev_mode)
+        else:
+            # Fallback für frühe Initialisierung oder Test-Environment
+            self._set_mode_fallback(mode)
+    
+    def _set_mode_fallback(self, mode):
+        """
+        Fallback-Implementierung wenn SketchController noch nicht verfügbar.
+        W28: Robust für Test-Umgebungen mit Mock-Objekten.
+        """
         if mode == "3d":
-            # 3D-Modus
-            self.tool_stack.setCurrentIndex(0)  # 3D-ToolPanel
-            self.center_stack.setCurrentIndex(0)  # Viewport
-            self.right_stack.setVisible(False)
+            if hasattr(self, 'tool_stack'):
+                self.tool_stack.setCurrentIndex(0)
+            if hasattr(self, 'center_stack'):
+                self.center_stack.setCurrentIndex(0)
+            if hasattr(self, 'right_stack'):
+                self.right_stack.setVisible(False)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(True)
-            # Update UI
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("3D")
+                self.mashcad_status_bar.set_zoom(5.0)  # W32: Reset zoom badge in 3D (default view_scale)
         else:
-            # Sketch-Modus
-            self.tool_stack.setCurrentIndex(1)  # 2D-ToolPanel
-            self.center_stack.setCurrentIndex(1)  # Sketch Editor
-            self.right_stack.setCurrentIndex(1)  # 2D Properties
-            self.right_stack.setVisible(True)
+            if hasattr(self, 'tool_stack'):
+                self.tool_stack.setCurrentIndex(1)
+            if hasattr(self, 'center_stack'):
+                self.center_stack.setCurrentIndex(1)
+            if hasattr(self, 'right_stack'):
+                self.right_stack.setCurrentIndex(1)
+                self.right_stack.setVisible(True)
             if hasattr(self, 'transform_toolbar'):
                 self.transform_toolbar.setVisible(False)
-            self.sketch_editor.setFocus()
-            # Update UI
+            if hasattr(self, 'sketch_editor'):
+                self.sketch_editor.setFocus()
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("2D")
-            if prev_mode != mode:
-                nav_hint = tr("Sketch-Navigation: Shift+R dreht Ansicht | Space halten fuer 3D-Peek")
-                self.statusBar().showMessage(nav_hint, 7000)
-                if hasattr(self, "sketch_editor") and hasattr(self.sketch_editor, "show_message"):
-                    self.sketch_editor.show_message(
-                        tr("Shift+R Ansicht drehen | Space halten fuer 3D-Peek"),
-                        duration=2600,
-                        color=QColor(110, 180, 255),
-                    )
 
     def _new_sketch(self):
         self.viewport_3d.set_plane_select_mode(True)
@@ -3155,7 +3251,11 @@ class MainWindow(QMainWindow):
             # Reset after use
             self.viewport_3d._last_picked_body_id = None
         
+        # W16 Paket D: Aktiven Sketch setzen (Controller + MainWindow)
         self.active_sketch = s
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller._active_sketch = s
+        
         self.sketch_editor.sketch = s
         
         # Bodies als Referenz übergeben (für Snapping auf Kanten)
@@ -3410,14 +3510,15 @@ class MainWindow(QMainWindow):
         # DOF-Anzeige ausblenden
         self.mashcad_status_bar.set_dof(0, visible=False)
 
-        self.active_sketch = None
-        self._set_mode("3d")
-        
-        # Browser Refresh triggert Visibility-Check
-        self.browser.refresh()
-        
-        # WICHTIG: Explizit Update anstoßen für sauberen Statuswechsel
-        self._trigger_viewport_update()
+        # W16 Paket D: Delegation an SketchController
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller.finish_sketch()
+        else:
+            # Fallback
+            self.active_sketch = None
+            self._set_mode("3d")
+            self.browser.refresh()
+            self._trigger_viewport_update()
 
     def _rotate_sketch_view(self):
         """Rotiert die Sketch-Ansicht um 90°."""
@@ -3427,26 +3528,29 @@ class MainWindow(QMainWindow):
     def _on_peek_3d(self, show_3d: bool):
         """
         Temporär 3D-Viewport zeigen während Space gedrückt (Peek-Modus).
-        Hilft zur Orientierung im Sketch.
+        W16 Paket D: Delegiert an SketchController.
         """
-        if show_3d:
-            # Zeige 3D-Viewport
-            self._peek_3d_active = True
-            self.center_stack.setCurrentIndex(0)
-            self.statusBar().showMessage(tr("3D-Vorschau (Space loslassen für Sketch)"), 0)
-
-            # grabKeyboard() auf MainWindow - fängt ALLE Key-Events ab (plattformübergreifend)
-            self.grabKeyboard()
+        if hasattr(self, 'sketch_controller'):
+            self.sketch_controller.set_peek_3d(show_3d)
         else:
-            # Zurück zum Sketch
-            self._peek_3d_active = False
-            self.releaseKeyboard()
-            self.center_stack.setCurrentIndex(1)
-            self.sketch_editor.setFocus()
-            self.statusBar().clearMessage()
+            # Fallback
+            self._peek_3d_active = show_3d
+            if show_3d:
+                self.center_stack.setCurrentIndex(0)
+                self.statusBar().showMessage(tr("3D-Vorschau (Space loslassen für Sketch)"), 0)
+                self.grabKeyboard()
+            else:
+                self.center_stack.setCurrentIndex(1)
+                self.sketch_editor.setFocus()
+                self.statusBar().clearMessage()
+                self.releaseKeyboard()
 
     def keyReleaseEvent(self, event):
-        """Key-Release Handler für 3D-Peek (grabKeyboard leitet hierher)."""
+        """Key-Release Handler für 3D-Peek."""
+        # W16 Paket D: Delegation an SketchController
+        if hasattr(self, 'sketch_controller') and self.sketch_controller.handle_key_release(event):
+            return
+        # Fallback für alte _peek_3d_active Logik
         if getattr(self, '_peek_3d_active', False):
             if event.key() == Qt.Key_Space and not event.isAutoRepeat():
                 self._on_peek_3d(False)
@@ -7431,6 +7535,17 @@ class MainWindow(QMainWindow):
 
             k = event.key()
 
+            # Sketch-Navigation: Home/0 immer an SketchEditor forwarden
+            if self.mode == "sketch":
+                if k == Qt.Key_Home:
+                    if hasattr(self, "sketch_editor") and self.sketch_editor:
+                        self.sketch_editor._reset_view_to_origin()
+                        return True
+                if k == Qt.Key_0 and not (event.modifiers() & Qt.ControlModifier):
+                    if hasattr(self, "sketch_editor") and self.sketch_editor:
+                        self.sketch_editor._reset_view_to_origin()
+                        return True
+
             # Tab - Fokussiert Input-Felder
             if k == Qt.Key_Tab:
                 if self.mode == "sketch":
@@ -7840,6 +7955,14 @@ class MainWindow(QMainWindow):
         """
         if not hasattr(self.document, '_assembly_enabled') or not self.document._assembly_enabled:
             return
+
+        # Workflow cleanup: component switch should not carry transient preview/mode state.
+        self._clear_transient_previews(reason="component_activated", clear_interaction_modes=True)
+        if hasattr(self, "viewport_3d"):
+            if hasattr(self.viewport_3d, "clear_trace_hint"):
+                self.viewport_3d.clear_trace_hint()
+            if hasattr(self.viewport_3d, "clear_projection_preview"):
+                self.viewport_3d.clear_projection_preview()
 
         from gui.commands.component_commands import ActivateComponentCommand
 
@@ -11862,6 +11985,13 @@ class MainWindow(QMainWindow):
 
     def _on_create_sketch_requested(self, face_id: int):
         """Handler for Context Menu -> Create Sketch"""
+        self._clear_transient_previews(reason="create_sketch_requested", clear_interaction_modes=True)
+        if hasattr(self, "viewport_3d"):
+            if hasattr(self.viewport_3d, "clear_trace_hint"):
+                self.viewport_3d.clear_trace_hint()
+            if hasattr(self.viewport_3d, "clear_projection_preview"):
+                self.viewport_3d.clear_projection_preview()
+
         # Access face from viewport detector
         # Note: SketchEditor usually expects a selected face object
         
@@ -11884,3 +12014,316 @@ class MainWindow(QMainWindow):
                      self.tool_panel.show_sketch_tools()
                      
                  logger.info(f"Sketch created on Face {face_id}")
+
+    # ========================================================================
+    # W26 F-UX-1: Batch- und Recovery-Action Handler
+    # ========================================================================
+
+    def _on_batch_retry_rebuild(self, problem_features):
+        """
+        W26 F-UX-1: Handler für Batch Retry Rebuild.
+        
+        Args:
+            problem_features: List[(feature, body)] - Zu rebuildende Features
+        """
+        if not problem_features:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        success_count = 0
+        failed_count = 0
+        
+        for feature, body in problem_features:
+            try:
+                # Retry rebuild durchführen
+                if hasattr(body, '_rebuild_from_feature'):
+                    body._rebuild_from_feature(feature)
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                logger.error(f"[BATCH_RETRY] Fehler bei Feature {feature.name}: {e}")
+                failed_count += 1
+        
+        # Status-Bar Update
+        msg = f"Rebuild: {success_count} erfolgreich"
+        if failed_count > 0:
+            msg += f", {failed_count} fehlgeschlagen"
+        self.statusBar().showMessage(msg)
+        
+        # Toast-Notification
+        if success_count > 0:
+            self.notification_manager.show_toast_overlay(
+                "success", 
+                f"{success_count} Features rebuilt"
+            )
+        
+        # Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+    def _on_batch_open_diagnostics(self, problem_features):
+        """
+        W26 F-UX-1: Handler für Batch Open Diagnostics.
+        
+        Args:
+            problem_features: List[(feature, body)] - Features zur Diagnose
+        """
+        if not problem_features:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        # Erstes Feature im DetailPanel anzeigen
+        feature, body = problem_features[0]
+        self.feature_detail_panel.show_feature(feature, body, self.document)
+        self.feature_detail_dock.show()
+        self.feature_detail_dock.raise_()
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Diagnostics: {len(problem_features)} Features")
+        
+        # Log-Panel öffnen für detaillierte Infos
+        self.log_dock.show()
+        self.log_dock.raise_()
+
+    def _on_batch_isolate_bodies(self, bodies):
+        """
+        W26 F-UX-1: Handler für Batch Isolate Bodies.
+        
+        Args:
+            bodies: List[Body] - Zu isolierende Bodies
+        """
+        if not bodies:
+            self.statusBar().showMessage(tr("Keine Bodies ausgewählt"))
+            return
+        
+        # Alle anderen Bodies verstecken
+        body_ids_to_keep = {b.id for b in bodies}
+        
+        for body in self.document.get_all_bodies():
+            if body.id in body_ids_to_keep:
+                self.browser.body_visibility[body.id] = True
+            else:
+                self.browser.body_visibility[body.id] = False
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Isoliert: {len(bodies)} Bodies")
+        
+        # Notification
+        self.notification_manager.show_toast_overlay(
+            "info", 
+            f"{len(bodies)} Bodies isoliert"
+        )
+        
+        # Viewport und Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+
+    def _on_batch_unhide_bodies(self, bodies):
+        """
+        W29 E2E Closeout: Handler für Batch Unhide Bodies.
+        
+        Args:
+            bodies: List[Body] - Sichtbar zu machende Bodies
+        """
+        if not bodies:
+            self.statusBar().showMessage(tr("Keine Bodies ausgewählt"))
+            return
+        
+        # Alle ausgewählten Bodies sichtbar machen
+        for body in bodies:
+            self.browser.body_visibility[body.id] = True
+        
+        # Status-Bar Update
+        self.statusBar().showMessage(f"Eingeblendet: {len(bodies)} Bodies")
+        
+        # Notification
+        self.notification_manager.show_toast_overlay(
+            "success", 
+            f"{len(bodies)} Bodies eingeblendet"
+        )
+        
+        # Viewport und Browser aktualisieren
+        self.browser.refresh()
+        self._trigger_viewport_update()
+        
+        logger.debug(f"[W29] Batch unhide: {len(bodies)} bodies")
+
+    def _on_batch_focus_features(self, feature_body_pairs):
+        """
+        W29 E2E Closeout: Handler für Batch Focus Features.
+        
+        Fokussiert die Viewport-Kamera auf die ausgewählten Features.
+        
+        Args:
+            feature_body_pairs: List[(feature, body)] - Zu fokussierende Features
+        """
+        if not feature_body_pairs:
+            self.statusBar().showMessage(tr("Keine Features ausgewählt"))
+            return
+        
+        # Extrahiere Bodies für Bounding-Box-Berechnung
+        bodies_to_focus = set()
+        for feature, body in feature_body_pairs:
+            if body:
+                bodies_to_focus.add(body)
+        
+        if not bodies_to_focus:
+            self.statusBar().showMessage(tr("Keine gültigen Bodies für Focus"))
+            return
+        
+        # Viewport auf Bodies fokussieren
+        body_list = list(bodies_to_focus)
+        try:
+            if hasattr(self.viewport_3d, 'focus_on_bodies'):
+                self.viewport_3d.focus_on_bodies(body_list)
+            elif hasattr(self.viewport_3d, 'reset_camera'):
+                # Fallback: Reset camera und zeige alle
+                self.viewport_3d.reset_camera()
+            
+            # Status-Bar Update
+            feature_count = len(feature_body_pairs)
+            body_count = len(body_list)
+            self.statusBar().showMessage(
+                f"Fokus: {feature_count} Features in {body_count} Bodies"
+            )
+            
+            # Notification
+            self.notification_manager.show_toast_overlay(
+                "info", 
+                f"Fokus auf {feature_count} Features"
+            )
+            
+            logger.debug(f"[W29] Batch focus: {feature_count} features, {body_count} bodies")
+            
+        except Exception as e:
+            logger.warning(f"[W29] Focus failed: {e}")
+            self.statusBar().showMessage(tr("Fokus nicht möglich"))
+
+    def _on_recovery_action_requested(self, action, feature):
+        """
+        W26 F-UX-1: Handler für Recovery-Actions aus dem FeatureDetailPanel.
+        
+        Args:
+            action: str - Die angeforderte Aktion
+            feature: Feature - Das betroffene Feature
+        """
+        logger.info(f"[RECOVERY_ACTION] {action} für Feature {feature.name}")
+        
+        if action == "reselect_ref":
+            self.statusBar().showMessage(tr("Referenz neu wählen: Feature editieren..."))
+            # Feature editieren starten
+            self._edit_feature(('feature', feature, None))
+            
+        elif action == "edit":
+            self.statusBar().showMessage(tr("Feature editieren..."))
+            self._edit_feature(('feature', feature, None))
+            
+        elif action == "rebuild":
+            self.statusBar().showMessage(tr("Feature rebuild..."))
+            # Finde den Body für dieses Feature
+            for body in self.document.get_all_bodies():
+                if feature in body.features:
+                    try:
+                        body._rebuild_from_feature(feature)
+                        self.notification_manager.show_toast_overlay(
+                            "success", 
+                            f"Feature {feature.name} rebuilt"
+                        )
+                    except Exception as e:
+                        self.notification_manager.show_toast_overlay(
+                            "error", 
+                            f"Rebuild fehlgeschlagen: {e}"
+                        )
+                    break
+            self.browser.refresh()
+            self._trigger_viewport_update()
+            
+        elif action == "accept_drift":
+            self.statusBar().showMessage(tr("Drift akzeptiert"))
+            # Status zurücksetzen
+            if hasattr(feature, 'status_details'):
+                feature.status_details = {}
+            if hasattr(feature, 'status'):
+                feature.status = "OK"
+            self.notification_manager.show_toast_overlay(
+                "success", 
+                f"Drift für {feature.name} akzeptiert"
+            )
+            self.browser.refresh()
+            
+        elif action == "check_deps":
+            self.statusBar().showMessage(tr("Dependencies prüfen..."))
+            # TNP Stats Panel öffnen
+            self.left_tabs.setCurrentIndex(1)  # TNP Tab
+            self.notification_manager.show_toast_overlay(
+                "info", 
+                f"Dependencies für {feature.name} in TNP-Tab"
+            )
+
+    def _on_edit_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Edit Feature Request."""
+        self._edit_feature(('feature', feature, None))
+
+    def _on_rebuild_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Rebuild Feature Request."""
+        self._on_recovery_action_requested("rebuild", feature)
+
+    def _on_delete_feature_requested(self, feature):
+        """W26 F-UX-1: Handler für Delete Feature Request."""
+        # Finde den Body für dieses Feature
+        for body in self.document.get_all_bodies():
+            if feature in body.features:
+                self._on_feature_deleted(feature, body)
+                break
+
+    def _on_highlight_edges_requested(self, edge_indices):
+        """
+        W26 F-UX-1: Handler für Highlight Edges Request.
+        
+        Args:
+            edge_indices: List[int] - Indizes der zu highlightenden Edges
+        """
+        if edge_indices and hasattr(self.viewport_3d, 'highlight_edges'):
+            self.viewport_3d.highlight_edges(edge_indices)
+            self.statusBar().showMessage(f"{len(edge_indices)} Kanten highlightet")
+
+    # ========================================================================
+    # W26 FIX: Projection-Preview Handler
+    # ========================================================================
+
+    def _on_projection_preview_requested(self, edge_tuple, projection_type):
+        """
+        W26 FIX: Handler für Projection-Preview Signal.
+        
+        Args:
+            edge_tuple: (x1, y1, x2, y2, d1, d2) - 2D line coordinates + depth values
+            projection_type: "edge" | "silhouette" | "intersection" | "mesh_outline"
+        """
+        if not edge_tuple or len(edge_tuple) < 4:
+            return
+        
+        try:
+            x1, y1, x2, y2 = edge_tuple[0], edge_tuple[1], edge_tuple[2], edge_tuple[3]
+            
+            # Adapter: Konvertiere zu Viewport-Format
+            # Das Viewport erwartet edges als Liste von ((x1,y1,z1), (x2,y2,z2)) Tupeln
+            edge_line = ((x1, y1, 0), (x2, y2, 0))
+            
+            # Zeige Preview im Viewport
+            if hasattr(self.viewport_3d, 'show_projection_preview'):
+                self.viewport_3d.show_projection_preview([edge_line], projection_type)
+            
+            logger.debug(f"[PROJECTION_PREVIEW] {projection_type}: ({x1},{y1})->({x2},{y2})")
+            
+        except Exception as e:
+            logger.error(f"[PROJECTION_PREVIEW] Error: {e}")
+
+    def _on_projection_preview_cleared(self):
+        """W26 FIX: Clear projection preview when mouse leaves edge."""
+        try:
+            if hasattr(self.viewport_3d, 'clear_projection_preview'):
+                self.viewport_3d.clear_projection_preview()
+            logger.debug("[PROJECTION_PREVIEW] Cleared")
+        except Exception as e:
+            logger.error(f"[PROJECTION_PREVIEW_CLEAR] Error: {e}")

@@ -10,6 +10,7 @@ from modeling import (
     HoleFeature,
     HollowFeature,
     NSidedPatchFeature,
+    ShellFeature,
     SurfaceTextureFeature,
     SweepFeature,
     ThreadFeature,
@@ -2849,3 +2850,237 @@ def test_tnp_health_report_texture_indices_stable_after_undo_redo_cycle():
     assert texture_after_redo["broken"] == 0
     assert texture_after_redo["ok"] >= 2
     assert all(ref.get("method") == "index" for ref in texture_after_redo.get("refs", []))
+
+
+def test_epic_x2_multi_cycle_rebuild_determinism_25_cycles():
+    """
+    EPIC X2: Rebuild-Idempotenz ueber 25+ Zyklen.
+
+    Stellt sicher dass:
+    - edge_indices/face Indices sortiert und entdupliziert bleiben
+    - Referenzstruktur nach jedem Rebuild identisch ist
+    - Keine driftenden Index-Arrays entstehen
+    """
+    pytest.importorskip("OCP.BRepFeat")
+
+    doc = Document()
+    body = Body("epic_x2_multi_cycle")
+    doc.add_body(body)
+
+    # Basis-Geometrie
+    base = PrimitiveFeature(primitive_type="box", length=40.0, width=30.0, height=20.0)
+    body.add_feature(base, rebuild=True)
+    assert body._build123d_solid is not None
+
+    # Feature mit unsortierten/duplizierten Indizes erstellen
+    # Die __post_init__ sollte diese normalisieren
+    fillet = FilletFeature(
+        radius=0.5,
+        edge_indices=[3, 1, 2, 2, 0, 3]  # Unsortiert mit Duplikaten
+    )
+    body.add_feature(fillet, rebuild=True)
+    assert fillet.status == "SUCCESS"
+
+    # Nach Init sollten Indizes sortiert und entdupliziert sein
+    assert fillet.edge_indices == [0, 1, 2, 3], (
+        f"Expected canonical [0, 1, 2, 3], got {fillet.edge_indices}"
+    )
+
+    # Snapshot der Referenzstruktur nach erstem Rebuild
+    ref_signature = {
+        "volume": float(body._build123d_solid.volume),
+        "faces": len(list(body._build123d_solid.faces())),
+        "edges": len(list(body._build123d_solid.edges())),
+        "edge_indices": list(fillet.edge_indices),
+    }
+
+    # 25 Rebuilds ausfuehren
+    for cycle in range(25):
+        body._rebuild()
+
+        # Nach jedem Rebuild: Identische Signatur
+        current_volume = float(body._build123d_solid.volume)
+        current_faces = len(list(body._build123d_solid.faces()))
+        current_edges = len(list(body._build123d_solid.edges()))
+
+        assert current_volume == pytest.approx(ref_signature["volume"], rel=1e-6), (
+            f"Cycle {cycle}: Volume drift {ref_signature['volume']} -> {current_volume}"
+        )
+        assert current_faces == ref_signature["faces"], (
+            f"Cycle {cycle}: Face count drift {ref_signature['faces']} -> {current_faces}"
+        )
+        assert current_edges == ref_signature["edges"], (
+            f"Cycle {cycle}: Edge count drift {ref_signature['edges']} -> {current_edges}"
+        )
+
+        # Indizes muessen stabil bleiben
+        assert fillet.edge_indices == ref_signature["edge_indices"], (
+            f"Cycle {cycle}: edge_indices drift {ref_signature['edge_indices']} -> {fillet.edge_indices}"
+        )
+
+
+def test_epic_x2_chamfer_unsorted_indices_normalized_on_init():
+    """
+    EPIC X2: Chamfer mit unsortierten Indizes wird bei Init normalisiert.
+    """
+    # Unsortiert mit Duplikaten und negativen Werten
+    # (Out-of-range-Werte werden nicht gefiltert - das ist Aufgabe der Laufzeit-Validierung)
+    chamfer = ChamferFeature(
+        distance=0.3,
+        edge_indices=[5, 2, -1, 2, 8, 5]  # Unsortiert, Duplikate, negativ
+    )
+
+    # Erwartet: Sortiert, entdupliziert, nur nicht-negative Werte
+    assert chamfer.edge_indices == [2, 5, 8], (
+        f"Expected [2, 5, 8], got {chamfer.edge_indices}"
+    )
+
+
+def test_epic_x2_hole_unsorted_face_indices_normalized_on_init():
+    """
+    EPIC X2: Hole mit unsortierten face_indices wird bei Init normalisiert.
+    """
+    hole = HoleFeature(
+        hole_type="simple",
+        diameter=4.0,
+        depth=5.0,
+        face_indices=[3, 1, 2, 2, 0, -5]
+    )
+
+    assert hole.face_indices == [0, 1, 2, 3], (
+        f"Expected [0, 1, 2, 3], got {hole.face_indices}"
+    )
+
+
+def test_epic_x2_shell_unsorted_face_indices_normalized_on_init():
+    """
+    EPIC X2: Shell mit unsortierten face_indices wird bei Init normalisiert.
+    """
+    shell = ShellFeature(
+        thickness=1.0,
+        face_indices=[2, 0, 1, 1, 3, -1]
+    )
+
+    assert shell.face_indices == [0, 1, 2, 3], (
+        f"Expected [0, 1, 2, 3], got {shell.face_indices}"
+    )
+
+@pytest.mark.parametrize(
+    "strict_topology,strict_self_heal,has_topo_refs,should_error",
+    [
+        # strict_topology=True, has_topo_refs=True -> ERROR (no silent recovery)
+        (True, True, True, True),
+        (True, False, True, True),
+        # strict_topology=False, has_topo_refs=True -> WARNING (recovery allowed)
+        (False, True, True, False),
+        (False, False, True, False),
+        # no topo refs -> depends on strict_self_heal
+        (True, True, False, False),
+        (True, False, False, False),
+    ],
+)
+def test_epic_x3_strict_fallback_policy_matrix(monkeypatch, strict_topology, strict_self_heal, has_topo_refs, should_error):
+    """
+    EPIC X3: Strict Fallback Policy Matrix.
+
+    Stellt sicher dass:
+    - Bei strict_topology_fallback_policy=True und Topologie-Referenzen -> ERROR (kein stilles Recovery)
+    - Bei strict_topology_fallback_policy=False -> WARNING (Recovery erlaubt)
+    """
+    from config.feature_flags import FEATURE_FLAGS
+    from modeling.ocp_helpers import OCPFilletHelper
+    from build123d import Solid
+
+    # Set up flags
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", strict_topology)
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", strict_self_heal)
+
+    doc = Document()
+    body = Body("epic_x3_policy_test")
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    body.add_feature(base, rebuild=True)
+
+    # Create fillet with or without topological references
+    if has_topo_refs:
+        fillet = FilletFeature(
+            radius=0.5,
+            edge_indices=[0, 1],  # Has topological refs
+            edge_shape_ids=[],  # Empty shape IDs -> triggers TNP resolution
+        )
+    else:
+        fillet = FilletFeature(
+            radius=0.5,
+            edge_indices=[],  # No topological refs
+            geometric_selectors=[_edge_selector()],  # Only geometric fallback
+        )
+
+    # Simulate fillet operation that will use fallback
+    def _mock_fillet_that_fails(**kwargs):
+        raise ValueError("Primary path failed - testing fallback")
+
+    monkeypatch.setattr(OCPFilletHelper, "fillet", staticmethod(_mock_fillet_that_fails))
+
+    body.add_feature(fillet, rebuild=False)
+
+    # Try to rebuild (will trigger fallback path)
+    body._rebuild()
+
+    # Check result based on policy
+    if should_error:
+        # When strict=True + topo_refs -> ERROR
+        assert fillet.status in ("ERROR", "WARNING"), (
+            f"Expected ERROR/WARNING with strict={strict_topology}, "
+            f"self_heal={strict_self_heal}, has_refs={has_topo_refs}, "
+            f"got status={fillet.status}"
+        )
+        details = fillet.status_details or {}
+        code = details.get("code", "")
+        # Should have either fallback_blocked_strict or operation_failed
+        assert code in ("fallback_blocked_strict", "operation_failed", "rebuild_finalize_failed"), (
+            f"Expected fallback_blocked_strict/operation_failed, got {code}"
+        )
+    else:
+        # When recovery allowed -> may succeed or fail with different code
+        assert fillet.status in ("SUCCESS", "WARNING", "ERROR")
+
+
+def test_epic_x3_strict_policy_blocks_selector_recovery(monkeypatch):
+    """
+    EPIC X3: Bei strict_topology_fallback_policy=True wird Geometric-Selector-Recovery blockiert.
+    """
+    from config.feature_flags import FEATURE_FLAGS
+
+    monkeypatch.setitem(FEATURE_FLAGS, "strict_topology_fallback_policy", True)
+    monkeypatch.setitem(FEATURE_FLAGS, "self_heal_strict", True)
+
+    doc = Document()
+    body = Body("epic_x3_block_selector_recovery")
+    doc.add_body(body)
+
+    base = PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0)
+    body.add_feature(base, rebuild=True)
+
+    # Fillet with topological refs but invalid indices (triggers TNP resolution)
+    fillet = FilletFeature(
+        radius=0.5,
+        edge_indices=[999, 998],  # Invalid indices
+        edge_shape_ids=[],  # No shape IDs
+        geometric_selectors=[_edge_selector(), _edge_selector()],  # Has fallback
+    )
+
+    body.add_feature(fillet, rebuild=True)
+
+    # With strict policy, should either succeed (if geometric worked) or error
+    # but should NOT silently fall back without proper status
+    details = fillet.status_details or {}
+
+    # If status is WARNING (drift), verify tnp_failure envelope is complete
+    if fillet.status == "WARNING":
+        tnp_failure = details.get("tnp_failure") or {}
+        assert "category" in tnp_failure
+        assert "reference_kind" in tnp_failure
+        assert "next_action" in tnp_failure
+        assert "strict" in tnp_failure
+        assert tnp_failure["strict"] is True

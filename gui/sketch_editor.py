@@ -18,7 +18,16 @@ import threading
 from threading import Thread
 
 from enum import Enum, auto
+
+
+def format_zoom_label(view_scale: float) -> str:
+    """W32: Single source of truth for zoom label formatting.
+    Used by sketch overlay HUD and status bar badge."""
+    if view_scale == int(view_scale):
+        return f"{int(view_scale)}x"
+    return f"{view_scale:.1f}x"
 from typing import Optional, List, Tuple, Set
+import inspect
 import math
 import time
 import sys
@@ -62,7 +71,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from i18n import tr
-from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
+from sketcher import Sketch, Point2D, Line2D, Circle2D, Arc2D, Ellipse2D, Polygon2D, Constraint, ConstraintType
 try:
     from gui.sketch_feedback import format_solver_failure_message
 except ImportError:
@@ -355,7 +364,7 @@ class DXFImportWorker(QThread):
                     except Exception as e:
                         logger.debug(f"ezdxf.path failed: {e}")
 
-                # Methode 2: Fallback für ältere Versionen
+                # Methode 2: Fallback für Ältere Versionen
                 if not points_2d:
                     dxftype = entity.dxftype()
                     if dxftype == 'SPLINE':
@@ -385,7 +394,7 @@ class DXFImportWorker(QThread):
                 if len(points_2d) < 2:
                     return
 
-                # RDP-Vereinfachung - Balance zwischen Performance und Qualität
+                # RDP-Vereinfachung - Balance zwischen Performance und QualitÄt
                 if len(points_2d) > 500:
                     rdp_tolerance = 0.15  # 0.15mm für sehr komplexe Kurven
                 elif len(points_2d) > 200:
@@ -407,7 +416,7 @@ class DXFImportWorker(QThread):
             def process_entity(entity, matrix=None):
                 dxftype = entity.dxftype()
                 
-                # Blöcke rekursiv auflösen
+                # Blücke rekursiv auflüsen
                 if dxftype == 'INSERT':
                     m = entity.matrix44()
                     if matrix: m = m * matrix
@@ -473,7 +482,7 @@ class DXFImportWorker(QThread):
                 # SPLINES -> Hybrid-Ansatz: Native für einfache, Polyline für komplexe
                 elif dxftype == 'SPLINE':
                     # Schwellenwert: Komplexe Splines (viele Kontrollpunkte) als Polyline
-                    NATIVE_SPLINE_THRESHOLD = 20  # Erhöht auf 20 für bessere Erkennung kleiner Splines
+                    NATIVE_SPLINE_THRESHOLD = 20  # Erhüht auf 20 für bessere Erkennung kleiner Splines
 
                     try:
                         ctrl_pts = list(entity.control_points)
@@ -482,7 +491,7 @@ class DXFImportWorker(QThread):
                         logger.debug(f"Spline ctrl_pts Zugriff fehlgeschlagen: {e}")
                         n_ctrl = 999  # Force polyline fallback on error
 
-                    # Prüfe ob Spline geschlossen ist (für Schraubenlöcher etc.)
+                    # Prüfe ob Spline geschlossen ist (für Schraubenlücher etc.)
                     is_closed_spline = False
                     try:
                         # Evaluiere Start/End des Splines
@@ -507,14 +516,14 @@ class DXFImportWorker(QThread):
 
                     logger.debug(f"SPLINE: {n_ctrl} ctrl pts, closed={is_closed_spline}")
 
-                    # Kleine geschlossene Splines (Schraubenlöcher) -> Als Kreis/Polygon
+                    # Kleine geschlossene Splines (Schraubenlücher) -> Als Kreis/Polygon
                     if is_closed_spline and n_ctrl <= 30:
                         # Evaluiere und erstelle Polygon direkt
                         try:
                             pts_2d = flatten_spline_fallback(entity, matrix)
                             if pts_2d and len(pts_2d) >= 3:
                                 # Als geschlossene Form zu circles hinzufügen
-                                # Berechne Bounding Box für Radius-Schätzung
+                                # Berechne Bounding Box für Radius-SchÄtzung
                                 xs = [p[0] for p in pts_2d]
                                 ys = [p[1] for p in pts_2d]
                                 cx = sum(xs) / len(xs)
@@ -603,9 +612,9 @@ class DXFImportWorker(QThread):
                 elif dxftype in ['TEXT', 'MTEXT', 'ATTRIB', 'ATTDEF']:
                     pass  # Text wird übersprungen
 
-                # DIMENSION - ignorieren (Bemaßungen)
+                # DIMENSION - ignorieren (Bemaüƒungen)
                 elif dxftype in ['DIMENSION', 'LEADER', 'TOLERANCE']:
-                    pass  # Bemaßungen überspringen
+                    pass  # Bemaüƒungen überspringen
 
                 # Fallback: Versuche path.make_path für unbekannte Typen
                 else:
@@ -624,7 +633,7 @@ class DXFImportWorker(QThread):
                     self.progress_signal.emit(f"Importiere... {int(i/total*100)}%")
 
             if skipped_types:
-                logger.info(f"DXF: Übersprungene Entity-Typen: {skipped_types}")
+                logger.info(f"DXF: ü£bersprungene Entity-Typen: {skipped_types}")
 
             self.finished_signal.emit(new_lines, new_circles, new_arcs, new_native_splines)
 
@@ -642,7 +651,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     grid_snap_mode_changed = Signal(bool)
     exit_requested = Signal()  # Escape Level 4: Sketch verlassen
     solver_finished_signal = Signal(bool, str, float, str) # success, message, dof, status
+    zoom_changed = Signal(float)  # W32: Emits view_scale for live status bar update
     peek_3d_requested = Signal(bool)  # True = zeige 3D, False = zurück zu Sketch
+    
+    # W26 FIX: Echter Projection-Preview-Hook
+    # Signal wird emittiert wenn User im PROJECT-Tool über einer Kante hovered
+    projection_preview_requested = Signal(object, str)  # (edge_tuple, projection_type)
+    projection_preview_cleared = Signal()
 
     # Farben
     BG_COLOR = QColor(28, 28, 28)
@@ -713,6 +728,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_lines = []
         self.selected_circles = []
         self.selected_arcs = []
+        self.selected_ellipses = []
+        self.selected_polygons = []
         self.selected_points = []  # Standalone Punkte
         self.selected_constraints = []  # Für Constraint-Selektion
         self.hovered_entity = None
@@ -739,6 +756,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._hud_message_time = 0
         self._hud_duration = 3000
         self._hud_color = QColor(255, 255, 255)
+
+        # W10 Paket C: Discoverability v4 Anti-Spam - Hint-Tracking
+        self._hint_history = []  # Liste von (text, timestamp_ms) Tupeln
+        self._hint_cooldown_ms = 5000  # Cooldown zwischen gleichen Hinweisen (5s)
+        self._hint_max_history = 10  # Max Anzahl gespeicherter Hinweise
+        
+        # W16 Paket B: Discoverability v2 - Navigation und Tutorial-Modus
+        self._peek_3d_active = False  # True wenn 3D-Peek aktiv (Space gehalten)
+        self._tutorial_mode_enabled = False  # Tutorial-Modus für neue Nutzer
+        self._tutorial_mode = self._tutorial_mode_enabled  # API-Alias für W17 Tests
+        self._hint_priority_levels = {
+            'CRITICAL': 3,   # Errors, Blockierende Hinweise
+            'WARNING': 2,    # Wichtige Warnungen
+            'INFO': 1,       # Normale Hinweise
+            'TUTORIAL': 0,   # Tutorial-Hinweise (niedrigste PrioritÄt)
+        }
+        self._current_hint_priority = 0  # Aktuelle angezeigte PrioritÄt
+        self._hint_context = 'sketch'  # 'sketch', 'peek_3d', 'direct_edit'
         
         self.selection_box_start = None
         self.selection_box_end = None
@@ -766,7 +801,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.dim_input.field_committed.connect(self._on_dim_field_committed)
         if hasattr(self.dim_input, 'field_reset'):
             self.dim_input.field_reset.connect(self._on_dim_field_reset)
-        # Phase 8: Per-field enter mode (Enter bestätigt nur aktuelles Feld)
+        # Phase 8: Per-field enter mode (Enter bestÄtigt nur aktuelles Feld)
         if hasattr(self.dim_input, 'set_per_field_enter'):
             self.dim_input.set_per_field_enter(True)
         self.dim_input_active = False
@@ -797,6 +832,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.fillet_radius = 5.0
         self.offset_distance = 5.0
         self.chamfer_distance = 5.0
+        
+        # W26: Projection-Preview State
+        self._last_projection_edge = None  # Für Change-Detection
+        self._projection_type = "edge"  # Default: "edge" | "silhouette" | "intersection" | "mesh_outline"
         self.extrude_operation = "New Body"  # Für Extrude-Dialog
         
         # Kreis-Segmente für Polygonisierung (für Face-Erkennung)
@@ -829,10 +868,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.spline_drag_type = None  # 'point', 'handle_in', 'handle_out'
         self.spline_drag_spline = None  # Die Spline die bearbeitet wird
         self.spline_drag_cp_index = None  # Index des Kontrollpunkts
-        self.selected_splines = []  # Ausgewählte Splines (Liste)
+        self.selected_splines = []  # AusgewÄhlte Splines (Liste)
         self.hovered_spline_element = None  # (spline, cp_index, element_type)
 
-        # Direct Manipulation (Fusion/Onshape-ähnlich)
+        # Direct Manipulation (Fusion/Onshape-Ähnlich)
         # Kreis/Polygon: Center-Drag und Radius-Drag direkt im SELECT-Modus.
         self._direct_hover_handle = None
         self._direct_edit_dragging = False
@@ -852,6 +891,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_live_solve_interval_s = 1.0 / 30.0
+        # W20 P1: Arc Direct Edit State
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        # W25: Ellipse/Polygon Direct Edit State
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
         
         # Schwebende Optionen-Palette
         self.tool_options = ToolOptionsPopup(self)
@@ -893,14 +944,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Phase 4.4: Debounced Update-Request.
 
         Problem: 30+ self.request_update() Aufrufe → Lag bei 100+ Constraints
-        Lösung: Sammle alle Requests, führe max 1 Update pro 16ms aus.
+        Lüsung: Sammle alle Requests, führe max 1 Update pro 16ms aus.
         """
         if not self._update_pending:
             self._update_pending = True
             self._update_timer.start()
 
     def _do_debounced_update(self):
-        """Führt das tatsächliche Qt-Update aus."""
+        """Führt das tatsÄchliche Qt-Update aus."""
         self._update_pending = False
         super().update()  # Direkter Qt-Update (nicht request_update!)
 
@@ -1077,18 +1128,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _debug_inspect_geometry(self):
         """
-        Forensische Suche: Findet Geometrie, die versehentlich Booleans statt Zahlen enthält.
+        Forensische Suche: Findet Geometrie, die versehentlich Booleans statt Zahlen enthÄlt.
         """
         import numpy as np
         
-        logger.info("🕵️ Starte Geometrie-Inspektion...")
+        logger.info("­ƒòÁ´©Å Starte Geometrie-Inspektion...")
         
         found_error = False
 
         def is_bad(val, name):
             # Prüft auf bool (Python) oder numpy.bool_ (NumPy)
             if isinstance(val, (bool, np.bool_)):
-                logger.critical(f"🚨 FEHLER GEFUNDEN in {name}!")
+                logger.critical(f"­ƒÜ¿ FEHLER GEFUNDEN in {name}!")
                 logger.critical(f"   Wert ist BOOLEAN: {val} (Typ: {type(val)})")
                 logger.critical(f"   Erwartet wurde float/int.")
                 return True
@@ -1254,7 +1305,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         """Reagiert auf Änderungen aus dem ToolPanel (Checkboxen)"""
         if option == "construction":
             self.construction_mode = self._safe_bool(value)
-            # Optional: Feedback in Statuszeile, wenn per Klick geändert
+            # Optional: Feedback in Statuszeile, wenn per Klick geÄndert
             state = tr("ON") if self.construction_mode else tr("OFF")
             self.status_message.emit(tr("Construction: {state}").format(state=state))
             
@@ -1302,7 +1353,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         except Exception:
             return QRectF() # Im Zweifel leeres Rect zurückgeben
             
-        # Padding für Strichstärke (5px) + Glow (10px) = sicherheitshalber 15
+        # Padding für StrichstÄrke (5px) + Glow (10px) = sicherheitshalber 15
         return rect.adjusted(-15, -15, 15, 15)
 
     def _get_circle_dirty_rect(self, cx: float, cy: float, radius: float) -> QRectF:
@@ -1318,6 +1369,62 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             2.0 * r_screen,
             2.0 * r_screen,
         )
+        return rect.adjusted(-28.0, -28.0, 28.0, 28.0)
+
+    # W28: Dirty-Rect Methoden für Arc, Ellipse, Polygon Direct-Manipulation
+    def _get_arc_dirty_rect(self, arc) -> QRectF:
+        """
+        Screen-Dirty-Rect für Arc-Direct-Edit.
+        Enthält Arc, Selection-Glow, Handles und Sicherheitsreserve.
+        """
+        from sketcher import Arc2D
+        if not isinstance(arc, Arc2D):
+            return QRectF()
+        
+        center_screen = self.world_to_screen(QPointF(float(arc.center.x), float(arc.center.y)))
+        r_screen = max(1.0, float(arc.radius) * float(self.view_scale))
+        rect = QRectF(
+            center_screen.x() - r_screen,
+            center_screen.y() - r_screen,
+            2.0 * r_screen,
+            2.0 * r_screen,
+        )
+        return rect.adjusted(-32.0, -32.0, 32.0, 32.0)
+
+    def _get_ellipse_dirty_rect(self, ellipse) -> QRectF:
+        """
+        Screen-Dirty-Rect für Ellipse-Direct-Edit.
+        Enthält Ellipse, Selection-Glow, Handles und Sicherheitsreserve.
+        """
+        center_screen = self.world_to_screen(QPointF(float(ellipse.center.x), float(ellipse.center.y)))
+        rx = max(0.01, float(getattr(ellipse, "radius_x", 0.01)))
+        ry = max(0.01, float(getattr(ellipse, "radius_y", 0.01)))
+        rx_screen = max(1.0, rx * float(self.view_scale))
+        ry_screen = max(1.0, ry * float(self.view_scale))
+        rect = QRectF(
+            center_screen.x() - rx_screen,
+            center_screen.y() - ry_screen,
+            2.0 * rx_screen,
+            2.0 * ry_screen,
+        )
+        return rect.adjusted(-32.0, -32.0, 32.0, 32.0)
+
+    def _get_polygon_dirty_rect(self, polygon) -> QRectF:
+        """
+        Screen-Dirty-Rect für Polygon-Direct-Edit.
+        Enthält alle Vertices, Selection-Glow und Sicherheitsreserve.
+        """
+        points = getattr(polygon, "points", [])
+        if not points:
+            return QRectF()
+        
+        rect = QRectF()
+        for pt in points:
+            p_screen = self.world_to_screen(QPointF(float(pt.x), float(pt.y)))
+            if rect.isEmpty():
+                rect = QRectF(p_screen.x() - 10, p_screen.y() - 10, 20, 20)
+            else:
+                rect = rect.united(QRectF(p_screen.x() - 10, p_screen.y() - 10, 20, 20))
         return rect.adjusted(-28.0, -28.0, 28.0, 28.0)
     
     def _calculate_plane_axes(self, normal_vec):
@@ -1366,7 +1473,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             wx = self._safe_float(w.x)
             wy = self._safe_float(w.y)
         else:
-            wx = self._safe_float(w.x())  # ← Explizit zu Python float
+            wx = self._safe_float(w.x())  # → Explizit zu Python float
             wy = self._safe_float(w.y())
 
         # Ansicht-Rotation anwenden (vor Scale/Translate)
@@ -1423,25 +1530,66 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         logger.debug(f"[Sketch] View rotation: {self.view_rotation}°")
         self.request_update()
 
-    def show_message(self, text: str, duration: int = 3000, color: QColor = None):
+    def show_message(self, text: str, duration: int = 3000, color: QColor = None,
+                    force: bool = False, priority: int = 0):
         """
         Zeigt eine HUD-Nachricht als zentralen Toast an.
+
+        W10 Paket C: Erweitert um Anti-Spam Hint-Tracking.
 
         Args:
             text: Die anzuzeigende Nachricht
             duration: Anzeigedauer in ms (Standard: 3000)
-            color: Textfarbe (Standard: weiß)
+            color: Textfarbe (Standard: weiüƒ)
+            force: Wenn True, wird Cooldown ignoriert (für wichtige Hinweise)
+            priority: Priority-Level (hüher = wichtiger, überschreibt niedrigere wÄhrend Cooldown)
+
+        Returns:
+            True wenn Nachricht angezeigt wurde, False wenn unterdrückt (Cooldown)
         """
         import time
+
+        current_time_ms = time.time() * 1000
+
+        # W10 Paket C: Hint-Tracking und Cooldown-Logik
+        if not force:
+            # Prüfen ob derselbe Hinweis kürzlich angezeigt wurde
+            for hint_text, hint_time_ms in self._hint_history:
+                if hint_text == text:
+                    # Cooldown prüfen
+                    time_since_last = current_time_ms - hint_time_ms
+                    if time_since_last < self._hint_cooldown_ms:
+                        # Hinweis ist noch im Cooldown - prüfe Priority
+                        if priority <= 0:
+                            # Niedrige Priority: Nicht anzeigen
+                            return False
+                        # Hohe Priority: Cooldown brechen
+
+        # Hinweis anzeigen
         self._hud_message = text
-        self._hud_message_time = time.time() * 1000
+        self._hud_message_time = current_time_ms
         self._hud_duration = duration
         self._hud_color = color if color else QColor(255, 255, 255)
+
+        # Hint-Trackung aktualisieren
+        # Alten Eintrag für denselben Text entfernen (um Duplikate zu vermeiden)
+        self._hint_history = [(t, tm) for t, tm in self._hint_history if t != text]
+        # Neuen Eintrag hinzufügen
+        self._hint_history.append((text, current_time_ms))
+        # History auf Max-LÄnge begrenzen
+        if len(self._hint_history) > self._hint_max_history:
+            self._hint_history = self._hint_history[-self._hint_max_history:]
+
         self.request_update()
 
-        # Timer für Refresh während Fade-out
+        # Timer für Refresh wÄhrend Fade-out
         QTimer.singleShot(duration - 500, self.update)
         QTimer.singleShot(duration, self.update)
+
+        return True
+
+    # PAKET B W6: Alias für Konsistenz mit bestehendem Code
+    _show_hud = show_message
 
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         self.reference_bodies = []
@@ -1450,7 +1598,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         import numpy as np
 
-        # Alles in float64 casten für Präzision
+        # Alles in float64 casten für PrÄzision
         n = np.array(plane_normal, dtype=np.float64)
         norm = np.linalg.norm(n)
         n = n / norm if norm > 0 else np.array([0,0,1], dtype=np.float64)
@@ -1522,7 +1670,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         # Expliziter Cast zu int für Loop-Index
                         n_pts = int(lines[i])
                         if n_pts >= 2:
-                            # Vektorisierte Berechnung wäre schneller, aber hier loop for safety
+                            # Vektorisierte Berechnung wÄre schneller, aber hier loop for safety
                             # Wir holen den Segment-Block
                             segment_indices = lines[i+1 : i+1+n_pts]
                             
@@ -1679,8 +1827,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _find_closed_profiles(self):
         """
         Kombinierte Logik: 
-        1. Welding (Punkte verschweißen) gegen Mikro-Lücken (für Slots/Langlöcher).
-        2. Hierarchie-Analyse (wie im 3D Modus) für korrekte Löcher/Inseln.
+        1. Welding (Punkte verschweiüƒen) gegen Mikro-Lücken (für Slots/Langlücher).
+        2. Hierarchie-Analyse (wie im 3D Modus) für korrekte Lücher/Inseln.
         """
        
         from shapely.geometry import LineString, Polygon as ShapelyPolygon, Point
@@ -1690,7 +1838,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.closed_profiles.clear()
 
         # --- PHASE 1: Fast Welding (Coordinate Hashing) ---
-        # Erhöht auf 0.5mm für bessere DXF-Kompatibilität (Fusion nutzt ähnliche Werte)
+        # Erhüht auf 0.5mm für bessere DXF-KompatibilitÄt (Fusion nutzt Ähnliche Werte)
         WELD_GRID = 0.5
         welded_points = {} # Map: (ix, iy) -> (float_x, float_y)
 
@@ -1709,7 +1857,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     neighbor_key = (ix + dx, iy + dy)
                     if neighbor_key in welded_points:
                         nx, ny = welded_points[neighbor_key]
-                        # Toleranz erhöht auf WELD_GRID (statt WELD_GRID/2)
+                        # Toleranz erhüht auf WELD_GRID (statt WELD_GRID/2)
                         if (x - nx)**2 + (y - ny)**2 < WELD_GRID**2:
                             return (nx, ny)
 
@@ -1732,14 +1880,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 shapely_lines.append(LineString([p1, p2]))
                 geometry_sources.append(('line', line, p1, p2))
 
-        # 2. Bögen
+        # 2. Bügen
         arcs = [a for a in self.sketch.arcs if not a.construction]
         all_arcs = self.sketch.arcs
         if is_enabled("sketch_debug"):
             logger.info(f"[PROFILE] Arcs: {len(arcs)} non-construction / {len(all_arcs)} total")
         for arc_idx, arc in enumerate(arcs):
             # FIX: Für Slots verwende die Marker-Punkte (exakt mit Linien verbunden)
-            # statt der berechneten start_point/end_point (können Floating-Point Abweichungen haben)
+            # statt der berechneten start_point/end_point (künnen Floating-Point Abweichungen haben)
             start_marker = getattr(arc, '_start_marker', None)
             end_marker = getattr(arc, '_end_marker', None)
 
@@ -1754,7 +1902,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 end_p = get_welded_pt(end_marker.x, end_marker.y)
 
                 # WICHTIG: Berechne Winkel aus den Marker-Punkten, nicht aus arc.start_angle/end_angle
-                # da diese nach Solver-Läufen nicht mehr stimmen könnten
+                # da diese nach Solver-LÄufen nicht mehr stimmen künnten
                 cx, cy = arc.center.x, arc.center.y
                 actual_start_angle = math.degrees(math.atan2(start_marker.y - cy, start_marker.x - cx))
                 actual_end_angle = math.degrees(math.atan2(end_marker.y - cy, end_marker.x - cx))
@@ -1835,7 +1983,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 continue
             try:
                 # Evaluiere Spline zu Punkten für Shapely
-                pts = spline.evaluate_points(50)  # Hohe Auflösung für gute Profil-Erkennung
+                pts = spline.evaluate_points(50)  # Hohe Auflüsung für gute Profil-Erkennung
                 if len(pts) >= 2:
                     # Start/End durch Welding
                     welded_pts = []
@@ -1878,7 +2026,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # --- 3. KREISE ---
         # Kreise müssen in Polygone umgewandelt werden, da Shapely keine echten Kreise kennt
-        # NEU: Überlappende Kreise werden als Arcs behandelt für korrekte Profile-Erkennung
+        # NEU: ü£berlappende Kreise werden als Arcs behandelt für korrekte Profile-Erkennung
         standalone_polys = []
         circles = [c for c in self.sketch.circles if not c.construction]
 
@@ -1886,7 +2034,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             logger.debug(f"Verarbeite {len(circles)} Kreise für Profil-Erkennung")
 
         if circles:
-            # NEU: Kreis-Überlappungs-Erkennung (Kreis-Kreis UND Kreis-Linie)
+            # NEU: Kreis-ü£berlappungs-Erkennung (Kreis-Kreis UND Kreis-Linie)
             from sketcher.geometry import get_circle_circle_intersection, circle_line_intersection
             from sketcher import Circle2D
 
@@ -1929,7 +2077,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 cx, cy, r = circle.center.x, circle.center.y, circle.radius
 
                 if idx in overlapping_circles and circle_intersections[idx]:
-                    # Überlappender Kreis: Teile in Arcs und füge zu shapely_lines hinzu
+                    # ü£berlappender Kreis: Teile in Arcs und füge zu shapely_lines hinzu
                     intersections = circle_intersections[idx]
                     # Sortiere nach Winkel
                     intersections.sort(key=lambda x: x[0])
@@ -1982,12 +2130,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         raw_polys = []
 
-        # Aus Linien/Bögen Flächen finden
+        # Aus Linien/Bügen FlÄchen finden
         if shapely_lines:
             try:
                 merged = unary_union(shapely_lines)
 
-                # PHASE 2a: Lücken schließen (für DXF-Kompatibilität)
+                # PHASE 2a: Lücken schlieüƒen (für DXF-KompatibilitÄt)
                 # Finde offene Endpunkte und verbinde nahe Punkte
                 if hasattr(merged, 'geoms'):
                     # Es ist eine MultiLineString - suche offene Enden
@@ -2027,16 +2175,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             except Exception as e:
                 logger.warning(f"Polygonize error: {e}")
 
-        # Eigenständige Kreise hinzufügen (wenn sie nicht schon durch Linien abgedeckt sind)
-        # WICHTIG: Nur ECHTE Duplikate filtern (gleiche Position + gleiche Größe)
-        # Kreise innerhalb anderer Polygone sind KEINE Duplikate - sie werden später als Löcher erkannt
+        # EigenstÄndige Kreise hinzufügen (wenn sie nicht schon durch Linien abgedeckt sind)
+        # WICHTIG: Nur ECHTE Duplikate filtern (gleiche Position + gleiche Grüüƒe)
+        # Kreise innerhalb anderer Polygone sind KEINE Duplikate - sie werden spÄter als Lücher erkannt
         for c_poly in standalone_polys:
             is_duplicate = False
             c_centroid = c_poly.centroid
             c_area = c_poly.area
 
             for existing in raw_polys:
-                # 1. Größen-Check: Nur ähnliche Größen vergleichen (±10%)
+                # 1. Grüüƒen-Check: Nur Ähnliche Grüüƒen vergleichen (°10%)
                 area_ratio = existing.area / c_area if c_area > 0 else 999
                 if area_ratio < 0.9 or area_ratio > 1.1:
                     continue
@@ -2054,14 +2202,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             if not is_duplicate:
                 raw_polys.append(c_poly)
-                logger.debug(f"Eigenständiger Kreis hinzugefügt: area={c_area:.2f} @ ({c_centroid.x:.2f}, {c_centroid.y:.2f})")
+                logger.debug(f"EigenstÄndiger Kreis hinzugefügt: area={c_area:.2f} @ ({c_centroid.x:.2f}, {c_centroid.y:.2f})")
 
         if not raw_polys:
             return
 
         # --- PHASE 3: Hierarchie & Holes (Die Logic aus GeometryDetector) ---
 
-        # Sortieren nach Größe (Groß zuerst -> Parents)
+        # Sortieren nach Grüüƒe (Groüƒ zuerst -> Parents)
         raw_polys.sort(key=lambda p: p.area, reverse=True)
 
         n_polys = len(raw_polys)
@@ -2081,7 +2229,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     parent_bounds[2] >= child_bounds[2] and
                     parent_bounds[3] >= child_bounds[3])
 
-        # Wer enthält wen?
+        # Wer enthÄlt wen?
         # hierarchy[i] = Liste von Indizes, die in Polygon i liegen
         hierarchy = {i: [] for i in range(n_polys)}
         contains_checks = 0
@@ -2091,7 +2239,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             for j, child in enumerate(raw_polys):
                 if i == j:
                     continue
-                # OPTIMIERUNG: Größenfilter - Kind kann nicht größer als Parent sein
+                # OPTIMIERUNG: Grüüƒenfilter - Kind kann nicht grüüƒer als Parent sein
                 if raw_polys[j].area >= raw_polys[i].area:
                     continue
                 # OPTIMIERUNG: Bounding Box Vorfilter
@@ -2118,7 +2266,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 for other_child in children_indices:
                     if child_idx == other_child:
                         continue
-                    # OPTIMIERUNG: Größenfilter
+                    # OPTIMIERUNG: Grüüƒenfilter
                     if raw_polys[child_idx].area >= raw_polys[other_child].area:
                         continue
                     # OPTIMIERUNG: BBox Vorfilter
@@ -2137,9 +2285,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Wir müssen vermeiden, dass Kinder doppelt gezeichnet werden.
         #
         # Hierarchie-Logik:
-        # - Level 0: Top-Level Polygone (keine Eltern) → hinzufügen mit Löchern
-        # - Level 1: Kinder von Level 0 → werden als Löcher abgezogen, NICHT separat hinzufügen
-        # - Level 2: Kinder von Level 1 (Inseln in Löchern) → hinzufügen mit Löchern
+        # - Level 0: Top-Level Polygone (keine Eltern) → hinzufügen mit Lüchern
+        # - Level 1: Kinder von Level 0 → werden als Lücher abgezogen, NICHT separat hinzufügen
+        # - Level 2: Kinder von Level 1 (Inseln in Lüchern) → hinzufügen mit Lüchern
         # - Level 3: usw.
         #
         # Regel: Nur Polygone auf geraden Levels (0, 2, 4, ...) hinzufügen
@@ -2165,7 +2313,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             cache[idx] = 0  # Kein Parent = Top-Level
             return 0
 
-        # --- Baue Endpoint-zu-Geometry Mapping für späteres Matching ---
+        # --- Baue Endpoint-zu-Geometry Mapping für spÄteres Matching ---
         # Key: (welded_start, welded_end) -> (geom_type, geom_obj)
         # Auch reversed key für bidirektionale Suche
         endpoint_to_geom = {}
@@ -2219,7 +2367,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             level = get_level(i)
 
             # Nur gerade Levels hinzufügen (0, 2, 4, ...)
-            # Ungerade Levels (1, 3, 5, ...) sind Löcher und werden per difference() abgezogen
+            # Ungerade Levels (1, 3, 5, ...) sind Lücher und werden per difference() abgezogen
             if level % 2 != 0:
                 continue
 
@@ -2269,25 +2417,25 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.sketch._profile_geometry_map[key] = geom_list
                 logger.debug(f"Stored geometry map for profile: {key}")
 
-        # Hinweis: Diese Methode erzeugt jetzt Shapely-Polygone, die Löcher enthalten können!
+        # Hinweis: Diese Methode erzeugt jetzt Shapely-Polygone, die Lücher enthalten künnen!
         # Der Renderer muss das verstehen.
         self._build_profile_hierarchy()
 
         # CAD Kernel First: Synchronisiere Profile auf das Sketch-Objekt
         # Damit kann _compute_extrude_part/_compute_revolve die Profile direkt
-        # aus dem Sketch abrufen (ohne SketchEditor zu benötigen)
+        # aus dem Sketch abrufen (ohne SketchEditor zu benütigen)
         self._sync_profiles_to_sketch()
 
     def _sync_profiles_to_sketch(self):
         """
         CAD Kernel First: Kopiert die closed_profiles auf das Sketch-Objekt.
 
-        Dies ermöglicht es dem Rebuild-Prozess, Profile direkt aus dem Sketch
-        abzurufen, ohne den SketchEditor zu benötigen.
+        Dies ermüglicht es dem Rebuild-Prozess, Profile direkt aus dem Sketch
+        abzurufen, ohne den SketchEditor zu benütigen.
 
         WICHTIG: Wir speichern ALLE selektierbaren Faces - sowohl Parents
-        als auch Löcher (Interiors). Das ermöglicht dem User, einzelne
-        Löcher zu extrudieren.
+        als auch Lücher (Interiors). Das ermüglicht dem User, einzelne
+        Lücher zu extrudieren.
         """
         if not self.sketch:
             return
@@ -2303,8 +2451,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if p_type == 'polygon' and hasattr(p_data, 'exterior'):
                     polys.append(p_data)
 
-                    # NEU: Auch die Interiors (Löcher) als separate Polygone hinzufügen
-                    # damit sie bei der Selektion gematcht werden können
+                    # NEU: Auch die Interiors (Lücher) als separate Polygone hinzufügen
+                    # damit sie bei der Selektion gematcht werden künnen
                     for interior in p_data.interiors:
                         try:
                             hole_poly = ShapelyPolygon(interior.coords)
@@ -2330,7 +2478,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         logger.debug(f"[CAD Kernel First] Synced {len(polys)} profiles to sketch (inkl. Holes)")
 
     def _build_profile_hierarchy(self):
-        """Baut Containment-Hierarchie auf: Welche Faces sind Löcher in anderen?"""
+        """Baut Containment-Hierarchie auf: Welche Faces sind Lücher in anderen?"""
         from shapely.geometry import Polygon as ShapelyPolygon, Point as ShapelyPoint
 
         def get_profile_vertices(profile):
@@ -2359,7 +2507,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return []
 
         def get_profile_area(profile):
-            """Berechnet Fläche eines Profils"""
+            """Berechnet FlÄche eines Profils"""
             # Handle both 2-tuple and 3-tuple formats
             profile_type = profile[0]
             data = profile[1]
@@ -2424,8 +2572,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if n == 0:
             return
         
-        # Sortiere Profile nach Fläche (größte zuerst)
-        # Größere Profile können kleinere enthalten
+        # Sortiere Profile nach FlÄche (grüüƒte zuerst)
+        # Grüüƒere Profile künnen kleinere enthalten
         areas = [get_profile_area(p) for p in self.closed_profiles]
         sorted_indices = sorted(range(n), key=lambda i: areas[i], reverse=True)
         
@@ -2437,7 +2585,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if point_i is None:
                 continue
             
-            # Finde den kleinsten Container (mit kleinster Fläche der enthält)
+            # Finde den kleinsten Container (mit kleinster FlÄche der enthÄlt)
             best_parent = -1
             best_parent_area = self._safe_float('inf')
             
@@ -2453,7 +2601,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 
                 # Prüfe ob Punkt von i in j liegt
                 if point_in_polygon(point_i[0], point_i[1], vertices_j):
-                    # j enthält i
+                    # j enthÄlt i
                     if areas[j] < best_parent_area and areas[j] > areas[i]:
                         best_parent = j
                         best_parent_area = areas[j]
@@ -2565,6 +2713,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
             self.snapper.invalidate_intersection_cache()
     
+    def _rollback_last_undo_state(self) -> bool:
+        """Stiller Rollback auf den letzten Undo-Snapshot."""
+        if not self.undo_stack:
+            return False
+
+        state = self.undo_stack.pop()
+        self.sketch = Sketch.from_dict(state)
+        self._restore_canvas_dict(state.get('_canvas'))
+        self._clear_selection()
+        self._find_closed_profiles()
+        self.sketched_changed.emit()
+
+        if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
+            self.snapper.invalidate_intersection_cache()
+
+        self.request_update()
+        return True
+
     def undo(self):
         if not self.undo_stack:
             self.show_message(tr("Nothing to undo"), 1500, QColor(255, 200, 100))
@@ -2675,7 +2841,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.sketched_changed.emit()
 
         # Status-Meldung mit Spline-Count
-        msg = f"Fertig: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Bögen"
+        msg = f"Fertig: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Bügen"
         if native_splines:
             msg += f", {len(native_splines)} Splines (nativ)"
         self.status_message.emit(msg)
@@ -2772,7 +2938,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if x_dir:
                 return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
             else:
-                # Fallback: Build123d rät die X-Richtung
+                # Fallback: Build123d rÄt die X-Richtung
                 return Plane(origin=origin, z_dir=normal)
         except Exception:
             # Fallback bei mathematischen Fehlern (z.B. Vektoren parallel)
@@ -2848,7 +3014,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     
     def get_build123d_part(self, height: float, operation: str = "New Body"):
         """
-        Extrudiert den Sketch. Fängt Fehler ab und liefert None zurück, 
+        Extrudiert den Sketch. FÄngt Fehler ab und liefert None zurück, 
         statt abzustürzen.
         """
         if not HAS_BUILD123D:
@@ -2923,7 +3089,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                     Polygon(*pts, align=None)
                                     created_any = True
 
-                                    # Löcher (Interiors)
+                                    # Lücher (Interiors)
                                     if hasattr(sub_poly, 'interiors'):
                                         for idx, interior in enumerate(sub_poly.interiors):
                                             hole_coords = list(interior.coords)
@@ -3011,7 +3177,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         Vorteile gegenüber get_build123d_part():
         - Kreise sind echte analytische Kurven
-        - Überlappende Geometrie wird exakt berechnet
+        - ü£berlappende Geometrie wird exakt berechnet
         - Konsistenz zwischen 2D und 3D
 
         Returns:
@@ -3378,7 +3544,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.tool_options.show_options(
                 tr("RECTANGLE MODE"),
                 "rect_mode",
-                [("⬚", tr("2-Point")), ("⊞", tr("Center"))],
+                [("□", tr("2-Point")), ("◎", tr("Center"))],
                 self.rect_mode
             )
             has_options = True
@@ -3388,7 +3554,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.tool_options.show_options(
                 tr("CIRCLE TYPE"),
                 "circle_mode",
-                [("◎", tr("Center")), ("⌀", tr("2-Point")), ("◯", tr("3-Point"))],
+                [("⊙", tr("Center")), ("⌀", tr("2-Point")), ("△", tr("3-Point"))],
                 self.circle_mode
             )
             has_options = True
@@ -3403,12 +3569,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.tool_options.show_options(
                 tr("SIDES"),
                 "polygon_sides",
-                [("△", "3"), ("◇", "4"), ("⬠", "5"), ("⬡", "6"), ("⯃", "8")],
+                [("▴", "3"), ("◆", "4"), ("⬟", "5"), ("⬡", "6"), ("⯃", "8")],
                 idx
             )
             has_options = True
             
-        # Muttern-Aussparung: Größe M2-M14
+        # Muttern-Aussparung: Grüüƒe M2-M14
         elif tool == SketchTool.NUT:
             self.tool_options.show_options(
                 f"NUT: {self.nut_size_names[self.nut_size_index]}",
@@ -3481,6 +3647,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
+        # W20 P1: Arc Direct Edit Cleanup
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+
+        # W26: ensure projection preview is cleared immediately on cancel.
+        if self._last_projection_edge is not None:
+            self._last_projection_edge = None
+            self.projection_preview_cleared.emit()
+        self.hovered_ref_edge = None
+        
+        # W16 Paket B: Kontext zurücksetzen und Navigation-Hint aktualisieren
+        self._hint_context = 'sketch'
+        self._show_tool_hint()
 
         # Constraint Highlight zurücksetzen
         self._clear_constraint_highlight()
@@ -3491,7 +3671,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _highlight_constraint_entity(self, entity):
         """
         Hebt eine Entity für 2-Entity Constraint Auswahl hervor.
-        Zeigt dem User visuell welches Element bereits ausgewählt ist.
+        Zeigt dem User visuell welches Element bereits ausgewÄhlt ist.
         """
         self._constraint_highlighted_entity = entity
         self.request_update()
@@ -3504,11 +3684,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _find_polygon_driver_circle_for_line(self, line):
         """
-        Findet den Konstruktionskreis, der ein reguläres Polygon steuert.
+        Findet den Konstruktionskreis, der ein regulÄres Polygon steuert.
 
         Heuristik:
         - Suche POINT_ON_CIRCLE Constraints für beide Linienendpunkte.
-        - Der häufigste Kreis-Kandidat ist der Treiberkreis.
+        - Der hÄufigste Kreis-Kandidat ist der Treiberkreis.
         """
         if line is None:
             return None
@@ -3589,7 +3769,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _build_rectangle_edge_drag_context(self, edge_line):
         """
-        Ermittelt Rectangle-Resize-Kontext für eine ausgewählte Kante.
+        Ermittelt Rectangle-Resize-Kontext für eine ausgewÄhlte Kante.
         Erwartet ein orthogonales 4-Linien-Rechteck mit geteilten Eckpunkten.
         """
         if not isinstance(edge_line, Line2D):
@@ -3677,7 +3857,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _build_line_move_drag_context(self, line):
         """
         Kontext für direktes Verschieben einer einzelnen Linie.
-        Enthält Startkoordinaten und visuell abhängige Geometrie für Dirty-Rect-Updates.
+        EnthÄlt Startkoordinaten und visuell abhÄngige Geometrie für Dirty-Rect-Updates.
         """
         if not isinstance(line, Line2D):
             return None
@@ -3741,6 +3921,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if not isinstance(line, Line2D):
             return None, None
 
+        # Ellipsen sind als Linienbündel modelliert; freie Linien-Handles darauf sperren.
+        if getattr(line, "_ellipse_bundle", None) is not None:
+            return None, None
+
         # Polygon-Linien bleiben im Circle/Polygon-Direct-Edit Pfad.
         if self._find_polygon_driver_circle_for_line(line) is not None:
             return None, None
@@ -3778,6 +3962,65 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             poly_circle = self._find_polygon_driver_circle_for_line(self.selected_lines[0])
             if poly_circle is not None:
                 return poly_circle, "polygon"
+
+        return None, None
+
+    def _resolve_direct_edit_target_arc(self):
+        """
+        W32: Ermittelt den aktuell bearbeitbaren Arc mit verbessertem Handle-Management.
+        
+        Returns:
+            Tuple (Arc2D, source) oder (None, None)
+        """
+        # Wenn wir gerade draggen, behalte den aktuellen Arc bei
+        if self._direct_edit_dragging and self._direct_edit_arc is not None:
+            return self._direct_edit_arc, "arc"
+        
+        hovered = self._last_hovered_entity
+        
+        if isinstance(hovered, Arc2D):
+            return hovered, "arc"
+        
+        if len(self.selected_arcs) == 1:
+            return self.selected_arcs[0], "arc"
+        
+        return None, None
+
+    def _resolve_direct_edit_target_ellipse(self):
+        """
+        Ermittelt die aktuell bearbeitbare Ellipse.
+        Unterstützt auch Test-Harness-Objekte via _test_selected_ellipse.
+        """
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Ellipse2D):
+            return hovered, "ellipse"
+
+        if len(self.selected_ellipses) == 1:
+            return self.selected_ellipses[0], "ellipse"
+
+        test_sel = getattr(self, "_test_selected_ellipse", None)
+        if isinstance(test_sel, Ellipse2D):
+            return test_sel, "ellipse"
+
+        return None, None
+
+    def _resolve_direct_edit_target_polygon(self):
+        """
+        Ermittelt das aktuell bearbeitbare Polygon.
+        Unterstützt auch Test-Harness-Objekte via _test_selected_polygon.
+        """
+        hovered = self._last_hovered_entity
+
+        if isinstance(hovered, Polygon2D):
+            return hovered, "polygon"
+
+        if len(self.selected_polygons) == 1:
+            return self.selected_polygons[0], "polygon"
+
+        test_sel = getattr(self, "_test_selected_polygon", None)
+        if isinstance(test_sel, Polygon2D):
+            return test_sel, "polygon"
 
         return None, None
 
@@ -3853,6 +4096,55 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if d_ring <= hit_radius * 0.75:
                 return {**handles, "kind": "circle", "mode": "radius"}
 
+        # W30 AP1: Line Endpoint and Midpoint Handles (Direct Manipulation Parity with Circle)
+        hovered = self._last_hovered_entity
+        if isinstance(hovered, Line2D) and not getattr(hovered, "construction", False):
+            if getattr(hovered, "_ellipse_bundle", None) is not None:
+                hovered = None
+        if isinstance(hovered, Line2D) and not getattr(hovered, "construction", False):
+            # Check if this line is part of a rectangle (skip - handled by rect edge logic)
+            rect_context = self._build_rectangle_edge_drag_context(hovered)
+            if rect_context is None:
+                # Not a rectangle edge - add endpoint/midpoint handles
+                start_point = QPointF(hovered.start.x, hovered.start.y)
+                end_point = QPointF(hovered.end.x, hovered.end.y)
+                midpoint = QPointF((hovered.start.x + hovered.end.x) / 2, (hovered.start.y + hovered.end.y) / 2)
+
+                # Start Endpoint Handle (yellow circle)
+                d_start = math.hypot(world_pos.x() - start_point.x(), world_pos.y() - start_point.y())
+                if d_start <= hit_radius:
+                    return {
+                        "kind": "line",
+                        "mode": "endpoint_start",
+                        "line": hovered,
+                        "source": "line",
+                        "endpoint": "start",
+                        "start_pos": start_point,
+                    }
+
+                # End Endpoint Handle (yellow circle)
+                d_end = math.hypot(world_pos.x() - end_point.x(), world_pos.y() - end_point.y())
+                if d_end <= hit_radius:
+                    return {
+                        "kind": "line",
+                        "mode": "endpoint_end",
+                        "line": hovered,
+                        "source": "line",
+                        "endpoint": "end",
+                        "end_pos": end_point,
+                    }
+
+                # Midpoint Handle (green square - like circle center)
+                d_midpoint = math.hypot(world_pos.x() - midpoint.x(), world_pos.y() - midpoint.y())
+                if d_midpoint <= hit_radius:
+                    return {
+                        "kind": "line",
+                        "mode": "midpoint",
+                        "line": hovered,
+                        "source": "line",
+                        "midpoint": midpoint,
+                    }
+
         line, context = self._resolve_direct_edit_target_rect_edge()
         if line is not None and context is not None:
             dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
@@ -3878,6 +4170,136 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     "context": context,
                 }
 
+        # W20 P1: Arc Direct Manipulation Handles
+        arc, arc_source = self._resolve_direct_edit_target_arc()
+        if arc is not None:
+            center = QPointF(arc.center.x, arc.center.y)
+            
+            # Center Handle
+            d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+            if d_center <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "center",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                }
+            
+            # Radius Handle (auf dem Arc)
+            mid_angle = (arc.start_angle + arc.end_angle) / 2
+            radius_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(mid_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(mid_angle)),
+            )
+            d_radius = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
+            if d_radius <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "radius",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "radius_point": radius_point,
+                    "angle": mid_angle,
+                }
+            
+            # Start Angle Handle
+            start_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle)),
+            )
+            d_start = math.hypot(world_pos.x() - start_point.x(), world_pos.y() - start_point.y())
+            if d_start <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "start_angle",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle_point": start_point,
+                }
+            
+            # End Angle Handle
+            end_point = QPointF(
+                arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
+                arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle)),
+            )
+            d_end = math.hypot(world_pos.x() - end_point.x(), world_pos.y() - end_point.y())
+            if d_end <= hit_radius:
+                return {
+                    "kind": "arc",
+                    "mode": "end_angle",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle_point": end_point,
+                }
+            
+            # Komfort: Klick auf Arc-Bahn startet Radius-Drag
+            d_to_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
+            if abs(d_to_center - arc.radius) <= hit_radius * 0.75:
+                angle = math.degrees(math.atan2(world_pos.y() - center.y(), world_pos.x() - center.x()))
+                return {
+                    "kind": "arc",
+                    "mode": "radius",
+                    "arc": arc,
+                    "source": arc_source,
+                    "center": center,
+                    "angle": angle,
+                }
+
+        # W25: Ellipse Direct Manipulation Handles
+        # W30 AP4: Simplified - Y-radius and rotation only during active edit
+        ellipse, ellipse_source = self._resolve_direct_edit_target_ellipse()
+        if ellipse is not None:
+            center = QPointF(ellipse.center.x, ellipse.center.y)
+            rotation_rad = math.radians(float(getattr(ellipse, "rotation", 0.0)))
+            ux, uy = math.cos(rotation_rad), math.sin(rotation_rad)
+            vx, vy = -math.sin(rotation_rad), math.cos(rotation_rad)
+
+            rx = max(0.01, float(getattr(ellipse, "radius_x", 0.01)))
+            ry = max(0.01, float(getattr(ellipse, "radius_y", 0.01)))
+
+            x_handle = QPointF(center.x() + rx * ux, center.y() + rx * uy)
+            y_handle = QPointF(center.x() + ry * vx, center.y() + ry * vy)
+            rot_handle = QPointF(center.x() + (rx * 1.2) * ux, center.y() + (rx * 1.2) * uy)
+
+            # Center handle always available
+            if math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "center", "ellipse": ellipse, "source": ellipse_source}
+
+            # Primary X-radius handle always available
+            if math.hypot(world_pos.x() - x_handle.x(), world_pos.y() - x_handle.y()) <= hit_radius:
+                return {"kind": "ellipse", "mode": "radius_x", "ellipse": ellipse, "source": ellipse_source}
+
+            # W30 AP4: Y-radius and rotation only during active editing (simplified visual)
+            is_active_edit = self._direct_edit_dragging and self._direct_edit_ellipse is ellipse
+            if is_active_edit:
+                if math.hypot(world_pos.x() - y_handle.x(), world_pos.y() - y_handle.y()) <= hit_radius:
+                    return {"kind": "ellipse", "mode": "radius_y", "ellipse": ellipse, "source": ellipse_source}
+                if math.hypot(world_pos.x() - rot_handle.x(), world_pos.y() - rot_handle.y()) <= hit_radius:
+                    return {"kind": "ellipse", "mode": "rotation", "ellipse": ellipse, "source": ellipse_source}
+
+        # W25: Polygon Direct Manipulation Handles (Vertex)
+        # W30 AP4: Only pickable when polygon is hovered or selected
+        polygon, polygon_source = self._resolve_direct_edit_target_polygon()
+        if polygon is not None:
+            # Only check vertices if polygon is being hovered or is selected
+            is_selected = polygon in getattr(self, 'selected_polygons', [])
+            is_hovered = isinstance(self._last_hovered_entity, type(polygon)) and self._last_hovered_entity is polygon
+
+            if is_selected or is_hovered:
+                for idx, pt in enumerate(getattr(polygon, "points", [])):
+                    if math.hypot(world_pos.x() - pt.x, world_pos.y() - pt.y) <= hit_radius:
+                        return {
+                            "kind": "polygon",
+                            "mode": "vertex",
+                            "polygon": polygon,
+                            "source": polygon_source,
+                            "vertex_idx": idx,
+                        }
+
         return None
 
     def _start_direct_edit_drag(self, handle_hit):
@@ -3897,6 +4319,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_drag_moved = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
+        
+        # W16 Paket B: Kontext für Navigation-Hints aktualisieren
+        self._hint_context = 'direct_edit'
+        self._show_tool_hint()  # Sofort Navigation-Hint aktualisieren
 
         # Reset mode-specific caches
         self._direct_edit_circle = None
@@ -3904,6 +4330,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_line = None
         self._direct_edit_line_context = None
         self._direct_edit_line_length_constraints = []
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
 
         if kind == "line" and mode in ("line_edge", "line_move"):
             line = handle_hit.get("line")
@@ -3924,6 +4360,122 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if line not in self.selected_lines:
                 self._clear_selection()
                 self.selected_lines = [line]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # W30 AP1: Line Endpoint and Midpoint Direct Edit (Parity with Circle)
+        # W33 EPIC AA4: Live-Solve-Logik fuer Line-Endpoints
+        if kind == "line" and mode in ("endpoint_start", "endpoint_end", "midpoint"):
+            line = handle_hit.get("line")
+            if line is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_line = line
+            endpoint = handle_hit.get("endpoint")
+
+            if mode == "endpoint_start":
+                # Store initial endpoint position
+                self._direct_edit_endpoint_start = QPointF(float(line.start.x), float(line.start.y))
+                self._direct_edit_endpoint_other = QPointF(float(line.end.x), float(line.end.y))
+                self._direct_edit_active_endpoint = "start"
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "endpoint_end":
+                # Store initial endpoint position
+                self._direct_edit_endpoint_start = QPointF(float(line.end.x), float(line.end.y))
+                self._direct_edit_endpoint_other = QPointF(float(line.start.x), float(line.start.y))
+                self._direct_edit_active_endpoint = "end"
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "midpoint":
+                # Move entire line via midpoint (like circle center)
+                context = self._build_line_move_drag_context(line)
+                self._direct_edit_line_context = context
+                self._direct_edit_endpoint_start = QPointF(float(line.start.x), float(line.start.y))
+                self._direct_edit_endpoint_end = QPointF(float(line.end.x), float(line.end.y))
+                self.setCursor(Qt.ClosedHandCursor)
+                # W33 EPIC AA4: Live-Solve fuer Midpoint-Drag wenn Constraints existieren
+                self._direct_edit_live_solve = self._direct_edit_requires_live_solve(
+                    mode="line_move",
+                    source="line",
+                    line_context=context,
+                )
+
+            if line not in self.selected_lines:
+                self._clear_selection()
+                self.selected_lines = [line]
+
+            self.request_update()
+            return
+
+        # W20 P1: Arc Direct Edit
+        if kind == "arc":
+            arc = handle_hit.get("arc")
+            if arc is None:
+                self._direct_edit_dragging = False
+                return
+            
+            # Store arc for dragging
+            self._direct_edit_arc = arc
+            self._direct_edit_start_center = QPointF(arc.center.x, arc.center.y)
+            self._direct_edit_start_radius = float(arc.radius)
+            self._direct_edit_start_start_angle = float(arc.start_angle)
+            self._direct_edit_start_end_angle = float(arc.end_angle)
+            
+            if mode == "center":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "radius":
+                self._direct_edit_anchor_angle = math.radians(handle_hit.get("angle", 0.0))
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("start_angle", "end_angle"):
+                self.setCursor(Qt.SizeAllCursor)
+            
+            if arc not in self.selected_arcs:
+                self._clear_selection()
+                self.selected_arcs = [arc]
+            
+            self.request_update()
+            return
+
+        # Ellipse direct edit
+        if kind == "ellipse":
+            ellipse = handle_hit.get("ellipse")
+            if ellipse is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_ellipse = ellipse
+            self._direct_edit_start_center = QPointF(float(ellipse.center.x), float(ellipse.center.y))
+            self._direct_edit_start_radius_x = float(getattr(ellipse, "radius_x", 0.0))
+            self._direct_edit_start_radius_y = float(getattr(ellipse, "radius_y", 0.0))
+            self._direct_edit_start_rotation = float(getattr(ellipse, "rotation", 0.0))
+
+            if ellipse not in self.selected_ellipses:
+                self._clear_selection()
+                self.selected_ellipses = [ellipse]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # Polygon direct edit
+        if kind == "polygon" and mode == "vertex":
+            polygon = handle_hit.get("polygon")
+            vertex_idx = int(handle_hit.get("vertex_idx", -1))
+            points = getattr(polygon, "points", None)
+            if polygon is None or points is None or vertex_idx < 0 or vertex_idx >= len(points):
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_polygon = polygon
+            self._direct_edit_polygon_vertex_idx = vertex_idx
+            pt = points[vertex_idx]
+            self._direct_edit_polygon_vertex_start = QPointF(float(pt.x), float(pt.y))
+
+            if polygon not in self.selected_polygons:
+                self._clear_selection()
+                self.selected_polygons = [polygon]
 
             self.setCursor(Qt.ClosedHandCursor)
             self.request_update()
@@ -3959,7 +4511,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _direct_edit_requires_live_solve(self, circle=None, source=None, mode=None, line_context=None) -> bool:
         """
-        Live-Solve nur dort, wo es für visuelles Follow-Up nötig ist.
+        Live-Solve nur dort, wo es für visuelles Follow-Up nütig ist.
         """
         if mode == "line_edge":
             if not line_context:
@@ -3970,22 +4522,29 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 ConstraintType.COINCIDENT,
                 ConstraintType.LENGTH,
             }
-            involved_lines = {
+            involved_lines = [
                 line_context.get("edge"),
                 line_context.get("adj_start"),
                 line_context.get("adj_end"),
                 line_context.get("opposite"),
-            }
-            involved_lines.discard(None)
-            involved_points = set()
+            ]
+            involved_lines = [line for line in involved_lines if line is not None]
+            involved_line_ids = {id(line) for line in involved_lines}
+
+            involved_points = []
             for line in involved_lines:
-                involved_points.add(getattr(line, "start", None))
-                involved_points.add(getattr(line, "end", None))
-            involved_points.discard(None)
+                start = getattr(line, "start", None)
+                end = getattr(line, "end", None)
+                if start is not None:
+                    involved_points.append(start)
+                if end is not None:
+                    involved_points.append(end)
+            involved_point_ids = {id(point) for point in involved_points}
 
             for c in self.sketch.constraints:
-                entities = set(getattr(c, "entities", ()))
-                if not entities.intersection(involved_lines) and not entities.intersection(involved_points):
+                entities = tuple(getattr(c, "entities", ()) or ())
+                entity_ids = {id(entity) for entity in entities}
+                if not entity_ids.intersection(involved_line_ids) and not entity_ids.intersection(involved_point_ids):
                     continue
                 if c.type in allowed_types:
                     continue
@@ -3998,8 +4557,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             line = line_context.get("line")
             if line is None:
                 return False
-            line_points = {getattr(line, "start", None), getattr(line, "end", None)}
-            line_points.discard(None)
+            line_points = [getattr(line, "start", None), getattr(line, "end", None)]
+            line_points = [point for point in line_points if point is not None]
+            line_point_ids = {id(point) for point in line_points}
             allowed_types = {
                 ConstraintType.HORIZONTAL,
                 ConstraintType.VERTICAL,
@@ -4011,8 +4571,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 ConstraintType.COINCIDENT,
             }
             for c in self.sketch.constraints:
-                entities = set(getattr(c, "entities", ()))
-                if line not in entities and not entities.intersection(line_points):
+                entities = tuple(getattr(c, "entities", ()) or ())
+                entity_ids = {id(entity) for entity in entities}
+                if id(line) not in entity_ids and not entity_ids.intersection(line_point_ids):
                     continue
                 if c.type in allowed_types:
                     continue
@@ -4035,7 +4596,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return False
 
     def _maybe_live_solve_during_direct_drag(self):
-        """Gedrosseltes Live-Solve für komplexe Abhängigkeiten beim Drag."""
+        """Gedrosseltes Live-Solve für komplexe AbhÄngigkeiten beim Drag."""
         if not self._direct_edit_live_solve:
             return
 
@@ -4208,7 +4769,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.update(dirty.toAlignedRect())
 
     def _apply_direct_edit_drag(self, world_pos, axis_lock=False):
-        """Aktualisiert Geometrie während des Drag-Vorgangs."""
+        """Aktualisiert Geometrie wÄhrend des Drag-Vorgangs."""
         if not self._direct_edit_dragging:
             return
 
@@ -4217,6 +4778,217 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return
         if self._direct_edit_mode == "line_move":
             self._apply_direct_edit_line_move_drag(world_pos, axis_lock=axis_lock)
+            return
+
+        # W30 AP1: Line Endpoint Dragging
+        if self._direct_edit_mode in ("endpoint_start", "endpoint_end"):
+            line = self._direct_edit_line
+            if line is not None:
+                # Update the active endpoint
+                if self._direct_edit_active_endpoint == "start":
+                    line.start.x = world_pos.x()
+                    line.start.y = world_pos.y()
+                else:  # end
+                    line.end.x = world_pos.x()
+                    line.end.y = world_pos.y()
+
+                self._direct_edit_drag_moved = True
+                self._maybe_live_solve_during_direct_drag()
+                if self._direct_edit_live_solve:
+                    self.request_update()
+                else:
+                    # Minimal dirty rect update
+                    bbox = self._get_entity_bbox(line)
+                    dirty = QRectF(bbox).adjusted(-8.0, -8.0, 8.0, 8.0)
+                    self.update(dirty.toAlignedRect())
+            return
+
+        # W30 AP1: Line Midpoint Dragging (move entire line)
+        if self._direct_edit_mode == "midpoint":
+            line = self._direct_edit_line
+            if line is not None:
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+
+                line.start.x = self._direct_edit_endpoint_start.x() + dx
+                line.start.y = self._direct_edit_endpoint_start.y() + dy
+                line.end.x = self._direct_edit_endpoint_end.x() + dx
+                line.end.y = self._direct_edit_endpoint_end.y() + dy
+
+                self._direct_edit_drag_moved = True
+                self._maybe_live_solve_during_direct_drag()
+                if self._direct_edit_live_solve:
+                    self.request_update()
+                else:
+                    # Minimal dirty rect update
+                    bbox = self._get_entity_bbox(line)
+                    dirty = QRectF(bbox).adjusted(-8.0, -8.0, 8.0, 8.0)
+                    self.update(dirty.toAlignedRect())
+            return
+
+        # W20 P1: Arc Direct Edit Dragging
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
+        if hasattr(self, '_direct_edit_arc') and self._direct_edit_arc is not None:
+            arc = self._direct_edit_arc
+            mode = self._direct_edit_mode
+            
+            # Dirty-Rect für Arc
+            dirty_old = self._get_arc_dirty_rect(arc)
+            
+            if mode == "center":
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+                arc.center.x = self._direct_edit_start_center.x() + dx
+                arc.center.y = self._direct_edit_start_center.y() + dy
+                
+            elif mode == "radius":
+                # W28: SHIFT-Lock für Radius auf 45°-Inkremente
+                angle = math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x)
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle_deg = math.degrees(angle)
+                    angle_deg = round(angle_deg / 45.0) * 45.0
+                    angle = math.radians(angle_deg)
+                new_radius = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
+                arc.radius = max(0.01, new_radius)
+                
+            elif mode == "start_angle":
+                angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
+                arc.start_angle = angle
+                
+            elif mode == "end_angle":
+                angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
+                arc.end_angle = angle
+            
+            self._direct_edit_drag_moved = True
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_arc_dirty_rect(arc)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
+            return
+
+        # Ellipse direct edit
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
+        if self._direct_edit_ellipse is not None:
+            ellipse = self._direct_edit_ellipse
+            mode = self._direct_edit_mode
+
+            # Dirty-Rect für Ellipse
+            dirty_old = self._get_ellipse_dirty_rect(ellipse)
+
+            if mode == "center":
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+                ellipse.center.x = self._direct_edit_start_center.x() + dx
+                ellipse.center.y = self._direct_edit_start_center.y() + dy
+            elif mode == "radius_x":
+                rot = math.radians(self._direct_edit_start_rotation)
+                ux, uy = math.cos(rot), math.sin(rot)
+                vx = world_pos.x() - ellipse.center.x
+                vy = world_pos.y() - ellipse.center.y
+                proj = (vx * ux) + (vy * uy)
+                new_rx = max(0.01, abs(float(proj)))
+                # W28: SHIFT-Lock für proportionalen Resize beider Achsen
+                if axis_lock:
+                    ratio = self._direct_edit_start_radius_x / self._direct_edit_start_radius_y if self._direct_edit_start_radius_y > 0 else 1.0
+                    ellipse.radius_x = new_rx
+                    ellipse.radius_y = new_rx / ratio if ratio > 0 else new_rx
+                else:
+                    ellipse.radius_x = new_rx
+            elif mode == "radius_y":
+                rot = math.radians(self._direct_edit_start_rotation)
+                px, py = -math.sin(rot), math.cos(rot)
+                vx = world_pos.x() - ellipse.center.x
+                vy = world_pos.y() - ellipse.center.y
+                proj = (vx * px) + (vy * py)
+                new_ry = max(0.01, abs(float(proj)))
+                # W28: SHIFT-Lock für proportionalen Resize beider Achsen
+                if axis_lock:
+                    ratio = self._direct_edit_start_radius_x / self._direct_edit_start_radius_y if self._direct_edit_start_radius_y > 0 else 1.0
+                    ellipse.radius_y = new_ry
+                    ellipse.radius_x = new_ry * ratio
+                else:
+                    ellipse.radius_y = new_ry
+            elif mode == "rotation":
+                angle = math.degrees(
+                    math.atan2(world_pos.y() - ellipse.center.y, world_pos.x() - ellipse.center.x)
+                )
+                if axis_lock:
+                    # Snap to 45° increments
+                    angle = round(angle / 45.0) * 45.0
+                ellipse.rotation = float(angle)
+            else:
+                return
+
+            self._direct_edit_drag_moved = True
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_ellipse_dirty_rect(ellipse)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
+            return
+
+        # Polygon direct edit
+        # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
+        if self._direct_edit_polygon is not None and self._direct_edit_mode == "vertex":
+            polygon = self._direct_edit_polygon
+            vertex_idx = self._direct_edit_polygon_vertex_idx
+            points = getattr(polygon, "points", None)
+            if points is None or vertex_idx < 0 or vertex_idx >= len(points):
+                return
+
+            # Dirty-Rect für Polygon
+            dirty_old = self._get_polygon_dirty_rect(polygon)
+
+            dx = world_pos.x() - self._direct_edit_start_pos.x()
+            dy = world_pos.y() - self._direct_edit_start_pos.y()
+            if axis_lock:
+                if abs(dx) >= abs(dy):
+                    dy = 0.0
+                else:
+                    dx = 0.0
+
+            pt = points[vertex_idx]
+            pt.x = self._direct_edit_polygon_vertex_start.x() + dx
+            pt.y = self._direct_edit_polygon_vertex_start.y() + dy
+
+            self._direct_edit_drag_moved = True
+            
+            # W28: Dirty-Rect Update statt Full Redraw
+            dirty_new = self._get_polygon_dirty_rect(polygon)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
             return
 
         if self._direct_edit_circle is None:
@@ -4270,7 +5042,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.update(dirty.toAlignedRect())
 
     def _finish_direct_edit_drag(self):
-        """Schließt Direct-Manipulation ab und propagiert UI-Updates."""
+        """
+        Schliesst Direct-Manipulation ab und propagiert UI-Updates.
+
+        W33 EPIC AA1: Constraint-Rollback bei unloesbarem Drag.
+        """
         if not self._direct_edit_dragging:
             return
 
@@ -4278,30 +5054,41 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
 
-        self._direct_edit_dragging = False
-        self._direct_edit_mode = None
-        self._direct_edit_circle = None
-        self._direct_edit_source = None
-        self._direct_edit_drag_moved = False
-        self._direct_edit_radius_constraints = []
-        self._direct_edit_line = None
-        self._direct_edit_line_context = None
-        self._direct_edit_line_length_constraints = []
-        self._direct_edit_live_solve = False
-        self._direct_edit_pending_solve = False
-        self._direct_edit_last_live_solve_ts = 0.0
+        # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
+        self._reset_direct_edit_state()
 
         if moved:
+            # W33 EPIC AA1.2: Final-Solve mit Rollback bei Fehler
             result = self.sketch.solve()
-            if not getattr(result, "success", True):
+            success = getattr(result, "success", True)
+
+            if not success:
+                # W33 EPIC AA1.1: Rollback bei unloesbarem Zustand
+                self._rollback_last_undo_state()
+                # W33 EPIC AA2: Verbesserte Solver-Feedback-Meldung
+                try:
+                    from gui.sketch_feedback import format_direct_edit_solver_message
+                    error_msg = format_direct_edit_solver_message(
+                        mode=mode,
+                        status=getattr(result, "status", ""),
+                        message=getattr(result, "message", "Solve failed"),
+                        dof=getattr(result, "dof", None),
+                    )
+                except ImportError:
+                    error_msg = f"Direct edit: {getattr(result, 'message', 'Solve failed')}"
+
                 self._emit_solver_feedback(
                     success=False,
-                    message=getattr(result, "message", "Solve failed"),
+                    message=error_msg,
                     dof=float(getattr(result, "dof", 0.0) or 0.0),
                     status_name=self._solver_status_name(result),
                     context="Direct edit",
                     show_hud=True,
                 )
+                # Nach Rollback keine weiteren Updates
+                return
+
+            # Erfolg: Profile finden und Update senden
             self._find_closed_profiles()
             self.sketched_changed.emit()
 
@@ -4313,6 +5100,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(tr("Rectangle size updated"))
             elif mode == "line_move":
                 self.status_message.emit(tr("Line moved"))
+            elif mode in ("radius_x", "radius_y"):
+                self.status_message.emit(tr("Ellipse axis updated"))
+            elif mode == "rotation":
+                self.status_message.emit(tr("Ellipse rotation updated"))
+            elif mode == "vertex":
+                self.status_message.emit(tr("Polygon vertex moved"))
+            elif mode in ("endpoint_start", "endpoint_end"):
+                self.status_message.emit(tr("Line endpoint updated"))
+            elif mode == "midpoint":
+                self.status_message.emit(tr("Line moved"))
+            elif mode in ("start_angle", "end_angle"):
+                self.status_message.emit(tr("Arc angle updated"))
 
         self.request_update()
 
@@ -4325,26 +5124,79 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         kind = handle.get("kind", "circle")
         if kind == "line":
             return (mode, kind, id(handle.get("line")), handle.get("orientation"))
+        if kind == "arc":
+            return (mode, kind, id(handle.get("arc")))
+        if kind == "ellipse":
+            return (mode, kind, id(handle.get("ellipse")))
+        if kind == "polygon":
+            return (mode, kind, id(handle.get("polygon")), handle.get("vertex_idx"))
         return (mode, kind, id(handle.get("circle")))
     
     def _update_cursor(self):
+        # W28: Direct-Manipulation Parity - konsistente Cursor für alle Handle-Typen
         if self._direct_edit_dragging:
+            # Während Drag: Cursor basierend auf Modus
+            mode = self._direct_edit_mode
+            if mode == "center":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "line_edge":
+                orientation = getattr(self, '_direct_edit_line_context', {}).get("orientation")
+                if orientation == "horizontal":
+                    self.setCursor(Qt.SizeVerCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeHorCursor)
+                else:
+                    self.setCursor(Qt.SizeAllCursor)
+            elif mode == "line_move":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode == "midpoint":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode in ("endpoint_start", "endpoint_end"):
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "radius":
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("radius_x", "radius_y"):
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode == "rotation":
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "vertex":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode in ("start_angle", "end_angle"):
+                self.setCursor(Qt.SizeAllCursor)
+            else:
+                self.setCursor(Qt.ClosedHandCursor)
             return
 
         if self.current_tool == SketchTool.SELECT and self._direct_hover_handle:
             mode = self._direct_hover_handle.get("mode")
+            kind = self._direct_hover_handle.get("kind", "circle")
             if mode == "center":
                 self.setCursor(Qt.OpenHandCursor)
             elif mode == "line_edge":
                 orientation = self._direct_hover_handle.get("orientation")
                 if orientation == "horizontal":
-                    self.setCursor(Qt.SizeHorCursor)
-                elif orientation == "vertical":
                     self.setCursor(Qt.SizeVerCursor)
+                elif orientation == "vertical":
+                    self.setCursor(Qt.SizeHorCursor)
                 else:
                     self.setCursor(Qt.SizeAllCursor)
             elif mode == "line_move":
                 self.setCursor(Qt.OpenHandCursor)
+            elif mode == "midpoint":
+                self.setCursor(Qt.OpenHandCursor)
+            elif mode in ("endpoint_start", "endpoint_end"):
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "radius":
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode in ("radius_x", "radius_y"):
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif mode == "rotation":
+                self.setCursor(Qt.SizeAllCursor)
+            elif mode == "vertex":
+                self.setCursor(Qt.OpenHandCursor)
+            elif mode in ("start_angle", "end_angle"):
+                # Arc angle handles
+                self.setCursor(Qt.SizeAllCursor)
             else:
                 self.setCursor(Qt.SizeHorCursor)
             return
@@ -4365,7 +5217,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             + len(self.selected_points)
             + len(self.selected_splines)
         )
-        sel_info = f" ({n_sel} ausgewählt)" if n_sel > 0 else ""
+        sel_info = f" ({n_sel} ausgewÄhlt)" if n_sel > 0 else ""
         
         hints = {
             SketchTool.SELECT: tr("Click=Select | Shift+Click=Multi | Drag=Box | Tab=Cycle overlap | W=Filter ({flt}) | Y=Repeat tool | Shift+C=Clip | Line: drag to move | Circle/Polygon: drag center or rim | Rectangle: select edge + drag | Del=Delete").format(
@@ -4412,11 +5264,72 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             SketchTool.CANVAS: tr("Canvas") + " | " + tr("Click to place image reference"),
         }
         tool_hint = hints.get(self.current_tool, "")
-        nav_hint = tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+        
+        # W16 Paket B: Kontext-sensitive Navigation-Hints
+        nav_hint = self._get_navigation_hints_for_context()
+        
+        # Tutorial-Modus: Erweiterte Hinweise für neue Nutzer
+        if self._tutorial_mode_enabled and not self._peek_3d_active:
+            tutorial_hint = self._get_tutorial_hint_for_tool()
+            if tutorial_hint:
+                tool_hint = f"{tool_hint} | {tutorial_hint}" if tool_hint else tutorial_hint
+        
         if tool_hint:
             self.status_message.emit(f"{tool_hint} | {nav_hint}")
         else:
             self.status_message.emit(nav_hint)
+    
+    def _get_navigation_hints_for_context(self):
+        """
+        W16 Paket B: Liefert kontext-sensitive Navigation-Hinweise.
+        
+        Returns:
+            str: Navigation-Hinweis passend zum aktuellen Kontext
+        """
+        if self._peek_3d_active:
+            return tr("Space loslassen=Zurück zum Sketch | Maus bewegen=Ansicht rotieren")
+        elif self._direct_edit_dragging:
+            return tr("Esc=Abbrechen | Drag=Ändern | Enter=Bestätigen")
+        elif self._tutorial_mode_enabled:
+            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | F1=Tutorial aus")
+        else:
+            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+    
+    def _get_tutorial_hint_for_tool(self, tool=None):
+        """
+        W16 Paket B: Liefert Tutorial-Hinweise für den aktuellen Tool-Modus.
+        
+        Args:
+            tool: Optional Tool-Constant (default: current_tool)
+        
+        Returns:
+            str: Tutorial-Hinweis oder leerer String
+        """
+        target_tool = tool if tool is not None else self.current_tool
+        tutorial_hints = {
+            SketchTool.SELECT: tr("Tipp: Ziehe Kreise am Rand um den Radius zu Ändern"),
+            SketchTool.LINE: tr("Tipp: Nutze Tab für exakte LÄngen/Winkeleingabe"),
+            SketchTool.CIRCLE: tr("Tipp: Ziehe vom Mittelpunkt aus für exakten Radius"),
+            SketchTool.RECTANGLE: tr("Tipp: Rechteck-Ecken künnen nach dem Zeichnen verschoben werden"),
+            SketchTool.DIMENSION: tr("Tipp: Dimensionen schrÄnken die Geometrie ein"),
+            SketchTool.FILLET_2D: tr("Tipp: Ziehe nacheinander zwei Linien für eine Rundung"),
+        }
+        return tutorial_hints.get(target_tool, "")
+    
+    def set_tutorial_mode(self, enabled: bool):
+        """
+        W16 Paket B: Aktiviert/Deaktiviert den Tutorial-Modus.
+        
+        Args:
+            enabled: True für Tutorial-Modus aktiviert
+        """
+        self._tutorial_mode_enabled = enabled
+        self._tutorial_mode = enabled  # API-Alias synchronisieren
+        self._show_tool_hint()  # Sofort aktualisieren
+        if enabled:
+            self.show_message(tr("Tutorial-Modus aktiviert - Erweiterte Hinweise werden angezeigt"), 3000)
+        else:
+            self.show_message(tr("Tutorial-Modus deaktiviert"), 2000)
     
     def _show_dimension_input(self):
         fields = []
@@ -4476,7 +5389,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self.current_tool == SketchTool.SCALE and self.tool_step >= 1:
             fields = [("F", "factor", 1.0, "")]
             
-        # SLOT: Nach Startpunkt (Länge/Winkel), Nach Mittellinie (Radius)
+        # SLOT: Nach Startpunkt (LÄnge/Winkel), Nach Mittellinie (Radius)
         elif self.current_tool == SketchTool.SLOT:
             if self.tool_step == 1:
                 fields = [("L", "length", self.live_length if self.live_length > 0 else 50.0, "mm"),
@@ -4796,7 +5709,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return True, "added"
 
             # 3) Fallback: vorhandenen Driver auf paralleler Linie aktualisieren
-            # (wichtig für Rechteck-Höhe, wenn die gegenüberliegende Seite der Driver ist).
+            # (wichtig für Rechteck-Hühe, wenn die gegenüberliegende Seite der Driver ist).
             candidates = []
             for c in self.sketch.constraints:
                 if c.type != ConstraintType.LENGTH or not c.entities:
@@ -4864,15 +5777,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._save_undo()
 
             if self.editing_mode == "constraint":
-                # Constraint-Wert ändern
+                # Constraint-Wert Ändern
                 new_val = values.get("value", 0.0)
                 self.editing_entity.value = new_val
                 run_solver_and_update()
-                self.show_message(f"Constraint auf {new_val:.2f} geändert", 2000, QColor(100, 255, 100))
-                logger.debug(f"Constraint {self.editing_entity.type.name} geändert auf {new_val}")
+                self.show_message(f"Constraint auf {new_val:.2f} geÄndert", 2000, QColor(100, 255, 100))
+                logger.debug(f"Constraint {self.editing_entity.type.name} geÄndert auf {new_val}")
 
             elif self.editing_mode == "line_length":
-                # Länge robust bearbeiten: vorhandenen Driver aktualisieren statt blind zu duplizieren.
+                # LÄnge robust bearbeiten: vorhandenen Driver aktualisieren statt blind zu duplizieren.
                 new_length = values.get("length", 10.0)
                 formula_text = get_valid_formula("length")
                 updated, strategy = apply_line_length_edit(self.editing_entity, new_length, formula_text)
@@ -4881,15 +5794,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if updated:
                     if strategy == "parallel":
                         self.show_message(
-                            f"Länge {new_length:.2f} mm aktualisiert (bestehender Höhen-Constraint)",
+                            f"LÄnge {new_length:.2f} mm aktualisiert (bestehender Hühen-Constraint)",
                             2200,
                             QColor(100, 255, 100),
                         )
                     else:
-                        self.show_message(f"Länge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
+                        self.show_message(f"LÄnge {new_length:.2f} mm festgelegt", 2000, QColor(100, 255, 100))
                 else:
                     self.show_message(
-                        tr("Länge konnte nicht konfliktfrei gesetzt werden"),
+                        tr("LÄnge konnte nicht konfliktfrei gesetzt werden"),
                         2200,
                         QColor(255, 120, 120),
                     )
@@ -4955,7 +5868,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._save_undo()
             line = self.sketch.add_line(start.x(), start.y(), end_x, end_y, construction=self.construction_mode)
             
-            # Optional: Hier könnten wir direkt Constraints (Länge/Winkel) hinzufügen,
+            # Optional: Hier künnten wir direkt Constraints (LÄnge/Winkel) hinzufügen,
             # wenn wir strikt parametrisch sein wollen. Aktuell setzen wir nur die Geometrie.
             
             self.tool_points.append(QPointF(end_x, end_y))
@@ -4977,10 +5890,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 y = p1.y() - h if mouse.y() < p1.y() else p1.y()
                 lines = self.sketch.add_rectangle(x, y, w, h, construction=self.construction_mode)
 
-            # Automatische Bemaßung hinzufügen (Constraints)
+            # Automatische Bemaüƒung hinzufügen (Constraints)
             if lines and len(lines) >= 4:
                 self.sketch.add_length(lines[0], w)  # Breite (Unten)
-                self.sketch.add_length(lines[3], h)  # Höhe (Links)
+                self.sketch.add_length(lines[3], h)  # Hühe (Links)
 
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
@@ -4992,16 +5905,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._save_undo()
             lines = self.sketch.add_rectangle(c.x() - w/2, c.y() - h/2, w, h, construction=self.construction_mode)
 
-            # Automatische Bemaßung hinzufügen (Constraints)
+            # Automatische Bemaüƒung hinzufügen (Constraints)
             if lines and len(lines) >= 4:
                 self.sketch.add_length(lines[0], w)  # Breite (Unten)
-                self.sketch.add_length(lines[3], h)  # Höhe (Links)
+                self.sketch.add_length(lines[3], h)  # Hühe (Links)
 
             run_solver_and_update()
             QTimer.singleShot(0, self._cancel_tool)
 
         elif self.current_tool == SketchTool.CIRCLE:
-            # Nur für Center-Radius-Modus (circle_mode == 0) via dim_input bestätigen
+            # Nur für Center-Radius-Modus (circle_mode == 0) via dim_input bestÄtigen
             # 2-Punkt und 3-Punkt werden durch Klicks im Handler abgeschlossen
             if self.circle_mode == 0:
                 r = self.live_radius if self.dim_input.is_locked('radius') else values.get("radius", 25)
@@ -5010,7 +5923,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self._save_undo()
                 circle = self.sketch.add_circle(c.x(), c.y(), r, construction=self.construction_mode)
 
-                # Automatische Bemaßung hinzufügen (Constraints)
+                # Automatische Bemaüƒung hinzufügen (Constraints)
                 if circle:
                     self.sketch.add_radius(circle, r)
 
@@ -5035,7 +5948,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         run_solver_and_update()
 
                 QTimer.singleShot(0, self._cancel_tool)
-            # 3-Punkt-Modus: Keine dim_input Bestätigung - muss durch 3 Klicks erfolgen
+            # 3-Punkt-Modus: Keine dim_input BestÄtigung - muss durch 3 Klicks erfolgen
             
         elif self.current_tool == SketchTool.ELLIPSE:
             if self.tool_step == 1:
@@ -5121,7 +6034,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 construction=self.construction_mode
             )
 
-            # Radius-Bemaßung für den Konstruktionskreis hinzufügen
+            # Radius-Bemaüƒung für den Konstruktionskreis hinzufügen
             if const_circle:
                 self.sketch.add_radius(const_circle, r)
 
@@ -5332,7 +6245,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.mouse_screen = pos
         self.mouse_world = self.screen_to_world(pos)
 
-        # 1. Dimension Input Handling (Klick außerhalb des Panels)
+        # 1. Dimension Input Handling (Klick auüƒerhalb des Panels)
         if self.dim_input_active and self.dim_input.isVisible():
             panel_geo = self.dim_input.geometry()
             click_in_panel = panel_geo.contains(pos.toPoint())
@@ -5346,7 +6259,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self._on_dim_confirmed()
                     return
                 elif event.button() == Qt.RightButton:
-                    # Rechts-Klick außerhalb = Abbrechen
+                    # Rechts-Klick auüƒerhalb = Abbrechen
                     if is_enabled("sketch_debug"):
                         logger.info(f"[CLICK] Right-click outside panel → canceling")
                     self.dim_input.hide()
@@ -5367,7 +6280,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # 3. Linksklick Interaktionen
         if event.button() == Qt.LeftButton:
             
-            # A. Constraint-Icon-Klick prüfen (höchste Priorität im SELECT-Modus)
+            # A. Constraint-Icon-Klick prüfen (hüchste PrioritÄt im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 clicked_constraint = self._find_constraint_at(pos)
                 if clicked_constraint:
@@ -5380,7 +6293,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     else:
                         self.selected_constraints.remove(clicked_constraint)
                     
-                    self.status_message.emit(f"Constraint ausgewählt: {clicked_constraint.type.name}")
+                    self.status_message.emit(f"Constraint ausgewÄhlt: {clicked_constraint.type.name}")
                     self.request_update()
                     return
 
@@ -5391,7 +6304,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self._start_direct_edit_drag(handle_hit)
                     return
 
-            # A1.5. Canvas-Kalibrierung (hat höchste Priorität wenn aktiv)
+            # A1.5. Canvas-Kalibrierung (hat hüchste PrioritÄt wenn aktiv)
             if self._canvas_calibrating:
                 if self._canvas_calibration_click(self.mouse_world):
                     return
@@ -5402,7 +6315,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     if self._canvas_start_drag(self.mouse_world):
                         return
 
-            # B. Spline-Element-Klick prüfen (hat Priorität im SELECT-Modus)
+            # B. Spline-Element-Klick prüfen (hat PrioritÄt im SELECT-Modus)
             if self.current_tool == SketchTool.SELECT:
                 spline_elem = self._find_spline_element_at(self.mouse_world)
                 if spline_elem:
@@ -5457,17 +6370,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             if handler:
                 try:
-                    # Versuche, das Entity mit zu übergeben (für _handle_line notwendig)
-                    handler(snapped, snap_type, snap_entity)
-                except TypeError:
-                    # Fallback: Falls andere Tools (z.B. Rect) noch nicht aktualisiert wurden
-                    # und keine 3 Argumente akzeptieren, rufen wir sie klassisch auf.
+                    # Signaturbasiert dispatchen, damit interne TypeError im Handler
+                    # nicht als "falsche Argumentzahl" maskiert werden.
+                    expects_snap_entity = False
                     try:
+                        expects_snap_entity = len(inspect.signature(handler).parameters) >= 3
+                    except Exception:
+                        expects_snap_entity = False
+
+                    if expects_snap_entity:
+                        handler(snapped, snap_type, snap_entity)
+                    else:
                         handler(snapped, snap_type)
-                    except Exception as e:
-                        logger.error(f"Handler {handler_name} failed: {e}")
-                        import traceback
-                        traceback.print_exc()
+                except Exception as e:
+                    logger.error(f"Handler {handler_name} failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         # 4. Rechtsklick (Abbrechen / Kontextmenü)
         elif event.button() == Qt.RightButton:
@@ -5513,7 +6431,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.request_update()
 
     def mouseDoubleClickEvent(self, event):
-        """Doppelklick auf Constraint-Icon oder Geometrie öffnet DimensionInput-Editor"""
+        """Doppelklick auf Constraint-Icon oder Geometrie üffnet DimensionInput-Editor"""
         from sketcher.constraints import ConstraintType
         from sketcher.geometry import Line2D, Circle2D, Arc2D
 
@@ -5537,7 +6455,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 label = "∠"
             elif constraint.type == ConstraintType.DIAMETER:
                 unit = "mm"
-                label = "Ø"
+                label = "üÿ"
             elif constraint.type == ConstraintType.RADIUS:
                 unit = "mm"
                 label = "R"
@@ -5572,7 +6490,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.dim_input.show()
                 self.dim_input.focus_field(0)
                 self.dim_input_active = True
-                self.show_message("Länge: Enter = Constraint hinzufügen, Esc = Abbrechen", 2000)
+                self.show_message("LÄnge: Enter = Constraint hinzufügen, Esc = Abbrechen", 2000)
 
             elif isinstance(entity, (Circle2D, Arc2D)):
                 # Quick-Radius mit DimensionInput
@@ -5874,7 +6792,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         type_str: 'point', 'handle_in', 'handle_out'
         """
         if threshold is None:
-            # FIX: Größerer Threshold für bessere Usability (v.a. bei Handles)
+            # FIX: Grüüƒerer Threshold für bessere Usability (v.a. bei Handles)
             threshold = 12.0 / self.view_scale
             
         px, py = pos.x(), pos.y()
@@ -5949,7 +6867,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                  cp.point.x += dx
                  cp.point.y += dy
                  
-             # Start-Pos für nächstes Event updaten
+             # Start-Pos für nÄchstes Event updaten
              self.spline_drag_start_pos = self.mouse_world
              
              # Cache invalidieren und Linien neu berechnen
@@ -5993,7 +6911,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if hasattr(spline, 'invalidate_cache'):
                 spline.invalidate_cache()
 
-            # Wir speichern die temporären Linien direkt im Spline-Objekt
+            # Wir speichern die temporÄren Linien direkt im Spline-Objekt
             spline._preview_lines = spline.to_lines(segments_per_span=10)
             self.request_update() # Wichtig: PaintEvent neu triggern
         except Exception as e:
@@ -6122,7 +7040,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         world_pos = self.screen_to_world(pos)
         
         # === Phase 19: NURBS Weight Editing ===
-        # Wenn Maus über einem Spline-Punkt ist -> Gewicht ändern statt Zoomen
+        # Wenn Maus über einem Spline-Punkt ist -> Gewicht Ändern statt Zoomen
         spline_elem = self._find_spline_element_at(world_pos)
         if spline_elem and spline_elem[2] == 'point':
             spline, idx, _ = spline_elem
@@ -6148,6 +7066,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         world_before = world_pos
         factor = 1.15 if event.angleDelta().y() > 0 else 1/1.15
         self.view_scale = max(0.5, min(200, self.view_scale * factor))
+        self._emit_zoom_changed()
         world_after = self.screen_to_world(pos)
         
         # Offset anpassen damit Zoom zur Mausposition geht
@@ -6183,8 +7102,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._adjust_reference_section_thickness(0.25)
             return
 
-        # Space: 3D-Peek (zeigt temporär 3D-Viewport)
+        # Space: 3D-Peek (zeigt temporÄr 3D-Viewport)
         if key == Qt.Key_Space and not event.isAutoRepeat():
+            self._peek_3d_active = True
+            self._hint_context = 'peek_3d'
             self.peek_3d_requested.emit(True)
             return
 
@@ -6231,8 +7152,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return
         
         if mod & Qt.ControlModifier:
-            if key == Qt.Key_Z: self.undo(); return
-            elif key == Qt.Key_Y: self.redo(); return
+            # W33: Verhindere Undo/Redo während aktiver Direct-Edit-Drag-Operation
+            if key == Qt.Key_Z:
+                if self._direct_edit_dragging:
+                    self._show_hud(tr("Nicht während Drag verfügbar"))
+                    return
+                self.undo()
+                return
+            elif key == Qt.Key_Y:
+                if self._direct_edit_dragging:
+                    self._show_hud(tr("Nicht während Drag verfügbar"))
+                    return
+                self.redo()
+                return
             elif key == Qt.Key_A: self._select_all(); return
             elif key == Qt.Key_I: self.import_dxf(); return
             elif key == Qt.Key_E: self.export_dxf(); return
@@ -6275,24 +7207,44 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Qt.Key_I: lambda: self.set_tool(SketchTool.MIRROR),    # I für Spiegeln (mIrror)
             Qt.Key_S: lambda: self.set_tool(SketchTool.SCALE),     # S für Skalieren
             Qt.Key_Y: self._repeat_last_tool,      # Y = letztes Werkzeug wiederholen
-            Qt.Key_Plus: self._increase_tolerance,   # + für Toleranz erhöhen
+            Qt.Key_Plus: self._increase_tolerance,   # + für Toleranz erhühen
             Qt.Key_Minus: self._decrease_tolerance,  # - für Toleranz verringern
             Qt.Key_P: lambda: self.set_tool(SketchTool.PROJECT), # <--- NEU
         }
+
+        # W33: Separate Navigation Shortcuts (werden zuerst verarbeitet)
+        if key == Qt.Key_Home:
+            self._reset_view_to_origin()
+            return
+        # 0-Taste auch für Origin Reset (wie CAD-Standard)
+        if key == Qt.Key_0 and not (mod & Qt.ControlModifier):
+            self._reset_view_to_origin()
+            return
+
         if key in shortcuts: shortcuts[key](); self.request_update()
-    
+
 
     def _handle_escape_logic(self):
         """
         Hierarchisches Beenden von Aktionen (CAD-Style).
         Jeder Escape bricht nur EINE Ebene ab:
-        0. Canvas-Kalibrierung abbrechen
-        1. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)
-        2. Aktives Tool beenden → SELECT
-        3. Auswahl aufheben
-        4. Signal an main_window → Sketch verlassen
+        0. Direct-Edit-Drag abbrechen (W14 Fixup)
+        1. Canvas-Kalibrierung abbrechen
+        2. Laufende Geometrie-Erstellung abbrechen (tool_step > 0)
+        3. Aktives Tool beenden → SELECT
+        4. Auswahl aufheben
+        5. Signal an main_window → Sketch verlassen
         """
-        # Level 0: Canvas-Kalibrierung abbrechen
+        # Level 0: Direct-Edit-Drag abbrechen (W14 Fixup, W25: Zentralisiert)
+        if self._direct_edit_dragging:
+            self._reset_direct_edit_state()
+            self._update_cursor()
+            self._show_hud(tr("Direktes Bearbeiten abgebrochen"))
+            self._show_tool_hint()
+            self.request_update()
+            return
+
+        # Level 1: Canvas-Kalibrierung abbrechen
         if self._canvas_calibrating:
             self._canvas_calibrating = False
             self._canvas_calib_points = []
@@ -6300,26 +7252,35 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
             return
 
-        # Level 1: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
+        # Level 2: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
         if self.tool_step > 0:
+            # W33: Spline mit >=2 Punkten wird finalisiert, nicht abgebrochen
+            if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
+                self._finish_spline()
+                self.status_message.emit(tr("Spline erstellt"))
+                return
             self._cancel_tool()
             self.status_message.emit(tr("Aktion abgebrochen"))
             return
 
-        # Level 2: Aktives Tool beenden (zurück zu Select)
+        # Level 3: Aktives Tool beenden (zurück zu Select)
         if self.current_tool != SketchTool.SELECT:
             self.set_tool(SketchTool.SELECT)
             self.status_message.emit(tr("Werkzeug deaktiviert"))
             return
 
-        # Level 3: Selektion aufheben
+        # Level 4: Selektion aufheben
         if (self.selected_lines or self.selected_points or self.selected_circles
                 or self.selected_arcs or self.selected_constraints or self.selected_splines):
             self._clear_selection()
             self.request_update()
             return
 
-        # Level 4: Sketch verlassen — Signal an main_window
+        # Level 5: Sketch verlassen — Signal an main_window
+        # W26 FIX: Clear projection preview when leaving sketch
+        if self._last_projection_edge is not None:
+            self._last_projection_edge = None
+            self.projection_preview_cleared.emit()
         self.exit_requested.emit()
             
     def _finish_current_operation(self):
@@ -6349,12 +7310,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def keyReleaseEvent(self, event):
         """Handle key release - z.B. für 3D-Peek (Space loslassen)."""
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self._peek_3d_active = False
+            self._hint_context = 'sketch'
             self.peek_3d_requested.emit(False)  # Zurück zum Sketch
             return
         super().keyReleaseEvent(event)
 
     def _increase_tolerance(self):
-        """Toleranz für Muttern erhöhen"""
+        """Toleranz für Muttern erhühen"""
         self.nut_tolerance = round(min(2.0, self.nut_tolerance + 0.1), 2)
         self.status_message.emit(tr("Nut tolerance: {tol}mm").format(tol=f"{self.nut_tolerance:.2f}"))
         if self.current_tool == SketchTool.NUT:
@@ -6371,6 +7334,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_lines.clear()
         self.selected_circles.clear()
         self.selected_arcs.clear()
+        self.selected_ellipses.clear()
+        self.selected_polygons.clear()
         self.selected_points.clear()
         self.selected_constraints.clear()
         self.selected_splines.clear()
@@ -6459,7 +7424,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return used
     
     def _delete_selected(self):
-        # Zuerst Constraints löschen
+        # Zuerst Constraints lüschen
         if self.selected_constraints:
             self._save_undo()
             count = len(self.selected_constraints)
@@ -6469,9 +7434,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.selected_constraints.clear()
             solve_result = self.sketch.solve()
             if not solve_result.success:
-                logger.warning(f"Solver nach Constraint-Löschung nicht konvergiert: {solve_result.message}")
+                logger.warning(f"Solver nach Constraint-Lüschung nicht konvergiert: {solve_result.message}")
             self.sketched_changed.emit()
-            self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
+            self.show_message(f"{count} Constraint(s) gelüscht", 2000, QColor(100, 255, 100))
             logger.debug(f"Deleted {count} constraints")
             self.request_update()
             return
@@ -6495,7 +7460,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._clear_selection()
         self._find_closed_profiles()
         self.sketched_changed.emit()
-        self.show_message(f"{deleted_count} Element(e) gelöscht", 2000, QColor(100, 255, 100))
+        self.show_message(f"{deleted_count} Element(e) gelüscht", 2000, QColor(100, 255, 100))
         logger.debug(f"Deleted {deleted_count} elements")
         self.request_update()
 
@@ -6830,7 +7795,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return None
     
     def _find_face_at(self, pos):
-        """Findet die Fläche unter dem Cursor (Point-in-Polygon Test)"""
+        """Findet die FlÄche unter dem Cursor (Point-in-Polygon Test)"""
         px, py = pos.x(), pos.y()
 
         for profile_data in self.closed_profiles:
@@ -6919,7 +7884,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if len(self.selected_lines) >= 2:
                 menu.addAction("Parallel (P)", lambda: self._apply_constraint('parallel'))
                 menu.addAction("Senkrecht", lambda: self._apply_constraint('perpendicular'))
-                menu.addAction("Gleiche Länge (E)", lambda: self._apply_constraint('equal'))
+                menu.addAction("Gleiche LÄnge (E)", lambda: self._apply_constraint('equal'))
             menu.addSeparator()
 
         if len(self.selected_circles) >= 2:
@@ -6934,7 +7899,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             if selection_constraints:
                 constraint_menu = menu.addMenu(f"⚙ Constraints ({len(selection_constraints)})")
                 constraint_menu.addAction(
-                    f"Constraints der Auswahl löschen ({len(selection_constraints)})",
+                    f"Constraints der Auswahl lüschen ({len(selection_constraints)})",
                     lambda: self._delete_constraints_of_selection()
                 )
             menu.addSeparator()
@@ -6942,7 +7907,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Globale Constraint-Verwaltung
         if self.sketch.constraints:
             menu.addAction(
-                f"Alle Constraints löschen ({len(self.sketch.constraints)})",
+                f"Alle Constraints lüschen ({len(self.sketch.constraints)})",
                 self._delete_all_constraints
             )
             menu.addSeparator()
@@ -6956,7 +7921,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if spline_elem:
             spline, idx, elem_type = spline_elem
             if elem_type == 'point':
-                menu.addAction("Spline-Punkt löschen", lambda: self._delete_spline_point(spline, idx))
+                menu.addAction("Spline-Punkt lüschen", lambda: self._delete_spline_point(spline, idx))
                 menu.addSeparator()
         
         # Prüfe ob Spline-Kurve unter Cursor oder selektiert
@@ -6969,9 +7934,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             menu.addSection("Spline")
             for sp in target_splines:
                 if sp.closed:
-                    menu.addAction("Spline öffnen", lambda s=sp: self._toggle_spline_closed(s, False))
+                    menu.addAction("Spline üffnen", lambda s=sp: self._toggle_spline_closed(s, False))
                 else:
-                    menu.addAction("Spline schließen", lambda s=sp: self._toggle_spline_closed(s, True))
+                    menu.addAction("Spline schlieüƒen", lambda s=sp: self._toggle_spline_closed(s, True))
             
             if hover_spline:
                  menu.addAction("Punkt einfügen", lambda: self._insert_spline_point(hover_spline, world_pos))
@@ -7018,7 +7983,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # === Canvas-Optionen ===
         if self.canvas_image is not None:
             menu.addSeparator()
-            canvas_menu = menu.addMenu("🖼 Canvas")
+            canvas_menu = menu.addMenu("▶ Canvas")
 
             vis_text = "Ausblenden" if self.canvas_visible else "Einblenden"
             canvas_menu.addAction(vis_text, self._canvas_toggle_visible)
@@ -7030,7 +7995,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             opacity_menu = canvas_menu.addMenu("Deckkraft")
             for pct in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
                 val = pct / 100.0
-                label = f"{pct}%" + (" ●" if abs(self.canvas_opacity - val) < 0.05 else "")
+                label = f"{pct}%" + (" ✓" if abs(self.canvas_opacity - val) < 0.05 else "")
                 opacity_menu.addAction(label, lambda v=val: self.canvas_set_opacity(v))
 
             # Size sub-menu
@@ -7073,7 +8038,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _insert_spline_point(self, spline, pos):
         # Finde besten Einfüge-Punkt (Index)
-        # Wir suchen das Segment, dem der Punkt am nächsten ist
+        # Wir suchen das Segment, dem der Punkt am nÄchsten ist
         pts = spline.get_curve_points(segments_per_span=10)
         best_idx = -1
         min_dist = self._safe_float('inf')
@@ -7087,18 +8052,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # Besser: Wir fügen den Punkt einfach da ein, wo er geometrisch am besten passt?
         # Nein, bei Bezier splines ist die Reihenfolge wichtig.
         
-        # Workaround: Wir suchen die nächstgelegene Stelle auf der Kurve (t-Wert) 
+        # Workaround: Wir suchen die nÄchstgelegene Stelle auf der Kurve (t-Wert) 
         # und fügen dort einen Control Point ein?
-        # Das würde die Kurve verändern.
+        # Das würde die Kurve verÄndern.
         
         # Einfachster UX-Ansatz:
-        # Finde Segment i -> i+1, das dem Klick am nächsten ist.
+        # Finde Segment i -> i+1, das dem Klick am nÄchsten ist.
         
         for i in range(len(spline.control_points) - (0 if spline.closed else 1)):
             p1 = spline.control_points[i].point
             p2 = spline.control_points[(i + 1) % len(spline.control_points)].point
             
-            # Prüfe Abstand zu Segment p1-p2 (als Linie genähert)
+            # Prüfe Abstand zu Segment p1-p2 (als Linie genÄhert)
             dx = p2.x - p1.x
             dy = p2.y - p1.y
             l2 = dx*dx + dy*dy
@@ -7135,7 +8100,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
 
     def _get_constraints_for_selection(self):
-        """Sammelt alle Constraints die zur aktuellen Auswahl gehören"""
+        """Sammelt alle Constraints die zur aktuellen Auswahl gehüren"""
         selected_entities = set()
         for line in self.selected_lines:
             selected_entities.add(id(line))
@@ -7156,10 +8121,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return matching
 
     def _delete_constraints_of_selection(self):
-        """Löscht alle Constraints der aktuell ausgewählten Elemente"""
+        """Lüscht alle Constraints der aktuell ausgewÄhlten Elemente"""
         constraints_to_delete = self._get_constraints_for_selection()
         if not constraints_to_delete:
-            self.show_message("Keine Constraints zu löschen", 2000, QColor(255, 200, 100))
+            self.show_message("Keine Constraints zu lüschen", 2000, QColor(255, 200, 100))
             return
 
         self._save_undo()
@@ -7170,14 +8135,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         solve_result = self.sketch.solve()
         if not solve_result.success:
-            logger.warning(f"Solver nach Constraint-Löschung nicht konvergiert: {solve_result.message}")
+            logger.warning(f"Solver nach Constraint-Lüschung nicht konvergiert: {solve_result.message}")
         self.sketched_changed.emit()
-        self.show_message(f"{count} Constraint(s) gelöscht", 2000, QColor(100, 255, 100))
+        self.show_message(f"{count} Constraint(s) gelüscht", 2000, QColor(100, 255, 100))
         logger.info(f"Deleted {count} constraints from selection")
         self.request_update()
 
     def _delete_all_constraints(self):
-        """Löscht alle Constraints im Sketch"""
+        """Lüscht alle Constraints im Sketch"""
         if not self.sketch.constraints:
             self.show_message("Keine Constraints vorhanden", 2000, QColor(255, 200, 100))
             return
@@ -7186,7 +8151,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         count = len(self.sketch.constraints)
         self.sketch.constraints.clear()
         self.sketched_changed.emit()
-        self.show_message(f"Alle {count} Constraints gelöscht", 2000, QColor(100, 255, 100))
+        self.show_message(f"Alle {count} Constraints gelüscht", 2000, QColor(100, 255, 100))
         logger.info(f"Deleted all {count} constraints")
         self.request_update()
     
@@ -7198,6 +8163,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.canvas_locked = not self.canvas_locked
         state = tr("gesperrt") if self.canvas_locked else tr("entsperrt")
         self._show_hud(f"Canvas {state}")
+
+    def _emit_zoom_changed(self):
+        """W32: Emit current view_scale for consistent zoom display."""
+        self.zoom_changed.emit(self.view_scale)
+
+    def set_zoom_to(self, scale: float):
+        """W32: Set zoom to a specific view_scale. Called from status bar presets."""
+        self.view_scale = max(0.5, min(200, scale))
+        self._emit_zoom_changed()
+        self.request_update()
 
     def _fit_view(self):
         if not self.sketch.lines and not self.sketch.circles:
@@ -7219,17 +8194,289 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.view_scale = min((self.width()-2*pad)/w, (self.height()-2*pad)/h)
         cx, cy = (minx+maxx)/2, (miny+maxy)/2
         self.view_offset = QPointF(self.width()/2 - cx*self.view_scale, self.height()/2 + cy*self.view_scale)
+        self._emit_zoom_changed()
         self.request_update()
-    
+
+    def _reset_view_to_origin(self):
+        """
+        W33: Setzt die Ansicht auf den Koordinatenursprung (0,0) zurück.
+        Zentriert den Ursprung und setzt einen sinnvollen Standard-Zoom.
+        """
+        # Ursprung in die Mitte des Viewports
+        self.view_offset = QPointF(self.width() / 2, self.height() / 2)
+        # Rotation zurücksetzen
+        self.view_rotation = 0
+        # Sinnvoller Standard-Zoom (1.0 = 1:1)
+        self.view_scale = 1.0
+        self._emit_zoom_changed()
+        self.request_update()
+        from loguru import logger
+        logger.debug("[Sketch] View reset to origin (0,0)")
+        self.show_message(tr("View reset to origin"), duration=1500)
+
+    def _draw_direct_edit_handles(self, painter):
+        """
+        W20 P1: Zeichnet Direct-Edit Handles für Circle, Arc, Line, Rectangle.
+        """
+        if self.current_tool != SketchTool.SELECT:
+            return
+        
+        handle_radius = 6
+        
+        # Circle Handles
+        circle, source = self._resolve_direct_edit_target_circle()
+        if circle is not None:
+            center_screen = self.world_to_screen(circle.center)
+            
+            # Center Handle (green square)
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 128))
+            painter.drawRect(int(center_screen.x() - handle_radius), 
+                           int(center_screen.y() - handle_radius),
+                           handle_radius * 2, handle_radius * 2)
+            
+            # Radius Handle (blue circle)
+            dx = self.mouse_world.x() - circle.center.x
+            dy = self.mouse_world.y() - circle.center.y
+            angle = math.atan2(dy, dx) if (abs(dx) > 1e-9 or abs(dy) > 1e-9) else 0.0
+            radius_point = Point2D(
+                circle.center.x + circle.radius * math.cos(angle),
+                circle.center.y + circle.radius * math.sin(angle)
+            )
+            radius_screen = self.world_to_screen(radius_point)
+            
+            painter.setPen(QPen(QColor(0, 128, 255), 2))
+            painter.setBrush(QColor(0, 128, 255, 128))
+            painter.drawEllipse(int(radius_screen.x() - handle_radius),
+                              int(radius_screen.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
+        
+        # W32: Arc Handles mit verbesserter Visualisierung und aktivem Zustand
+        arc, arc_source = self._resolve_direct_edit_target_arc()
+        if arc is not None:
+            center_screen = self.world_to_screen(arc.center)
+            
+            # Prüfe ob dieser Arc aktiv bearbeitet wird
+            is_active_edit = self._direct_edit_dragging and self._direct_edit_arc is arc
+            
+            # W32: Zeichne "Ghost" Arc während des Drags für besseres Feedback
+            if is_active_edit:
+                painter.setPen(QPen(QColor(0, 200, 255), 2, Qt.DashLine))
+                painter.setBrush(Qt.NoBrush)
+                # Berechne Bounding Box für den Arc
+                r_screen = max(1.0, float(arc.radius) * float(self.view_scale))
+                painter.drawEllipse(
+                    int(center_screen.x() - r_screen),
+                    int(center_screen.y() - r_screen),
+                    int(2 * r_screen),
+                    int(2 * r_screen)
+                )
+            
+            # Center Handle (green square) - immer sichtbar
+            # W32: Vergrößert wenn aktiv
+            center_size = handle_radius + 2 if is_active_edit else handle_radius
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 180 if is_active_edit else 128))
+            painter.drawRect(int(center_screen.x() - center_size), 
+                           int(center_screen.y() - center_size),
+                           center_size * 2, center_size * 2)
+            
+            # W32: Radius Handle (cyan circle on arc mid) - prominent wenn nicht aktiv
+            mid_angle = math.radians((arc.start_angle + arc.end_angle) / 2)
+            radius_point = Point2D(
+                arc.center.x + arc.radius * math.cos(mid_angle),
+                arc.center.y + arc.radius * math.sin(mid_angle)
+            )
+            radius_screen = self.world_to_screen(radius_point)
+            
+            # Radius Handle ist wichtigster Handle - immer prominent
+            radius_size = handle_radius + 3 if not is_active_edit else handle_radius + 1
+            painter.setPen(QPen(QColor(0, 255, 255), 3 if not is_active_edit else 2))
+            painter.setBrush(QColor(0, 255, 255, 200 if not is_active_edit else 150))
+            painter.drawEllipse(int(radius_screen.x() - radius_size),
+                              int(radius_screen.y() - radius_size),
+                              radius_size * 2, radius_size * 2)
+            
+            # W32: Verbindungslinie Center → Radius Handle für klare Assoziation
+            if not is_active_edit:
+                painter.setPen(QPen(QColor(0, 255, 255, 80), 1))
+                painter.drawLine(center_screen, radius_screen)
+            
+            # Start/End Angle Handles nur wenn aktiv oder gehovered
+            show_angle_handles = is_active_edit or self._last_hovered_entity is arc
+            
+            if show_angle_handles:
+                # Start Angle Handle (orange)
+                start_point = Point2D(
+                    arc.center.x + arc.radius * math.cos(math.radians(arc.start_angle)),
+                    arc.center.y + arc.radius * math.sin(math.radians(arc.start_angle))
+                )
+                start_screen = self.world_to_screen(start_point)
+                
+                painter.setPen(QPen(QColor(255, 165, 0), 2))
+                painter.setBrush(QColor(255, 165, 0, 128))
+                painter.drawEllipse(int(start_screen.x() - handle_radius),
+                                  int(start_screen.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+                
+                # End Angle Handle (magenta)
+                end_point = Point2D(
+                    arc.center.x + arc.radius * math.cos(math.radians(arc.end_angle)),
+                    arc.center.y + arc.radius * math.sin(math.radians(arc.end_angle))
+                )
+                end_screen = self.world_to_screen(end_point)
+                
+                painter.setPen(QPen(QColor(255, 0, 255), 2))
+                painter.setBrush(QColor(255, 0, 255, 128))
+                painter.drawEllipse(int(end_screen.x() - handle_radius),
+                                  int(end_screen.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+                
+                # W32: Zeichne Winkel-Sector für visuelles Feedback
+                if is_active_edit and self._direct_edit_mode in ("start_angle", "end_angle"):
+                    painter.setPen(QPen(QColor(255, 200, 100, 150), 1, Qt.DashLine))
+                    painter.setBrush(QColor(255, 200, 100, 30))
+                    # Vereinfachte Sector-Darstellung als Dreieck
+                    path = QPainterPath()
+                    path.moveTo(center_screen)
+                    path.lineTo(start_screen)
+                    path.lineTo(end_screen)
+                    path.closeSubpath()
+                    painter.drawPath(path)
+
+        # W30 AP1: Line Handles (Endpoint + Midpoint - Direct Manipulation Parity with Circle)
+        hovered = self._last_hovered_entity
+        if isinstance(hovered, Line2D) and not getattr(hovered, "construction", False):
+            # Check if this line is part of a rectangle (skip - handled by rect edge logic)
+            rect_context = self._build_rectangle_edge_drag_context(hovered)
+            if rect_context is None:
+                # Not a rectangle edge - draw endpoint/midpoint handles
+                start_point = self.world_to_screen(hovered.start)
+                end_point = self.world_to_screen(hovered.end)
+                midpoint = self.world_to_screen(Point2D(
+                    (hovered.start.x + hovered.end.x) / 2,
+                    (hovered.start.y + hovered.end.y) / 2
+                ))
+
+                # Start Endpoint Handle (yellow circle)
+                painter.setPen(QPen(QColor(255, 255, 0), 2))
+                painter.setBrush(QColor(255, 255, 0, 128))
+                painter.drawEllipse(int(start_point.x() - handle_radius),
+                                  int(start_point.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+
+                # End Endpoint Handle (yellow circle)
+                painter.setPen(QPen(QColor(255, 255, 0), 2))
+                painter.setBrush(QColor(255, 255, 0, 128))
+                painter.drawEllipse(int(end_point.x() - handle_radius),
+                                  int(end_point.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+
+                # Midpoint Handle (green square - like circle center)
+                painter.setPen(QPen(QColor(0, 255, 0), 2))
+                painter.setBrush(QColor(0, 255, 0, 128))
+                painter.drawRect(int(midpoint.x() - handle_radius),
+                               int(midpoint.y() - handle_radius),
+                               handle_radius * 2, handle_radius * 2)
+
+        # W30 AP4: Simplified Ellipse Handles (only center + primary X-radius in normal mode)
+        ellipse, ellipse_source = self._resolve_direct_edit_target_ellipse()
+        if ellipse is not None:
+            center = self.world_to_screen(ellipse.center)
+            rotation_rad = math.radians(float(getattr(ellipse, "rotation", 0.0)))
+            ux, uy = math.cos(rotation_rad), math.sin(rotation_rad)
+
+            rx = max(0.01, float(getattr(ellipse, "radius_x", 0.01)))
+            ry = max(0.01, float(getattr(ellipse, "radius_y", 0.01)))
+
+            # Center Handle (green square)
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 128))
+            painter.drawRect(int(center.x() - handle_radius),
+                           int(center.y() - handle_radius),
+                           handle_radius * 2, handle_radius * 2)
+
+            # Primary X-Radius Handle (blue circle)
+            x_handle_world = Point2D(
+                ellipse.center.x + rx * ux,
+                ellipse.center.y + rx * uy
+            )
+            x_handle = self.world_to_screen(x_handle_world)
+
+            painter.setPen(QPen(QColor(0, 128, 255), 2))
+            painter.setBrush(QColor(0, 128, 255, 128))
+            painter.drawEllipse(int(x_handle.x() - handle_radius),
+                              int(x_handle.y() - handle_radius),
+                              handle_radius * 2, handle_radius * 2)
+
+            # W30 AP4: Y-radius and rotation handles only during active edit (dragging)
+            if self._direct_edit_dragging and self._direct_edit_ellipse is ellipse:
+                # Y-Radius Handle (red circle)
+                vx, vy = -math.sin(rotation_rad), math.cos(rotation_rad)
+                y_handle_world = Point2D(
+                    ellipse.center.x + ry * vx,
+                    ellipse.center.y + ry * vy
+                )
+                y_handle = self.world_to_screen(y_handle_world)
+
+                painter.setPen(QPen(QColor(255, 100, 100), 2))
+                painter.setBrush(QColor(255, 100, 100, 128))
+                painter.drawEllipse(int(y_handle.x() - handle_radius),
+                                  int(y_handle.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+
+                # Rotation Handle (purple circle - further out)
+                rot_handle_world = Point2D(
+                    ellipse.center.x + (rx * 1.2) * ux,
+                    ellipse.center.y + (rx * 1.2) * uy
+                )
+                rot_handle = self.world_to_screen(rot_handle_world)
+
+                painter.setPen(QPen(QColor(180, 0, 255), 2))
+                painter.setBrush(QColor(180, 0, 255, 128))
+                painter.drawEllipse(int(rot_handle.x() - handle_radius),
+                                  int(rot_handle.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+
+        # W30 AP4: Simplified Polygon Handles (only when hovered/selected)
+        polygon, polygon_source = self._resolve_direct_edit_target_polygon()
+        if polygon is not None:
+            # Only show vertices when polygon is hovered or selected
+            is_selected = polygon in getattr(self, 'selected_polygons', [])
+            is_hovered = isinstance(self._last_hovered_entity, type(polygon))
+
+            if is_selected or is_hovered:
+                points = getattr(polygon, "points", [])
+                # Highlight active vertex during drag
+                active_idx = getattr(self, '_direct_edit_polygon_vertex_idx', -1)
+
+                for idx, pt in enumerate(points):
+                    pt_screen = self.world_to_screen(pt)
+
+                    # Active vertex is more prominent
+                    if idx == active_idx:
+                        painter.setPen(QPen(QColor(255, 255, 0), 3))
+                        painter.setBrush(QColor(255, 255, 0, 180))
+                        radius = handle_radius + 2
+                    else:
+                        # Subtle styling for non-active vertices
+                        painter.setPen(QPen(QColor(200, 200, 200), 1))
+                        painter.setBrush(QColor(150, 150, 150, 100))
+                        radius = handle_radius - 1
+
+                    painter.drawEllipse(int(pt_screen.x() - radius),
+                                      int(pt_screen.y() - radius),
+                                      radius * 2, radius * 2)
+
     def paintEvent(self, event):
         # 1. QPainter initialisieren
         p = QPainter(self)
         
-        # WICHTIG: Clipping setzen, damit Qt nicht außerhalb des "Dirty Rects" malt.
+        # WICHTIG: Clipping setzen, damit Qt nicht auüƒerhalb des "Dirty Rects" malt.
         # Das spart GPU-Arbeit.
         p.setClipRect(event.rect())
         
-        # Antialiasing für schöne Linien
+        # Antialiasing für schüne Linien
         p.setRenderHint(QPainter.Antialiasing)
         
         # 2. Hintergrund füllen (Schneller als drawRect)
@@ -7237,9 +8484,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # 3. Update-Rect für Culling vorbereiten
         # Wir nehmen das Event-Rect (den Bereich, der neu gezeichnet werden muss)
-        # und machen es etwas größer (Padding).
+        # und machen es etwas grüüƒer (Padding).
         # Warum? Damit dicke Linien oder Kreise am Rand nicht "abgehackt" wirken,
-        # wenn der Renderer entscheidet, sie seien knapp draußen.
+        # wenn der Renderer entscheidet, sie seien knapp drauüƒen.
         update_rect = QRectF(event.rect()).adjusted(-20, -20, 20, 20)
         
         # 4. Zeichen-Methoden aufrufen
@@ -7303,7 +8550,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.dim_input.show()
         self.dim_input.focus_field(0)
         self.dim_input_active = True
-        self.status_message.emit("Extrude: Flächen wählen | Tab=Optionen | Enter=Anwenden")
+        self.status_message.emit("Extrude: FlÄchen wÄhlen | Tab=Optionen | Enter=Anwenden")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -7311,7 +8558,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._center_view()
 
     def _is_empty_right_click_target(self, screen_pos: QPointF, world_pos: QPointF) -> bool:
-        """True, wenn unter dem Cursor keine editierbare/auswählbare Sketch-Entität liegt."""
+        """True, wenn unter dem Cursor keine editierbare/auswÄhlbare Sketch-EntitÄt liegt."""
         if self._find_constraint_at(screen_pos):
             return False
         if self._find_spline_element_at(world_pos):
@@ -7325,12 +8572,25 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return True
 
     def _cancel_right_click_empty_action(self) -> bool:
-        """Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab."""
+        """
+        Bricht genau eine sinnvolle Interaktion für Rechtsklick im leeren Bereich ab.
+        PAKET B W6: HUD-Feedback für alle Abbruch-FÄlle hinzugefügt.
+        W25: Direct-Edit-Drag Abbruch hinzugefügt für Konsistenz mit ESC.
+        """
+        # W25: Level 0 - Direct-Edit-Drag abbrechen (Konsistenz mit _handle_escape_logic)
+        if self._direct_edit_dragging:
+            self._reset_direct_edit_state()
+            self._show_hud(tr("Direktes Bearbeiten abgebrochen"))
+            self._update_cursor()
+            self.request_update()
+            return True
+
         if self.dim_input_active and self.dim_input.isVisible():
             self.dim_input.hide()
             self.dim_input.unlock_all()
             self.dim_input_active = False
             self.setFocus()
+            self._show_hud(tr("Eingabe abgebrochen"))
             return True
 
         if self._canvas_calibrating:
@@ -7342,21 +8602,58 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.selection_box_start:
             self.selection_box_start = None
             self.selection_box_end = None
+            # Kein HUD nütig für Box-Abbruch (passiert oft versehentlich)
             return True
 
         if self.tool_step > 0:
-            self._cancel_tool()
-            self.status_message.emit(tr("Aktion abgebrochen"))
+            if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
+                self._finish_spline()
+                self._show_hud(tr("Spline erstellt"))
+            else:
+                self._cancel_tool()
+                self._show_hud(tr("Aktion abgebrochen"))
             return True
 
         if self.current_tool != SketchTool.SELECT:
             self.set_tool(SketchTool.SELECT)
-            self.status_message.emit(tr("Werkzeug deaktiviert"))
+            self._show_hud(tr("Werkzeug deaktiviert"))
             return True
 
         if (self.selected_lines or self.selected_points or self.selected_circles
                 or self.selected_arcs or self.selected_constraints or self.selected_splines):
             self._clear_selection()
+            # PAKET B W6: HUD-Feedback für Selektion-Clear
+            self._show_hud(tr("Selektion aufgehoben"))
             return True
 
         return False
+
+    def _reset_direct_edit_state(self):
+        """
+        W25: Zentralisierte Methode zum Zurücksetzen aller Direct-Edit-ZustÄnde.
+        Sorgt für konsistente Zustandsbereinigung nach ESC/Finish/Rechtsklick.
+        """
+        self._direct_edit_dragging = False
+        self._direct_edit_mode = None
+        self._direct_edit_circle = None
+        self._direct_edit_source = None
+        self._direct_edit_drag_moved = False
+        self._direct_edit_radius_constraints = []
+        self._direct_edit_line = None
+        self._direct_edit_line_context = None
+        self._direct_edit_line_length_constraints = []
+        self._direct_edit_arc = None
+        self._direct_edit_start_start_angle = 0.0
+        self._direct_edit_start_end_angle = 0.0
+        self._direct_edit_ellipse = None
+        self._direct_edit_start_radius_x = 0.0
+        self._direct_edit_start_radius_y = 0.0
+        self._direct_edit_start_rotation = 0.0
+        self._direct_edit_polygon = None
+        self._direct_edit_polygon_vertex_idx = -1
+        self._direct_edit_polygon_vertex_start = QPointF()
+        self._direct_edit_live_solve = False
+        self._direct_edit_pending_solve = False
+        self._direct_edit_last_live_solve_ts = 0.0
+        # W25: Kontext zurücksetzen für korrekte Navigation-Hints
+        self._hint_context = 'sketch'

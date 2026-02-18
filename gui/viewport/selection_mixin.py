@@ -4,17 +4,15 @@ Unified Selection Mixin (Paket B: Selection-State Konsolidierung)
 
 Provides single source of truth for face and edge selection.
 
-Problem:
-- Doppelmodell: selected_faces (Legacy, Index-basiert) vs selected_face_ids (TNP v4)
-- Doppelmodell: selected_edges (Legacy, VTK Objekte) vs _selected_edge_ids (TNP v4)
-
-Lösung:
-- Unified Selection API mit Single Source of Truth
-- Rückwärtskompatible Wrapper für Legacy-Access
-- Zentrale Clear-Methoden für alle Selektions-Typen
+W33 EPIC Y1-Y4: Viewport Interaction Stability
+- Hit-Priorisierung für präzise Auswahl
+- Abort/Cancel Parity für konsistentes Verhalten
+- Actor Lifecycle Management
+- Performance-Optimierungen
 
 Author: GLM 4.7 (UX/WORKFLOW + QA Integration Cell)
-Date: 2026-02-16
+Author: Claude (AI-LARGE-Y) - W33 EPIC Y1-Y4
+Date: 2026-02-16 / 2026-02-17
 Branch: feature/v1-ux-aiB
 """
 
@@ -294,6 +292,293 @@ class SelectionMixin:
         self.selected_edge_ids.update(edge_ids)
         if hasattr(self, '_selected_edge_ids'):
             self._selected_edge_ids.update(edge_ids)
+
+    # ========================================================================
+    # W33 EPIC Y1: Selection Robustness - Hit Priorisierung
+    # ========================================================================
+
+    def prioritize_hit(self, face_id: int, domain_type: str = None) -> int:
+        """
+        EPIC Y1: Bestimmt die Priorität eines Hits für die Selektion.
+
+        Prioritätsordnung (höchste zuerst):
+        1. Sketch-Profile (für Extrude-Workflows)
+        2. Sketch-Shells (gefüllte Flächen)
+        3. Body-Faces (3D-Körper)
+        4. Konstruktionsflächen
+
+        Args:
+            face_id: Die Face ID
+            domain_type: Optional der Domain-Typ (wenn bereits bekannt)
+
+        Returns:
+            int: Priorität (0 = höchste, größere Zahlen = niedrigere Priorität)
+        """
+        if domain_type is None and hasattr(self, 'detector'):
+            face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
+            if face:
+                domain_type = getattr(face, 'domain_type', 'unknown')
+
+        # Prioritätszuordnung
+        if domain_type == 'sketch_profile':
+            return 0  # Höchste Priorität
+        elif domain_type == 'sketch_shell':
+            return 1
+        elif domain_type == 'body_face':
+            return 2
+        elif domain_type and domain_type.startswith('construction'):
+            return 3
+        else:
+            return 99  # Niedrigste Priorität für unbekannte Typen
+
+    def is_selection_valid_for_mode(self, face_id: int, current_mode: str) -> bool:
+        """
+        EPIC Y1: Prüft ob eine Selektion für den aktuellen Modus gültig ist.
+
+        Args:
+            face_id: Die Face ID
+            current_mode: Der aktuelle Modus ('3d', 'sketch', etc.)
+
+        Returns:
+            bool: True wenn die Selektion gültig ist
+        """
+        if not hasattr(self, 'detector'):
+            return True  # Keine Prüfung möglich, erlaube
+
+        face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return False
+
+        domain_type = getattr(face, 'domain_type', 'unknown')
+
+        # In 3D-Modus: Body-Faces haben Priorität
+        if current_mode == '3d':
+            return domain_type in ('body_face', 'sketch_profile', 'sketch_shell')
+
+        # In Sketch-Modus: Sketch-Elemente haben Priorität
+        if current_mode == 'sketch':
+            return domain_type.startswith('sketch')
+
+        # Extrude-Modus: Nur Profile erlaubt
+        if hasattr(self, 'extrude_mode') and self.extrude_mode:
+            return domain_type == 'sketch_profile'
+
+        return True  # Standard: Erlaube alles
+
+    # ========================================================================
+    # W33 EPIC Y2: Abort/Cancel Parity - Zentrale Abort-Methode
+    # ========================================================================
+
+    def abort_interaction_state(self, reason: str = "user_abort") -> bool:
+        """
+        EPIC Y2: Zentrale Abort-Methode für alle interaktiven Zustände.
+
+        Diese Methode sorgt für Parity zwischen ESC und Rechtsklick bei:
+        - Drag-Operationen (is_dragging, _offset_plane_dragging, _split_dragging)
+        - Interaktionsmodi (extrude_mode, measure_mode, point_to_point_mode)
+        - Edge/Texture-Selection-Modi
+        - Preview-Aktoren
+
+        Args:
+            reason: Grund für den Abort (für Logging)
+
+        Returns:
+            bool: True wenn ein Zustand abgebrochen wurde, False wenn im Idle-Zustand
+        """
+        aborted = False
+        states_cleared = []
+
+        # 1. Drag-Zustände abbrechen (Priority 1)
+        if hasattr(self, 'is_dragging') and self.is_dragging:
+            self.is_dragging = False
+            self.drag_start_pos = None  # type: ignore
+            states_cleared.append("is_dragging")
+            aborted = True
+
+        if hasattr(self, '_offset_plane_dragging') and self._offset_plane_dragging:
+            self._offset_plane_dragging = False
+            self._offset_plane_drag_start = None
+            states_cleared.append("offset_plane_dragging")
+            aborted = True
+
+        if hasattr(self, '_split_dragging') and self._split_dragging:
+            self._split_dragging = False
+            self._split_drag_start = None
+            states_cleared.append("split_dragging")
+            aborted = True
+
+        # 2. Interaktionsmodi abbrechen (Priority 2)
+        if hasattr(self, 'extrude_mode') and self.extrude_mode:
+            self.extrude_mode = False
+            self._is_potential_drag = False  # type: ignore
+            states_cleared.append("extrude_mode")
+            aborted = True
+
+        if hasattr(self, 'point_to_point_mode') and self.point_to_point_mode:
+            try:
+                # W32 Crash-Stabilisierung: cancel Methode existiert möglicherweise nicht
+                if hasattr(self, 'cancel_point_to_point_mode') and callable(getattr(self, 'cancel_point_to_point_mode', None)):
+                    self.cancel_point_to_point_mode()
+                else:
+                    # Fallback: Manuelles Bereinigen
+                    self.point_to_point_mode = False
+                    if hasattr(self, 'point_to_point_start'):
+                        self.point_to_point_start = None
+                    if hasattr(self, 'point_to_point_body_id'):
+                        self.point_to_point_body_id = None
+            except Exception as e:
+                logger.debug(f"[SelectionMixin] Error during point_to_point cleanup: {e}")
+                # Fallback: Minimale Bereinigung
+                self.point_to_point_mode = False
+            states_cleared.append("point_to_point_mode")
+            aborted = True
+
+        if hasattr(self, 'edge_select_mode') and self.edge_select_mode:
+            self.stop_edge_selection_mode()
+            states_cleared.append("edge_select_mode")
+            aborted = True
+
+        if hasattr(self, 'texture_face_mode') and self.texture_face_mode:
+            self.texture_face_mode = False
+            self._texture_body_id = None
+            self._texture_selected_faces = []
+            states_cleared.append("texture_face_mode")
+            aborted = True
+
+        # 3. Preview-Aktoren bereinigen (Priority 3)
+        preview_actors = [
+            '_preview_actor', '_revolve_preview_actor',
+            '_hole_preview_actor', '_thread_preview_actor',
+            '_draft_preview_actor', '_offset_plane_preview_actor'
+        ]
+        for attr in preview_actors:
+            if hasattr(self, attr) and getattr(self, attr) is not None:
+                setattr(self, attr, None)
+                states_cleared.append(f"preview_{attr}")
+
+        # 4. Selektion bei Bedarf clearen (abhängig vom reason)
+        if reason in ("mode_change", "component_switch"):
+            self.clear_all_selection()
+            states_cleared.append("selection")
+
+        # 5. Cursor zurücksetzen
+        try:
+            from PySide6.QtCore import Qt
+            if hasattr(self, 'setCursor'):
+                self.setCursor(Qt.ArrowCursor)
+        except Exception:
+            pass
+
+        if states_cleared:
+            logger.debug(f"[SelectionMixin] Abort ({reason}): {', '.join(states_cleared)}")
+
+        return aborted
+
+    # ========================================================================
+    # W33 EPIC Y3: Preview & Actor Lifecycle Hardening
+    # ========================================================================
+
+    def cleanup_preview_actors(self) -> None:
+        """
+        EPIC Y3: Bereinigt alle Preview-Aktoren deterministisch.
+
+        Diese Methode sollte bei Moduswechseln und vor neuen Operationen
+        aufgerufen werden, um Actor-Leaks zu vermeiden.
+        """
+        if not hasattr(self, 'plotter') or self.plotter is None:
+            return
+
+        # Liste aller bekannten Preview-Actor-Namen
+        preview_patterns = [
+            'preview', 'highlight', 'hover_', 'det_face_',
+            'draft_face_highlight_', 'texture_face_highlight_',
+            'body_face_highlight', 'edit_edge_highlight', 'edit_face_highlight',
+            'p2p_hover_marker', 'p2p_start_marker', 'p2p_line',
+            'projection_preview_', 'tnp_debug_',
+            'batch_edges_', 'edge_hover'
+        ]
+
+        actors_to_remove = []
+        try:
+            # Alle aktuellen Actors auflisten
+            if hasattr(self.plotter, 'renderer') and hasattr(self.plotter.renderer, 'actors'):
+                for name in list(self.plotter.renderer.actors.keys()):
+                    # Prüfen ob der Name einem Preview-Muster entspricht
+                    if any(pattern in name for pattern in preview_patterns):
+                        actors_to_remove.append(name)
+        except Exception:
+            pass
+
+        # Actors entfernen (mit try-except für robustheit)
+        for name in actors_to_remove:
+            try:
+                self.plotter.remove_actor(name, render=False)
+            except Exception:
+                pass
+
+        if actors_to_remove:
+            logger.debug(f"[SelectionMixin] Cleaned up {len(actors_to_remove)} preview actors")
+
+    def ensure_selection_actors_valid(self) -> None:
+        """
+        EPIC Y3: Stellt sicher dass alle Selektions-Aktoren gültig sind.
+
+        Entfernt "stale" Actors die nicht mehr zum aktuellen Selektionszustand passen.
+        """
+        if not hasattr(self, 'plotter') or self.plotter is None:
+            return
+
+        # Entferne Hover-Actors für nicht-selektierte Faces
+        if hasattr(self, 'selected_face_ids'):
+            for face_id in list(self.selected_face_ids):
+                actor_name = f"hover_{face_id}"
+                try:
+                    if actor_name in self.plotter.renderer.actors:
+                        self.plotter.remove_actor(actor_name, render=False)
+                except Exception:
+                    pass
+
+    # ========================================================================
+    # W33 EPIC Y4: Interaction Performance - Hot-Path Optimierung
+    # ========================================================================
+
+    def is_hover_cache_valid(self, x: int, y: int, ttl_seconds: float = 0.016) -> bool:
+        """
+        EPIC Y4: Prüft ob der Hover-Cache noch gültig ist.
+
+        Args:
+            x: X-Koordinate
+            y: Y-Koordinate
+            ttl_seconds: Time-To-Live in Sekunden (default: 16ms = 60 FPS)
+
+        Returns:
+            bool: True wenn der Cache gültig ist
+        """
+        if not hasattr(self, '_hover_pick_cache') or self._hover_pick_cache is None:
+            return False
+
+        try:
+            import time
+            timestamp, cache_x, cache_y, *_ = self._hover_pick_cache
+            return (time.time() - timestamp) < ttl_seconds and cache_x == x and cache_y == y
+        except Exception:
+            return False
+
+    def update_hover_cache(self, x: int, y: int, result: Any) -> None:
+        """
+        EPIC Y4: Aktualisiert den Hover-Cache.
+
+        Args:
+            x: X-Koordinate
+            y: Y-Koordinate
+            result: Das Pick-Ergebnis zum Cachen
+        """
+        import time
+        self._hover_pick_cache = (time.time(), x, y, result)
+
+    def invalidate_hover_cache(self) -> None:
+        """EPIC Y4: Invalidiert den Hover-Cache."""
+        self._hover_pick_cache = None
 
 
 # Export für Viewport Integration

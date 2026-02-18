@@ -12,6 +12,7 @@ from modeling import (
     DraftFeature,
     HollowFeature,
     HoleFeature,
+    PrimitiveFeature,
     ShellFeature,
     Sketch,
     SurfaceTextureFeature,
@@ -623,3 +624,59 @@ def test_after_load_shell_edit_rebuild_keeps_reference_integrity(tmp_path):
     assert "referenz" not in (loaded_shell.status_message or "").lower()
     code = (loaded_shell.status_details or {}).get("code")
     assert code not in {"tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift"}
+
+
+def test_load_migrates_legacy_status_details_with_code_to_status_class_and_severity():
+    body = Body("legacy_status_details_migration")
+    feat = FilletFeature(radius=0.5, edge_indices=[0])
+    feat.id = "legacy_feat_001"
+    feat.status = "ERROR"
+    feat.status_message = "Legacy envelope without class"
+    feat.status_details = {
+        "schema": "error_envelope_v1",
+        "code": "rebuild_finalize_failed",
+        "message": "synthetic",
+    }
+    body.features = [feat]
+
+    payload = body.to_dict()
+    legacy_details = payload["features"][0]["status_details"]
+    legacy_details.pop("status_class", None)
+    legacy_details.pop("severity", None)
+
+    restored = Body.from_dict(payload)
+    restored_feat = restored.features[0]
+    details = restored_feat.status_details or {}
+
+    assert details.get("code") == "rebuild_finalize_failed"
+    assert details.get("status_class") == "CRITICAL"
+    assert details.get("severity") == "critical"
+
+
+def test_roundtrip_preserves_error_status_class_and_severity_fields(tmp_path):
+    doc = Document("status_details_roundtrip_doc")
+    body = doc.new_body("StatusBody")
+    body.id = "status_body_01"
+    body.add_feature(PrimitiveFeature(primitive_type="box", length=20.0, width=20.0, height=20.0), rebuild=True)
+
+    fillet = FilletFeature(radius=50.0, edge_indices=[0, 1, 2, 3])
+    body.add_feature(fillet, rebuild=True)
+    assert str(fillet.status).upper() == "ERROR"
+
+    pre_details = fillet.status_details or {}
+    assert pre_details.get("status_class") == "ERROR"
+    assert pre_details.get("severity") == "error"
+
+    save_path = tmp_path / "status_details_roundtrip.mshcad"
+    assert doc.save_project(str(save_path))
+
+    loaded = Document.load_project(str(save_path))
+    assert loaded is not None
+    loaded_body = loaded.find_body_by_id("status_body_01")
+    assert loaded_body is not None
+    loaded_fillet = next(feat for feat in loaded_body.features if isinstance(feat, FilletFeature))
+    loaded_details = loaded_fillet.status_details or {}
+
+    assert loaded_details.get("code") == "operation_failed"
+    assert loaded_details.get("status_class") == "ERROR"
+    assert loaded_details.get("severity") == "error"

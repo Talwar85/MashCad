@@ -109,7 +109,13 @@
       "Bash(if not exist \"c:\\\\LiteCad\\\\docs\" mkdir \"c:\\\\LiteCad\\\\docs\")",
       "Bash(git push:*)",
       "Bash(rg:*)",
-      "Bash($env:QT_OPENGL='software')"
+      "Bash($env:QT_OPENGL='software')",
+      "Bash($env:QT_QPA_PLATFORM='offscreen')",
+      "Bash(export QT_OPENGL=software:*)",
+      "Bash(export QT_QPA_PLATFORM=offscreen:*)",
+      "Bash(C:UsersUserminiforge3envscad_envpython.exe -m pytest:*)",
+      "Bash(if exist:*)",
+      "Bash(if exist \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\" del \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\")"
     ]
   }
 }
