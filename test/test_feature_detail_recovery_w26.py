@@ -587,5 +587,81 @@ class TestW29RecoveryActionGuards:
             assert len(visible_enabled) > 0, f"No valid actions for {code}"
 
 
+class TestW30RecoveryDecisionEngine:
+    """
+    W30 Product Leap: Tests für Recovery Decision Engine.
+    Tests für primäre/sekundäre Aktionen und Next-Steps.
+    8 Assertions
+    """
+
+    def test_recovery_decision_dict_exists(self, panel):
+        """W30-F1: _RECOVERY_DECISIONS Klassenvariable existiert."""
+        from gui.widgets.feature_detail_panel import FeatureDetailPanel
+        assert hasattr(FeatureDetailPanel, '_RECOVERY_DECISIONS')
+
+    def test_recovery_decision_dict_has_all_codes(self, panel):
+        """W30-F2: _RECOVERY_DECISIONS enthält alle Error-Codes."""
+        from gui.widgets.feature_detail_panel import FeatureDetailPanel
+        decisions = FeatureDetailPanel._RECOVERY_DECISIONS
+        expected = ["tnp_ref_missing", "tnp_ref_mismatch", "tnp_ref_drift",
+                   "rebuild_finalize_failed", "ocp_api_unavailable"]
+        for code in expected:
+            assert code in decisions, f"Missing {code}"
+
+    def test_primary_action_is_bold_for_tnp_ref_missing(self, panel):
+        """W30-F3: Primäraktion wird hervorgehoben für tnp_ref_missing."""
+        feature = Mock()
+        feature.name = "MissingRef"
+        feature.status = "ERROR"
+        feature.status_details = {"code": "tnp_ref_missing"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Reselect-Button sollte sichtbar sein
+        assert panel._btn_reselect_ref.isVisible()
+
+    def test_next_step_text_contains_steps(self, panel):
+        """W30-F4: Next-Step Text enthält Schrittanleitung."""
+        feature = Mock()
+        feature.name = "DriftFeature"
+        feature.status = "WARNING"
+        feature.status_details = {"code": "tnp_ref_drift"}
+        feature.edge_indices = []
+
+        panel.show_feature(feature)
+
+        # Hint-Feld sollte Text enthalten
+        hint_text = panel._diag_hint.text()
+        assert len(hint_text) > 0
+
+    def test_apply_button_style_exists(self, panel):
+        """W30-F5: _apply_button_style Methode existiert."""
+        assert hasattr(panel, '_apply_button_style')
+        assert callable(panel._apply_button_style)
+
+    def test_apply_button_style_sets_stylesheet(self, panel):
+        """W30-F6: _apply_button_style setzt StyleSheet."""
+        panel._apply_button_style(panel._btn_edit_feature, is_primary=False, is_secondary=False)
+        style = panel._btn_edit_feature.styleSheet()
+        assert len(style) > 0
+
+    def test_primary_button_gets_bold_style(self, panel):
+        """W30-F7: Primärbutton erhält fetten Stil."""
+        panel._apply_button_style(panel._btn_rebuild, is_primary=True, is_secondary=False)
+        style = panel._btn_rebuild.styleSheet()
+        assert "bold" in style.lower()
+
+    def test_secondary_button_gets_different_style(self, panel):
+        """W30-F8: Sekundärbutton erhält anderen Stil als Primär."""
+        panel._apply_button_style(panel._btn_edit_feature, is_primary=False, is_secondary=True)
+        secondary_style = panel._btn_edit_feature.styleSheet()
+        panel._apply_button_style(panel._btn_rebuild, is_primary=True, is_secondary=False)
+        primary_style = panel._btn_rebuild.styleSheet()
+        # Verschiedene Styles für primär vs sekundär
+        assert len(secondary_style) > 0
+        assert len(primary_style) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

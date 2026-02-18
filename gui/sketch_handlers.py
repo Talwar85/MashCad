@@ -343,7 +343,7 @@ class SketchHandlersMixin:
 
     def _add_point_constraint(self, point, pos, snap_type, snap_entity, new_line):
         """
-        FÃ¼gt automatisch Constraints fÃ¼r einen Punkt hinzu basierend auf Snap-Info.
+        Fügt automatisch Constraints für einen Punkt hinzu basierend auf Snap-Info.
 
         Args:
             point: Der Point2D der neuen Linie (start oder end)
@@ -364,7 +364,7 @@ class SketchHandlersMixin:
         if snap_type == SnapType.ENDPOINT:
             snapped_point = None
             if hasattr(snap_entity, 'start') and hasattr(snap_entity, 'end'):
-                # Linie - prÃ¼fe welcher Endpunkt nÃ¤her ist
+                # Linie - prüfe welcher Endpunkt näher ist
                 dist_start = math.hypot(pos.x() - snap_entity.start.x, pos.y() - snap_entity.start.y)
                 dist_end = math.hypot(pos.x() - snap_entity.end.x, pos.y() - snap_entity.end.y)
                 snapped_point = snap_entity.start if dist_start < dist_end else snap_entity.end
@@ -372,7 +372,7 @@ class SketchHandlersMixin:
             if snapped_point and snapped_point != point:
                 if hasattr(self.sketch, 'add_coincident'):
                     self.sketch.add_coincident(point, snapped_point)
-                    logger.debug(f"Auto: COINCIDENT fÃ¼r {type(snap_entity).__name__}")
+                    logger.debug(f"Auto: COINCIDENT für {type(snap_entity).__name__}")
                 else:
                     # Fallback: Koordinaten direkt setzen
                     point.x = snapped_point.x
@@ -531,10 +531,10 @@ class SketchHandlersMixin:
         # Schritt 1: Startpunkt setzen
         if self.tool_step == 0:
             self.tool_points = [pos]
-            # WICHTIG: Snap-Info fÃ¼r Startpunkt speichern!
+            # WICHTIG: Snap-Info für Startpunkt speichern!
             self._line_start_snap = (snap_type, snap_entity)
             self.tool_step = 1
-            self.status_message.emit("Endpunkt wÃ¤hlen | Tab=LÃ¤nge/Winkel | Rechts=Fertig")
+            self.status_message.emit("Endpunkt wählen | Tab=Länge/Winkel | Rechts=Fertig")
         
         # Schritt 2: Endpunkt setzen und Linie erstellen
         else:
@@ -553,7 +553,7 @@ class SketchHandlersMixin:
                 # Wir nutzen hier deine existierenden Methoden add_horizontal/vertical
                 h_tolerance = self._adaptive_world_tolerance(scale=0.35, min_world=0.05, max_world=2.0)
                 
-                # Nur prÃ¼fen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
+                # Nur prüfen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
                 if snap_type not in [
                     SnapType.EDGE,
                     SnapType.INTERSECTION,
@@ -823,7 +823,7 @@ class SketchHandlersMixin:
         x2, y2 = p2.x(), p2.y()
         x3, y3 = p3.x(), p3.y()
         
-        # Determinante fÃ¼r KollinearitÃ¤ts-Check
+        # Determinante für Kollinearitäts-Check
         d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
         if abs(d) < 1e-10:
             return None, 0  # Punkte sind kollinear (liegen auf einer Linie)
@@ -838,7 +838,7 @@ class SketchHandlersMixin:
         return QPointF(ux, uy), r
     
     def _handle_circle_2point(self, pos, snap_type):
-        """Separater Handler fÃ¼r reinen 2-Punkt-Modus (falls als eigenes Tool genutzt)"""
+        """Separater Handler für reinen 2-Punkt-Modus (falls als eigenes Tool genutzt)"""
         if self.tool_step == 0:
             self.tool_points = [pos]
             self.tool_step = 1
@@ -886,13 +886,13 @@ class SketchHandlersMixin:
                     construction=self.construction_mode
                 )
                 
-                # 2. Radius-BemaÃŸung hinzufÃ¼gen
-                # Das erlaubt dir, den Radius spÃ¤ter per Doppelklick zu Ã¤ndern!
+                # 2. Radius-Bemaßung hinzufügen
+                # Das erlaubt dir, den Radius später per Doppelklick zu ändern!
                 center_snap_type, center_snap_entity = getattr(self, "_polygon_center_snap", (SnapType.NONE, None))
                 self._apply_center_snap_constraint(const_circle.center, center_snap_type, center_snap_entity)
                 self.sketch.add_radius(const_circle, r)
                 
-                # 3. LÃ¶sen
+                # 3. Lösen
                 self.sketch.solve()
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
@@ -1049,7 +1049,7 @@ class SketchHandlersMixin:
             for p in self.tool_points:
                 spline.add_point(p.x(), p.y())
             
-            # Spline zum Sketch hinzufÃ¼gen
+            # Spline zum Sketch hinzufügen
             self.sketch.splines.append(spline)
             
             # Apply Constraints
@@ -1067,15 +1067,15 @@ class SketchHandlersMixin:
                 # Cleanup
                 del self.spline_snap_data
 
-            # Auch als Linien fÃ¼r KompatibilitÃ¤t (Export etc.)
+            # Auch als Linien für Kompatibilität (Export etc.)
             lines = spline.to_lines(segments_per_span=10)
-            spline._lines = lines  # Referenz speichern fÃ¼r spÃ¤teren Update
+            spline._lines = lines  # Referenz speichern für späteren Update
             
             # We DON'T add these lines to self.sketch.lines anymore if we have native spline support!
             # Adding them causes double rendering and selection issues.
             # But the 'dxf_export' might need them. Let's keep them in spline._lines only.
             
-            # Spline auswÃ¤hlen fÃ¼r sofortiges Editing
+            # Spline auswählen für sofortiges Editing
             self.selected_splines = [spline]
             
             self.sketched_changed.emit()
@@ -1086,13 +1086,13 @@ class SketchHandlersMixin:
         self._cancel_tool()
     
     def _handle_move(self, pos, snap_type):
-        """Verschieben: Basispunkt â†’ Zielpunkt (wie Fusion360)"""
+        """Verschieben: Basispunkt → Zielpunkt (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
         
         if self.tool_step == 0:
-            # Schritt 1: Basispunkt wÃ¤hlen
+            # Schritt 1: Basispunkt wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Target point | [Tab] for X/Y input"))
@@ -1107,7 +1107,7 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _move_selection(self, dx, dy):
-        """Verschiebt alle ausgewÃ¤hlten Elemente"""
+        """Verschiebt alle ausgewählten Elemente"""
         moved = set()
         for line in self.selected_lines:
             for pt in [line.start, line.end]:
@@ -1130,13 +1130,13 @@ class SketchHandlersMixin:
         self._solve_async()
     
     def _handle_copy(self, pos, snap_type):
-        """Kopieren: Basispunkt â†’ Zielpunkt (INKLUSIVE CONSTRAINTS)"""
+        """Kopieren: Basispunkt → Zielpunkt (INKLUSIVE CONSTRAINTS)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
         
         if self.tool_step == 0:
-            # Schritt 1: Basispunkt wÃ¤hlen
+            # Schritt 1: Basispunkt wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Target point for copy"))
@@ -1163,8 +1163,8 @@ class SketchHandlersMixin:
         new_circles = []
         new_arcs = []
         
-        # Mapping: Alte ID -> Neues Objekt (fÃ¼r Constraint-Rekonstruktion)
-        # Wir mÃ¼ssen Linien, Kreise UND Punkte mappen
+        # Mapping: Alte ID -> Neues Objekt (für Constraint-Rekonstruktion)"""
+        # Wir müssen Linien, Kreise UND Punkte mappen
         old_to_new = {}
 
         # 1. Linien kopieren
@@ -1208,9 +1208,9 @@ class SketchHandlersMixin:
         # Wir durchsuchen alle existierenden Constraints
         constraints_added = 0
         for c in self.sketch.constraints:
-            # PrÃ¼fen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
+            # Prüfen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
             # Das bedeutet, der Constraint bezieht sich nur auf kopierte Elemente (intern).
-            # Beispiel: Rechteck-SeitenlÃ¤nge (intern) -> Kopieren.
+            # Beispiel: Rechteck-Seitenlänge (intern) -> Kopieren.
             # Beispiel: Abstand Rechteck zu Ursprung (extern) -> Nicht kopieren.
             
             is_internal = True
@@ -1235,7 +1235,7 @@ class SketchHandlersMixin:
                 self.sketch.constraints.append(new_c)
                 constraints_added += 1
 
-        # Neue Elemente auswÃ¤hlen
+        # Neue Elemente auswählen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
@@ -1246,13 +1246,13 @@ class SketchHandlersMixin:
             msg += f", {constraints_added} constraints"
         self.status_message.emit(msg)
     def _handle_rotate(self, pos, snap_type):
-        """Drehen: Zentrum â†’ Winkel (wie Fusion360)"""
+        """Drehen: Zentrum → Winkel (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
         
         if self.tool_step == 0:
-            # Schritt 1: Drehzentrum wÃ¤hlen
+            # Schritt 1: Drehzentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Set rotation angle | Tab=Enter degrees"))
@@ -1268,25 +1268,25 @@ class SketchHandlersMixin:
     
     def _rotate_selection(self, center, angle_deg):
         """
-        Rotiert Auswahl und entfernt dabei stÃ¶rende H/V Constraints.
+        Rotiert Auswahl und entfernt dabei störende H/V Constraints.
         """
         rad = math.radians(angle_deg)
         cos_a, sin_a = math.cos(rad), math.sin(rad)
         rotated = set()
         
-        # 1. FIX: StÃ¶rende Constraints entfernen
-        # Horizontal/Vertical Constraints verhindern Rotation -> LÃ¶schen
-        # (Optional kÃ¶nnte man sie durch Perpendicular/Parallel ersetzen, 
-        # aber LÃ¶schen ist fÃ¼r freie Rotation sicherer)
+        # 1. FIX: Störende Constraints entfernen
+        # Horizontal/Vertical Constraints verhindern Rotation -> Löschen
+        # (Optional könnte man sie durch Perpendicular/Parallel ersetzen, 
+        # aber Löschen ist für freie Rotation sicherer)
         constraints_to_remove = []
         
-        # IDs der ausgewÃ¤hlten Elemente sammeln
+        # IDs der ausgewählten Elemente sammeln
         selected_ids = set()
         for l in self.selected_lines: selected_ids.add(l.id)
         
         for c in self.sketch.constraints:
             if c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
-                # Wenn das Constraint zu einer der rotierten Linien gehÃ¶rt
+                # Wenn das Constraint zu einer der rotierten Linien gehört
                 if c.entities and c.entities[0].id in selected_ids:
                     constraints_to_remove.append(c)
         
@@ -1381,7 +1381,7 @@ class SketchHandlersMixin:
             new_circle = self.sketch.add_circle(cx, cy, c.radius, construction=c.construction)
             new_circles.append(new_circle)
         
-        # Neue Elemente auswÃ¤hlen
+        # Neue Elemente auswählen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
@@ -1389,17 +1389,17 @@ class SketchHandlersMixin:
     
     def _handle_pattern_linear(self, pos, snap_type):
         """
-        Lineares Muster: VollstÃ¤ndig interaktiv mit DimensionInput.
+        Lineares Muster: Vollständig interaktiv mit DimensionInput.
         UX: 
-        1. User wÃ¤hlt Elemente.
+        1. User wählt Elemente.
         2. Aktiviert Tool.
         3. Klick definiert Startpunkt -> Mausbewegung definiert Richtung & Abstand (Vorschau).
-        4. Tab Ã¶ffnet Eingabe fÃ¼r prÃ¤zise Werte.
+        4. Tab öffnet Eingabe für präzise Werte.
         """
-        # Validierung: Nichts ausgewÃ¤hlt?
+        # Validierung: Nichts ausgewählt?
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             if hasattr(self, 'show_message'):
-                self.show_message("Bitte erst Elemente auswÃ¤hlen!", 2000, QColor(255, 200, 100))
+                self.show_message("Bitte erst Elemente auswählen!", 2000, QColor(255, 200, 100))
             else:
                 self.status_message.emit(tr("Select elements first!"))
             self.set_tool(SketchTool.SELECT) # Auto-Cancel
@@ -1435,10 +1435,10 @@ class SketchHandlersMixin:
             self._apply_linear_pattern(pos)
 
     def _show_pattern_linear_input(self):
-        """Zeigt DimensionInput fÃ¼r Linear Pattern"""
+        """Zeigt DimensionInput für Linear Pattern"""
         count = self.tool_data.get('pattern_count', 3)
         spacing = self.tool_data.get('pattern_spacing', 20.0)
-        fields = [("N", "count", float(count), "Ã—"), ("D", "spacing", spacing, "mm")]
+        fields = [("N", "count", float(count), "×"), ("D", "spacing", spacing, "mm")]
         self.dim_input.setup(fields)
 
         # Position neben Maus
@@ -1489,7 +1489,7 @@ class SketchHandlersMixin:
         self._cancel_tool()
 
     def _handle_pattern_circular(self, pos, snap_type):
-        """KreisfÃ¶rmiges Muster: Interaktiv mit DimensionInput"""
+        """Kreisförmiges Muster: Interaktiv mit DimensionInput"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             self.set_tool(SketchTool.SELECT)
@@ -1513,7 +1513,7 @@ class SketchHandlersMixin:
     def _show_pattern_circular_input(self):
         count = self.tool_data.get('pattern_count', 6)
         angle = self.tool_data.get('pattern_angle', 360.0)
-        fields = [("N", "count", float(count), "x"), ("âˆ ", "angle", angle, "Â°")]
+        fields = [("N", "count", float(count), "x"), ("∠ ", "angle", angle, "°")]
         self.dim_input.setup(fields)
         
         pos = self.mouse_screen
@@ -1568,13 +1568,13 @@ class SketchHandlersMixin:
         self._cancel_tool()
     
     def _handle_scale(self, pos, snap_type):
-        """Skalieren: Zentrum â†’ Faktor (wie Fusion360)"""
+        """Skalieren: Zentrum → Faktor (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
         
         if self.tool_step == 0:
-            # Schritt 1: Skalierungszentrum wÃ¤hlen
+            # Schritt 1: Skalierungszentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
             # Berechne initialen Abstand zur Auswahl
@@ -1604,7 +1604,7 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _scale_selection(self, center, factor):
-        """Skaliert alle ausgewÃ¤hlten Elemente vom Zentrum aus"""
+        """Skaliert alle ausgewählten Elemente vom Zentrum aus"""
         scaled = set()
         
         for line in self.selected_lines:
@@ -1631,7 +1631,7 @@ class SketchHandlersMixin:
         Intelligentes Trimmen:
         1. Findet Entity unter Maus
         2. Berechnet ALLE Schnittpunkte gegen ALLE anderen Geometrien
-        3. LÃ¶scht Segment
+        3. Löscht Segment
 
         Nutzt die extrahierte TrimOperation Klasse.
         """
@@ -1682,7 +1682,7 @@ class SketchHandlersMixin:
 
         self.status_message.emit("Klicken zum Trimmen")
 
-        # AusfÃ¼hren bei Klick
+        # Ausführen bei Klick
         if QApplication.mouseButtons() & Qt.LeftButton:
             from sketcher.operations.base import ResultStatus
 
@@ -1760,7 +1760,7 @@ class SketchHandlersMixin:
         return QPointF(line.start.x + t*(line.end.x-line.start.x), line.start.y + t*(line.end.y-line.start.y))
     
     def _find_connected_profile(self, start_line):
-        """Findet alle zusammenhÃ¤ngenden Linien die ein Profil bilden"""
+        """Findet alle zusammenhängenden Linien die ein Profil bilden"""
         TOL = 0.5
         
         def pt_match(p1, p2):
@@ -1774,7 +1774,7 @@ class SketchHandlersMixin:
         if start_line not in all_lines:
             return [start_line]
         
-        # Finde zusammenhÃ¤ngende Linien via BFS
+        # Finde zusammenhängende Linien via BFS
         profile = [start_line]
         used = {id(start_line)}
         
@@ -1785,7 +1785,7 @@ class SketchHandlersMixin:
                 if id(line) in used:
                     continue
                 
-                # PrÃ¼fe ob diese Linie an eine Linie im Profil anschlieÃŸt
+                # Prüfe ob diese Linie an eine Linie im Profil anschließt
                 line_pts = line_endpoints(line)
                 for profile_line in profile:
                     profile_pts = line_endpoints(profile_line)
@@ -1804,7 +1804,7 @@ class SketchHandlersMixin:
         return profile
     
     def _polygon_to_lines(self, shapely_polygon):
-        """Konvertiert ein Shapely Polygon zu Pseudo-Line Objekten fÃ¼r Offset"""
+        """Konvertiert ein Shapely Polygon zu Pseudo-Line Objekten für Offset"""
         from collections import namedtuple
         
         # Erstelle einfache Pseudo-Line Struktur
@@ -1826,11 +1826,11 @@ class SketchHandlersMixin:
     
     def _compute_offset_lines(self, profile_lines, distance, direction_outward=True):
         """
-        Berechnet Offset-Linien fÃ¼r ein Profil.
+        Berechnet Offset-Linien für ein Profil.
         
         Args:
             profile_lines: Liste von Linien die das Profil bilden
-            distance: Offset-Abstand (positiv = nach auÃŸen, negativ = nach innen)
+            distance: Offset-Abstand (positiv = nach außen, negativ = nach innen)
             direction_outward: Wird ignoriert - Richtung wird durch Vorzeichen von distance bestimmt
         
         Returns:
@@ -1862,7 +1862,7 @@ class SketchHandlersMixin:
             # Normale berechnen (senkrecht zur Linie)
             nx, ny = -dy/length, dx/length
             
-            # Bestimme ob diese Normale nach auÃŸen (weg vom Zentrum) zeigt
+            # Bestimme ob diese Normale nach außen (weg vom Zentrum) zeigt
             mid_x = (line.start.x + line.end.x) / 2
             mid_y = (line.start.y + line.end.y) / 2
             
@@ -1873,11 +1873,11 @@ class SketchHandlersMixin:
             # Wenn Normale zum Zentrum zeigt, umkehren
             dot = nx * to_center_x + ny * to_center_y
             if dot > 0:
-                # Normale zeigt zum Zentrum, also umkehren fÃ¼r "nach auÃŸen"
+                # Normale zeigt zum Zentrum, also umkehren für "nach außen"
                 nx, ny = -nx, -ny
             
-            # Jetzt zeigt (nx, ny) immer nach auÃŸen
-            # Positiver distance = nach auÃŸen, negativer = nach innen
+            # Jetzt zeigt (nx, ny) immer nach außen
+            # Positiver distance = nach außen, negativer = nach innen
             d = distance
             
             x1 = line.start.x + nx * d
@@ -1887,7 +1887,7 @@ class SketchHandlersMixin:
             
             offset_lines.append((x1, y1, x2, y2, line))
         
-        # Ecken verbinden (Linien verlÃ¤ngern/trimmen)
+        # Ecken verbinden (Linien verlängern/trimmen)
         if len(offset_lines) > 1:
             offset_lines = self._connect_offset_corners(offset_lines)
         
@@ -1901,7 +1901,7 @@ class SketchHandlersMixin:
             return math.hypot(x1 - x2, y1 - y2) < TOL
         
         def line_intersection(l1, l2):
-            """Berechnet Schnittpunkt zweier Linien (unendlich verlÃ¤ngert)"""
+            """Berechnet Schnittpunkt zweier Linien (unendlich verlängert)"""
             x1, y1, x2, y2, _ = l1
             x3, y3, x4, y4, _ = l2
             
@@ -1917,7 +1917,7 @@ class SketchHandlersMixin:
         
         result = list(offset_lines)
         
-        # FÃ¼r jedes Paar von Linien die sich berÃ¼hren sollten
+        # Für jedes Paar von Linien die sich berühren sollten
         for i in range(len(result)):
             x1, y1, x2, y2, orig1 = result[i]
             
@@ -1927,7 +1927,7 @@ class SketchHandlersMixin:
                 
                 x3, y3, x4, y4, orig2 = result[j]
                 
-                # PrÃ¼fe ob die Original-Linien verbunden waren
+                # Prüfe ob die Original-Linien verbunden waren
                 orig_connected = False
                 for p1 in [(orig1.start.x, orig1.start.y), (orig1.end.x, orig1.end.y)]:
                     for p2 in [(orig2.start.x, orig2.start.y), (orig2.end.x, orig2.end.y)]:
@@ -1944,7 +1944,7 @@ class SketchHandlersMixin:
                         px, py = intersection
                         
                         # Update Endpunkte
-                        # Finde welcher Endpunkt am nÃ¤chsten zum Schnittpunkt ist
+                        # Finde welcher Endpunkt am nächsten zum Schnittpunkt ist
                         d1_start = math.hypot(x1 - px, y1 - py)
                         d1_end = math.hypot(x2 - px, y2 - py)
                         d2_start = math.hypot(x3 - px, y3 - py)
@@ -1967,17 +1967,17 @@ class SketchHandlersMixin:
     def _handle_offset(self, pos, snap_type):
         """
         Offset-Tool (wie Fusion360):
-        1. Klick auf Element â†’ Sofort Vorschau mit Standard-Offset
-        2. Tab â†’ Wert eingeben â†’ Vorschau aktualisiert live  
-        3. Enter/Klick â†’ Anwenden
+        1. Klick auf Element →’ Sofort Vorschau mit Standard-Offset
+        2. Tab →’ Wert eingeben →’ Vorschau aktualisiert live  
+        3. Enter/Klick →’ Anwenden
         
-        Positiver Offset = nach auÃŸen (grÃ¶ÃŸer)
+        Positiver Offset = nach außen (größer)
         Negativer Offset = nach innen (kleiner)
         """
         
-        # Schritt 1: Element auswÃ¤hlen
+        # Schritt 1: Element auswählen
         if self.tool_step == 0:
-            # PrÃ¼fe Kreis zuerst
+            # Prüfe Kreis zuerst
             circle = self._find_circle_at(pos)
             if circle:
                 self.offset_profile = None
@@ -1989,7 +1989,7 @@ class SketchHandlersMixin:
                 self.tool_step = 1
                 self._show_dimension_input()
                 self._update_offset_preview()
-                direction = "auÃŸen" if self.tool_data['offset_outward'] else "innen"
+                direction = "außen" if self.tool_data['offset_outward'] else "innen"
                 self.status_message.emit(tr("Circle offset ({dir}): {d}mm | Tab=Value | Enter=Apply").format(dir=tr(direction), d=f"{self.offset_distance:.1f}"))
                 return
             
@@ -2017,15 +2017,15 @@ class SketchHandlersMixin:
             
             self.status_message.emit(tr("Click on line, circle or face | Tab=Distance"))
         
-        # Schritt 2: BestÃ¤tigen mit Klick
+        # Schritt 2: Bestätigen mit Klick
         elif self.tool_step == 1:
             self._apply_offset()
     
     def _offset_circle(self, circle, click_pos):
-        """Offset fÃ¼r Kreis - sofort anwenden (legacy, wird nicht mehr verwendet)"""
+        """Offset für Kreis - sofort anwenden (legacy, wird nicht mehr verwendet)"""
         dist = math.hypot(click_pos.x() - circle.center.x, click_pos.y() - circle.center.y)
         
-        # Positiver offset = grÃ¶ÃŸer (klick auÃŸen), negativer = kleiner (klick innen)
+        # Positiver offset = größer (klick außen), negativer = kleiner (klick innen)
         if dist > circle.radius:
             new_r = circle.radius + self.offset_distance
         else:
@@ -2145,7 +2145,7 @@ class SketchHandlersMixin:
         if not self.dim_input_active:
             self._show_dimension_input()
 
-        # Radius aus Input Ã¼bernehmen (Live-Update)
+        # Radius aus Input übernehmen (Live-Update)
         if self.dim_input_active:
             # Holen ohne zu sperren, damit Tastatureingaben funktionieren
             vals = self.dim_input.get_values()
@@ -2157,7 +2157,7 @@ class SketchHandlersMixin:
         # Suche Ecken (wo zwei Linien sich treffen)
         for i, l1 in enumerate(self.sketch.lines):
             for l2 in self.sketch.lines[i+1:]:
-                # PrÃ¼fe alle Punkt-Kombinationen
+                # Prüfe alle Punkt-Kombinationen
                 corners = [
                     (l1.start, l1.end, l2.start, l2.end, 'start', 'start'),
                     (l1.start, l1.end, l2.end, l2.start, 'start', 'end'),
@@ -2182,7 +2182,7 @@ class SketchHandlersMixin:
 
     def _create_fillet_v2(self, l1, l2, corner, other1, other2, attr1, attr2, radius):
         """
-        Erstellt ein Fillet mit korrigierter Geometrie und fÃ¼gt Radius-Constraint hinzu.
+        Erstellt ein Fillet mit korrigierter Geometrie und fügt Radius-Constraint hinzu.
 
         Geometrie: Der Fillet-Bogen ist tangent zu beiden Linien und hat den angegebenen Radius.
         Das Zentrum liegt auf der Winkelhalbierenden, Abstand = radius / sin(half_angle).
@@ -2229,8 +2229,8 @@ class SketchHandlersMixin:
         t2_y = corner.y + d2[1] * tan_dist
 
         # Winkelhalbierender Vektor (d1 + d2)
-        # FÃ¼r konvexe Ecken (wie Rechteck) zeigt d1+d2 nach INNEN
-        # Das ist korrekt fÃ¼r Fillets - NICHT negieren!
+        # Für konvexe Ecken (wie Rechteck) zeigt d1+d2 nach INNEN
+        # Das ist korrekt für Fillets - NICHT negieren!
         bisect_x = d1[0] + d2[0]
         bisect_y = d1[1] + d2[1]
         bisect_len = math.hypot(bisect_x, bisect_y)
@@ -2249,7 +2249,7 @@ class SketchHandlersMixin:
         center_x = corner.x + bisect_x * center_dist
         center_y = corner.y + bisect_y * center_dist
 
-        # Linien verkÃ¼rzen - neue Endpunkte an den Tangentenpunkten
+        # Linien verkürzen - neue Endpunkte an den Tangentenpunkten
         new_pt1 = Point2D(t1_x, t1_y)
         new_pt2 = Point2D(t2_x, t2_y)
         self.sketch.points.append(new_pt1)
@@ -2275,22 +2275,22 @@ class SketchHandlersMixin:
         while sweep > 180: sweep -= 360
         while sweep < -180: sweep += 360
 
-        # WÃ¤hle Start/End so dass der Sweep positiv ist (CCW)
+        # Wähle Start/End so dass der Sweep positiv ist (CCW)
         if sweep >= 0:
             start_angle = angle1
             end_angle = angle2
         else:
-            # Negativer sweep â†’ tausche fÃ¼r positiven Sweep
+            # Negativer sweep →’ tausche für positiven Sweep
             start_angle = angle2
             end_angle = angle1
 
-        # Stelle sicher dass end > start (fÃ¼r positiven Sweep im Renderer)
+        # Stelle sicher dass end > start (für positiven Sweep im Renderer)
         if end_angle < start_angle:
             end_angle += 360
 
         arc = self.sketch.add_arc(center_x, center_y, radius, start_angle, end_angle)
 
-        # Radius-Constraint hinzufÃ¼gen
+        # Radius-Constraint hinzufügen
         self.sketch.add_radius(arc, radius)
 
         self.status_message.emit(tr("Fillet R={radius}mm created").format(radius=f"{radius:.1f}"))
@@ -2303,7 +2303,7 @@ class SketchHandlersMixin:
         if not self.dim_input_active:
             self._show_dimension_input()
             
-        # LÃ¤nge aus Input Ã¼bernehmen
+        # Länge aus Input übernehmen
         if self.dim_input_active:
             vals = self.dim_input.get_values()
             if 'length' in vals:
@@ -2335,7 +2335,7 @@ class SketchHandlersMixin:
 
     def _create_chamfer_v2(self, l1, l2, corner, other1, other2, attr1, attr2, dist):
         """
-        Erstellt eine Fase und fÃ¼gt LÃ¤ngen-Constraint hinzu.
+        Erstellt eine Fase und fügt Längen-Constraint hinzu.
         """
         from sketcher.geometry import Point2D
         
@@ -2373,24 +2373,24 @@ class SketchHandlersMixin:
         if attr2 == 'start': l2.start = new_pt2
         else: l2.end = new_pt2
         
-        # Fase-Linie hinzufÃ¼gen
+        # Fase-Linie hinzufügen
         chamfer_line = self.sketch.add_line(c1_x, c1_y, c2_x, c2_y)
         
-        # CONSTRAINT HINZUFÃœGEN: LÃ¤nge der Fase anzeigen
-        # Wir berechnen die hypothetische LÃ¤nge der Fasenlinie (Wurzel(dist^2 + dist^2) bei 90 Grad, 
+        # CONSTRAINT HINZUFÜGEN: Länge der Fase anzeigen
+        # Wir berechnen die hypothetische Länge der Fasenlinie (Wurzel(dist^2 + dist^2) bei 90 Grad, 
         # aber hier setzen wir einfach die Distanz an den Schenkeln fest, oder besser:
-        # Fusion360 zeigt meist die SchenkellÃ¤nge an, aber hier haben wir keine "Chamfer Dimension".
-        # Wir fÃ¼gen einfach die LÃ¤nge der neuen Linie hinzu, damit man sie Ã¤ndern kann.
+        # Fusion360 zeigt meist die Schenkellänge an, aber hier haben wir keine "Chamfer Dimension".
+        # Wir fügen einfach die Länge der neuen Linie hinzu, damit man sie ändern kann.
         
-        # Hinweis: Bei 'Equal Distance' Chamfer ist die LinienlÃ¤nge = dist * sqrt(2 * (1 - cos(angle))).
-        # Das ist kompliziert zu bemaÃŸen. 
-        # Besser: Wir fÃ¼gen KEINE direkte BemaÃŸung an die schrÃ¤ge Linie an, da das oft krumme Werte sind,
+        # Hinweis: Bei 'Equal Distance' Chamfer ist die Linienlänge = dist * sqrt(2 * (1 - cos(angle))).
+        # Das ist kompliziert zu bemaßen. 
+        # Besser: Wir fügen KEINE direkte Bemaßung an die schräge Linie an, da das oft krumme Werte sind,
         # SONDERN wir lassen den Nutzer es sehen. 
         # Aber die Anforderung war "sollte er auch hinschreiben".
-        # Da wir "Schenkel-LÃ¤nge" (Distance) eingegeben haben, ist es am intuitivsten, 
-        # wenn wir nichts tun ODER eine BemaÃŸung hinzufÃ¼gen.
-        # Da unsere Constraints aktuell nur "Line Length" kÃ¶nnen und nicht "Point to Point distance along vector",
-        # ist die LÃ¤nge der Fasenlinie der einzige Wert, den wir anzeigen kÃ¶nnen.
+        # Da wir "Schenkel-Länge" (Distance) eingegeben haben, ist es am intuitivsten, 
+        # wenn wir nichts tun ODER eine Bemaßung hinzufügen.
+        # Da unsere Constraints aktuell nur "Line Length" können und nicht "Point to Point distance along vector",
+        # ist die Länge der Fasenlinie der einzige Wert, den wir anzeigen können.
         
         actual_len = math.hypot(c2_x - c1_x, c2_y - c1_y)
         self.sketch.add_length(chamfer_line, actual_len)
@@ -2399,7 +2399,7 @@ class SketchHandlersMixin:
         return True
     
     def _handle_dimension(self, pos, snap_type):
-        """BemaÃŸungstool - Modernisiert (Kein QInputDialog mehr!)"""
+        """Bemaßungstool - Modernisiert (Kein QInputDialog mehr!)"""
         
         # 1. Input-Feld automatisch anzeigen, wenn noch nicht aktiv
         if not self.dim_input_active:
@@ -2417,7 +2417,7 @@ class SketchHandlersMixin:
         line = self._find_line_at(pos)
         if line:
             current = line.length
-            # Wenn Input bestÃ¤tigt wurde, anwenden
+            # Wenn Input bestätigt wurde, anwenden
             if new_val is not None and abs(new_val - current) > 0.001:
                  self._save_undo()
                  constraint = self.sketch.add_length(line, new_val)
@@ -2482,10 +2482,10 @@ class SketchHandlersMixin:
         if edge:
             x1, y1, x2, y2 = edge
             
-            # PrÃ¼fen ob Linie schon existiert (um Duplikate zu vermeiden)
-            # Das ist wichtig fÃ¼r UX, sonst stackt man 10 Linien Ã¼bereinander
+            # Prüfen ob Linie schon existiert (um Duplikate zu vermeiden)
+            # Das ist wichtig für UX, sonst stackt man 10 Linien übereinander
             for l in self.sketch.lines:
-                # PrÃ¼fe Endpunkte (ungefÃ¤hre Gleichheit)
+                # Prüfe Endpunkte (ungefähre Gleichheit)
                 if (math.hypot(l.start.x - x1, l.start.y - y1) < 0.001 and \
                     math.hypot(l.end.x - x2, l.end.y - y2) < 0.001) or \
                    (math.hypot(l.start.x - x2, l.start.y - y2) < 0.001 and \
@@ -2500,11 +2500,11 @@ class SketchHandlersMixin:
             line = self.sketch.add_line(x1, y1, x2, y2, construction=self.construction_mode)
             
             # 3. FIXIEREN!
-            # Projizierte Geometrie sollte fixiert sein, da sie an 3D hÃ¤ngt
+            # Projizierte Geometrie sollte fixiert sein, da sie an 3D hängt
             self.sketch.add_fixed(line.start)
             self.sketch.add_fixed(line.end)
-            # Optional: Wir kÃ¶nnten ein spezielles Flag 'projected' einfÃ¼hren, 
-            # aber 'fixed' Punkte reichen fÃ¼r die Logik vorerst.
+            # Optional: Wir könnten ein spezielles Flag 'projected' einführen, 
+            # aber 'fixed' Punkte reichen für die Logik vorerst.
             
             self.sketched_changed.emit()
             self._find_closed_profiles()
@@ -2515,7 +2515,7 @@ class SketchHandlersMixin:
 
             
     def _handle_dimension_angle(self, pos, snap_type):
-        """WinkelbemaÃŸung - Modernisiert"""
+        """Winkelbemaßung - Modernisiert"""
         line = self._find_line_at(pos)
         if not line: self.status_message.emit(tr("Select first line")); return
         
@@ -2552,7 +2552,7 @@ class SketchHandlersMixin:
                     self._find_closed_profiles()
                     self._cancel_tool()
                 else:
-                    fields = [("Angle", "angle", current_angle, "Â°")]
+                    fields = [("Angle", "angle", current_angle, "°")]
                     self.dim_input.setup(fields)
                     screen_pos = self.mouse_screen
                     self.dim_input.move(int(screen_pos.x()) + 20, int(screen_pos.y()) + 20)
@@ -2581,7 +2581,7 @@ class SketchHandlersMixin:
         line = self._find_line_at(pos)
         if line:
             self._save_undo()
-            # Automatisch COINCIDENT Constraints fÃ¼r nahe Punkte hinzufÃ¼gen
+            # Automatisch COINCIDENT Constraints für nahe Punkte hinzufügen
             self._ensure_coincident_for_line(line)
             self.sketch.add_vertical(line)
             result = self.sketch.solve()
@@ -2630,7 +2630,7 @@ class SketchHandlersMixin:
                         if pt in self.sketch.points:
                             self.sketch.points.remove(pt)
                         
-                        # Fertig fÃ¼r diesen Endpunkt
+                        # Fertig für diesen Endpunkt
                         break
     
     def _handle_parallel(self, pos, snap_type):
@@ -2655,13 +2655,13 @@ class SketchHandlersMixin:
     def _handle_perpendicular(self, pos, snap_type):
         """
         Perpendicular Constraint mit Pre-Rotation.
-        Rotiert die zweite Linie VOR dem Constraint ungefÃ¤hr senkrecht,
+        Rotiert die zweite Linie VOR dem Constraint ungefähr senkrecht,
         damit der Solver besser konvergiert und keine Ecken "wegrutschen".
         """
         line = self._find_line_at(pos)
         if not line:
             if hasattr(self, 'show_message'):
-                self.show_message("Linie auswÃ¤hlen", 2000)
+                self.show_message("Linie auswählen", 2000)
             else:
                 self.status_message.emit(tr("Select first line"))
             return
@@ -2670,7 +2670,7 @@ class SketchHandlersMixin:
             self.tool_data['line1'] = line
             self.tool_step = 1
             if hasattr(self, 'show_message'):
-                self.show_message("Zweite Linie auswÃ¤hlen", 2000)
+                self.show_message("Zweite Linie auswählen", 2000)
             else:
                 self.status_message.emit(tr("Select second line"))
         else:
@@ -2678,7 +2678,7 @@ class SketchHandlersMixin:
             if l1 and line != l1:
                 self._save_undo()
 
-                # === PRE-ROTATION: Linie 2 ungefÃ¤hr senkrecht zu Linie 1 rotieren ===
+                # === PRE-ROTATION: Linie 2 ungefähr senkrecht zu Linie 1 rotieren ===
                 # Berechne aktuellen Winkel von l1
                 dx1 = l1.end.x - l1.start.x
                 dy1 = l1.end.y - l1.start.y
@@ -2690,7 +2690,7 @@ class SketchHandlersMixin:
                 angle2 = math.atan2(dy2, dx2)
                 length2 = math.hypot(dx2, dy2)
 
-                # Zielwinkel: 90Â° zu l1 (nehme den nÃ¤heren der beiden MÃ¶glichkeiten)
+                # Zielwinkel: 90° zu l1 (nehme den näheren der beiden Möglichkeiten)
                 target_angle_a = angle1 + math.pi / 2
                 target_angle_b = angle1 - math.pi / 2
 
@@ -2703,20 +2703,20 @@ class SketchHandlersMixin:
                 diff_a = abs(normalize_angle(target_angle_a - angle2))
                 diff_b = abs(normalize_angle(target_angle_b - angle2))
 
-                # WÃ¤hle den Winkel mit kleinerer Rotation
+                # Wähle den Winkel mit kleinerer Rotation
                 target_angle = target_angle_a if diff_a < diff_b else target_angle_b
 
                 # Rotiere l2 um seinen Startpunkt auf den Zielwinkel
-                # (nur wenn Abweichung > 5Â°, um unnÃ¶tige Ã„nderungen zu vermeiden)
+                # (nur wenn Abweichung > 5°, um unnötige Änderungen zu vermeiden)
                 rotation_needed = abs(normalize_angle(target_angle - angle2))
                 if rotation_needed > math.radians(5):
                     new_end_x = line.start.x + length2 * math.cos(target_angle)
                     new_end_y = line.start.y + length2 * math.sin(target_angle)
                     line.end.x = new_end_x
                     line.end.y = new_end_y
-                    logger.debug(f"Pre-rotated line by {math.degrees(rotation_needed):.1f}Â° for perpendicular")
+                    logger.debug(f"Pre-rotated line by {math.degrees(rotation_needed):.1f}° for perpendicular")
 
-                # Constraint hinzufÃ¼gen und lÃ¶sen
+                # Constraint hinzufügen und lösen
                 self.sketch.add_perpendicular(l1, line)
                 result = self.sketch.solve()
                 logger.debug(f"Solver Result: Success={result.success}, Message={result.message}")
@@ -2780,13 +2780,13 @@ class SketchHandlersMixin:
         from loguru import logger
         from PySide6.QtGui import QColor
 
-        # WICHTIG: FÃ¼r Constraint-Tools brauchen wir die originale Mausposition,
-        # nicht die gesnappte Position. Grid-Snap wÃ¼rde sonst die Entity-Suche verhindern.
+        # WICHTIG: Für Constraint-Tools brauchen wir die originale Mausposition,
+        # nicht die gesnappte Position. Grid-Snap würde sonst die Entity-Suche verhindern.
         original_pos = self.mouse_world
 
         line = self._find_line_at(original_pos)
         circle = self._find_circle_at(original_pos)
-        arc = self._find_arc_at(original_pos)  # Phase: Arc-Support fÃ¼r Tangent
+        arc = self._find_arc_at(original_pos)  # Phase: Arc-Support für Tangent
 
         logger.debug(f"[TANGENT] Step={self.tool_step}, pos={pos.x():.1f},{pos.y():.1f}, orig={original_pos.x():.1f},{original_pos.y():.1f}")
         logger.debug(f"[TANGENT] Found: line={line is not None}, circle={circle is not None}, arc={arc is not None}")
@@ -2842,7 +2842,7 @@ class SketchHandlersMixin:
                 self._cancel_tool()
                 return
 
-            # Validierung: Line-Line ist nicht tangent-fÃ¤hig
+            # Validierung: Line-Line ist nicht tangent-fähig
             if elem1_type == 'line' and elem2_type == 'line':
                 logger.warning(f"[TANGENT] Line-Line not supported")
                 if hasattr(self, 'show_message'):
@@ -2854,8 +2854,8 @@ class SketchHandlersMixin:
 
             self._save_undo()
 
-            # Pre-Positionierung fÃ¼r bessere Solver-Konvergenz
-            # (Geometrie wird UNGEFÃ„HR tangent positioniert, dann Ã¼bernimmt der Constraint)
+            # Pre-Positionierung für bessere Solver-Konvergenz
+            # (Geometrie wird UNGEFÄHR tangent positioniert, dann übernimmt der Constraint)
             if elem1_type == 'line' and elem2_type in ('circle', 'arc'):
                 self._make_line_tangent_to_circle(elem1, elem2)
             elif elem2_type == 'line' and elem1_type in ('circle', 'arc'):
@@ -2863,11 +2863,11 @@ class SketchHandlersMixin:
             elif elem1_type in ('circle', 'arc') and elem2_type in ('circle', 'arc'):
                 self._make_circles_tangent(elem1, elem2)
 
-            # === ECHTER CONSTRAINT HINZUFÃœGEN ===
+            # === ECHTER CONSTRAINT HINZUFÜGEN ===
             constraint = self.sketch.add_tangent(elem1, elem2)
 
             if constraint:
-                logger.info(f"[TANGENT] Constraint created: {elem1_type} â†” {elem2_type}")
+                logger.info(f"[TANGENT] Constraint created: {elem1_type} →” {elem2_type}")
                 result = self.sketch.solve()
                 self.sketched_changed.emit()
                 self._find_closed_profiles()
@@ -2881,12 +2881,12 @@ class SketchHandlersMixin:
                     self.show_message(tr("Invalid combination!"), 2000, QColor(255, 100, 100))
                 self.status_message.emit(tr("Invalid combination - select different elements"))
 
-            self._clear_constraint_highlight()  # Visual Feedback zurÃ¼cksetzen
+            self._clear_constraint_highlight()  # Visual Feedback zurücksetzen
             self._cancel_tool()
     
     def _make_line_tangent_to_circle(self, line, circle):
         """Macht eine Linie tangential zu einem Kreis"""
-        # Berechne den nÃ¤chsten Punkt auf der Linie zum Kreismittelpunkt
+        # Berechne den nächsten Punkt auf der Linie zum Kreismittelpunkt
         cx, cy = circle.center.x, circle.center.y
         x1, y1 = line.start.x, line.start.y
         x2, y2 = line.end.x, line.end.y
@@ -2901,7 +2901,7 @@ class SketchHandlersMixin:
         t = ((cx - x1) * dx + (cy - y1) * dy) / (line_len * line_len)
         t = max(0, min(1, t))  # Auf Liniensegment begrenzen
         
-        # NÃ¤chster Punkt auf der Linie
+        # Nächster Punkt auf der Linie
         px, py = x1 + t * dx, y1 + t * dy
         
         # Aktuelle Distanz zum Kreis
@@ -2911,7 +2911,7 @@ class SketchHandlersMixin:
             return
         
         # Verschiebe die Linie so dass sie tangential ist
-        # Richtung vom Mittelpunkt zum nÃ¤chsten Punkt
+        # Richtung vom Mittelpunkt zum nächsten Punkt
         nx, ny = (px - cx) / dist, (py - cy) / dist
         
         # Zielabstand = Radius
@@ -2924,7 +2924,7 @@ class SketchHandlersMixin:
         line.end.y += ny * offset
     
     def _make_circles_tangent(self, c1, c2):
-        """Macht zwei Kreise tangential (berÃ¼hrend)"""
+        """Macht zwei Kreise tangential (berührend)"""
         cx1, cy1, r1 = c1.center.x, c1.center.y, c1.radius
         cx2, cy2, r2 = c2.center.x, c2.center.y, c2.radius
         
@@ -2936,7 +2936,7 @@ class SketchHandlersMixin:
         # Richtung von c1 nach c2
         dx, dy = (cx2 - cx1) / dist, (cy2 - cy1) / dist
         
-        # Zieldistanz (auÃŸen tangent)
+        # Zieldistanz (außen tangent)
         target_dist = r1 + r2
         
         # Verschiebe c2
@@ -2947,21 +2947,21 @@ class SketchHandlersMixin:
     
     def _handle_pattern_circular(self, pos, snap_type):
         """
-        KreisfÃ¶rmiges Muster.
+        Kreisförmiges Muster.
         UX:
         1. Selektion.
         2. Tool aktivieren.
-        3. Zentrum wÃ¤hlen (Snap!).
-        4. Tab fÃ¼r Anzahl/Winkel.
+        3. Zentrum wählen (Snap!).
+        4. Tab für Anzahl/Winkel.
         """
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             if hasattr(self, 'show_message'):
-                self.show_message("Bitte erst Elemente auswÃ¤hlen!", 2000, QColor(255, 200, 100))
+                self.show_message("Bitte erst Elemente auswählen!", 2000, QColor(255, 200, 100))
             self.set_tool(SketchTool.SELECT)
             return
 
         if self.tool_step == 0:
-            # Zentrum wÃ¤hlen
+            # Zentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
             
@@ -2980,18 +2980,18 @@ class SketchHandlersMixin:
                 self.status_message.emit(msg)
 
         elif self.tool_step == 1:
-            # Klick im Canvas (woanders als Zentrum) bestÃ¤tigt auch
+            # Klick im Canvas (woanders als Zentrum) bestätigt auch
             self._apply_circular_pattern()
     
     def _handle_gear(self, pos, snap_type, snap_entity=None):
         """
         Erweitertes Zahnrad-Tool (CAD Kompatibel).
-        UnterstÃ¼tzt Backlash, Profilverschiebung und Bohrung.
+        Unterstützt Backlash, Profilverschiebung und Bohrung.
         """
         # --- 1. Dialog Setup ---
         dialog = QDialog(self)
         dialog.setWindowTitle(tr("Stirnrad (Spur Gear)"))
-        dialog.setFixedWidth(340) # Etwas breiter fÃ¼r mehr Optionen
+        dialog.setFixedWidth(340) # Etwas breiter für mehr Optionen
         dialog.setStyleSheet("""
             QDialog { background-color: #2d2d30; color: #e0e0e0; }
             QLabel, QCheckBox { color: #aaaaaa; }
@@ -3019,17 +3019,17 @@ class SketchHandlersMixin:
         spin_angle = QDoubleSpinBox()
         spin_angle.setRange(14.5, 30.0)
         spin_angle.setValue(20.0)
-        spin_angle.setSuffix(" Â°")
+        spin_angle.setSuffix(" °")
 
         # --- Erweiterte Parameter (Wichtig!) ---
         
-        # Zahnflankenspiel (Backlash) - Wichtig fÃ¼r 3D Druck
+        # Zahnflankenspiel (Backlash) - Wichtig für 3D Druck
         spin_backlash = QDoubleSpinBox()
         spin_backlash.setRange(0.0, 2.0)
-        spin_backlash.setValue(0.15) # Guter Default fÃ¼r 3D Druck
+        spin_backlash.setValue(0.15) # Guter Default für 3D Druck
         spin_backlash.setSingleStep(0.05)
         spin_backlash.setSuffix(" mm")
-        spin_backlash.setToolTip("Verringert die Zahndicke fÃ¼r Spielraum")
+        spin_backlash.setToolTip("Verringert die Zahndicke für Spielraum")
 
         # Bohrung
         spin_hole = QDoubleSpinBox()
@@ -3037,14 +3037,14 @@ class SketchHandlersMixin:
         spin_hole.setValue(6.0) # Standard Welle
         spin_hole.setSuffix(" mm")
 
-        # Profilverschiebung (x) - Wichtig bei wenig ZÃ¤hnen (<17)
+        # Profilverschiebung (x) - Wichtig bei wenig Zähnen (<17)
         spin_shift = QDoubleSpinBox()
         spin_shift.setRange(-1.0, 1.0)
         spin_shift.setValue(0.0)
         spin_shift.setSingleStep(0.1)
-        spin_shift.setToolTip("Positiv: StÃ¤rkerer FuÃŸ, grÃ¶ÃŸerer Durchmesser.\nNÃ¶tig bei < 17 ZÃ¤hnen um Unterschnitt zu vermeiden.")
+        spin_shift.setToolTip("Positiv: Stärkerer Fuß, größerer Durchmesser.\nNötig bei < 17 Zähnen um Unterschnitt zu vermeiden.")
 
-        # FuÃŸrundung (Fillet)
+        # Fußrundung (Fillet)
         spin_fillet = QDoubleSpinBox()
         spin_fillet.setRange(0.0, 5.0)
         spin_fillet.setValue(0.5) # Leichte Rundung
@@ -3056,13 +3056,13 @@ class SketchHandlersMixin:
 
         # Layout bauen
         form.addRow(tr("Modul:"), spin_module)
-        form.addRow(tr("ZÃ¤hne:"), spin_teeth)
+        form.addRow(tr("Zähne:"), spin_teeth)
         form.addRow(tr("Druckwinkel:"), spin_angle)
         form.addRow(tr("-----------"), QLabel("")) # Trenner
-        form.addRow(tr("Bohrung âŒ€:"), spin_hole)
+        form.addRow(tr("Bohrung ⌀:"), spin_hole)
         form.addRow(tr("Spiel (Backlash):"), spin_backlash)
         form.addRow(tr("Profilverschiebung:"), spin_shift)
-        form.addRow(tr("FuÃŸradius:"), spin_fillet)
+        form.addRow(tr("Fußradius:"), spin_fillet)
         form.addRow("", check_lowpoly)
         
         layout.addLayout(form)
@@ -3076,7 +3076,7 @@ class SketchHandlersMixin:
         def update_preview():
             self._remove_preview_elements()
             
-            # Parameter dictionary fÃ¼r saubereren Aufruf
+            # Parameter dictionary für saubereren Aufruf
             params = {
                 'cx': pos.x(), 'cy': pos.y(),
                 'module': spin_module.value(),
@@ -3117,7 +3117,7 @@ class SketchHandlersMixin:
                 'profile_shift': spin_shift.value(),
                 'fillet': spin_fillet.value(),
                 'preview': False,
-                'low_poly': False # Immer High Quality fÃ¼r Final
+                'low_poly': False # Immer High Quality für Final
             }
             
             self._generate_involute_gear(**params)
@@ -3163,7 +3163,7 @@ class SketchHandlersMixin:
                               backlash=0.0, hole_diam=0.0, profile_shift=0.0, fillet=0.0,
                               preview=False, low_poly=True):
         """
-        Umfassender Generator fÃ¼r Evolventen-Verzahnung.
+        Umfassender Generator für Evolventen-Verzahnung.
         Mathematik basiert auf DIN 3960 / Fusion SpurGear Script.
         """
         if teeth < 4: teeth = 4
@@ -3179,14 +3179,14 @@ class SketchHandlersMixin:
         db = d * math.cos(alpha)
         rb = db / 2.0
         
-        # Kopf- und FuÃŸhÃ¶henfaktoren (Standard 1.0 und 1.25)
-        # Profilverschiebung (x) Ã¤ndert diese Durchmesser
+        # Kopf- und Fußhöhenfaktoren (Standard 1.0 und 1.25)
+        # Profilverschiebung (x) ändert diese Durchmesser
         ha = (1.0 + profile_shift) * module  # Addendum (Kopf)
-        hf = (1.25 - profile_shift) * module # Dedendum (FuÃŸ)
+        hf = (1.25 - profile_shift) * module # Dedendum (Fuß)
         
         # Durchmesser
         da = d + 2 * ha # Kopfkreis (Tip)
-        df = d - 2 * hf # FuÃŸkreis (Root)
+        df = d - 2 * hf # Fußkreis (Root)
         
         ra = da / 2.0
         rf = df / 2.0
@@ -3207,13 +3207,13 @@ class SketchHandlersMixin:
         # Backlash anwenden (Verringert die Dicke)
         s_act = s_nom - backlash
         
-        # Winkel im BogenmaÃŸ am Teilkreis fÃ¼r die halbe Zahndicke
+        # Winkel im Bogenmaß am Teilkreis für die halbe Zahndicke
         psi = s_act / (2.0 * r) 
         
         # Involute Funktion: inv(alpha) = tan(alpha) - alpha
         inv_alpha = tan_alpha - alpha
         
-        # Der Winkel-Offset fÃ¼r den Start der Evolvente (am Grundkreis)
+        # Der Winkel-Offset für den Start der Evolvente (am Grundkreis)
         # Theta_start = psi + inv_alpha
         half_tooth_angle = psi + inv_alpha
         # --- 3. Profilberechnung (Eine Flanke) ---
@@ -3237,13 +3237,13 @@ class SketchHandlersMixin:
         steps = _calc_flank_steps(teeth, module, low_poly)
         flank_points = []
         # Wir berechnen Punkte vom Grundkreis (rb) bis Kopfkreis (ra)
-        # Achtung: Wenn FuÃŸkreis (rf) < Grundkreis (rb), startet Evolvente erst bei rb.
+        # Achtung: Wenn Fußkreis (rf) < Grundkreis (rb), startet Evolvente erst bei rb.
         # Darunter ist es eine Gerade oder ein Fillet.
         
         start_r = max(rb, rf)
         
         for i in range(steps + 1):
-            # Nicht-lineare Verteilung fÃ¼r schÃ¶nere Kurven an der Basis
+            # Nicht-lineare Verteilung für schönere Kurven an der Basis
             t = i / steps
             radius_at_point = start_r + (ra - start_r) * t
             
@@ -3261,54 +3261,54 @@ class SketchHandlersMixin:
             theta = half_tooth_angle - inv_phi
             flank_points.append((radius_at_point, theta))
             
-        # --- 4. FuÃŸbereich (Root / Undercut / Fillet) ---
-        # Wenn der FuÃŸkreis kleiner als der Grundkreis ist, mÃ¼ssen wir den Zahn nach unten verlÃ¤ngern.
-        # Fusion nutzt hier komplexe Trochoiden fÃ¼r Unterschnitt. Wir nutzen eine radiale Linie + Fillet.
+        # --- 4. Fußbereich (Root / Undercut / Fillet) ---
+        # Wenn der Fußkreis kleiner als der Grundkreis ist, müssen wir den Zahn nach unten verlängern.
+        # Fusion nutzt hier komplexe Trochoiden für Unterschnitt. Wir nutzen eine radiale Linie + Fillet.
         
         if rf < rb:
-            # Einfache VerlÃ¤ngerung: Radial vom FuÃŸkreis zum Start der Evolvente
-            # Mit Fillet: Wir runden den Ãœbergang vom FuÃŸkreis zur Flanke ab.
+            # Einfache Verlängerung: Radial vom Fußkreis zum Start der Evolvente
+            # Mit Fillet: Wir runden den Übergang vom Fußkreis zur Flanke ab.
             
             # Winkel am Start der Evolvente
             angle_at_base = flank_points[0][1]
             
             if fillet > 0.01 and not low_poly:
                 # Simuliertes Fillet: Ein Punkt zwischen (rf, angle) und (rb, angle)
-                # Wir gehen etwas in den Zahnzwischenraum (Winkel wird grÃ¶ÃŸer)
-                # ZahnlÃ¼cke Mitte ist bei PI/z. 
-                # Das ist zu komplex fÃ¼r schnelles Skripting. 
-                # Wir machen eine direkte Linie zum FuÃŸkreis.
+                # Wir gehen etwas in den Zahnzwischenraum (Winkel wird größer)
+                # Zahnlücke Mitte ist bei PI/z. 
+                # Das ist zu komplex für schnelles Skripting. 
+                # Wir machen eine direkte Linie zum Fußkreis.
                 flank_points.insert(0, (rf, angle_at_base))
             else:
-                # Harter Ãœbergang
+                # Harter Übergang
                 flank_points.insert(0, (rf, angle_at_base))
 
         # --- 5. Spiegeln und Zusammenbauen ---
         tooth_poly = []
         
-        # Linke Flanke (gespiegelt, Winkel negativ) -> Von FuÃŸ nach Kopf
-        # flank_points ist [FuÃŸ ... Kopf]. 
-        # Wir brauchen [FuÃŸ ... Kopf] aber mit negativen Winkeln?
-        # Nein, fÃ¼r CCW Polygon: 
+        # Linke Flanke (gespiegelt, Winkel negativ) -> Von Fuß nach Kopf
+        # flank_points ist [Fuß ... Kopf]. 
+        # Wir brauchen [Fuß ... Kopf] aber mit negativen Winkeln?
+        # Nein, für CCW Polygon: 
         # Center -> (Rechte Flanke) -> Tip -> (Linke Flanke) -> Center
         # Aber wir bauen das ganze Rad.
         
-        # Strategie: Wir bauen die Punkte fÃ¼r EINEN Zahn (Rechts + Links)
+        # Strategie: Wir bauen die Punkte für EINEN Zahn (Rechts + Links)
         # und rotieren diesen.
         
         # Linke Flanke (Winkel = -theta). Von Root zu Tip?
-        # Sagen wir 0Â° ist die Zahnmitte.
+        # Sagen wir 0° ist die Zahnmitte.
         # Rechte Flanke ist bei +Theta. Linke bei -Theta.
         # CCW Reihenfolge: Rechte Flanke (Tip->Root) -> Root Arc -> Linke Flanke (Root->Tip) -> Tip Arc
         
-        # 1. Rechte Flanke (AuÃŸen nach Innen)
+        # 1. Rechte Flanke (Außen nach Innen)
         for r, theta in reversed(flank_points):
             tooth_poly.append((r, theta))
             
-        # 2. FuÃŸkreis (Verbindung zur linken Flanke im GLEICHEN Zahn ist falsch, das wÃ¤re durch den Zahn durch)
-        # Wir verbinden zum NÃ„CHSTEN Zahn Ã¼ber den FuÃŸkreis.
+        # 2. Fußkreis (Verbindung zur linken Flanke im GLEICHEN Zahn ist falsch, das wäre durch den Zahn durch)
+        # Wir verbinden zum NÄCHSTEN Zahn über den Fußkreis.
         # Also definieren wir nur das Profil EINES Zahns.
-        # Profil: Tip Right -> ... -> Root Right -> (LÃ¼cke) -> Root Left -> ... Tip Left
+        # Profil: Tip Right -> ... -> Root Right -> (Lücke) -> Root Left -> ... Tip Left
         # Aber das ist schwer zu loopen.
         
         # Einfacher: Ein Zahn besteht aus Linker Flanke (aufsteigend) und Rechter Flanke (absteigend).
@@ -3498,7 +3498,7 @@ class SketchHandlersMixin:
             center = self.tool_points[0]
             rotation_angle = math.atan2(pos.y() - center.y(), pos.x() - center.x())
             
-            # SchlÃ¼sselweite mit Toleranz
+            # Schlüsselweite mit Toleranz
             size_name = self.nut_size_names[self.nut_size_index]
             sw = self.nut_sizes[size_name] + self.nut_tolerance
             
@@ -3527,7 +3527,7 @@ class SketchHandlersMixin:
             self._find_closed_profiles()
             
             # Info anzeigen
-            self.status_message.emit(f"{size_name} " + tr("Nut") + f" (SW {sw:.2f}mm, " + tr("Hole") + f" âŒ€{screw_diameter + self.nut_tolerance:.2f}mm)")
+            self.status_message.emit(f"{size_name} " + tr("Nut") + f" (SW {sw:.2f}mm, " + tr("Hole") + f" ⌀{screw_diameter + self.nut_tolerance:.2f}mm)")
             if hasattr(self, "_nut_center_snap"):
                 del self._nut_center_snap
             self._cancel_tool()
@@ -3805,7 +3805,7 @@ class SketchHandlersMixin:
             self.canvas_image = pixmap
             self.canvas_file_path = path
 
-            # Default: 100mm Breite, HÃ¶he aus Aspect Ratio
+            # Default: 100mm Breite, Höhe aus Aspect Ratio
             default_width = 100.0
             aspect = pixmap.height() / max(pixmap.width(), 1)
             default_height = default_width * aspect
@@ -3821,12 +3821,12 @@ class SketchHandlersMixin:
 
             logger.info(f"Canvas geladen: {path} ({pixmap.width()}x{pixmap.height()}px, {default_width:.0f}x{default_height:.0f}mm)")
             self.status_message.emit(tr("Canvas platziert") + f" ({default_width:.0f}x{default_height:.0f}mm)")
-            self._draw_hud(tr("Canvas platziert â€” Rechtsklick fÃ¼r Optionen"))
+            self._draw_hud(tr("Canvas platziert — Rechtsklick für Optionen"))
             self.set_tool(SketchTool.SELECT)
             self.request_update()
 
     def _canvas_hit_test(self, world_pos):
-        """PrÃ¼ft ob world_pos innerhalb des Canvas liegt."""
+        """Prüft ob world_pos innerhalb des Canvas liegt."""
         if not self.canvas_world_rect or not self.canvas_image:
             return False
         return self.canvas_world_rect.contains(QPointF(world_pos.x(), world_pos.y()))
@@ -3844,7 +3844,7 @@ class SketchHandlersMixin:
         return True
 
     def _canvas_update_drag(self, world_pos):
-        """Aktualisiert Canvas-Position wÃ¤hrend Drag."""
+        """Aktualisiert Canvas-Position während Drag."""
         if not self._canvas_dragging or not self.canvas_world_rect:
             return
         new_x = world_pos.x() - self._canvas_drag_offset.x()
@@ -3871,12 +3871,12 @@ class SketchHandlersMixin:
         self.request_update()
 
     def canvas_set_opacity(self, opacity):
-        """Setzt Canvas-Deckkraft (0.0â€“1.0)."""
+        """Setzt Canvas-Deckkraft (0.0–1.0)."""
         self.canvas_opacity = max(0.0, min(1.0, opacity))
         self.request_update()
 
     def canvas_set_size(self, width_mm):
-        """Setzt Canvas-Breite in mm (HÃ¶he folgt Aspect Ratio)."""
+        """Setzt Canvas-Breite in mm (Höhe folgt Aspect Ratio)."""
         if not self.canvas_image or not self.canvas_world_rect:
             return
         aspect = self.canvas_image.height() / max(self.canvas_image.width(), 1)
@@ -3898,11 +3898,11 @@ class SketchHandlersMixin:
         self._canvas_calibrating = True
         self._canvas_calib_points = []
         self.status_message.emit(tr("Kalibrierung: Ersten Punkt auf dem Bild anklicken"))
-        self._draw_hud(tr("Kalibrierung â€” Punkt 1 von 2 setzen"))
+        self._draw_hud(tr("Kalibrierung — Punkt 1 von 2 setzen"))
         self.request_update()
 
     def _canvas_calibration_click(self, world_pos):
-        """Verarbeitet einen Klick im Kalibrierungsmodus. Gibt True zurÃ¼ck wenn konsumiert."""
+        """Verarbeitet einen Klick im Kalibrierungsmodus. Gibt True zurück wenn konsumiert."""
         if not self._canvas_calibrating:
             return False
 
@@ -3910,7 +3910,7 @@ class SketchHandlersMixin:
 
         if len(self._canvas_calib_points) == 1:
             self.status_message.emit(tr("Kalibrierung: Zweiten Punkt auf dem Bild anklicken"))
-            self._draw_hud(tr("Kalibrierung â€” Punkt 2 von 2 setzen"))
+            self._draw_hud(tr("Kalibrierung — Punkt 2 von 2 setzen"))
             self.request_update()
             return True
 

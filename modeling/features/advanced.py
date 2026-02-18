@@ -6,6 +6,32 @@ from .base import Feature, FeatureType
 from modeling.nurbs import ContinuityMode
 from modeling.tnp_system import ShapeID
 
+
+def _canonicalize_indices(indices):
+    """
+    Normalisiert Topologie-Indizes fuer Determinismus (EPIC X2).
+
+    Stellt sicher dass edge_indices, face_indices etc. immer
+    sortiert und entdupliziert sind. Dies ist kritisch fuer:
+    - Rebuild-Idempotenz
+    - Save/Load Konsistenz
+    - TNP Reference Stability
+    """
+    if not indices:
+        return []
+
+    canonical = set()
+    for idx in indices:
+        try:
+            i = int(idx)
+            if i >= 0:
+                canonical.add(i)
+        except (ValueError, TypeError):
+            continue
+
+    return sorted(canonical)
+
+
 @dataclass
 class LoftFeature(Feature):
     """
@@ -155,8 +181,11 @@ class ShellFeature(Feature):
             self.name = "Shell"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        # EPIC X2: Canonicalize face_indices for determinism
         if self.face_indices is None:
             self.face_indices = []
+        else:
+            self.face_indices = _canonicalize_indices(self.face_indices)
 
 
 @dataclass
@@ -195,8 +224,11 @@ class HoleFeature(Feature):
             self.name = f"Hole: {self.hole_type}"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        # EPIC X2: Canonicalize face_indices for determinism
         if self.face_indices is None:
             self.face_indices = []
+        else:
+            self.face_indices = _canonicalize_indices(self.face_indices)
         if self.face_selectors is None:
             self.face_selectors = []
 
@@ -209,11 +241,11 @@ class DraftFeature(Feature):
     draft_angle: float = 2.0  # Winkel in Grad (primaerer Feldname)
     # Legacy-Compat: aeltere Callsites nutzen "angle".
     angle: Optional[float] = None
-    
+
     # TNP v4.0: Persistent ShapeIDs für Faces
     face_shape_ids: List = None
     face_indices: List = None
-    
+
     face_selectors: List[dict] = field(default_factory=list)
     pull_direction: Tuple[float, float, float] = (0, 0, 1)  # Vektor der Entformung
     neutral_plane_normal: Tuple[float, float, float] = (0, 0, 1) # Normale der neutralen Ebene
@@ -236,8 +268,11 @@ class DraftFeature(Feature):
         self.angle = self.draft_angle
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        # EPIC X2: Canonicalize face_indices for determinism
         if self.face_indices is None:
             self.face_indices = []
+        else:
+            self.face_indices = _canonicalize_indices(self.face_indices)
 
 
 @dataclass
@@ -332,8 +367,11 @@ class HollowFeature(Feature):
             self.name = "Hollow"
         if self.opening_face_shape_ids is None:
             self.opening_face_shape_ids = []
+        # EPIC X2: Canonicalize opening_face_indices for determinism
         if self.opening_face_indices is None:
             self.opening_face_indices = []
+        else:
+            self.opening_face_indices = _canonicalize_indices(self.opening_face_indices)
         if self.opening_face_selectors is None:
             self.opening_face_selectors = []
 
@@ -347,7 +385,7 @@ class NSidedPatchFeature(Feature):
     # TNP v4.0: Kanten-Referenzen
     edge_shape_ids: List = None
     edge_indices: List = None
-    
+
     # Legacy: Geometrische Selektoren
     geometric_selectors: List[dict] = field(default_factory=list)
 
@@ -362,8 +400,11 @@ class NSidedPatchFeature(Feature):
             self.name = "N-Sided Patch"
         if self.edge_shape_ids is None:
             self.edge_shape_ids = []
+        # EPIC X2: Canonicalize edge_indices for determinism
         if self.edge_indices is None:
             self.edge_indices = []
+        else:
+            self.edge_indices = _canonicalize_indices(self.edge_indices)
         if self.geometric_selectors is None:
             self.geometric_selectors = []
 
@@ -390,8 +431,11 @@ class SurfaceTextureFeature(Feature):
             self.name = "Surface Texture"
         if self.face_shape_ids is None:
             self.face_shape_ids = []
+        # EPIC X2: Canonicalize face_indices for determinism
         if self.face_indices is None:
             self.face_indices = []
+        else:
+            self.face_indices = _canonicalize_indices(self.face_indices)
 
 @dataclass
 class PrimitiveFeature(Feature):

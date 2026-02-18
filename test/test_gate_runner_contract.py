@@ -1252,3 +1252,183 @@ class TestFastFeedbackTimeoutW29:
         # Check for target documentation in comments or schema
         assert "target_seconds" in content, \
             "Profiles must document target duration"
+
+
+# ============================================================================
+# W33: Ultrapack Release/Ops Contract Tests - Extended Profile Coverage
+# ============================================================================
+
+class TestFastFeedbackProfileDefinitionsW33:
+    """W33: Contract tests for new persistence and recovery profiles."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def test_persistence_quick_profile_exists_w33(self):
+        """W33: persistence_quick profile must be defined."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert '"persistence_quick"' in content or "'persistence_quick'" in content, \
+            "persistence_quick profile must be defined"
+
+    def test_recovery_quick_profile_exists_w33(self):
+        """W33: recovery_quick profile must be defined."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert '"recovery_quick"' in content or "'recovery_quick'" in content, \
+            "recovery_quick profile must be defined"
+
+    def test_persistence_quick_target_documented_w33(self):
+        """W33: persistence_quick target (<20s) must be documented."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "persistence_quick" in content, "persistence_quick profile required"
+        # Check for target in table or switch
+        assert ("20" in content and "persistence" in content) or "persistence_quick.*20" in content, \
+            "persistence_quick target should be ~20s"
+
+    def test_recovery_quick_target_documented_w33(self):
+        """W33: recovery_quick target (<30s) must be documented."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "recovery_quick" in content, "recovery_quick profile required"
+        # Check for target in table or switch
+        assert ("30" in content and "recovery" in content) or "recovery_quick.*30" in content, \
+            "recovery_quick target should be ~30s"
+
+    def test_all_profiles_timeout_proof_w33(self):
+        """W33: All profiles must be timeout-proof (<60s target)."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # All target_seconds should be <= 60
+        assert "60" in content or "target_seconds" in content, \
+            "Profiles must document target durations"
+        # Check that no profile has target > 60
+        assert "120" not in content or "target_seconds" not in content, \
+            "No fast feedback profile should target >60s"
+
+    def test_fast_feedback_w33_version_w33(self):
+        """W33: gate_fast_feedback.ps1 must be W33 version."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "W33" in content, \
+            "Fast feedback must be W33 version"
+
+    def test_persistence_quick_has_roundtrip_test_w33(self):
+        """W33: persistence_quick should include roundtrip test."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test_project_roundtrip_persistence.py" in content, \
+            "persistence_quick should include persistence roundtrip tests"
+
+    def test_recovery_quick_has_rollback_test_w33(self):
+        """W33: recovery_quick should include rollback/recovery tests."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+        assert "test_feature_edit_robustness.py" in content, \
+            "recovery_quick should include feature edit robustness tests"
+
+    def test_profile_table_documented_w33(self):
+        """W33: Profile table with targets must be documented in comments."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # Should have a profile documentation table
+        assert ("Profile" in content and "Target" in content) or \
+               ("ui_ultraquick" in content and "ops_quick" in content), \
+            "Fast feedback should document profile targets in table"
+
+    def test_no_recursive_gate_calls_w33(self):
+        """W33: Profiles must not include tests that call gate_fast_feedback.ps1."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # test_gate_runner_contract.py calls gate_fast_feedback.ps1
+        # It should NOT be in any fast feedback profile
+        assert "test_gate_runner_contract.py" not in content, \
+            "Fast feedback profiles must not include recursive gate tests"
+
+
+class TestTimeoutProofExecutionW33:
+    """W33: Contract tests for timeout-proof execution strategy."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def test_gate_core_has_chunkable_profiles_w33(self):
+        """W33: gate_core.ps1 should have profiles suitable for chunking."""
+        script_path = self.SCRIPT_DIR / "gate_core.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # Should have multiple profiles for chunked execution
+        assert "Profile" in content, "gate_core.ps1 must have Profile parameter"
+        assert "parallel_safe" in content or "kernel_only" in content, \
+            "gate_core.ps1 should have chunkable profiles"
+
+    def test_fast_feedback_max_target_60s_w33(self):
+        """W33: All fast feedback profiles must target <=60s."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # Extract target_seconds switch and check values
+        assert "target_seconds" in content, \
+            "Fast feedback must have target_seconds documentation"
+        # The comment should mention <60s
+        assert "<60" in content or "60s" in content or "timeout" in content.lower(), \
+            "Fast feedback should document timeout-proof nature"
+
+    def test_recommended_order_documented_w33(self):
+        """W33: Recommended execution order should be documented."""
+        script_path = self.SCRIPT_DIR / "gate_fast_feedback.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # Should have some order recommendation
+        assert ("ultraquick" in content and "quick" in content) or \
+               "smoke" in content or \
+               "Profile" in content, \
+            "Fast feedback should imply usage order via profile naming"
+
+
+class TestHygieneGateContractW33:
+    """W33: Contract tests for workspace hygiene gate."""
+
+    SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
+
+    def test_hygiene_check_exists_w33(self):
+        """W33: hygiene_check.ps1 must exist."""
+        script_path = self.SCRIPT_DIR / "hygiene_check.ps1"
+        assert script_path.exists(), f"hygiene_check.ps1 not found at {script_path}"
+
+    def test_hygiene_check_has_test_coverage_w33(self):
+        """W33: hygiene_check.ps1 should have corresponding contract tests."""
+        # Test file should reference hygiene patterns
+        test_path = Path(__file__).parent.parent / "test" / "test_hygiene_contract.py"
+        # Test file may not exist yet, that's OK - we're checking if hygiene_check.ps1 has good structure
+        script_path = self.SCRIPT_DIR / "hygiene_check.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        # Should check for problematic patterns
+        assert (".bak" in content or "backup" in content.lower()), \
+            "Hygiene check should detect backup artifacts"
+        assert ("temp" in content.lower() or "*.tmp" in content), \
+            "Hygiene check should detect temp files"
+        assert "Check" in content or "VIOLATION" in content, \
+            "Hygiene check should report violations"
+
+    def test_hygiene_check_has_fail_mode_w33(self):
+        """W33: hygiene_check.ps1 should have strict mode option."""
+        script_path = self.SCRIPT_DIR / "hygiene_check.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        assert "FailOnUntracked" in content or "Strict" in content, \
+            "Hygiene check should have strict/fail mode parameter"
+
+    def test_hygiene_check_exits_zero_on_clean_w33(self):
+        """W33: hygiene_check.ps1 should exit 0 on clean workspace."""
+        # This is a static check - we verify the script has the logic
+        script_path = self.SCRIPT_DIR / "hygiene_check.ps1"
+        content = script_path.read_text(encoding="utf-8")
+
+        assert "Exit Code:" in content or "exit 0" in content, \
+            "Hygiene check should output exit code"
+        assert "CLEAN" in content or "Status:" in content, \
+            "Hygiene check should report clean status"

@@ -22,12 +22,14 @@ $ErrorActionPreference = "Continue"
 $TARGET_RUNTIME = 25
 
 # W29: Blocker type constants for consistent classification
+# W31: Added NATIVE_BOOTSTRAP for headless/AV detection
 $BLOCKER_TYPES = @{
     IMPORT_ERROR = "IMPORT_ERROR"
     LOCK_TEMP = "LOCK_TEMP"
     OPENCL_NOISE = "OPENCL_NOISE"
     CLASS_DEFINITION = "CLASS_DEFINITION"
     TIMEOUT = "TIMEOUT"
+    NATIVE_BOOTSTRAP = "NATIVE_BOOTSTRAP"  # W31: Headless/Access-Violation class
     UNKNOWN = "UNKNOWN"
 }
 
@@ -85,7 +87,12 @@ Write-Host "[1/4] Checking GUI module imports..." -ForegroundColor Yellow
 
 $preflightCheckScript = @"
 import sys
+import os
 sys.path.insert(0, '.')
+
+# W31 EPIC A2/C1: Headless-safe bootstrap check
+# Setze headless Modus für den Test
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 # Critical imports for UI bootstrap
 results = []
@@ -101,6 +108,30 @@ except Exception as e:
 try:
     import gui.viewport_pyvista
     results.append('[OK] gui.viewport_pyvista imported')
+
+    # W31: Prüfe ob headless-safe Funktionen vorhanden sind
+    if hasattr(gui.viewport_pyvista, 'is_headless_mode'):
+        results.append('[OK] is_headless_mode() exists')
+    else:
+        results.append('[FAIL] is_headless_mode() missing - W31 EPIC A2 not applied')
+        print('\n'.join(results))
+        sys.exit(1)
+
+    if hasattr(gui.viewport_pyvista, 'create_headless_safe_plotter'):
+        results.append('[OK] create_headless_safe_plotter() exists')
+    else:
+        results.append('[FAIL] create_headless_safe_plotter() missing - W31 EPIC A2 not applied')
+        print('\n'.join(results))
+        sys.exit(1)
+
+    # W31: Prüfe ob MockPlotter für headless vorhanden ist
+    if hasattr(gui.viewport_pyvista, 'MockPlotter'):
+        results.append('[OK] MockPlotter exists (headless fallback)')
+    else:
+        results.append('[FAIL] MockPlotter missing - W31 EPIC A2 not applied')
+        print('\n'.join(results))
+        sys.exit(1)
+
 except Exception as e:
     results.append(f'[FAIL] gui.viewport_pyvista: {e}')
     print('\n'.join(results))
@@ -139,11 +170,16 @@ foreach ($line in $importOutput) {
 }
 
 if ($importExit -ne 0) {
-    # W29: Enhanced blocker classification with consistent output
+    # W29/W31: Enhanced blocker classification with consistent output
     $outputStr = $importOutput -join "`n"
 
+    # W31: Native Bootstrap/Access-Violation detection (NATIVE_BOOTSTRAP = BLOCKED_INFRA)
+    if ($outputStr -match "Access violation|EXCEPTION_ACCESS_VIOLATION|fatal exception.*access violation") {
+        $blockerType = $BLOCKER_TYPES.NATIVE_BOOTSTRAP
+        $rootCause = "Native VTK/OpenGL crash - headless bootstrap not safe"
+        $status = "BLOCKED_INFRA"
     # W29: Infrastructure blocker patterns (BLOCKED_INFRA, exit 0)
-    if ($outputStr -match "NameError.*'tr' not defined") {
+    } elseif ($outputStr -match "NameError.*'tr' not defined") {
         $blockerType = $BLOCKER_TYPES.IMPORT_ERROR
         $rootCause = "gui/widgets/status_bar.py:126 - i18n 'tr' not defined"
         $status = "BLOCKED_INFRA"
@@ -192,10 +228,11 @@ if ($importExit -ne 0) {
     }
 
     # W28: JSON output support
+    # W31: Extended with headless_bootstrap_status and access_violation_detected fields
     if ($JsonOut -and $JsonPath) {
         $jsonData = @{
             schema = "preflight_bootstrap_v1"
-            version = "W29"
+            version = "W31"
             timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             duration_seconds = $duration
             target_seconds = $TARGET_RUNTIME
@@ -203,6 +240,9 @@ if ($importExit -ne 0) {
             blocker_type = $blockerType
             root_cause = $rootCause
             details = $details
+            # W31: New fields for headless bootstrap detection
+            headless_bootstrap_status = if ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP) { "FAIL" } else { "PASS" }
+            access_violation_detected = ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP)
         }
         $jsonText = $jsonData | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
@@ -293,10 +333,11 @@ if ($initExit -ne 0) {
     Write-Host "Exit Code: 1"
 
     # W28: JSON output support
+    # W31: Extended with headless_bootstrap_status and access_violation_detected fields
     if ($JsonOut -and $JsonPath) {
         $jsonData = @{
             schema = "preflight_bootstrap_v1"
-            version = "W29"
+            version = "W31"
             timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             duration_seconds = $duration
             target_seconds = $TARGET_RUNTIME
@@ -304,6 +345,9 @@ if ($initExit -ne 0) {
             blocker_type = $blockerType
             root_cause = $rootCause
             details = $details
+            # W31: New fields for headless bootstrap detection
+            headless_bootstrap_status = if ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP) { "FAIL" } else { "PASS" }
+            access_violation_detected = ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP)
         }
         $jsonText = $jsonData | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
@@ -390,10 +434,11 @@ if ($sketchExit -ne 0) {
     Write-Host "Exit Code: 1"
 
     # W28: JSON output support
+    # W31: Extended with headless_bootstrap_status and access_violation_detected fields
     if ($JsonOut -and $JsonPath) {
         $jsonData = @{
             schema = "preflight_bootstrap_v1"
-            version = "W29"
+            version = "W31"
             timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             duration_seconds = $duration
             target_seconds = $TARGET_RUNTIME
@@ -401,6 +446,9 @@ if ($sketchExit -ne 0) {
             blocker_type = $blockerType
             root_cause = $rootCause
             details = $details
+            # W31: New fields for headless bootstrap detection
+            headless_bootstrap_status = if ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP) { "FAIL" } else { "PASS" }
+            access_violation_detected = ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP)
         }
         $jsonText = $jsonData | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
@@ -479,10 +527,11 @@ if ($viewportExit -ne 0) {
     Write-Host "Exit Code: 1"
 
     # W28: JSON output support
+    # W31: Extended with headless_bootstrap_status and access_violation_detected fields
     if ($JsonOut -and $JsonPath) {
         $jsonData = @{
             schema = "preflight_bootstrap_v1"
-            version = "W29"
+            version = "W31"
             timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             duration_seconds = $duration
             target_seconds = $TARGET_RUNTIME
@@ -490,6 +539,9 @@ if ($viewportExit -ne 0) {
             blocker_type = $blockerType
             root_cause = $rootCause
             details = $details
+            # W31: New fields for headless bootstrap detection
+            headless_bootstrap_status = if ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP) { "FAIL" } else { "PASS" }
+            access_violation_detected = ($blockerType -eq $BLOCKER_TYPES.NATIVE_BOOTSTRAP)
         }
         $jsonText = $jsonData | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($JsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))

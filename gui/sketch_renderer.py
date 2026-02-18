@@ -2609,7 +2609,8 @@ class SketchRendererMixin:
         p.setPen(QPen(QColor(150, 150, 150)))
         p.setFont(QFont("Consolas", 10))
         p.drawText(10, self.height() - 10, f"X: {self.mouse_world.x():.2f}  Y: {self.mouse_world.y():.2f}")
-        p.drawText(self.width() - 100, self.height() - 10, f"Zoom: {self.view_scale:.1f}x")
+        from gui.sketch_editor import format_zoom_label
+        p.drawText(self.width() - 100, self.height() - 10, f"Zoom: {format_zoom_label(self.view_scale)}")
         tool_name = self.current_tool.name.replace('_', ' ').title()
         p.setFont(QFont("Arial", 12, QFont.Bold))
         p.setPen(QPen(self.GEO_SELECTED))

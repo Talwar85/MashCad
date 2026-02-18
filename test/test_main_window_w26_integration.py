@@ -16,6 +16,8 @@ from PySide6.QtTest import QTest
 
 os.environ["QT_OPENGL"] = "software"
 
+# W31 EPIC A2: Headless-safe Import - SketchEditor innerhalb des Mock-Blocks importieren
+# Dies verhindert numpy-Reload-Fehler wenn pyvista/pyvistaqt gemocked sind
 with patch.dict(
     "sys.modules",
     {
@@ -25,10 +27,9 @@ with patch.dict(
     },
 ):
     from gui.main_window import MainWindow
-
-# W28: Additional imports done once per session (not per test) to avoid numpy re-import errors
-import gui.sketch_editor
-from gui.managers.preview_manager import PreviewManager
+    # W31: Fix numpy-Reload-Problem durch Import im Mock-Kontext
+    import gui.sketch_editor
+    from gui.managers.preview_manager import PreviewManager
 
 
 @pytest.fixture(scope="session")

@@ -575,10 +575,57 @@ class FeatureDetailPanel(QFrame):
         self._tnp_quality.show()
         self._tnp_header.show()
 
+    # W30: Recovery Decision Engine - Priorisierte Aktionen pro Error-Code
+    _RECOVERY_DECISIONS = {
+        "tnp_ref_missing": {
+            "primary": "reselect_ref",
+            "secondary": ["edit", "check_deps"],
+            "explanation": tr("Die Referenz-Kante oder Fläche konnte nicht mehr gefunden werden. "
+                            "Dies passiert oft nach Boolean-Operationen wenn die Topologie sich ändert."),
+            "next_step": tr("1. Im Browser '🔄 Referenz neu wählen' klicken\n"
+                          "2. Die betroffene Kante/Fläche im Viewport anklicken\n"
+                          "3. Feature neu berechnen"),
+        },
+        "tnp_ref_mismatch": {
+            "primary": "edit",
+            "secondary": ["rebuild", "check_deps"],
+            "explanation": tr("Die Form der Referenz passt nicht zur erwarteten Geometrie. "
+                            "Der Feature-Vorgänger hat sich möglicherweise geändert."),
+            "next_step": tr("1. Feature-Parameter prüfen und anpassen\n"
+                          "2. Nach Anpassung '🔄 Rebuild' klicken\n"
+                          "3. Bei Persistenz 'Dependencies prüfen'"),
+        },
+        "tnp_ref_drift": {
+            "primary": "accept_drift",
+            "secondary": ["edit"],
+            "explanation": tr("Die Geometrie hat sich leicht verschoben. "
+                            "Dies ist oft harmlos und Ergebnis von numerischer Präzision."),
+            "next_step": tr("1. Wenn das Ergebnis korrekt aussieht: '✓ Drift akzeptieren'\n"
+                          "2. Sonst Feature manuell korrigieren"),
+        },
+        "rebuild_finalize_failed": {
+            "primary": "rebuild",
+            "secondary": ["edit"],
+            "explanation": tr("Der letzte Rebuild-Versuch ist fehlgeschlagen. "
+                            "Das Feature befindet sich in einem inkonsistenten Zustand."),
+            "next_step": tr("1. '🔄 Rebuild' für erneuten Versuch klicken\n"
+                          "2. Bei wiederholtem Fehler Parameter prüfen"),
+        },
+        "ocp_api_unavailable": {
+            "primary": "check_deps",
+            "secondary": ["rebuild"],
+            "explanation": tr("Das CAD-Backend (OpenCASCADE) ist nicht verfügbar. "
+                            "Dies kann temporär oder durch einen vorherigen Fehler verursacht sein."),
+            "next_step": tr("1. 'Dependencies prüfen' um Vorgänger-Features zu validieren\n"
+                          "2. Falls Vorgänger OK: 'Rebuild' erneut versuchen"),
+        },
+    }
+
     def _update_recovery_actions(self, code: str, category: str):
         """
         W26 PAKET F2: Zeigt/versteckt Recovery-Buttons basierend auf Error-Code.
         W29 Closeout: Buttons mit Guards - enabled/disabled mit Tooltips.
+        W30 Product Leap: Priorisierte Aktionen mit Next-Step-Anleitung.
 
         Args:
             code: Error-Code aus status_details
@@ -596,6 +643,9 @@ class FeatureDetailPanel(QFrame):
             return
 
         self._recovery_header.show()
+
+        # W30: Priorisierte Aktion bestimmen
+        decision = self._RECOVERY_DECISIONS.get(code) or self._RECOVERY_DECISIONS.get(category)
 
         # W29: Alle Buttons erst zeigen, dann guards anwenden
         self._btn_reselect_ref.show()
@@ -699,6 +749,118 @@ class FeatureDetailPanel(QFrame):
             self._btn_accept_drift.hide()
         if not self._btn_check_deps.isEnabled():
             self._btn_check_deps.hide()
+
+        # W30: Primäraktion visuell hervorheben
+        primary_action = decision.get("primary") if decision else None
+        button_map = {
+            "reselect_ref": self._btn_reselect_ref,
+            "edit": self._btn_edit_feature,
+            "rebuild": self._btn_rebuild,
+            "accept_drift": self._btn_accept_drift,
+            "check_deps": self._btn_check_deps,
+        }
+
+        # Alle Buttons auf Standard-Stil zurücksetzen
+        for btn_name, btn in button_map.items():
+            if btn.isVisible():
+                self._apply_button_style(btn, is_primary=False, is_secondary=False)
+
+        # Primäraktion hervorheben
+        if primary_action and primary_action in button_map:
+            primary_btn = button_map[primary_action]
+            if primary_btn.isVisible():
+                self._apply_button_style(primary_btn, is_primary=True)
+
+        # Sekundäraktionen markieren
+        secondary_actions = decision.get("secondary", []) if decision else []
+        for action in secondary_actions:
+            if action in button_map and action != primary_action:
+                btn = button_map[action]
+                if btn.isVisible():
+                    self._apply_button_style(btn, is_secondary=True)
+
+        # W30: Next-Step Anleitung anzeigen
+        if decision:
+            explanation = decision.get("explanation", "")
+            next_step = decision.get("next_step", "")
+            if explanation or next_step:
+                # Zeige Next-Step im hint Feld an
+                if next_step:
+                    self._diag_hint.setText(f"📋 {tr('Nächste Schritte')}:\n{next_step}")
+                    self._diag_hint.setStyleSheet(
+                        f"color: {DesignTokens.COLOR_TEXT_PRIMARY.name()}; "
+                        f"font-size: 9px; "
+                        f"background: {DesignTokens.COLOR_BG_ELEVATED.name()}; "
+                        f"padding: 4px; "
+                        f"border-radius: 3px;"
+                    )
+                # Zeige Erklärung im category Feld an
+                if explanation:
+                    self._diag_category.setText(f"ℹ️ {explanation}")
+                    self._diag_category.setStyleSheet(
+                        f"color: {DesignTokens.COLOR_TEXT_SECONDARY.name()}; font-size: 9px;"
+                    )
+                self._diag_hint.show()
+                self._diag_category.show()
+
+    def _apply_button_style(self, button, is_primary=False, is_secondary=False):
+        """
+        W30: Wendet visuelle Stile auf Recovery-Buttons an.
+
+        Args:
+            button: Der QPushButton
+            is_primary: Primäraktion (hervorgehoben)
+            is_secondary: Sekundäraktion (subtil markiert)
+        """
+        if is_primary:
+            # Primäraktion: Fett, heller, mit Akzent-Farbe
+            button.setStyleSheet(
+                "QPushButton { "
+                "background: #3182ce; "
+                "color: white; "
+                "border: 2px solid #63b3ed; "
+                "border-radius: 4px; "
+                "font-size: 11px; "
+                "font-weight: bold; "
+                "padding: 3px 10px; "
+                "} "
+                "QPushButton:hover { "
+                "background: #2c5282; "
+                "border: 2px solid #4299e1; "
+                "}"
+            )
+        elif is_secondary:
+            # Sekundäraktion: Subtil markiert
+            button.setStyleSheet(
+                "QPushButton { "
+                "background: #2d3748; "
+                "color: #cbd5e0; "
+                "border: 1px solid #4a5568; "
+                "border-radius: 3px; "
+                "font-size: 10px; "
+                "padding: 2px 8px; "
+                "} "
+                "QPushButton:hover { "
+                "background: #4a5568; "
+                "color: white; "
+                "}"
+            )
+        else:
+            # Standard-Stil
+            button.setStyleSheet(
+                "QPushButton { "
+                "background: #2d3748; "
+                "color: #90cdf4; "
+                "border: 1px solid #4299e1; "
+                "border-radius: 3px; "
+                "font-size: 10px; "
+                "padding: 2px 8px; "
+                "} "
+                "QPushButton:hover { "
+                "background: #3182ce; "
+                "color: white; "
+                "}"
+            )
 
     def _on_recovery_action(self, action: str):
         """

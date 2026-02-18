@@ -702,6 +702,11 @@ class MainWindow(QMainWindow):
         self.sketch_editor.sketched_changed.connect(self._on_sketch_changed_refresh_viewport)
         self.sketch_editor.solver_finished_signal.connect(self._on_solver_dof_updated)
         
+        # W32: Live zoom badge
+        self.sketch_editor.zoom_changed.connect(self.mashcad_status_bar.set_zoom)
+        self.mashcad_status_bar.zoom_preset_requested.connect(self.sketch_editor.set_zoom_to)
+        self.mashcad_status_bar.zoom_fit_requested.connect(self.sketch_editor._fit_view)
+        
         # W26 FIX: Projection-Preview Signals
         self.sketch_editor.projection_preview_requested.connect(self._on_projection_preview_requested)
         self.sketch_editor.projection_preview_cleared.connect(self._on_projection_preview_cleared)
@@ -3085,6 +3090,7 @@ class MainWindow(QMainWindow):
                 self.transform_toolbar.setVisible(True)
             if hasattr(self, 'mashcad_status_bar'):
                 self.mashcad_status_bar.set_mode("3D")
+                self.mashcad_status_bar.set_zoom(5.0)  # W32: Reset zoom badge in 3D (default view_scale)
         else:
             if hasattr(self, 'tool_stack'):
                 self.tool_stack.setCurrentIndex(1)

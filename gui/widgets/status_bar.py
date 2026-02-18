@@ -3,14 +3,17 @@ MashCad - Status Bar Widget
 Moderne Statusleiste nach Figma-Design mit Koordinaten, Tool-Info, Grid und Zoom.
 """
 
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QMenu
+from PySide6.QtCore import Qt, Signal
 from gui.design_tokens import DesignTokens
 from i18n import tr
 
 
 class MashCadStatusBar(QWidget):
     """Statusleiste unten im Hauptfenster."""
+
+    zoom_preset_requested = Signal(float)  # W32: Emitted when user picks a zoom preset (view_scale)
+    zoom_fit_requested = Signal()  # W32: Emitted when user picks "Fit"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,13 +101,17 @@ class MashCadStatusBar(QWidget):
         self._dof_separator.setVisible(False)
         layout.addWidget(self._dof_separator)
 
+        self._is_sketch_mode = False  # W32: Track mode for zoom presets
         self.zoom_badge = QLabel("100%")
         self.zoom_badge.setStyleSheet(f"""
             background: {elevated};
             border-radius: 4px;
             padding: 2px 8px;
             color: {txt};
+            font-family: 'Consolas', monospace;
         """)
+        self.zoom_badge.setCursor(Qt.PointingHandCursor)
+        self.zoom_badge.mousePressEvent = self._on_zoom_badge_clicked
         layout.addWidget(self.zoom_badge)
 
         layout.addWidget(self._create_separator())
@@ -177,6 +184,7 @@ class MashCadStatusBar(QWidget):
     def set_mode(self, mode: str):
         """Setzt den aktuellen Modus (2D/3D)."""
         self.mode_label.setText(f"Modus: {mode}")
+        self._is_sketch_mode = (mode == "2D")
 
     def set_status(self, status: str, is_error: bool = False, status_class: str = "", severity: str = ""):
         """
@@ -213,9 +221,10 @@ class MashCadStatusBar(QWidget):
         """Setzt die Grid-Anzeige."""
         self.grid_label.setText(f"Grid: {grid_size:.0f}mm")
 
-    def set_zoom(self, zoom_percent: int):
-        """Setzt die Zoom-Anzeige."""
-        self.zoom_badge.setText(f"{zoom_percent}%")
+    def set_zoom(self, view_scale: float):
+        """Setzt die Zoom-Anzeige mit view_scale (Single Source of Truth)."""
+        from gui.sketch_editor import format_zoom_label
+        self.zoom_badge.setText(format_zoom_label(view_scale))
 
     def update_fps(self, fps: float):
         """Aktualisiert die FPS-Anzeige mit Farbcodierung."""
@@ -289,3 +298,23 @@ class MashCadStatusBar(QWidget):
     def set_strict_mode(self, active: bool):
         """Enable/Disable Strict Mode badge."""
         self.strict_badge.setVisible(active)
+
+    def _build_zoom_menu(self):
+        """W32: Build zoom presets menu. Separated for testability."""
+        from gui.sketch_editor import format_zoom_label
+        menu = QMenu(self)
+        for scale in [2.5, 5.0, 10.0]:
+            label = format_zoom_label(scale)
+            action = menu.addAction(label)
+            action.triggered.connect(lambda checked=False, s=scale: self.zoom_preset_requested.emit(s))
+        menu.addSeparator()
+        fit_action = menu.addAction("Fit")
+        fit_action.triggered.connect(self.zoom_fit_requested.emit)
+        return menu
+
+    def _on_zoom_badge_clicked(self, event):
+        """W32: Show zoom presets context menu on badge click."""
+        if not self._is_sketch_mode:
+            return
+        menu = self._build_zoom_menu()
+        menu.exec(self.zoom_badge.mapToGlobal(event.pos()))

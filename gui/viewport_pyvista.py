@@ -1,8 +1,14 @@
 """
 MashCad - PyVista 3D Viewport
 V3.0: Modular mit Mixins für bessere Wartbarkeit
+
+W31: Headless-safe Bootstrap - EPIC A2 Implementation
+- Erkennung von headless Modus via Umgebungsvariablen
+- Mock-Implementierung für QtInteractor in Tests
+- Verhindert Access Violations bei QT_QPA_PLATFORM='offscreen'
 """
 
+import os
 import math
 import numpy as np
 from typing import Optional, List, Tuple, Dict, Any
@@ -10,6 +16,179 @@ import uuid
 from loguru import logger
 from gui.geometry_detector import GeometryDetector
 import time
+
+
+# =============================================================================
+# W31 EPIC A2: Headless Mode Detection & Mock Infrastructure
+# =============================================================================
+
+def is_headless_mode() -> bool:
+    """
+    Erkennung von headless/headless-safe Modus.
+
+    Returns:
+        True wenn in einem headless Test-Umfeld (QT_QPA_PLATFORM='offscreen')
+    """
+    return os.environ.get('QT_QPA_PLATFORM') == 'offscreen' or \
+           os.environ.get('PYTEST_CURRENT_TEST') is not None or \
+           os.environ.get('LITECAD_HEADLESS') == '1'
+
+
+class MockInteractorWidget:
+    """
+    Mock-Implementierung von QtInteractor für headless Tests.
+
+    Stellt die gleiche API wie QtInteractor.interactor zur Verfügung,
+    ohne echte VTK/OpenGL Ressourcen zu erstellen.
+    """
+
+    def __init__(self, parent=None):
+        self._parent = parent
+        self._style_sheet = ""
+        self._mouse_tracking = False
+
+    def setStyleSheet(self, style):
+        self._style_sheet = style
+
+    def setMouseTracking(self, enabled):
+        self._mouse_tracking = enabled
+
+    def installEventFilter(self, filter_obj):
+        pass  # No-op in headless
+
+    def show(self):
+        pass
+
+    def hide(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class MockPlotter:
+    """
+    Mock-Implementierung von QtInteractor (Plotter) für headless Tests.
+
+    Stellt die gleiche API wie der echte Plotter zur Verfügung,
+    aber führt keine echten VTK-Operationen aus.
+    """
+
+    def __init__(self, parent=None):
+        self.interactor = MockInteractorWidget(parent)
+        self._iren = None
+        self._ren_win = None
+        self._actors = {}
+        self._background = '#1e1e1e'
+        self._camera_position = (1, 1, 1)
+        self._focal_point = (0, 0, 0)
+        self._view_up = (0, 0, 1)
+        self._is_closed = False
+
+    # Attribute-Emulation für hasattr() Checks
+    @property
+    def iren(self):
+        return self._iren
+
+    @property
+    def ren_win(self):
+        return self._ren_win
+
+    def set_background(self, color, top=None):
+        self._background = color
+
+    def enable_trackball_style(self):
+        pass
+
+    def add_key_event(self, key, callback):
+        pass
+
+    def enable_anti_aliasing(self, method):
+        pass
+
+    def hide_axes(self):
+        pass
+
+    def add_mesh(self, mesh, **kwargs):
+        # Speichere Actor für spätere Referenz
+        name = kwargs.get('name', f'mesh_{len(self._actors)}')
+        self._actors[name] = (mesh, kwargs)
+        return name
+
+    def remove_actor(self, actor):
+        """
+        Entfernt einen Actor aus dem Mock-Registry.
+
+        Akzeptiert sowohl den Actor-Namen (str) als auch die gespeicherte
+        Mesh-Referenz aus add_mesh().
+        """
+        if actor is None:
+            return
+
+        if isinstance(actor, str):
+            self._actors.pop(actor, None)
+            return
+
+        keys_to_remove = []
+        for key, value in self._actors.items():
+            mesh_obj, _kwargs = value
+            if mesh_obj is actor:
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            self._actors.pop(key, None)
+
+    def clear(self):
+        self._actors.clear()
+
+    def view_isometric(self):
+        pass
+
+    def reset_camera(self):
+        pass
+
+    def render(self):
+        pass
+
+    def close(self):
+        self._is_closed = True
+
+    def add_text(self, *args, **kwargs):
+        return None
+
+    def add_camera_orientation_widget(self):
+        return None
+
+    def set_position(self, position):
+        self._camera_position = position
+
+    def set_focus(self, focal_point):
+        self._focal_point = focal_point
+
+    def set_viewup(self, view_up):
+        self._view_up = view_up
+
+
+def create_headless_safe_plotter(parent=None):
+    """
+    Erstellt einen Plotter (echt oder Mock) basierend auf Umgebung.
+
+    Args:
+        parent: Parent Widget
+
+    Returns:
+        QtInteractor oder MockPlotter
+    """
+    if is_headless_mode():
+        logger.debug("[W31-HEADLESS] Using MockPlotter for headless mode")
+        return MockPlotter(parent)
+    else:
+        from pyvistaqt import QtInteractor
+        return QtInteractor(parent)
+
+
+# End of W31 EPIC A2 Headless Infrastructure
+# =============================================================================
 
 # Mixins importieren
 from gui.viewport.extrude_mixin import ExtrudeMixin
@@ -572,11 +751,15 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     
     def _setup_plotter(self):
         self._drag_screen_vector = np.array([1.0, 0.0])
-        
-        # QtInteractor erstellen
-        self.plotter = QtInteractor(self)
+
+        # W31 EPIC A2: Headless-safe QtInteractor Erstellung
+        # Verwendet MockPlotter in headless Tests, echten QtInteractor sonst
+        self.plotter = create_headless_safe_plotter(self)
         self.plotter.interactor.setStyleSheet(f"background-color: {DesignTokens.COLOR_BG_PANEL.name()};")
-        self.main_layout.addWidget(self.plotter.interactor)
+
+        # Layout nur hinzufügen wenn wir nicht im Mock-Modus sind
+        if not is_headless_mode():
+            self.main_layout.addWidget(self.plotter.interactor)
         
         # --- PERFORMANCE & FIX START ---
         # Hier lag der Absturz. Wir machen das jetzt robust für alle Versionen.
@@ -1033,22 +1216,32 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.point_to_point_mode = False
         self.point_to_point_start = None
         self.point_to_point_body_id = None
-        self.setCursor(Qt.ArrowCursor)
+        try:
+            self.setCursor(Qt.ArrowCursor)
+        except Exception:
+            pass
 
         # Phase 3: Performance - Marker cleanup
-        if is_enabled("reuse_hover_markers"):
-            # OPTIMIZED: Actors bleiben cached, nur verstecken
-            if self._p2p_hover_marker_actor:
-                self._p2p_hover_marker_actor.SetVisibility(False)
-            if self._p2p_start_marker_actor:
-                self._p2p_start_marker_actor.SetVisibility(False)
-        else:
-            # LEGACY: Komplett entfernen
-            self.plotter.remove_actor("p2p_hover_marker", render=False)
-            self.plotter.remove_actor("p2p_start_marker", render=False)
-        self.plotter.remove_actor("p2p_line", render=True)
+        try:
+            if is_enabled("reuse_hover_markers"):
+                # OPTIMIZED: Actors bleiben cached, nur verstecken
+                if hasattr(self, '_p2p_hover_marker_actor') and self._p2p_hover_marker_actor:
+                    self._p2p_hover_marker_actor.SetVisibility(False)
+                if hasattr(self, '_p2p_start_marker_actor') and self._p2p_start_marker_actor:
+                    self._p2p_start_marker_actor.SetVisibility(False)
+            else:
+                # LEGACY: Komplett entfernen
+                if hasattr(self, 'plotter') and self.plotter:
+                    self.plotter.remove_actor("p2p_hover_marker", render=False)
+                    self.plotter.remove_actor("p2p_start_marker", render=False)
+                    self.plotter.remove_actor("p2p_line", render=True)
+        except Exception as e:
+            logger.debug(f"[viewport] P2P cleanup warning: {e}")
         logger.info("Point-to-Point Mode abgebrochen")
-        self.point_to_point_cancelled.emit()
+        try:
+            self.point_to_point_cancelled.emit()
+        except Exception:
+            pass
 
     def highlight_edge(self, p1, p2):
         """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""

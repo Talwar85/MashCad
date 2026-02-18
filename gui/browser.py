@@ -1388,26 +1388,143 @@ class ProjectBrowser(QFrame):
 
             # W29: Batch-Aktionen nur bei Multi-Select ohne gemischte Typen
             if selected_count > 1 and has_features and not has_bodies:
+                # W30: Guard gegen Hidden-Only-Selection
+                hidden_count = sum(
+                    1 for i in selected_items
+                    if self._is_item_hidden_or_invalid(i)
+                )
+
                 menu.addSeparator()
                 batch_menu = menu.addMenu(tr("📦 Batch"))
+
+                # W30: Recover & Focus Aktion (Primary Batch Action)
+                problem_count = sum(
+                    1 for i in selected_items
+                    if self.tree._is_problem_item(i)
+                )
+
+                if problem_count > 0:
+                    batch_menu.addAction(tr(f"🔧 Recover & Focus ({problem_count})"), self.recover_and_focus_selected)
 
                 # Nur Focus-Aktion wenn alle Features sind
                 batch_menu.addAction(tr("Focus Features"), self.batch_focus_selected_features)
 
                 # Recovery-Aktionen wenn Problem-Features selektiert
-                problem_count = sum(
-                    1 for i in selected_items
-                    if self.tree._is_problem_item(i)
-                )
                 if problem_count > 0:
                     batch_menu.addAction(tr(f"Retry Rebuild ({problem_count})"), self.batch_retry_selected)
-                    batch_menu.addAction(tr(f"Open Diagnostics ({problem_count})"), self.batch_open_selected_diagnostics)
+                    batch_menu.addAction(tr(f"Open Diagnostics ({problem_count})"), self.batch_diagnostics_selected_features)
+
+                # W30: Warnung bei Hidden-Only-Selection
+                if hidden_count == selected_count:
+                    warning = batch_menu.addAction(tr("⚠️ Alle Items versteckt"))
+                    warning.setEnabled(False)
+                    warning.setToolTip(tr("Einige selektierte Items sind aktuell versteckt"))
 
             menu.addSeparator()
             menu.addAction(tr("Delete"), lambda: self._del_feature(feature, body))
 
         menu.exec(self.tree.mapToGlobal(pos))
-    
+
+    def _is_item_hidden_or_invalid(self, item: QTreeWidgetItem) -> bool:
+        """
+        W30: Prüft ob ein Item versteckt oder ungültig ist.
+
+        Args:
+            item: Das zu prüfende Tree-Item
+
+        Returns:
+            True wenn Item versteckt oder Body/Feature ungültig ist
+        """
+        if item.isHidden():
+            return True
+
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return False
+
+        item_type = data[0]
+
+        # Prüfe ob Body versteckt ist
+        if item_type == 'body':
+            body = data[1]
+            if body and hasattr(body, 'id'):
+                return not self.body_visibility.get(body.id, True)
+
+        # Prüfe ob Feature in einem versteckten Body ist
+        elif item_type == 'feature':
+            body = data[2] if len(data) > 2 else None
+            if body and hasattr(body, 'id'):
+                return not self.body_visibility.get(body.id, True)
+
+        return False
+
+    def _validate_batch_selection(self) -> dict:
+        """
+        W30: Validiert die aktuelle Selektion für Batch-Aktionen.
+
+        Returns:
+            dict mit keys: valid, is_mixed, is_hidden_only, has_invalid_refs,
+                          error_message
+        """
+        selected_items = self.tree.selectedItems()
+        if not selected_items:
+            return {
+                "valid": False,
+                "error_message": tr("Keine Items ausgewählt")
+            }
+
+        # Prüfe auf gemischte Selektion
+        has_features = any(
+            i.data(0, Qt.UserRole) and i.data(0, Qt.UserRole)[0] == 'feature'
+            for i in selected_items
+        )
+        has_bodies = any(
+            i.data(0, Qt.UserRole) and i.data(0, Qt.UserRole)[0] == 'body'
+            for i in selected_items
+        )
+        has_sketches = any(
+            i.data(0, Qt.UserRole) and i.data(0, Qt.UserRole)[0] == 'sketch'
+            for i in selected_items
+        )
+
+        is_mixed = sum([has_features, has_bodies, has_sketches]) > 1
+
+        # Prüfe auf Hidden-Only-Selection
+        hidden_count = sum(1 for i in selected_items if self._is_item_hidden_or_invalid(i))
+        is_hidden_only = hidden_count == len(selected_items)
+
+        # Prüfe auf ungültige Referenzen
+        has_invalid_refs = False
+        for item in selected_items:
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'feature':
+                feature = data[1]
+                if feature and hasattr(feature, 'status'):
+                    details = _safe_details(getattr(feature, 'status_details', None))
+                    code = details.get('code', '')
+                    if code in ('tnp_ref_missing', 'tnp_ref_mismatch'):
+                        has_invalid_refs = True
+                        break
+
+        if is_mixed:
+            return {
+                "valid": False,
+                "is_mixed": True,
+                "error_message": tr("Gemischte Selektion (Features, Bodies, Sketches) nicht unterstützt")
+            }
+
+        if is_hidden_only:
+            return {
+                "valid": False,
+                "is_hidden_only": True,
+                "error_message": tr("Alle ausgewählten Items sind versteckt")
+            }
+
+        return {
+            "valid": True,
+            "has_invalid_refs": has_invalid_refs,
+        }
+
     def _toggle_vis(self, obj, type_):
         if type_ == 'sketch':
             self.sketch_visibility[obj.id] = not self.sketch_visibility.get(obj.id, True)
@@ -1842,6 +1959,166 @@ class ProjectBrowser(QFrame):
         if selected_features:
             self.batch_focus_features.emit(selected_features)
             logger.debug(f"[BROWSER] Batch focus {len(selected_features)} Features")
+
+    # =========================================================================
+    # W30 PRODUCT LEAP: BATCH RECOVERY ORCHESTRATION
+    # =========================================================================
+
+    def batch_recover_selected_features(self):
+        """
+        W30: Batch-Recovery-Orchestrierung für ausgewählte Problem-Features.
+
+        Führt eine intelligente Recovery-Aktionssequenz aus:
+        1. Sammle alle Problem-Features und ihre Bodies
+        2. Mache Bodies sichtbar
+        3. Führe Recovery-Aktion aus (je nach Error-Code)
+        4. Bereinige Selektion nach Aktion
+        """
+        problem_features = self.get_selected_problem_features()
+
+        if not problem_features:
+            logger.debug("[BROWSER] Batch Recovery: Keine Problem-Features ausgewählt")
+            return
+
+        # W30: Bodies sichtbar machen (Unhide)
+        affected_bodies = set()
+        for feature, body in problem_features:
+            if body:
+                affected_bodies.add(body)
+
+        # Alle betroffenen Bodies sichtbar machen
+        for body in affected_bodies:
+            self.body_visibility[body.id] = True
+
+        # Batch-Rebuild-Signal emittieren
+        self.batch_retry_rebuild.emit(problem_features)
+
+        logger.info(f"[BROWSER] Batch Recovery: {len(problem_features)} Features in {len(affected_bodies)} Bodies")
+
+        # W30: Selektion nach Aktion bereinigen (stale state vermeiden)
+        self._clear_selection_after_batch_action()
+
+    def _clear_selection_after_batch_action(self):
+        """
+        W30: Bereinigt die Selektion nach Batch-Aktionen.
+
+        Verhindert stale-selection States nach Batch-Operationen.
+        """
+        self.tree.clearSelection()
+        logger.debug("[BROWSER] Selektion nach Batch-Aktion bereinigt")
+
+    def batch_diagnostics_selected_features(self):
+        """
+        W30: Batch-Diagnostics-Orchestrierung.
+
+        Öffnet Diagnostics-Panel für die ersten 3 Problem-Features
+        und zeigt eine Zusammenfassung an.
+        """
+        problem_features = self.get_selected_problem_features()
+
+        if not problem_features:
+            logger.debug("[BROWSER] Batch Diagnostics: Keine Problem-Features ausgewählt")
+            return
+
+        # W30: Statistik sammeln
+        error_types = {}
+        for feature, body in problem_features:
+            details = _safe_details(getattr(feature, "status_details", None))
+            code = details.get("code", "unknown")
+            error_types[code] = error_types.get(code, 0) + 1
+
+        # Zusammenfassung loggen
+        summary = ", ".join([f"{code}: {count}" for code, count in error_types.items()])
+        logger.info(f"[BROWSER] Batch Diagnostics: {len(problem_features)} Features ({summary})")
+
+        # Diagnostics-Signal für erstes Feature emittieren
+        self.batch_open_diagnostics.emit(problem_features)
+
+        # W30: Selektion bereinigen
+        self._clear_selection_after_batch_action()
+
+    def get_batch_selection_summary(self) -> dict:
+        """
+        W30: Gibt eine Zusammenfassung der aktuellen Selektion zurück.
+
+        Returns:
+            dict mit keys: total_features, problem_features, bodies,
+                          hidden_bodies, error_types
+        """
+        selected_features = self.get_selected_features()
+        problem_features = self.get_selected_problem_features()
+
+        bodies = set()
+        hidden_bodies = set()
+        error_types = {}
+
+        for feature, body in problem_features:
+            if body:
+                bodies.add(body)
+                if not self.body_visibility.get(body.id, True):
+                    hidden_bodies.add(body)
+
+            details = _safe_details(getattr(feature, "status_details", None))
+            code = details.get("code", "unknown")
+            error_types[code] = error_types.get(code, 0) + 1
+
+        return {
+            "total_features": len(selected_features),
+            "problem_features": len(problem_features),
+            "bodies": len(bodies),
+            "hidden_bodies": len(hidden_bodies),
+            "error_types": error_types,
+        }
+
+    def recover_and_focus_selected(self):
+        """
+        W30: Workflow-Leap 'Recover & Focus' - Kombinierte Aktion.
+
+        Führt einen vollständigen Recovery-Workflow aus:
+        1. Problematische Features sammeln
+        2. Betroffene Bodies sichtbar machen
+        3. Viewport-Fokus auf Bodies
+        4. Detailpanel öffnen mit erstem Problem-Feature
+
+        Diese Aktion ist stabil bei leeren/inkonsistenten Inputs.
+        """
+        problem_features = self.get_selected_problem_features()
+
+        if not problem_features:
+            logger.debug("[BROWSER] Recover & Focus: Keine Problem-Features ausgewählt")
+            return
+
+        # W30: Guards gegen leere/inkonsistente Inputs
+        if not self.document:
+            logger.warning("[BROWSER] Recover & Focus: Kein Dokument geladen")
+            return
+
+        # 1. Bodies sammeln und sichtbar machen
+        affected_bodies = set()
+        for feature, body in problem_features:
+            if body and hasattr(body, 'id'):
+                affected_bodies.add(body)
+                self.body_visibility[body.id] = True
+
+        if not affected_bodies:
+            logger.warning("[BROWSER] Recover & Focus: Keine gültigen Bodies gefunden")
+            return
+
+        # 2. Viewport-Fokus emittieren
+        feature_body_pairs = [(f, b) for f, b in problem_features if b]
+        if feature_body_pairs:
+            self.batch_focus_features.emit(feature_body_pairs)
+
+        # 3. Detailpanel öffnen mit erstem Problem-Feature
+        first_feature, first_body = problem_features[0]
+        if first_feature and first_body:
+            self.feature_selected.emit(("feature", first_feature, first_body))
+
+        # 4. Refresh für Sichtbarkeit
+        self.refresh()
+        self.visibility_changed.emit()
+
+        logger.info(f"[BROWSER] Recover & Focus: {len(problem_features)} Features in {len(affected_bodies)} Bodies")
 
     def show_rollback_bar(self, body):
         """Show rollback slider for a body with features."""

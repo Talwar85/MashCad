@@ -147,6 +147,37 @@ def _solid_metrics(solid):
         return None
 
 
+def _canonicalize_indices(indices):
+    """
+    Normalisiert Topologie-Indizes fuer Determinismus.
+
+    EPIC X2: Stellt sicher dass edge_indices, face_indices etc.
+    immer sortiert und entdupliziert sind. Dies ist kritisch fuer:
+    - Rebuild-Idempotenz
+    - Save/Load Konsistenz
+    - TNP Reference Stability
+
+    Args:
+        indices: Liste von Indizes (int, float, oder andere)
+
+    Returns:
+        Sorted list of unique non-negative integers
+    """
+    if not indices:
+        return []
+
+    canonical = set()
+    for idx in indices:
+        try:
+            i = int(idx)
+            if i >= 0:
+                canonical.add(i)
+        except (ValueError, TypeError):
+            continue
+
+    return sorted(canonical)
+
+
 # ==================== DATENSTRUKTUREN ====================
 
 # Refactored: Feature classes moved to modeling/features/ and modeling/construction.py
