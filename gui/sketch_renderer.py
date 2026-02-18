@@ -2777,51 +2777,61 @@ class SketchRendererMixin:
 
     def _calc_arc_3point(self, p1, p2, p3):
         """
-        Berechnet einen Arc durch 3 Punkte (Start, Punkt auf Bogen, End).
+        Berechnet einen Arc durch 3 Punkte: Start, Punkt-auf-Bogen, Ende.
         Kopie aus sketch_handlers.py für die Preview-Funktionalität.
-        
-        Returns:
-            tuple: (cx, cy, radius, start_angle, end_angle) oder None
+        Der Bogen verläuft von p1 nach p3 und enthält p2.
         """
-        ax, ay = p1.x(), p1.y()
-        bx, by = p2.x(), p2.y()
-        cx, cy = p3.x(), p3.y()
+        import math
+        
+        # p1 = Start, p2 = Punkt auf Bogen, p3 = Ende
+        sx, sy = p1.x(), p1.y()
+        mx, my = p2.x(), p2.y()
+        ex, ey = p3.x(), p3.y()
 
-        # Umkreiszentrum der 3 Punkte
-        d = 2*(ax*(by-cy) + bx*(cy-ay) + cx*(ay-by))
+        # Berechne Umkreis durch 3 Punkte
+        d = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
         if abs(d) < 1e-10:
             return None
         
-        ux = ((ax*ax+ay*ay)*(by-cy) + (bx*bx+by*by)*(cy-ay) + (cx*cx+cy*cy)*(ay-by)) / d
-        uy = ((ax*ax+ay*ay)*(cx-bx) + (bx*bx+by*by)*(ax-cx) + (cx*cx+cy*cy)*(bx-ax)) / d
-        r = math.hypot(ax-ux, ay-uy)
+        ux = ((sx**2 + sy**2) * (my - ey) + (mx**2 + my**2) * (ey - sy) + (ex**2 + ey**2) * (sy - my)) / d
+        uy = ((sx**2 + sy**2) * (ex - mx) + (mx**2 + my**2) * (sx - ex) + (ex**2 + ey**2) * (mx - sx)) / d
+        r = math.hypot(sx - ux, sy - uy)
         
-        if r <= 1e-9:
+        if r < 1e-9:
             return None
 
-        # Winkel der drei Punkte relativ zum Zentrum
-        angle1 = math.atan2(ay-uy, ax-ux)
-        angle2 = math.atan2(by-uy, bx-ux)
-        angle3 = math.atan2(cy-uy, cx-ux)
+        # Winkel der Punkte vom Zentrum aus
+        start_angle = math.degrees(math.atan2(sy - uy, sx - ux))
+        mid_angle = math.degrees(math.atan2(my - uy, mx - ux))
+        end_angle = math.degrees(math.atan2(ey - uy, ex - ux))
 
-        def norm360(rad):
-            deg = math.degrees(rad) % 360.0
-            return deg + 360.0 if deg < 0.0 else deg
+        # Normalisiere alle Winkel auf [0, 360)
+        def norm(a):
+            while a < 0:
+                a += 360
+            while a >= 360:
+                a -= 360
+            return a
 
-        start = norm360(angle1)
-        mid = norm360(angle2)
-        end = norm360(angle3)
+        a1 = norm(start_angle)
+        a2 = norm(mid_angle)
+        a3 = norm(end_angle)
 
-        # CCW-Spannen von start aus
-        span_start_to_end_ccw = (end - start) % 360.0
-        span_start_to_mid_ccw = (mid - start) % 360.0
+        # Berechne beide möglichen Bögen (CCW von a1 nach a3)
+        ccw_span = (a3 - a1) % 360
+        cw_span = -((a1 - a3) % 360)
 
-        if span_start_to_mid_ccw <= span_start_to_end_ccw:
-            # p2 liegt auf dem CCW-Weg start -> end
-            resolved_end = start + span_start_to_end_ccw
+        # Prüfe welcher Bogen a2 enthält
+        def angle_between(target, start, span):
+            """Prüft ob target auf dem Bogen von start mit span liegt"""
+            if span > 0:  # CCW
+                return (target - start) % 360 <= span
+            else:  # CW
+                return (start - target) % 360 <= abs(span)
+
+        if angle_between(a2, a1, ccw_span):
+            # a2 liegt auf CCW-Bogen
+            return (ux, uy, r, start_angle, start_angle + ccw_span)
         else:
-            # p2 liegt auf dem CW-Weg; end unter start ziehen
-            span_start_to_end_cw = -((start - end) % 360.0)
-            resolved_end = start + span_start_to_end_cw
-
-        return (ux, uy, r, start, resolved_end)
+            # a2 liegt auf CW-Bogen
+            return (ux, uy, r, start_angle, start_angle + cw_span)
