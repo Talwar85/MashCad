@@ -554,11 +554,13 @@ class SketchHandlersMixin:
                 line = self.sketch.add_line(start.x(), start.y(), pos.x(), pos.y(), construction=self.construction_mode)
 
                 # --- A. Auto-Constraints: Horizontal / Vertikal ---
-                # Wir nutzen hier deine existierenden Methoden add_horizontal/vertical
+                # DEAKTIVIERT: H/V-Constraints werden nicht mehr automatisch permanent gesetzt.
+                # Sie werden nur als Inference/Preview angezeigt (Glyph).
+                # Permanente H/V-Constraints nur bei explizitem User-Wunsch (Shift-Lock, etc.)
+                # TODO: H/V als Preview/Glyph implementieren, nicht als permanente Constraints
                 h_tolerance = self._adaptive_world_tolerance(scale=0.35, min_world=0.05, max_world=2.0)
-                
-                # Nur prüfen, wenn wir nicht explizit an einer Kante snappen (um Konflikte zu vermeiden)
-                # UND nur für das erste Segment, damit Folge-Segmente keine vorherige Geometrie verdrehen.
+
+                # Nur prüfen für Inference-Anzeige, nicht für permanente Constraints
                 if (not is_chained_segment) and snap_type not in [
                     SnapType.EDGE,
                     SnapType.INTERSECTION,
@@ -571,24 +573,31 @@ class SketchHandlersMixin:
                     SnapType.PARALLEL,
                 ]:
                     if abs(dy) < h_tolerance and abs(dx) > h_tolerance:
-                        if hasattr(self.sketch, 'add_horizontal'):
-                            self.sketch.add_horizontal(line)
-                            self.status_message.emit("Auto: Horizontal")
-                            
+                        # H/V nur als Status-Message, nicht als permanenter Constraint
+                        self.status_message.emit("Inference: Horizontal")
+
                     elif abs(dx) < h_tolerance and abs(dy) > h_tolerance:
-                        if hasattr(self.sketch, 'add_vertical'):
-                            self.sketch.add_vertical(line)
-                            self.status_message.emit("Auto: Vertical")
+                        # H/V nur als Status-Message, nicht als permanenter Constraint
+                        self.status_message.emit("Inference: Vertical")
 
                 # --- B. Auto-Constraints: Verbindungen (Das neue Snapping) ---
-                # Behandelt sowohl START als auch END der neuen Linie
+                # DEAKTIVIERT: Auto-Snap-Constraints werden nicht mehr automatisch erstellt.
+                # COINCIDENT und POINT_ON_LINE Constraints haben bewirkt, dass bestehende
+                # Geometrie "mitgezogen" wird, was nicht gewünscht ist.
+                #
+                # WICHTIGE REGEL: Auto-Constraints dürfen nur die neu erzeugte Geometrie beeinflussen.
+                # Bereits vorhandene Geometrie darf nicht "mitspringen".
+                #
+                # TODO: Auto-Constraints nur erstellen, wenn:
+                # - User explizit snap willt (z.B. mit Modifier-Key)
+                # - Solver-Konflikt-Prüfung zeigt, dass bestehende Geometrie nicht beeinflusst wird
 
-                # B.1: START-Punkt Constraints (aus gespeicherter Snap-Info)
+                # Polyline-Fortsetzung: Startpunkt des neuen Segments am Ende des vorherigen
+                # Das wird durch die Koordinaten gesetzt, kein separater Constraint nötig
                 start_snap_type, start_snap_entity = getattr(self, '_line_start_snap', (SnapType.NONE, None))
-                self._add_point_constraint(line.start, start, start_snap_type, start_snap_entity, line)
 
-                # B.2: END-Punkt Constraints (aktueller Snap)
-                self._add_point_constraint(line.end, pos, snap_type, snap_entity, line)
+                # Keine automatischen COINCIDENT/POINT_ON_LINE Constraints mehr
+                # User kann explizite Constraints über Constraint-Tools hinzufügen
 
                 # --- C. Abschluss ---
                 self._solve_async() 
