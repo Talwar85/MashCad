@@ -1582,19 +1582,22 @@ class SketchRendererMixin:
                 if arc_data:
                     cx, cy, r, start_angle, end_angle = arc_data
                     
-                    # Draw arc as polyline (more accurate and consistent with result)
+                    # Draw arc as polyline - EXACT same logic as final rendering
                     path = QPainterPath()
                     n_segments = 64
-                    span = end_angle - start_angle
-                    # Handle both CW and CCW spans
-                    if span > 180:
-                        span = span - 360
-                    elif span < -180:
-                        span = span + 360
+                    
+                    # Same sweep calculation as _draw_canvas (lines 598-605)
+                    sweep = end_angle - start_angle
+                    while sweep < 0:
+                        sweep += 360
+                    while sweep > 360:
+                        sweep -= 360
+                    if sweep < 0.1:
+                        sweep = 360
                     
                     for i in range(n_segments + 1):
                         t = i / n_segments
-                        angle = math.radians(start_angle + span * t)
+                        angle = math.radians(start_angle + sweep * t)
                         px = cx + r * math.cos(angle)
                         py = cy + r * math.sin(angle)
                         sp = self.world_to_screen(QPointF(px, py))
