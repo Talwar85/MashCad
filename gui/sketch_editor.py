@@ -4026,6 +4026,34 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         return None, None
 
+    def _resolve_direct_edit_target_slot(self):
+        """
+        Ermittelt das aktuell bearbeitbare Slot.
+        Slots werden über ihre Center-Line identifiziert (Markierung _slot_center_line).
+        """
+        # Check hovered entity first
+        hovered = self._last_hovered_entity
+        if isinstance(hovered, Line2D):
+            # Check if this line is a slot center line
+            if getattr(hovered, '_slot_center_line', False):
+                return hovered, "slot"
+            # Check if this line is part of a slot (top/bottom lines)
+            if hasattr(hovered, '_slot_parent_center_line'):
+                parent = hovered._slot_parent_center_line
+                if parent is not None:
+                    return parent, "slot"
+
+        # Check selected lines for slot components
+        for line in getattr(self, 'selected_lines', []):
+            if getattr(line, '_slot_center_line', False):
+                return line, "slot"
+            if hasattr(line, '_slot_parent_center_line'):
+                parent = line._slot_parent_center_line
+                if parent is not None:
+                    return parent, "slot"
+
+        return None, None
+
     def _get_direct_edit_handles_world(self):
         """
         Liefert Handle-Daten für Direct Manipulation in Weltkoordinaten.
@@ -4292,7 +4320,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             is_hovered = isinstance(self._last_hovered_entity, type(polygon)) and self._last_hovered_entity is polygon
 
             if is_selected or is_hovered:
-                for idx, pt in enumerate(getattr(polygon, "points", [])):
+                # W34: Check for center handle first (before vertex handles)
+                # Calculate centroid from polygon points
+                points = getattr(polygon, "points", [])
+                if points and len(points) >= 3:
+                    cx = sum(pt.x for pt in points) / len(points)
+                    cy = sum(pt.y for pt in points) / len(points)
+                    d_center = math.hypot(world_pos.x() - cx, world_pos.y() - cy)
+                    if d_center <= hit_radius:
+                        return {
+                            "kind": "polygon",
+                            "mode": "center",
+                            "polygon": polygon,
+                            "source": polygon_source,
+                            "center": QPointF(cx, cy),
+                        }
+
+                # Vertex handles (existing functionality)
+                for idx, pt in enumerate(points):
                     if math.hypot(world_pos.x() - pt.x, world_pos.y() - pt.y) <= hit_radius:
                         return {
                             "kind": "polygon",
@@ -4300,6 +4345,55 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             "polygon": polygon,
                             "source": polygon_source,
                             "vertex_idx": idx,
+                        }
+
+        # W34: Slot Direct Edit Handles
+        slot, slot_source = self._resolve_direct_edit_target_slot()
+        if slot is not None:
+            # Center line midpoint handle (move entire slot)
+            midpoint = QPointF((slot.start.x + slot.end.x) / 2, (slot.start.y + slot.end.y) / 2)
+            d_midpoint = math.hypot(world_pos.x() - midpoint.x(), world_pos.y() - midpoint.y())
+            if d_midpoint <= hit_radius:
+                return {
+                    "kind": "slot",
+                    "mode": "center",
+                    "slot": slot,
+                    "source": slot_source,
+                    "midpoint": midpoint,
+                }
+
+            # Length handles (on center line endpoints)
+            d_start = math.hypot(world_pos.x() - slot.start.x, world_pos.y() - slot.start.y)
+            if d_start <= hit_radius:
+                return {
+                    "kind": "slot",
+                    "mode": "length_start",
+                    "slot": slot,
+                    "source": slot_source,
+                }
+
+            d_end = math.hypot(world_pos.x() - slot.end.x, world_pos.y() - slot.end.y)
+            if d_end <= hit_radius:
+                return {
+                    "kind": "slot",
+                    "mode": "length_end",
+                    "slot": slot,
+                    "source": slot_source,
+                }
+
+            # Radius handle (find on arc caps - check distance to arc edges)
+            for arc in self.sketch.arcs:
+                if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                    # Check distance to arc edge
+                    d_arc_center = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
+                    d_from_radius = abs(d_arc_center - arc.radius)
+                    if d_from_radius <= hit_radius * 0.75:
+                        return {
+                            "kind": "slot",
+                            "mode": "radius",
+                            "slot": slot,
+                            "arc": arc,
+                            "source": slot_source,
                         }
 
         return None
@@ -4342,6 +4436,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_polygon = None
         self._direct_edit_polygon_vertex_idx = -1
         self._direct_edit_polygon_vertex_start = QPointF()
+        # W34: Polygon center drag variables
+        self._direct_edit_polygon_driver_circle = None
+        self._direct_edit_polygon_start_center = QPointF()
+        self._direct_edit_start_circle_center = QPointF()
+        self._direct_edit_polygon_point_starts = []  # W34-fix: start positions of all polygon points
+        # W34: Slot drag variables
+        self._direct_edit_slot = None
+        self._direct_edit_slot_arc = None
+        self._direct_edit_slot_start_center = QPointF()
+        self._direct_edit_slot_start_length = 0.0
+        self._direct_edit_slot_start_radius = 0.0
 
         if kind == "line" and mode in ("line_edge", "line_move"):
             line = handle_hit.get("line")
@@ -4461,6 +4566,45 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
             return
 
+        # W34: Polygon Center Direct Edit (Move entire polygon via driver circle)
+        if kind == "polygon" and mode == "center":
+            polygon = handle_hit.get("polygon")
+            if polygon is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_polygon = polygon
+            center_handle = handle_hit.get("center", QPointF())
+            self._direct_edit_polygon_start_center = center_handle
+
+            # Find driver circle for this polygon
+            points = getattr(polygon, "points", [])
+            driver_circle = None
+            if points:
+                # Try to find the driver circle through the polygon lines
+                for line in self.sketch.lines:
+                    if line.start in points or line.end in points:
+                        driver_circle = self._find_polygon_driver_circle_for_line(line)
+                        if driver_circle is not None:
+                            self._direct_edit_polygon_driver_circle = driver_circle
+                            self._direct_edit_start_circle_center = QPointF(
+                                float(driver_circle.center.x),
+                                float(driver_circle.center.y)
+                            )
+                            # W34-fix: save start positions of all polygon points
+                            self._direct_edit_polygon_point_starts = [
+                                QPointF(float(p.x), float(p.y)) for p in points
+                            ]
+                            break
+
+            if polygon not in self.selected_polygons:
+                self._clear_selection()
+                self.selected_polygons = [polygon]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
         # Polygon direct edit
         if kind == "polygon" and mode == "vertex":
             polygon = handle_hit.get("polygon")
@@ -4480,6 +4624,45 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.selected_polygons = [polygon]
 
             self.setCursor(Qt.ClosedHandCursor)
+            self.request_update()
+            return
+
+        # W34: Slot Direct Edit
+        if kind == "slot":
+            slot = handle_hit.get("slot")
+            if slot is None:
+                self._direct_edit_dragging = False
+                return
+
+            self._direct_edit_slot = slot
+            self._direct_edit_slot_start_center = QPointF(
+                (slot.start.x + slot.end.x) / 2,
+                (slot.start.y + slot.end.y) / 2
+            )
+
+            # Calculate initial slot length
+            dx = slot.end.x - slot.start.x
+            dy = slot.end.y - slot.start.y
+            self._direct_edit_slot_start_length = math.hypot(dx, dy)
+
+            # Find arc caps for radius editing
+            if mode == "radius":
+                arc = handle_hit.get("arc")
+                if arc is not None:
+                    self._direct_edit_slot_arc = arc
+                    self._direct_edit_slot_start_radius = float(arc.radius)
+
+            if slot not in self.selected_lines:
+                self._clear_selection()
+                self.selected_lines = [slot]
+
+            if mode == "center":
+                self.setCursor(Qt.ClosedHandCursor)
+            elif mode in ("length_start", "length_end"):
+                self.setCursor(Qt.SizeHorCursor)
+            elif mode == "radius":
+                self.setCursor(Qt.SizeVerCursor)
+
             self.request_update()
             return
 
@@ -4863,20 +5046,42 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     angle = math.radians(angle_deg)
                 new_radius = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
                 arc.radius = max(0.01, new_radius)
-                
+
+                # W34: Update marker positions when radius changes
+                if hasattr(arc, '_start_marker') and arc._start_marker is not None:
+                    start_angle_rad = math.radians(arc.start_angle)
+                    arc._start_marker.x = arc.center.x + arc.radius * math.cos(start_angle_rad)
+                    arc._start_marker.y = arc.center.y + arc.radius * math.sin(start_angle_rad)
+                if hasattr(arc, '_end_marker') and arc._end_marker is not None:
+                    end_angle_rad = math.radians(arc.end_angle)
+                    arc._end_marker.x = arc.center.x + arc.radius * math.cos(end_angle_rad)
+                    arc._end_marker.y = arc.center.y + arc.radius * math.sin(end_angle_rad)
+
             elif mode == "start_angle":
                 angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
                 if axis_lock:
                     # Snap to 45° increments
                     angle = round(angle / 45.0) * 45.0
                 arc.start_angle = angle
-                
+
+                # W34: Update start marker point
+                if hasattr(arc, '_start_marker') and arc._start_marker is not None:
+                    angle_rad = math.radians(angle)
+                    arc._start_marker.x = arc.center.x + arc.radius * math.cos(angle_rad)
+                    arc._start_marker.y = arc.center.y + arc.radius * math.sin(angle_rad)
+
             elif mode == "end_angle":
                 angle = math.degrees(math.atan2(world_pos.y() - arc.center.y, world_pos.x() - arc.center.x))
                 if axis_lock:
                     # Snap to 45° increments
                     angle = round(angle / 45.0) * 45.0
                 arc.end_angle = angle
+
+                # W34: Update end marker point
+                if hasattr(arc, '_end_marker') and arc._end_marker is not None:
+                    angle_rad = math.radians(angle)
+                    arc._end_marker.x = arc.center.x + arc.radius * math.cos(angle_rad)
+                    arc._end_marker.y = arc.center.y + arc.radius * math.sin(angle_rad)
             
             self._direct_edit_drag_moved = True
             
@@ -4948,7 +5153,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return
 
             self._direct_edit_drag_moved = True
-            
+
+            # W34: Immediate ellipse geometry update for live visual feedback
+            # This ensures segment points are updated immediately after property changes
+            self.sketch._update_ellipse_geometry()
+
             # W28: Dirty-Rect Update statt Full Redraw
             dirty_new = self._get_ellipse_dirty_rect(ellipse)
             dirty = dirty_old.united(dirty_new)
@@ -4958,10 +5167,49 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.update(dirty.toAlignedRect())
             return
 
-        # Polygon direct edit
+        # W34: Polygon direct edit
         # W28: SHIFT-Achsenlock + Dirty-Rect für Performance
-        if self._direct_edit_polygon is not None and self._direct_edit_mode == "vertex":
+        if self._direct_edit_polygon is not None and self._direct_edit_mode in ("vertex", "center"):
             polygon = self._direct_edit_polygon
+
+            # W34: Handle center mode (move entire polygon via driver circle)
+            if self._direct_edit_mode == "center":
+                driver_circle = self._direct_edit_polygon_driver_circle
+                if driver_circle is not None:
+                    # Dirty-Rect für Polygon
+                    dirty_old = self._get_polygon_dirty_rect(polygon)
+
+                    dx = world_pos.x() - self._direct_edit_start_pos.x()
+                    dy = world_pos.y() - self._direct_edit_start_pos.y()
+                    if axis_lock:
+                        if abs(dx) >= abs(dy):
+                            dy = 0.0
+                        else:
+                            dx = 0.0
+
+                    # Move driver circle center
+                    driver_circle.center.x = self._direct_edit_start_circle_center.x() + dx
+                    driver_circle.center.y = self._direct_edit_start_circle_center.y() + dy
+
+                    # W34-fix: Move all polygon points together (solver only runs on finish)
+                    points = getattr(polygon, "points", [])
+                    for i, pt in enumerate(points):
+                        if i < len(self._direct_edit_polygon_point_starts):
+                            pt.x = self._direct_edit_polygon_point_starts[i].x() + dx
+                            pt.y = self._direct_edit_polygon_point_starts[i].y() + dy
+
+                    self._direct_edit_drag_moved = True
+
+                    # W28: Dirty-Rect Update statt Full Redraw
+                    dirty_new = self._get_polygon_dirty_rect(polygon)
+                    dirty = dirty_old.united(dirty_new)
+                    if dirty.isEmpty():
+                        self.request_update()
+                    else:
+                        self.update(dirty.toAlignedRect())
+                return
+
+            # Original vertex drag mode
             vertex_idx = self._direct_edit_polygon_vertex_idx
             points = getattr(polygon, "points", None)
             if points is None or vertex_idx < 0 or vertex_idx >= len(points):
@@ -4986,6 +5234,127 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             # W28: Dirty-Rect Update statt Full Redraw
             dirty_new = self._get_polygon_dirty_rect(polygon)
+            dirty = dirty_old.united(dirty_new)
+            if dirty.isEmpty():
+                self.request_update()
+            else:
+                self.update(dirty.toAlignedRect())
+            return
+
+        # W34: Slot direct edit
+        if self._direct_edit_slot is not None:
+            slot = self._direct_edit_slot
+            mode = self._direct_edit_mode
+
+            # Calculate dirty rect for slot (bounding box of all components)
+            dirty_old = QRectF()
+            for line in self.sketch.lines:
+                if getattr(line, '_slot_center_line', False) or getattr(line, '_slot_parent_center_line', None) is slot:
+                    bbox = self._get_entity_bbox(line)
+                    dirty_old = dirty_old.united(QRectF(bbox))
+            for arc in self.sketch.arcs:
+                if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                    bbox = self._get_arc_dirty_rect(arc)
+                    dirty_old = dirty_old.united(bbox)
+
+            if mode == "center":
+                # Move entire slot by moving the center line
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+
+                # Move center line endpoints
+                slot.start.x = slot.start.x + dx
+                slot.start.y = slot.start.y + dy
+                slot.end.x = slot.end.x + dx
+                slot.end.y = slot.end.y + dy
+
+                # Move arc centers (they're at the same position as center line endpoints)
+                for arc in self.sketch.arcs:
+                    if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                        arc.center.x += dx
+                        arc.center.y += dy
+
+                self._direct_edit_drag_moved = True
+
+            elif mode in ("length_start", "length_end"):
+                # Change slot length by moving one endpoint
+                dx = world_pos.x() - self._direct_edit_start_pos.x()
+                dy = world_pos.y() - self._direct_edit_start_pos.y()
+                if axis_lock:
+                    if abs(dx) >= abs(dy):
+                        dy = 0.0
+                    else:
+                        dx = 0.0
+
+                if mode == "length_start":
+                    # Move start point along the line direction
+                    slot.start.x += dx
+                    slot.start.y += dy
+                else:
+                    # Move end point along the line direction
+                    slot.end.x += dx
+                    slot.end.y += dy
+
+                # Update corresponding arc center
+                for arc in self.sketch.arcs:
+                    if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                        # Check if this arc is at the start or end
+                        arc_center_dist_start = math.hypot(arc.center.x - slot.start.x, arc.center.y - slot.start.y)
+                        arc_center_dist_end = math.hypot(arc.center.x - slot.end.x, arc.center.y - slot.end.y)
+                        if mode == "length_start" and arc_center_dist_start < 1e-6:
+                            arc.center.x = slot.start.x
+                            arc.center.y = slot.start.y
+                        elif mode == "length_end" and arc_center_dist_end < 1e-6:
+                            arc.center.x = slot.end.x
+                            arc.center.y = slot.end.y
+
+                self._direct_edit_drag_moved = True
+
+            elif mode == "radius":
+                # Change slot radius by updating arc radii
+                arc = self._direct_edit_slot_arc
+                if arc is not None:
+                    # Calculate new radius based on mouse distance from center
+                    dx = world_pos.x() - self._direct_edit_start_pos.x()
+                    dy = world_pos.y() - self._direct_edit_start_pos.y()
+
+                    # Project mouse movement onto radius direction
+                    new_radius = self._direct_edit_slot_start_radius + dx  # Simplified: use x-delta
+                    new_radius = max(0.01, abs(new_radius))
+
+                    # Update both arc caps
+                    for slot_arc in self.sketch.arcs:
+                        if hasattr(slot_arc, '_slot_arc') and slot_arc._slot_arc:
+                            slot_arc.radius = new_radius
+
+                            # Update marker points for this arc
+                            if hasattr(slot_arc, '_start_marker') and slot_arc._start_marker is not None:
+                                start_angle_rad = math.radians(slot_arc.start_angle)
+                                slot_arc._start_marker.x = slot_arc.center.x + new_radius * math.cos(start_angle_rad)
+                                slot_arc._start_marker.y = slot_arc.center.y + new_radius * math.sin(start_angle_rad)
+                            if hasattr(slot_arc, '_end_marker') and slot_arc._end_marker is not None:
+                                end_angle_rad = math.radians(slot_arc.end_angle)
+                                slot_arc._end_marker.x = slot_arc.center.x + new_radius * math.cos(end_angle_rad)
+                                slot_arc._end_marker.y = slot_arc.center.y + new_radius * math.sin(end_angle_rad)
+
+                    self._direct_edit_drag_moved = True
+
+            # Calculate new dirty rect and update
+            dirty_new = QRectF()
+            for line in self.sketch.lines:
+                if getattr(line, '_slot_center_line', False) or getattr(line, '_slot_parent_center_line', None) is slot:
+                    bbox = self._get_entity_bbox(line)
+                    dirty_new = dirty_new.united(QRectF(bbox))
+            for arc in self.sketch.arcs:
+                if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                    bbox = self._get_arc_dirty_rect(arc)
+                    dirty_new = dirty_new.united(bbox)
+
             dirty = dirty_old.united(dirty_new)
             if dirty.isEmpty():
                 self.request_update()

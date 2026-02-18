@@ -760,6 +760,13 @@ class Sketch:
         arc2._start_marker = b2
         arc2._end_marker = t2
 
+        # W34: Marker für Slot Direct Edit
+        line_center._slot_center_line = True
+        line_top._slot_parent_center_line = line_center
+        line_bot._slot_parent_center_line = line_center
+        arc1._slot_arc = True
+        arc2._slot_arc = True
+
         return line_center, arc1
 
 
