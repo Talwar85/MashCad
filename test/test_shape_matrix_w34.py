@@ -270,16 +270,20 @@ class TestPolygonDrag:
 # ===================================================================
 
 class TestEllipseCreate:
-    def test_add_ellipse_creates_segments(self, sketch):
-        result = sketch.add_ellipse(10, 20, 30, 15, angle_deg=0, segments=32)
-        ellipse_lines, major_axis, minor_axis, center = result
-        assert len(ellipse_lines) == 32
-        assert major_axis.construction is True
-        assert minor_axis.construction is True
+    def test_add_ellipse_creates_native_ellipse(self, sketch):
+        from sketcher.geometry import Ellipse2D
+        ellipse = sketch.add_ellipse(10, 20, 30, 15, angle_deg=0)
+        assert isinstance(ellipse, Ellipse2D)
+        assert ellipse.center.x == 10
+        assert ellipse.center.y == 20
+        assert ellipse.radius_x == 30
+        assert ellipse.radius_y == 15
+        assert ellipse in sketch.ellipses
 
     def test_ellipse_axis_lengths(self, sketch):
-        result = sketch.add_ellipse(0, 0, 20, 10, angle_deg=0, segments=32)
-        _, major_axis, minor_axis, _ = result
+        ellipse = sketch.add_ellipse(0, 0, 20, 10, angle_deg=0)
+        major_axis = ellipse._major_axis
+        minor_axis = ellipse._minor_axis
         major_len = major_axis.length
         minor_len = minor_axis.length
         assert abs(major_len - 40) < 1e-4  # 2 * 20
@@ -287,15 +291,15 @@ class TestEllipseCreate:
 
 
 class TestEllipsePersistence:
-    def test_roundtrip_preserves_line_count(self, sketch):
-        sketch.add_ellipse(0, 0, 20, 10, segments=32)
-        n_lines = len(sketch.lines)
+    def test_roundtrip_preserves_ellipse(self, sketch):
+        sketch.add_ellipse(0, 0, 20, 10, angle_deg=0)
+        n_ellipses = len(sketch.ellipses)
         data = sketch.to_dict()
         sketch2 = Sketch.from_dict(data)
-        assert len(sketch2.lines) == n_lines
+        assert len(sketch2.ellipses) == n_ellipses
 
     def test_roundtrip_preserves_axes(self, sketch):
-        sketch.add_ellipse(0, 0, 20, 10, segments=32)
+        sketch.add_ellipse(0, 0, 20, 10, angle_deg=0)
         data = sketch.to_dict()
         sketch2 = Sketch.from_dict(data)
         construction_lines = [l for l in sketch2.lines if l.construction]

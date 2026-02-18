@@ -676,12 +676,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     DIM_COLOR = QColor(255, 200, 100)
     CONSTRAINT_COLOR = QColor(100, 200, 100)
     PREVIEW_COLOR = QColor(0, 150, 255, 150)
-    SELECTION_FILTER_ORDER = ("all", "line", "circle", "arc", "spline", "point")
+    SELECTION_FILTER_ORDER = ("all", "line", "circle", "arc", "ellipse", "spline", "point")
     SELECTION_FILTER_LABELS = {
         "all": "All",
         "line": "Lines",
         "circle": "Circles",
         "arc": "Arcs",
+        "ellipse": "Ellipses",
         "spline": "Splines",
         "point": "Points",
     }
@@ -1218,7 +1219,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # 2. STANDARD CHECKS
         has_geo = (len(self.sketch.lines) > 0 or len(self.sketch.circles) > 0 or 
-                   len(self.sketch.arcs) > 0 or len(self.sketch.splines) > 0)
+                   len(self.sketch.arcs) > 0 or len(self.sketch.splines) > 0 or
+                   len(getattr(self.sketch, 'ellipses', [])) > 0)
         
         if not has_geo:
             self.spatial_index = None
@@ -1249,6 +1251,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             cx, cy = to_float(c.center.x), to_float(c.center.y)
             min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
             min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
+        
+        # Ellipsen Bounding Box (approximiert als max radius)
+        for e in getattr(self.sketch, 'ellipses', []):
+            rx = to_float(e.radius_x)
+            ry = to_float(e.radius_y)
+            r_max = max(rx, ry)
+            cx, cy = to_float(e.center.x), to_float(e.center.y)
+            min_x = min(min_x, cx - r_max); max_x = max(max_x, cx + r_max)
+            min_y = min(min_y, cy - r_max); max_y = max(max_y, cy + r_max)
 
         for s in self.sketch.splines:
              for cp in getattr(s, 'control_points', []):
@@ -1290,6 +1301,14 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             cx, cy = to_float(c.center.x), to_float(c.center.y)
             r = to_float(c.radius)
             self.spatial_index.insert(c, QRectF(self._safe_float(cx-r), self._safe_float(cy-r), self._safe_float(2*r), self._safe_float(2*r)))
+        
+        # Ellipsen in Spatial Index
+        for e in getattr(self.sketch, 'ellipses', []):
+            cx, cy = to_float(e.center.x), to_float(e.center.y)
+            rx = to_float(e.radius_x)
+            ry = to_float(e.radius_y)
+            r_max = max(rx, ry)
+            self.spatial_index.insert(e, QRectF(self._safe_float(cx-r_max), self._safe_float(cy-r_max), self._safe_float(2*r_max), self._safe_float(2*r_max)))
 
         for s in self.sketch.splines:
              cps = getattr(s, 'control_points', [])
@@ -1412,6 +1431,72 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             2.0 * ry_screen,
         )
         return rect.adjusted(-32.0, -32.0, 32.0, 32.0)
+
+    def _update_ellipse_constraints_after_drag(self, ellipse):
+        """
+        Aktualisiert LENGTH-Constraints der Achsen nach Direct-Edit Drag.
+        Sonst springt die Ellipse beim Solve zurück auf alte Werte.
+        """
+        if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
+            return
+        
+        from sketcher.constraints import ConstraintType
+        
+        major_axis = ellipse._major_axis
+        minor_axis = ellipse._minor_axis
+        
+        # Neue Längen berechnen
+        new_major_length = 2.0 * ellipse.radius_x
+        new_minor_length = 2.0 * ellipse.radius_y
+        
+        # Major-Achsen Constraints aktualisieren
+        for c in self.sketch.constraints:
+            if c.type == ConstraintType.LENGTH and major_axis in c.entities:
+                c.value = new_major_length
+        
+        # Minor-Achsen Constraints aktualisieren  
+        for c in self.sketch.constraints:
+            if c.type == ConstraintType.LENGTH and minor_axis in c.entities:
+                c.value = new_minor_length
+
+    def _update_ellipse_axes_from_ellipse(self, ellipse):
+        """
+        Aktualisiert Achsen-Endpunkte aus Ellipse-Parametern (nach Drag).
+        Das ist die UMGEKEHRTE Richtung zu _update_ellipse_geometry().
+        """
+        import math
+        
+        if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
+            return
+        
+        cx, cy = ellipse.center.x, ellipse.center.y
+        rx, ry = ellipse.radius_x, ellipse.radius_y
+        angle_rad = math.radians(ellipse.rotation)
+        
+        # Richtungsvektoren
+        ux = math.cos(angle_rad)
+        uy = math.sin(angle_rad)
+        vx = -uy
+        vy = ux
+        
+        # Achsen-Endpunkte aus Ellipse-Parametern berechnen
+        ellipse._major_pos.x = cx + ux * rx
+        ellipse._major_pos.y = cy + uy * rx
+        ellipse._major_neg.x = cx - ux * rx
+        ellipse._major_neg.y = cy - uy * rx
+        ellipse._minor_pos.x = cx + vx * ry
+        ellipse._minor_pos.y = cy + vy * ry
+        ellipse._minor_neg.x = cx - vx * ry
+        ellipse._minor_neg.y = cy - vy * ry
+        ellipse._center_point.x = cx
+        ellipse._center_point.y = cy
+        
+        # native_ocp_data aktualisieren
+        if ellipse.native_ocp_data:
+            ellipse.native_ocp_data['center'] = (cx, cy)
+            ellipse.native_ocp_data['radius_x'] = rx
+            ellipse.native_ocp_data['radius_y'] = ry
+            ellipse.native_ocp_data['rotation'] = ellipse.rotation
 
     def _get_polygon_dirty_rect(self, polygon) -> QRectF:
         """
@@ -4320,7 +4405,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 }
 
         # W25: Ellipse Direct Manipulation Handles
-        # W30 AP4: Simplified - Y-radius and rotation only during active edit
+        # WICHTIG: Größerer Hit-Radius für Ellipse-Handles (leichter zu treffen)
+        ellipse_hit_radius = hit_radius * 1.5
+        
         ellipse, ellipse_source = self._resolve_direct_edit_target_ellipse()
         if ellipse is not None:
             center = QPointF(ellipse.center.x, ellipse.center.y)
@@ -4335,20 +4422,44 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             y_handle = QPointF(center.x() + ry * vx, center.y() + ry * vy)
             rot_handle = QPointF(center.x() + (rx * 1.2) * ux, center.y() + (rx * 1.2) * uy)
 
-            # Center handle always available
-            if math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) <= hit_radius:
+            # Center handle (grünes Quadrat) - prüfe auch tatsächlichen _center_point
+            if math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) <= ellipse_hit_radius:
                 return {"kind": "ellipse", "mode": "center", "ellipse": ellipse, "source": ellipse_source}
+            
+            # Prüfe tatsächlichen Center-Point (falls anders positioniert)
+            if hasattr(ellipse, '_center_point'):
+                actual_center = QPointF(ellipse._center_point.x, ellipse._center_point.y)
+                if math.hypot(world_pos.x() - actual_center.x(), world_pos.y() - actual_center.y()) <= ellipse_hit_radius:
+                    return {"kind": "ellipse", "mode": "center", "ellipse": ellipse, "source": ellipse_source}
 
-            # Primary X-radius handle always available
-            if math.hypot(world_pos.x() - x_handle.x(), world_pos.y() - x_handle.y()) <= hit_radius:
+            # Primary X-radius handle (blauer Kreis)
+            if math.hypot(world_pos.x() - x_handle.x(), world_pos.y() - x_handle.y()) <= ellipse_hit_radius:
                 return {"kind": "ellipse", "mode": "radius_x", "ellipse": ellipse, "source": ellipse_source}
+            
+            # Prüfe tatsächliche Major-Achsen Endpunkte (rosa Punkte)
+            if hasattr(ellipse, '_major_pos') and hasattr(ellipse, '_major_neg'):
+                major_pos_pt = QPointF(ellipse._major_pos.x, ellipse._major_pos.y)
+                major_neg_pt = QPointF(ellipse._major_neg.x, ellipse._major_neg.y)
+                if math.hypot(world_pos.x() - major_pos_pt.x(), world_pos.y() - major_pos_pt.y()) <= ellipse_hit_radius:
+                    return {"kind": "ellipse", "mode": "radius_x", "ellipse": ellipse, "source": ellipse_source}
+                if math.hypot(world_pos.x() - major_neg_pt.x(), world_pos.y() - major_neg_pt.y()) <= ellipse_hit_radius:
+                    return {"kind": "ellipse", "mode": "radius_x", "ellipse": ellipse, "source": ellipse_source}
+
+            # Y-radius handle (roter Kreis) - prüfe auch tatsächliche Minor-Endpunkte
+            if hasattr(ellipse, '_minor_pos') and hasattr(ellipse, '_minor_neg'):
+                minor_pos_pt = QPointF(ellipse._minor_pos.x, ellipse._minor_pos.y)
+                minor_neg_pt = QPointF(ellipse._minor_neg.x, ellipse._minor_neg.y)
+                if math.hypot(world_pos.x() - minor_pos_pt.x(), world_pos.y() - minor_pos_pt.y()) <= ellipse_hit_radius:
+                    return {"kind": "ellipse", "mode": "radius_y", "ellipse": ellipse, "source": ellipse_source}
+                if math.hypot(world_pos.x() - minor_neg_pt.x(), world_pos.y() - minor_neg_pt.y()) <= ellipse_hit_radius:
+                    return {"kind": "ellipse", "mode": "radius_y", "ellipse": ellipse, "source": ellipse_source}
 
             # W30 AP4: Y-radius and rotation only during active editing (simplified visual)
             is_active_edit = self._direct_edit_dragging and self._direct_edit_ellipse is ellipse
             if is_active_edit:
-                if math.hypot(world_pos.x() - y_handle.x(), world_pos.y() - y_handle.y()) <= hit_radius:
+                if math.hypot(world_pos.x() - y_handle.x(), world_pos.y() - y_handle.y()) <= ellipse_hit_radius:
                     return {"kind": "ellipse", "mode": "radius_y", "ellipse": ellipse, "source": ellipse_source}
-                if math.hypot(world_pos.x() - rot_handle.x(), world_pos.y() - rot_handle.y()) <= hit_radius:
+                if math.hypot(world_pos.x() - rot_handle.x(), world_pos.y() - rot_handle.y()) <= ellipse_hit_radius:
                     return {"kind": "ellipse", "mode": "rotation", "ellipse": ellipse, "source": ellipse_source}
 
         # W25: Polygon Direct Manipulation Handles (Vertex)
@@ -5221,9 +5332,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             self._direct_edit_drag_moved = True
 
-            # W34: Immediate ellipse geometry update for live visual feedback
-            # This ensures segment points are updated immediately after property changes
-            self.sketch._update_ellipse_geometry()
+            # WICHTIG: Nach Drag müssen die ACHSEN aus der Ellipse berechnet werden
+            # (nicht umgekehrt wie bei Constraint-Änderungen)
+            self._update_ellipse_axes_from_ellipse(ellipse)
 
             # W28: Dirty-Rect Update statt Full Redraw
             dirty_new = self._get_ellipse_dirty_rect(ellipse)
@@ -5497,6 +5608,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._reset_direct_edit_state()
 
         if moved:
+            # WICHTIG: Vor dem Solve müssen Ellipse-Constraints aktualisiert werden!
+            # Sonst springt die Ellipse zurück auf die alten Constraint-Werte
+            if self._direct_edit_ellipse is not None and mode in ("center", "radius_x", "radius_y", "rotation"):
+                self._update_ellipse_constraints_after_drag(self._direct_edit_ellipse)
+            
             # W33 EPIC AA1.2: Final-Solve mit Rollback bei Fehler
             result = self.sketch.solve()
             success = getattr(result, "success", True)
@@ -5653,6 +5769,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             len(self.selected_lines)
             + len(self.selected_circles)
             + len(self.selected_arcs)
+            + len(self.selected_ellipses)
             + len(self.selected_points)
             + len(self.selected_splines)
         )
@@ -6436,15 +6553,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 minor_radius = max(0.01, abs(float(minor_radius)))
 
                 self._save_undo()
-                _, _, _, center_point = self.sketch.add_ellipse(
+                ellipse = self.sketch.add_ellipse(
                     cx=center.x(),
                     cy=center.y(),
                     major_radius=major_radius,
                     minor_radius=minor_radius,
                     angle_deg=angle_deg,
                     construction=self.construction_mode,
-                    segments=max(24, int(getattr(self, "circle_segments", 64) * 0.5)),
                 )
+                center_point = ellipse._center_point if hasattr(ellipse, '_center_point') else ellipse.center
 
                 center_snap_type, center_snap_entity = getattr(self, "_ellipse_center_snap", (SnapType.NONE, None))
                 self._apply_center_snap_constraint(center_point, center_snap_type, center_snap_entity)
@@ -7825,6 +7942,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.selected_lines = [line for line in self.sketch.lines if self._entity_passes_selection_filter(line)]
         self.selected_circles = [circle for circle in self.sketch.circles if self._entity_passes_selection_filter(circle)]
         self.selected_arcs = [arc for arc in self.sketch.arcs if self._entity_passes_selection_filter(arc)]
+        self.selected_ellipses = [ellipse for ellipse in getattr(self.sketch, 'ellipses', []) if self._entity_passes_selection_filter(ellipse)]
         # Nur standalone Punkte (nicht Teil anderer Geometrie)
         used_point_ids = set()
         for line in self.sketch.lines:
@@ -7868,6 +7986,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             r = arc.radius * self.view_scale
             if rect.contains(QRectF(center.x()-r, center.y()-r, 2*r, 2*r)) and arc not in self.selected_arcs:
                 self.selected_arcs.append(arc)
+        # Ellipsen
+        for ellipse in getattr(self.sketch, 'ellipses', []):
+            if not self._entity_passes_selection_filter(ellipse):
+                continue
+            center = self.world_to_screen(QPointF(ellipse.center.x, ellipse.center.y))
+            rx = ellipse.radius_x * self.view_scale
+            ry = ellipse.radius_y * self.view_scale
+            r_max = max(rx, ry)
+            if rect.contains(QRectF(center.x()-r_max, center.y()-r_max, 2*r_max, 2*r_max)) and ellipse not in self.selected_ellipses:
+                self.selected_ellipses.append(ellipse)
         # Standalone Punkte
         used_point_ids = self._get_used_point_ids()
         for pt in self.sketch.points:
@@ -7942,7 +8070,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if id(circle_entity) in driver_circles_to_delete:
                     polygon_points_to_delete.add(id(point_entity))
         
-        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_points) + len(self.selected_splines)
+        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_ellipses) + len(self.selected_points) + len(self.selected_splines)
         
         # Lösche Linien
         for line in self.selected_lines[:]:
@@ -7959,6 +8087,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         for arc in self.selected_arcs[:]:
             self.sketch.delete_arc(arc)
+        
+        # Lösche Ellipsen
+        for ellipse in self.selected_ellipses[:]:
+            self.sketch.delete_ellipse(ellipse)
         
         # Lösche ausgewählte Punkte + Polygon-Punkte
         points_to_delete = list(self.selected_points)
@@ -8001,6 +8133,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return "circle"
         if isinstance(entity, Arc2D):
             return "arc"
+        if hasattr(entity, 'radius_x') and hasattr(entity, 'radius_y') and hasattr(entity, 'rotation'):
+            return "ellipse"
         if isinstance(entity, Point2D):
             return "point"
         if hasattr(entity, "control_points"):
@@ -8013,19 +8147,29 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _entity_passes_selection_filter(self, entity) -> bool:
         mode = getattr(self, "selection_filter_mode", "all")
+        
+        # Ellipsen-Achsen sind nie direkt selektierbar (nur via Ellipse)
+        if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
+            return False
+        
         if mode == "all":
             return True
         return self._entity_kind(entity) == mode
 
     def _entity_pick_priority(self, entity) -> int:
         # Linien/Flaechenkanten zuerst, Punkte zuletzt, damit Selektion stabil bleibt.
+        # WICHTIG: Ellipsen-Achsen haben niedrigste Priorität (werden übersprungen)
+        if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
+            return 100  # Niedrigste Priorität - wird fast nie selektiert
+        
         kind = self._entity_kind(entity)
         return {
             "line": 0,
             "circle": 1,
             "arc": 2,
-            "spline": 3,
-            "point": 4,
+            "ellipse": 3,
+            "spline": 4,
+            "point": 5,
         }.get(kind, 99)
 
     def _entity_distance_to_pos(self, entity, pos: QPointF) -> float:
@@ -8045,6 +8189,35 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 in_arc = (s <= e and s <= angle <= e) or (s > e and (angle >= s or angle <= e))
                 if not in_arc:
                     return self._safe_float("inf")
+            return float(dist)
+        
+        # Ellipse2D Distanz
+        if hasattr(entity, 'radius_x') and hasattr(entity, 'radius_y') and hasattr(entity, 'rotation'):
+            # Ellipse2D - transformiere Punkt in lokales Koordinatensystem
+            dx = pos.x() - entity.center.x
+            dy = pos.y() - entity.center.y
+            
+            # Rotation rückgängig machen
+            rot_rad = math.radians(-entity.rotation)
+            cos_rot = math.cos(rot_rad)
+            sin_rot = math.sin(rot_rad)
+            
+            local_x = dx * cos_rot - dy * sin_rot
+            local_y = dx * sin_rot + dy * cos_rot
+            
+            # Distanz zur Ellipse im normalisierten Raum
+            if entity.radius_x < 1e-9 or entity.radius_y < 1e-9:
+                return self._safe_float("inf")
+            
+            # Parametrischer Winkel auf der Ellipse zum Punkt
+            angle = math.atan2(local_y / entity.radius_y, local_x / entity.radius_x)
+            
+            # Punkt auf der Ellipse bei diesem Winkel
+            ellipse_x = entity.radius_x * math.cos(angle)
+            ellipse_y = entity.radius_y * math.sin(angle)
+            
+            # Distanz im lokalen Koordinatensystem
+            dist = math.hypot(local_x - ellipse_x, local_y - ellipse_y)
             return float(dist)
 
         if hasattr(entity, "control_points"):
@@ -8081,7 +8254,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.spatial_index:
             broad_candidates = list(self.spatial_index.query(query_rect))
         else:
-            broad_candidates = list(self.sketch.lines) + list(self.sketch.circles) + list(self.sketch.arcs) + list(self.sketch.splines)
+            ellipses = list(getattr(self.sketch, 'ellipses', []))
+            broad_candidates = list(self.sketch.lines) + list(self.sketch.circles) + list(self.sketch.arcs) + ellipses + list(self.sketch.splines)
 
         hits = []
         seen = set()
@@ -8100,13 +8274,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         used_point_ids = self._get_used_point_ids()
         for point in self.sketch.points:
-            if point.id in used_point_ids:
+            # Ellipse-Handle-Punkte (Achsen-Endpunkte) sind immer selektierbar
+            is_ellipse_handle = getattr(point, '_ellipse_handle', None) is not None
+            if point.id in used_point_ids and not is_ellipse_handle:
                 continue
             if apply_selection_filter and not self._entity_passes_selection_filter(point):
                 continue
+            # Für Ellipse-Handles: größerer Hit-Radius
+            point_radius = r_world * 1.5 if is_ellipse_handle else r_world
             dist = self._entity_distance_to_pos(point, pos)
-            if dist <= r_world:
-                hits.append((dist, self._entity_pick_priority(point), id(point), point))
+            if dist <= point_radius:
+                # Ellipse-Handles haben höhere Priorität
+                priority = -1 if is_ellipse_handle else self._entity_pick_priority(point)
+                hits.append((dist, priority, id(point), point))
 
         hits.sort(key=lambda row: (row[0], row[1], row[2]))
         return [row[3] for row in hits]
@@ -8253,6 +8433,41 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 
                 if is_within:
                     return arc
+                    
+        return None
+    
+    def _find_ellipse_at(self, pos):
+        """Findet eine Ellipse an der Position"""
+        if not hasattr(self.sketch, 'ellipses') or not self.sketch.ellipses:
+            return None
+            
+        r = self.snap_radius / self.view_scale
+        px, py = pos.x(), pos.y()
+        
+        for ellipse in self.sketch.ellipses:
+            # Transformiere Punkt in Ellipse-Koordinatensystem
+            dx = px - ellipse.center.x
+            dy = py - ellipse.center.y
+            
+            # Rotation rückgängig machen
+            rot_rad = math.radians(-ellipse.rotation)
+            cos_rot = math.cos(rot_rad)
+            sin_rot = math.sin(rot_rad)
+            
+            local_x = dx * cos_rot - dy * sin_rot
+            local_y = dx * sin_rot + dy * cos_rot
+            
+            # Ellipsengleichung: (x/rx)² + (y/ry)² = 1
+            # Wir prüfen ob der Punkt nahe der Ellipse liegt
+            if ellipse.radius_x < 1e-9 or ellipse.radius_y < 1e-9:
+                continue
+                
+            normalized_dist = (local_x / ellipse.radius_x) ** 2 + (local_y / ellipse.radius_y) ** 2
+            # normalized_dist sollte ~1 sein für Punkte auf der Ellipse
+            # Toleranz basierend auf snap_radius
+            tolerance = r / min(ellipse.radius_x, ellipse.radius_y)
+            if abs(normalized_dist - 1.0) < tolerance:
+                return ellipse
                     
         return None
     
@@ -8956,6 +9171,36 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 painter.setBrush(QColor(180, 0, 255, 128))
                 painter.drawEllipse(int(rot_handle.x() - handle_radius),
                                   int(rot_handle.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+            
+            # Zeichne die tatsächlichen Achsen-Endpunkt-Handles (die im Sketch existieren)
+            # Diese sind immer sichtbar wenn die Ellipse aktiv ist
+            if hasattr(ellipse, '_major_pos') and hasattr(ellipse, '_major_neg'):
+                # Major Axis Endpoints (pink circles)
+                major_pos_screen = self.world_to_screen(ellipse._major_pos)
+                major_neg_screen = self.world_to_screen(ellipse._major_neg)
+                
+                painter.setPen(QPen(QColor(255, 100, 150), 2))
+                painter.setBrush(QColor(255, 100, 150, 128))
+                painter.drawEllipse(int(major_pos_screen.x() - handle_radius),
+                                  int(major_pos_screen.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+                painter.drawEllipse(int(major_neg_screen.x() - handle_radius),
+                                  int(major_neg_screen.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+            
+            if hasattr(ellipse, '_minor_pos') and hasattr(ellipse, '_minor_neg'):
+                # Minor Axis Endpoints (red circles)
+                minor_pos_screen = self.world_to_screen(ellipse._minor_pos)
+                minor_neg_screen = self.world_to_screen(ellipse._minor_neg)
+                
+                painter.setPen(QPen(QColor(255, 50, 50), 2))
+                painter.setBrush(QColor(255, 50, 50, 128))
+                painter.drawEllipse(int(minor_pos_screen.x() - handle_radius),
+                                  int(minor_pos_screen.y() - handle_radius),
+                                  handle_radius * 2, handle_radius * 2)
+                painter.drawEllipse(int(minor_neg_screen.x() - handle_radius),
+                                  int(minor_neg_screen.y() - handle_radius),
                                   handle_radius * 2, handle_radius * 2)
 
         # W30 AP4: Simplified Polygon Handles (only when hovered/selected)

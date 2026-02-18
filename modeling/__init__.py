@@ -7661,6 +7661,14 @@ class Body:
                     logger.info(f"[TNP v4.1] {len(native_arc_faces)} native Arc Faces erstellt (wenige Faces statt vielen)")
                     faces_to_extrude.extend(native_arc_faces)
 
+            # === TNP v4.1: Native Ellipse Path (glatte Fläche statt Polygon) ===
+            # PrÃ¼fe ob der Sketch Ellipsen mit native_ocp_data hat
+            if has_sketch and hasattr(sketch, 'ellipses') and sketch.ellipses:
+                native_ellipse_faces = self._extrude_sketch_ellipses(sketch, plane, profile_selector)
+                if native_ellipse_faces:
+                    logger.info(f"[TNP v4.1] {len(native_ellipse_faces)} native Ellipse Faces erstellt (glatt statt polygon)")
+                    faces_to_extrude.extend(native_ellipse_faces)
+
             # Wenn native Faces erstellt wurden, diese direkt extrudieren
             if faces_to_extrude:
                 polys_to_extrude = []  # Polygon-Path Ã¼berspringen
@@ -8814,6 +8822,143 @@ class Body:
                     logger.warning("[TNP v4.1] Chord Edge Maker fehlgeschlagen")
             else:
                 logger.warning(f"[TNP v4.1] Arc Maker fehlgeschlagen fÃ¼r {arc}")
+
+        return faces
+
+    def _extrude_sketch_ellipses(self, sketch, plane, profile_selector=None):
+        """
+        TNP v4.1: Erstellt native OCP Ellipse Faces aus Sketch-Ellipsen.
+
+        Ellipsen sind geschlossene Kurven. Wir erstellen eine planare Face
+        aus der vollen Ellipse für Extrusion.
+
+        Args:
+            sketch: Sketch-Objekt mit ellipses Liste
+            plane: Build123d Plane für 3D-Konvertierung
+            profile_selector: Optional selector for filtering ellipses
+
+        Returns:
+            Liste von build123d Faces aus nativen OCP Ellipsen
+        """
+        from build123d import Face, Vector
+        from OCP.GC import GC_MakeEllipse
+        from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir, gp_XYZ
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace
+        from OCP.BRepLib import BRepLib
+
+        faces = []
+        
+        if not hasattr(sketch, 'ellipses') or not sketch.ellipses:
+            return faces
+        
+        ellipses_with_native_data = [
+            e for e in sketch.ellipses
+            if hasattr(e, 'native_ocp_data') and e.native_ocp_data
+        ]
+
+        if not ellipses_with_native_data:
+            return faces
+
+        logger.info(f"[TNP v4.1] {len(ellipses_with_native_data)} Ellipsen mit native_ocp_data gefunden")
+
+        for ellipse in ellipses_with_native_data:
+            if ellipse.construction:
+                continue  # Konstruktions-Ellipsen nicht extrudieren
+
+            ocp_data = ellipse.native_ocp_data
+            cx, cy = ocp_data['center']
+            radius_x = ocp_data['radius_x']
+            radius_y = ocp_data['radius_y']
+            rotation = ocp_data.get('rotation', 0.0)
+            plane_data = ocp_data.get('plane', {})
+
+            # Profiler-Selektor Matching
+            if profile_selector:
+                ellipse_centroid = (cx, cy)
+                if not any(
+                    abs(ellipse_centroid[0] - sel[0]) < 0.1 and
+                    abs(ellipse_centroid[1] - sel[1]) < 0.1
+                    for sel in profile_selector
+                ):
+                    continue
+
+            # AKTUELLE Plane-Orientation vom Sketch verwenden
+            origin = Vector(*sketch.plane_origin)
+            z_dir = Vector(*sketch.plane_normal)
+            x_dir = Vector(*sketch.plane_x_dir)
+            y_dir = Vector(*sketch.plane_y_dir)
+
+            # FIX: Wenn y_dir Nullvektor ist (Bug), aus z_dir und x_dir berechnen
+            if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
+                y_dir = z_dir.cross(x_dir)
+                logger.debug(f"[TNP v4.1] Ellipse y_dir aus z_dir × x_dir berechnet")
+
+            # Ellipse-Center in 3D
+            center_3d = origin + x_dir * cx + y_dir * cy
+
+            # Ellipse-Achsen in 3D (mit Rotation)
+            rot_rad = math.radians(rotation)
+            cos_rot = math.cos(rot_rad)
+            sin_rot = math.sin(rot_rad)
+
+            # Major-Achse (X-Richtung im Ellipse-Koordinatensystem)
+            major_dir = x_dir * cos_rot + y_dir * sin_rot
+            # Minor-Achse (Y-Richtung im Ellipse-Koordinatensystem)
+            minor_dir = -x_dir * sin_rot + y_dir * cos_rot
+
+            # gp_Ax2 für die Ellipse erstellen
+            # XDirection = Major-Achse, YDirection = Minor-Achse
+            gp_center = gp_Pnt(center_3d.X, center_3d.Y, center_3d.Z)
+            gp_major_dir = gp_Dir(major_dir.X, major_dir.Y, major_dir.Z)
+            gp_minor_dir = gp_Dir(minor_dir.X, minor_dir.Y, minor_dir.Z)
+
+            # Die Normale der Ellipse-Ebene (Kreuzprodukt Major × Minor)
+            gp_normal = gp_Dir(
+                gp_major_dir.Y() * gp_minor_dir.Z() - gp_major_dir.Z() * gp_minor_dir.Y(),
+                gp_major_dir.Z() * gp_minor_dir.X() - gp_major_dir.X() * gp_minor_dir.Z(),
+                gp_major_dir.X() * gp_minor_dir.Y() - gp_major_dir.Y() * gp_minor_dir.X()
+            )
+
+            # gp_Ax2: Koordinatensystem der Ellipse
+            ellipse_axis = gp_Ax2(gp_center, gp_normal, gp_major_dir)
+
+            # Native OCP Ellipse erstellen
+            ellipse_maker = GC_MakeEllipse(ellipse_axis, radius_x, radius_y)
+            
+            if ellipse_maker.IsDone():
+                ellipse_geom = ellipse_maker.Value()
+                
+                # Edge aus der Ellipse-Geometrie erstellen
+                edge_maker = BRepBuilderAPI_MakeEdge(ellipse_geom)
+                if not edge_maker.IsDone():
+                    logger.warning("[TNP v4.1] Ellipse Edge Maker fehlgeschlagen")
+                    continue
+                
+                ellipse_edge = edge_maker.Edge()
+                
+                # Wire aus der geschlossenen Ellipse erstellen
+                wire_maker = BRepBuilderAPI_MakeWire()
+                wire_maker.Add(ellipse_edge)
+                wire_maker.Build()
+                
+                if wire_maker.IsDone():
+                    ocp_wire = wire_maker.Wire()
+                    
+                    # Face aus Wire erstellen
+                    face_maker = BRepBuilderAPI_MakeFace(ocp_wire)
+                    if face_maker.IsDone():
+                        ocp_face = face_maker.Face()
+                        
+                        # Zu build123d Face konvertieren
+                        face = Face(ocp_face)
+                        faces.append(face)
+                        logger.debug(f"[TNP v4.1] Native Ellipse Face erstellt: rx={radius_x:.2f}, ry={radius_y:.2f}")
+                    else:
+                        logger.warning("[TNP v4.1] Ellipse Face Maker fehlgeschlagen")
+                else:
+                    logger.warning("[TNP v4.1] Ellipse Wire Maker fehlgeschlagen")
+            else:
+                logger.warning(f"[TNP v4.1] Ellipse Maker fehlgeschlagen für {ellipse}")
 
         return faces
 

@@ -812,15 +812,15 @@ class SketchHandlersMixin:
         angle_deg = math.degrees(math.atan2(uy, ux))
 
         self._save_undo()
-        _, _, _, center_point = self.sketch.add_ellipse(
+        ellipse = self.sketch.add_ellipse(
             cx=center.x(),
             cy=center.y(),
             major_radius=major_radius,
             minor_radius=minor_radius,
             angle_deg=angle_deg,
             construction=self.construction_mode,
-            segments=max(24, int(getattr(self, "circle_segments", 64) * 0.5)),
         )
+        center_point = ellipse._center_point if hasattr(ellipse, '_center_point') else ellipse.center
 
         center_snap_type, center_snap_entity = getattr(self, "_ellipse_center_snap", (SnapType.NONE, None))
         self._apply_center_snap_constraint(center_point, center_snap_type, center_snap_entity)

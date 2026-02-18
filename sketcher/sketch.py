@@ -11,7 +11,7 @@ import math
 from loguru import logger
 
 from .geometry import (
-    Point2D, Line2D, Circle2D, Arc2D, Rectangle2D,
+    Point2D, Line2D, Circle2D, Arc2D, Ellipse2D, Rectangle2D,
     line_line_intersection, points_are_coincident,
     BezierSpline, SplineControlPoint, Spline2D
 )
@@ -55,6 +55,7 @@ class Sketch:
     _line_shape_uuids: Dict[str, str] = field(default_factory=dict)  # line.id -> shape_uuid
     _circle_shape_uuids: Dict[str, str] = field(default_factory=dict)  # circle.id -> shape_uuid
     _arc_shape_uuids: Dict[str, str] = field(default_factory=dict)     # arc.id -> shape_uuid
+    _ellipse_shape_uuids: Dict[str, str] = field(default_factory=dict)  # ellipse.id -> shape_uuid
     _spline_shape_uuids: Dict[str, str] = field(default_factory=dict)  # spline.id -> shape_uuid
 
     # Geometrie
@@ -62,6 +63,7 @@ class Sketch:
     lines: List[Line2D] = field(default_factory=list)
     circles: List[Circle2D] = field(default_factory=list)
     arcs: List[Arc2D] = field(default_factory=list)
+    ellipses: List['Ellipse2D'] = field(default_factory=list)  # Native Ellipsen (TNP v4.1)
     splines: List['BezierSpline'] = field(default_factory=list)  # Bézier-Splines (interaktiv)
     native_splines: List['Spline2D'] = field(default_factory=list)  # B-Splines aus DXF (exakt)
 
@@ -100,6 +102,7 @@ class Sketch:
             'lines': [sid for sid in self._line_shape_uuids.values()],
             'circles': [sid for sid in self._circle_shape_uuids.values()],
             'arcs': [sid for sid in self._arc_shape_uuids.values()],
+            'ellipses': [sid for sid in self._ellipse_shape_uuids.values()],
         }
         return uuids
 
@@ -119,6 +122,7 @@ class Sketch:
             'line': self._line_shape_uuids,
             'circle': self._circle_shape_uuids,
             'arc': self._arc_shape_uuids,
+            'ellipse': self._ellipse_shape_uuids,
             'spline': self._spline_shape_uuids,
         }
 
@@ -333,118 +337,131 @@ class Sketch:
         return arc
 
     def add_ellipse(self, cx: float, cy: float, major_radius: float, minor_radius: float,
-                    angle_deg: float = 0.0, construction: bool = False,
-                    segments: int = 32):
+                    angle_deg: float = 0.0, construction: bool = False) -> Ellipse2D:
         """
-        Fügt eine Ellipse hinzu.
-
-        Aktuelle Implementierung:
-        - Ellipsenrand als geschlossene Segmentkette (profilfähig für Extrude).
-        - Zwei Konstruktionslinien (Major/Minor-Achse) im Fusion360-Stil.
-        - Basis-Constraints für Achsen:
-            * MIDPOINT(center, major_axis)
-            * MIDPOINT(center, minor_axis)
-            * PERPENDICULAR(major_axis, minor_axis)
-            * LENGTH(major_axis), LENGTH(minor_axis)
-
+        Fügt eine native Ellipse hinzu (TNP v4.1).
+        
+        Die Ellipse wird als echtes geometrisches Objekt gespeichert (nicht als
+        Liniensegmente). Dies ermöglicht:
+        - Glatte Rendering ohne Sichtbare Segmente
+        - Native OCP Extrusion mit glatter Fläche
+        - Professionelles CAD-Verhalten wie Fusion 360
+        
+        Args:
+            cx, cy: Zentrum der Ellipse
+            major_radius: Länge der Hauptachse (Radius)
+            minor_radius: Länge der Nebenachse (Radius)
+            angle_deg: Rotation der Hauptachse in Grad
+            construction: True für Konstruktionsgeometrie
+        
         Returns:
-            (ellipse_lines, major_axis_line, minor_axis_line, center_point)
+            Ellipse2D: Die erstellte native Ellipse
         """
+        from modeling.tnp_system import ShapeID, ShapeType
+        import uuid
+        
         major_radius = max(0.01, float(major_radius))
         minor_radius = max(0.01, float(minor_radius))
-
-        seg_count = max(24, int(segments))
-        if seg_count % 4 != 0:
-            seg_count += (4 - (seg_count % 4))
-
-        angle = math.radians(float(angle_deg))
-        ux = math.cos(angle)
-        uy = math.sin(angle)
-        vx = -uy
-        vy = ux
-
-        center = Point2D(cx, cy, construction=True)
-        major_pos = Point2D(cx + ux * major_radius, cy + uy * major_radius, construction=True)
-        major_neg = Point2D(cx - ux * major_radius, cy - uy * major_radius, construction=True)
-        minor_pos = Point2D(cx + vx * minor_radius, cy + vy * minor_radius, construction=True)
-        minor_neg = Point2D(cx - vx * minor_radius, cy - vy * minor_radius, construction=True)
-
-        self.points.extend([center, major_pos, major_neg, minor_pos, minor_neg])
-
-        major_axis = Line2D(major_neg, major_pos, construction=True)
-        minor_axis = Line2D(minor_neg, minor_pos, construction=True)
-        self.lines.extend([major_axis, minor_axis])
-
-        bundle = {
-            "center": center,
-            "major_pos": major_pos,
-            "major_neg": major_neg,
-            "minor_pos": minor_pos,
-            "minor_neg": minor_neg,
-            "major_axis": major_axis,
-            "minor_axis": minor_axis,
-            "perimeter_points": [],
+        angle = float(angle_deg)
+        
+        # Native Ellipse erstellen
+        center = Point2D(cx, cy)
+        ellipse = Ellipse2D(
+            center=center,
+            radius_x=major_radius,
+            radius_y=minor_radius,
+            rotation=angle,
+            construction=construction
+        )
+        
+        # TNP v4.1: Native OCP Daten für optimierte Extrusion
+        ellipse.native_ocp_data = {
+            'center': (cx, cy),
+            'radius_x': major_radius,
+            'radius_y': minor_radius,
+            'rotation': angle,
+            'plane': {
+                'origin': self.plane_origin,
+                'normal': self.plane_normal,
+                'x_dir': self.plane_x_dir,
+                'y_dir': self.plane_y_dir,
+            }
         }
-        self._ellipse_bundles.append(bundle)
-        major_axis._ellipse_axis = "major"
-        minor_axis._ellipse_axis = "minor"
-        major_axis._ellipse_bundle = bundle
-        minor_axis._ellipse_bundle = bundle
-
-        # Ensure visible relation between ellipse and axis endpoints.
-        quarter = seg_count // 4
-        perimeter_points: List[Point2D] = []
-        for i in range(seg_count):
-            if i == 0:
-                perimeter_points.append(major_pos)
-                continue
-            if i == quarter:
-                perimeter_points.append(minor_pos)
-                continue
-            if i == 2 * quarter:
-                perimeter_points.append(major_neg)
-                continue
-            if i == 3 * quarter:
-                perimeter_points.append(minor_neg)
-                continue
-
-            t = (2.0 * math.pi * i) / float(seg_count)
-            local_x = major_radius * math.cos(t)
-            local_y = minor_radius * math.sin(t)
-            x = cx + local_x * ux + local_y * vx
-            y = cy + local_x * uy + local_y * vy
-            pt = Point2D(x, y, construction=construction)
-            pt._ellipse_param_t = t
-            perimeter_points.append(pt)
-
-        # Add only newly created points (axis points are already appended).
-        for pt in perimeter_points:
-            if pt not in (major_pos, minor_pos, major_neg, minor_neg):
-                self.points.append(pt)
-        bundle["perimeter_points"] = perimeter_points
-
-        ellipse_lines: List[Line2D] = []
-        for i in range(seg_count):
-            p1 = perimeter_points[i]
-            p2 = perimeter_points[(i + 1) % seg_count]
-            line = Line2D(p1, p2, construction=construction)
-            # UI-Hinweis: Ellipse ist intern segmentiert, soll aber wie eine
-            # einzelne Kurve wirken (keine Endpoint-Punktwolke / Endpoint-Snaps).
-            line._ellipse_segment = True
-            line._suppress_endpoint_markers = True
-            line._ellipse_bundle = bundle
-            self.lines.append(line)
-            ellipse_lines.append(line)
-
-        # Axis constraints (Fusion-like helper geometry behavior).
-        self.add_midpoint(center, major_axis)
-        self.add_midpoint(center, minor_axis)
-        self.add_perpendicular(major_axis, minor_axis)
-        self.add_length(major_axis, 2.0 * major_radius)
-        self.add_length(minor_axis, 2.0 * minor_radius)
-
+        
+        # TNP v4.1: ShapeUUID für diese Ellipse generieren
+        if not hasattr(self, '_ellipse_shape_uuids'):
+            self._ellipse_shape_uuids = {}
+        
+        ellipse_shape_id = ShapeID(
+            uuid=str(uuid.uuid4())[:8],
+            shape_type=ShapeType.EDGE,  # Ellipse ist eine Edge
+            feature_id=f"{self.id}_ellipse",
+            local_index=len(self.ellipses),
+            geometry_hash=(cx, cy, major_radius, minor_radius, angle)
+        )
+        self._ellipse_shape_uuids[ellipse.id] = ellipse_shape_id.uuid
+        
+        # Zur Sketch-Geometrie hinzufügen
+        self.ellipses.append(ellipse)
+        
+        # Konstruktions-Geometrie: Achsenlinien und Center-Point (für UI)
+        if not construction:
+            # Achsen-Endpunkte berechnen
+            angle_rad = math.radians(angle)
+            ux = math.cos(angle_rad)
+            uy = math.sin(angle_rad)
+            vx = -uy
+            vy = ux
+            
+            center_pt = Point2D(cx, cy, construction=True)
+            major_pos = Point2D(cx + ux * major_radius, cy + uy * major_radius, construction=True)
+            major_neg = Point2D(cx - ux * major_radius, cy - uy * major_radius, construction=True)
+            minor_pos = Point2D(cx + vx * minor_radius, cy + vy * minor_radius, construction=True)
+            minor_neg = Point2D(cx - vx * minor_radius, cy - vy * minor_radius, construction=True)
+            
+            # WICHTIG: Markiere Achsen-Endpunkte als "handle" für bessere Selektion
+            center_pt._ellipse_handle = "center"
+            center_pt._parent_ellipse = ellipse
+            major_pos._ellipse_handle = "major_pos"
+            major_pos._parent_ellipse = ellipse
+            major_neg._ellipse_handle = "major_neg"
+            major_neg._parent_ellipse = ellipse
+            minor_pos._ellipse_handle = "minor_pos"
+            minor_pos._parent_ellipse = ellipse
+            minor_neg._ellipse_handle = "minor_neg"
+            minor_neg._parent_ellipse = ellipse
+            
+            self.points.extend([center_pt, major_pos, major_neg, minor_pos, minor_neg])
+            
+            major_axis = Line2D(major_neg, major_pos, construction=True)
+            minor_axis = Line2D(minor_neg, minor_pos, construction=True)
+            
+            # Achsen mit Ellipse verbinden (Bundle-System für Updates)
+            major_axis._ellipse_axis = "major"
+            major_axis._ellipse_bundle = ellipse
+            minor_axis._ellipse_axis = "minor"
+            minor_axis._ellipse_bundle = ellipse
+            
+            self.lines.extend([major_axis, minor_axis])
+            
+            # Achsen-Constraints (Fusion-like)
+            self.add_midpoint(center_pt, major_axis)
+            self.add_midpoint(center_pt, minor_axis)
+            self.add_perpendicular(major_axis, minor_axis)
+            self.add_length(major_axis, 2.0 * major_radius)
+            self.add_length(minor_axis, 2.0 * minor_radius)
+            
+            # Referenz für späteres Editieren
+            ellipse._center_point = center_pt
+            ellipse._major_axis = major_axis
+            ellipse._minor_axis = minor_axis
+            ellipse._major_pos = major_pos
+            ellipse._major_neg = major_neg
+            ellipse._minor_pos = minor_pos
+            ellipse._minor_neg = minor_neg
+        
         self.invalidate_profiles()
-        return ellipse_lines, major_axis, minor_axis, center
+        return ellipse
     
     def add_rectangle(self, x: float, y: float, width: float, height: float, construction: bool = False) -> List[Line2D]:
         """Fügt ein Rechteck hinzu (4 Linien mit geteilten Eckpunkten)"""
@@ -812,9 +829,60 @@ class Sketch:
 
     def _update_ellipse_geometry(self):
         """
-        Rekonstruiert segmentierte Ellipsen aus ihren Achsenpunkten.
-        Damit wirken LENGTH-/MIDPOINT-/PERPENDICULAR-Edits auf die tatsächliche Ellipsengeometrie.
+        Synchronisiert Ellipsen-Geometrie:
+        - Bei Drag: Ellipse-Parameter → Achsen (Live-Update während Drag)
+        - Bei Constraint-Änderung: Achsen → Ellipse-Parameter (nach Solve)
         """
+        import math
+        
+        for ellipse in getattr(self, 'ellipses', []):
+            if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
+                continue
+            
+            # Hole aktuelle Achsen-Punkte
+            major_pos = ellipse._major_axis.end
+            major_neg = ellipse._major_axis.start
+            minor_pos = ellipse._minor_axis.end
+            minor_neg = ellipse._minor_axis.start
+            center_pt = ellipse._center_point
+            
+            # Berechne Center aus Achsen-Mittelpunkten
+            center_x = (major_pos.x + major_neg.x) / 2
+            center_y = (major_pos.y + major_neg.y) / 2
+            
+            # Berechne Radien aus Achsen-Längen
+            major_dx = major_pos.x - major_neg.x
+            major_dy = major_pos.y - major_neg.y
+            major_length = math.hypot(major_dx, major_dy)
+            new_rx = major_length / 2
+            
+            minor_dx = minor_pos.x - minor_neg.x
+            minor_dy = minor_pos.y - minor_neg.y
+            minor_length = math.hypot(minor_dx, minor_dy)
+            new_ry = minor_length / 2
+            
+            # Berechne Rotation aus Major-Achse
+            new_rotation = math.degrees(math.atan2(major_dy, major_dx))
+            
+            # Update Ellipse-Parameter (aus Achsen berechnet)
+            ellipse.center.x = center_x
+            ellipse.center.y = center_y
+            ellipse.radius_x = max(0.01, new_rx)
+            ellipse.radius_y = max(0.01, new_ry)
+            ellipse.rotation = new_rotation
+            
+            # Synchronisiere Center-Point mit berechnetem Center
+            center_pt.x = center_x
+            center_pt.y = center_y
+            
+            # native_ocp_data aktualisieren
+            if ellipse.native_ocp_data:
+                ellipse.native_ocp_data['center'] = (center_x, center_y)
+                ellipse.native_ocp_data['radius_x'] = ellipse.radius_x
+                ellipse.native_ocp_data['radius_y'] = ellipse.radius_y
+                ellipse.native_ocp_data['rotation'] = new_rotation
+        
+        # === 2. Legacy Bundles: Ellipse aus Achsen berechnen (altes System) ===
         if not self._ellipse_bundles:
             return
 
@@ -1338,6 +1406,35 @@ class Sketch:
         
         self.constraints = [c for c in self.constraints 
                           if arc not in c.entities]
+        
+        # Bereinige verwaiste Punkte
+        self._cleanup_orphan_points()
+    
+    def delete_ellipse(self, ellipse: Ellipse2D):
+        """Löscht eine Ellipse und bereinigt verwaiste Punkte und Achsen"""
+        if ellipse in self.ellipses:
+            self.ellipses.remove(ellipse)
+        
+        self.constraints = [c for c in self.constraints 
+                          if ellipse not in c.entities]
+        
+        # Lösche zugehörige Konstruktionsgeometrie (Achsen)
+        if hasattr(ellipse, '_center_point') and ellipse._center_point in self.points:
+            self.points.remove(ellipse._center_point)
+        if hasattr(ellipse, '_major_axis') and ellipse._major_axis in self.lines:
+            self.lines.remove(ellipse._major_axis)
+            # Achsen-Endpunkte auch löschen
+            if ellipse._major_axis.start in self.points:
+                self.points.remove(ellipse._major_axis.start)
+            if ellipse._major_axis.end in self.points:
+                self.points.remove(ellipse._major_axis.end)
+        if hasattr(ellipse, '_minor_axis') and ellipse._minor_axis in self.lines:
+            self.lines.remove(ellipse._minor_axis)
+            # Achsen-Endpunkte auch löschen
+            if ellipse._minor_axis.start in self.points:
+                self.points.remove(ellipse._minor_axis.start)
+            if ellipse._minor_axis.end in self.points:
+                self.points.remove(ellipse._minor_axis.end)
         
         # Bereinige verwaiste Punkte
         self._cleanup_orphan_points()

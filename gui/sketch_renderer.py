@@ -653,6 +653,55 @@ class SketchRendererMixin:
             if last_point:
                 path_endpoints.addEllipse(last_point, 3, 3)
 
+        # --- 3b. Ellipsen sammeln (Native Ellipse2D - glatte Kurven) ---
+        if hasattr(self.sketch, 'ellipses') and self.sketch.ellipses:
+            for ellipse in self.sketch.ellipses:
+                # Bounding box für culling (approximiert als Rechteck)
+                max_r = max(ellipse.radius_x, ellipse.radius_y)
+                c = self.world_to_screen(QPointF(ellipse.center.x, ellipse.center.y))
+                r_screen = max_r * self.view_scale
+                bounds = QRectF(c.x() - r_screen, c.y() - r_screen, 2*r_screen, 2*r_screen).adjusted(-10, -10, 10, 10)
+                if not is_visible(bounds): 
+                    continue
+
+                # Ellipse als Polyline für glatte Darstellung
+                # Mehr Segmente für sehr flache Ellipsen
+                circumference_approx = 2 * math.pi * math.sqrt((ellipse.radius_x**2 + ellipse.radius_y**2) / 2)
+                steps = max(64, int(circumference_approx * self.view_scale / 5))  # ~5px pro Segment
+                steps = min(steps, 256)  # Cap bei 256 für Performance
+
+                temp_path = QPainterPath()
+                curve_points = ellipse.get_curve_points(steps)
+                
+                for i, (wx, wy) in enumerate(curve_points):
+                    screen_pt = self.world_to_screen(QPointF(wx, wy))
+                    if i == 0:
+                        temp_path.moveTo(screen_pt)
+                    else:
+                        temp_path.lineTo(screen_pt)
+                # Schließen
+                temp_path.closeSubpath()
+
+                # Style zuweisen
+                is_sel = getattr(self, 'selected_ellipses', set()) and ellipse in self.selected_ellipses
+                is_hov = self.hovered_entity == ellipse
+                is_fixed = getattr(ellipse, 'fixed', False)
+                is_constraint_highlight = (highlight_entity is not None and ellipse is highlight_entity)
+
+                if is_constraint_highlight:
+                    path_constraint_highlight.addPath(temp_path)
+                elif is_sel:
+                    path_selected.addPath(temp_path)
+                    path_glow.addPath(temp_path)
+                elif is_hov:
+                    path_hover.addPath(temp_path)
+                elif ellipse.construction:
+                    path_construction.addPath(temp_path)
+                elif is_fixed:
+                    path_fixed.addPath(temp_path)
+                else:
+                    path_normal.addPath(temp_path)
+
         # --- 4. ZEICHNEN ---
 
         if not path_glow.isEmpty():
@@ -748,6 +797,36 @@ class SketchRendererMixin:
                        QPointF(screen_pt.x() + size, screen_pt.y() + size))
             p.drawLine(QPointF(screen_pt.x() + size, screen_pt.y() - size),
                        QPointF(screen_pt.x() - size, screen_pt.y() + size))
+
+        # --- 4c. Ellipse Handle-Punkte (Achsen-Endpunkte) ---
+        # Diese Punkte sind Teil von Linien aber müssen als Handles sichtbar sein
+        for pt in self.sketch.points:
+            if not getattr(pt, '_ellipse_handle', None):
+                continue
+            
+            screen_pt = self.world_to_screen(QPointF(pt.x, pt.y))
+            is_hov = self.hovered_entity == pt
+            handle_type = pt._ellipse_handle
+            
+            # Größere, farbige Handles für bessere Sichtbarkeit
+            if handle_type == "center":
+                # Grünes Quadrat für Center (wie bei Circle)
+                p.setPen(QPen(QColor(0, 255, 0), 2))
+                p.setBrush(QColor(0, 255, 0, 128))
+                size = 7 if is_hov else 6
+                p.drawRect(int(screen_pt.x() - size), int(screen_pt.y() - size), size * 2, size * 2)
+            elif handle_type in ("major_pos", "major_neg"):
+                # Rosa Kreis für Major-Achse
+                p.setPen(QPen(QColor(255, 100, 150), 2))
+                p.setBrush(QColor(255, 100, 150, 128))
+                size = 7 if is_hov else 6
+                p.drawEllipse(screen_pt, size, size)
+            elif handle_type in ("minor_pos", "minor_neg"):
+                # Roter Kreis für Minor-Achse
+                p.setPen(QPen(QColor(255, 50, 50), 2))
+                p.setBrush(QColor(255, 50, 50, 128))
+                size = 7 if is_hov else 6
+                p.drawEllipse(screen_pt, size, size)
 
         # --- 5. Splines (Separat & Korrigiert) ---
         for spline in self.sketch.splines:

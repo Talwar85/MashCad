@@ -7009,6 +7009,19 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 pts_3d = [t3d(p[0], p[1]) for p in pts_2d]
                 self.plotter.add_mesh(pv.lines_from_points(np.array(pts_3d)), color=col, line_width=3, name=f"s_{sid}_sp_{i}", pickable=True)
                 self._sketch_actors.append(f"s_{sid}_sp_{i}")
+        
+        # Ellipsen (Native Ellipse2D)
+        for i, ellipse in enumerate(getattr(s, 'ellipses', [])):
+            col = 'gray' if getattr(ellipse, 'construction', False) else '#4d94ff'
+            pts = []
+            # Ellipse als geschlossene Kurve mit 64 Segmenten
+            for j in range(65):
+                angle = math.radians(j * 360 / 64)
+                pt = ellipse.point_at_angle(angle)
+                pts.append(t3d(pt.x, pt.y))
+            if len(pts) > 1:
+                self.plotter.add_mesh(pv.lines_from_points(np.array(pts)), color=col, line_width=3, name=f"s_{sid}_e_{i}", pickable=True)
+                self._sketch_actors.append(f"s_{sid}_e_{i}")
 
     def _show_selection_planes(self):
         sz = 150; op = 0.25

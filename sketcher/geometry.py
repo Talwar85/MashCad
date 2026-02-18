@@ -295,27 +295,75 @@ class Arc2D:
 
 @dataclass
 class Ellipse2D:
-    """2D-Ellipse mit separaten Achsen und Rotation in Grad."""
+    """2D-Ellipse mit separaten Achsen und Rotation in Grad.
+    
+    TNP v4.1: Native OCP Daten für optimale Extrusion.
+    Wenn native_ocp_data gesetzt ist, wird die Ellipse direkt als
+    nativer OCP Ellipse extrudiert (glatte Fläche statt Polygon-Approximation).
+    """
     center: Point2D
-    radius_x: float = 10.0
-    radius_y: float = 5.0
-    rotation: float = 0.0
+    radius_x: float = 10.0  # Major radius
+    radius_y: float = 5.0   # Minor radius
+    rotation: float = 0.0   # Rotation in Grad
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     construction: bool = False
+    # TNP v4.1: Native OCP Daten für optimierte Extrusion
+    native_ocp_data: Optional[dict] = None  # {center, radius_x, radius_y, rotation, plane}
+
+    def point_at_angle(self, angle_deg: float) -> Point2D:
+        """Punkt auf der Ellipse bei gegebenem Winkel (parametrisch)."""
+        rad = math.radians(angle_deg)
+        # Lokale Koordinaten (ungerotiert)
+        local_x = self.radius_x * math.cos(rad)
+        local_y = self.radius_y * math.sin(rad)
+        # Rotation anwenden
+        rot_rad = math.radians(self.rotation)
+        cos_rot = math.cos(rot_rad)
+        sin_rot = math.sin(rot_rad)
+        x = self.center.x + local_x * cos_rot - local_y * sin_rot
+        y = self.center.y + local_x * sin_rot + local_y * cos_rot
+        return Point2D(x, y)
 
     def point_on_major_axis(self) -> Point2D:
-        rad = math.radians(self.rotation)
-        return Point2D(
-            self.center.x + self.radius_x * math.cos(rad),
-            self.center.y + self.radius_x * math.sin(rad),
-        )
+        """Endpunkt der Major-Achse."""
+        return self.point_at_angle(0)
 
     def point_on_minor_axis(self) -> Point2D:
-        rad = math.radians(self.rotation)
-        return Point2D(
-            self.center.x - self.radius_y * math.sin(rad),
-            self.center.y + self.radius_y * math.cos(rad),
-        )
+        """Endpunkt der Minor-Achse (90°)."""
+        return self.point_at_angle(90)
+
+    def get_curve_points(self, segments: int = 64) -> List[Tuple[float, float]]:
+        """Berechnet Punkte entlang der Ellipse für Rendering.
+        
+        Args:
+            segments: Anzahl der Segmente (default: 64 für glatte Kurve)
+        
+        Returns:
+            Liste von (x, y) Tupeln
+        """
+        points = []
+        for i in range(segments + 1):
+            angle = (360.0 * i) / segments
+            pt = self.point_at_angle(angle)
+            points.append((pt.x, pt.y))
+        return points
+
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON."""
+        return {
+            "type": "Ellipse2D",
+            "center_x": self.center.x,
+            "center_y": self.center.y,
+            "radius_x": self.radius_x,
+            "radius_y": self.radius_y,
+            "rotation": self.rotation,
+            "id": self.id,
+            "construction": self.construction,
+            "native_ocp_data": self.native_ocp_data,
+        }
+
+    def __repr__(self):
+        return f"Ellipse(center={self.center}, rx={self.radius_x:.2f}, ry={self.radius_y:.2f}, rot={self.rotation:.1f}°)"
 
 
 @dataclass
