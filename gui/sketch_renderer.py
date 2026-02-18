@@ -2807,34 +2807,32 @@ class SketchRendererMixin:
         a2 = math.degrees(math.atan2(my - uy, mx - ux))
         a3 = math.degrees(math.atan2(ey - uy, ex - ux))
 
-        # Berechne beide möglichen Bögen (kurz und lang)
-        base_span = (a3 - a1) % 360
+        # Berechne beide mögliche Bögen (kurz CCW und kurz CW)
+        ccw_short = (a3 - a1) % 360
+        cw_short = -((a1 - a3) % 360)
         
+        def point_on_arc_simple(target, start, end):
+            """Prüft ob target auf dem Bogen von start nach end liegt"""
+            sweep = end - start
+            if abs(sweep) < 1e-9:
+                return abs((target - start) % 360) < 1e-9
+            
+            rel_target = (target - start) % 360
+            
+            if sweep > 0:  # CCW
+                return rel_target <= sweep + 1e-9
+            else:  # CW
+                rel_target_cw = (start - target) % 360
+                return rel_target_cw <= abs(sweep) + 1e-9
+        
+        # Teste kurze Bögen
         candidates = [
-            (base_span, "ccw_short"),
-            (base_span - 360, "ccw_long"),
-            (-(360 - base_span), "cw_short"),
-            (360 - base_span, "cw_long")
+            (a1 + ccw_short, "ccw_short"),
+            (a1 + cw_short, "cw_short"),
         ]
         
-        def point_on_arc(target, start, span):
-            if abs(span) < 1e-9:
-                return abs((target - start) % 360) < 1e-9
-            rel_target = (target - start) % 360
-            if span > 0:
-                if span <= 360:
-                    return rel_target <= span + 1e-9
-                else:
-                    return rel_target >= 360 - (span - 360) - 1e-9 or rel_target <= 1e-9
-            else:
-                span_abs = abs(span)
-                if span_abs <= 360:
-                    return rel_target >= 360 - span_abs - 1e-9 or rel_target <= 1e-9
-                else:
-                    return rel_target >= 360 - span_abs + 360 - 1e-9
+        for end_angle, name in candidates:
+            if point_on_arc_simple(a2, a1, end_angle):
+                return (ux, uy, r, a1, end_angle)
         
-        for span, name in candidates:
-            if point_on_arc(a2, a1, span):
-                return (ux, uy, r, a1, a1 + span)
-        
-        return (ux, uy, r, a1, a1 + base_span)
+        return (ux, uy, r, a1, a1 + ccw_short)

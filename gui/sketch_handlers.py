@@ -975,47 +975,36 @@ class SketchHandlersMixin:
         a2 = math.degrees(math.atan2(my - uy, mx - ux))
         a3 = math.degrees(math.atan2(ey - uy, ex - ux))
 
-        # Berechne beide möglichen Bögen (kurz und lang)
-        # Basis-Span (immer 0-360)
-        base_span = (a3 - a1) % 360
+        # Berechne beide mögliche Bögen (kurz CCW und kurz CW)
+        ccw_short = (a3 - a1) % 360
+        cw_short = -((a1 - a3) % 360)
         
-        # 4 Kandidaten: CCW kurz/lang, CW kurz/lang
-        candidates = [
-            (base_span, "ccw_short"),           # 0-360
-            (base_span - 360, "ccw_long"),      # -360-0
-            (-(360 - base_span), "cw_short"),   # -(360-0)
-            (360 - base_span, "cw_long")        # 0-360 andere Richtung
-        ]
-        
-        def point_on_arc(target, start, span):
-            """Prüft ob target auf dem Bogen von start mit span liegt"""
-            if abs(span) < 1e-9:
+        def point_on_arc_simple(target, start, end):
+            """Prüft ob target auf dem Bogen von start nach end liegt"""
+            sweep = end - start
+            if abs(sweep) < 1e-9:
                 return abs((target - start) % 360) < 1e-9
             
-            # Normalisiere beide Winkel relativ zum Start
             rel_target = (target - start) % 360
             
-            if span > 0:  # CCW
-                # Bogen geht von 0 bis span
-                if span <= 360:
-                    return rel_target <= span + 1e-9
-                else:  # long arc
-                    return rel_target >= 360 - (span - 360) - 1e-9 or rel_target <= 1e-9
-            else:  # CW (span negativ)
-                span_abs = abs(span)
-                if span_abs <= 360:
-                    # Bogen geht von 0 zurück bis span_abs
-                    return rel_target >= 360 - span_abs - 1e-9 or rel_target <= 1e-9
-                else:  # long arc
-                    return rel_target >= 360 - span_abs + 360 - 1e-9
+            if sweep > 0:  # CCW
+                return rel_target <= sweep + 1e-9
+            else:  # CW
+                rel_target_cw = (start - target) % 360
+                return rel_target_cw <= abs(sweep) + 1e-9
         
-        # Teste alle Kandidaten
-        for span, name in candidates:
-            if point_on_arc(a2, a1, span):
-                return (ux, uy, r, a1, a1 + span)
+        # Teste kurze Bögen
+        candidates = [
+            (a1 + ccw_short, "ccw_short"),
+            (a1 + cw_short, "cw_short"),
+        ]
+        
+        for end_angle, name in candidates:
+            if point_on_arc_simple(a2, a1, end_angle):
+                return (ux, uy, r, a1, end_angle)
         
         # Fallback: kurzer CCW-Bogen
-        return (ux, uy, r, a1, a1 + base_span)
+        return (ux, uy, r, a1, a1 + ccw_short)
     
     def _handle_slot(self, pos, snap_type, snap_entity=None):
         """
