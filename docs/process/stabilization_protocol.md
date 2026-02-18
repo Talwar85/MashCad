@@ -101,6 +101,17 @@ Verstoesse gegen dieses Protokoll fuehren zu:
 2. Ruecknahme der betroffenen Aenderung,
 3. Neuplanung mit reduziertem Scope.
 
+## 12. Prompt-Standards (verbindlich)
+Jeder Prompt an KI-Implementierer MUSS folgende Pflichtklauseln enthalten:
+1. **CAD-Kernel-First:** Implementierungen muessen als native CAD-Objekte erfolgen.
+   - Beispiel: Ellipse als native `Ellipse2D`, nicht als Linien-Approximation.
+2. **Keine Alternativloesungen:** Keine Ersatzpfade, die Fachlogik umgehen.
+3. **Keine Quickhacks:** Keine kurzfristigen Umgehungen ohne belastbare Lifecycle-Abdeckung.
+4. **Lifecycle-Pflicht:** Save, Load, Undo, Redo, Edit, Reopen muessen fuer geaenderte Objekte mitgeprueft werden.
+5. **Visual + Functional Validation:** Nicht nur Unit-Tests, sondern auch sichtbares Interaktionsverhalten validieren.
+6. **No-Skip-Regel:** Keine neuen Skip/XFail-Marker zur kosmetischen Gruenfaerbung.
+7. **Traceability:** Handoff MUSS Root Cause, geaenderte Dateien, Risiko und Rollback-Referenz enthalten.
+
 ---
 
 **Kurzform:**  
