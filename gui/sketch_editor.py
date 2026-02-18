@@ -3978,16 +3978,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     def _resolve_direct_edit_target_circle(self):
         """
         Ermittelt den aktuell bearbeitbaren Kreis:
-        - Direkt gehoverter Kreis (prüft auch ob Polygon-Treiber)
+        - Direkt gehoverter Kreis
         - Polygon-Treiberkreis unter gehoverter Linie
         - Fallback auf Selektion (ein Kreis oder eine Polygon-Linie)
         """
         hovered = self._last_hovered_entity
 
         if isinstance(hovered, Circle2D):
-            # W34-fix: Check if this circle is a polygon driver circle
-            if self._is_polygon_driver_circle(hovered):
-                return hovered, "polygon"
             return hovered, "circle"
 
         if isinstance(hovered, Line2D):
@@ -3996,11 +3993,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return poly_circle, "polygon"
 
         if len(self.selected_circles) == 1:
-            circle = self.selected_circles[0]
-            # W34-fix: Check if this circle is a polygon driver circle
-            if self._is_polygon_driver_circle(circle):
-                return circle, "polygon"
-            return circle, "circle"
+            return self.selected_circles[0], "circle"
 
         if len(self.selected_lines) == 1:
             poly_circle = self._find_polygon_driver_circle_for_line(self.selected_lines[0])
@@ -4158,7 +4151,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
             if d_center <= hit_radius:
                 # W34-fix: Check if this is a polygon driver circle -> treat as polygon center drag
-                if handles.get("source") == "polygon":
+                # This works for both: hovering polygon lines (source="polygon") OR
+                # hovering the construction circle directly (check via _is_polygon_driver_circle)
+                if handles.get("source") == "polygon" or self._is_polygon_driver_circle(circle):
                     return {**handles, "kind": "polygon", "mode": "center", "polygon": circle}
                 return {**handles, "kind": "circle", "mode": "center"}
 
