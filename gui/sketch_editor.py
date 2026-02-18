@@ -905,6 +905,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_polygon = None
         self._direct_edit_polygon_vertex_idx = -1
         self._direct_edit_polygon_vertex_start = QPointF()
+        self._direct_edit_polygon_point_refs = []   # W34-fix: point objects for regular polygons
+        self._direct_edit_polygon_point_starts = []  # W34-fix: start positions of all polygon points
         
         # Schwebende Optionen-Palette
         self.tool_options = ToolOptionsPopup(self)
@@ -1416,7 +1418,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Screen-Dirty-Rect für Polygon-Direct-Edit.
         Enthält alle Vertices, Selection-Glow und Sicherheitsreserve.
         """
+        # W34-fix: Support both Polygon2D (has points) and regular polygons (Circle2D driver)
         points = getattr(polygon, "points", [])
+        
+        # For regular polygons, use stored point references if available
+        if not points and hasattr(self, '_direct_edit_polygon_point_refs'):
+            points = self._direct_edit_polygon_point_refs
+        
+        # For Circle2D (driver circle), estimate based on radius
+        if not points and hasattr(polygon, 'radius'):
+            # Estimate dirty rect based on circle radius - covers the polygon bounds
+            from PySide6.QtCore import QPointF
+            center = QPointF(float(polygon.center.x), float(polygon.center.y))
+            radius = float(polygon.radius)
+            c_screen = self.world_to_screen(center)
+            r_screen = radius * self.view_scale
+            return QRectF(
+                c_screen.x() - r_screen - 38, c_screen.y() - r_screen - 38,
+                2 * r_screen + 76, 2 * r_screen + 76
+            )
+        
         if not points:
             return QRectF()
         
@@ -4440,6 +4461,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_polygon_driver_circle = None
         self._direct_edit_polygon_start_center = QPointF()
         self._direct_edit_start_circle_center = QPointF()
+        self._direct_edit_polygon_point_refs = []   # W34-fix: point objects for regular polygons
         self._direct_edit_polygon_point_starts = []  # W34-fix: start positions of all polygon points
         # W34: Slot drag variables
         self._direct_edit_slot = None
@@ -4577,25 +4599,51 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             center_handle = handle_hit.get("center", QPointF())
             self._direct_edit_polygon_start_center = center_handle
 
-            # Find driver circle for this polygon
+            # Find driver circle and all polygon points
+            # Note: Regular polygons don't have a 'points' attribute - they consist of lines + circle + constraints
             points = getattr(polygon, "points", [])
             driver_circle = None
+            polygon_points = []
+            
             if points:
-                # Try to find the driver circle through the polygon lines
+                # This is a Polygon2D object - use its points directly
+                polygon_points = points
                 for line in self.sketch.lines:
                     if line.start in points or line.end in points:
                         driver_circle = self._find_polygon_driver_circle_for_line(line)
-                        if driver_circle is not None:
-                            self._direct_edit_polygon_driver_circle = driver_circle
-                            self._direct_edit_start_circle_center = QPointF(
-                                float(driver_circle.center.x),
-                                float(driver_circle.center.y)
-                            )
-                            # W34-fix: save start positions of all polygon points
-                            self._direct_edit_polygon_point_starts = [
-                                QPointF(float(p.x), float(p.y)) for p in points
-                            ]
-                            break
+                        break
+            else:
+                # This is a regular polygon (lines + circle) - polygon is actually the driver circle
+                # Find the driver circle through _find_polygon_driver_circle_for_line or use polygon directly if it's a circle
+                from sketcher import Circle2D
+                if isinstance(polygon, Circle2D):
+                    driver_circle = polygon
+                else:
+                    # Try to find via hovered line
+                    hovered = self._last_hovered_entity
+                    if isinstance(hovered, Line2D):
+                        driver_circle = self._find_polygon_driver_circle_for_line(hovered)
+                
+                # Find all points with POINT_ON_CIRCLE constraint to this driver circle
+                if driver_circle is not None:
+                    for c in self.sketch.constraints:
+                        if c.type.name == "POINT_ON_CIRCLE" and len(c.entities) >= 2:
+                            point_entity = c.entities[0]
+                            circle_entity = c.entities[1]
+                            if circle_entity is driver_circle:
+                                polygon_points.append(point_entity)
+            
+            if driver_circle is not None:
+                self._direct_edit_polygon_driver_circle = driver_circle
+                self._direct_edit_start_circle_center = QPointF(
+                    float(driver_circle.center.x),
+                    float(driver_circle.center.y)
+                )
+                # W34-fix: save point references and start positions of all polygon points
+                self._direct_edit_polygon_point_refs = polygon_points  # Store actual point objects
+                self._direct_edit_polygon_point_starts = [
+                    QPointF(float(p.x), float(p.y)) for p in polygon_points
+                ]
 
             if polygon not in self.selected_polygons:
                 self._clear_selection()
@@ -5192,8 +5240,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     driver_circle.center.y = self._direct_edit_start_circle_center.y() + dy
 
                     # W34-fix: Move all polygon points together (solver only runs on finish)
-                    points = getattr(polygon, "points", [])
-                    for i, pt in enumerate(points):
+                    # Use stored point references instead of polygon.points (which doesn't exist for regular polygons)
+                    point_refs = getattr(self, '_direct_edit_polygon_point_refs', [])
+                    for i, pt in enumerate(point_refs):
                         if i < len(self._direct_edit_polygon_point_starts):
                             pt.x = self._direct_edit_polygon_point_starts[i].x() + dx
                             pt.y = self._direct_edit_polygon_point_starts[i].y() + dy
@@ -9064,6 +9113,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_polygon = None
         self._direct_edit_polygon_vertex_idx = -1
         self._direct_edit_polygon_vertex_start = QPointF()
+        self._direct_edit_polygon_point_refs = []  # W34-fix: reset point references
+        self._direct_edit_polygon_point_starts = []  # W34-fix: reset start positions
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
