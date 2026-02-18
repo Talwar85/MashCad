@@ -3962,16 +3962,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return None, None
         return line, context
 
+    def _is_polygon_driver_circle(self, circle):
+        """
+        Prüft ob ein Kreis ein Polygon-Treiberkreis ist.
+        Ein Treiberkreis hat POINT_ON_CIRCLE Constraints zu Polygon-Punkten.
+        """
+        if circle is None:
+            return False
+        for c in self.sketch.constraints:
+            if c.type.name == "POINT_ON_CIRCLE" and len(c.entities) >= 2:
+                if c.entities[1] is circle:
+                    return True
+        return False
+
     def _resolve_direct_edit_target_circle(self):
         """
         Ermittelt den aktuell bearbeitbaren Kreis:
-        - Direkt gehoverter Kreis
+        - Direkt gehoverter Kreis (prüft auch ob Polygon-Treiber)
         - Polygon-Treiberkreis unter gehoverter Linie
         - Fallback auf Selektion (ein Kreis oder eine Polygon-Linie)
         """
         hovered = self._last_hovered_entity
 
         if isinstance(hovered, Circle2D):
+            # W34-fix: Check if this circle is a polygon driver circle
+            if self._is_polygon_driver_circle(hovered):
+                return hovered, "polygon"
             return hovered, "circle"
 
         if isinstance(hovered, Line2D):
@@ -3980,7 +3996,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return poly_circle, "polygon"
 
         if len(self.selected_circles) == 1:
-            return self.selected_circles[0], "circle"
+            circle = self.selected_circles[0]
+            # W34-fix: Check if this circle is a polygon driver circle
+            if self._is_polygon_driver_circle(circle):
+                return circle, "polygon"
+            return circle, "circle"
 
         if len(self.selected_lines) == 1:
             poly_circle = self._find_polygon_driver_circle_for_line(self.selected_lines[0])
