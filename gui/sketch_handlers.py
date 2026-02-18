@@ -2138,8 +2138,8 @@ class SketchHandlersMixin:
             for x1, y1, x2, y2, _ in offset_data:
                 self.offset_preview_lines.append((x1, y1, x2, y2))
         
-        self.update()
-    
+        self.request_update()
+
     def _apply_offset(self):
         """Wendet den aktuellen Offset an"""
         offset_type = self.tool_data.get('offset_type', 'profile')

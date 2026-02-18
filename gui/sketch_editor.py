@@ -824,6 +824,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.live_width = 0.0
         self.live_height = 0.0
         self.live_radius = 0.0
+        self.live_dx = 0.0  # Für Modify-Tools (MOVE, COPY)
+        self.live_dy = 0.0  # Für Modify-Tools (MOVE, COPY)
         
         self.polygon_sides = 6
         self.rect_mode = 0  # 0=2-Punkt, 1=Center (wie Fusion360)
@@ -7034,6 +7036,47 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.live_angle = math.degrees(math.atan2(snapped.y() - c.y(), snapped.x() - c.x()))
                 if self.dim_input.isVisible():
                     self.dim_input.set_value('angle', self.live_angle)
+
+        # Phase 8: Live-Werte für Modify-Tools (MOVE, COPY, ROTATE, SCALE)
+        elif self.current_tool == SketchTool.MOVE and self.tool_step == 1:
+            p1 = self.tool_points[0]
+            if not self.dim_input.is_locked('dx'):
+                dx = snapped.x() - p1.x()
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('dx', dx)
+            if not self.dim_input.is_locked('dy'):
+                dy = snapped.y() - p1.y()
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('dy', dy)
+
+        elif self.current_tool == SketchTool.COPY and self.tool_step == 1:
+            # COPY benutzt die gleichen Felder wie MOVE
+            p1 = self.tool_points[0]
+            if not self.dim_input.is_locked('dx'):
+                dx = snapped.x() - p1.x()
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('dx', dx)
+            if not self.dim_input.is_locked('dy'):
+                dy = snapped.y() - p1.y()
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('dy', dy)
+
+        elif self.current_tool == SketchTool.ROTATE and self.tool_step >= 1:
+            center = self.tool_points[0]
+            if not self.dim_input.is_locked('angle'):
+                angle = math.degrees(math.atan2(snapped.y() - center.y(), snapped.x() - center.x()))
+                self.live_angle = angle
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('angle', angle)
+
+        elif self.current_tool == SketchTool.SCALE and self.tool_step == 1:
+            center = self.tool_points[0]
+            current_dist = math.hypot(snapped.x() - center.x(), snapped.y() - center.y())
+            base_dist = self.tool_data.get('base_dist', current_dist)
+            if base_dist > 0.01 and not self.dim_input.is_locked('factor'):
+                factor = current_dist / base_dist
+                if self.dim_input.isVisible():
+                    self.dim_input.set_value('factor', factor)
 
     def wheelEvent(self, event):
         pos = event.position()
