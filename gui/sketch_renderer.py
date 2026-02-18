@@ -1575,10 +1575,12 @@ class SketchRendererMixin:
                 # Step 1: Draw line from start to cursor
                 p.drawLine(self.world_to_screen(self.tool_points[0]), self.world_to_screen(snap))
             elif len(self.tool_points) == 2:
-                # Step 2: Calculate and draw arc preview
-                p1, p2 = self.tool_points[0], self.tool_points[1]
-                p3 = snap
-                arc_data = self._calc_arc_3point(p1, p2, p3)
+                # Step 2: Draw arc preview with mouse as through point
+                # Fusion 360: p1=Start, p2=End, snap=Through point
+                p1_start = self.tool_points[0]   # Start
+                p2_end = self.tool_points[1]     # End
+                p3_through = snap                # Through point (mouse)
+                arc_data = self._calc_arc_3point(p1_start, p3_through, p2_end)
                 if arc_data:
                     cx, cy, r, start_angle, end_angle = arc_data
                     

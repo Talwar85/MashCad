@@ -918,13 +918,27 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _handle_arc_3point(self, pos, snap_type):
+        """
+        3-Punkt Arc wie Fusion 360:
+        - Klick 1: Startpunkt
+        - Klick 2: Endpunkt  
+        - Klick 3: Durchgangspunkt (definiert Krümmung)
+        """
         self.tool_points.append(pos)
         n = len(self.tool_points)
-        if n == 1: self.tool_step = 1; self.status_message.emit(tr("Through point"))
-        elif n == 2: self.tool_step = 2; self.status_message.emit(tr("Endpoint"))
+        if n == 1: 
+            self.tool_step = 1
+            self.status_message.emit(tr("End point"))
+        elif n == 2: 
+            self.tool_step = 2
+            self.status_message.emit(tr("Through point (defines arc curvature)"))
         else:
-            p1, p2, p3 = self.tool_points[:3]
-            arc = self._calc_arc_3point(p1, p2, p3)
+            # Fusion 360 Reihenfolge: p1=Start, p2=Ende, p3=Durchgang
+            p1_start = self.tool_points[0]   # Start
+            p2_end = self.tool_points[1]     # Ende
+            p3_through = self.tool_points[2] # Durchgangspunkt
+            # _calc_arc_3point erwartet: start, through, end
+            arc = self._calc_arc_3point(p1_start, p3_through, p2_end)
             if arc:
                 self._save_undo()
                 self.sketch.add_arc(*arc, construction=self.construction_mode)
