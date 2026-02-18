@@ -1581,15 +1581,28 @@ class SketchRendererMixin:
                 arc_data = self._calc_arc_3point(p1, p2, p3)
                 if arc_data:
                     cx, cy, r, start_angle, end_angle = arc_data
-                    # Draw the arc
-                    rect = QRectF(
-                        self.world_to_screen(QPointF(cx - r, cy + r)),
-                        self.world_to_screen(QPointF(cx + r, cy - r))
-                    ).normalized()
-                    # Qt angles are in 1/16 degrees, and 0 is at 3 o'clock
-                    start_qt = -start_angle * 16  # Flip Y for Qt
-                    span_qt = -(end_angle - start_angle) * 16
-                    p.drawArc(rect, int(start_qt), int(span_qt))
+                    
+                    # Draw arc as polyline (more accurate and consistent with result)
+                    path = QPainterPath()
+                    n_segments = 64
+                    span = end_angle - start_angle
+                    # Handle both CW and CCW spans
+                    if span > 180:
+                        span = span - 360
+                    elif span < -180:
+                        span = span + 360
+                    
+                    for i in range(n_segments + 1):
+                        t = i / n_segments
+                        angle = math.radians(start_angle + span * t)
+                        px = cx + r * math.cos(angle)
+                        py = cy + r * math.sin(angle)
+                        sp = self.world_to_screen(QPointF(px, py))
+                        if i == 0:
+                            path.moveTo(sp)
+                        else:
+                            path.lineTo(sp)
+                    p.drawPath(path)
                     
                     # Draw chord line between start and end
                     start_pt = QPointF(cx + r * math.cos(math.radians(start_angle)), 
