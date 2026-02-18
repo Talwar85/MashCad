@@ -4846,6 +4846,16 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             
             if len(pts_2d) > 1:
                 add_poly_segments(pts_2d, getattr(spline, 'construction', False))
+        
+        # --- 5. Ellipsen ---
+        for ellipse in getattr(s, 'ellipses', []):
+            pts = []
+            steps = 64
+            for j in range(steps + 1):
+                angle = j * 360 / steps
+                pt = ellipse.point_at_angle(angle)
+                pts.append((pt.x, pt.y))
+            add_poly_segments(pts, getattr(ellipse, 'construction', False))
 
         # --- BATCH MESH ERSTELLEN (FIXED) ---
         def create_lines_mesh(point_list):
