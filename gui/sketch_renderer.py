@@ -1617,11 +1617,6 @@ class SketchRendererMixin:
                     p.setPen(QPen(self.PREVIEW_COLOR, 1, Qt.DashLine))
                     p.drawLine(self.world_to_screen(start_pt), self.world_to_screen(end_pt))
                     p.setPen(QPen(self.PREVIEW_COLOR, 2, Qt.DashLine))
-                    
-                    # Draw center point
-                    p.setBrush(QBrush(QColor(255, 100, 100)))
-                    p.drawEllipse(self.world_to_screen(QPointF(cx, cy)), 4, 4)
-                    p.setBrush(Qt.NoBrush)
         elif self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 1:
             for pt in self.tool_points:
                 p.setBrush(QBrush(QColor(0, 120, 215)))
