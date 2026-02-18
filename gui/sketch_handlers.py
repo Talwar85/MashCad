@@ -979,32 +979,35 @@ class SketchHandlersMixin:
         ccw_short = (a3 - a1) % 360
         cw_short = -((a1 - a3) % 360)
         
-        def point_on_arc_simple(target, start, end):
-            """Prüft ob target auf dem Bogen von start nach end liegt"""
-            sweep = end - start
-            if abs(sweep) < 1e-9:
+        def point_on_arc_simple(target, start, span):
+            """Prüft ob target auf dem Bogen mit gegebenem span liegt"""
+            if abs(span) < 1e-9:
                 return abs((target - start) % 360) < 1e-9
             
             rel_target = (target - start) % 360
+            span_abs = abs(span)
             
-            if sweep > 0:  # CCW
-                return rel_target <= sweep + 1e-9
+            # Für beide Richtungen: prüfe ob target innerhalb des Spans liegt
+            if span > 0:  # CCW
+                return rel_target <= span + 1e-9
             else:  # CW
-                rel_target_cw = (start - target) % 360
-                return rel_target_cw <= abs(sweep) + 1e-9
+                # Für CW arc: der Bereich ist von start zurück bis start+span
+                # d.h. von 0 bis -span im CW-Sinn = von 360-abs(span) bis 360
+                return rel_target >= (360 - span_abs) - 1e-9
         
         # Teste kurze Bögen
-        candidates = [
-            (a1 + ccw_short, "ccw_short"),
-            (a1 + cw_short, "cw_short"),
-        ]
-        
-        for end_angle, name in candidates:
-            if point_on_arc_simple(a2, a1, end_angle):
-                return (ux, uy, r, a1, end_angle)
-        
-        # Fallback: kurzer CCW-Bogen
-        return (ux, uy, r, a1, a1 + ccw_short)
+        if point_on_arc_simple(a2, a1, ccw_short):
+            # CCW Bogen - direkt verwenden
+            return (ux, uy, r, a1, a1 + ccw_short)
+        else:
+            # CW Bogen - als positiven Sweep speichern (360 + cw_short)
+            # z.B. cw_short = -123.86 -> sweep = 236.14 ist falsch!
+            # Wir müssen den kurzen CW als CCW-equivalent speichern
+            # Eigentlich wollen wir: sweep = 360 - abs(cw_short) = 236.14? Nein!
+            
+            # KORREKTUR: Wir invertieren Start/End für CW Bögen
+            # Dann wird der Bogen in die andere Richtung gezeichnet
+            return (ux, uy, r, a3, a1)  # Vertausche Start/End für CW
     
     def _handle_slot(self, pos, snap_type, snap_entity=None):
         """

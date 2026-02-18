@@ -2811,28 +2811,23 @@ class SketchRendererMixin:
         ccw_short = (a3 - a1) % 360
         cw_short = -((a1 - a3) % 360)
         
-        def point_on_arc_simple(target, start, end):
-            """Prüft ob target auf dem Bogen von start nach end liegt"""
-            sweep = end - start
-            if abs(sweep) < 1e-9:
+        def point_on_arc_simple(target, start, span):
+            """Prüft ob target auf dem Bogen mit gegebenem span liegt"""
+            if abs(span) < 1e-9:
                 return abs((target - start) % 360) < 1e-9
             
             rel_target = (target - start) % 360
+            span_abs = abs(span)
             
-            if sweep > 0:  # CCW
-                return rel_target <= sweep + 1e-9
+            if span > 0:  # CCW
+                return rel_target <= span + 1e-9
             else:  # CW
-                rel_target_cw = (start - target) % 360
-                return rel_target_cw <= abs(sweep) + 1e-9
+                return rel_target >= (360 - span_abs) - 1e-9
         
         # Teste kurze Bögen
-        candidates = [
-            (a1 + ccw_short, "ccw_short"),
-            (a1 + cw_short, "cw_short"),
-        ]
-        
-        for end_angle, name in candidates:
-            if point_on_arc_simple(a2, a1, end_angle):
-                return (ux, uy, r, a1, end_angle)
-        
-        return (ux, uy, r, a1, a1 + ccw_short)
+        if point_on_arc_simple(a2, a1, ccw_short):
+            # CCW Bogen
+            return (ux, uy, r, a1, a1 + ccw_short)
+        else:
+            # CW Bogen - Start/End vertauschen für korrekte Darstellung
+            return (ux, uy, r, a3, a1)
