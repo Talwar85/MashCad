@@ -1434,7 +1434,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _update_ellipse_constraints_after_drag(self, ellipse):
         """
-        Aktualisiert LENGTH-Constraints der Achsen nach Direct-Edit Drag.
+        Aktualisiert/löscht Constraints nach Direct-Edit Drag.
         Sonst springt die Ellipse beim Solve zurück auf alte Werte.
         """
         if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
@@ -1444,20 +1444,35 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         major_axis = ellipse._major_axis
         minor_axis = ellipse._minor_axis
+        center_pt = ellipse._center_point
         
-        # Neue Längen berechnen
+        # WICHTIG: Lösche ALLE Constraints die mit der Ellipse verbunden sind
+        # (außer LENGTH - die werden aktualisiert)
+        constraints_to_remove = []
+        for c in self.sketch.constraints:
+            if center_pt in c.entities or major_axis in c.entities or minor_axis in c.entities:
+                if c.type != ConstraintType.LENGTH:
+                    constraints_to_remove.append(c)
+        
+        for c in constraints_to_remove:
+            if c in self.sketch.constraints:
+                self.sketch.constraints.remove(c)
+        
+        # LENGTH-Constraints aktualisieren
         new_major_length = 2.0 * ellipse.radius_x
         new_minor_length = 2.0 * ellipse.radius_y
         
-        # Major-Achsen Constraints aktualisieren
         for c in self.sketch.constraints:
-            if c.type == ConstraintType.LENGTH and major_axis in c.entities:
-                c.value = new_major_length
+            if c.type == ConstraintType.LENGTH:
+                if major_axis in c.entities:
+                    c.value = new_major_length
+                elif minor_axis in c.entities:
+                    c.value = new_minor_length
         
-        # Minor-Achsen Constraints aktualisieren  
-        for c in self.sketch.constraints:
-            if c.type == ConstraintType.LENGTH and minor_axis in c.entities:
-                c.value = new_minor_length
+        # NEU: Constraints mit neuen Werten erstellen
+        self.sketch.add_midpoint(center_pt, major_axis)
+        self.sketch.add_midpoint(center_pt, minor_axis)
+        self.sketch.add_perpendicular(major_axis, minor_axis)
 
     def _update_ellipse_axes_from_ellipse(self, ellipse):
         """

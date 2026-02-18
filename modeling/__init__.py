@@ -8851,26 +8851,33 @@ class Body:
         if not hasattr(sketch, 'ellipses') or not sketch.ellipses:
             return faces
         
-        ellipses_with_native_data = [
+        # WICHTIG: Extrudiere ALLE Ellipsen (nicht nur mit native_ocp_data)
+        # Falls native_ocp_data fehlt, verwende direkt die Ellipse-Attribute
+        ellipses_to_extrude = [
             e for e in sketch.ellipses
-            if hasattr(e, 'native_ocp_data') and e.native_ocp_data
+            if not e.construction  # Nur nicht-Konstruktions-Ellipsen
         ]
 
-        if not ellipses_with_native_data:
+        if not ellipses_to_extrude:
             return faces
 
-        logger.info(f"[TNP v4.1] {len(ellipses_with_native_data)} Ellipsen mit native_ocp_data gefunden")
+        logger.info(f"[TNP v4.1] {len(ellipses_to_extrude)} Ellipsen zur Extrusion")
 
-        for ellipse in ellipses_with_native_data:
-            if ellipse.construction:
-                continue  # Konstruktions-Ellipsen nicht extrudieren
-
-            ocp_data = ellipse.native_ocp_data
-            cx, cy = ocp_data['center']
-            radius_x = ocp_data['radius_x']
-            radius_y = ocp_data['radius_y']
-            rotation = ocp_data.get('rotation', 0.0)
-            plane_data = ocp_data.get('plane', {})
+        for ellipse in ellipses_to_extrude:
+            # Hole Daten aus native_ocp_data oder direkt aus der Ellipse
+            if hasattr(ellipse, 'native_ocp_data') and ellipse.native_ocp_data:
+                ocp_data = ellipse.native_ocp_data
+                cx, cy = ocp_data['center']
+                radius_x = ocp_data['radius_x']
+                radius_y = ocp_data['radius_y']
+                rotation = ocp_data.get('rotation', 0.0)
+            else:
+                # Fallback: Direkt aus der Ellipse lesen
+                cx, cy = ellipse.center.x, ellipse.center.y
+                radius_x = ellipse.radius_x
+                radius_y = ellipse.radius_y
+                rotation = ellipse.rotation
+                logger.debug(f"[TNP v4.1] Ellipse ohne native_ocp_data, verwende direkte Attribute")
 
             # Profiler-Selektor Matching
             if profile_selector:
@@ -8920,13 +8927,23 @@ class Body:
             )
 
             # gp_Ax2: Koordinatensystem der Ellipse
+            # ACHTUNG: XDirection muss korrekt sein für die Ellipse-Orientierung
             ellipse_axis = gp_Ax2(gp_center, gp_normal, gp_major_dir)
 
+            # DEBUG: Logge die Parameter
+            logger.debug(f"[TNP v4.1] Ellipse-Extrusion: center=({center_3d.X:.2f}, {center_3d.Y:.2f}, {center_3d.Z:.2f})")
+            logger.debug(f"[TNP v4.1] Ellipse-Extrusion: rx={radius_x:.2f}, ry={radius_y:.2f}, rot={rotation:.2f}")
+            
             # Native OCP Ellipse erstellen
             ellipse_maker = GC_MakeEllipse(ellipse_axis, radius_x, radius_y)
             
             if ellipse_maker.IsDone():
                 ellipse_geom = ellipse_maker.Value()
+                
+                # WICHTIG: Die Ellipse ist eine geschlossene Kurve!
+                # Wir müssen sie als geschlossene Edge behandeln
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+                from OCP.TopoDS import TopoDS_Edge
                 
                 # Edge aus der Ellipse-Geometrie erstellen
                 edge_maker = BRepBuilderAPI_MakeEdge(ellipse_geom)
@@ -8944,21 +8961,43 @@ class Body:
                 if wire_maker.IsDone():
                     ocp_wire = wire_maker.Wire()
                     
-                    # Face aus Wire erstellen
-                    face_maker = BRepBuilderAPI_MakeFace(ocp_wire)
-                    if face_maker.IsDone():
-                        ocp_face = face_maker.Face()
-                        
-                        # Zu build123d Face konvertieren
-                        face = Face(ocp_face)
-                        faces.append(face)
-                        logger.debug(f"[TNP v4.1] Native Ellipse Face erstellt: rx={radius_x:.2f}, ry={radius_y:.2f}")
-                    else:
-                        logger.warning("[TNP v4.1] Ellipse Face Maker fehlgeschlagen")
+                    # PRÜFE: Ist der Wire geschlossen?
+                    if not ocp_wire.Closed():
+                        logger.warning("[TNP v4.1] Ellipse Wire ist nicht geschlossen!")
+                    
+                    # Face aus Wire erstellen - mit expliziter Ebene
+                    try:
+                        # Versuche mit BRepBuilderAPI_MakeFace
+                        face_maker = BRepBuilderAPI_MakeFace(ocp_wire)
+                        if face_maker.IsDone():
+                            ocp_face = face_maker.Face()
+                            
+                            # Zu build123d Face konvertieren
+                            face = Face(ocp_face)
+                            faces.append(face)
+                            logger.info(f"[TNP v4.1] ✓ Native Ellipse Face erstellt: rx={radius_x:.2f}, ry={radius_y:.2f}")
+                        else:
+                            logger.error("[TNP v4.1] Ellipse Face Maker fehlgeschlagen - versuche Alternative...")
+                            # Alternative: Über plane
+                            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace as FaceMaker
+                            from OCP.gp import gp_Pln
+                            gp_plane = gp_Pln(gp_center, gp_normal)
+                            face_maker2 = FaceMaker(gp_plane, ocp_wire)
+                            if face_maker2.IsDone():
+                                ocp_face = face_maker2.Face()
+                                face = Face(ocp_face)
+                                faces.append(face)
+                                logger.info(f"[TNP v4.1] ✓ Native Ellipse Face (Alternative) erstellt")
+                            else:
+                                logger.error("[TNP v4.1] Alternative Ellipse Face Maker auch fehlgeschlagen")
+                    except Exception as e:
+                        logger.error(f"[TNP v4.1] Exception bei Ellipse Face: {e}")
+                        import traceback
+                        traceback.print_exc()
                 else:
                     logger.warning("[TNP v4.1] Ellipse Wire Maker fehlgeschlagen")
             else:
-                logger.warning(f"[TNP v4.1] Ellipse Maker fehlgeschlagen für {ellipse}")
+                logger.error(f"[TNP v4.1] Ellipse Maker fehlgeschlagen für Ellipse bei ({cx}, {cy})")
 
         return faces
 
