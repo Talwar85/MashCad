@@ -1564,8 +1564,46 @@ class SketchRendererMixin:
             p.setFont(QFont("Arial", 8))
             p.drawText(int(p2.x()) + 10, int(p2.y()), "Project")
         elif self.current_tool == SketchTool.ARC_3POINT and self.tool_points:
+            # Draw fixed points
             for pt in self.tool_points:
-                p.drawEllipse(self.world_to_screen(pt), 4, 4)
+                p.setBrush(QBrush(QColor(0, 120, 215)))
+                p.drawEllipse(self.world_to_screen(pt), 5, 5)
+                p.setBrush(Qt.NoBrush)
+            
+            # Live preview of the arc
+            if len(self.tool_points) == 1:
+                # Step 1: Draw line from start to cursor
+                p.drawLine(self.world_to_screen(self.tool_points[0]), self.world_to_screen(snap))
+            elif len(self.tool_points) == 2:
+                # Step 2: Calculate and draw arc preview
+                p1, p2 = self.tool_points[0], self.tool_points[1]
+                p3 = snap
+                arc_data = self._calc_arc_3point(p1, p2, p3)
+                if arc_data:
+                    cx, cy, r, start_angle, end_angle = arc_data
+                    # Draw the arc
+                    rect = QRectF(
+                        self.world_to_screen(QPointF(cx - r, cy + r)),
+                        self.world_to_screen(QPointF(cx + r, cy - r))
+                    ).normalized()
+                    # Qt angles are in 1/16 degrees, and 0 is at 3 o'clock
+                    start_qt = -start_angle * 16  # Flip Y for Qt
+                    span_qt = -(end_angle - start_angle) * 16
+                    p.drawArc(rect, int(start_qt), int(span_qt))
+                    
+                    # Draw chord line between start and end
+                    start_pt = QPointF(cx + r * math.cos(math.radians(start_angle)), 
+                                      cy + r * math.sin(math.radians(start_angle)))
+                    end_pt = QPointF(cx + r * math.cos(math.radians(end_angle)), 
+                                    cy + r * math.sin(math.radians(end_angle)))
+                    p.setPen(QPen(self.PREVIEW_COLOR, 1, Qt.DashLine))
+                    p.drawLine(self.world_to_screen(start_pt), self.world_to_screen(end_pt))
+                    p.setPen(QPen(self.PREVIEW_COLOR, 2, Qt.DashLine))
+                    
+                    # Draw center point
+                    p.setBrush(QBrush(QColor(255, 100, 100)))
+                    p.drawEllipse(self.world_to_screen(QPointF(cx, cy)), 4, 4)
+                    p.setBrush(Qt.NoBrush)
         elif self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 1:
             for pt in self.tool_points:
                 p.setBrush(QBrush(QColor(0, 120, 215)))
@@ -2720,3 +2758,54 @@ class SketchRendererMixin:
         p.setPen(text_color)
         p.drawText(x + 20, y + box_h - 10, self._hud_message)
     
+
+    def _calc_arc_3point(self, p1, p2, p3):
+        """
+        Berechnet einen Arc durch 3 Punkte (Start, Punkt auf Bogen, End).
+        Kopie aus sketch_handlers.py für die Preview-Funktionalität.
+        
+        Returns:
+            tuple: (cx, cy, radius, start_angle, end_angle) oder None
+        """
+        ax, ay = p1.x(), p1.y()
+        bx, by = p2.x(), p2.y()
+        cx, cy = p3.x(), p3.y()
+
+        # Umkreiszentrum der 3 Punkte
+        d = 2*(ax*(by-cy) + bx*(cy-ay) + cx*(ay-by))
+        if abs(d) < 1e-10:
+            return None
+        
+        ux = ((ax*ax+ay*ay)*(by-cy) + (bx*bx+by*by)*(cy-ay) + (cx*cx+cy*cy)*(ay-by)) / d
+        uy = ((ax*ax+ay*ay)*(cx-bx) + (bx*bx+by*by)*(ax-cx) + (cx*cx+cy*cy)*(bx-ax)) / d
+        r = math.hypot(ax-ux, ay-uy)
+        
+        if r <= 1e-9:
+            return None
+
+        # Winkel der drei Punkte relativ zum Zentrum
+        angle1 = math.atan2(ay-uy, ax-ux)
+        angle2 = math.atan2(by-uy, bx-ux)
+        angle3 = math.atan2(cy-uy, cx-ux)
+
+        def norm360(rad):
+            deg = math.degrees(rad) % 360.0
+            return deg + 360.0 if deg < 0.0 else deg
+
+        start = norm360(angle1)
+        mid = norm360(angle2)
+        end = norm360(angle3)
+
+        # CCW-Spannen von start aus
+        span_start_to_end_ccw = (end - start) % 360.0
+        span_start_to_mid_ccw = (mid - start) % 360.0
+
+        if span_start_to_mid_ccw <= span_start_to_end_ccw:
+            # p2 liegt auf dem CCW-Weg start -> end
+            resolved_end = start + span_start_to_end_ccw
+        else:
+            # p2 liegt auf dem CW-Weg; end unter start ziehen
+            span_start_to_end_cw = -((start - end) % 360.0)
+            resolved_end = start + span_start_to_end_cw
+
+        return (ux, uy, r, start, resolved_end)
