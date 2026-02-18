@@ -2784,9 +2784,9 @@ class SketchRendererMixin:
         import math
         
         # p1 = Start, p2 = Punkt auf Bogen, p3 = Ende
-        sx, sy = p1.x(), p1.y()
-        mx, my = p2.x(), p2.y()
-        ex, ey = p3.x(), p3.y()
+        sx, sy = float(p1.x()), float(p1.y())
+        mx, my = float(p2.x()), float(p2.y())
+        ex, ey = float(p3.x()), float(p3.y())
 
         # Berechne Umkreis durch 3 Punkte
         d = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
@@ -2800,38 +2800,27 @@ class SketchRendererMixin:
         if r < 1e-9:
             return None
 
-        # Winkel der Punkte vom Zentrum aus
-        start_angle = math.degrees(math.atan2(sy - uy, sx - ux))
-        mid_angle = math.degrees(math.atan2(my - uy, mx - ux))
-        end_angle = math.degrees(math.atan2(ey - uy, ex - ux))
+        # Winkel der Punkte vom Zentrum aus (roh, -180 bis +180)
+        a1 = math.degrees(math.atan2(sy - uy, sx - ux))
+        a2 = math.degrees(math.atan2(my - uy, mx - ux))
+        a3 = math.degrees(math.atan2(ey - uy, ex - ux))
 
-        # Normalisiere alle Winkel auf [0, 360)
-        def norm(a):
-            while a < 0:
-                a += 360
-            while a >= 360:
-                a -= 360
-            return a
-
-        a1 = norm(start_angle)
-        a2 = norm(mid_angle)
-        a3 = norm(end_angle)
-
-        # Berechne beide möglichen Bögen (CCW von a1 nach a3)
+        # Berechne beide möglichen Bögen
         ccw_span = (a3 - a1) % 360
         cw_span = -((a1 - a3) % 360)
 
         # Prüfe welcher Bogen a2 enthält
         def angle_between(target, start, span):
-            """Prüft ob target auf dem Bogen von start mit span liegt"""
-            if span > 0:  # CCW
-                return (target - start) % 360 <= span
-            else:  # CW
-                return (start - target) % 360 <= abs(span)
+            rel_target = (target - start) % 360
+            if span > 0:
+                return rel_target <= span
+            else:
+                rel_target_cw = (start - target) % 360
+                return rel_target_cw <= abs(span)
 
         if angle_between(a2, a1, ccw_span):
-            # a2 liegt auf CCW-Bogen
-            return (ux, uy, r, start_angle, start_angle + ccw_span)
+            end_angle = a1 + ccw_span
         else:
-            # a2 liegt auf CW-Bogen
-            return (ux, uy, r, start_angle, start_angle + cw_span)
+            end_angle = a1 + cw_span
+
+        return (ux, uy, r, a1, end_angle)
