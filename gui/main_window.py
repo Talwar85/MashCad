@@ -7535,6 +7535,17 @@ class MainWindow(QMainWindow):
 
             k = event.key()
 
+            # Sketch-Navigation: Home/0 immer an SketchEditor forwarden
+            if self.mode == "sketch":
+                if k == Qt.Key_Home:
+                    if hasattr(self, "sketch_editor") and self.sketch_editor:
+                        self.sketch_editor._reset_view_to_origin()
+                        return True
+                if k == Qt.Key_0 and not (event.modifiers() & Qt.ControlModifier):
+                    if hasattr(self, "sketch_editor") and self.sketch_editor:
+                        self.sketch_editor._reset_view_to_origin()
+                        return True
+
             # Tab - Fokussiert Input-Felder
             if k == Qt.Key_Tab:
                 if self.mode == "sketch":

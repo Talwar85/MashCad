@@ -34,13 +34,28 @@ class Point2D:
         FIREWALL: Wandelt alles sofort in native Python-Floats um.
         Schützt vor Abstürzen durch Solver-Rückgabewerte (NumPy).
         """
+        def _coerce_scalar(value, fallback=0.0):
+            try:
+                # Falls versehentlich eine gebundene Methode uebergeben wurde (z.B. QPointF.y)
+                if callable(value):
+                    value = value()
+
+                # NumPy-Skalare: .item() nur nutzen, wenn wirklich aufrufbar
+                item_attr = getattr(value, "item", None)
+                if callable(item_attr):
+                    value = item_attr()
+
+                # Manche Wrapper liefern erneut callables
+                if callable(value):
+                    value = value()
+
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+
         try:
-            # .item() wandelt numpy-skalare extrem schnell in python-types
-            if hasattr(self.x, 'item'): self.x = self.x.item()
-            else: self.x = float(self.x)
-            
-            if hasattr(self.y, 'item'): self.y = self.y.item()
-            else: self.y = float(self.y)
+            self.x = _coerce_scalar(self.x, 0.0)
+            self.y = _coerce_scalar(self.y, 0.0)
         except (TypeError, ValueError):
             self.x = 0.0
             self.y = 0.0

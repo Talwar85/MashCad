@@ -2712,6 +2712,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
             self.snapper.invalidate_intersection_cache()
     
+    def _rollback_last_undo_state(self) -> bool:
+        """Stiller Rollback auf den letzten Undo-Snapshot."""
+        if not self.undo_stack:
+            return False
+
+        state = self.undo_stack.pop()
+        self.sketch = Sketch.from_dict(state)
+        self._restore_canvas_dict(state.get('_canvas'))
+        self._clear_selection()
+        self._find_closed_profiles()
+        self.sketched_changed.emit()
+
+        if self.snapper and hasattr(self.snapper, 'invalidate_intersection_cache'):
+            self.snapper.invalidate_intersection_cache()
+
+        self.request_update()
+        return True
+
     def undo(self):
         if not self.undo_stack:
             self.show_message(tr("Nothing to undo"), 1500, QColor(255, 200, 100))
@@ -3902,6 +3920,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if not isinstance(line, Line2D):
             return None, None
 
+        # Ellipsen sind als Linienbündel modelliert; freie Linien-Handles darauf sperren.
+        if getattr(line, "_ellipse_bundle", None) is not None:
+            return None, None
+
         # Polygon-Linien bleiben im Circle/Polygon-Direct-Edit Pfad.
         if self._find_polygon_driver_circle_for_line(line) is not None:
             return None, None
@@ -4075,6 +4097,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # W30 AP1: Line Endpoint and Midpoint Handles (Direct Manipulation Parity with Circle)
         hovered = self._last_hovered_entity
+        if isinstance(hovered, Line2D) and not getattr(hovered, "construction", False):
+            if getattr(hovered, "_ellipse_bundle", None) is not None:
+                hovered = None
         if isinstance(hovered, Line2D) and not getattr(hovered, "construction", False):
             # Check if this line is part of a rectangle (skip - handled by rect edge logic)
             rect_context = self._build_rectangle_edge_drag_context(hovered)
@@ -5038,7 +5063,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             if not success:
                 # W33 EPIC AA1.1: Rollback bei unloesbarem Zustand
-                self.undo()
+                self._rollback_last_undo_state()
                 # W33 EPIC AA2: Verbesserte Solver-Feedback-Meldung
                 try:
                     from gui.sketch_feedback import format_direct_edit_solver_message
@@ -6529,7 +6554,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._emit_snap_diagnostic_feedback(snap_type)
             self._update_live_values(snapped)
             
-            self.request_update() # Erzwingt komplettes Neuziehnen -> Lüscht alte "Geister"
+            self.request_update() # Erzwingt komplettes Neuziehnen -> Löscht alte "Geister"
             return
         needs_full_update = False
         dirty_region = QRectF()
@@ -6579,7 +6604,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.current_snap = (snapped, snap_type, snap_entity)
             
             if self.current_snap != old_snap:
-                # Snap hat sich geÄndert -> Bereich um alten und neuen Snap invalidieren
+                # Snap hat sich geändert -> Bereich um alten und neuen Snap invalidieren
                 if old_snap:
                     p_old = self.world_to_screen(old_snap[0])
                     dirty_region = dirty_region.united(QRectF(p_old.x()-10, p_old.y()-10, 20, 20))
@@ -6588,17 +6613,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     dirty_region = dirty_region.united(QRectF(p_new.x()-10, p_new.y()-10, 20, 20))
             
             if self.current_tool == SketchTool.PROJECT:
-                hovered_edge = self._find_reference_edge_at(self.mouse_world)
-                # W26 FIX: Projection-Preview Signal Emission
-                if hovered_edge != self._last_projection_edge:
-                    self._last_projection_edge = hovered_edge
-                    if hovered_edge:
-                        self.projection_preview_requested.emit(hovered_edge, self._projection_type)
-                    else:
-                        self.projection_preview_cleared.emit()
-                self.hovered_ref_edge = hovered_edge
+                self.hovered_ref_edge = self._find_reference_edge_at(self.mouse_world)
                 if self.hovered_ref_edge:
-                    # Cursor Ändern um InteraktivitÄt zu zeigen
+                    # Cursor ändern um Interaktivität zu zeigen
                     self.setCursor(Qt.PointingHandCursor)
                     # Wir brauchen ein Update, um das Highlight zu zeichnen
                     dirty_region = dirty_region.united(self.rect()) 
@@ -6606,10 +6623,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     self._update_cursor()
             else:
                 self.hovered_ref_edge = None
-                # W26 FIX: Clear projection preview when leaving PROJECT tool
-                if self._last_projection_edge is not None:
-                    self._last_projection_edge = None
-                    self.projection_preview_cleared.emit()
 
             # Entity Hover Logic mit Selection-Filter + Overlap-Cycle
             if self.current_tool == SketchTool.SELECT:
@@ -6638,8 +6651,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Face Hover Logic
             new_face = self._find_face_at(self.mouse_world)
             if new_face != self._last_hovered_face:
-                # Da Faces groüƒ sein künnen, machen wir hier lieber ein Full Update wenn sich Face Ändert
-                # ODER: Wir invalidieren das Bounding Rect des Faces (wÄre besser)
+                # Da Faces groß sein können, machen wir hier lieber ein Full Update wenn sich Face ändert
+                # ODER: Wir invalidieren das Bounding Rect des Faces (wäre besser)
                 needs_full_update = True 
                 self.hovered_face = new_face
                 self._last_hovered_face = new_face
@@ -6679,9 +6692,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             self.setCursor(Qt.SizeAllCursor)
                     elif mode == "line_move":
                         self.setCursor(Qt.OpenHandCursor)
-                    elif mode == "radius":
-                        # PAKET A W6: Radius-Drag uses diagonal cursor (scaling action)
-                        self.setCursor(Qt.SizeFDiagCursor)
                     else:
                         self.setCursor(Qt.SizeHorCursor)
                 elif spline_elem:
@@ -6703,7 +6713,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.update(dirty_region.toAlignedRect())
         elif self.dim_input.isVisible():
              # HUD Updates (Koordinaten etc) brauchen leider oft Full Update
-             # Wenn wir nur Koordinaten unten links Ändern, künnten wir das optimieren:
+             # Wenn wir nur Koordinaten unten links ändern, könnten wir das optimieren:
              # self.update(0, self.height()-30, 200, 30)
              pass
         
@@ -7136,8 +7146,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return
         
         if mod & Qt.ControlModifier:
-            if key == Qt.Key_Z: self.undo(); return
-            elif key == Qt.Key_Y: self.redo(); return
+            # W33: Verhindere Undo/Redo während aktiver Direct-Edit-Drag-Operation
+            if key == Qt.Key_Z:
+                if self._direct_edit_dragging:
+                    self._show_hud(tr("Nicht während Drag verfügbar"))
+                    return
+                self.undo()
+                return
+            elif key == Qt.Key_Y:
+                if self._direct_edit_dragging:
+                    self._show_hud(tr("Nicht während Drag verfügbar"))
+                    return
+                self.redo()
+                return
             elif key == Qt.Key_A: self._select_all(); return
             elif key == Qt.Key_I: self.import_dxf(); return
             elif key == Qt.Key_E: self.export_dxf(); return
@@ -7184,8 +7205,18 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             Qt.Key_Minus: self._decrease_tolerance,  # - für Toleranz verringern
             Qt.Key_P: lambda: self.set_tool(SketchTool.PROJECT), # <--- NEU
         }
+
+        # W33: Separate Navigation Shortcuts (werden zuerst verarbeitet)
+        if key == Qt.Key_Home:
+            self._reset_view_to_origin()
+            return
+        # 0-Taste auch für Origin Reset (wie CAD-Standard)
+        if key == Qt.Key_0 and not (mod & Qt.ControlModifier):
+            self._reset_view_to_origin()
+            return
+
         if key in shortcuts: shortcuts[key](); self.request_update()
-    
+
 
     def _handle_escape_logic(self):
         """
@@ -7217,6 +7248,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # Level 2: Laufende Operation abbrechen (z.B. Linie hat Startpunkt)
         if self.tool_step > 0:
+            # W33: Spline mit >=2 Punkten wird finalisiert, nicht abgebrochen
+            if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
+                self._finish_spline()
+                self.status_message.emit(tr("Spline erstellt"))
+                return
             self._cancel_tool()
             self.status_message.emit(tr("Aktion abgebrochen"))
             return
@@ -8155,6 +8191,23 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._emit_zoom_changed()
         self.request_update()
 
+    def _reset_view_to_origin(self):
+        """
+        W33: Setzt die Ansicht auf den Koordinatenursprung (0,0) zurück.
+        Zentriert den Ursprung und setzt einen sinnvollen Standard-Zoom.
+        """
+        # Ursprung in die Mitte des Viewports
+        self.view_offset = QPointF(self.width() / 2, self.height() / 2)
+        # Rotation zurücksetzen
+        self.view_rotation = 0
+        # Sinnvoller Standard-Zoom (1.0 = 1:1)
+        self.view_scale = 1.0
+        self._emit_zoom_changed()
+        self.request_update()
+        from loguru import logger
+        logger.debug("[Sketch] View reset to origin (0,0)")
+        self.show_message(tr("View reset to origin"), duration=1500)
+
     def _draw_direct_edit_handles(self, painter):
         """
         W20 P1: Zeichnet Direct-Edit Handles für Circle, Arc, Line, Rectangle.
@@ -8547,8 +8600,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return True
 
         if self.tool_step > 0:
-            self._cancel_tool()
-            self._show_hud(tr("Aktion abgebrochen"))
+            if self.current_tool == SketchTool.SPLINE and len(self.tool_points) >= 2:
+                self._finish_spline()
+                self._show_hud(tr("Spline erstellt"))
+            else:
+                self._cancel_tool()
+                self._show_hud(tr("Aktion abgebrochen"))
             return True
 
         if self.current_tool != SketchTool.SELECT:

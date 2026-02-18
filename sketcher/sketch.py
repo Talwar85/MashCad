@@ -84,6 +84,7 @@ class Sketch:
     _profiles_valid: bool = field(default=False, repr=False)
     _cached_profiles: list = field(default_factory=list, repr=False)
     _adjacency: dict = field(default_factory=dict, repr=False) # {(rx,ry): [line, ...]}
+    _ellipse_bundles: List[dict] = field(default_factory=list, repr=False)
 
     # === TNP v4.1: Sketch-ShapeUUID Verwaltung ===
 
@@ -374,6 +375,22 @@ class Sketch:
         minor_axis = Line2D(minor_neg, minor_pos, construction=True)
         self.lines.extend([major_axis, minor_axis])
 
+        bundle = {
+            "center": center,
+            "major_pos": major_pos,
+            "major_neg": major_neg,
+            "minor_pos": minor_pos,
+            "minor_neg": minor_neg,
+            "major_axis": major_axis,
+            "minor_axis": minor_axis,
+            "perimeter_points": [],
+        }
+        self._ellipse_bundles.append(bundle)
+        major_axis._ellipse_axis = "major"
+        minor_axis._ellipse_axis = "minor"
+        major_axis._ellipse_bundle = bundle
+        minor_axis._ellipse_bundle = bundle
+
         # Ensure visible relation between ellipse and axis endpoints.
         quarter = seg_count // 4
         perimeter_points: List[Point2D] = []
@@ -396,12 +413,15 @@ class Sketch:
             local_y = minor_radius * math.sin(t)
             x = cx + local_x * ux + local_y * vx
             y = cy + local_x * uy + local_y * vy
-            perimeter_points.append(Point2D(x, y, construction=construction))
+            pt = Point2D(x, y, construction=construction)
+            pt._ellipse_param_t = t
+            perimeter_points.append(pt)
 
         # Add only newly created points (axis points are already appended).
         for pt in perimeter_points:
             if pt not in (major_pos, minor_pos, major_neg, minor_neg):
                 self.points.append(pt)
+        bundle["perimeter_points"] = perimeter_points
 
         ellipse_lines: List[Line2D] = []
         for i in range(seg_count):
@@ -412,6 +432,7 @@ class Sketch:
             # einzelne Kurve wirken (keine Endpoint-Punktwolke / Endpoint-Snaps).
             line._ellipse_segment = True
             line._suppress_endpoint_markers = True
+            line._ellipse_bundle = bundle
             self.lines.append(line)
             ellipse_lines.append(line)
 
@@ -519,17 +540,16 @@ class Sketch:
         for i in range(sides):
             p1 = points[i]
             p2 = points[(i + 1) % sides] # Modulo verbindet den letzten mit dem ersten
-            
+
             # Hier nutzen wir add_line_from_points, damit die Punkte geteilt werden
             line = self.add_line_from_points(p1, p2, construction=construction)
             lines.append(line)
 
-        # 4. Seitenlängen gleichsetzen (Equal Length Constraint)
-        # Das sorgt dafür, dass alle Seiten gleich lang bleiben, auch wenn man zieht
-        for i in range(len(lines)):
-            l1 = lines[i]
-            l2 = lines[(i + 1) % len(lines)]
-            self.add_equal_length(l1, l2)
+        # 4. W33: Keine Equal-Length-Constraints mehr!
+        # Die Point-On-Circle-Constraints sorgen bereits dafür, dass alle Punkte
+        # auf dem Kreis bleiben, was für ein reguläres Polygon ausreicht.
+        # Zusätzliche Equal-Length-Constraints führten zu Überbestimmung und
+        # Solver-Fehlern beim Direct-Edit.
 
         return lines, circle
 
@@ -672,86 +692,74 @@ class Sketch:
     
     def add_slot(self, x1: float, y1: float, x2: float, y2: float, radius: float, construction: bool = False):
         """
-        Erstellt ein robustes Langloch mit 'Skelett'-Struktur.
-        Verhindert das Verzerren beim Rotieren durch interne Konstruktionslinien.
+        Erstellt ein robustes Langloch mit Skelett-Struktur.
+        Verhindert Verzerrung beim Rotieren und Radius-Edit.
         """
         import math
-        
+
         # 1. Mittellinie (Konstruktion)
         p_start = self.add_point(x1, y1, construction=True)
         p_end = self.add_point(x2, y2, construction=True)
         line_center = self.add_line_from_points(p_start, p_end, construction=True)
-        
-        # Vektor für Offset berechnen
+
+        # Richtungsvektor fuer Offsets
         dx, dy = x2 - x1, y2 - y1
-        len_sq = dx*dx + dy*dy
-        if len_sq < 1e-9: dx, dy = 1, 0 # Fallback
+        len_sq = dx * dx + dy * dy
+        if len_sq < 1e-9:
+            dx, dy = 1.0, 0.0
         else:
             length = math.sqrt(len_sq)
             dx /= length
             dy /= length
-            
-        nx, ny = -dy * radius, dx * radius # Normale skalieren
-        
-        # 2. Die 4 Eckpunkte berechnen
+
+        nx, ny = -dy * radius, dx * radius
+
+        # 2. Eckpunkte
         t1 = self.add_point(x1 + nx, y1 + ny, construction=construction)
         b1 = self.add_point(x1 - nx, y1 - ny, construction=construction)
         t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
         b2 = self.add_point(x2 - nx, y2 - ny, construction=construction)
-        
-        # 3. Das "Skelett" bauen (Konstruktionslinien an den Enden)
-        # Diese Linien sind entscheidend für die Stabilität beim Rotieren!
+
+        # 3. Skelettlinien an den Endkappen
         cap1 = self.add_line_from_points(t1, b1, construction=True)
         cap2 = self.add_line_from_points(t2, b2, construction=True)
-        
-        # 4. Außenlinien verbinden
+
+        # 4. Aussenkontur
         line_top = self.add_line_from_points(t1, t2, construction=construction)
         line_bot = self.add_line_from_points(b1, b2, construction=construction)
-        
-        # 5. Bögen erstellen
+
+        # 5. Endkappen-Boegen
         angle_deg = math.degrees(math.atan2(dy, dx))
         arc1 = self.add_arc(x1, y1, radius, angle_deg + 90, angle_deg + 270, construction=construction)
         arc2 = self.add_arc(x2, y2, radius, angle_deg - 90, angle_deg + 90, construction=construction)
-        
-        # === CONSTRAINTS (Die Magie für die Stabilität) ===
-        
-        # A. Kappen rechtwinklig zur Mittellinie zwingen (Verhindert Shearing)
+
+        # Stabilitaets-Constraints
         self.add_perpendicular(cap1, line_center)
         self.add_perpendicular(cap2, line_center)
-        
-        # B. Mittellinie zentriert auf Kappen (Midpoint)
         self.add_midpoint(p_start, cap1)
         self.add_midpoint(p_end, cap2)
-        
-        # C. Symmetrie/Länge der Kappen
-        # Wir setzen den Abstand der Eckpunkte zur Mitte fest (definiert die Breite)
+
         self.add_distance(p_start, t1, radius)
         self.add_distance(p_start, b1, radius)
         self.add_distance(p_end, t2, radius)
         self.add_distance(p_end, b2, radius)
-        
-        # D. Bögen mit dem Skelett verbinden
+
         self.add_coincident(arc1.center, p_start)
         self.add_coincident(arc2.center, p_end)
-        
-        # WICHTIG: Die Bogen-Enden müssen an den Kappen-Enden kleben
-        # Da Arc-Endpunkte berechnet sind, nutzen wir PointOnCircle für die Eckpunkte
         self.add_point_on_circle(t1, arc1)
         self.add_point_on_circle(b1, arc1)
         self.add_point_on_circle(t2, arc2)
         self.add_point_on_circle(b2, arc2)
-        
-        # E. Optional: Tangenten (für doppelte Sicherheit)
+
+        # Tangente fuer konturtreuen Uebergang
         self.add_tangent(line_top, arc1)
-        
-        # Speichere Referenzen in den Arcs, damit wir die Winkel später updaten können!
-        # Wir fügen dynamisch Attribute hinzu, die wir später auslesen
-        arc1._start_marker = t1  # Startet oben (CCW +90)
-        arc1._end_marker = b1    # Endet unten
-        
-        arc2._start_marker = b2  # Startet unten (CCW -90)
-        arc2._end_marker = t2    # Endet oben
-        
+
+        # Marker fuer Winkel-Refresh nach Solve
+        arc1._start_marker = t1
+        arc1._end_marker = b1
+        arc2._start_marker = b2
+        arc2._end_marker = t2
+
         return line_center, arc1
 
 
@@ -794,6 +802,73 @@ class Sketch:
                 # Winkel setzen
                 arc.start_angle = ang_s
                 arc.end_angle = ang_e
+
+    def _update_ellipse_geometry(self):
+        """
+        Rekonstruiert segmentierte Ellipsen aus ihren Achsenpunkten.
+        Damit wirken LENGTH-/MIDPOINT-/PERPENDICULAR-Edits auf die tatsächliche Ellipsengeometrie.
+        """
+        if not self._ellipse_bundles:
+            return
+
+        alive_bundles = []
+        for bundle in self._ellipse_bundles:
+            center = bundle.get("center")
+            major_pos = bundle.get("major_pos")
+            major_neg = bundle.get("major_neg")
+            minor_pos = bundle.get("minor_pos")
+            minor_neg = bundle.get("minor_neg")
+            perimeter_points = bundle.get("perimeter_points") or []
+
+            if any(p is None for p in (center, major_pos, major_neg, minor_pos, minor_neg)):
+                continue
+            if any(p not in self.points for p in (center, major_pos, major_neg, minor_pos, minor_neg)):
+                continue
+
+            # Zentrum aus den beiden Achsen-Mittelpunkten stabil bestimmen.
+            major_mid_x = (major_pos.x + major_neg.x) * 0.5
+            major_mid_y = (major_pos.y + major_neg.y) * 0.5
+            minor_mid_x = (minor_pos.x + minor_neg.x) * 0.5
+            minor_mid_y = (minor_pos.y + minor_neg.y) * 0.5
+            center.x = (major_mid_x + minor_mid_x) * 0.5
+            center.y = (major_mid_y + minor_mid_y) * 0.5
+
+            ux = major_pos.x - center.x
+            uy = major_pos.y - center.y
+            vx = minor_pos.x - center.x
+            vy = minor_pos.y - center.y
+
+            rx = math.hypot(ux, uy)
+            ry = math.hypot(vx, vy)
+            if rx <= 1e-9 or ry <= 1e-9:
+                alive_bundles.append(bundle)
+                continue
+
+            ux /= rx
+            uy /= rx
+            vx /= ry
+            vy /= ry
+
+            protected_ids = {
+                getattr(major_pos, "id", None),
+                getattr(major_neg, "id", None),
+                getattr(minor_pos, "id", None),
+                getattr(minor_neg, "id", None),
+            }
+            for pt in perimeter_points:
+                if getattr(pt, "id", None) in protected_ids:
+                    continue
+                t = getattr(pt, "_ellipse_param_t", None)
+                if t is None:
+                    continue
+                local_x = rx * math.cos(t)
+                local_y = ry * math.sin(t)
+                pt.x = center.x + local_x * ux + local_y * vx
+                pt.y = center.y + local_x * uy + local_y * vy
+
+            alive_bundles.append(bundle)
+
+        self._ellipse_bundles = alive_bundles
 
     # Hilfsmethoden für Constraints
     def add_tangent(self, entity1, entity2) -> Optional[Constraint]:
@@ -895,6 +970,7 @@ class Sketch:
                     res = self._normalize_parametric_result(raw_res)
                     # Winkel-Update für Arcs ist wichtig nach dem Solve!
                     if res.success:
+                        self._update_ellipse_geometry()
                         self._update_arc_angles()
                         self.invalidate_profiles()
                         return res
@@ -924,6 +1000,7 @@ class Sketch:
         
         # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
         if res.success:
+            self._update_ellipse_geometry()
             self._update_arc_angles()
             self.invalidate_profiles()
 
