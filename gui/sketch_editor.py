@@ -1419,6 +1419,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Enthält alle Vertices, Selection-Glow und Sicherheitsreserve.
         """
         # W34-fix: Support both Polygon2D (has points) and regular polygons (Circle2D driver)
+        from PySide6.QtCore import QPointF
+        
         points = getattr(polygon, "points", [])
         
         # For regular polygons, use stored point references if available
@@ -1428,7 +1430,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # For Circle2D (driver circle), estimate based on radius
         if not points and hasattr(polygon, 'radius'):
             # Estimate dirty rect based on circle radius - covers the polygon bounds
-            from PySide6.QtCore import QPointF
             center = QPointF(float(polygon.center.x), float(polygon.center.y))
             radius = float(polygon.radius)
             c_screen = self.world_to_screen(center)
