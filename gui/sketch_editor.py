@@ -4136,6 +4136,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
             d_center = math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y())
             if d_center <= hit_radius:
+                # W34-fix: Check if this is a polygon driver circle -> treat as polygon center drag
+                if handles.get("source") == "polygon":
+                    return {**handles, "kind": "polygon", "mode": "center", "polygon": circle}
                 return {**handles, "kind": "circle", "mode": "center"}
 
             d_handle = math.hypot(world_pos.x() - radius_point.x(), world_pos.y() - radius_point.y())
