@@ -1434,8 +1434,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _update_ellipse_constraints_after_drag(self, ellipse):
         """
-        Aktualisiert/löscht Constraints nach Direct-Edit Drag.
+        Aktualisiert Constraints nach Direct-Edit Drag.
         Sonst springt die Ellipse beim Solve zurück auf alte Werte.
+        
+        KORREKTE STRATEGIE:
+        1. Alle Constraints löschen, die die Ellipse betreffen (außer LENGTH-Werte)
+        2. LENGTH-Constraints aktualisieren
+        3. Constraints mit neuen Positionen neu erstellen
         """
         if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
             return
@@ -1446,33 +1451,57 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         minor_axis = ellipse._minor_axis
         center_pt = ellipse._center_point
         
-        # WICHTIG: Lösche ALLE Constraints die mit der Ellipse verbunden sind
-        # (außer LENGTH - die werden aktualisiert)
-        constraints_to_remove = []
-        for c in self.sketch.constraints:
-            if center_pt in c.entities or major_axis in c.entities or minor_axis in c.entities:
-                if c.type != ConstraintType.LENGTH:
-                    constraints_to_remove.append(c)
-        
-        for c in constraints_to_remove:
-            if c in self.sketch.constraints:
-                self.sketch.constraints.remove(c)
-        
-        # LENGTH-Constraints aktualisieren
+        # NEUE LÄNGEN berechnen
         new_major_length = 2.0 * ellipse.radius_x
         new_minor_length = 2.0 * ellipse.radius_y
         
+        # 1. Alle Constraints löschen, die Ellipse-Elemente betreffen
+        constraints_to_remove = []
         for c in self.sketch.constraints:
-            if c.type == ConstraintType.LENGTH:
-                if major_axis in c.entities:
-                    c.value = new_major_length
-                elif minor_axis in c.entities:
-                    c.value = new_minor_length
+            # Prüfe, ob das Constraint Ellipse-Elemente betrifft
+            if center_pt in c.entities or major_axis in c.entities or minor_axis in c.entities:
+                if c.type == ConstraintType.LENGTH:
+                    # LENGTH-Constraints: Wert aktualisieren statt löschen
+                    if major_axis in c.entities:
+                        c.value = new_major_length
+                        logger.debug(f"[Ellipse] Updated major axis LENGTH to {new_major_length}")
+                    elif minor_axis in c.entities:
+                        c.value = new_minor_length
+                        logger.debug(f"[Ellipse] Updated minor axis LENGTH to {new_minor_length}")
+                else:
+                    # Andere Constraints (MIDPOINT, PERPENDICULAR, etc.): löschen
+                    constraints_to_remove.append(c)
         
-        # NEU: Constraints mit neuen Werten erstellen
-        self.sketch.add_midpoint(center_pt, major_axis)
-        self.sketch.add_midpoint(center_pt, minor_axis)
-        self.sketch.add_perpendicular(major_axis, minor_axis)
+        # Constraints entfernen
+        for c in constraints_to_remove:
+            if c in self.sketch.constraints:
+                self.sketch.constraints.remove(c)
+                logger.debug(f"[Ellipse] Removed constraint: {c.type.name}")
+        
+        # 2. Constraints mit neuen Positionen neu erstellen
+        # (Nur wenn wir welche gelöscht haben)
+        if constraints_to_remove:
+            self.sketch.add_midpoint(center_pt, major_axis)
+            self.sketch.add_midpoint(center_pt, minor_axis)
+            self.sketch.add_perpendicular(major_axis, minor_axis)
+            logger.debug(f"[Ellipse] Recreated MIDPOINT and PERPENDICULAR constraints")
+        
+        # 3. LENGTH-Constraints erstellen falls nicht vorhanden
+        has_major_length = any(
+            c.type == ConstraintType.LENGTH and major_axis in c.entities 
+            for c in self.sketch.constraints
+        )
+        has_minor_length = any(
+            c.type == ConstraintType.LENGTH and minor_axis in c.entities 
+            for c in self.sketch.constraints
+        )
+        
+        if not has_major_length:
+            self.sketch.add_length(major_axis, new_major_length)
+            logger.debug(f"[Ellipse] Created major axis LENGTH: {new_major_length}")
+        if not has_minor_length:
+            self.sketch.add_length(minor_axis, new_minor_length)
+            logger.debug(f"[Ellipse] Created minor axis LENGTH: {new_minor_length}")
 
     def _update_ellipse_axes_from_ellipse(self, ellipse):
         """
@@ -1494,17 +1523,25 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         vx = -uy
         vy = ux
         
-        # Achsen-Endpunkte aus Ellipse-Parametern berechnen
-        ellipse._major_pos.x = cx + ux * rx
-        ellipse._major_pos.y = cy + uy * rx
-        ellipse._major_neg.x = cx - ux * rx
-        ellipse._major_neg.y = cy - uy * rx
-        ellipse._minor_pos.x = cx + vx * ry
-        ellipse._minor_pos.y = cy + vy * ry
-        ellipse._minor_neg.x = cx - vx * ry
-        ellipse._minor_neg.y = cy - vy * ry
-        ellipse._center_point.x = cx
-        ellipse._center_point.y = cy
+        # Berechne neue Positionen
+        new_major_pos = (cx + ux * rx, cy + uy * rx)
+        new_major_neg = (cx - ux * rx, cy - uy * rx)
+        new_minor_pos = (cx + vx * ry, cy + vy * ry)
+        new_minor_neg = (cx - vx * ry, cy - vy * ry)
+        
+        # Aktualisiere die Punkte
+        ellipse._major_pos.x, ellipse._major_pos.y = new_major_pos
+        ellipse._major_pos.x, ellipse._major_pos.y = new_major_pos
+        ellipse._major_neg.x, ellipse._major_neg.y = new_major_neg
+        ellipse._minor_pos.x, ellipse._minor_pos.y = new_minor_pos
+        ellipse._minor_neg.x, ellipse._minor_neg.y = new_minor_neg
+        ellipse._center_point.x, ellipse._center_point.y = cx, cy
+        
+        # WICHTIG: Aktualisiere auch die Linien-Endpunkte
+        ellipse._major_axis.start = ellipse._major_neg
+        ellipse._major_axis.end = ellipse._major_pos
+        ellipse._minor_axis.start = ellipse._minor_neg
+        ellipse._minor_axis.end = ellipse._minor_pos
         
         # native_ocp_data aktualisieren
         if ellipse.native_ocp_data:
@@ -1512,6 +1549,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             ellipse.native_ocp_data['radius_x'] = rx
             ellipse.native_ocp_data['radius_y'] = ry
             ellipse.native_ocp_data['rotation'] = ellipse.rotation
+        
+        logger.debug(f"[Ellipse] Axes updated: center=({cx:.2f}, {cy:.2f}), rx={rx:.2f}, ry={ry:.2f}")
+
+    def _update_slot_constraints_after_drag(self, slot_line, mode):
+        """
+        Aktualisiert Constraints nach Slot Direct-Edit Drag.
+        
+        KORREKTE STRATEGIE:
+        1. DISTANCE-Constraints aktualisieren (Radius)
+        2. Bei Radius-Change: Alle Radius-bezogenen Constraints aktualisieren
+        3. Bei Length-Change: Positionen sind bereits aktualisiert, Constraints bleiben
+        """
+        from sketcher.constraints import ConstraintType
+        
+        # Finde alle Slot-Arcs und deren Center-Punkte
+        slot_arc_centers = set()
+        current_radius = None
+        for arc in self.sketch.arcs:
+            if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                slot_arc_centers.add(id(arc.center))  # Verwende id() für Identity-Check
+                if current_radius is None:
+                    current_radius = arc.radius
+        
+        if not slot_arc_centers or current_radius is None:
+            return
+        
+        # DISTANCE-Constraints aktualisieren (verbinden Center mit Top/Bottom Punkten)
+        updated_count = 0
+        for c in self.sketch.constraints:
+            if c.type == ConstraintType.DISTANCE:
+                # Prüfe, ob dies ein Slot-Radius-Constraint ist
+                # (verbindet einen Arc-Center-Punkt mit einem Top/Bottom Punkt)
+                entities = c.entities
+                if len(entities) >= 2:
+                    # Prüfe, ob eines der Entities ein Slot-Arc-Center ist
+                    # (vergleiche mit id() da es Point2D Objekte sind)
+                    is_slot_distance = any(id(e) in slot_arc_centers for e in entities)
+                    if is_slot_distance:
+                        c.value = current_radius
+                        updated_count += 1
+                        logger.debug(f"[Slot] Updated DISTANCE constraint to {current_radius}")
+        
+        if updated_count > 0:
+            logger.debug(f"[Slot] Updated {updated_count} DISTANCE constraints to radius={current_radius}")
 
     def _get_polygon_dirty_rect(self, polygon) -> QRectF:
         """
@@ -5619,8 +5700,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
         
-        # WICHTIG: Ellipse VOR dem Reset speichern!
-        dragged_ellipse = self._direct_edit_ellipse
+        # WICHTIG: Ellipse und Slot VOR dem Reset speichern!
+        dragged_ellipse = getattr(self, "_direct_edit_ellipse", None)
+        dragged_slot = getattr(self, "_direct_edit_slot", None)
 
         # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
         self._reset_direct_edit_state()
@@ -5630,6 +5712,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Sonst springt die Ellipse zurück auf die alten Constraint-Werte
             if dragged_ellipse is not None and mode in ("center", "radius_x", "radius_y", "rotation"):
                 self._update_ellipse_constraints_after_drag(dragged_ellipse)
+            
+            # WICHTIG: Slot-Constraints aktualisieren (besonders nach Radius-Change)
+            if dragged_slot is not None and mode in ("center", "length_start", "length_end", "radius"):
+                self._update_slot_constraints_after_drag(dragged_slot, mode)
             
             # W33 EPIC AA1.2: Final-Solve mit Rollback bei Fehler
             result = self.sketch.solve()
@@ -5685,6 +5771,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(tr("Line moved"))
             elif mode in ("start_angle", "end_angle"):
                 self.status_message.emit(tr("Arc angle updated"))
+            elif mode in ("length_start", "length_end"):
+                self.status_message.emit(tr("Slot length updated"))
 
         self.request_update()
 
