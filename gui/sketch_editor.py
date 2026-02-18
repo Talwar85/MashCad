@@ -5618,6 +5618,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         moved = self._direct_edit_drag_moved
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
+        
+        # WICHTIG: Ellipse VOR dem Reset speichern!
+        dragged_ellipse = self._direct_edit_ellipse
 
         # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
         self._reset_direct_edit_state()
@@ -5625,8 +5628,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if moved:
             # WICHTIG: Vor dem Solve müssen Ellipse-Constraints aktualisiert werden!
             # Sonst springt die Ellipse zurück auf die alten Constraint-Werte
-            if self._direct_edit_ellipse is not None and mode in ("center", "radius_x", "radius_y", "rotation"):
-                self._update_ellipse_constraints_after_drag(self._direct_edit_ellipse)
+            if dragged_ellipse is not None and mode in ("center", "radius_x", "radius_y", "rotation"):
+                self._update_ellipse_constraints_after_drag(dragged_ellipse)
             
             # W33 EPIC AA1.2: Final-Solve mit Rollback bei Fehler
             result = self.sketch.solve()
