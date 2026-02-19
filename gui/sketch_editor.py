@@ -5605,7 +5605,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self._direct_edit_drag_moved = True
 
             elif mode == "radius":
-                # Change slot radius by updating arc radii
+                # Change slot radius by updating arc radii AND lines
                 arc = self._direct_edit_slot_arc
                 if arc is not None:
                     # Calculate new radius based on mouse distance from center
@@ -5615,6 +5615,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     # Project mouse movement onto radius direction
                     new_radius = self._direct_edit_slot_start_radius + dx  # Simplified: use x-delta
                     new_radius = max(0.01, abs(new_radius))
+                    
+                    # WICHTIG: Radius-Delta berechnen für Linien-Verschiebung
+                    radius_delta = new_radius - self._direct_edit_slot_start_radius
 
                     # Update both arc caps
                     for slot_arc in self.sketch.arcs:
@@ -5630,6 +5633,47 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                 end_angle_rad = math.radians(slot_arc.end_angle)
                                 slot_arc._end_marker.x = slot_arc.center.x + new_radius * math.cos(end_angle_rad)
                                 slot_arc._end_marker.y = slot_arc.center.y + new_radius * math.sin(end_angle_rad)
+                    
+                    # WICHTIG: Top/Bottom Linien mit verschieben!
+                    # Berechne Normalen-Vektor zur Center-Line
+                    cx1, cy1 = slot.start.x, slot.start.y
+                    cx2, cy2 = slot.end.x, slot.end.y
+                    dx_line = cx2 - cx1
+                    dy_line = cy2 - cy1
+                    length = math.hypot(dx_line, dy_line)
+                    if length > 1e-9:
+                        # Normalisierte Normale (senkrecht zur Center-Line)
+                        nx = -dy_line / length  # Normale X
+                        ny = dx_line / length   # Normale Y
+                        
+                        # Finde Top/Bottom Linien und deren Punkte
+                        for line in self.sketch.lines:
+                            if getattr(line, '_slot_parent_center_line', None) is slot:
+                                # Bestimme ob dies Top oder Bottom Linie ist
+                                # Mittelpunkt der Linie
+                                mid_x = (line.start.x + line.end.x) / 2
+                                mid_y = (line.start.y + line.end.y) / 2
+                                # Mittelpunkt der Center-Line
+                                center_mid_x = (cx1 + cx2) / 2
+                                center_mid_y = (cy1 + cy2) / 2
+                                # Richtung vom Center zur Linie
+                                dir_x = mid_x - center_mid_x
+                                dir_y = mid_y - center_mid_y
+                                # Skalarprodukt mit Normale
+                                dot = dir_x * nx + dir_y * ny
+                                
+                                # Verschiebe die Punkte (Start und End) der Linie
+                                # WICHTIG: Point2D Objekte direkt modifizieren!
+                                if dot > 0:  # Top Linie - weiter nach außen
+                                    line.start.x += nx * radius_delta
+                                    line.start.y += ny * radius_delta
+                                    line.end.x += nx * radius_delta
+                                    line.end.y += ny * radius_delta
+                                else:  # Bottom Linie - weiter nach außen (entgegengesetzt)
+                                    line.start.x -= nx * radius_delta
+                                    line.start.y -= ny * radius_delta
+                                    line.end.x -= nx * radius_delta
+                                    line.end.y -= ny * radius_delta
 
                     self._direct_edit_drag_moved = True
 
