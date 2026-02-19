@@ -1,4 +1,4 @@
-﻿"""
+"""
 W14 Paket A: Isolierte Drag-Tests (Subprozess-Ausfuehrung)
 ==========================================================
 
@@ -138,10 +138,11 @@ class TestDragIsolated:
         QApplication.processEvents()
         QTest.qWait(100)
 
+        # Start at (-5, 10) to avoid hitting the midpoint handle at (0, 10)
         sketch_harness.direct_edit_drag(
             entity=line,
-            start_world=(0.0, 10.0),
-            end_world=(0.0, 20.0),
+            start_world=(-5.0, 10.0),
+            end_world=(-5.0, 20.0),
             expected_mode="line_move",
         )
         assert abs(line.start.y - 20.0) < 1.0

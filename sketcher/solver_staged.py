@@ -109,7 +109,9 @@ class StagedSolverBackend(ISolverBackend):
             circles=problem.circles,
             arcs=problem.arcs,
             constraints=phase_constraints,
-            options=problem.options
+            options=problem.options,
+            # W35: Spline Control Points durchreichen
+            spline_control_points=getattr(problem, 'spline_control_points', [])
         )
         
         # Adjust regularization based on phase
@@ -148,22 +150,27 @@ class StagedSolverBackend(ISolverBackend):
     def _save_geometry_state(self, problem: SolverProblem) -> Dict:
         """Saves current geometry state for potential rollback"""
         state = {}
-        
+
         for p in problem.points:
             state[id(p)] = (p.x, p.y)
-        
+
         for line in problem.lines:
             state[id(line.start)] = (line.start.x, line.start.y)
             state[id(line.end)] = (line.end.x, line.end.y)
-        
+
         for circle in problem.circles:
             state[id(circle.center)] = (circle.center.x, circle.center.y)
             state[id(circle)] = circle.radius
-        
+
         for arc in problem.arcs:
             state[id(arc.center)] = (arc.center.x, arc.center.y)
             state[id(arc)] = (arc.radius, arc.start_angle, arc.end_angle)
-        
+
+        # W35: Spline Control Points für State-Save
+        spline_control_points = getattr(problem, 'spline_control_points', [])
+        for p in spline_control_points:
+            state[id(p)] = (p.x, p.y)
+
         return state
     
     def _solve_fast_path(self, problem: SolverProblem, start_time: float) -> SolverResult:
@@ -242,24 +249,30 @@ class StagedSolverBackend(ISolverBackend):
         for p in problem.points:
             if id(p) in state:
                 p.x, p.y = state[id(p)]
-        
+
         for line in problem.lines:
             if id(line.start) in state:
                 line.start.x, line.start.y = state[id(line.start)]
             if id(line.end) in state:
                 line.end.x, line.end.y = state[id(line.end)]
-        
+
         for circle in problem.circles:
             if id(circle.center) in state:
                 circle.center.x, circle.center.y = state[id(circle.center)]
             if id(circle) in state:
                 circle.radius = state[id(circle)]
-        
+
         for arc in problem.arcs:
             if id(arc.center) in state:
                 arc.center.x, arc.center.y = state[id(arc.center)]
             if id(arc) in state:
                 arc.radius, arc.start_angle, arc.end_angle = state[id(arc)]
+
+        # W35: Spline Control Points für State-Restore
+        spline_control_points = getattr(problem, 'spline_control_points', [])
+        for p in spline_control_points:
+            if id(p) in state:
+                p.x, p.y = state[id(p)]
     
     def solve(self, problem: SolverProblem) -> SolverResult:
         """

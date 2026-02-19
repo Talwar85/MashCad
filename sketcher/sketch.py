@@ -1003,6 +1003,37 @@ class Sketch:
     
     # === Constraint-Solver ===
 
+    def get_spline_control_points(self) -> List['Point2D']:
+        """
+        W35: Gibt alle Spline-Control-Points zurück für Constraint-Solver.
+
+        Control-Points sind reguläre Point2D Objekte, die vom Solver
+        manipuliert werden können. Nach dem Solve müssen die Splines
+        ihre Caches invalidieren.
+
+        Returns:
+            Liste aller Point2D Objekte aus Spline Control Points
+        """
+        control_points = []
+        for spline in self.splines:
+            for cp in spline.control_points:
+                control_points.append(cp.point)
+        return control_points
+
+    def _invalidate_all_spline_caches(self) -> None:
+        """
+        W35: Invalidiert alle Spline-Caches nach Solver-Änderungen.
+
+        Muss aufgerufen werden nachdem der Solver Control-Point-Koordinaten
+        geändert hat.
+        """
+        for spline in self.splines:
+            if hasattr(spline, 'invalidate_cache'):
+                spline.invalidate_cache()
+            # Re-generate line segments for rendering
+            if hasattr(spline, 'to_lines'):
+                spline._lines = spline.to_lines(segments_per_span=10)
+
     def _sanitize_for_solver(self) -> int:
         """
         Entfernt verwaiste Constraint-Referenzen vor dem Solve.
@@ -1075,6 +1106,8 @@ class Sketch:
                     if res.success:
                         self._update_ellipse_geometry()
                         self._update_arc_angles()
+                        # W35: Spline-Caches invalidieren nach Control-Point-Änderungen
+                        self._invalidate_all_spline_caches()
                         self.invalidate_profiles()
                         return res
                     raw_result_name = getattr(getattr(raw_res, "result", None), "name", "")
@@ -1092,19 +1125,24 @@ class Sketch:
             logger.info("py-slvs nicht verfügbar, nutze SciPy-Fallback")
 
         # 2. Fallback auf Scipy Solver (NEU)
+        # W35: Spline Control Points für Constraints exponieren
+        spline_control_points = self.get_spline_control_points()
         res = self._solver.solve(
-            self.points, self.lines, self.circles, self.arcs, self.constraints
+            self.points, self.lines, self.circles, self.arcs, self.constraints,
+            spline_control_points=spline_control_points
         )
 
         if fallback_context and not res.success:
             base_msg = (res.message or "SciPy-Solver fehlgeschlagen").strip()
             if fallback_context not in base_msg:
                 res.message = f"{base_msg} | {fallback_context}"
-        
+
         # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
         if res.success:
             self._update_ellipse_geometry()
             self._update_arc_angles()
+            # W35: Spline-Caches invalidieren nach Control-Point-Änderungen
+            self._invalidate_all_spline_caches()
             self.invalidate_profiles()
 
         return res
@@ -1521,6 +1559,11 @@ class Sketch:
         for point in self.points:
             valid_ids.add(id(point))
 
+        # W35: Spline Control Points als gültige Entities eintragen
+        for spline in self.splines:
+            for cp in spline.control_points:
+                valid_ids.add(id(cp.point))
+
         # Filtere Constraints
         valid_constraints = []
         for c in self.constraints:
@@ -1743,7 +1786,8 @@ class Sketch:
                     'point': (cp.point.x, cp.point.y),
                     'handle_in': cp.handle_in,
                     'handle_out': cp.handle_out,
-                    'smooth': cp.smooth
+                    'smooth': cp.smooth,
+                    'weight': cp.weight  # W35: Weight auch serialisieren
                 })
             splines_data.append({
                 'id': spline.id,
@@ -1925,9 +1969,14 @@ class Sketch:
                     point=Point2D(px, py),
                     handle_in=tuple(cp_data.get('handle_in', (0, 0))),
                     handle_out=tuple(cp_data.get('handle_out', (0, 0))),
-                    smooth=cp_data.get('smooth', True)
+                    smooth=cp_data.get('smooth', True),
+                    weight=cp_data.get('weight', 1.0)  # W35: Weight auch deserialisieren
                 )
                 spline.control_points.append(cp)
+
+            # W35: Cache invalidieren nach Deserialisierung
+            if hasattr(spline, 'invalidate_cache'):
+                spline.invalidate_cache()
 
             sketch.splines.append(spline)
 

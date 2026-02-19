@@ -6,7 +6,7 @@ Mit Build123d Backend für parametrische CAD-Operationen
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QApplication, QFrame, QPushButton
+    QMenu, QApplication, QFrame, QPushButton, QToolButton
 )
 from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer, QThread
 from PySide6.QtGui import (
@@ -943,6 +943,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._update_timer.setSingleShot(True)
         self._update_timer.setInterval(16)  # ~60 FPS max
         self._update_timer.timeout.connect(self._do_debounced_update)
+
+        # W35: Home-Button für schnellen Zurücksprung zum Origin
+        self._btn_home = QToolButton(self)
+        self._btn_home.setText("🏠")
+        self._btn_home.setFixedSize(32, 32)
+        self._btn_home.setCursor(Qt.PointingHandCursor)
+        self._btn_home.setToolTip(tr("Zur Origin (Home)"))
+        p = DesignTokens.COLOR_PRIMARY.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        self._btn_home.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {elevated};
+                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
+                border-radius: 4px;
+                font-size: 16px;
+            }}
+            QToolButton:hover {{
+                background-color: {p};
+                border: 1px solid {p};
+                color: white;
+            }}
+        """)
+        self._btn_home.clicked.connect(self._reset_view_to_origin)
+        self._btn_home.move(20, 20)
+        self._btn_home.show()
 
     def request_update(self):
         """
@@ -2843,13 +2869,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     # In sketch_editor.py
 
     def snap_point(self, w):
-        if not self.snap_enabled: 
+        if not self.snap_enabled:
             self.last_snap_diagnostic = ""
             self.last_snap_confidence = 0.0
             self.last_snap_priority = 0
             self.last_snap_distance = 0.0
             return w, SnapType.NONE, None  # <--- Drittes Element: Entity
-            
+
         if self.snapper:
             if self.index_dirty: self._rebuild_spatial_index()
             screen_pos = self.world_to_screen(w)
@@ -2858,6 +2884,30 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.last_snap_confidence = float(getattr(res, "confidence", 0.0) or 0.0)
             self.last_snap_priority = int(getattr(res, "priority", 0) or 0)
             self.last_snap_distance = float(getattr(res, "distance", 0.0) or 0.0)
+
+            # W35: Snappoints für bereits geklickte Spline-Punkte während der Erstellung
+            if self.current_tool == SketchTool.SPLINE and self.tool_points:
+                snap_radius_world = self.snap_radius / self.view_scale
+                closest_tool_point = None
+                min_dist = float('inf')
+
+                for pt in self.tool_points:
+                    dist = math.hypot(w.x() - pt.x(), w.y() - pt.y())
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_tool_point = pt
+
+                # Wenn tool_point näher ist als der gefundene Snappoint, nutze tool_point
+                if closest_tool_point and min_dist < snap_radius_world:
+                    # Prüfe auch die Distanz zum Snapper-Ergebnis
+                    snapper_dist = math.hypot(w.x() - res.point.x(), w.y() - res.point.y())
+                    if min_dist < snapper_dist:
+                        self.last_snap_diagnostic = "Spline tool point"
+                        self.last_snap_confidence = 1.0
+                        self.last_snap_priority = 100  # Hohe Priorität
+                        self.last_snap_distance = min_dist
+                        return closest_tool_point, SnapType.POINT, None
+
             # Rückgabe: Punkt, Typ, Getroffenes Entity (für Auto-Constraints)
             return res.point, res.type, res.target_entity
             
@@ -4284,6 +4334,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         return None, None
 
+    def _resolve_direct_edit_target_spline(self):
+        """
+        Ermittelt den aktuell bearbeitbaren Spline.
+        Returns:
+            Tuple (BezierSpline, source) oder (None, None)
+        """
+        hovered = self._last_hovered_entity
+
+        # Prüfe ob gehovered Entity ein Spline ist
+        if len(self.selected_splines) == 1:
+            return self.selected_splines[0], "spline"
+
+        return None, None
+
+    def _get_spline_center_point(self, spline):
+        """
+        Berechnet den visuellen Mittelpunkt eines Splines für das Direct Edit Handle.
+        """
+        if not spline.control_points:
+            return None
+
+        # Arithmetischer Durchschnitt aller Control Points
+        sum_x = sum(cp.point.x for cp in spline.control_points)
+        sum_y = sum(cp.point.y for cp in spline.control_points)
+        n = len(spline.control_points)
+        return QPointF(sum_x / n, sum_y / n)
+
     def _get_direct_edit_handles_world(self):
         """
         Liefert Handle-Daten für Direct Manipulation in Weltkoordinaten.
@@ -4360,6 +4437,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             d_ring = abs(math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) - circle.radius)
             if d_ring <= hit_radius * 0.75:
                 return {**handles, "kind": "circle", "mode": "radius"}
+
+        # W35: Spline Center Handle
+        spline, _ = self._resolve_direct_edit_target_spline()
+        if spline is not None:
+            center_world = self._get_spline_center_point(spline)
+            if center_world is not None:
+                d_center = math.hypot(world_pos.x() - center_world.x(), world_pos.y() - center_world.y())
+                if d_center <= hit_radius:
+                    return {"kind": "spline", "mode": "center", "spline": spline, "center": center_world}
 
         # W30 AP1: Line Endpoint and Midpoint Handles (Direct Manipulation Parity with Circle)
         hovered = self._last_hovered_entity
@@ -4666,6 +4752,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         kind = handle_hit.get("kind", "circle")
         mode = handle_hit["mode"]
+
+        # W35: Spline verwendet die eigene Spline-Dragging-Infrastruktur, NICHT Direct-Edit
+        # Da die Direct-Edit-Infrastruktur spline_dragging nicht zurücksetzt,
+        # würde der User sonst "gefangen" sein (Drag kann nicht beendet werden)
+        if kind == "spline":
+            self._save_undo()
+
+            spline = handle_hit.get("spline")
+            if spline is None:
+                return
+
+            # Spline center drag verwendet die existierende Spline-Dragging-Infrastruktur
+            self.spline_dragging = True
+            self.spline_drag_spline = spline
+            self.spline_drag_cp_index = -1  # -1 = Body-Drag (ganzes Spline)
+            self.spline_drag_type = 'body'
+            self.spline_drag_start_pos = QPointF(self.mouse_world.x(), self.mouse_world.y())
+
+            if spline not in self.selected_splines:
+                self._clear_selection()
+                self.selected_splines = [spline]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.status_message.emit(tr("Spline verschieben"))
+            self.request_update()
+            return
 
         self._save_undo()
 
@@ -6011,9 +6123,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self._direct_edit_dragging:
             return tr("Esc=Abbrechen | Drag=Ändern | Enter=Bestätigen")
         elif self._tutorial_mode_enabled:
-            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | F1=Tutorial aus")
+            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | 0=Origin | F1=Tutorial aus")
         else:
-            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek | 0=Origin")
     
     def _get_tutorial_hint_for_tool(self, tool=None):
         """
@@ -7251,13 +7363,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # Neue Linien generieren
         new_lines = spline.to_lines(segments_per_span=10)
-        spline._lines = new_lines  # Referenz aktualisieren
-        
-        for line in new_lines:
-            self.sketch.lines.append(line)
-            self.sketch.points.append(line.start)
-        if new_lines:
-            self.sketch.points.append(new_lines[-1].end)
+        spline._lines = new_lines  # Nur Cache für Rendering/Hittest - nicht zu sketch.lines!
+
+        # WICHTIG: Segmente NICHT zu sketch.lines hinzufügen!
+        # Spline als Ganzes ist bereits in sketch.splines - Segmente sind nur für Rendering.
         
         # Reset Drag-State aber behalte Spline-Selection
         self.spline_dragging = False
@@ -7581,18 +7690,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
              # Delta berechnen
              dx = self.mouse_world.x() - self.spline_drag_start_pos.x()
              dy = self.mouse_world.y() - self.spline_drag_start_pos.y()
-             
+
              # Alle Punkte verschieben
              for cp in spline.control_points:
                  cp.point.x += dx
                  cp.point.y += dy
-                 
+
              # Start-Pos für nÄchstes Event updaten
              self.spline_drag_start_pos = self.mouse_world
-             
+
              # Cache invalidieren und Linien neu berechnen
              spline.invalidate_cache()
              spline._lines = spline.to_lines(segments_per_span=10)
+             # WICHTIG: Auch _preview_lines setzen für Live-Rendering!
+             spline._preview_lines = spline._lines
              self.sketched_changed.emit()
              self._find_closed_profiles()
              self.request_update()
@@ -8049,7 +8160,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._finish_spline()
             return
         self._cancel_tool()
-    
+
+    def _finish_spline(self):
+        """
+        Finalisiert die Spline-Erstellung und fügt den Spline zum Sketch hinzu.
+        Wird aufgerufen von Right-Click oder ESC bei >=2 Punkten.
+        """
+        from sketcher.geometry import BezierSpline
+
+        # Undo-Status speichern
+        self._save_undo()
+
+        # Neuen Spline erstellen
+        spline = BezierSpline()
+        spline.construction = self.construction_mode
+        spline.closed = False  # TODO: Geschlossene Splines könnten später Option sein
+
+        # Alle Punkte aus tool_points hinzufügen
+        for pt in self.tool_points:
+            spline.add_point(pt.x(), pt.y())
+
+        # Spline zum Sketch hinzufügen
+        self.sketch.splines.append(spline)
+
+        # Preview-Lines für Rendering setzen
+        spline._lines = spline.to_lines(segments_per_span=10)
+
+        # Tool-Status zurücksetzen
+        self.tool_step = 0
+        self._last_auto_show_step = -1
+        self.tool_points.clear()
+        self.tool_data.clear()
+
+        # Zurück zum Select-Tool wechseln
+        self.set_tool(SketchTool.SELECT)
+
+        # Spline selektieren für sofortiges Editieren
+        self.selected_splines = [spline]
+
+        # Sketch aktualisieren
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self.request_update()
+        self.status_message.emit(tr("Spline erstellt ({count} Punkte)").format(count=len(spline.control_points)))
+
     def _toggle_grid_snap(self):
         self.grid_snap = not self.grid_snap
         state = tr("ON") if self.grid_snap else tr("OFF")
@@ -8945,18 +9099,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if len(spline.control_points) <= 2:
             self.show_message("Spline muss mindestens 2 Punkte haben", 2000, QColor(255, 100, 100))
             return
-        
+
         self._save_undo()
         spline.control_points.pop(idx)
+        # WICHTIG: Cache invalidieren nach Änderung der control_points!
+        spline.invalidate_cache()
         # Re-calc lines
         spline._lines = spline.to_lines(segments_per_span=10)
         self.sketched_changed.emit()
         self._find_closed_profiles()
         self.request_update()
-        
+
     def _toggle_spline_closed(self, spline, closed):
         self._save_undo()
         spline.closed = closed
+        # WICHTIG: Cache invalidieren nach Änderung!
+        spline.invalidate_cache()
         # Re-calc lines
         spline._lines = spline.to_lines(segments_per_span=10)
         self.sketched_changed.emit()
@@ -9016,11 +9174,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             # Insert AFTER best_idx
             spline.insert_point(best_idx + 1, px, py)
-            
-            # Generate NEW lines and add to sketch
+
+            # Generate NEW lines for rendering/hittest only
             new_lines = spline.to_lines(segments_per_span=10)
             spline._lines = new_lines
-            self.sketch.lines.extend(new_lines)
+            # WICHTIG: NICHT zu sketch.lines hinzufügen!
+            # Spline als Ganzes ist bereits in sketch.splines.
             
             self.sketched_changed.emit()
             self._find_closed_profiles()
@@ -9425,6 +9584,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                       int(pt_screen.y() - radius),
                                       radius * 2, radius * 2)
 
+        # W35: Spline Handles (Center Handle für direktes Verschieben)
+        spline, spline_source = self._resolve_direct_edit_target_spline()
+        if spline is not None:
+            center_world = self._get_spline_center_point(spline)
+            if center_world is not None:
+                center_screen = self.world_to_screen(center_world)
+
+                # Center Handle (green square - wie bei Circle/Line)
+                painter.setPen(QPen(QColor(0, 255, 0), 2))
+                painter.setBrush(QColor(0, 255, 0, 128))
+                painter.drawRect(int(center_screen.x() - handle_radius),
+                               int(center_screen.y() - handle_radius),
+                               handle_radius * 2, handle_radius * 2)
+
     def paintEvent(self, event):
         # 1. QPainter initialisieren
         p = QPainter(self)
@@ -9513,6 +9686,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         super().resizeEvent(event)
         if self.view_offset == QPointF(0, 0):
             self._center_view()
+        # W35: Home-Button Position aktualisieren
+        if hasattr(self, '_btn_home'):
+            self._btn_home.move(20, 20)
 
     def _is_empty_right_click_target(self, screen_pos: QPointF, world_pos: QPointF) -> bool:
         """True, wenn unter dem Cursor keine editierbare/auswÄhlbare Sketch-EntitÄt liegt."""

@@ -85,12 +85,19 @@ class SciPyBackendBase(ISolverBackend):
         
         return len(issues) == 0, issues
     
-    def _collect_variables(self, points, lines, circles, arcs):
-        """Sammelt Variablen aus der Geometrie"""
+    def _collect_variables(self, points, lines, circles, arcs, spline_control_points=None):
+        """
+        Sammelt Variablen aus der Geometrie
+
+        W35: Spline Control Points werden ebenfalls als Variablen aufgenommen.
+        """
+        if spline_control_points is None:
+            spline_control_points = []
+
         refs = []  # Liste von (Objekt, AttributName)
         x0_vals = []  # Startwerte
         processed_ids = set()
-        
+
         def add_point(p):
             """Fügt Punkt-Koordinaten als Variablen hinzu"""
             if p.id in processed_ids or getattr(p, 'fixed', False):
@@ -100,21 +107,21 @@ class SciPyBackendBase(ISolverBackend):
             refs.append((p, 'y'))
             x0_vals.append(p.y)
             processed_ids.add(p.id)
-        
+
         # Punkte aus allen Quellen sammeln
         for p in points:
             add_point(p)
-        
+
         for line in lines:
             add_point(line.start)
             add_point(line.end)
-        
+
         for circle in circles:
             add_point(circle.center)
             # Radius als Variable
             refs.append((circle, 'radius'))
             x0_vals.append(circle.radius)
-        
+
         for arc in arcs:
             add_point(arc.center)
             # Radius und Winkel als Variablen
@@ -124,7 +131,11 @@ class SciPyBackendBase(ISolverBackend):
             x0_vals.append(arc.start_angle)
             refs.append((arc, 'end_angle'))
             x0_vals.append(arc.end_angle)
-        
+
+        # W35: Spline Control Points als Variablen aufnehmen
+        for p in spline_control_points:
+            add_point(p)
+
         return refs, x0_vals
     
     def _count_effective_constraints(self, constraints):
@@ -146,31 +157,33 @@ class SciPyBackendBase(ISolverBackend):
         """Implementierung des SciPy Solvers"""
         if not HAS_SCIPY:
             return SolverResult(
-                False, 0, float('inf'), 
+                False, 0, float('inf'),
                 ConstraintStatus.INCONSISTENT,
                 "SciPy nicht installiert!",
                 backend_used=self.name
             )
-        
+
         points = problem.points
         lines = problem.lines
         circles = problem.circles
         arcs = problem.arcs
         constraints = problem.constraints
         options = problem.options
-        
+        # W35: Spline Control Points aus Problem extrahieren
+        spline_control_points = getattr(problem, 'spline_control_points', [])
+
         if not constraints:
             return SolverResult(
-                True, 0, 0.0, 
+                True, 0, 0.0,
                 ConstraintStatus.UNDER_CONSTRAINED,
                 "Keine Constraints",
                 backend_used=self.name
             )
-        
+
         # Nur aktive und valide Constraints
         active_constraints = [c for c in constraints if getattr(c, 'enabled', True) and c.is_valid()]
         invalid_enabled = [c for c in constraints if getattr(c, 'enabled', True) and not c.is_valid()]
-        
+
         if invalid_enabled:
             return SolverResult(
                 False, 0, float('inf'),
@@ -178,7 +191,7 @@ class SciPyBackendBase(ISolverBackend):
                 f"Ungültige Constraints: {len(invalid_enabled)}",
                 backend_used=self.name
             )
-        
+
         if not active_constraints:
             return SolverResult(
                 True, 0, 0.0,
@@ -186,7 +199,7 @@ class SciPyBackendBase(ISolverBackend):
                 "Keine aktiven Constraints",
                 backend_used=self.name
             )
-        
+
         # P1: Pre-validation
         if options.pre_validation:
             is_valid, issues = self._validate_pre_solve(lines, active_constraints)
@@ -197,9 +210,9 @@ class SciPyBackendBase(ISolverBackend):
                     f"Pre-validation failed: {'; '.join(issues)}",
                     backend_used=self.name
                 )
-        
+
         # Variablen sammeln
-        refs, x0_vals = self._collect_variables(points, lines, circles, arcs)
+        refs, x0_vals = self._collect_variables(points, lines, circles, arcs, spline_control_points)
         
         n_effective_constraints = self._count_effective_constraints(active_constraints)
         

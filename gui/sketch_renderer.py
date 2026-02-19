@@ -2744,12 +2744,14 @@ class SketchRendererMixin:
         tool_name = self.current_tool.name.replace('_', ' ').title()
         p.setFont(QFont("Arial", 12, QFont.Bold))
         p.setPen(QPen(self.GEO_SELECTED))
-        p.drawText(12, 25, f"Tool: {tool_name}")
+        # W35: Text nach rechts versetzt (Home-Button ist bei x=20, Breite 32)
+        p.drawText(60, 25, f"Tool: {tool_name}")
 
         hint_y = 45
         p.setFont(QFont("Arial", 10))
         p.setPen(QPen(QColor(110, 180, 255, 220)))
-        p.drawText(12, hint_y, tr("Navigation: Shift+R=Ansicht drehen | Space halten=3D-Peek"))
+        # W35: Text nach rechts versetzt (Home-Button ist bei x=20, Breite 32)
+        p.drawText(60, hint_y, tr("Navigation: Shift+R=Ansicht drehen | Space halten=3D-Peek | 0=Origin"))
         hint_y += 18
 
         # Tab hint for drawing tools.

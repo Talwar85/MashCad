@@ -680,6 +680,36 @@ class SplineControlPoint:
             # Spiegeln für glatten Übergang
             self.handle_in = (-self.handle_out[0], -self.handle_out[1])
 
+    def to_dict(self) -> dict:
+        """Serialisiert zu Dictionary für JSON-Persistenz."""
+        return {
+            "type": "SplineControlPoint",
+            "point": self.point.to_dict(),
+            "handle_in": self.handle_in,
+            "handle_out": self.handle_out,
+            "smooth": self.smooth,
+            "weight": self.weight,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'SplineControlPoint':
+        """Deserialisiert von Dictionary."""
+        point_data = data.get("point", {})
+        point = Point2D(
+            x=point_data.get("x", 0.0),
+            y=point_data.get("y", 0.0),
+            id=point_data.get("id", ""),
+            fixed=point_data.get("fixed", False),
+            construction=point_data.get("construction", False),
+        )
+        return cls(
+            point=point,
+            handle_in=tuple(data.get("handle_in", (0.0, 0.0))),
+            handle_out=tuple(data.get("handle_out", (0.0, 0.0))),
+            smooth=data.get("smooth", True),
+            weight=data.get("weight", 1.0),
+        )
+
 
 @dataclass
 class BezierSpline:
@@ -938,6 +968,41 @@ class BezierSpline:
             comb_data.append((Point2D(px, py), Point2D(end_x, end_y), k))
             
         return comb_data
+
+    def to_dict(self) -> dict:
+        """
+        Serialisiert zu Dictionary für JSON-Persistenz.
+        Speichert alle Control Points mit Handles und Einstellungen.
+        """
+        return {
+            "type": "BezierSpline",
+            "id": self.id,
+            "construction": self.construction,
+            "closed": self.closed,
+            "control_points": [cp.to_dict() for cp in self.control_points],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'BezierSpline':
+        """
+        Deserialisiert von Dictionary für JSON-Persistenz.
+        Stellt alle Control Points mit Handles wieder her.
+        """
+        control_points = []
+        for cp_data in data.get("control_points", []):
+            control_points.append(SplineControlPoint.from_dict(cp_data))
+
+        spline = cls(
+            control_points=control_points,
+            id=data.get("id", ""),
+            construction=data.get("construction", False),
+            closed=data.get("closed", False),
+        )
+
+        # Cache invalidieren nach Deserialisierung
+        spline.invalidate_cache()
+
+        return spline
 
 
 @dataclass

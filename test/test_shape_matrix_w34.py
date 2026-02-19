@@ -401,3 +401,130 @@ class TestSplineDrag:
         assert abs(cp1.point.x) < 1e-6  # unchanged
         assert abs(cp3.point.x - 20) < 1e-6  # unchanged
         assert abs(cp2.point.x - 15) < 1e-6  # moved
+
+
+class TestSplinePersistence:
+    """W35: Spline Persistenz – Save/Load behält Spline-Editierbarkeit"""
+
+    def test_spline_roundtrip(self, sketch):
+        """Spline wird korrekt serialisiert und deserialisiert"""
+        from sketcher.geometry import BezierSpline, SplineControlPoint
+
+        # Spline erstellen
+        cp1 = SplineControlPoint(Point2D(0, 0))
+        cp1.handle_in = (1.0, 0.5)
+        cp1.handle_out = (-1.0, -0.5)
+        cp1.weight = 1.0
+
+        cp2 = SplineControlPoint(Point2D(10, 10))
+        cp2.handle_in = (0.0, 0.0)
+        cp2.handle_out = (0.0, 0.0)
+        cp2.smooth = False
+        cp2.weight = 1.5
+
+        cp3 = SplineControlPoint(Point2D(20, 0))
+        cp3.handle_in = (-1.0, 0.0)
+        cp3.handle_out = (1.0, 0.0)
+        cp3.weight = 1.0
+
+        spline = BezierSpline(
+            control_points=[cp1, cp2, cp3],
+            id="test_spline_123",
+            construction=False,
+            closed=False
+        )
+        sketch.splines.append(spline)
+
+        # Serialisieren
+        data = sketch.to_dict()
+
+        # Deserialisieren
+        sketch2 = Sketch.from_dict(data)
+
+        # Validieren
+        assert len(sketch2.splines) == 1
+        spline2 = sketch2.splines[0]
+
+        # ID und Eigenschaften
+        assert spline2.id == "test_spline_123"
+        assert spline2.construction == False
+        assert spline2.closed == False
+
+        # Control Points mit Handles und Weights
+        assert len(spline2.control_points) == 3
+
+        # CP1
+        assert abs(spline2.control_points[0].point.x - 0) < 1e-6
+        assert abs(spline2.control_points[0].point.y - 0) < 1e-6
+        assert spline2.control_points[0].handle_in == (1.0, 0.5)
+        assert spline2.control_points[0].handle_out == (-1.0, -0.5)
+        assert spline2.control_points[0].weight == 1.0
+
+        # CP2 (mit smooth=False und weight=1.5)
+        assert abs(spline2.control_points[1].point.x - 10) < 1e-6
+        assert abs(spline2.control_points[1].point.y - 10) < 1e-6
+        assert spline2.control_points[1].handle_in == (0.0, 0.0)
+        assert spline2.control_points[1].handle_out == (0.0, 0.0)
+        assert spline2.control_points[1].smooth == False
+        assert spline2.control_points[1].weight == 1.5
+
+        # CP3
+        assert abs(spline2.control_points[2].point.x - 20) < 1e-6
+        assert abs(spline2.control_points[2].point.y - 0) < 1e-6
+        assert spline2.control_points[2].handle_in == (-1.0, 0.0)
+        assert spline2.control_points[2].handle_out == (1.0, 0.0)
+        assert spline2.control_points[2].weight == 1.0
+
+    def test_spline_roundtrip_after_edit(self, sketch):
+        """Spline bleibt nach Edit (Punkte verschieben) serialisierbar"""
+        from sketcher.geometry import BezierSpline, SplineControlPoint
+
+        # Spline erstellen
+        spline = BezierSpline()
+        spline.add_point(0, 0)
+        spline.add_point(10, 10)
+        spline.add_point(20, 0)
+        sketch.splines.append(spline)
+
+        # Bearbeiten: Mittelpunkt verschieben
+        spline.control_points[1].point.x = 15
+        spline.control_points[1].point.y = 15
+        spline.control_points[1].handle_in = (2.0, 2.0)
+        spline.control_points[1].handle_out = (-2.0, -2.0)
+        spline.control_points[1].smooth = False
+
+        # Serialisieren
+        data = sketch.to_dict()
+
+        # Deserialisieren
+        sketch2 = Sketch.from_dict(data)
+        spline2 = sketch2.splines[0]
+
+        # Validieren
+        assert len(spline2.control_points) == 3
+        assert abs(spline2.control_points[1].point.x - 15) < 1e-6
+        assert abs(spline2.control_points[1].point.y - 15) < 1e-6
+        assert spline2.control_points[1].smooth == False
+        assert spline2.control_points[1].weight == 1.0
+
+    def test_spline_roundtrip_closed(self, sketch):
+        """Geschlossene Spline wird korrekt serialisiert"""
+        from sketcher.geometry import BezierSpline
+
+        spline = BezierSpline()
+        spline.add_point(0, 0)
+        spline.add_point(10, 10)
+        spline.add_point(20, 0)
+        spline.closed = True
+        sketch.splines.append(spline)
+
+        # Serialisieren
+        data = sketch.to_dict()
+
+        # Deserialisieren
+        sketch2 = Sketch.from_dict(data)
+        spline2 = sketch2.splines[0]
+
+        # Validieren
+        assert spline2.closed == True
+        assert len(spline2.control_points) == 3

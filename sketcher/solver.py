@@ -129,13 +129,16 @@ class ConstraintSolver:
         
         return len(issues) == 0, issues
 
-    def solve(self, points, lines, circles, arcs, constraints, 
+    def solve(self, points, lines, circles, arcs, constraints,
+              spline_control_points=None,
               progress_callback=None, callback_interval=10) -> SolverResult:
         """
         Löst das Constraint-System.
-        
+
         W35 P2: Verwendet jetzt die neue Solver-Architektur mit Backend-Auswahl.
         Für Rückwärtskompatibilität wird standardmäßig SciPy LM verwendet.
+
+        W35: Spline Control Points werden für Constraints unterstützt.
 
         Args:
             points: Liste aller Punkte
@@ -143,10 +146,14 @@ class ConstraintSolver:
             circles: Liste aller Kreise
             arcs: Liste aller Bögen
             constraints: Liste aller Constraints
+            spline_control_points: Liste der Spline-Control-Punkte (optional)
 
         Returns:
             SolverResult mit Erfolg/Misserfolg und Details
         """
+        if spline_control_points is None:
+            spline_control_points = []
+
         # W35 P2: Versuche neues Unified Solver Interface
         try:
             # Erstelle Problem
@@ -154,7 +161,7 @@ class ConstraintSolver:
                 regularization=self.regularization,
                 tolerance=self.tolerance
             )
-            
+
             # Lese P1 Feature-Flags
             try:
                 from config.feature_flags import is_enabled
@@ -162,21 +169,24 @@ class ConstraintSolver:
                 options.smooth_penalties = is_enabled("solver_smooth_penalties")
             except Exception:
                 pass
-            
+
             problem = SolverProblem(
                 points=points,
                 lines=lines,
                 circles=circles,
                 arcs=arcs,
                 constraints=constraints,
-                options=options
+                options=options,
+                # W35: Spline Control Points für Constraints
+                spline_control_points=spline_control_points
             )
-            
+
             # Verwende neues Unified Solver
             from .solver_interface import UnifiedConstraintSolver
             unified = UnifiedConstraintSolver()
             result = unified.solve(
                 points, lines, circles, arcs, constraints,
+                spline_control_points=spline_control_points,
                 progress_callback=progress_callback,
                 callback_interval=callback_interval
             )
