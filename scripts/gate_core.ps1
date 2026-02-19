@@ -116,7 +116,9 @@ if ($DryRun) {
 $start = Get-Date
 
 # Run tests and capture output
-$result = & conda run -n cad_env python -m pytest -q $CORE_TESTS 2>&1
+# Join array with spaces for proper expansion through conda run
+$testArgs = $CORE_TESTS -join " "
+$result = & conda run -n cad_env python -m pytest -q $testArgs 2>&1
 $exitCode = $LASTEXITCODE
 
 $end = Get-Date

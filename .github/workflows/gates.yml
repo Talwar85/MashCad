@@ -37,6 +37,13 @@ jobs:
         conda run -n cad_env python -m pip install pytest
         conda run -n cad_env python -m pip install -r requirements.txt
 
+    - name: Verify Test Environment
+      shell: powershell
+      run: |
+        conda run -n cad_env python --version
+        conda run -n cad_env python -m pytest --version
+        conda run -n cad_env python -m pytest --collect-only test/test_feature_flags.py -q
+
     - name: Run Core-Gate
       shell: powershell
       run: |
