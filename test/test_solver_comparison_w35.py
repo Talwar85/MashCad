@@ -288,8 +288,11 @@ class TestSolverComparison:
         print("W35 SOLVER COMPARISON - ALL SCENARIOS")
         print("="*80)
         
-        # Import baseline scenarios
-        from test.test_solver_baseline_w35 import BENCHMARK_CASES
+        # Import baseline scenarios (same directory)
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(__file__))
+        from test_solver_baseline_w35 import BENCHMARK_SCENARIOS as BENCHMARK_CASES
         
         backends = {
             'scipy_lm': SciPyLMBackend(),
