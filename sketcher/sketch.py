@@ -722,6 +722,8 @@ class Sketch:
         # 1. Mittellinie (Konstruktion)
         p_start = self.add_point(x1, y1, construction=True)
         p_end = self.add_point(x2, y2, construction=True)
+        p_start._slot_center_point = True  # Marker: nicht selektierbar
+        p_end._slot_center_point = True    # Marker: nicht selektierbar
         line_center = self.add_line_from_points(p_start, p_end, construction=True)
 
         # Richtungsvektor fuer Offsets
@@ -741,10 +743,17 @@ class Sketch:
         b1 = self.add_point(x1 - nx, y1 - ny, construction=construction)
         t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
         b2 = self.add_point(x2 - nx, y2 - ny, construction=construction)
+        # Marker: Slot-Eckpunkte nicht einzeln selektierbar
+        t1._slot_point = True
+        b1._slot_point = True
+        t2._slot_point = True
+        b2._slot_point = True
 
         # 3. Skelettlinien an den Endkappen
         cap1 = self.add_line_from_points(t1, b1, construction=True)
         cap2 = self.add_line_from_points(t2, b2, construction=True)
+        cap1._slot_skeleton_line = True  # Marker: nicht selektierbar
+        cap2._slot_skeleton_line = True  # Marker: nicht selektierbar
 
         # 4. Aussenkontur
         line_top = self.add_line_from_points(t1, t2, construction=construction)
