@@ -8305,6 +8305,31 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return "spline"
         return "unknown"
 
+    def _tag_spline_lines(self, spline, lines):
+        """Markiert approximierte Spline-Linien als nicht-direkt-selektierbare Segmente."""
+        for line in lines or []:
+            line._spline_segment = True
+            line._spline_owner = spline
+            line._suppress_endpoint_markers = True
+
+    def _is_spline_segment_line(self, entity) -> bool:
+        """True wenn die Linie ein internes Spline-Segment ist."""
+        if not isinstance(entity, Line2D):
+            return False
+
+        if getattr(entity, "_spline_segment", False) or getattr(entity, "_spline_owner", None) is not None:
+            return True
+
+        # Fallback für ältere Zustände ohne Marker
+        for spline in getattr(self.sketch, "splines", []):
+            lines = getattr(spline, "_lines", None)
+            if lines and entity in lines:
+                entity._spline_segment = True
+                entity._spline_owner = spline
+                entity._suppress_endpoint_markers = True
+                return True
+        return False
+
     def _selection_filter_label(self, mode: Optional[str] = None) -> str:
         key = mode or self.selection_filter_mode
         return self.SELECTION_FILTER_LABELS.get(key, str(key))
@@ -8314,6 +8339,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # Ellipsen-Achsen sind nie direkt selektierbar (nur via Ellipse)
         if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
+            return False
+        # Interne Spline-Segmente sind nie direkt selektierbar
+        if isinstance(entity, Line2D) and self._is_spline_segment_line(entity):
             return False
         
         if mode == "all":

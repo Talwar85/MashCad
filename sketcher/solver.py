@@ -1,10 +1,14 @@
 """
 LiteCAD Sketcher - Constraint Solver
 Numerischer Solver für geometrische Constraints mit SciPy least_squares
+
+W35 P2: Dieses Modul enthält jetzt die Unified-Solver-Architektur.
+Für Rückwärtskompatibilität ist ConstraintSolver ein Alias für
+UnifiedConstraintSolver mit SciPy LM Backend.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import inspect
 import numpy as np
 
@@ -21,15 +25,22 @@ from .constraints import (
     calculate_constraint_errors_batch
 )
 
+# W35 P2: Import neue Solver-Architektur
+from .solver_interface import (
+    ISolverBackend, SolverProblem, SolverOptions,
+    SolverBackendType, SolverBackendRegistry
+)
+
 
 @dataclass
 class SolverResult:
-    """Ergebnis des Constraint-Solvers"""
+    """Ergebnis des Constraint-Solvers (W35: Erweitert um backend_used)"""
     success: bool
     iterations: int
     final_error: float
     status: ConstraintStatus
     message: str = ""
+    backend_used: str = ""  # W35 P2: Zusätzliches Feld
 
 
 class ConstraintSolver:
@@ -40,16 +51,91 @@ class ConstraintSolver:
     "mehr Residuen als Variablen" zu lösen.
     """
 
-    def __init__(self):
+    def __init__(self, regularization: float = None):
         self.tolerance = 1e-6
-        self.regularization = 0.01  # Dämpfungsfaktor für Regularisierung
+        # W35 P1: Controllable regularization via parameter or feature flag
+        if regularization is not None:
+            self.regularization = regularization
+        else:
+            # Try to get from feature flags
+            try:
+                from config.feature_flags import is_enabled
+                import os
+                env_reg = os.environ.get('SOLVER_REGULARIZATION')
+                if env_reg:
+                    self.regularization = float(env_reg)
+                else:
+                    self.regularization = 0.01  # Default
+            except Exception:
+                self.regularization = 0.01  # Dämpfungsfaktor für Regularisierung
+        
         self.progress_callback = None  # Callback für Live-Updates
         self.callback_interval = 10    # Alle N Iterationen
+
+    def _validate_pre_solve(self, lines, constraints) -> Tuple[bool, List[str]]:
+        """
+        W35 P1: Pre-solve validation to detect contradictory constraints early.
+        
+        Returns:
+            (is_valid, list_of_issues)
+        """
+        from .constraints import ConstraintType
+        
+        issues = []
+        
+        # Collect constraints by type for quick lookup
+        constraints_by_type = {}
+        for c in constraints:
+            if not getattr(c, 'enabled', True) or not c.is_valid():
+                continue
+            c_type = c.type
+            if c_type not in constraints_by_type:
+                constraints_by_type[c_type] = []
+            constraints_by_type[c_type].append(c)
+        
+        # Check 1: Horizontal + Vertical + Non-zero length on same line
+        for line in lines:
+            line_constraints = []
+            for c in constraints:
+                if not getattr(c, 'enabled', True) or not c.is_valid():
+                    continue
+                if line in c.entities or line.start in c.entities or line.end in c.entities:
+                    line_constraints.append(c)
+            
+            has_horizontal = any(c.type == ConstraintType.HORIZONTAL for c in line_constraints)
+            has_vertical = any(c.type == ConstraintType.VERTICAL for c in line_constraints)
+            has_nonzero_length = any(
+                c.type == ConstraintType.LENGTH and getattr(c, 'value', 0) > 0.001
+                for c in line_constraints
+            )
+            
+            if has_horizontal and has_vertical and has_nonzero_length:
+                issues.append(f"Line {getattr(line, 'id', '?')}: Horizontal + Vertical + Length>0 is geometrically impossible")
+        
+        # Check 2: Coincident constraint on same point (self-reference)
+        for c in constraints:
+            if c.type == ConstraintType.COINCIDENT:
+                entities = getattr(c, 'entities', [])
+                if len(entities) == 2:
+                    if entities[0] is entities[1]:
+                        issues.append(f"Constraint {getattr(c, 'id', '?')}: COINCIDENT on same point")
+        
+        # Check 3: Distance constraint with negative value
+        for c in constraints:
+            if c.type in (ConstraintType.DISTANCE, ConstraintType.LENGTH, ConstraintType.RADIUS):
+                value = getattr(c, 'value', None)
+                if value is not None and value < 0:
+                    issues.append(f"Constraint {getattr(c, 'id', '?')}: {c.type.name} with negative value ({value})")
+        
+        return len(issues) == 0, issues
 
     def solve(self, points, lines, circles, arcs, constraints, 
               progress_callback=None, callback_interval=10) -> SolverResult:
         """
         Löst das Constraint-System.
+        
+        W35 P2: Verwendet jetzt die neue Solver-Architektur mit Backend-Auswahl.
+        Für Rückwärtskompatibilität wird standardmäßig SciPy LM verwendet.
 
         Args:
             points: Liste aller Punkte
@@ -61,6 +147,58 @@ class ConstraintSolver:
         Returns:
             SolverResult mit Erfolg/Misserfolg und Details
         """
+        # W35 P2: Versuche neues Unified Solver Interface
+        try:
+            # Erstelle Problem
+            options = SolverOptions(
+                regularization=self.regularization,
+                tolerance=self.tolerance
+            )
+            
+            # Lese P1 Feature-Flags
+            try:
+                from config.feature_flags import is_enabled
+                options.pre_validation = is_enabled("solver_pre_validation")
+                options.smooth_penalties = is_enabled("solver_smooth_penalties")
+            except Exception:
+                pass
+            
+            problem = SolverProblem(
+                points=points,
+                lines=lines,
+                circles=circles,
+                arcs=arcs,
+                constraints=constraints,
+                options=options
+            )
+            
+            # Verwende neues Unified Solver
+            from .solver_interface import UnifiedConstraintSolver
+            unified = UnifiedConstraintSolver()
+            result = unified.solve(
+                points, lines, circles, arcs, constraints,
+                progress_callback=progress_callback,
+                callback_interval=callback_interval
+            )
+            
+            # Konvertiere in altes SolverResult Format (ohne backend_used)
+            return SolverResult(
+                success=result.success,
+                iterations=result.iterations,
+                final_error=result.final_error,
+                status=result.status,
+                message=result.message,
+                backend_used=result.backend_used  # W35: Neues Feld
+            )
+            
+        except Exception as e:
+            # Fallback auf direkte Implementierung wenn neues Interface fehlschlägt
+            return self._solve_legacy(points, lines, circles, arcs, constraints,
+                                      progress_callback, callback_interval)
+    
+    def _solve_legacy(self, points, lines, circles, arcs, constraints, 
+                      progress_callback=None, callback_interval=10) -> SolverResult:
+        """Legacy implementation als Fallback"""
         if not constraints:
             return SolverResult(True, 0, 0.0, ConstraintStatus.UNDER_CONSTRAINED, "Keine Constraints")
 
@@ -82,6 +220,24 @@ class ConstraintSolver:
 
         if not HAS_SCIPY:
             return SolverResult(False, 0, 0.0, ConstraintStatus.INCONSISTENT, "SciPy nicht installiert!")
+        
+        # W35 P1: Pre-solve validation (if enabled via feature flag)
+        try:
+            from config.feature_flags import is_enabled
+            pre_validation_enabled = is_enabled("solver_pre_validation")
+        except Exception:
+            pre_validation_enabled = False
+        
+        if pre_validation_enabled:
+            is_valid, validation_issues = self._validate_pre_solve(lines, active_constraints)
+            if not is_valid:
+                return SolverResult(
+                    False,
+                    0,
+                    float('inf'),
+                    ConstraintStatus.INCONSISTENT,
+                    f"Pre-validation failed: {'; '.join(validation_issues)}"
+                )
 
         # 1. Variablen sammeln (Referenzen auf bewegliche Teile)
         refs = []  # Liste von (Objekt, AttributName)

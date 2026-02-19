@@ -115,7 +115,8 @@
       "Bash(export QT_QPA_PLATFORM=offscreen:*)",
       "Bash(C:UsersUserminiforge3envscad_envpython.exe -m pytest:*)",
       "Bash(if exist:*)",
-      "Bash(if exist \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\" del \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\")"
+      "Bash(if exist \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\" del \"c:\\\\LiteCad\\\\test\\\\_temp_add_epic_x3_tests.py\")",
+      "Bash(py_compile:*)"
     ]
   }
 }

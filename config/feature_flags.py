@@ -108,6 +108,12 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Phase 9: BREP Persistence
     "ocp_brep_persistence": True,
+    
+    # W35: Solver Stabilization (P0-P4)
+    "solver_backend": "staged",  # Options: "scipy_lm", "scipy_trf", "staged"
+    "solver_pre_validation": True,  # P1: Early contradiction detection
+    "solver_smooth_penalties": True,  # P1: Smooth tangent penalties
+    "solver_experimental_staged": True,  # P3: Staged solve (experimental)
 }
 
 
