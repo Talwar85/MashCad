@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QStackedWidget, QWidget, QProgressBar,
     QCheckBox, QFrame, QTextEdit, QListWidget, QListWidgetItem,
-    QGraphicsDropShadowEffect, QApplication
+    QGraphicsDropShadowEffect, QApplication, QMessageBox
 )
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtGui import QColor, QFont, QPixmap

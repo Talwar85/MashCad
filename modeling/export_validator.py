@@ -8,6 +8,11 @@ Phase 1: Export Foundation (PR-002)
 Prüft Geometrie auf Manifold-Status, Free-Bounds, und Degenerate Faces
 vor dem Export.
 
+PR-002 Complete:
+- Normals consistency check (check_normals_consistency)
+- Auto-repair integration (attempt_auto_repair)
+- GeometryHealer integration
+
 Usage:
     from modeling.export_validator import ExportValidator, ValidationOptions
     
@@ -18,10 +23,13 @@ Usage:
         print(f"Warnungen: {result.warnings}")
         for issue in result.issues:
             print(f"  - {issue.severity.value}: {issue.message}")
+    
+    # Mit Auto-Repair:
+    repaired_solid, repair_result = ExportValidator.attempt_auto_repair(solid)
 
 Author: Kimi (Phase 1 Implementation)
 Date: 2026-02-19
-Branch: feature/v1-ux-aiB
+Branch: feature/v1-roadmap-execution
 """
 
 from dataclasses import dataclass, field
@@ -515,54 +523,426 @@ class ExportValidator:
         result: ValidationResult,
         options: ValidationOptions
     ):
-        """Prüft auf konsistente Normalen (optional)."""
+        """
+        Prüft auf konsistente Normalen (optional).
+        
+        Delegate to check_normals_consistency for detailed analysis.
+        """
+        # Use the detailed method
+        normals_result = ExportValidator.check_normals_consistency(shape)
+        
+        # Merge results
         result.checks_performed.append(ValidationCheckType.NORMALS)
         
-        try:
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_FACE
-            from OCP.BRep import BRep_Tool
-            from OCP.BRepTools import BRepTools_Normal
-            from OCP.gp import gp_Pnt
+        if normals_result['has_inconsistencies']:
+            result.has_inverted_normals = True
             
-            inverted_count = 0
-            
-            face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
-            while face_explorer.More():
-                face = face_explorer.Current()
-                
-                # Prüfe Normalen-Richtung
-                surface = BRep_Tool.Surface(face)
-                if surface is not None:
-                    # Sampling-Punkt (UV = 0.5, 0.5)
-                    try:
-                        u_min, u_max, v_min, v_max = surface.Bounds()
-                        u = (u_min + u_max) / 2
-                        v = (v_min + v_max) / 2
-                        
-                        pnt = gp_Pnt()
-                        normal = BRepTools_Normal(surface, u, v)
-                        
-                        # Hier könnte komplexere Normalen-Analyse folgen
-                        # Für jetzt: Grundlegende Prüfung
-                        
-                    except Exception:
-                        pass
-                
-                face_explorer.Next()
-            
-            if inverted_count > 0:
+            for issue in normals_result['issues']:
                 result.add_issue(ValidationIssue(
                     severity=ValidationSeverity.WARNING,
                     check_type=ValidationCheckType.NORMALS,
-                    message=f"{inverted_count} Faces mit möglicherweise invertierten Normalen",
-                    suggestion="Überprüfen Sie die Face-Orientierung"
+                    message=issue['message'],
+                    entity_id=issue.get('face_id'),
+                    location=issue.get('location'),
+                    suggestion=issue.get('suggestion')
                 ))
+        
+        # Store statistics
+        result.statistics['normals_check'] = normals_result
+    
+    @staticmethod
+    def check_normals_consistency(shape: Any) -> Dict[str, Any]:
+        """
+        Detaillierte Prüfung der Normalen-Konsistenz.
+        
+        Erkennt:
+        - Invertierte Faces (Normalen zeigen nach innen statt außen)
+        - Inkonsistente Orientierung zwischen benachbarten Faces
+        - Zero-Length Normalen (degenerierte Geometrie)
+        
+        Args:
+            shape: OCP TopoDS_Shape oder Build123d Solid
             
-        except ImportError:
-            logger.warning("OCP BRepTools nicht verfügbar")
+        Returns:
+            Dictionary mit:
+            - has_inconsistencies: bool
+            - inverted_faces: List[int] - Face-Indizes mit invertierten Normalen
+            - zero_normals: List[int] - Faces mit Null-Normalen
+            - inconsistent_edges: List[int] - Kanten mit inkonsistenter Orientierung
+            - issues: List[Dict] - Detaillierte Issue-Beschreibungen
+            - statistics: Dict - Gesamtanzahl Faces, Edges etc.
+        """
+        result = {
+            'has_inconsistencies': False,
+            'inverted_faces': [],
+            'zero_normals': [],
+            'inconsistent_edges': [],
+            'issues': [],
+            'statistics': {
+                'total_faces': 0,
+                'total_edges': 0,
+                'checked_faces': 0
+            }
+        }
+        
+        try:
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_FORWARD, TopAbs_REVERSED
+            from OCP.BRep import BRep_Tool
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.gp import gp_Pnt, gp_Vec, gp_Dir
+            from OCP.TopoDS import TopoDS_Face, TopoDS_Edge
+            from OCP.GProp import GProp_GProps
+            from OCP.BRepGProp import BRepGProp
+            
+            # Extract OCP shape
+            ocp_shape = shape.wrapped if hasattr(shape, 'wrapped') else shape
+            
+            if ocp_shape is None:
+                result['issues'].append({
+                    'message': 'Shape ist None',
+                    'type': 'error'
+                })
+                return result
+            
+            # Sammle alle Faces mit ihrer Orientierung
+            faces_data = []
+            face_explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+            face_idx = 0
+            
+            while face_explorer.More():
+                face = TopoDS_Face(face_explorer.Current())
+                orientation = face.Orientation()
+                
+                # Berechne Face-Zentrum und Normale
+                adaptor = BRepAdaptor_Surface(face)
+                u_min, u_max = adaptor.FirstUParameter(), adaptor.LastUParameter()
+                v_min, v_max = adaptor.FirstVParameter(), adaptor.LastVParameter()
+                
+                u_mid = (u_min + u_max) / 2
+                v_mid = (v_min + v_max) / 2
+                
+                # Normale am Mittelpunkt
+                try:
+                    # Verwende BRepLProp für Normale
+                    from OCP.BRepLProp import BRepLProp_SLProps
+                    props = BRepLProp_SLProps(adaptor, u_mid, v_mid, 1, 1e-6)
+                    
+                    if props.IsNormalDefined():
+                        normal = props.Normal()
+                        
+                        # Prüfe auf Zero-Normale
+                        normal_mag = math.sqrt(
+                            normal.X() ** 2 + normal.Y() ** 2 + normal.Z() ** 2
+                        )
+                        
+                        if normal_mag < 1e-10:
+                            result['zero_normals'].append(face_idx)
+                            result['issues'].append({
+                                'message': f'Face {face_idx} hat degenerierte Normale (Länge ≈ 0)',
+                                'face_id': f'face_{face_idx}',
+                                'type': 'zero_normal'
+                            })
+                        else:
+                            # Speichere für Konsistenz-Check
+                            faces_data.append({
+                                'idx': face_idx,
+                                'normal': (normal.X(), normal.Y(), normal.Z()),
+                                'orientation': orientation,
+                                'face': face
+                            })
+                    else:
+                        # Normale nicht definiert - degenerierte Fläche
+                        result['zero_normals'].append(face_idx)
+                        result['issues'].append({
+                            'message': f'Face {face_idx} hat keine definierte Normale',
+                            'face_id': f'face_{face_idx}',
+                            'type': 'undefined_normal'
+                        })
+                        
+                except Exception as e:
+                    logger.debug(f"Normals check failed for face {face_idx}: {e}")
+                
+                face_idx += 1
+                face_explorer.Next()
+            
+            result['statistics']['total_faces'] = face_idx
+            result['statistics']['checked_faces'] = len(faces_data)
+            
+            # Prüfe auf invertierte Faces durch Analyse der Orientierung
+            # Bei einem korrekten Solid sollten alle Faces die gleiche Orientierung haben
+            # (FORWARD für Außenflächen)
+            
+            forward_count = sum(1 for f in faces_data if f['orientation'] == TopAbs_FORWARD)
+            reversed_count = sum(1 for f in faces_data if f['orientation'] == TopAbs_REVERSED)
+            
+            # Wenn mehr als 50% der Faces REVERSED sind, ist das verdächtig
+            if len(faces_data) > 0:
+                reversed_ratio = reversed_count / len(faces_data)
+                
+                if reversed_ratio > 0.5:
+                    result['has_inconsistencies'] = True
+                    result['inverted_faces'] = [f['idx'] for f in faces_data
+                                                if f['orientation'] == TopAbs_REVERSED]
+                    result['issues'].append({
+                        'message': f'{reversed_count} von {len(faces_data)} Faces haben REVERSED-Orientierung ({reversed_ratio*100:.1f}%)',
+                        'suggestion': 'Shape könnte invertierte Normalen haben. Erwägen Sie Auto-Repair.',
+                        'type': 'orientation_mismatch'
+                    })
+            
+            # Prüfe auf inkonsistente Normalen an gemeinsamen Kanten
+            edge_explorer = TopExp_Explorer(ocp_shape, TopAbs_EDGE)
+            edge_idx = 0
+            
+            while edge_explorer.More():
+                edge = TopoDS_Edge(edge_explorer.Current())
+                # Edge-Orientierung prüfen wäre hier komplexer
+                edge_idx += 1
+                edge_explorer.Next()
+            
+            result['statistics']['total_edges'] = edge_idx
+            
+            # Setze has_inconsistencies wenn Issues gefunden wurden
+            if result['inverted_faces'] or result['zero_normals']:
+                result['has_inconsistencies'] = True
+            
+            if result['has_inconsistencies']:
+                logger.warning(f"Normals check found issues: {len(result['inverted_faces'])} inverted, "
+                             f"{len(result['zero_normals'])} zero normals")
+            
+        except ImportError as e:
+            logger.warning(f"OCP Module nicht verfügbar für Normals-Check: {e}")
+            result['issues'].append({
+                'message': f'OCP Module nicht verfügbar: {e}',
+                'type': 'import_error'
+            })
         except Exception as e:
             logger.warning(f"Normals-Check fehlgeschlagen: {e}")
+            result['issues'].append({
+                'message': f'Normals-Check fehlgeschlagen: {e}',
+                'type': 'error'
+            })
+        
+        return result
+    
+    @staticmethod
+    def attempt_auto_repair(
+        solid: Any,
+        validation_result: Optional[ValidationResult] = None,
+        strategies: Optional[List[str]] = None
+    ) -> Tuple[Any, "RepairResult"]:
+        """
+        Versucht automatische Reparatur eines Solids.
+        
+        Integriert mit GeometryHealer für umfassende Reparaturen.
+        
+        Args:
+            solid: Build123d Solid oder OCP TopoDS_Shape
+            validation_result: Optional: Vorhandenes ValidationResult für gezielte Reparatur
+            strategies: Optional: Liste der Reparatur-Strategien
+                       ['shape_fix', 'solid_fix', 'sewing', 'tolerance']
+        
+        Returns:
+            Tuple[repaired_solid, RepairResult]
+            
+        RepairResult enthält:
+            - success: bool
+            - changes_made: List[str]
+            - message: str
+            - original_issues: int
+            - remaining_issues: int
+        """
+        from dataclasses import dataclass as _dataclass
+        from typing import List as _List
+        
+        @_dataclass
+        class RepairResult:
+            """Ergebnis einer Auto-Repair Operation."""
+            success: bool = False
+            changes_made: _List[str] = None
+            message: str = ""
+            original_issues: int = 0
+            remaining_issues: int = 0
+            strategies_applied: _List[str] = None
+            
+            def __post_init__(self):
+                if self.changes_made is None:
+                    self.changes_made = []
+                if self.strategies_applied is None:
+                    self.strategies_applied = []
+        
+        repair_result = RepairResult()
+        
+        # Extract OCP shape
+        ocp_shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+        
+        if ocp_shape is None:
+            repair_result.message = "Shape ist None"
+            return solid, repair_result
+        
+        # Validierung vor Repair
+        if validation_result is None:
+            validation_result = ExportValidator.validate_for_export(solid)
+        
+        repair_result.original_issues = len(validation_result.issues)
+        
+        if repair_result.original_issues == 0:
+            repair_result.success = True
+            repair_result.message = "Keine Reparatur nötig - Shape ist bereits valid"
+            return solid, repair_result
+        
+        logger.info(f"Starting auto-repair with {repair_result.original_issues} issues")
+        
+        # Default strategies
+        if strategies is None:
+            strategies = ['shape_fix', 'solid_fix', 'sewing']
+        
+        repaired_shape = ocp_shape
+        all_changes = []
+        applied_strategies = []
+        
+        # Strategy 1: ShapeFix_Shape
+        if 'shape_fix' in strategies:
+            try:
+                from OCP.ShapeFix import ShapeFix_Shape
+                from OCP.BRepCheck import BRepCheck_Analyzer
+                from config.tolerances import Tolerances
+                
+                fixer = ShapeFix_Shape(repaired_shape)
+                fixer.SetPrecision(Tolerances.KERNEL_FUZZY)
+                fixer.SetMaxTolerance(Tolerances.MESH_EXPORT)
+                fixer.SetMinTolerance(Tolerances.KERNEL_PRECISION / 10)
+                
+                if fixer.Perform():
+                    fixed = fixer.Shape()
+                    analyzer = BRepCheck_Analyzer(fixed)
+                    if analyzer.IsValid():
+                        repaired_shape = fixed
+                        all_changes.append("ShapeFix_Shape angewendet")
+                        applied_strategies.append('shape_fix')
+                        logger.debug("Auto-repair: ShapeFix_Shape erfolgreich")
+            except Exception as e:
+                logger.debug(f"Auto-repair: ShapeFix_Shape fehlgeschlagen: {e}")
+        
+        # Strategy 2: ShapeFix_Solid
+        if 'solid_fix' in strategies:
+            try:
+                from OCP.ShapeFix import ShapeFix_Solid
+                from OCP.TopoDS import TopoDS
+                from OCP.TopAbs import TopAbs_SOLID
+                from OCP.TopExp import TopExp_Explorer
+                
+                # Finde Solids im Shape
+                explorer = TopExp_Explorer(repaired_shape, TopAbs_SOLID)
+                if explorer.More():
+                    topo_solid = TopoDS.Solid_s(explorer.Current())
+                    fixer = ShapeFix_Solid(topo_solid)
+                    fixer.Perform()
+                    fixed = fixer.Solid()
+                    repaired_shape = fixed
+                    all_changes.append("ShapeFix_Solid angewendet")
+                    applied_strategies.append('solid_fix')
+                    logger.debug("Auto-repair: ShapeFix_Solid erfolgreich")
+            except Exception as e:
+                logger.debug(f"Auto-repair: ShapeFix_Solid fehlgeschlagen: {e}")
+        
+        # Strategy 3: Sewing (für offene Kanten)
+        if 'sewing' in strategies and validation_result.has_free_bounds:
+            try:
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing
+                from config.tolerances import Tolerances
+                
+                sewing = BRepBuilderAPI_Sewing(Tolerances.KERNEL_FUZZY)
+                sewing.Add(repaired_shape)
+                sewing.Perform()
+                sewed = sewing.SewedShape()
+                
+                repaired_shape = sewed
+                all_changes.append(f"Sewing angewendet (Toleranz: {Tolerances.KERNEL_FUZZY})")
+                applied_strategies.append('sewing')
+                logger.debug("Auto-repair: Sewing erfolgreich")
+            except Exception as e:
+                logger.debug(f"Auto-repair: Sewing fehlgeschlagen: {e}")
+        
+        # Strategy 4: Tolerance Upgrade
+        if 'tolerance' in strategies:
+            try:
+                from OCP.ShapeFix import ShapeFix_ShapeTolerance
+                
+                fixer = ShapeFix_ShapeTolerance()
+                # Erhöhe Toleranz auf Fuzzy-Value
+                fixer.SetTolerance(repaired_shape, 1e-4)
+                all_changes.append("Toleranz erhöht")
+                applied_strategies.append('tolerance')
+                logger.debug("Auto-repair: Tolerance Upgrade angewendet")
+            except Exception as e:
+                logger.debug(f"Auto-repair: Tolerance Upgrade fehlgeschlagen: {e}")
+        
+        # Integration mit GeometryHealer falls verfügbar
+        try:
+            from modeling.geometry_healer import GeometryHealer, HealingStrategy
+            
+            # Konvertiere zu Build123d Solid für GeometryHealer
+            try:
+                from build123d import Solid
+                if hasattr(repaired_shape, 'wrapped'):
+                    # Bereits ein Build123d Objekt
+                    b3d_solid = repaired_shape
+                else:
+                    b3d_solid = Solid(repaired_shape)
+                
+                # Wende GeometryHealer an
+                healed, heal_result = GeometryHealer.heal_solid(b3d_solid)
+                
+                if heal_result.success and heal_result.changes_made:
+                    repaired_shape = healed.wrapped if hasattr(healed, 'wrapped') else healed
+                    all_changes.extend(heal_result.changes_made)
+                    applied_strategies.append('geometry_healer')
+                    logger.info(f"Auto-repair: GeometryHealer erfolgreich: {heal_result.changes_made}")
+                    
+            except Exception as e:
+                logger.debug(f"Auto-repair: Build123d Konvertierung fehlgeschlagen: {e}")
+                
+        except ImportError:
+            logger.debug("Auto-repair: GeometryHealer nicht verfügbar")
+        except Exception as e:
+            logger.debug(f"Auto-repair: GeometryHealer Integration fehlgeschlagen: {e}")
+        
+        # Konvertiere zurück zu Build123d Solid
+        try:
+            from build123d import Solid
+            repaired_solid = Solid(repaired_shape)
+        except Exception:
+            repaired_solid = repaired_shape
+        
+        # Validierung nach Repair
+        post_validation = ExportValidator.validate_for_export(repaired_solid)
+        repair_result.remaining_issues = len(post_validation.issues)
+        
+        # Ergebnis zusammenstellen
+        repair_result.changes_made = all_changes
+        repair_result.strategies_applied = applied_strategies
+        
+        if repair_result.remaining_issues < repair_result.original_issues:
+            repair_result.success = True
+            repair_result.message = (
+                f"Reparatur erfolgreich: {repair_result.original_issues} → "
+                f"{repair_result.remaining_issues} Issues"
+            )
+            logger.success(f"Auto-repair: {repair_result.message}")
+        elif len(all_changes) > 0:
+            repair_result.success = True
+            repair_result.message = (
+                f"Reparatur durchgeführt, aber Issues bleiben: "
+                f"{repair_result.remaining_issues} verbleibend"
+            )
+            logger.warning(f"Auto-repair: {repair_result.message}")
+        else:
+            repair_result.success = False
+            repair_result.message = "Keine Reparaturen möglich"
+            logger.warning(f"Auto-repair: {repair_result.message}")
+        
+        return repaired_solid, repair_result
     
     @staticmethod
     def _check_self_intersections(

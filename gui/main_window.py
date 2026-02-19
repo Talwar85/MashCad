@@ -419,6 +419,7 @@ class MainWindow(QMainWindow):
         self._getting_started_overlay.action_triggered.connect(self._on_3d_action)
         self._getting_started_overlay.action_triggered.connect(lambda: self._getting_started_overlay.hide())
         self._getting_started_overlay.recent_file_requested.connect(self._open_recent_file)
+        self._getting_started_overlay.tutorial_requested.connect(self._start_tutorial)
         
         self.sketch_editor = SketchEditor()
         self.center_stack.addWidget(self.sketch_editor)
@@ -8235,6 +8236,16 @@ class MainWindow(QMainWindow):
                 logger.success(f"Projekt geladen: {path}")
         except Exception as e:
             logger.error(f"Fehler beim Öffnen: {e}")
+
+    def _start_tutorial(self):
+        """Startet das Enhanced Tutorial."""
+        from gui.enhanced_tutorial import EnhancedTutorial
+        tutorial = EnhancedTutorial(
+            main_window=self,
+            document=self.document,
+            viewport=self.viewport_3d
+        )
+        tutorial.exec()
 
     def _export_stl(self):
         """STL Export mit Quality-Dialog und Surface Texture Support.
