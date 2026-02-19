@@ -2,15 +2,17 @@
 ExportController - UI-Orchestrierung für Export/Import Workflows
 =================================================================
 
+Phase 1 Update (PR-001): Integriert ExportKernel API für vereinheitlichten Export.
+
 W17 Paket C (AR-004 Phase-2): Extrahiert Export/Import-Logik aus MainWindow.
 Zuständig für:
-- STL Export (sync/async)
+- STL Export (sync/async) mit Pre-flight Validierung
 - STEP Export/Import
 - SVG Export/Import
 - Mesh Import (STL, OBJ, etc.)
 
-Author: GLM 4.7 (UX/Workflow Delivery Cell)
-Date: 2026-02-16
+Author: GLM 4.7 (UX/Workflow Delivery Cell) + Kimi (Phase 1 Integration)
+Date: 2026-02-19
 Branch: feature/v1-ux-aiB
 """
 
@@ -18,7 +20,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from loguru import logger
 from pathlib import Path
-from typing import List, Optional, Callable
+from typing import List, Optional, Callable, Any
 
 from i18n import tr
 
@@ -28,28 +30,22 @@ class STLExportWorker(QThread):
     finished = Signal(bool, str)  # success, message
     progress = Signal(str)
     
-    def __init__(self, parent, export_func, bodies, filepath, linear_defl, angular_tol, is_binary, scale):
+    def __init__(self, parent, export_func, bodies, filepath, options):
         super().__init__(parent)
         self.export_func = export_func
         self.bodies = bodies
         self.filepath = filepath
-        self.linear_defl = linear_defl
-        self.angular_tol = angular_tol
-        self.is_binary = is_binary
-        self.scale = scale
+        self.options = options
         
     def run(self):
         try:
             self.progress.emit(tr("Exportiere STL..."))
-            success = self.export_func(
-                self.bodies, self.filepath,
-                self.linear_defl, self.angular_tol,
-                self.is_binary, self.scale
-            )
-            if success:
-                self.finished.emit(True, tr("STL Export erfolgreich"))
+            result = self.export_func(self.bodies, self.filepath, self.options)
+            if result.success:
+                msg = tr(f"STL Export erfolgreich: {result.triangle_count:,} Dreiecke")
+                self.finished.emit(True, msg)
             else:
-                self.finished.emit(False, tr("STL Export fehlgeschlagen"))
+                self.finished.emit(False, tr(f"STL Export fehlgeschlagen: {result.error_message}"))
         except Exception as e:
             logger.exception("STL Export Error")
             self.finished.emit(False, str(e))
@@ -59,8 +55,8 @@ class ExportController(QObject):
     """
     Controller für Export/Import Operationen.
     
-    Kapselt alle Export/Import-Workflows und delegiert an MainWindow
-    für UI-Interaktionen.
+    Kapselt alle Export/Import-Workflows und nutzt die neue ExportKernel API
+    für vereinheitlichte Export-Operationen.
     """
     
     # Signals for UI updates
@@ -68,25 +64,27 @@ class ExportController(QObject):
     export_finished = Signal(bool, str)  # success, message
     import_started = Signal(str)  # format
     import_finished = Signal(bool, str, object)  # success, message, result
+    validation_warnings = Signal(list)  # list of validation issues
     
     def __init__(self, main_window):
         """
         Args:
             main_window: MainWindow Instanz (für UI-Zugriff)
         """
-        super().__init__(None)  # QObject Parent ist None, MainWindow wird separat gespeichert
+        super().__init__(None)
         self._mw = main_window
         self._current_worker = None
         
-    def export_stl(self, bodies: Optional[List] = None) -> bool:
+    def export_stl(self, bodies: Optional[List] = None, show_options_dialog: bool = True) -> bool:
         """
-        Exportiert Bodies als STL.
+        Exportiert Bodies als STL mit Pre-flight Validierung.
         
         Args:
             bodies: Liste der zu exportierenden Bodies (None = alle sichtbaren)
+            show_options_dialog: True um Export-Dialog zu zeigen
             
         Returns:
-            bool: True wenn Export gestartet wurde
+            bool: True wenn Export gestartet/war erfolgreich
         """
         # Default: alle sichtbaren Bodies
         if bodies is None:
@@ -99,7 +97,42 @@ class ExportController(QObject):
                 tr("Keine sichtbaren Bodies zum Exportieren.")
             )
             return False
+        
+        # Importiere ExportKernel
+        try:
+            from modeling.export_kernel import ExportKernel, ExportOptions, ExportQuality
+            from modeling.export_validator import ExportValidator
+        except ImportError as e:
+            logger.error(f"ExportKernel nicht verfügbar: {e}")
+            QMessageBox.critical(None, tr("Export Fehler"), tr("Export-Modul nicht verfügbar."))
+            return False
+        
+        # Erstelle Default-Optionen
+        options = ExportOptions(
+            format=ExportFormat.STL,
+            quality=ExportQuality.FINE,
+            binary=True,
+            scale=1.0
+        )
+        
+        # Zeige Export-Dialog wenn gewünscht
+        if show_options_dialog:
+            from gui.dialogs.stl_export_dialog import STLExportDialog
+            dlg = STLExportDialog(parent=self._mw)
+            if dlg.exec() != QFileDialog.Accepted:
+                return False
             
+            # Übernehme Optionen aus Dialog
+            options.linear_deflection = dlg.linear_deflection
+            options.angular_tolerance = dlg.angular_tolerance
+            options.binary = dlg.is_binary
+            options.scale = dlg.scale_factor
+            
+            # Map quality slider to enum
+            quality_map = [ExportQuality.DRAFT, ExportQuality.STANDARD, 
+                          ExportQuality.FINE, ExportQuality.ULTRA]
+            options.quality = quality_map[dlg.quality_slider.value()]
+        
         # File Dialog
         filepath, _ = QFileDialog.getSaveFileName(
             self._mw,
@@ -114,40 +147,83 @@ class ExportController(QObject):
         # Ensure .stl extension
         if not filepath.lower().endswith('.stl'):
             filepath += '.stl'
+        
+        # Pre-flight Validierung
+        validation_issues = self._run_preflight_validation(bodies)
+        if validation_issues:
+            self.validation_warnings.emit(validation_issues)
             
-        # TODO: Dialog für Export-Optionen (linear_defl, angular_tol, etc.)
-        # Für jetzt: Standardwerte
-        linear_defl = 0.1
-        angular_tol = 0.5
-        is_binary = True
-        scale = 1.0
+            # Zeige Warnungen falls kritische Issues
+            critical_issues = [i for i in validation_issues 
+                             if i.severity.value == "error"]
+            if critical_issues:
+                msg = tr("Kritische Probleme gefunden:\n\n")
+                for issue in critical_issues[:5]:
+                    msg += f"• {issue.message}\n"
+                msg += tr("\nTrotzdem exportieren?")
+                
+                reply = QMessageBox.warning(
+                    self._mw,
+                    tr("Export Validierung"),
+                    msg,
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return False
         
         self.export_started.emit("STL")
         
         # Async Export
-        self._export_stl_async(bodies, filepath, linear_defl, angular_tol, is_binary, scale)
+        self._export_stl_async(bodies, filepath, options)
         return True
         
-    def _export_stl_async(self, bodies, filepath, linear_defl, angular_tol, is_binary, scale):
-        """Startet asynchronen STL Export."""
-        # Get export function from MainWindow (fallback implementation)
-        export_func = getattr(self._mw, '_export_stl_async_impl', None)
-        if export_func is None:
-            # Fallback: sync export
-            try:
-                self._do_stl_export(bodies, filepath, linear_defl, angular_tol, is_binary, scale)
-                self.export_finished.emit(True, tr("STL Export erfolgreich"))
-            except Exception as e:
-                logger.exception("STL Export Error")
-                self.export_finished.emit(False, str(e))
-            return
+    def _run_preflight_validation(self, bodies: List) -> List:
+        """
+        Führt Pre-flight Validierung durch.
+        
+        Returns:
+            Liste von ValidationIssues
+        """
+        try:
+            from modeling.export_validator import ExportValidator, ValidationOptions
             
-        self._current_worker = STLExportWorker(
-            self, export_func, bodies, filepath,
-            linear_defl, angular_tol, is_binary, scale
-        )
-        self._current_worker.finished.connect(self._on_export_finished)
-        self._current_worker.start()
+            all_issues = []
+            for body in bodies:
+                solid = getattr(body, '_build123d_solid', None)
+                if solid is not None:
+                    options = ValidationOptions(
+                        check_manifold=True,
+                        check_free_bounds=True,
+                        check_degenerate=True,
+                        check_normals=False
+                    )
+                    result = ExportValidator.validate_for_export(solid, options)
+                    all_issues.extend(result.issues)
+            
+            return all_issues
+            
+        except Exception as e:
+            logger.warning(f"Preflight validation failed: {e}")
+            return []
+        
+    def _export_stl_async(self, bodies, filepath, options):
+        """Startet asynchronen STL Export über ExportKernel."""
+        try:
+            from modeling.export_kernel import ExportKernel
+            
+            # Get export function from ExportKernel
+            export_func = ExportKernel.export_bodies
+            
+            self._current_worker = STLExportWorker(
+                self, export_func, bodies, filepath, options
+            )
+            self._current_worker.finished.connect(self._on_export_finished)
+            self._current_worker.start()
+            
+        except Exception as e:
+            logger.exception("Failed to start async export")
+            self._on_export_finished(False, str(e))
         
     def _on_export_finished(self, success: bool, message: str):
         """Handler für Export-Fertigstellung."""
@@ -155,13 +231,13 @@ class ExportController(QObject):
         self.export_finished.emit(success, message)
         
         if success:
-            self._mw.statusBar().showMessage(tr("STL Export erfolgreich"), 5000)
+            self._mw.statusBar().showMessage(message, 5000)
         else:
             QMessageBox.warning(None, tr("Export Fehler"), message)
             
     def export_step(self) -> bool:
         """
-        Exportiert als STEP.
+        Exportiert als STEP mit Pre-flight Validierung.
         
         Returns:
             bool: True wenn Export erfolgreich
@@ -174,7 +250,12 @@ class ExportController(QObject):
                 tr("Keine sichtbaren Bodies zum Exportieren.")
             )
             return False
-            
+        
+        # Pre-flight Validierung
+        validation_issues = self._run_preflight_validation(bodies)
+        if validation_issues:
+            self.validation_warnings.emit(validation_issues)
+        
         filepath, _ = QFileDialog.getSaveFileName(
             self._mw,
             tr("Export als STEP"),
@@ -184,18 +265,35 @@ class ExportController(QObject):
         
         if not filepath:
             return False
+        
+        try:
+            from modeling.export_kernel import ExportKernel, ExportOptions, ExportFormat
             
-        # Delegate to MainWindow implementation
-        if hasattr(self._mw, '_export_step_impl'):
-            return self._mw._export_step_impl(bodies, filepath)
+            options = ExportOptions(format=ExportFormat.STEP)
+            result = ExportKernel.export_bodies(bodies, filepath, options)
             
-        # Fallback: Info message
-        QMessageBox.information(
-            None,
-            tr("Nicht implementiert"),
-            tr("STEP Export wird von MainWindow nicht unterstützt.")
-        )
-        return False
+            if result.success:
+                self._mw.statusBar().showMessage(
+                    tr(f"STEP Export erfolgreich: {result.file_size_kb:.1f} KB"), 
+                    5000
+                )
+                return True
+            else:
+                QMessageBox.warning(
+                    None, 
+                    tr("Export Fehler"), 
+                    result.error_message
+                )
+                return False
+                
+        except ImportError as e:
+            logger.error(f"ExportKernel nicht verfügbar: {e}")
+            QMessageBox.critical(None, tr("Export Fehler"), tr("Export-Modul nicht verfügbar."))
+            return False
+        except Exception as e:
+            logger.exception("STEP Export Error")
+            QMessageBox.warning(None, tr("Export Fehler"), str(e))
+            return False
         
     def export_svg(self) -> bool:
         """
@@ -372,56 +470,6 @@ class ExportController(QObject):
             
         return bodies
         
-    def _do_stl_export(self, bodies, filepath, linear_defl, angular_tol, is_binary, scale):
-        """Synchroner STL Export (Fallback)."""
-        # Versuche MainWindow Implementierung
-        if hasattr(self._mw, '_export_stl_sync_impl'):
-            return self._mw._export_stl_sync_impl(bodies, filepath, linear_defl, angular_tol, is_binary, scale)
-            
-        # Fallback: Direkter Export
-        try:
-            import meshio
-            import numpy as np
-            
-            all_vertices = []
-            all_faces = []
-            vertex_offset = 0
-            
-            for body in bodies:
-                if hasattr(body, '_mesh') and body._mesh:
-                    mesh = body._mesh
-                    if hasattr(mesh, 'points') and hasattr(mesh, 'cells'):
-                        vertices = mesh.points * scale
-                        all_vertices.append(vertices)
-                        
-                        for cell_block in mesh.cells:
-                            if cell_block.type == 'triangle':
-                                faces = cell_block.data + vertex_offset
-                                all_faces.append(faces)
-                                
-                        vertex_offset += len(vertices)
-                        
-            if not all_vertices:
-                raise ValueError("Keine Mesh-Daten zum Exportieren")
-                
-            combined_vertices = np.vstack(all_vertices) if all_vertices else np.array([])
-            combined_faces = np.vstack(all_faces) if all_faces else np.array([]).reshape(0, 3)
-            
-            export_mesh = meshio.Mesh(
-                points=combined_vertices,
-                cells=[('triangle', combined_faces)]
-            )
-            
-            export_mesh.write(filepath, file_format='stl', binary=is_binary)
-            return True
-            
-        except ImportError:
-            logger.error("meshio nicht installiert für STL Export")
-            return False
-        except Exception as e:
-            logger.exception("STL Export Error")
-            return False
-            
     def cleanup(self):
         """Räumt auf beim Beenden."""
         if self._current_worker and self._current_worker.isRunning():
