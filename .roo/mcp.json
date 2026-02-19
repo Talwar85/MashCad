@@ -10,7 +10,8 @@
 			"disabled": false,
 			"alwaysAllow": [
 				"create_directory",
-				"list_directory"
+				"list_directory",
+				"read_text_file"
 			]
 		},
 		"sequentialthinking": {
