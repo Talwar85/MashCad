@@ -68,3 +68,5 @@ test/_debug_*.py
 
 # PyInstaller
 # Note: MashCAD.spec is intentionally tracked as it's our build configuration
+
+first_run_config.json
