@@ -15,7 +15,7 @@ $ErrorActionPreference = "Continue"
 
 $CORE_TESTS_FULL = @(
     "test/test_feature_error_status.py",
-    "test/test_tnp_v4_feature_refs.py",
+    "test/test_tnp_v4_1_regression_suite.py",
     "test/test_trust_gate_core_workflow.py",
     "test/test_cad_workflow_trust.py",
     "test/test_brepopengun_offset_api.py",
@@ -35,7 +35,7 @@ $CORE_TESTS_FULL = @(
 $CORE_TESTS_RED_FLAG = @(
     "test/test_showstopper_red_flag_pack.py",
     "test/test_feature_error_status.py",
-    "test/test_tnp_v4_feature_refs.py",
+    "test/test_tnp_v4_1_regression_suite.py",
     "test/test_feature_edit_robustness.py",
     "test/test_project_roundtrip_persistence.py",
     "test/test_parametric_reference_modelset.py"
