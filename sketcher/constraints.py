@@ -456,7 +456,46 @@ def calculate_constraint_error(constraint: Constraint) -> float:
                 on_arc = angle_to_line >= start_angle or angle_to_line <= end_angle
             
             # Wenn nicht auf dem Bogen, addiere einen Penalty
-            arc_penalty = 0.0 if on_arc else 100.0  # Großer Fehler wenn nicht auf Bogen
+            # W35 P1: Smooth penalty option via feature flag
+            try:
+                from config.feature_flags import is_enabled
+                smooth_penalties = is_enabled("solver_smooth_penalties")
+            except Exception:
+                smooth_penalties = False
+            
+            if smooth_penalties:
+                # Smooth sigmoid penalty instead of hard jump
+                # Distance from arc (in degrees, normalized)
+                if on_arc:
+                    arc_penalty = 0.0
+                else:
+                    # Calculate angular distance from arc
+                    if start_angle <= end_angle:
+                        if angle_to_line < start_angle:
+                            angular_dist = start_angle - angle_to_line
+                        elif angle_to_line > end_angle:
+                            angular_dist = angle_to_line - end_angle
+                        else:
+                            angular_dist = 0.0
+                    else:
+                        # Arc wraps around 0°
+                        if start_angle <= angle_to_line <= 360:
+                            angular_dist = 0.0
+                        elif 0 <= angle_to_line <= end_angle:
+                            arc_penalty = 0.0
+                        else:
+                            # Between end_angle and start_angle
+                            dist1 = angle_to_line - end_angle if angle_to_line > end_angle else angle_to_line + (360 - start_angle)
+                            dist2 = start_angle - angle_to_line if angle_to_line < start_angle else (360 - angle_to_line) + end_angle
+                            angular_dist = min(dist1, dist2)
+                    
+                    # Sigmoid: smooth transition from 0 to 100
+                    # steepness controls how sharp the transition is
+                    steepness = 0.3
+                    arc_penalty = 100.0 / (1.0 + math.exp(-steepness * (angular_dist - 10)))
+            else:
+                # Original hard penalty
+                arc_penalty = 0.0 if on_arc else 100.0  # Großer Fehler wenn nicht auf Bogen
             
             return radius_error + arc_penalty
         

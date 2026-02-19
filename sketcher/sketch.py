@@ -133,7 +133,8 @@ class Sketch:
                                   point_uuids: Dict[str, str] = None,
                                   line_uuids: Dict[str, str] = None,
                                   circle_uuids: Dict[str, str] = None,
-                                  arc_uuids: Dict[str, str] = None) -> bool:
+                                  arc_uuids: Dict[str, str] = None,
+                                  ellipse_uuids: Dict[str, str] = None) -> bool:
         """
         Aktualisiert die ShapeUUIDs nach einem Sketch-Rebuild.
         Wird vom Feature/Body aufgerufen wenn sich der Sketch geändert hat.
@@ -144,6 +145,7 @@ class Sketch:
             line_uuids: Neue UUIDs für Lines
             circle_uuids: Neue UUIDs für Circles
             arc_uuids: Neue UUIDs für Arcs
+            ellipse_uuids: Neue UUIDs für Ellipses (TNP v4.1)
 
         Returns:
             True wenn mindestens eine UUID aktualisiert wurde
@@ -161,6 +163,9 @@ class Sketch:
             updated = True
         if arc_uuids:
             self._arc_shape_uuids.update(arc_uuids)
+            updated = True
+        if ellipse_uuids:
+            self._ellipse_shape_uuids.update(ellipse_uuids)
             updated = True
 
         return updated
@@ -717,6 +722,8 @@ class Sketch:
         # 1. Mittellinie (Konstruktion)
         p_start = self.add_point(x1, y1, construction=True)
         p_end = self.add_point(x2, y2, construction=True)
+        p_start._slot_center_point = True  # Marker: nicht selektierbar
+        p_end._slot_center_point = True    # Marker: nicht selektierbar
         line_center = self.add_line_from_points(p_start, p_end, construction=True)
 
         # Richtungsvektor fuer Offsets
@@ -736,10 +743,17 @@ class Sketch:
         b1 = self.add_point(x1 - nx, y1 - ny, construction=construction)
         t2 = self.add_point(x2 + nx, y2 + ny, construction=construction)
         b2 = self.add_point(x2 - nx, y2 - ny, construction=construction)
+        # Marker: Slot-Eckpunkte nicht einzeln selektierbar
+        t1._slot_point = True
+        b1._slot_point = True
+        t2._slot_point = True
+        b2._slot_point = True
 
         # 3. Skelettlinien an den Endkappen
         cap1 = self.add_line_from_points(t1, b1, construction=True)
         cap2 = self.add_line_from_points(t2, b2, construction=True)
+        cap1._slot_skeleton_line = True  # Marker: nicht selektierbar
+        cap2._slot_skeleton_line = True  # Marker: nicht selektierbar
 
         # 4. Aussenkontur
         line_top = self.add_line_from_points(t1, t2, construction=construction)
@@ -832,56 +846,79 @@ class Sketch:
         Synchronisiert Ellipsen-Geometrie:
         - Bei Drag: Ellipse-Parameter → Achsen (Live-Update während Drag)
         - Bei Constraint-Änderung: Achsen → Ellipse-Parameter (nach Solve)
+        - Aktualisiert native_ocp_data für alle Ellipsen (Lifecycle-Support)
         """
         import math
-        
+
         for ellipse in getattr(self, 'ellipses', []):
-            if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
-                continue
-            
-            # Hole aktuelle Achsen-Punkte
-            major_pos = ellipse._major_axis.end
-            major_neg = ellipse._major_axis.start
-            minor_pos = ellipse._minor_axis.end
-            minor_neg = ellipse._minor_axis.start
-            center_pt = ellipse._center_point
-            
-            # Berechne Center aus Achsen-Mittelpunkten
-            center_x = (major_pos.x + major_neg.x) / 2
-            center_y = (major_pos.y + major_neg.y) / 2
-            
-            # Berechne Radien aus Achsen-Längen
-            major_dx = major_pos.x - major_neg.x
-            major_dy = major_pos.y - major_neg.y
-            major_length = math.hypot(major_dx, major_dy)
-            new_rx = major_length / 2
-            
-            minor_dx = minor_pos.x - minor_neg.x
-            minor_dy = minor_pos.y - minor_neg.y
-            minor_length = math.hypot(minor_dx, minor_dy)
-            new_ry = minor_length / 2
-            
-            # Berechne Rotation aus Major-Achse
-            new_rotation = math.degrees(math.atan2(major_dy, major_dx))
-            
-            # Update Ellipse-Parameter (aus Achsen berechnet)
-            ellipse.center.x = center_x
-            ellipse.center.y = center_y
-            ellipse.radius_x = max(0.01, new_rx)
-            ellipse.radius_y = max(0.01, new_ry)
-            ellipse.rotation = new_rotation
-            
-            # Synchronisiere Center-Point mit berechnetem Center
-            center_pt.x = center_x
-            center_pt.y = center_y
-            
-            # native_ocp_data aktualisieren
+            # === Fall 1: Ellipse mit Achsen-Referenzen (via add_ellipse erstellt) ===
+            if hasattr(ellipse, '_major_axis') and hasattr(ellipse, '_minor_axis'):
+                # Hole aktuelle Achsen-Punkte
+                major_pos = ellipse._major_axis.end
+                major_neg = ellipse._major_axis.start
+                minor_pos = ellipse._minor_axis.end
+                minor_neg = ellipse._minor_axis.start
+                center_pt = ellipse._center_point
+
+                # Berechne Center aus Achsen-Mittelpunkten
+                center_x = (major_pos.x + major_neg.x) / 2
+                center_y = (major_pos.y + major_neg.y) / 2
+
+                # Berechne Radien aus Achsen-Längen
+                major_dx = major_pos.x - major_neg.x
+                major_dy = major_pos.y - major_neg.y
+                major_length = math.hypot(major_dx, major_dy)
+                new_rx = major_length / 2
+
+                minor_dx = minor_pos.x - minor_neg.x
+                minor_dy = minor_pos.y - minor_neg.y
+                minor_length = math.hypot(minor_dx, minor_dy)
+                new_ry = minor_length / 2
+
+                # Berechne Rotation aus Major-Achse
+                new_rotation = math.degrees(math.atan2(major_dy, major_dx))
+
+                # Update Ellipse-Parameter (aus Achsen berechnet)
+                ellipse.center.x = center_x
+                ellipse.center.y = center_y
+                ellipse.radius_x = max(0.01, new_rx)
+                ellipse.radius_y = max(0.01, new_ry)
+                ellipse.rotation = new_rotation
+
+                # Synchronisiere Center-Point mit berechnetem Center
+                center_pt.x = center_x
+                center_pt.y = center_y
+
+            # === Fall 2: Ellipse ohne Achsen-Referenzen (z.B. nach Deserialisierung) ===
+            else:
+                # Ellipse-Parameter direkt aktualisieren (nichts zu tun, Werte sind aktuell)
+                center_x = ellipse.center.x
+                center_y = ellipse.center.y
+                new_rx = ellipse.radius_x
+                new_ry = ellipse.radius_y
+                new_rotation = ellipse.rotation
+
+            # === native_ocp_data für ALLE Ellipsen aktualisieren (Lifecycle-Support) ===
             if ellipse.native_ocp_data:
                 ellipse.native_ocp_data['center'] = (center_x, center_y)
-                ellipse.native_ocp_data['radius_x'] = ellipse.radius_x
-                ellipse.native_ocp_data['radius_y'] = ellipse.radius_y
+                ellipse.native_ocp_data['radius_x'] = new_rx
+                ellipse.native_ocp_data['radius_y'] = new_ry
                 ellipse.native_ocp_data['rotation'] = new_rotation
-        
+            else:
+                # Wenn native_ocp_data noch nicht existiert, jetzt erstellen
+                ellipse.native_ocp_data = {
+                    'center': (center_x, center_y),
+                    'radius_x': new_rx,
+                    'radius_y': new_ry,
+                    'rotation': new_rotation,
+                    'plane': {
+                        'origin': self.plane_origin,
+                        'normal': self.plane_normal,
+                        'x_dir': self.plane_x_dir,
+                        'y_dir': self.plane_y_dir,
+                    }
+                }
+
         # === 2. Legacy Bundles: Ellipse aus Achsen berechnen (altes System) ===
         if not self._ellipse_bundles:
             return
@@ -975,6 +1012,37 @@ class Sketch:
     
     # === Constraint-Solver ===
 
+    def get_spline_control_points(self) -> List['Point2D']:
+        """
+        W35: Gibt alle Spline-Control-Points zurück für Constraint-Solver.
+
+        Control-Points sind reguläre Point2D Objekte, die vom Solver
+        manipuliert werden können. Nach dem Solve müssen die Splines
+        ihre Caches invalidieren.
+
+        Returns:
+            Liste aller Point2D Objekte aus Spline Control Points
+        """
+        control_points = []
+        for spline in self.splines:
+            for cp in spline.control_points:
+                control_points.append(cp.point)
+        return control_points
+
+    def _invalidate_all_spline_caches(self) -> None:
+        """
+        W35: Invalidiert alle Spline-Caches nach Solver-Änderungen.
+
+        Muss aufgerufen werden nachdem der Solver Control-Point-Koordinaten
+        geändert hat.
+        """
+        for spline in self.splines:
+            if hasattr(spline, 'invalidate_cache'):
+                spline.invalidate_cache()
+            # Re-generate line segments for rendering
+            if hasattr(spline, 'to_lines'):
+                spline._lines = spline.to_lines(segments_per_span=10)
+
     def _sanitize_for_solver(self) -> int:
         """
         Entfernt verwaiste Constraint-Referenzen vor dem Solve.
@@ -1047,6 +1115,8 @@ class Sketch:
                     if res.success:
                         self._update_ellipse_geometry()
                         self._update_arc_angles()
+                        # W35: Spline-Caches invalidieren nach Control-Point-Änderungen
+                        self._invalidate_all_spline_caches()
                         self.invalidate_profiles()
                         return res
                     raw_result_name = getattr(getattr(raw_res, "result", None), "name", "")
@@ -1064,19 +1134,24 @@ class Sketch:
             logger.info("py-slvs nicht verfügbar, nutze SciPy-Fallback")
 
         # 2. Fallback auf Scipy Solver (NEU)
+        # W35: Spline Control Points für Constraints exponieren
+        spline_control_points = self.get_spline_control_points()
         res = self._solver.solve(
-            self.points, self.lines, self.circles, self.arcs, self.constraints
+            self.points, self.lines, self.circles, self.arcs, self.constraints,
+            spline_control_points=spline_control_points
         )
 
         if fallback_context and not res.success:
             base_msg = (res.message or "SciPy-Solver fehlgeschlagen").strip()
             if fallback_context not in base_msg:
                 res.message = f"{base_msg} | {fallback_context}"
-        
+
         # Auch hier Winkel updaten, falls der Solver Winkel geändert hat
         if res.success:
             self._update_ellipse_geometry()
             self._update_arc_angles()
+            # W35: Spline-Caches invalidieren nach Control-Point-Änderungen
+            self._invalidate_all_spline_caches()
             self.invalidate_profiles()
 
         return res
@@ -1487,9 +1562,17 @@ class Sketch:
         for arc in self.arcs:
             valid_ids.add(id(arc))
             valid_ids.add(id(arc.center))
+        for ellipse in getattr(self, 'ellipses', []):
+            valid_ids.add(id(ellipse))
+            valid_ids.add(id(ellipse.center))
         for point in self.points:
             valid_ids.add(id(point))
-        
+
+        # W35: Spline Control Points als gültige Entities eintragen
+        for spline in self.splines:
+            for cp in spline.control_points:
+                valid_ids.add(id(cp.point))
+
         # Filtere Constraints
         valid_constraints = []
         for c in self.constraints:
@@ -1501,7 +1584,7 @@ class Sketch:
                     break
             if all_valid:
                 valid_constraints.append(c)
-        
+
         self.constraints = valid_constraints
     
     def find_point_at(self, x: float, y: float, tolerance: float = 5.0) -> Optional[Point2D]:
@@ -1566,6 +1649,49 @@ class Sketch:
             profile = self._trace_profile(start_line, used_line_ids, tolerance)
             if profile and len(profile) >= 3:
                 profiles.append(profile)
+
+        # === TNP v4.1: Ellipsen als geschlossene Profile erkennen ===
+        # Ellipsen sind per Definition geschlossene Kurven und können direkt extrudiert werden
+        for ellipse in getattr(self, 'ellipses', []):
+            if not ellipse.construction:
+                # Erstelle ein Profil-Objekt für die Ellipse (ähnlich wie Kreise)
+                # Das Profil-System akzeptiert jetzt auch Ellipse2D-Objekte
+                profiles.append({'type': 'ellipse', 'geometry': ellipse})
+
+        # === TNP v4.1: Kreise als geschlossene Profile erkennen ===
+        for circle in self.circles:
+            if not circle.construction:
+                profiles.append({'type': 'circle', 'geometry': circle})
+        
+        # === W34: Slots als geschlossene Profile erkennen ===
+        # Slots bestehen aus 2 Arcs + 2 Linien und sind geschlossene Profile
+        # Wir identifizieren Slots über die Center-Line Marker
+        processed_slot_centers = set()
+        for line in self.lines:
+            if getattr(line, '_slot_center_line', False) and line.id not in processed_slot_centers:
+                # Finde alle Komponenten dieses Slots
+                slot_arcs = []
+                slot_lines = []
+                
+                for arc in self.arcs:
+                    if getattr(arc, '_slot_arc', False):
+                        slot_arcs.append(arc)
+                
+                for l in self.lines:
+                    if getattr(l, '_slot_parent_center_line', None) is line:
+                        slot_lines.append(l)
+                
+                # Slot ist gültig wenn er 2 Arcs und mindestens 2 Linien hat
+                if len(slot_arcs) == 2 and len(slot_lines) >= 2:
+                    profiles.append({
+                        'type': 'slot',
+                        'geometry': {
+                            'center_line': line,
+                            'arcs': slot_arcs,
+                            'lines': slot_lines
+                        }
+                    })
+                    processed_slot_centers.add(line.id)
 
         self._cached_profiles = profiles
         self._profiles_valid = True
@@ -1669,7 +1795,8 @@ class Sketch:
                     'point': (cp.point.x, cp.point.y),
                     'handle_in': cp.handle_in,
                     'handle_out': cp.handle_out,
-                    'smooth': cp.smooth
+                    'smooth': cp.smooth,
+                    'weight': cp.weight  # W35: Weight auch serialisieren
                 })
             splines_data.append({
                 'id': spline.id,
@@ -1718,6 +1845,20 @@ class Sketch:
             except Exception as e:
                 logger.debug(f"Profil-Serialisierung übersprungen: {e}")
 
+        # Slot-Marker für Linien sammeln
+        line_slot_data = {}
+        for l in self.lines:
+            if getattr(l, '_slot_center_line', False):
+                line_slot_data[l.id] = {'center_line': True}
+            elif hasattr(l, '_slot_parent_center_line') and l._slot_parent_center_line is not None:
+                line_slot_data[l.id] = {'parent_center_line_id': l._slot_parent_center_line.id}
+        
+        # Slot-Marker für Arcs sammeln
+        arc_slot_data = {}
+        for a in self.arcs:
+            if getattr(a, '_slot_arc', False):
+                arc_slot_data[a.id] = True
+        
         return {
             'name': self.name,
             'id': self.id,
@@ -1725,10 +1866,14 @@ class Sketch:
             'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction,
                        bool(getattr(l, "_suppress_endpoint_markers", False)))
                       for l in self.lines],
+            'line_slot_markers': line_slot_data,  # W34: Slot-Marker persistieren
             'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction)
                         for c in self.circles],
             'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle,
                       a.id, a.construction) for a in self.arcs],
+            'arc_slot_markers': arc_slot_data,  # W34: Slot-Arc-Marker persistieren
+            'ellipses': [(e.center.x, e.center.y, e.radius_x, e.radius_y, e.rotation,
+                         e.id, e.construction, e.native_ocp_data) for e in self.ellipses],
             'splines': splines_data,
             'native_splines': native_splines_data,
             'constraints': constraints_data,
@@ -1755,6 +1900,7 @@ class Sketch:
                     point.id = pid
 
         # Linien wiederherstellen
+        line_id_map = {}  # W34: Für Slot-Parent-Referenzen
         for ldata in data.get('lines', []):
             x1, y1, x2, y2 = ldata[0], ldata[1], ldata[2], ldata[3]
             lid = ldata[4] if len(ldata) > 4 else None
@@ -1763,9 +1909,21 @@ class Sketch:
             line = sketch.add_line(x1, y1, x2, y2, construction=construction)
             if lid:
                 line.id = lid
+                line_id_map[lid] = line
             if suppress_endpoint_markers:
                 line._suppress_endpoint_markers = True
                 line._ellipse_segment = True
+        
+        # W34: Slot-Marker für Linien wiederherstellen
+        line_slot_markers = data.get('line_slot_markers', {})
+        for line_id, markers in line_slot_markers.items():
+            if line_id in line_id_map:
+                line = line_id_map[line_id]
+                if markers.get('center_line'):
+                    line._slot_center_line = True
+                parent_id = markers.get('parent_center_line_id')
+                if parent_id and parent_id in line_id_map:
+                    line._slot_parent_center_line = line_id_map[parent_id]
 
         # Kreise wiederherstellen
         for cdata in data.get('circles', []):
@@ -1777,6 +1935,7 @@ class Sketch:
                 circle.id = cid
 
         # Bögen wiederherstellen
+        arc_id_map = {}  # W34: Für Slot-Arc-Referenzen
         for adata in data.get('arcs', []):
             cx, cy, r, start, sweep = adata[0], adata[1], adata[2], adata[3], adata[4]
             aid = adata[5] if len(adata) > 5 else None
@@ -1784,6 +1943,27 @@ class Sketch:
             arc = sketch.add_arc(cx, cy, r, start, start + sweep, construction=construction)
             if aid:
                 arc.id = aid
+                arc_id_map[aid] = arc
+        
+        # W34: Slot-Marker für Arcs wiederherstellen
+        arc_slot_markers = data.get('arc_slot_markers', {})
+        for arc_id, is_slot_arc in arc_slot_markers.items():
+            if is_slot_arc and arc_id in arc_id_map:
+                arc_id_map[arc_id]._slot_arc = True
+
+        # Ellipsen wiederherstellen (TNP v4.1: Native Ellipse2D mit lifecycle support)
+        for edata in data.get('ellipses', []):
+            cx, cy, rx, ry = edata[0], edata[1], edata[2], edata[3]
+            rotation = edata[4] if len(edata) > 4 else 0.0
+            eid = edata[5] if len(edata) > 5 else None
+            construction = edata[6] if len(edata) > 6 else False
+            native_ocp_data = edata[7] if len(edata) > 7 else None
+
+            ellipse = sketch.add_ellipse(cx, cy, rx, ry, rotation, construction=construction)
+            if eid:
+                ellipse.id = eid
+            if native_ocp_data:
+                ellipse.native_ocp_data = native_ocp_data
 
         # Splines wiederherstellen
         for sdata in data.get('splines', []):
@@ -1798,9 +1978,14 @@ class Sketch:
                     point=Point2D(px, py),
                     handle_in=tuple(cp_data.get('handle_in', (0, 0))),
                     handle_out=tuple(cp_data.get('handle_out', (0, 0))),
-                    smooth=cp_data.get('smooth', True)
+                    smooth=cp_data.get('smooth', True),
+                    weight=cp_data.get('weight', 1.0)  # W35: Weight auch deserialisieren
                 )
                 spline.control_points.append(cp)
+
+            # W35: Cache invalidieren nach Deserialisierung
+            if hasattr(spline, 'invalidate_cache'):
+                spline.invalidate_cache()
 
             sketch.splines.append(spline)
 
@@ -1830,6 +2015,8 @@ class Sketch:
             id_map[c.id] = c
         for a in sketch.arcs:
             id_map[a.id] = a
+        for e in sketch.ellipses:
+            id_map[e.id] = e
 
         from .constraints import Constraint, ConstraintType
         for cdata in data.get('constraints', []):

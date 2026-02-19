@@ -1,0 +1,221 @@
+{
+  "timestamp": "2026-02-19T16:40:17.597767+00:00",
+  "total_tests": 22,
+  "passed": 22,
+  "failed": 0,
+  "results": [
+    {
+      "shape": "Line",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Line",
+      "checkpoint": "constraint_horizontal",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Line",
+      "checkpoint": "constraint_length",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Line",
+      "checkpoint": "save_load_roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Rectangle",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Rectangle",
+      "checkpoint": "solve_stable",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Rectangle",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Circle",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Circle",
+      "checkpoint": "radius_constraint",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Circle",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Arc",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Arc",
+      "checkpoint": "solver_stable",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Arc",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Ellipse",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Ellipse",
+      "checkpoint": "solver_stable",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Ellipse",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Polygon",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Polygon",
+      "checkpoint": "solver_stable",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Polygon",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Slot",
+      "checkpoint": "create",
+      "triage_tag": "interaction",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Slot",
+      "checkpoint": "solver_stable",
+      "triage_tag": "solver",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    },
+    {
+      "shape": "Slot",
+      "checkpoint": "roundtrip",
+      "triage_tag": "persistence",
+      "passed": true,
+      "duration_ms": 0.0,
+      "error": null
+    }
+  ],
+  "summary_by_shape": {
+    "Line": {
+      "passed": 4,
+      "failed": 0,
+      "total": 4
+    },
+    "Rectangle": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    },
+    "Circle": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    },
+    "Arc": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    },
+    "Ellipse": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    },
+    "Polygon": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    },
+    "Slot": {
+      "passed": 3,
+      "failed": 0,
+      "total": 3
+    }
+  }
+}

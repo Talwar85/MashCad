@@ -6,7 +6,7 @@ Mit Build123d Backend für parametrische CAD-Operationen
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QApplication, QFrame, QPushButton
+    QMenu, QApplication, QFrame, QPushButton, QToolButton
 )
 from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer, QThread
 from PySide6.QtGui import (
@@ -944,6 +944,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._update_timer.setInterval(16)  # ~60 FPS max
         self._update_timer.timeout.connect(self._do_debounced_update)
 
+        # W35: Home-Button für schnellen Zurücksprung zum Origin
+        self._btn_home = QToolButton(self)
+        self._btn_home.setText("🏠")
+        self._btn_home.setFixedSize(32, 32)
+        self._btn_home.setCursor(Qt.PointingHandCursor)
+        self._btn_home.setToolTip(tr("Zur Origin (Home)"))
+        p = DesignTokens.COLOR_PRIMARY.name()
+        elevated = DesignTokens.COLOR_BG_ELEVATED.name()
+        self._btn_home.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {elevated};
+                color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                border: 1px solid {DesignTokens.COLOR_BORDER.name()};
+                border-radius: 4px;
+                font-size: 16px;
+            }}
+            QToolButton:hover {{
+                background-color: {p};
+                border: 1px solid {p};
+                color: white;
+            }}
+        """)
+        self._btn_home.clicked.connect(self._reset_view_to_origin)
+        self._btn_home.move(20, 20)
+        self._btn_home.show()
+
     def request_update(self):
         """
         Phase 4.4: Debounced Update-Request.
@@ -1434,8 +1460,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _update_ellipse_constraints_after_drag(self, ellipse):
         """
-        Aktualisiert/löscht Constraints nach Direct-Edit Drag.
+        Aktualisiert Constraints nach Direct-Edit Drag.
         Sonst springt die Ellipse beim Solve zurück auf alte Werte.
+        
+        KORREKTE STRATEGIE:
+        1. Alle Constraints löschen, die die Ellipse betreffen (außer LENGTH-Werte)
+        2. LENGTH-Constraints aktualisieren
+        3. Constraints mit neuen Positionen neu erstellen
         """
         if not hasattr(ellipse, '_major_axis') or not hasattr(ellipse, '_minor_axis'):
             return
@@ -1446,33 +1477,57 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         minor_axis = ellipse._minor_axis
         center_pt = ellipse._center_point
         
-        # WICHTIG: Lösche ALLE Constraints die mit der Ellipse verbunden sind
-        # (außer LENGTH - die werden aktualisiert)
-        constraints_to_remove = []
-        for c in self.sketch.constraints:
-            if center_pt in c.entities or major_axis in c.entities or minor_axis in c.entities:
-                if c.type != ConstraintType.LENGTH:
-                    constraints_to_remove.append(c)
-        
-        for c in constraints_to_remove:
-            if c in self.sketch.constraints:
-                self.sketch.constraints.remove(c)
-        
-        # LENGTH-Constraints aktualisieren
+        # NEUE LÄNGEN berechnen
         new_major_length = 2.0 * ellipse.radius_x
         new_minor_length = 2.0 * ellipse.radius_y
         
+        # 1. Alle Constraints löschen, die Ellipse-Elemente betreffen
+        constraints_to_remove = []
         for c in self.sketch.constraints:
-            if c.type == ConstraintType.LENGTH:
-                if major_axis in c.entities:
-                    c.value = new_major_length
-                elif minor_axis in c.entities:
-                    c.value = new_minor_length
+            # Prüfe, ob das Constraint Ellipse-Elemente betrifft
+            if center_pt in c.entities or major_axis in c.entities or minor_axis in c.entities:
+                if c.type == ConstraintType.LENGTH:
+                    # LENGTH-Constraints: Wert aktualisieren statt löschen
+                    if major_axis in c.entities:
+                        c.value = new_major_length
+                        logger.debug(f"[Ellipse] Updated major axis LENGTH to {new_major_length}")
+                    elif minor_axis in c.entities:
+                        c.value = new_minor_length
+                        logger.debug(f"[Ellipse] Updated minor axis LENGTH to {new_minor_length}")
+                else:
+                    # Andere Constraints (MIDPOINT, PERPENDICULAR, etc.): löschen
+                    constraints_to_remove.append(c)
         
-        # NEU: Constraints mit neuen Werten erstellen
-        self.sketch.add_midpoint(center_pt, major_axis)
-        self.sketch.add_midpoint(center_pt, minor_axis)
-        self.sketch.add_perpendicular(major_axis, minor_axis)
+        # Constraints entfernen
+        for c in constraints_to_remove:
+            if c in self.sketch.constraints:
+                self.sketch.constraints.remove(c)
+                logger.debug(f"[Ellipse] Removed constraint: {c.type.name}")
+        
+        # 2. Constraints mit neuen Positionen neu erstellen
+        # (Nur wenn wir welche gelöscht haben)
+        if constraints_to_remove:
+            self.sketch.add_midpoint(center_pt, major_axis)
+            self.sketch.add_midpoint(center_pt, minor_axis)
+            self.sketch.add_perpendicular(major_axis, minor_axis)
+            logger.debug(f"[Ellipse] Recreated MIDPOINT and PERPENDICULAR constraints")
+        
+        # 3. LENGTH-Constraints erstellen falls nicht vorhanden
+        has_major_length = any(
+            c.type == ConstraintType.LENGTH and major_axis in c.entities 
+            for c in self.sketch.constraints
+        )
+        has_minor_length = any(
+            c.type == ConstraintType.LENGTH and minor_axis in c.entities 
+            for c in self.sketch.constraints
+        )
+        
+        if not has_major_length:
+            self.sketch.add_length(major_axis, new_major_length)
+            logger.debug(f"[Ellipse] Created major axis LENGTH: {new_major_length}")
+        if not has_minor_length:
+            self.sketch.add_length(minor_axis, new_minor_length)
+            logger.debug(f"[Ellipse] Created minor axis LENGTH: {new_minor_length}")
 
     def _update_ellipse_axes_from_ellipse(self, ellipse):
         """
@@ -1494,17 +1549,24 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         vx = -uy
         vy = ux
         
-        # Achsen-Endpunkte aus Ellipse-Parametern berechnen
-        ellipse._major_pos.x = cx + ux * rx
-        ellipse._major_pos.y = cy + uy * rx
-        ellipse._major_neg.x = cx - ux * rx
-        ellipse._major_neg.y = cy - uy * rx
-        ellipse._minor_pos.x = cx + vx * ry
-        ellipse._minor_pos.y = cy + vy * ry
-        ellipse._minor_neg.x = cx - vx * ry
-        ellipse._minor_neg.y = cy - vy * ry
-        ellipse._center_point.x = cx
-        ellipse._center_point.y = cy
+        # Berechne neue Positionen
+        new_major_pos = (cx + ux * rx, cy + uy * rx)
+        new_major_neg = (cx - ux * rx, cy - uy * rx)
+        new_minor_pos = (cx + vx * ry, cy + vy * ry)
+        new_minor_neg = (cx - vx * ry, cy - vy * ry)
+        
+        # Aktualisiere die Punkte
+        ellipse._major_pos.x, ellipse._major_pos.y = new_major_pos
+        ellipse._major_neg.x, ellipse._major_neg.y = new_major_neg
+        ellipse._minor_pos.x, ellipse._minor_pos.y = new_minor_pos
+        ellipse._minor_neg.x, ellipse._minor_neg.y = new_minor_neg
+        ellipse._center_point.x, ellipse._center_point.y = cx, cy
+        
+        # WICHTIG: Aktualisiere auch die Linien-Endpunkte
+        ellipse._major_axis.start = ellipse._major_neg
+        ellipse._major_axis.end = ellipse._major_pos
+        ellipse._minor_axis.start = ellipse._minor_neg
+        ellipse._minor_axis.end = ellipse._minor_pos
         
         # native_ocp_data aktualisieren
         if ellipse.native_ocp_data:
@@ -1512,6 +1574,64 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             ellipse.native_ocp_data['radius_x'] = rx
             ellipse.native_ocp_data['radius_y'] = ry
             ellipse.native_ocp_data['rotation'] = ellipse.rotation
+        
+        logger.debug(f"[Ellipse] Axes updated: center=({cx:.2f}, {cy:.2f}), rx={rx:.2f}, ry={ry:.2f}")
+
+    def _update_slot_constraints_after_drag(self, slot_line, mode):
+        """
+        Aktualisiert Constraints nach Slot Direct-Edit Drag.
+        
+        KORREKTE STRATEGIE:
+        1. Bei Center/Length: Constraints bleiben gleich, nur Positionen ändern sich
+        2. Bei Radius-Change: DISTANCE-Constraints aktualisieren (verbinden Center mit Edge-Punkten)
+        """
+        from sketcher.constraints import ConstraintType
+        
+        if slot_line is None or not hasattr(slot_line, "start") or not hasattr(slot_line, "end"):
+            return
+
+        # Nur bei Radius-Change müssen wir Constraints aktualisieren
+        if mode != "radius":
+            return
+
+        # Finde aktuellen Radius aus den Slot-Arcs
+        current_radius = None
+        for arc in self.sketch.arcs:
+            if hasattr(arc, "_slot_arc") and arc._slot_arc:
+                current_radius = float(arc.radius)
+                break
+        
+        if current_radius is None:
+            return
+        
+        # Sammle alle Slot-Edge-Punkte (t1, b1, t2, b2) und Center-Punkte (p_start, p_end)
+        slot_edge_points = set()
+        slot_center_points = set()
+        
+        for point in self.sketch.points:
+            if getattr(point, '_slot_point', False):
+                slot_edge_points.add(id(point))
+            if getattr(point, '_slot_center_point', False):
+                slot_center_points.add(id(point))
+        
+        # DISTANCE-Constraints aktualisieren (verbinden Center mit Edge-Punkten)
+        updated_count = 0
+        for c in self.sketch.constraints:
+            if c.type == ConstraintType.DISTANCE:
+                entities = c.entities
+                if len(entities) >= 2:
+                    # Prüfe ob dies ein Slot-Radius-Constraint ist
+                    # (verbindet einen Center-Punkt mit einem Edge-Punkt)
+                    has_center = any(id(e) in slot_center_points for e in entities)
+                    has_edge = any(id(e) in slot_edge_points for e in entities)
+                    
+                    if has_center and has_edge:
+                        c.value = current_radius
+                        updated_count += 1
+                        logger.debug(f"[Slot] Updated DISTANCE constraint to {current_radius}")
+        
+        if updated_count > 0:
+            logger.debug(f"[Slot] Updated {updated_count} DISTANCE constraints to radius={current_radius}")
 
     def _get_polygon_dirty_rect(self, polygon) -> QRectF:
         """
@@ -2748,13 +2868,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
     # In sketch_editor.py
 
     def snap_point(self, w):
-        if not self.snap_enabled: 
+        if not self.snap_enabled:
             self.last_snap_diagnostic = ""
             self.last_snap_confidence = 0.0
             self.last_snap_priority = 0
             self.last_snap_distance = 0.0
             return w, SnapType.NONE, None  # <--- Drittes Element: Entity
-            
+
         if self.snapper:
             if self.index_dirty: self._rebuild_spatial_index()
             screen_pos = self.world_to_screen(w)
@@ -2763,6 +2883,30 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.last_snap_confidence = float(getattr(res, "confidence", 0.0) or 0.0)
             self.last_snap_priority = int(getattr(res, "priority", 0) or 0)
             self.last_snap_distance = float(getattr(res, "distance", 0.0) or 0.0)
+
+            # W35: Snappoints für bereits geklickte Spline-Punkte während der Erstellung
+            if self.current_tool == SketchTool.SPLINE and self.tool_points:
+                snap_radius_world = self.snap_radius / self.view_scale
+                closest_tool_point = None
+                min_dist = float('inf')
+
+                for pt in self.tool_points:
+                    dist = math.hypot(w.x() - pt.x(), w.y() - pt.y())
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_tool_point = pt
+
+                # Wenn tool_point näher ist als der gefundene Snappoint, nutze tool_point
+                if closest_tool_point and min_dist < snap_radius_world:
+                    # Prüfe auch die Distanz zum Snapper-Ergebnis
+                    snapper_dist = math.hypot(w.x() - res.point.x(), w.y() - res.point.y())
+                    if min_dist < snapper_dist:
+                        self.last_snap_diagnostic = "Spline tool point"
+                        self.last_snap_confidence = 1.0
+                        self.last_snap_priority = 100  # Hohe Priorität
+                        self.last_snap_distance = min_dist
+                        return closest_tool_point, SnapType.POINT, None
+
             # Rückgabe: Punkt, Typ, Getroffenes Entity (für Auto-Constraints)
             return res.point, res.type, res.target_entity
             
@@ -4165,20 +4309,45 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         """
         Ermittelt das aktuell bearbeitbare Slot.
         Slots werden über ihre Center-Line identifiziert (Markierung _slot_center_line).
+        W35: Sucht auch Slot basierend auf Mausposition, da Slot-Komponenten nicht mehr einzeln gehovered werden.
         """
-        # Check hovered entity first
-        hovered = self._last_hovered_entity
-        if isinstance(hovered, Line2D):
-            # Check if this line is a slot center line
-            if getattr(hovered, '_slot_center_line', False):
-                return hovered, "slot"
-            # Check if this line is part of a slot (top/bottom lines)
-            if hasattr(hovered, '_slot_parent_center_line'):
-                parent = hovered._slot_parent_center_line
-                if parent is not None:
-                    return parent, "slot"
+        import math
 
-        # Check selected lines for slot components
+        # W35: First, check if mouse is near any slot component (since they're blocked from individual selection)
+        world_pos = QPointF(self.mouse_world.x(), self.mouse_world.y())
+        hit_tolerance = max(20.0 / self.view_scale, 10.0)  # Adaptive tolerance (größer für bessere Treffer)
+
+        # Check all slot center lines
+        for line in self.sketch.lines:
+            if getattr(line, '_slot_center_line', False):
+                # Check distance to center line
+                dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
+                if dist <= hit_tolerance:
+                    return line, "slot"
+
+        # Check top/bottom lines (they have _slot_parent_center_line)
+        for line in self.sketch.lines:
+            if hasattr(line, '_slot_parent_center_line') and line._slot_parent_center_line is not None:
+                dist = line.distance_to_point(Point2D(world_pos.x(), world_pos.y()))
+                if dist <= hit_tolerance:
+                    return line._slot_parent_center_line, "slot"
+
+        # Check slot arcs
+        for arc in self.sketch.arcs:
+            if getattr(arc, '_slot_arc', False):
+                center_dist = math.hypot(arc.center.x - world_pos.x(), arc.center.y - world_pos.y())
+                dist_from_edge = abs(center_dist - arc.radius)
+                if dist_from_edge <= hit_tolerance:
+                    # Find the center line for this slot
+                    for line in self.sketch.lines:
+                        if getattr(line, '_slot_center_line', False):
+                            # Check if arc center is near this center line
+                            arc_to_start = math.hypot(arc.center.x - line.start.x, arc.center.y - line.start.y)
+                            arc_to_end = math.hypot(arc.center.x - line.end.x, arc.center.y - line.end.y)
+                            if arc_to_start < 1.0 or arc_to_end < 1.0:
+                                return line, "slot"
+
+        # Fallback: Check selected lines (shouldn't happen due to filter, but kept for safety)
         for line in getattr(self, 'selected_lines', []):
             if getattr(line, '_slot_center_line', False):
                 return line, "slot"
@@ -4188,6 +4357,33 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     return parent, "slot"
 
         return None, None
+
+    def _resolve_direct_edit_target_spline(self):
+        """
+        Ermittelt den aktuell bearbeitbaren Spline.
+        Returns:
+            Tuple (BezierSpline, source) oder (None, None)
+        """
+        hovered = self._last_hovered_entity
+
+        # Prüfe ob gehovered Entity ein Spline ist
+        if len(self.selected_splines) == 1:
+            return self.selected_splines[0], "spline"
+
+        return None, None
+
+    def _get_spline_center_point(self, spline):
+        """
+        Berechnet den visuellen Mittelpunkt eines Splines für das Direct Edit Handle.
+        """
+        if not spline.control_points:
+            return None
+
+        # Arithmetischer Durchschnitt aller Control Points
+        sum_x = sum(cp.point.x for cp in spline.control_points)
+        sum_y = sum(cp.point.y for cp in spline.control_points)
+        n = len(spline.control_points)
+        return QPointF(sum_x / n, sum_y / n)
 
     def _get_direct_edit_handles_world(self):
         """
@@ -4265,6 +4461,15 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             d_ring = abs(math.hypot(world_pos.x() - center.x(), world_pos.y() - center.y()) - circle.radius)
             if d_ring <= hit_radius * 0.75:
                 return {**handles, "kind": "circle", "mode": "radius"}
+
+        # W35: Spline Center Handle
+        spline, _ = self._resolve_direct_edit_target_spline()
+        if spline is not None:
+            center_world = self._get_spline_center_point(spline)
+            if center_world is not None:
+                d_center = math.hypot(world_pos.x() - center_world.x(), world_pos.y() - center_world.y())
+                if d_center <= hit_radius:
+                    return {"kind": "spline", "mode": "center", "spline": spline, "center": center_world}
 
         # W30 AP1: Line Endpoint and Midpoint Handles (Direct Manipulation Parity with Circle)
         hovered = self._last_hovered_entity
@@ -4513,7 +4718,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                             "vertex_idx": idx,
                         }
 
-        # W34: Slot Direct Edit Handles
+        # W35: Slot Direct Edit Handles
         slot, slot_source = self._resolve_direct_edit_target_slot()
         if slot is not None:
             # Center line midpoint handle (move entire slot)
@@ -4528,38 +4733,44 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     "midpoint": midpoint,
                 }
 
-            # Length handles (on center line endpoints)
-            d_start = math.hypot(world_pos.x() - slot.start.x, world_pos.y() - slot.start.y)
-            if d_start <= hit_radius:
-                return {
-                    "kind": "slot",
-                    "mode": "length_start",
-                    "slot": slot,
-                    "source": slot_source,
-                }
-
-            d_end = math.hypot(world_pos.x() - slot.end.x, world_pos.y() - slot.end.y)
-            if d_end <= hit_radius:
-                return {
-                    "kind": "slot",
-                    "mode": "length_end",
-                    "slot": slot,
-                    "source": slot_source,
-                }
-
-            # Radius handle (find on arc caps - check distance to arc edges)
+            # Length Handles (on arc caps - yellow) - drag left/right to change slot length
             for arc in self.sketch.arcs:
                 if hasattr(arc, '_slot_arc') and arc._slot_arc:
-                    # Check distance to arc edge
-                    d_arc_center = math.hypot(world_pos.x() - arc.center.x, world_pos.y() - arc.center.y)
-                    d_from_radius = abs(d_arc_center - arc.radius)
-                    if d_from_radius <= hit_radius * 0.75:
+                    # Handle on the arc edge (away from center line)
+                    mid_angle = math.radians((arc.start_angle + arc.end_angle) / 2)
+                    length_pt = QPointF(
+                        arc.center.x + arc.radius * math.cos(mid_angle),
+                        arc.center.y + arc.radius * math.sin(mid_angle)
+                    )
+                    d_length = math.hypot(world_pos.x() - length_pt.x(), world_pos.y() - length_pt.y())
+                    if d_length <= hit_radius:
+                        # Determine which arc (start or end based on position relative to slot)
+                        # Arc closer to slot.start is length_start, closer to slot.end is length_end
+                        dist_to_start = math.hypot(arc.center.x - slot.start.x, arc.center.y - slot.start.y)
+                        dist_to_end = math.hypot(arc.center.x - slot.end.x, arc.center.y - slot.end.y)
+                        mode = "length_start" if dist_to_start < dist_to_end else "length_end"
+                        return {
+                            "kind": "slot",
+                            "mode": mode,
+                            "slot": slot,
+                            "arc": arc,
+                            "source": slot_source,
+                            "length_point": length_pt,
+                        }
+
+            # Radius Handles (midpoints of top/bottom lines - cyan) - drag up/down to change slot width
+            for line in self.sketch.lines:
+                if hasattr(line, '_slot_parent_center_line') and line._slot_parent_center_line is slot:
+                    midpoint_line = QPointF((line.start.x + line.end.x) / 2, (line.start.y + line.end.y) / 2)
+                    d_radius = math.hypot(world_pos.x() - midpoint_line.x(), world_pos.y() - midpoint_line.y())
+                    if d_radius <= hit_radius:
                         return {
                             "kind": "slot",
                             "mode": "radius",
                             "slot": slot,
-                            "arc": arc,
+                            "line": line,
                             "source": slot_source,
+                            "radius_point": midpoint_line,
                         }
 
         return None
@@ -4571,6 +4782,32 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         kind = handle_hit.get("kind", "circle")
         mode = handle_hit["mode"]
+
+        # W35: Spline verwendet die eigene Spline-Dragging-Infrastruktur, NICHT Direct-Edit
+        # Da die Direct-Edit-Infrastruktur spline_dragging nicht zurücksetzt,
+        # würde der User sonst "gefangen" sein (Drag kann nicht beendet werden)
+        if kind == "spline":
+            self._save_undo()
+
+            spline = handle_hit.get("spline")
+            if spline is None:
+                return
+
+            # Spline center drag verwendet die existierende Spline-Dragging-Infrastruktur
+            self.spline_dragging = True
+            self.spline_drag_spline = spline
+            self.spline_drag_cp_index = -1  # -1 = Body-Drag (ganzes Spline)
+            self.spline_drag_type = 'body'
+            self.spline_drag_start_pos = QPointF(self.mouse_world.x(), self.mouse_world.y())
+
+            if spline not in self.selected_splines:
+                self._clear_selection()
+                self.selected_splines = [spline]
+
+            self.setCursor(Qt.ClosedHandCursor)
+            self.status_message.emit(tr("Spline verschieben"))
+            self.request_update()
+            return
 
         self._save_undo()
 
@@ -4611,6 +4848,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # W34: Slot drag variables
         self._direct_edit_slot = None
         self._direct_edit_slot_arc = None
+        self._direct_edit_slot_line = None
         self._direct_edit_slot_start_center = QPointF()
         self._direct_edit_slot_start_length = 0.0
         self._direct_edit_slot_start_radius = 0.0
@@ -4838,12 +5076,23 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             dy = slot.end.y - slot.start.y
             self._direct_edit_slot_start_length = math.hypot(dx, dy)
 
-            # Find arc caps for radius editing
-            if mode == "radius":
+            # W35: For length editing, find the arc cap
+            if mode in ("length_start", "length_end"):
                 arc = handle_hit.get("arc")
                 if arc is not None:
                     self._direct_edit_slot_arc = arc
-                    self._direct_edit_slot_start_radius = float(arc.radius)
+
+            # W35: For radius editing, get the line and current slot radius
+            if mode == "radius":
+                line = handle_hit.get("line")
+                if line is not None:
+                    self._direct_edit_slot_line = line
+                    # Get current radius from any slot arc
+                    for arc in self.sketch.arcs:
+                        if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                            self._direct_edit_slot_start_radius = float(arc.radius)
+                            self._direct_edit_slot_arc = arc  # Store for marker updates
+                            break
 
             if slot not in self.selected_lines:
                 self._clear_selection()
@@ -5452,7 +5701,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     dirty_old = dirty_old.united(bbox)
 
             if mode == "center":
-                # Move entire slot by moving the center line
+                # Move entire slot by moving the center line endpoints
                 dx = world_pos.x() - self._direct_edit_start_pos.x()
                 dy = world_pos.y() - self._direct_edit_start_pos.y()
                 if axis_lock:
@@ -5461,18 +5710,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     else:
                         dx = 0.0
 
-                # Move center line endpoints
-                slot.start.x = slot.start.x + dx
-                slot.start.y = slot.start.y + dy
-                slot.end.x = slot.end.x + dx
-                slot.end.y = slot.end.y + dy
+                # Move center line endpoints (p_start and p_end)
+                slot.start.x += dx
+                slot.start.y += dy
+                slot.end.x += dx
+                slot.end.y += dy
 
-                # Move arc centers (they're at the same position as center line endpoints)
+                # WICHTIG: Arc-Center auch verschieben (für Live-Visualisierung)
+                # Die Coincident-Constraints synchronisieren sie später
                 for arc in self.sketch.arcs:
                     if hasattr(arc, '_slot_arc') and arc._slot_arc:
                         arc.center.x += dx
                         arc.center.y += dy
 
+                self._direct_edit_start_pos = QPointF(world_pos.x(), world_pos.y())
                 self._direct_edit_drag_moved = True
 
             elif mode in ("length_start", "length_end"):
@@ -5486,55 +5737,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         dx = 0.0
 
                 if mode == "length_start":
-                    # Move start point along the line direction
+                    # Move start point (p_start)
                     slot.start.x += dx
                     slot.start.y += dy
+                    # WICHTIG: Zugehörigen Arc-Center auch verschieben
+                    for arc in self.sketch.arcs:
+                        if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                            dist_to_start = math.hypot(arc.center.x - slot.start.x, arc.center.y - slot.start.y)
+                            if dist_to_start < 1.0:  # Nahe am Start
+                                arc.center.x += dx
+                                arc.center.y += dy
                 else:
-                    # Move end point along the line direction
+                    # Move end point (p_end)
                     slot.end.x += dx
                     slot.end.y += dy
+                    # WICHTIG: Zugehörigen Arc-Center auch verschieben
+                    for arc in self.sketch.arcs:
+                        if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                            dist_to_end = math.hypot(arc.center.x - slot.end.x, arc.center.y - slot.end.y)
+                            if dist_to_end < 1.0:  # Nahe am Ende
+                                arc.center.x += dx
+                                arc.center.y += dy
 
-                # Update corresponding arc center
-                for arc in self.sketch.arcs:
-                    if hasattr(arc, '_slot_arc') and arc._slot_arc:
-                        # Check if this arc is at the start or end
-                        arc_center_dist_start = math.hypot(arc.center.x - slot.start.x, arc.center.y - slot.start.y)
-                        arc_center_dist_end = math.hypot(arc.center.x - slot.end.x, arc.center.y - slot.end.y)
-                        if mode == "length_start" and arc_center_dist_start < 1e-6:
-                            arc.center.x = slot.start.x
-                            arc.center.y = slot.start.y
-                        elif mode == "length_end" and arc_center_dist_end < 1e-6:
-                            arc.center.x = slot.end.x
-                            arc.center.y = slot.end.y
-
+                self._direct_edit_start_pos = QPointF(world_pos.x(), world_pos.y())
                 self._direct_edit_drag_moved = True
 
             elif mode == "radius":
                 # Change slot radius by updating arc radii
+                # WICHTIG: Die Linien- und Punkt-Positionen werden vom Solver berechnet!
+                # Wir aktualisieren nur die Arc-Radien und die DISTANCE-Constraints
                 arc = self._direct_edit_slot_arc
                 if arc is not None:
-                    # Calculate new radius based on mouse distance from center
+                    # Calculate new radius based on mouse movement
                     dx = world_pos.x() - self._direct_edit_start_pos.x()
-                    dy = world_pos.y() - self._direct_edit_start_pos.y()
-
-                    # Project mouse movement onto radius direction
-                    new_radius = self._direct_edit_slot_start_radius + dx  # Simplified: use x-delta
+                    new_radius = self._direct_edit_slot_start_radius + dx
                     new_radius = max(0.01, abs(new_radius))
-
+                    
                     # Update both arc caps
                     for slot_arc in self.sketch.arcs:
                         if hasattr(slot_arc, '_slot_arc') and slot_arc._slot_arc:
                             slot_arc.radius = new_radius
-
-                            # Update marker points for this arc
-                            if hasattr(slot_arc, '_start_marker') and slot_arc._start_marker is not None:
-                                start_angle_rad = math.radians(slot_arc.start_angle)
-                                slot_arc._start_marker.x = slot_arc.center.x + new_radius * math.cos(start_angle_rad)
-                                slot_arc._start_marker.y = slot_arc.center.y + new_radius * math.sin(start_angle_rad)
-                            if hasattr(slot_arc, '_end_marker') and slot_arc._end_marker is not None:
-                                end_angle_rad = math.radians(slot_arc.end_angle)
-                                slot_arc._end_marker.x = slot_arc.center.x + new_radius * math.cos(end_angle_rad)
-                                slot_arc._end_marker.y = slot_arc.center.y + new_radius * math.sin(end_angle_rad)
+                    
+                    # WICHTIG: Start-Position aktualisieren für kontinuierliches Dragging
+                    self._direct_edit_slot_start_radius = new_radius
+                    self._direct_edit_start_pos = QPointF(world_pos.x(), world_pos.y())
 
                     self._direct_edit_drag_moved = True
 
@@ -5619,8 +5865,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
         
-        # WICHTIG: Ellipse VOR dem Reset speichern!
-        dragged_ellipse = self._direct_edit_ellipse
+        # WICHTIG: Ellipse und Slot VOR dem Reset speichern!
+        dragged_ellipse = getattr(self, "_direct_edit_ellipse", None)
+        dragged_slot = getattr(self, "_direct_edit_slot", None)
 
         # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
         self._reset_direct_edit_state()
@@ -5630,6 +5877,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             # Sonst springt die Ellipse zurück auf die alten Constraint-Werte
             if dragged_ellipse is not None and mode in ("center", "radius_x", "radius_y", "rotation"):
                 self._update_ellipse_constraints_after_drag(dragged_ellipse)
+            
+            # WICHTIG: Slot-Constraints aktualisieren (besonders nach Radius-Change)
+            if dragged_slot is not None and mode in ("center", "length_start", "length_end", "radius"):
+                self._update_slot_constraints_after_drag(dragged_slot, mode)
             
             # W33 EPIC AA1.2: Final-Solve mit Rollback bei Fehler
             result = self.sketch.solve()
@@ -5662,6 +5913,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 return
 
             # Erfolg: Profile finden und Update senden
+            # WICHTIG: Arc-Winkel aktualisieren (für Slots und andere Arc-Features)
+            self.sketch._update_arc_angles()
             self._find_closed_profiles()
             self.sketched_changed.emit()
 
@@ -5685,6 +5938,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 self.status_message.emit(tr("Line moved"))
             elif mode in ("start_angle", "end_angle"):
                 self.status_message.emit(tr("Arc angle updated"))
+            elif mode in ("length_start", "length_end"):
+                self.status_message.emit(tr("Slot length updated"))
 
         self.request_update()
 
@@ -5865,9 +6120,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         elif self._direct_edit_dragging:
             return tr("Esc=Abbrechen | Drag=Ändern | Enter=Bestätigen")
         elif self._tutorial_mode_enabled:
-            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | F1=Tutorial aus")
+            return tr("Shift+R=Ansicht drehen | Space=3D-Peek | 0=Origin | F1=Tutorial aus")
         else:
-            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek")
+            return tr("Shift+R=Ansicht drehen | Space halten=3D-Peek | 0=Origin")
     
     def _get_tutorial_hint_for_tool(self, tool=None):
         """
@@ -7105,13 +7360,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         # Neue Linien generieren
         new_lines = spline.to_lines(segments_per_span=10)
-        spline._lines = new_lines  # Referenz aktualisieren
-        
-        for line in new_lines:
-            self.sketch.lines.append(line)
-            self.sketch.points.append(line.start)
-        if new_lines:
-            self.sketch.points.append(new_lines[-1].end)
+        spline._lines = new_lines  # Nur Cache für Rendering/Hittest - nicht zu sketch.lines!
+
+        # WICHTIG: Segmente NICHT zu sketch.lines hinzufügen!
+        # Spline als Ganzes ist bereits in sketch.splines - Segmente sind nur für Rendering.
         
         # Reset Drag-State aber behalte Spline-Selection
         self.spline_dragging = False
@@ -7435,18 +7687,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
              # Delta berechnen
              dx = self.mouse_world.x() - self.spline_drag_start_pos.x()
              dy = self.mouse_world.y() - self.spline_drag_start_pos.y()
-             
+
              # Alle Punkte verschieben
              for cp in spline.control_points:
                  cp.point.x += dx
                  cp.point.y += dy
-                 
+
              # Start-Pos für nÄchstes Event updaten
              self.spline_drag_start_pos = self.mouse_world
-             
+
              # Cache invalidieren und Linien neu berechnen
              spline.invalidate_cache()
              spline._lines = spline.to_lines(segments_per_span=10)
+             # WICHTIG: Auch _preview_lines setzen für Live-Rendering!
+             spline._preview_lines = spline._lines
              self.sketched_changed.emit()
              self._find_closed_profiles()
              self.request_update()
@@ -7903,7 +8157,50 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._finish_spline()
             return
         self._cancel_tool()
-    
+
+    def _finish_spline(self):
+        """
+        Finalisiert die Spline-Erstellung und fügt den Spline zum Sketch hinzu.
+        Wird aufgerufen von Right-Click oder ESC bei >=2 Punkten.
+        """
+        from sketcher.geometry import BezierSpline
+
+        # Undo-Status speichern
+        self._save_undo()
+
+        # Neuen Spline erstellen
+        spline = BezierSpline()
+        spline.construction = self.construction_mode
+        spline.closed = False  # TODO: Geschlossene Splines könnten später Option sein
+
+        # Alle Punkte aus tool_points hinzufügen
+        for pt in self.tool_points:
+            spline.add_point(pt.x(), pt.y())
+
+        # Spline zum Sketch hinzufügen
+        self.sketch.splines.append(spline)
+
+        # Preview-Lines für Rendering setzen
+        spline._lines = spline.to_lines(segments_per_span=10)
+
+        # Tool-Status zurücksetzen
+        self.tool_step = 0
+        self._last_auto_show_step = -1
+        self.tool_points.clear()
+        self.tool_data.clear()
+
+        # Zurück zum Select-Tool wechseln
+        self.set_tool(SketchTool.SELECT)
+
+        # Spline selektieren für sofortiges Editieren
+        self.selected_splines = [spline]
+
+        # Sketch aktualisieren
+        self.sketched_changed.emit()
+        self._find_closed_profiles()
+        self.request_update()
+        self.status_message.emit(tr("Spline erstellt ({count} Punkte)").format(count=len(spline.control_points)))
+
     def _toggle_grid_snap(self):
         self.grid_snap = not self.grid_snap
         state = tr("ON") if self.grid_snap else tr("OFF")
@@ -8159,17 +8456,58 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return "spline"
         return "unknown"
 
+    def _tag_spline_lines(self, spline, lines):
+        """Markiert approximierte Spline-Linien als nicht-direkt-selektierbare Segmente."""
+        for line in lines or []:
+            line._spline_segment = True
+            line._spline_owner = spline
+            line._suppress_endpoint_markers = True
+
+    def _is_spline_segment_line(self, entity) -> bool:
+        """True wenn die Linie ein internes Spline-Segment ist."""
+        if not isinstance(entity, Line2D):
+            return False
+
+        if getattr(entity, "_spline_segment", False) or getattr(entity, "_spline_owner", None) is not None:
+            return True
+
+        # Fallback für ältere Zustände ohne Marker
+        for spline in getattr(self.sketch, "splines", []):
+            lines = getattr(spline, "_lines", None)
+            if lines and entity in lines:
+                entity._spline_segment = True
+                entity._spline_owner = spline
+                entity._suppress_endpoint_markers = True
+                return True
+        return False
+
     def _selection_filter_label(self, mode: Optional[str] = None) -> str:
         key = mode or self.selection_filter_mode
         return self.SELECTION_FILTER_LABELS.get(key, str(key))
 
     def _entity_passes_selection_filter(self, entity) -> bool:
         mode = getattr(self, "selection_filter_mode", "all")
-        
+
         # Ellipsen-Achsen sind nie direkt selektierbar (nur via Ellipse)
         if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
             return False
-        
+        # Interne Spline-Segmente sind nie direkt selektierbar
+        if isinstance(entity, Line2D) and self._is_spline_segment_line(entity):
+            return False
+
+        # W35: Slot-Komponenten sind nie direkt selektierbar (nur via Slot-Handles)
+        # WICHTIG: Center-Line (_slot_center_line) bleibt selektierbar - sie repräsentiert den Slot!
+        if isinstance(entity, Line2D) and hasattr(entity, '_slot_parent_center_line'):
+            return False  # Top/Bottom-Linien nicht einzeln
+        if isinstance(entity, Line2D) and getattr(entity, '_slot_skeleton_line', False):
+            return False  # Skelettlinien (cap1, cap2) nicht selektierbar
+        if isinstance(entity, Arc2D) and getattr(entity, '_slot_arc', False):
+            return False  # Slot-Arcs nicht einzeln
+        if isinstance(entity, Point2D) and getattr(entity, '_slot_point', False):
+            return False  # Slot-Eckpunkte nicht selektierbar
+        if isinstance(entity, Point2D) and getattr(entity, '_slot_center_point', False):
+            return False  # Slot-Mittellinien-Punkte nicht selektierbar
+
         if mode == "all":
             return True
         return self._entity_kind(entity) == mode
@@ -8179,7 +8517,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         # WICHTIG: Ellipsen-Achsen haben niedrigste Priorität (werden übersprungen)
         if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
             return 100  # Niedrigste Priorität - wird fast nie selektiert
-        
+
+        # W35: Slot-Komponenten haben niedrigste Priorität (werden fast nie selektiert)
+        # WICHTIG: Center-Line hat NORMALE Priorität (0), damit sie selektierbar ist!
+        if isinstance(entity, Line2D) and getattr(entity, '_slot_skeleton_line', False):
+            return 100  # Skelettlinien
+        if isinstance(entity, Line2D) and hasattr(entity, '_slot_parent_center_line'):
+            return 100  # Top/Bottom-Linien
+        if isinstance(entity, Arc2D) and getattr(entity, '_slot_arc', False):
+            return 100  # Slot-Arcs
+        if isinstance(entity, Point2D) and getattr(entity, '_slot_point', False):
+            return 100  # Slot-Eckpunkte
+        if isinstance(entity, Point2D) and getattr(entity, '_slot_center_point', False):
+            return 100  # Slot-Center-Punkte
+
         kind = self._entity_kind(entity)
         return {
             "line": 0,
@@ -8771,18 +9122,22 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         if len(spline.control_points) <= 2:
             self.show_message("Spline muss mindestens 2 Punkte haben", 2000, QColor(255, 100, 100))
             return
-        
+
         self._save_undo()
         spline.control_points.pop(idx)
+        # WICHTIG: Cache invalidieren nach Änderung der control_points!
+        spline.invalidate_cache()
         # Re-calc lines
         spline._lines = spline.to_lines(segments_per_span=10)
         self.sketched_changed.emit()
         self._find_closed_profiles()
         self.request_update()
-        
+
     def _toggle_spline_closed(self, spline, closed):
         self._save_undo()
         spline.closed = closed
+        # WICHTIG: Cache invalidieren nach Änderung!
+        spline.invalidate_cache()
         # Re-calc lines
         spline._lines = spline.to_lines(segments_per_span=10)
         self.sketched_changed.emit()
@@ -8842,11 +9197,12 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             
             # Insert AFTER best_idx
             spline.insert_point(best_idx + 1, px, py)
-            
-            # Generate NEW lines and add to sketch
+
+            # Generate NEW lines for rendering/hittest only
             new_lines = spline.to_lines(segments_per_span=10)
             spline._lines = new_lines
-            self.sketch.lines.extend(new_lines)
+            # WICHTIG: NICHT zu sketch.lines hinzufügen!
+            # Spline als Ganzes ist bereits in sketch.splines.
             
             self.sketched_changed.emit()
             self._find_closed_profiles()
@@ -9251,6 +9607,87 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                       int(pt_screen.y() - radius),
                                       radius * 2, radius * 2)
 
+        # W35: Slot Handles (Center, Length on Arcs, Radius on Lines)
+        # Prüfe erst, ob ein Slot selektiert ist (für persistente Handle-Anzeige)
+        slot = None
+        slot_source = None
+        
+        # Check selected lines for slot
+        for line in getattr(self, 'selected_lines', []):
+            if getattr(line, '_slot_center_line', False):
+                slot = line
+                slot_source = "selection"
+                break
+        
+        # Wenn kein Slot selektiert, prüfe Hover
+        if slot is None:
+            slot, slot_source = self._resolve_direct_edit_target_slot()
+        
+        if slot is not None:
+            # Check if this slot is actively being edited
+            is_active_edit = self._direct_edit_dragging and self._direct_edit_slot is slot
+
+            # Center Line Midpoint (Center Handle - for moving entire slot)
+            midpoint = QPointF((slot.start.x + slot.end.x) / 2, (slot.start.y + slot.end.y) / 2)
+            midpoint_screen = self.world_to_screen(midpoint)
+
+            # Center Handle (green square - like circle center)
+            center_size = handle_radius + 2 if is_active_edit and self._direct_edit_mode == "center" else handle_radius
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 180 if is_active_edit and self._direct_edit_mode == "center" else 128))
+            painter.drawRect(int(midpoint_screen.x() - center_size),
+                           int(midpoint_screen.y() - center_size),
+                           center_size * 2, center_size * 2)
+
+            # Length Handles (yellow circles - on arc caps)
+            for arc in self.sketch.arcs:
+                if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                    # Handle on the arc edge (away from center line)
+                    mid_angle = math.radians((arc.start_angle + arc.end_angle) / 2)
+                    length_pt = Point2D(
+                        arc.center.x + arc.radius * math.cos(mid_angle),
+                        arc.center.y + arc.radius * math.sin(mid_angle)
+                    )
+                    length_screen = self.world_to_screen(length_pt)
+                    is_length_active = is_active_edit and self._direct_edit_mode in ("length_start", "length_end")
+                    length_size = handle_radius + 2 if is_length_active else handle_radius
+                    painter.setPen(QPen(QColor(255, 255, 0), 2))
+                    painter.setBrush(QColor(255, 255, 0, 180 if is_length_active else 128))
+                    painter.drawEllipse(int(length_screen.x() - length_size),
+                                      int(length_screen.y() - length_size),
+                                      length_size * 2, length_size * 2)
+
+            # Radius Handles (cyan circles - midpoints of top/bottom lines)
+            for line in self.sketch.lines:
+                if hasattr(line, '_slot_parent_center_line') and line._slot_parent_center_line is slot:
+                    midpoint_line = QPointF((line.start.x + line.end.x) / 2, (line.start.y + line.end.y) / 2)
+                    line_screen = self.world_to_screen(midpoint_line)
+                    is_radius_active = is_active_edit and self._direct_edit_mode == "radius"
+                    radius_size = handle_radius + 2 if is_radius_active else handle_radius
+                    painter.setPen(QPen(QColor(0, 255, 255), 2))
+                    painter.setBrush(QColor(0, 255, 255, 180 if is_radius_active else 128))
+                    painter.drawEllipse(int(line_screen.x() - radius_size),
+                                      int(line_screen.y() - radius_size),
+                                      radius_size * 2, radius_size * 2)
+
+                    # Draw guide line from slot center line to radius handle
+                    painter.setPen(QPen(QColor(0, 255, 255, 80), 1))
+                    painter.drawLine(midpoint_screen, line_screen)
+
+        # W35: Spline Handles (Center Handle für direktes Verschieben)
+        spline, spline_source = self._resolve_direct_edit_target_spline()
+        if spline is not None:
+            center_world = self._get_spline_center_point(spline)
+            if center_world is not None:
+                center_screen = self.world_to_screen(center_world)
+
+                # Center Handle (green square - wie bei Circle/Line)
+                painter.setPen(QPen(QColor(0, 255, 0), 2))
+                painter.setBrush(QColor(0, 255, 0, 128))
+                painter.drawRect(int(center_screen.x() - handle_radius),
+                               int(center_screen.y() - handle_radius),
+                               handle_radius * 2, handle_radius * 2)
+
     def paintEvent(self, event):
         # 1. QPainter initialisieren
         p = QPainter(self)
@@ -9339,6 +9776,9 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         super().resizeEvent(event)
         if self.view_offset == QPointF(0, 0):
             self._center_view()
+        # W35: Home-Button Position aktualisieren
+        if hasattr(self, '_btn_home'):
+            self._btn_home.move(20, 20)
 
     def _is_empty_right_click_target(self, screen_pos: QPointF, world_pos: QPointF) -> bool:
         """True, wenn unter dem Cursor keine editierbare/auswÄhlbare Sketch-EntitÄt liegt."""

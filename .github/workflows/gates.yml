@@ -34,13 +34,14 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda install -y pytest
-        pip install -r requirements.txt
+        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install -r requirements.txt
 
     - name: Run Core-Gate
       shell: powershell
       run: |
-        powershell -ExecutionPolicy Bypass -File scripts/gate_core.ps1
+        New-Item -ItemType Directory -Force -Path roadmap_ctp | Out-Null
+        powershell -ExecutionPolicy Bypass -File scripts/gate_core.ps1 -JsonOut roadmap_ctp/core_gate_summary.json 2>&1 | Tee-Object -FilePath test_output_core.txt
       continue-on-error: false  # Core-Gate must pass
 
     - name: Upload Core-Gate Evidence
@@ -50,6 +51,8 @@ jobs:
         name: core-gate-evidence
         path: |
           test_output*.txt
+          roadmap_ctp/core_gate_summary.json
+        if-no-files-found: warn
         retention-days: 7
 
   # PI-010 Gate: Parametric Reference Modelset
@@ -108,9 +111,9 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda install -y pytest
-        pip install -r requirements.txt
-        pip install PySide6  # UI dependencies
+        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install -r requirements.txt
+        conda run -n cad_env python -m pip install PySide6  # UI dependencies
 
     - name: Run UI-Gate
       shell: powershell
@@ -123,13 +126,17 @@ jobs:
       if: always()
       shell: powershell
       run: |
+        if (-not (Test-Path $env:GITHUB_STEP_SUMMARY)) {
+          echo "::notice::No step summary found; skipping BLOCKED_INFRA classification check"
+          exit 0
+        }
         # Check for BLOCKED_INFRA in output (if available)
-        if (Select-String -Path env:GITHUB_STEP_SUMMARY -Pattern "BLOCKED_INFRA" -Quiet) {
+        if (Select-String -Path $env:GITHUB_STEP_SUMMARY -Pattern "BLOCKED_INFRA" -Quiet) {
           echo "::notice::UI-Gate: BLOCKED_INFRA (infrastructure issue, not blocking release)"
           exit 0
         }
         # Check for FAIL (logic error - would block)
-        if (Select-String -Path env:GITHUB_STEP_SUMMARY -Pattern "Status: FAIL" -Quiet) {
+        if (Select-String -Path $env:GITHUB_STEP_SUMMARY -Pattern "Status: FAIL" -Quiet) {
           echo "::error::UI-Gate: FAIL (logic error - blocking release)"
           exit 1
         }
@@ -187,12 +194,14 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda install -y pytest
+        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install -r requirements.txt
 
     - name: Generate Gate Evidence (W3)
       shell: powershell
       run: |
         powershell -ExecutionPolicy Bypass -File scripts\generate_gate_evidence.ps1
+      continue-on-error: true  # Evidence should be generated even if core gates are red
 
     - name: Upload Evidence Artifacts
       uses: actions/upload-artifact@v4

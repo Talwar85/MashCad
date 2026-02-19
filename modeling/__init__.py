@@ -7663,7 +7663,8 @@ class Body:
 
             # === TNP v4.1: Native Ellipse Path (glatte Fläche statt Polygon) ===
             # PrÃ¼fe ob der Sketch Ellipsen mit native_ocp_data hat
-            if has_sketch and hasattr(sketch, 'ellipses') and sketch.ellipses:
+            # PARITÄT MIT CIRCLE: Nur extrudieren wenn nicht explicit_closed_profiles
+            if has_sketch and hasattr(sketch, 'ellipses') and sketch.ellipses and not explicit_closed_profiles:
                 native_ellipse_faces = self._extrude_sketch_ellipses(sketch, plane, profile_selector)
                 if native_ellipse_faces:
                     logger.info(f"[TNP v4.1] {len(native_ellipse_faces)} native Ellipse Faces erstellt (glatt statt polygon)")
@@ -7678,6 +7679,44 @@ class Body:
             if polys_to_extrude:
                 if is_enabled("extrude_debug"):
                     logger.info(f"[OCP-FIRST] Verarbeite {len(polys_to_extrude)} Profile.")
+
+                # === TNP v4.1: Native Ellipse/Circle Profile aus Profil-Liste extrudieren ===
+                # Diese Profile werden als Dicts {'type': 'ellipse', 'geometry': ...} übergeben
+                native_profile_faces = []
+                remaining_profiles = []
+
+                for profile in polys_to_extrude:
+                    if isinstance(profile, dict) and profile.get('type') in ('ellipse', 'circle', 'slot'):
+                        profile_type = profile['type']
+                        geometry = profile['geometry']
+                        if profile_type == 'ellipse':
+                            # Native Ellipse extrudieren
+                            ellipse_faces = self._extrude_single_ellipse(geometry, plane)
+                            if ellipse_faces:
+                                native_profile_faces.extend(ellipse_faces)
+                        elif profile_type == 'circle':
+                            # Native Circle extrudieren
+                            circle_faces = self._extrude_single_circle(geometry, plane)
+                            if circle_faces:
+                                native_profile_faces.extend(circle_faces)
+                        elif profile_type == 'slot':
+                            # W34: Native Slot extrudieren
+                            slot_faces = self._extrude_single_slot(geometry, plane)
+                            if slot_faces:
+                                native_profile_faces.extend(slot_faces)
+                    else:
+                        # Shapely Polygon - später verarbeiten
+                        remaining_profiles.append(profile)
+
+                if native_profile_faces:
+                    faces_to_extrude.extend(native_profile_faces)
+                    logger.info(f"[TNP v4.1] {len(native_profile_faces)} native Ellipse/Circle Faces aus Profil-Liste erstellt")
+
+                # polys_to_extrude auf nicht-native Profile beschränken
+                polys_to_extrude = remaining_profiles
+
+                if is_enabled("extrude_debug") and polys_to_extrude:
+                    logger.info(f"[OCP-FIRST] Verbleibende Polygon-Profile: {len(polys_to_extrude)}")
 
                 for idx, poly in enumerate(polys_to_extrude):
                     try:
@@ -7851,6 +7890,24 @@ class Body:
                 faces_to_extrude = []
                 for idx, poly in enumerate(polys_to_extrude):
                     try:
+                        # W34: Native Profile (Ellipse, Circle, Slot) behandeln
+                        if isinstance(poly, dict) and poly.get('type') in ('ellipse', 'circle', 'slot'):
+                            profile_type = poly['type']
+                            geometry = poly['geometry']
+                            if profile_type == 'ellipse':
+                                ellipse_faces = self._extrude_single_ellipse(geometry, plane)
+                                if ellipse_faces:
+                                    faces_to_extrude.extend(ellipse_faces)
+                            elif profile_type == 'circle':
+                                circle_faces = self._extrude_single_circle(geometry, plane)
+                                if circle_faces:
+                                    faces_to_extrude.extend(circle_faces)
+                            elif profile_type == 'slot':
+                                slot_faces = self._extrude_single_slot(geometry, plane)
+                                if slot_faces:
+                                    faces_to_extrude.extend(slot_faces)
+                            continue
+                        
                         # DEBUG: Polygon-Info loggen
                         n_interiors = len(list(poly.interiors)) if hasattr(poly, 'interiors') else 0
                         poly_area = poly.area if hasattr(poly, 'area') else 0
@@ -8020,15 +8077,17 @@ class Body:
         """
         Konvertiert Profile zu Shapely Polygons fÃ¼r Legacy-Code.
 
-        UnterstÃ¼tzt zwei Formate:
-        1. List[List[Line2D]] - vom Sketch _find_closed_profiles()
-        2. List[ShapelyPolygon] - bereits vom UI vorkonvertiert
+        UnterstÃ¼tzt folgende Formate:
+        1. List[Line2D] - vom Sketch _find_closed_profiles()
+        2. ShapelyPolygon - bereits vom UI vorkonvertiert
+        3. Dict {'type': 'ellipse', 'geometry': Ellipse2D} - native Ellipse Profile (TNP v4.1)
+        4. Dict {'type': 'circle', 'geometry': Circle2D} - native Circle Profile (TNP v4.1)
 
         Args:
-            line_profiles: Liste von Profilen (List[Line2D] oder ShapelyPolygon)
+            line_profiles: Liste von Profilen (List[Line2D], ShapelyPolygon, oder Dict)
 
         Returns:
-            Liste von Shapely Polygon Objekten
+            Liste von Shapely Polygon Objekten und/oder Dict-Profilen (native)
         """
         from shapely.geometry import Polygon as ShapelyPoly
 
@@ -8036,6 +8095,14 @@ class Body:
         for profile in line_profiles:
             if not profile:
                 continue
+
+            # Fall 0: Native Ellipse/Circle/Slot Profile (TNP v4.1) - direkt weiterleiten
+            if isinstance(profile, dict):
+                profile_type = profile.get('type')
+                if profile_type in ('ellipse', 'circle', 'slot'):
+                    # Native Profile werden nicht konvertiert, sondern direkt verwendet
+                    polygons.append(profile)
+                    continue
 
             # Fall 1: Bereits ein Shapely Polygon (vom UI)
             if hasattr(profile, 'exterior') and hasattr(profile, 'area'):
@@ -8081,12 +8148,12 @@ class Body:
         NICHT alle Profile! Das ist CAD Kernel First konform.
 
         Args:
-            profiles: Liste von Shapely Polygons (aktuelle Profile aus Sketch)
+            profiles: Liste von Shapely Polygons oder Dict-Profilen (Ellipse/Circle)
             selector: Liste von (cx, cy) Tupeln (gespeicherte Centroids)
             tolerance: Abstand-Toleranz fÃ¼r Centroid-Match in mm
 
         Returns:
-            Gefilterte Liste von Polygons die zum Selektor passen (kann leer sein!)
+            Gefilterte Liste von Profilen die zum Selektor passen (kann leer sein!)
         """
         if not profiles or not selector:
             return list(profiles) if profiles else []
@@ -8095,14 +8162,34 @@ class Body:
         matched = []
         used_profile_indices = set()  # Verhindert doppeltes Matchen
 
+        # Hilfsfunktion: Centroid aus Profil ermitteln
+        def get_profile_centroid(profile):
+            """Ermittelt den Centroid eines Profils (Shapely oder Dict)."""
+            if isinstance(profile, dict):
+                # Native Ellipse/Circle Profil
+                geometry = profile.get('geometry')
+                if geometry:
+                    if hasattr(geometry, 'center'):
+                        # Ellipse2D oder Circle2D
+                        return geometry.center.x, geometry.center.y
+            # Shapely Polygon
+            if hasattr(profile, 'centroid'):
+                c = profile.centroid
+                return c.x, c.y
+            return None
+
         # Debug: Zeige alle verfÃ¼gbaren Profile
         if is_enabled("extrude_debug"):
             logger.debug(f"[SELECTOR] {len(profiles)} Profile verfÃ¼gbar, {len(selector)} Selektoren")
-        for i, poly in enumerate(profiles):
+        for i, profile in enumerate(profiles):
             try:
-                c = poly.centroid
-                if is_enabled("extrude_debug"):
-                    logger.debug(f"  Profile {i}: centroid=({c.x:.2f}, {c.y:.2f}), area={poly.area:.1f}")
+                centroid = get_profile_centroid(profile)
+                if centroid:
+                    cx, cy = centroid
+                    if hasattr(profile, 'area'):
+                        logger.debug(f"  Profile {i}: centroid=({cx:.2f}, {cy:.2f}), area={profile.area:.1f}")
+                    else:
+                        logger.debug(f"  Profile {i}: centroid=({cx:.2f}, {cy:.2f}) [native]")
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 pass
@@ -8115,13 +8202,15 @@ class Body:
             best_match_idx = None
             best_match_dist = float('inf')
 
-            for i, poly in enumerate(profiles):
+            for i, profile in enumerate(profiles):
                 if i in used_profile_indices:
                     continue  # Bereits verwendet
 
                 try:
-                    centroid = poly.centroid
-                    cx, cy = centroid.x, centroid.y
+                    centroid = get_profile_centroid(profile)
+                    if centroid is None:
+                        continue
+                    cx, cy = centroid
                     dist = math.hypot(cx - sel_cx, cy - sel_cy)
 
                     # Nur innerhalb Toleranz UND besser als bisheriges Match
@@ -8136,9 +8225,9 @@ class Body:
             if best_match_idx is not None:
                 matched.append(profiles[best_match_idx])
                 used_profile_indices.add(best_match_idx)
-                c = profiles[best_match_idx].centroid
-                if is_enabled("extrude_debug"):
-                    logger.debug(f"[SELECTOR] BEST MATCH: ({c.x:.2f}, {c.y:.2f}) â‰ˆ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
+                centroid = get_profile_centroid(profiles[best_match_idx])
+                if centroid and is_enabled("extrude_debug"):
+                    logger.debug(f"[SELECTOR] BEST MATCH: ({centroid[0]:.2f}, {centroid[1]:.2f}) â‰ˆ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
             else:
                 if is_enabled("extrude_debug"):
                     logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
@@ -8998,6 +9087,202 @@ class Body:
                     logger.warning("[TNP v4.1] Ellipse Wire Maker fehlgeschlagen")
             else:
                 logger.error(f"[TNP v4.1] Ellipse Maker fehlgeschlagen für Ellipse bei ({cx}, {cy})")
+
+        return faces
+
+    def _extrude_single_ellipse(self, ellipse, plane):
+        """
+        TNP v4.1: Erstellt eine native OCP Ellipse Face aus einer einzelnen Ellipse2D.
+
+        Wird für Profil-basierte Extrusion verwendet, wenn die Ellipse als
+        Dict-Profil {'type': 'ellipse', 'geometry': Ellipse2D} vorliegt.
+
+        Args:
+            ellipse: Ellipse2D Objekt
+            plane: Build123d Plane für 3D-Konvertierung
+
+        Returns:
+            Liste von build123d Faces (eine Face, bei Erfolg)
+        """
+        from build123d import Face, Vector
+        from OCP.GC import GC_MakeEllipse
+        from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+
+        faces = []
+
+        # Ellipse-Parameter
+        cx, cy = ellipse.center.x, ellipse.center.y
+        radius_x = ellipse.radius_x
+        radius_y = ellipse.radius_y
+        rotation = ellipse.rotation
+
+        # Ellipse in 3D konvertieren
+        origin = plane.origin
+        z_dir = plane.z_dir
+        x_dir = plane.x_dir
+        y_dir = plane.y_dir
+
+        # Ellipse-Center in 3D
+        center_3d = origin + x_dir * cx + y_dir * cy
+
+        # Ellipse-Achsen in 3D (mit Rotation)
+        rot_rad = math.radians(rotation)
+        cos_rot = math.cos(rot_rad)
+        sin_rot = math.sin(rot_rad)
+
+        major_dir = x_dir * cos_rot + y_dir * sin_rot
+        minor_dir = -x_dir * sin_rot + y_dir * cos_rot
+
+        gp_center = gp_Pnt(center_3d.X, center_3d.Y, center_3d.Z)
+        gp_major_dir = gp_Dir(major_dir.X, major_dir.Y, major_dir.Z)
+        gp_minor_dir = gp_Dir(minor_dir.X, minor_dir.Y, minor_dir.Z)
+
+        gp_normal = gp_Dir(
+            gp_major_dir.Y() * gp_minor_dir.Z() - gp_major_dir.Z() * gp_minor_dir.Y(),
+            gp_major_dir.Z() * gp_minor_dir.X() - gp_major_dir.X() * gp_minor_dir.Z(),
+            gp_major_dir.X() * gp_minor_dir.Y() - gp_major_dir.Y() * gp_minor_dir.X()
+        )
+
+        ellipse_axis = gp_Ax2(gp_center, gp_normal, gp_major_dir)
+        ellipse_maker = GC_MakeEllipse(ellipse_axis, radius_x, radius_y)
+
+        if ellipse_maker.IsDone():
+            ellipse_geom = ellipse_maker.Value()
+            # Ellipse ist eine geschlossene Kurve: Edge → Wire → Face
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+            edge = BRepBuilderAPI_MakeEdge(ellipse_geom).Edge()
+            wire = BRepBuilderAPI_MakeWire(edge).Wire()
+            if wire.Closed():
+                face = BRepBuilderAPI_MakeFace(wire).Face()
+                faces.append(Face(face))
+                logger.debug(f"[TNP v4.1] Ellipse Face erstellt: rx={radius_x:.2f}, ry={radius_y:.2f}")
+            else:
+                logger.warning(f"[TNP v4.1] Ellipse Wire nicht geschlossen - Face-Erstellung übersprungen")
+
+        return faces
+
+    def _extrude_single_circle(self, circle, plane):
+        """
+        TNP v4.1: Erstellt eine native OCP Circle Face aus einer einzelnen Circle2D.
+
+        Wird für Profil-basierte Extrusion verwendet, wenn der Circle als
+        Dict-Profil {'type': 'circle', 'geometry': Circle2D} vorliegt.
+
+        Args:
+            circle: Circle2D Objekt
+            plane: Build123d Plane für 3D-Konvertierung
+
+        Returns:
+            Liste von build123d Faces (eine Face, bei Erfolg)
+        """
+        from build123d import Face, Wire, make_face
+        from build123d import Plane as B3DPlane
+
+        faces = []
+
+        # Circle-Parameter
+        cx, cy = circle.center.x, circle.center.y
+        radius = circle.radius
+
+        # Circle-Center in 3D
+        center_3d = plane.from_local_coords((cx, cy))
+
+        # Circle-Plane erstellen
+        circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+
+        try:
+            # Native Circle Face erstellen
+            face = make_face(Wire.make_circle(radius, circle_plane))
+            faces.append(face)
+        except Exception as e:
+            logger.warning(f"[TNP v4.1] Circle Face Erstellung fehlgeschlagen: {e}")
+
+        return faces
+
+    def _extrude_single_slot(self, slot_data, plane):
+        """
+        W34: Erstellt eine native OCP Slot Face aus Slot-Komponenten.
+
+        Ein Slot besteht aus 2 parallelen Linien (top/bottom) und 2 Halbkreisen (Enden).
+        Diese Methode kombiniert diese zu einem geschlossenen Wire und erstellt ein Face.
+
+        Args:
+            slot_data: Dict mit 'center_line', 'arcs', 'lines'
+            plane: Build123d Plane für 3D-Konvertierung
+
+        Returns:
+            Liste von build123d Faces (eine Face, bei Erfolg)
+        """
+        from build123d import Face, Wire, make_face
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace
+        from OCP.GC import GC_MakeArcOfCircle, GC_MakeCircle
+        from OCP.gp import gp_Pnt, gp_Dir, gp_Ax2
+        import math
+
+        faces = []
+        arcs = slot_data.get('arcs', [])
+        lines = slot_data.get('lines', [])
+
+        if len(arcs) != 2 or len(lines) < 2:
+            logger.warning(f"[W34] Ungültige Slot-Struktur: {len(arcs)} Arcs, {len(lines)} Linien")
+            return faces
+
+        try:
+            # Sammle alle Edges für das Slot-Profil
+            edges = []
+
+            # 1. Top/Bottom Linien als Edges
+            for line in lines[:2]:  # Max 2 Linien
+                p1_3d = plane.from_local_coords((line.start.x, line.start.y))
+                p2_3d = plane.from_local_coords((line.end.x, line.end.y))
+                gp1 = gp_Pnt(p1_3d.X, p1_3d.Y, p1_3d.Z)
+                gp2 = gp_Pnt(p2_3d.X, p2_3d.Y, p2_3d.Z)
+                edge = BRepBuilderAPI_MakeEdge(gp1, gp2).Edge()
+                edges.append(edge)
+
+            # 2. Arcs als Edges
+            for arc in arcs:
+                center_3d = plane.from_local_coords((arc.center.x, arc.center.y))
+                radius = arc.radius
+                start_angle = math.radians(arc.start_angle)
+                end_angle = math.radians(arc.end_angle)
+
+                # OCP Arc erstellen
+                gp_center = gp_Pnt(center_3d.X, center_3d.Y, center_3d.Z)
+                gp_z = gp_Dir(plane.z_dir.X, plane.z_dir.Y, plane.z_dir.Z)
+                gp_x = gp_Dir(plane.x_dir.X, plane.x_dir.Y, plane.x_dir.Z)
+                arc_axis = gp_Ax2(gp_center, gp_z, gp_x)
+
+                arc_maker = GC_MakeArcOfCircle(
+                    arc_axis,
+                    radius,
+                    start_angle,
+                    end_angle
+                )
+
+                if arc_maker.IsDone():
+                    arc_geom = arc_maker.Value()
+                    edge = BRepBuilderAPI_MakeEdge(arc_geom).Edge()
+                    edges.append(edge)
+
+            # 3. Wire und Face erstellen
+            if len(edges) >= 4:  # Mindestens 2 Linien + 2 Arcs
+                wire_maker = BRepBuilderAPI_MakeWire()
+                for edge in edges:
+                    wire_maker.Add(edge)
+
+                if wire_maker.IsDone():
+                    wire = wire_maker.Wire()
+                    if wire.Closed():
+                        face_maker = BRepBuilderAPI_MakeFace(wire)
+                        if face_maker.IsDone():
+                            face = Face(face_maker.Face())
+                            faces.append(face)
+                            logger.debug(f"[W34] Slot Face erstellt: {len(edges)} edges")
+
+        except Exception as e:
+            logger.warning(f"[W34] Slot Face Erstellung fehlgeschlagen: {e}")
 
         return faces
 

@@ -1,6 +1,8 @@
 from sketcher.constraints import Constraint, ConstraintType
+import sketcher.constraints as constraints_module
 import sketcher.parametric_solver as parametric_solver_module
 import sketcher.solver as solver_module
+import sketcher.solver_scipy as solver_scipy_module
 from sketcher.sketch import ConstraintStatus, Sketch
 from types import SimpleNamespace
 import random
@@ -115,8 +117,15 @@ def test_solver_reports_non_finite_residuals(monkeypatch):
     line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
     sketch.add_length(line, 10.0)
 
+    # W35: Patch both modules since solver_scipy imports the function
     monkeypatch.setattr(
-        solver_module,
+        constraints_module,
+        "calculate_constraint_errors_batch",
+        lambda constraints: [float("nan")] * len(constraints),
+    )
+    # Also patch in solver_scipy since it imports the function directly
+    monkeypatch.setattr(
+        solver_scipy_module,
         "calculate_constraint_errors_batch",
         lambda constraints: [float("nan")] * len(constraints),
     )
@@ -242,7 +251,7 @@ def test_scipy_non_convergence_restores_original_geometry(monkeypatch):
         fun(mutated)  # simulates internal solver iterations mutating refs
         return SimpleNamespace(x=mutated, nfev=5, success=False, status=5)
 
-    monkeypatch.setattr(solver_module, "least_squares", _fake_least_squares)
+    monkeypatch.setattr(solver_scipy_module, "least_squares", _fake_least_squares)
 
     result = sketch._solver.solve(
         sketch.points,
@@ -270,7 +279,7 @@ def test_scipy_exception_restores_original_geometry(monkeypatch):
         fun(mutated)  # simulates mutation before backend crash
         raise RuntimeError("forced backend failure")
 
-    monkeypatch.setattr(solver_module, "least_squares", _raising_least_squares)
+    monkeypatch.setattr(solver_scipy_module, "least_squares", _raising_least_squares)
 
     result = sketch._solver.solve(
         sketch.points,

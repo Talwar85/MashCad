@@ -1289,9 +1289,6 @@ class SketchHandlersMixin:
         # 4. Constraints kopieren (Der wichtige Teil!)
         # Wir durchsuchen alle existierenden Constraints
         constraints_added = 0
-        constraint_cls = globals().get("Constraint")
-        if constraint_cls is None:
-            from sketcher.constraints import Constraint as constraint_cls
 
         for c in list(self.sketch.constraints):
             # PrÃ¼fen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
@@ -1313,7 +1310,7 @@ class SketchHandlersMixin:
             
             if is_internal:
                 # Constraint klonen
-                new_c = constraint_cls(
+                new_c = Constraint(
                     type=c.type,
                     entities=new_entities,
                     value=c.value,
@@ -1374,6 +1371,8 @@ class SketchHandlersMixin:
         # IDs der ausgewÃ¤hlten Elemente sammeln
         selected_ids = set()
         for l in self.selected_lines: selected_ids.add(l.id)
+        # W35-BF: Auch Arcs berÃ¼cksichtigen (kÃ¶nnen H/V Constraints haben)
+        for arc in getattr(self, 'selected_arcs', []): selected_ids.add(arc.id)
         
         for c in self.sketch.constraints:
             if c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
@@ -1438,7 +1437,7 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _mirror_selection(self, p1, p2):
-        """Spiegelt Auswahl an Achse p1-p2 (erstellt Kopie)"""
+        """Spiegelt Auswahl an Achse p1-p2 (erstellt Kopie mit Constraints)"""
         dx = p2.x() - p1.x()
         dy = p2.y() - p1.y()
         length = math.hypot(dx, dy)
@@ -1460,23 +1459,82 @@ class SketchHandlersMixin:
         # Gespiegelte Kopien erstellen
         new_lines = []
         new_circles = []
+        new_arcs = []
+        old_to_new = {}  # W35-BF: Mapping fÃ¼r Constraint-Kopie
         
         for line in self.selected_lines:
             sx, sy = mirror_point(line.start.x, line.start.y)
             ex, ey = mirror_point(line.end.x, line.end.y)
             new_line = self.sketch.add_line(sx, sy, ex, ey, construction=line.construction)
             new_lines.append(new_line)
+            # Mapping fÃ¼r Constraints
+            old_to_new[line.id] = new_line
+            old_to_new[line.start.id] = new_line.start
+            old_to_new[line.end.id] = new_line.end
         
         for c in self.selected_circles:
             cx, cy = mirror_point(c.center.x, c.center.y)
             new_circle = self.sketch.add_circle(cx, cy, c.radius, construction=c.construction)
             new_circles.append(new_circle)
+            old_to_new[c.id] = new_circle
+            old_to_new[c.center.id] = new_circle.center
+        
+        # W35-BF: Arcs auch spiegeln
+        for arc in getattr(self, 'selected_arcs', []):
+            cx, cy = mirror_point(arc.center.x, arc.center.y)
+            # Winkel spiegeln (Start/End Angle an Achse gespiegelt)
+            # Bei Spiegelung an einer Linie: Winkel werden gespiegelt
+            new_arc = self.sketch.add_arc(
+                cx, cy, arc.radius,
+                -arc.end_angle, -arc.start_angle,  # Winkel gespiegelt
+                construction=arc.construction
+            )
+            new_arcs.append(new_arc)
+            old_to_new[arc.id] = new_arc
+            old_to_new[arc.center.id] = new_arc.center
+        
+        # W35-BF: Constraints kopieren (wie bei Copy)
+        constraints_added = 0
+        for c in list(self.sketch.constraints):
+            is_internal = True
+            if not c.entities:
+                is_internal = False
+                continue
+            
+            new_entities = []
+            for entity in c.entities:
+                if hasattr(entity, 'id') and entity.id in old_to_new:
+                    new_entities.append(old_to_new[entity.id])
+                else:
+                    is_internal = False
+                    break
+            
+            if is_internal:
+                new_c = Constraint(
+                    type=c.type,
+                    entities=new_entities,
+                    value=c.value,
+                    formula=getattr(c, "formula", None),
+                    driving=getattr(c, "driving", True),
+                    priority=getattr(c, "priority", None),
+                    group=getattr(c, "group", None),
+                    enabled=getattr(c, "enabled", True),
+                )
+                self.sketch.constraints.append(new_c)
+                constraints_added += 1
         
         # Neue Elemente auswÃ¤hlen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
-        self.status_message.emit(tr("Mirrored: {lines} lines, {circles} circles").format(lines=len(new_lines), circles=len(new_circles)))
+        self.selected_arcs = new_arcs
+        
+        msg = tr("Mirrored: {l} lines, {c} circles").format(l=len(new_lines), c=len(new_circles))
+        if len(new_arcs) > 0:
+            msg += tr(", {a} arcs").format(a=len(new_arcs))
+        if constraints_added > 0:
+            msg += f", {constraints_added} constraints"
+        self.status_message.emit(msg)
     
     def _handle_pattern_linear(self, pos, snap_type):
         """
@@ -1712,6 +1770,15 @@ class SketchHandlersMixin:
                 scaled.add(c.center.id)
             # Radius auch skalieren
             c.radius *= factor
+        
+        # W35-BF: Arcs auch skalieren (Center + Radius)
+        for arc in getattr(self, 'selected_arcs', []):
+            if arc.center.id not in scaled:
+                arc.center.x = center.x() + (arc.center.x - center.x()) * factor
+                arc.center.y = center.y() + (arc.center.y - center.y()) * factor
+                scaled.add(arc.center.id)
+            # Radius skalieren
+            arc.radius *= factor
         
         self._solve_async()
         self._find_closed_profiles()
