@@ -1531,7 +1531,6 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         
         # Aktualisiere die Punkte
         ellipse._major_pos.x, ellipse._major_pos.y = new_major_pos
-        ellipse._major_pos.x, ellipse._major_pos.y = new_major_pos
         ellipse._major_neg.x, ellipse._major_neg.y = new_major_neg
         ellipse._minor_pos.x, ellipse._minor_pos.y = new_minor_pos
         ellipse._minor_neg.x, ellipse._minor_neg.y = new_minor_neg
@@ -1564,14 +1563,29 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         from sketcher.constraints import ConstraintType
         
         # Finde alle Slot-Arcs und deren Center-Punkte
+        if slot_line is None or not hasattr(slot_line, "start") or not hasattr(slot_line, "end"):
+            return
+
+        def _same_point(p1, p2, tol=1e-6):
+            return abs(float(p1.x) - float(p2.x)) <= tol and abs(float(p1.y) - float(p2.y)) <= tol
+
         slot_arc_centers = set()
         current_radius = None
         for arc in self.sketch.arcs:
-            if hasattr(arc, '_slot_arc') and arc._slot_arc:
+            if hasattr(arc, "_slot_arc") and arc._slot_arc and (
+                _same_point(arc.center, slot_line.start) or _same_point(arc.center, slot_line.end)
+            ):
                 slot_arc_centers.add(id(arc.center))  # Verwende id() für Identity-Check
                 if current_radius is None:
-                    current_radius = arc.radius
+                    current_radius = float(arc.radius)
         
+        if not slot_arc_centers:
+            for arc in self.sketch.arcs:
+                if hasattr(arc, "_slot_arc") and arc._slot_arc:
+                    slot_arc_centers.add(id(arc.center))
+                    if current_radius is None:
+                        current_radius = float(arc.radius)
+
         if not slot_arc_centers or current_radius is None:
             return
         
