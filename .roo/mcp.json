@@ -11,7 +11,8 @@
 			"alwaysAllow": [
 				"create_directory",
 				"list_directory",
-				"read_text_file"
+				"read_text_file",
+				"search_files"
 			]
 		},
 		"sequentialthinking": {
