@@ -9,7 +9,8 @@
 			],
 			"disabled": false,
 			"alwaysAllow": [
-				"create_directory"
+				"create_directory",
+				"list_directory"
 			]
 		},
 		"sequentialthinking": {

@@ -72,6 +72,14 @@ Write-Host "DryRun: $DryRun"
 Write-Host "Tests: $($CORE_TESTS.Count) suites"
 Write-Host ""
 
+Write-Host "=== Environment Debug ===" -ForegroundColor Yellow
+Write-Host "Working Directory: $(Get-Location)"
+conda run -n cad_env python --version
+conda run -n cad_env python -m pytest --version
+Write-Host "Test files in test/: $(@(Get-ChildItem test/test_*.py).Count)"
+Write-Host "Selected test suites: $($CORE_TESTS.Count)"
+Write-Host ""
+
 if ($DryRun) {
     Write-Host "Selected Suites:" -ForegroundColor Cyan
     $idx = 1
