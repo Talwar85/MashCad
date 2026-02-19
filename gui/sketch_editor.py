@@ -9584,6 +9584,69 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                                       int(pt_screen.y() - radius),
                                       radius * 2, radius * 2)
 
+        # W35: Slot Handles (Center, Length, Radius)
+        slot, slot_source = self._resolve_direct_edit_target_slot()
+        if slot is not None:
+            # Check if this slot is actively being edited
+            is_active_edit = self._direct_edit_dragging and self._direct_edit_slot is slot
+            
+            # Center Line Midpoint (Center Handle - for moving entire slot)
+            midpoint = QPointF((slot.start.x + slot.end.x) / 2, (slot.start.y + slot.end.y) / 2)
+            midpoint_screen = self.world_to_screen(midpoint)
+            
+            # Center Handle (green square - like circle center)
+            center_size = handle_radius + 2 if is_active_edit and self._direct_edit_mode == "center" else handle_radius
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 180 if is_active_edit and self._direct_edit_mode == "center" else 128))
+            painter.drawRect(int(midpoint_screen.x() - center_size),
+                           int(midpoint_screen.y() - center_size),
+                           center_size * 2, center_size * 2)
+            
+            # Length Handles (endpoints of center line)
+            start_screen = self.world_to_screen(slot.start)
+            end_screen = self.world_to_screen(slot.end)
+            
+            # Start Length Handle (yellow circle)
+            start_size = handle_radius + 2 if is_active_edit and self._direct_edit_mode == "length_start" else handle_radius
+            painter.setPen(QPen(QColor(255, 255, 0), 2))
+            painter.setBrush(QColor(255, 255, 0, 180 if is_active_edit and self._direct_edit_mode == "length_start" else 128))
+            painter.drawEllipse(int(start_screen.x() - start_size),
+                              int(start_screen.y() - start_size),
+                              start_size * 2, start_size * 2)
+            
+            # End Length Handle (yellow circle)
+            end_size = handle_radius + 2 if is_active_edit and self._direct_edit_mode == "length_end" else handle_radius
+            painter.setPen(QPen(QColor(255, 255, 0), 2))
+            painter.setBrush(QColor(255, 255, 0, 180 if is_active_edit and self._direct_edit_mode == "length_end" else 128))
+            painter.drawEllipse(int(end_screen.x() - end_size),
+                              int(end_screen.y() - end_size),
+                              end_size * 2, end_size * 2)
+            
+            # Radius Handles (on arc caps)
+            for arc in self.sketch.arcs:
+                if hasattr(arc, '_slot_arc') and arc._slot_arc:
+                    # Find point on arc edge for radius handle
+                    mid_angle = math.radians((arc.start_angle + arc.end_angle) / 2)
+                    radius_point = Point2D(
+                        arc.center.x + arc.radius * math.cos(mid_angle),
+                        arc.center.y + arc.radius * math.sin(mid_angle)
+                    )
+                    radius_screen = self.world_to_screen(radius_point)
+                    
+                    # Radius Handle (cyan circle)
+                    is_radius_active = is_active_edit and self._direct_edit_mode == "radius" and self._direct_edit_slot_arc is arc
+                    radius_size = handle_radius + 2 if is_radius_active else handle_radius
+                    painter.setPen(QPen(QColor(0, 255, 255), 2))
+                    painter.setBrush(QColor(0, 255, 255, 180 if is_radius_active else 128))
+                    painter.drawEllipse(int(radius_screen.x() - radius_size),
+                                      int(radius_screen.y() - radius_size),
+                                      radius_size * 2, radius_size * 2)
+                    
+                    # Draw guide line from arc center to radius handle
+                    arc_center_screen = self.world_to_screen(arc.center)
+                    painter.setPen(QPen(QColor(0, 255, 255, 80), 1))
+                    painter.drawLine(arc_center_screen, radius_screen)
+
         # W35: Spline Handles (Center Handle für direktes Verschieben)
         spline, spline_source = self._resolve_direct_edit_target_spline()
         if spline is not None:

@@ -209,14 +209,16 @@ class StagedSolverBackend(ISolverBackend):
                 max_iterations=problem.options.max_iterations,
                 regularization=0.01  # Medium regularization
             )
-            
+
             fast_problem = SolverProblem(
                 points=problem.points,
                 lines=problem.lines,
                 circles=problem.circles,
                 arcs=problem.arcs,
                 constraints=problem.constraints,
-                options=fast_options
+                options=fast_options,
+                # W35: Spline Control Points durchreichen
+                spline_control_points=getattr(problem, 'spline_control_points', [])
             )
             
             backend = SciPyLMBackend()
