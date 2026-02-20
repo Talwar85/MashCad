@@ -8238,14 +8238,9 @@ class MainWindow(QMainWindow):
             logger.error(f"Fehler beim Öffnen: {e}")
 
     def _start_tutorial(self):
-        """Startet das Immersive Tutorial (12/10 Experience)."""
-        from gui.immersive_tutorial import ImmersiveTutorial
-        tutorial = ImmersiveTutorial(
-            main_window=self,
-            document=self.document,
-            viewport=self.viewport_3d
-        )
-        tutorial.exec()
+        """Startet das kontextuelle Overlay-Tutorial (12/10 Experience)."""
+        from gui.tutorial_overlay_system import start_contextual_tutorial
+        self._tutorial = start_contextual_tutorial(self)
 
     def _export_stl(self):
         """STL Export mit Quality-Dialog und Surface Texture Support.
