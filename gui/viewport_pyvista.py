@@ -5665,14 +5665,28 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 face_mesh = face_mesh.extract_surface()
                 actor_name = f'textured_overlay_{body_id}_{i}'
 
-                # Echtes 3D-Displacement anwenden wenn Feature vorhanden
+                # Preview-Modus prüfen (displacement oder normal_map)
+                preview_mode = getattr(self, '_preview_mode', 'displacement')
+                from config.feature_flags import is_enabled
+                
+                # Echtes 3D-Displacement oder Normal-Map anwenden wenn Feature vorhanden
                 if texture_feature is not None:
-                    displaced_mesh = self._apply_texture_preview(
-                        face_mesh, face_data, texture_feature
-                    )
-                    if displaced_mesh is not None:
-                        face_mesh = displaced_mesh
-                        logger.debug(f"Displacement für Face {i} angewendet: {face_texture_type}")
+                    if preview_mode == 'normal_map' and is_enabled("normal_map_preview"):
+                        # Normal-Map Preview (keine Geometrie-Änderung)
+                        preview_mesh = self._apply_normal_map_preview(
+                            face_mesh, face_data, texture_feature
+                        )
+                        if preview_mesh is not None:
+                            face_mesh = preview_mesh
+                            logger.debug(f"Normal-Map Preview für Face {i}: {face_texture_type}")
+                    else:
+                        # Displacement Preview (Standard)
+                        displaced_mesh = self._apply_texture_preview(
+                            face_mesh, face_data, texture_feature
+                        )
+                        if displaced_mesh is not None:
+                            face_mesh = displaced_mesh
+                            logger.debug(f"Displacement für Face {i} angewendet: {face_texture_type}")
 
                 # Farbe basierend auf DIESEM Face's Textur-Typ
                 color = texture_colors.get(face_texture_type, '#4a90d9')
@@ -5715,11 +5729,21 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             from modeling.surface_texture import TextureGenerator, sample_heightmap_at_uvs
             from modeling.texture_exporter import TextureExporter
 
-            # Preview-Einstellungen: HÖHERE Subdivisions für sichtbares 3D-Relief
-            # 3 subdivisions = 81 Vertices (zu wenig)
+            # Preview-Einstellungen: Adaptive Subdivisions basierend auf Quality-Modus
+            # Live Preview (während Slider-Drag): Weniger Subdivisions für Performance
+            # Final Preview (nach Apply): Mehr Subdivisions für Qualität
+            from config.feature_flags import FEATURE_FLAGS
+            
+            # Check for quality mode from live preview system
+            quality_mode = getattr(self, '_preview_quality', 'final')
+            if quality_mode == 'live':
+                preview_subdivisions = FEATURE_FLAGS.get("preview_subdivisions_live", 3)
+            else:
+                preview_subdivisions = FEATURE_FLAGS.get("preview_subdivisions_final", 5)
+            
+            # 3 subdivisions = ~500 Vertices (schnell)
             # 5 subdivisions = ~2000 Vertices (gut sichtbar)
             # 6 subdivisions = ~8000 Vertices (sehr detailliert)
-            preview_subdivisions = 5  # Guter Kompromiss zwischen Qualität und Performance
 
             # Kopie erstellen um Original nicht zu verändern
             face_mesh = face_mesh.copy()
@@ -5809,6 +5833,102 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         except Exception as e:
             logger.error(f"Texture-Preview Fehler: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _apply_normal_map_preview(self, face_mesh, face_data, texture_feature):
+        """
+        Wendet Normal-Map-Preview an (ohne Geometry-Änderung).
+        
+        High-Priority TODO 2026: Normal-Map Preview im Viewport
+        
+        Modifiziert nur die Normalen für visuelle Darstellung des Textureffekts.
+        Die Geometrie bleibt unverändert - nur die Beleuchtung reagiert anders.
+        
+        Args:
+            face_mesh: PyVista Mesh der Face
+            face_data: Face-Metadaten (center, normal)
+            texture_feature: SurfaceTextureFeature mit Parametern
+            
+        Returns:
+            Modifiziertes Mesh mit perturbierten Normalen
+        """
+        try:
+            from modeling.surface_texture import (
+                TextureGenerator, generate_normal_map_from_heightmap,
+                sample_normal_map_at_uvs, apply_normal_perturbation
+            )
+            from modeling.texture_exporter import TextureExporter
+            from config.feature_flags import is_enabled
+            
+            if not is_enabled("normal_map_preview"):
+                return None
+            
+            # Kopie erstellen
+            face_mesh = face_mesh.copy()
+            
+            # Normalen berechnen falls nicht vorhanden
+            face_mesh.compute_normals(inplace=True)
+            
+            # UVs berechnen
+            face_center = face_data.get('center', (0, 0, 0))
+            face_normal = face_data.get('normal', (0, 0, 1))
+            uvs = TextureExporter._compute_uvs(face_mesh, face_center, face_normal)
+            
+            # Heightmap generieren
+            type_params = texture_feature.type_params.copy()
+            wave_width = type_params.get("wave_width")
+            
+            if wave_width and wave_width > 0:
+                u_min, u_max = uvs[:, 0].min(), uvs[:, 0].max()
+                v_min, v_max = uvs[:, 1].min(), uvs[:, 1].max()
+                face_size = max(u_max - u_min, v_max - v_min)
+                wave_count = face_size / wave_width
+                type_params["wave_count"] = wave_count
+            
+            heightmap = TextureGenerator.generate(
+                texture_feature.texture_type,
+                type_params,
+                size=128  # Kleiner für Preview
+            )
+            
+            # Normal-Map aus Heightmap generieren
+            normal_strength = texture_feature.type_params.get("normal_strength", 1.0)
+            normal_map = generate_normal_map_from_heightmap(heightmap, strength=normal_strength)
+            
+            # Normal-Map an UVs sampeln
+            tangent_normals = sample_normal_map_at_uvs(
+                normal_map,
+                uvs,
+                scale=texture_feature.scale,
+                rotation=texture_feature.rotation
+            )
+            
+            # Original-Normalen abrufen
+            vertex_normals = face_mesh.point_data.get('Normals')
+            if vertex_normals is None:
+                # Fallback: Face-Normale für alle Vertices
+                normal_arr = np.array(face_normal)
+                normal_arr = normal_arr / (np.linalg.norm(normal_arr) + 1e-10)
+                vertex_normals = np.tile(normal_arr, (face_mesh.n_points, 1))
+            
+            # Normalen perturbieren
+            blend_factor = texture_feature.depth  # Tiefe als Blend-Faktor
+            perturbed_normals = apply_normal_perturbation(
+                vertex_normals, tangent_normals, blend_factor
+            )
+            
+            # Perturbierte Normalen setzen
+            face_mesh.point_data['Normals'] = perturbed_normals
+            
+            logger.info(f"Normal-Map Preview: {face_mesh.n_points} Vertices, "
+                       f"strength={normal_strength:.2f}, blend={blend_factor:.2f}")
+            
+            return face_mesh
+            
+        except Exception as e:
+            logger.error(f"Normal-Map Preview Fehler: {e}")
             import traceback
             traceback.print_exc()
             return None

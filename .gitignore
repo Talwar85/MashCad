@@ -45,6 +45,9 @@ roadmap_ctp/
 .roo/
 mcp.json
 
+# Allow docs/KNOWN_LIMITATIONS.md (must come after docs/ ignore)
+!docs/KNOWN_LIMITATIONS.md
+
 
 # Virtual environments
 venv/

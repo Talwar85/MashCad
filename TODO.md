@@ -19,16 +19,16 @@
 
 | Datei | Zeile | Beschreibung | Status |
 |-------|-------|--------------|--------|
-| `gui/main_window.py` | 8489 | Live-Preview für Texturen wenn Performance es erlaubt | 🟡 Offen |
-| `gui/main_window.py` | 8746 | Live-Preview für Patterns wenn Performance es erlaubt | 🟡 Offen |
-| `gui/main_window.py` | 8940 | Normal-Map Preview im Viewport | 🟡 Offen |
+| `gui/main_window.py` | 8489 | Live-Preview für Texturen wenn Performance es erlaubt | ✅ Erledigt |
+| `gui/main_window.py` | 8746 | Live-Preview für Patterns wenn Performance es erlaubt | ✅ Erledigt |
+| `gui/main_window.py` | 8940 | Normal-Map Preview im Viewport | ✅ Erledigt |
 
 ### Core Improvements
 
 | Datei | Zeile | Beschreibung | Status |
 |-------|-------|--------------|--------|
-| `modeling/__init__.py` | 4611 | OCP History von Boolean-Operationen extrahieren für besseres TNP | 🟡 Offen |
-| `modeling/brep_face_analyzer.py` | 685 | Helix-Fitting implementieren | 🟡 Offen |
+| `modeling/__init__.py` | 4611 | OCP History von Boolean-Operationen extrahieren für besseres TNP | ✅ Erledigt |
+| `modeling/brep_face_analyzer.py` | 685 | Helix-Fitting implementieren | ✅ Erledigt |
 
 ---
 
@@ -64,11 +64,11 @@
 
 ```
 🔴 Kritisch:  0
-🟡 Hoch:      5
+🟡 Hoch:      0 (5 erledigt ✅)
 🟢 Mittel:    3
 🔵 Niedrig:   7
 ─────────────
-Gesamt:      15
+Gesamt:      10 (5 erledigt)
 ```
 
 ---

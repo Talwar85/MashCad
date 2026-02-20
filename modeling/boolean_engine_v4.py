@@ -175,6 +175,146 @@ class BooleanEngineV4:
             return shape
 
     @staticmethod
+    def extract_detailed_history(
+        bool_op: Any,
+        source_shape: Any,
+        tool_shape: Any,
+        result_shape: Any
+    ) -> Dict[str, Any]:
+        """
+        Extract comprehensive history from BOPAlgo Boolean operation.
+        
+        High-Priority TODO 2026: Detailed Boolean History for TNP
+        
+        Captures:
+        - Modified faces/edges/vertices (shapes that changed but still exist)
+        - Generated shapes (new shapes created by the operation)
+        - Deleted shapes (shapes that no longer exist)
+        - Intersection edges (new edges at shape boundaries)
+        
+        Args:
+            bool_op: BRepAlgoAPI_Fuse/Cut/Common operation (completed)
+            source_shape: The primary input shape
+            tool_shape: The tool input shape
+            result_shape: The result shape
+            
+        Returns:
+            Dict with 'modified', 'generated', 'deleted', 'intersections' mappings
+        """
+        from config.feature_flags import is_enabled
+        
+        if not is_enabled("detailed_boolean_history"):
+            return {}
+        
+        if not HAS_OCP:
+            return {}
+        
+        try:
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
+            from OCP.TopTools import TopTools_ListOfShape, TopTools_IndexedDataMapOfShapeListOfShape
+            from OCP.TopExp import TopExp_MapShapesAndAncestors
+            
+            history = bool_op.History()
+            details = {
+                'modified_faces': {},      # face_id -> [result_face_ids]
+                'modified_edges': {},      # edge_id -> [result_edge_ids]
+                'modified_vertices': {},   # vertex_id -> [result_vertex_ids]
+                'generated_faces': {},     # parent_id -> [generated_face_ids]
+                'generated_edges': {},     # parent_id -> [generated_edge_ids]
+                'deleted_shapes': [],      # list of deleted shape ids
+                'intersections': [],       # new intersection edges
+            }
+            
+            def _get_shape_hash(shape) -> str:
+                """Generate a stable hash for a shape."""
+                # Use OCP's shape hash for stable identification
+                return str(hash(shape))  # Simplified; could use geometry-based hash
+            
+            def _iter_list_of_shape(list_of_shape: TopTools_ListOfShape) -> list:
+                """Convert TopTools_ListOfShape to Python list."""
+                shapes = []
+                it = list_of_shape.Iterator()
+                while it.More():
+                    shapes.append(it.Value())
+                    it.Next()
+                return shapes
+            
+            # Process each shape type
+            for shape_type, detail_key in [
+                (TopAbs_FACE, 'modified_faces'),
+                (TopAbs_EDGE, 'modified_edges'),
+                (TopAbs_VERTEX, 'modified_vertices')
+            ]:
+                # Explore source shape
+                explorer = TopExp_Explorer(source_shape, shape_type)
+                while explorer.More():
+                    source_subshape = explorer.Current()
+                    source_hash = _get_shape_hash(source_subshape)
+                    
+                    # Check what this shape became
+                    modified = history.Modified(source_subshape)
+                    modified_list = _iter_list_of_shape(modified)
+                    
+                    if modified_list:
+                        result_hashes = [_get_shape_hash(s) for s in modified_list]
+                        details[detail_key][source_hash] = result_hashes
+                    
+                    # Check if deleted
+                    if history.IsRemoved(source_subshape):
+                        details['deleted_shapes'].append(source_hash)
+                    
+                    # Check generated shapes
+                    generated = history.Generated(source_subshape)
+                    generated_list = _iter_list_of_shape(generated)
+                    
+                    if generated_list:
+                        gen_key = 'generated_faces' if shape_type == TopAbs_FACE else \
+                                  'generated_edges' if shape_type == TopAbs_EDGE else 'generated_vertices'
+                        result_hashes = [_get_shape_hash(s) for s in generated_list]
+                        if source_hash not in details[gen_key]:
+                            details[gen_key][source_hash] = []
+                        details[gen_key][source_hash].extend(result_hashes)
+                    
+                    explorer.Next()
+            
+            # Find intersection edges (edges that are in result but not from source or tool)
+            result_edges = set()
+            explorer = TopExp_Explorer(result_shape, TopAbs_EDGE)
+            while explorer.More():
+                result_edges.add(_get_shape_hash(explorer.Current()))
+                explorer.Next()
+            
+            source_edges = set()
+            explorer = TopExp_Explorer(source_shape, TopAbs_EDGE)
+            while explorer.More():
+                source_edges.add(_get_shape_hash(explorer.Current()))
+                explorer.Next()
+            
+            tool_edges = set()
+            explorer = TopExp_Explorer(tool_shape, TopAbs_EDGE)
+            while explorer.More():
+                tool_edges.add(_get_shape_hash(explorer.Current()))
+                explorer.Next()
+            
+            # New edges = result - source - tool
+            new_edges = result_edges - source_edges - tool_edges
+            details['intersections'] = list(new_edges)
+            
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"Boolean History: {len(details['modified_faces'])} modified faces, "
+                           f"{len(details['intersections'])} intersection edges, "
+                           f"{len(details['deleted_shapes'])} deleted shapes")
+            
+            return details
+            
+        except Exception as e:
+            logger.warning(f"Detailed history extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+
+    @staticmethod
     def execute_boolean_on_shapes(
         solid1: Any,
         solid2: Any,
@@ -360,13 +500,27 @@ class BooleanEngineV4:
                     logger.warning(f"  TNP-Update fehlgeschlagen: {tnp_err}")
 
             logger.success(f"✅ Boolean {operation} successful")
+            
+            # High-Priority TODO 2026: Extract detailed history for TNP
+            history_details = {}
+            if is_enabled("detailed_boolean_history"):
+                try:
+                    history_details = BooleanEngineV4.extract_detailed_history(
+                        bool_op=op,
+                        source_shape=shape1,
+                        tool_shape=shape2,
+                        result_shape=result_shape
+                    )
+                except Exception as hist_err:
+                    logger.debug(f"Detailed history extraction failed: {hist_err}")
 
             return BooleanResult(
                 status=ResultStatus.SUCCESS,
                 value=result_solid,
                 message=f"Boolean {operation} completed successfully",
                 operation_type=op_type,
-                history=history
+                history=history,
+                history_details=history_details
             )
 
         except Exception as e:

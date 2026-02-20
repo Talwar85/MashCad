@@ -322,7 +322,10 @@ class MainWindow(
         Execute texture live preview with LOD optimization.
         
         Uses lower subdivision count for faster preview during slider drag.
+        Supports both displacement preview and normal map preview.
         """
+        from config.feature_flags import is_enabled, FEATURE_FLAGS
+        
         body = config.get('body')
         if not body:
             return
@@ -330,18 +333,20 @@ class MainWindow(
         # Clear previous texture previews for this body
         self._preview_clear_group(f"texture_preview_{body.id}", render=False)
         
-        # Use live preview subdivisions (lower quality, faster)
-        from config.feature_flags import FEATURE_FLAGS
-        preview_subs = FEATURE_FLAGS.get("preview_subdivisions_live", 3)
+        # Determine preview mode
+        use_normal_map = is_enabled("normal_map_preview")
         
-        # Store quality setting for viewport to use
+        # Store quality setting and mode for viewport to use
         if hasattr(self.viewport_3d, '_preview_quality'):
             self.viewport_3d._preview_quality = "live"
+        if hasattr(self.viewport_3d, '_preview_mode'):
+            self.viewport_3d._preview_mode = "normal_map" if use_normal_map else "displacement"
         
         # Refresh texture previews with live quality
         self.viewport_3d.refresh_texture_previews(body.id)
         
-        logger.debug(f"Texture live preview updated for body {body.id}")
+        mode_str = "normal map" if use_normal_map else "displacement"
+        logger.debug(f"Texture live preview ({mode_str}) updated for body {body.id}")
     
     def _execute_pattern_live_preview(self, config: dict):
         """Execute pattern live preview (delegates to existing _update_pattern_preview)."""
