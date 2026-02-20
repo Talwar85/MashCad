@@ -12,7 +12,10 @@
 				"create_directory",
 				"list_directory",
 				"read_text_file",
-				"search_files"
+				"search_files",
+				"read_multiple_files",
+				"write_file",
+				"edit_file"
 			]
 		},
 		"sequentialthinking": {

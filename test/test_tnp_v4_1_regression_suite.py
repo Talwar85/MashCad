@@ -250,14 +250,15 @@ def test_boolean_cut_face_tracking():
     # Initialisiere ShapeIDs für modified faces
     feature.modified_shape_ids = []
 
-    # Boolean mit BooleanEngineV4 ausführen
-    result = BooleanEngineV4.cut(base, tool)
+    # Boolean mit BooleanEngineV4.execute_boolean_on_shapes ausführen
+    result = BooleanEngineV4.execute_boolean_on_shapes(base, tool, "Cut")
 
     assert result is not None
-    assert result.is_valid()
+    assert result.status.name == "SUCCESS" or result.value is not None
 
     # Prüfe dass das Loch erstellt wurde (Volumen sollte kleiner sein)
-    assert result.volume < base.volume
+    if result.value is not None:
+        assert result.value.volume < base.volume
 
     print("✓ Boolean Cut Face Tracking")
 

@@ -1,7 +1,7 @@
 # MashCad - Technische Schulden & TODOs
 
-> **Letzte Aktualisierung:** 2026-02-06  
-> **Gesamt:** 16 offene Punkte
+> **Letzte Aktualisierung:** 2026-02-20
+> **Gesamt:** 14 offene Punkte
 
 ---
 
@@ -9,10 +9,7 @@
 
 ### BUGs
 
-| Datei | Zeile | Beschreibung | Status |
-|-------|-------|--------------|--------|
-| `gui/viewport/body_mixin.py` | 221 | `edge_mapper.Modified()` außerhalb if → crash wenn Actor nicht existiert! | 🔴 Offen |
-| `modeling/tnp_system.py` | 692 | BUG FIX Kommentar - prüfen ob wirklich gefixt | 🟡 Prüfen |
+*Keine kritischen Bugs aktuell.*
 
 ---
 
@@ -75,12 +72,12 @@
 ## 📊 Statistik
 
 ```
-🔴 Kritisch:  2
-🟡 Hoch:      8  
+🔴 Kritisch:  0
+🟡 Hoch:      6
 🟢 Mittel:    6
 🔵 Niedrig:   7
 ───────────────
-Gesamt:      23
+Gesamt:      19
 ```
 
 ---

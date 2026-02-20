@@ -235,10 +235,11 @@ class BodyRenderingMixin:
                             if n_edge in self.plotter.renderer.actors:
                                 edge_actor = self.plotter.renderer.actors[n_edge]
                                 edge_mapper = edge_actor.GetMapper()
-                                edge_mapper.SetInputData(edge_mesh_obj)
-                                edge_mapper.Modified()
-                                edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+                                if edge_mapper is not None:
+                                    edge_mapper.SetInputData(edge_mesh_obj)
+                                    edge_mapper.Modified()
+                                    edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                                    edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
 
                     actors_list.append(n_edge)
                 

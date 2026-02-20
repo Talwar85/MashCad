@@ -658,3 +658,83 @@ class SplitBodyCommand(QUndoCommand):
             _restore_document_state(self.document, doc_state)
             CADTessellator.notify_body_changed()
             _update_document_ui(self.main_window, self.document)
+
+
+class ReorderFeatureCommand(QUndoCommand):
+    """Undoable command for reordering features in a body.
+    
+    Moves a feature from old_index to new_index and triggers rebuild.
+    """
+
+    def __init__(self, body, old_index: int, new_index: int, main_window=None):
+        super().__init__()
+        self.body = body
+        self.old_index = old_index
+        self.new_index = new_index
+        self.main_window = main_window
+        self._first_redo = True
+        
+        # Store feature name for display
+        feature = body.features[old_index]
+        self.setText(f"Reorder {feature.__class__.__name__}")
+
+    def redo(self):
+        from modeling.cad_tessellator import CADTessellator
+
+        # Skip first redo (QUndoCommand pattern)
+        if self._first_redo:
+            self._first_redo = False
+            return
+
+        tx_state = _capture_body_state(self.body)
+        try:
+            # Perform reorder
+            success = self.body.reorder_features(self.old_index, self.new_index)
+            if success:
+                logger.debug(f"Redo: Reordered feature from {self.old_index} to {self.new_index}")
+                CADTessellator.notify_body_changed()
+
+            regressed, reason = _has_transaction_regression(self.body, tx_state)
+            if regressed:
+                logger.error(f"Reorder redo rollback: {reason}")
+                _restore_body_state(self.body, tx_state)
+                if hasattr(self.main_window, "show_notification"):
+                    self.main_window.show_notification(
+                        tr("Rollback"),
+                        f"{tr('Reorder prevented')}: {reason}",
+                        level="warning",
+                        status_class="WARNING_RECOVERABLE",
+                        severity="warning"
+                    )
+
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
+        except Exception as e:
+            logger.error(f"Reorder redo failed: {e}")
+            _restore_body_state(self.body, tx_state)
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
+
+    def undo(self):
+        from modeling.cad_tessellator import CADTessellator
+
+        tx_state = _capture_body_state(self.body)
+        try:
+            # Reverse the reorder
+            success = self.body.reorder_features(self.new_index, self.old_index)
+            if success:
+                logger.debug(f"Undo: Reordered feature back from {self.new_index} to {self.old_index}")
+                CADTessellator.notify_body_changed()
+
+            regressed, reason = _has_transaction_regression(self.body, tx_state)
+            if regressed:
+                logger.error(f"Reorder undo rollback: {reason}")
+                _restore_body_state(self.body, tx_state)
+
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
+        except Exception as e:
+            logger.error(f"Reorder undo failed: {e}")
+            _restore_body_state(self.body, tx_state)
+            CADTessellator.notify_body_changed()
+            _update_body_ui(self.main_window, self.body)
