@@ -157,7 +157,7 @@ V1 has documented limitations to set honest expectations. See the complete list 
 | **Modeling** | No surface modeling, no multi-body loft |
 | **Import** | No direct SolidWorks/Fusion/Inventor files (use STEP) |
 | **Performance** | Recommended max ~50 bodies for smooth interaction |
-| **Platform** | macOS not supported; Linux is experimental |
+| **Platform** | macOS supported via build pipeline; Linux supported |
 
 ---
 
@@ -194,8 +194,8 @@ V1 has documented limitations to set honest expectations. See the complete list 
 | Platform | Support Level | Notes |
 |----------|---------------|-------|
 | **Windows 10/11** | ✅ Primary | Fully tested, recommended |
-| **Linux (Ubuntu 22.04+)** | 🟡 Experimental | May have display issues |
-| **macOS** | ❌ Not Supported | No current plans |
+| **Linux (Ubuntu 22.04+)** | ✅ Supported | Build pipeline available |
+| **macOS 12+** | ✅ Supported | Build pipeline available |
 
 ### Dependencies
 
@@ -261,7 +261,7 @@ V2 will build on the solid foundation of V1 with these planned features:
 
 ### Platform Expansion
 - Improved Linux support
-- macOS evaluation
+- Enhanced macOS support (Apple Silicon native)
 
 ---
 

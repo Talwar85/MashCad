@@ -250,8 +250,8 @@ Common causes of large files:
 | OS | Support Level | Notes |
 |----|---------------|-------|
 | Windows 10/11 | **Primary** | Fully tested, recommended |
-| Linux (Ubuntu 22.04+) | **Experimental** | May have display/audio issues |
-| macOS | **Not Supported** | No current plans |
+| Linux (Ubuntu 22.04+) | **Supported** | Build pipeline available |
+| macOS | **Supported** | Build pipeline available |
 
 **Linux Known Issues:**
 - Some display managers cause flickering
@@ -259,9 +259,15 @@ Common causes of large files:
 - Font rendering may differ
 - File dialogs may have quirks
 
+**macOS Known Issues:**
+- Apple Silicon (M1/M2/M3) may require Rosetta for some dependencies
+- Xcode command line tools required for compilation
+
 **Workaround (Linux):** Use X11 session, report issues with system details.
 
-**Planned for V2:** Linux support will be improved; macOS not currently planned.
+**Workaround (macOS):** Use conda-forge for ARM64 packages, or Rosetta for x86_64 compatibility.
+
+**Planned for V2:** Platform support will continue to be improved across all platforms.
 
 ---
 
