@@ -79,6 +79,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "export_normals_check": False,  # Normalen-Konsistenz-Check (optional, performance-intensiv)
     "export_auto_repair": True,  # Auto-Repair Integration mit GeometryHealer
     
+    # Geometry Drift Detection (PI-008: Sprint 3)
+    "geometry_drift_detection": True,  # Early detection of accumulated numerical errors
+    
     # PR-010: Printability Trust Gate
     "printability_trust_gate": True,  # Printability-Validierung vor Export
     "printability_min_score": 60,  # Mindest-Score für Export (0-100)

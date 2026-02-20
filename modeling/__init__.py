@@ -6390,6 +6390,40 @@ class Body:
                 else:
                     logger.warning(f"âš ï¸ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
 
+                # PI-008: Geometry Drift Detection
+                if is_enabled("geometry_drift_detection"):
+                    try:
+                        from modeling.geometry_drift_detector import GeometryDriftDetector, DriftThresholds
+                        
+                        detector = GeometryDriftDetector()
+                        
+                        # Check if we have a cached baseline for this body
+                        baseline_key = f"body_{self.id}_baseline"
+                        baseline = detector.get_cached_baseline(baseline_key)
+                        
+                        if baseline is not None:
+                            # Detect drift against the baseline
+                            ocp_shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                            metrics = detector.detect_drift(ocp_shape, baseline)
+                            
+                            if not detector.is_drift_acceptable(metrics):
+                                warnings = detector.get_drift_warnings(metrics)
+                                for warning in warnings:
+                                    logger.warning(f"Geometry Drift: {warning}")
+                                # Store drift info for UI/debugging
+                                self._last_drift_metrics = metrics
+                            else:
+                                logger.debug(f"Geometry Drift Check: OK (vertex={metrics.vertex_drift:.2e}, volume={metrics.volume_drift:.4%})")
+                                self._last_drift_metrics = None
+                        else:
+                            # Capture baseline on first rebuild
+                            ocp_shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                            detector.capture_baseline(ocp_shape, baseline_key)
+                            logger.debug(f"Geometry Drift: Baseline captured for '{self.name}'")
+                            self._last_drift_metrics = None
+                    except Exception as drift_error:
+                        logger.debug(f"Geometry Drift Detection skipped: {drift_error}")
+
                 # Phase 8.2: Automatische Referenz-Migration nach Rebuild
                 self._migrate_tnp_references(current_solid)
             except Exception as finalize_error:

@@ -123,6 +123,30 @@ class Tolerances:
     GEOMETRY_CYLINDRICAL = 1e-4  # 0.1mm
 
     # =========================================================================
+    # Geometry Drift Detection (PI-008)
+    # =========================================================================
+
+    # Maximum vertex position drift in mm
+    # Used to detect accumulated numerical errors in vertex positions
+    DRIFT_VERTEX_MAX = 1e-6  # 1µm - very tight for precision
+
+    # Maximum normal deviation in radians
+    # Used to detect surface normal changes during operations
+    DRIFT_NORMAL_MAX = 1e-4  # ~0.006° - tight angular tolerance
+
+    # Maximum surface area change as percentage (0.0-1.0)
+    # Used to detect unexpected geometry changes during rebuild
+    DRIFT_AREA_MAX = 0.01  # 1% - reasonable for most operations
+
+    # Maximum volume change as percentage (0.0-1.0)
+    # Used to detect significant geometry loss or gain
+    DRIFT_VOLUME_MAX = 0.01  # 1% - reasonable for most operations
+
+    # Maximum topology count change (faces, edges, vertices)
+    # Set to 0 for strict topology preservation
+    DRIFT_TOPOLOGY_MAX = 0  # No topology changes expected
+
+    # =========================================================================
     # UI/Picker-Toleranzen
     # =========================================================================
 
