@@ -106,6 +106,12 @@ class TutorialActionDetector(QObject):
             self.sketch_created.emit(f"sketch_{current_sketch_count}")
             self._last_sketch_count = current_sketch_count
             
+        # Prüfe auf Geometrie im aktiven Sketch (Rechtecke, Linien)
+        self._check_sketch_geometry()
+        
+        # Prüfe auf Extrusion (neue Bodies)
+        self._check_extrusion()
+            
     def _count_sketches(self) -> int:
         """Zählt aktive Sketches."""
         try:
@@ -114,6 +120,67 @@ class TutorialActionDetector(QObject):
         except:
             pass
         return 0
+        
+    def _check_sketch_geometry(self):
+        """Prüft ob Geometrie im aktiven Sketch gezeichnet wurde."""
+        try:
+            # Aktiven Sketch finden
+            active_sketch = None
+            if hasattr(self.mw, 'active_sketch') and self.mw.active_sketch:
+                active_sketch = self.mw.active_sketch
+            elif hasattr(self.mw, 'sketch_editor') and self.mw.sketch_editor:
+                if hasattr(self.mw.sketch_editor, 'sketch'):
+                    active_sketch = self.mw.sketch_editor.sketch
+                    
+            if not active_sketch:
+                return
+                
+            # Geometrie zählen
+            geom_count = 0
+            
+            # Prüfe auf lines attribute
+            if hasattr(active_sketch, 'lines'):
+                geom_count += len(active_sketch.lines)
+            if hasattr(active_sketch, 'rectangles'):
+                geom_count += len(active_sketch.rectangles)
+            if hasattr(active_sketch, 'entities'):
+                geom_count += len(active_sketch.entities)
+            if hasattr(active_sketch, '_lines'):
+                geom_count += len(active_sketch._lines)
+            if hasattr(active_sketch, '_entities'):
+                geom_count += len(active_sketch._entities)
+                
+            # Wenn wir noch keinen Tracking-Wert haben, initialisieren
+            if not hasattr(self, '_last_geom_count'):
+                self._last_geom_count = 0
+                
+            # Wenn neue Geometrie hinzugekommen ist
+            if geom_count > self._last_geom_count and geom_count > 0:
+                logger.info(f"[Tutorial] Geometrie erkannt: {geom_count} Elemente")
+                self.rectangle_drawn.emit()
+                self._last_geom_count = geom_count
+                
+        except Exception as e:
+            logger.debug(f"[Tutorial] Geometry check error: {e}")
+            
+    def _check_extrusion(self):
+        """Prüft ob eine Extrusion durchgeführt wurde."""
+        try:
+            if not hasattr(self, '_last_body_count'):
+                self._last_body_count = 0
+                
+            current_body_count = 0
+            if hasattr(self.mw, 'document') and self.mw.document:
+                if hasattr(self.mw.document, 'bodies'):
+                    current_body_count = len(self.mw.document.bodies)
+                    
+            if current_body_count > self._last_body_count:
+                logger.info(f"[Tutorial] Neue Body erkannt: {current_body_count}")
+                self.extrusion_done.emit(10.0)
+                self._last_body_count = current_body_count
+                
+        except Exception as e:
+            logger.debug(f"[Tutorial] Extrusion check error: {e}")
         
     def simulate_detection(self, action_type: str):
         """Simuliert eine Erkennung (für Testing)."""
@@ -368,6 +435,7 @@ class InteractiveTutorialPanel(QFrame):
     
     next_challenge = Signal()
     skip_tutorial = Signal()
+    manual_confirm = Signal()  # Falls Auto-Erkennung nicht klappt
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -492,8 +560,10 @@ class InteractiveTutorialPanel(QFrame):
         """)
         card_layout.addWidget(self.status_label)
         
-        # Hint Button
-        self.hint_btn = QPushButton("💡 Hinweis anzeigen")
+        # Buttons
+        btn_layout = QHBoxLayout()
+        
+        self.hint_btn = QPushButton("💡 Hinweis")
         self.hint_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -509,7 +579,28 @@ class InteractiveTutorialPanel(QFrame):
             }
         """)
         self.hint_btn.clicked.connect(self._show_hint)
-        card_layout.addWidget(self.hint_btn)
+        btn_layout.addWidget(self.hint_btn)
+        
+        # Manuelle Bestätigung (falls Auto-Erkennung nicht klappt)
+        self.manual_btn = QPushButton("✓ Fertig")
+        self.manual_btn.setStyleSheet("""
+            QPushButton {
+                background: #48bb7830;
+                border: 1px solid #48bb78;
+                color: #48bb78;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #48bb7850;
+            }
+        """)
+        self.manual_btn.clicked.connect(self.manual_confirm.emit)
+        btn_layout.addWidget(self.manual_btn)
+        
+        card_layout.addLayout(btn_layout)
         
         layout.addWidget(self.challenge_card)
         
@@ -715,6 +806,7 @@ class InteractiveTutorialV2(QObject):
         # Panel erstellen
         self.panel = InteractiveTutorialPanel()
         self.panel.skip_tutorial.connect(self._finish)
+        self.panel.manual_confirm.connect(self._complete_challenge)
         
         # Als Dock hinzufügen
         from PySide6.QtWidgets import QDockWidget
