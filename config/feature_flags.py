@@ -44,6 +44,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # Assembly System (Phase 1-6)
     "assembly_system": True,  # Hierarchische Component-Struktur wie CAD
     "mate_system_v1": True,  # AS-002: Mate constraints between components
+    "mate_solver": True,  # AS-003: Mate-Solver Base Kernel for assembly constraint solving
 
     # Performance Optimizations (2026 Performance Plan)
     "optimized_actor_pooling": True,  # Phase 2: VTK Actor Pooling Optimierung
