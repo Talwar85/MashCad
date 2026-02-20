@@ -177,28 +177,69 @@ class ErrorDetailsDialog(QDialog):
             auto_fix_frame = self._create_auto_fix_frame()
             layout.addWidget(auto_fix_frame)
         
-        # Next Actions
-        actions_group = QFrame()
-        actions_group.setStyleSheet("""
-            QFrame {
-                background-color: #e8f4f8;
-                border-left: 4px solid #2196F3;
-                border-radius: 4px;
-            }
-        """)
-        actions_layout = QVBoxLayout(actions_group)
-        
-        actions_title = QLabel(tr("💡 Empfohlene Schritte:"))
-        actions_title.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
-        actions_layout.addWidget(actions_title)
-        
-        for i, action in enumerate(self.explanation.next_actions, 1):
-            action_label = QLabel(f"{i}. {action}")
-            action_label.setWordWrap(True)
-            action_label.setStyleSheet("margin-left: 10px; margin-top: 3px;")
-            actions_layout.addWidget(action_label)
-        
-        layout.addWidget(actions_group)
+        # Next Steps (UX-003: Prominent numbered list)
+        next_steps = self._get_next_steps()
+        if next_steps:
+            actions_group = QFrame()
+            actions_group.setStyleSheet("""
+                QFrame {
+                    background-color: #e8f4f8;
+                    border-left: 4px solid #2196F3;
+                    border-radius: 4px;
+                    padding: 10px;
+                }
+            """)
+            actions_layout = QVBoxLayout(actions_group)
+            actions_layout.setSpacing(8)
+            
+            # Header with icon
+            actions_title = QLabel(tr("🎯 Next Steps"))
+            actions_title.setStyleSheet("""
+                font-weight: bold;
+                font-size: 14px;
+                color: #1976D2;
+                margin-bottom: 5px;
+            """)
+            actions_layout.addWidget(actions_title)
+            
+            # Numbered list of steps
+            for i, step in enumerate(next_steps, 1):
+                step_frame = QFrame()
+                step_frame.setStyleSheet("""
+                    QFrame {
+                        background-color: white;
+                        border-radius: 4px;
+                        padding: 5px;
+                    }
+                """)
+                step_layout = QHBoxLayout(step_frame)
+                step_layout.setContentsMargins(8, 4, 8, 4)
+                step_layout.setSpacing(10)
+                
+                # Step number
+                num_label = QLabel(str(i))
+                num_label.setStyleSheet("""
+                    background-color: #2196F3;
+                    color: white;
+                    border-radius: 12px;
+                    min-width: 24px;
+                    max-width: 24px;
+                    min-height: 24px;
+                    max-height: 24px;
+                    font-weight: bold;
+                    qproperty-alignment: AlignCenter;
+                """)
+                step_layout.addWidget(num_label)
+                
+                # Step text
+                step_text = QLabel(step)
+                step_text.setWordWrap(True)
+                step_text.setStyleSheet("font-size: 13px;")
+                step_layout.addWidget(step_text, stretch=1)
+                
+                actions_layout.addWidget(step_frame)
+            
+            layout.addWidget(actions_group)
         
         # Kontext-Info (falls vorhanden)
         if self.explanation.context:
@@ -340,9 +381,23 @@ class ErrorDetailsDialog(QDialog):
         copy_btn.clicked.connect(self._copy_details)
         btn_layout.addWidget(copy_btn)
         
+        # Learn More Button (UX-003: immer verfügbar)
+        learn_more_btn = QPushButton(tr("📖 Learn More"))
+        learn_more_btn.setToolTip(tr("Öffnet die Dokumentation für diesen Fehler"))
+        learn_more_btn.clicked.connect(self._open_learn_more)
+        btn_layout.addWidget(learn_more_btn)
+        
         btn_layout.addStretch()
         
         # Right side: Action buttons
+        # Quick Fix Button (UX-003: für automatisch behebbare Fehler)
+        if self.explanation.can_auto_fix and self.show_auto_fix:
+            quick_fix_btn = QPushButton(tr("⚡ Quick Fix"))
+            quick_fix_btn.setObjectName("success")
+            quick_fix_btn.setToolTip(tr("Wendet die automatische Korrektur an"))
+            quick_fix_btn.clicked.connect(self._on_auto_fix)
+            btn_layout.addWidget(quick_fix_btn)
+        
         # Take Action Button (falls action_type definiert)
         if self.explanation.action_type and self.show_auto_fix:
             action_btn_text = self.explanation.get_action_button_text()
@@ -351,12 +406,6 @@ class ErrorDetailsDialog(QDialog):
             action_btn.setToolTip(tr("Führt die empfohlene Aktion aus"))
             action_btn.clicked.connect(self._on_take_action)
             btn_layout.addWidget(action_btn)
-        
-        # Help Button (falls Docs verfügbar)
-        if self.explanation.related_docs:
-            help_btn = QPushButton(tr("❓ Hilfe"))
-            help_btn.clicked.connect(self._open_help)
-            btn_layout.addWidget(help_btn)
         
         # Close Button
         close_btn = QPushButton(tr("Schließen"))
@@ -425,9 +474,31 @@ class ErrorDetailsDialog(QDialog):
             ErrorCategory.UNKNOWN: tr("Unbekannter Fehler"),
         }
         return category_names.get(
-            self.explanation.category, 
+            self.explanation.category,
             self.explanation.category.value
         )
+    
+    def _get_next_steps(self) -> list:
+        """
+        Gibt die Next Steps für den aktuellen Fehler zurück.
+        
+        UX-003: Nutzt die neuen get_next_steps() Funktionen
+        für konsistente Next Step Guidance.
+        """
+        # Zuerst: Explizite next_actions aus Explanation
+        if self.explanation.next_actions:
+            return list(self.explanation.next_actions)
+        
+        # Fallback: Hole über get_next_steps Funktion
+        try:
+            from gui.error_explainer import get_next_steps
+            return get_next_steps(self.explanation.error_code)
+        except Exception as e:
+            logger.warning(f"Failed to get next steps: {e}")
+            return [
+                tr("Speichern Sie Ihr Projekt"),
+                tr("Versuchen Sie die Operation erneut")
+            ]
         
     def _on_auto_fix(self):
         """Handler für Auto-Fix Button."""
@@ -438,19 +509,30 @@ class ErrorDetailsDialog(QDialog):
         """Kopiert Fehlerdetails in die Zwischenablage."""
         from PySide6.QtWidgets import QApplication
         
+        # UX-003: Nutze _get_next_steps für konsistente Next Steps
+        next_steps = self._get_next_steps()
+        
         text = f"""Error: {self.explanation.error_code}
 Title: {self.explanation.title}
 Description: {self.explanation.description}
 Severity: {self.explanation.severity.value}
 Category: {self.explanation.category.value}
 
-Next Actions:
+Next Steps:
 """
-        for i, action in enumerate(self.explanation.next_actions, 1):
-            text += f"{i}. {action}\n"
+        for i, step in enumerate(next_steps, 1):
+            text += f"{i}. {step}\n"
         
         if self.explanation.technical_details:
             text += f"\nTechnical: {self.explanation.technical_details}\n"
+        
+        # UX-003: Füge Dokumentations-Link hinzu
+        try:
+            from gui.error_explainer import get_documentation_link
+            doc_link = get_documentation_link(self.explanation.error_code)
+            text += f"\nDocumentation: {doc_link}\n"
+        except Exception:
+            pass
         
         clipboard = QApplication.clipboard()
         clipboard.setText(text)
@@ -464,15 +546,46 @@ Next Actions:
         
     def _open_help(self):
         """Öffnet Hilfe-Dokumentation."""
-        # TODO: Implementiere Hilfe-System Integration
-        logger.info(f"Help requested for error: {self.explanation.error_code}")
+        # Delegate to _open_learn_more
+        self._open_learn_more()
         
-        from PySide6.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self,
-            tr("Hilfe"),
-            tr("Dokumentation wird in einem zukünftigen Update verfügbar sein.")
-        )
+    def _open_learn_more(self):
+        """
+        Öffnet die Dokumentation für den aktuellen Fehler.
+        
+        UX-003: "Learn More" Link für alle Fehler.
+        """
+        logger.info(f"Learn More requested for error: {self.explanation.error_code}")
+        
+        try:
+            from gui.error_explainer import get_documentation_link
+            import webbrowser
+            
+            doc_url = get_documentation_link(self.explanation.error_code)
+            
+            # Versuche Browser zu öffnen
+            if webbrowser.open(doc_url):
+                logger.info(f"Opened documentation: {doc_url}")
+            else:
+                # Fallback: Zeige URL in Dialog
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self,
+                    tr("Dokumentation"),
+                    tr(f"Dokumentation verfügbar unter:\n{doc_url}")
+                )
+        except Exception as e:
+            logger.exception(f"Failed to open documentation: {e}")
+            
+            # Fallback: Zeige generische Info
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                tr("Dokumentation"),
+                tr(f"Fehler-Code: {self.explanation.error_code}\n\n"
+                   "Weitere Informationen finden Sie in der Online-Dokumentation:\n"
+                   "https://docs.mashcad.io/errors")
+            )
         
     def _get_stylesheet(self) -> str:
         """Gibt das Stylesheet zurück."""

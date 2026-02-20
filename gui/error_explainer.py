@@ -406,7 +406,231 @@ def with_error_handling(
 
 
 # =============================================================================
-# Convenience Functions
+# Next Steps Functions (UX-003)
+# =============================================================================
+
+def get_next_steps(error_code: str) -> list:
+    """
+    Gibt die nächsten Schritte für einen Error-Code zurück.
+    
+    UX-003: Stellt sicher, dass alle Fehler mindestens einen
+    handlungsorientierten "Next Step" haben.
+    
+    Args:
+        error_code: Der Error-Code (z.B. "geometry_non_manifold")
+        
+    Returns:
+        Liste von nächsten Schritten als Strings
+    """
+    from modeling.error_diagnostics import ErrorDiagnostics, ERROR_KNOWLEDGE_BASE
+    
+    # Prüfe Knowledge Base
+    if error_code in ERROR_KNOWLEDGE_BASE:
+        entry = ERROR_KNOWLEDGE_BASE[error_code]
+        next_actions = entry.get("next_actions", [])
+        if next_actions:
+            return list(next_actions)
+    
+    # Fallback: Generische Next Steps basierend auf Kategorie
+    explanation = ErrorDiagnostics.explain(error_code)
+    category = explanation.category
+    
+    fallback_steps = {
+        # TNP Errors - Reference issues
+        "reference": [
+            tr("Wählen Sie eine neue Referenz aus"),
+            tr("Bearbeiten Sie das Feature und aktualisieren Sie die Referenz"),
+            tr("Prüfen Sie ob die referenzierte Geometrie noch existiert")
+        ],
+        # Rebuild Errors - Operation failures
+        "operation": [
+            tr("Machen Sie die letzte Operation rückgängig"),
+            tr("Prüfen Sie die Eingabeparameter"),
+            tr("Vereinfachen Sie die Geometrie und versuchen Sie es erneut")
+        ],
+        # Export Errors
+        "import_export": [
+            tr("Führen Sie eine Geometrie-Validierung durch"),
+            tr("Prüfen Sie die Printability-Einstellungen"),
+            tr("Stellen Sie sicher, dass alle Bodies gültige Solids sind")
+        ],
+        # Solver/Constraint Errors
+        "constraint": [
+            tr("Fügen Sie weitere Constraints hinzu"),
+            tr("Entfernen Sie widersprüchliche Constraints"),
+            tr("Verwenden Sie 'Auto-Lösen' zur Konflikt-Erkennung")
+        ],
+        # File Errors
+        "system": [
+            tr("Prüfen Sie die Dateiberechtigungen"),
+            tr("Versuchen Sie einen anderen Speicherort"),
+            tr("Starten Sie die Anwendung neu")
+        ],
+        # Geometry Errors
+        "geometry": [
+            tr("Führen Sie eine Geometrie-Heilung durch"),
+            tr("Prüfen Sie auf selbstüberschneidende Geometrie"),
+            tr("Vereinfachen Sie komplexe Features")
+        ],
+        # Topology Errors
+        "topology": [
+            tr("Überprüfen Sie die Topologie-Struktur"),
+            tr("Verwenden Sie BRep-Repair zur Heilung"),
+            tr("Erstellen Sie das Feature neu")
+        ],
+        # Parameter Errors
+        "parameter": [
+            tr("Überprüfen Sie die Parameter-Grenzen"),
+            tr("Verwenden Sie gültige Werte für die Operation"),
+            tr("Konsultieren Sie die Dokumentation für erlaubte Werte")
+        ],
+        # Dependency Errors
+        "dependency": [
+            tr("Installieren Sie fehlende Abhängigkeiten"),
+            tr("Überprüfen Sie Ihre Python-Umgebung"),
+            tr("Starten Sie die Anwendung neu")
+        ],
+    }
+    
+    category_key = category.value if hasattr(category, 'value') else str(category)
+    return fallback_steps.get(category_key, [
+        tr("Speichern Sie Ihr Projekt"),
+        tr("Versuchen Sie die Operation erneut"),
+        tr("Kontaktieren Sie den Support falls das Problem besteht")
+    ])
+
+
+def get_quick_fix_action(error_code: str):
+    """
+    Gibt die Quick-Fix-Action für einen Error-Code zurück.
+    
+    UX-003: Ermittelt die beste automatische oder halb-automatische
+    Aktion zur Fehlerbehebung.
+    
+    Args:
+        error_code: Der Error-Code
+        
+    Returns:
+        ErrorActionType oder None wenn keine Quick-Fix verfügbar
+    """
+    from modeling.error_diagnostics import (
+        ERROR_KNOWLEDGE_BASE, ErrorActionType
+    )
+    
+    # Prüfe Knowledge Base
+    if error_code in ERROR_KNOWLEDGE_BASE:
+        entry = ERROR_KNOWLEDGE_BASE[error_code]
+        
+        # Wenn explizite action_type definiert
+        if "action_type" in entry:
+            try:
+                return ErrorActionType(entry["action_type"])
+            except ValueError:
+                pass
+        
+        # Wenn auto_fix verfügbar, aber keine action_type
+        if entry.get("can_auto_fix"):
+            # Bestimme action_type basierend auf Fehler-Kategorie
+            category = entry.get("category")
+            category_name = category.value if hasattr(category, 'value') else str(category)
+            
+            # Mapping von Fehler-Typen zu Aktionen
+            if "tnp" in error_code or "reference" in error_code:
+                return ErrorActionType.SELECT_REFERENCE
+            elif "rebuild" in error_code or "failed" in error_code:
+                return ErrorActionType.UNDO
+            elif "geometry" in error_code or "topology" in error_code:
+                return ErrorActionType.REPAIR_GEOMETRY
+            elif "export" in error_code or "import" in error_code:
+                return ErrorActionType.VALIDATE_GEOMETRY
+            elif "constraint" in error_code:
+                return ErrorActionType.EDIT_FEATURE
+    
+    return None
+
+
+def get_documentation_link(error_code: str) -> str:
+    """
+    Gibt einen Link zur Dokumentation für den Error-Code zurück.
+    
+    UX-003: "Learn More" Links für alle Fehler.
+    
+    Args:
+        error_code: Der Error-Code
+        
+    Returns:
+        URL zur Dokumentation
+    """
+    from modeling.error_diagnostics import ERROR_KNOWLEDGE_BASE
+    
+    # Prüfe ob explizite Docs definiert
+    if error_code in ERROR_KNOWLEDGE_BASE:
+        entry = ERROR_KNOWLEDGE_BASE[error_code]
+        if entry.get("related_docs"):
+            return entry["related_docs"][0]
+    
+    # Generische Doku-Links basierend auf Kategorie
+    base_url = "https://docs.mashcad.io/errors"
+    
+    if "tnp" in error_code or "reference" in error_code:
+        return f"{base_url}/tnp-references"
+    elif "geometry" in error_code:
+        return f"{base_url}/geometry-validation"
+    elif "constraint" in error_code:
+        return f"{base_url}/sketch-constraints"
+    elif "export" in error_code:
+        return f"{base_url}/export-validation"
+    elif "boolean" in error_code:
+        return f"{base_url}/boolean-operations"
+    else:
+        return f"{base_url}/{error_code}"
+
+
+def has_quick_fix(error_code: str) -> bool:
+    """Prüft ob ein Quick-Fix für den Fehler verfügbar ist."""
+    return get_quick_fix_action(error_code) is not None
+
+
+def get_all_error_codes() -> list:
+    """Gibt alle bekannten Error-Codes zurück."""
+    from modeling.error_diagnostics import ERROR_KNOWLEDGE_BASE
+    return list(ERROR_KNOWLEDGE_BASE.keys())
+
+
+def validate_error_coverage() -> dict:
+    """
+    Validiert dass alle Fehler Next Steps haben.
+    
+    UX-003: Quality Assurance für Error Coverage.
+    
+    Returns:
+        Dict mit 'valid', 'missing_next_steps', 'missing_quick_fix'
+    """
+    from modeling.error_diagnostics import ERROR_KNOWLEDGE_BASE
+    
+    missing_next_steps = []
+    missing_quick_fix = []
+    
+    for error_code, entry in ERROR_KNOWLEDGE_BASE.items():
+        # Prüfe Next Steps
+        if not entry.get("next_actions"):
+            missing_next_steps.append(error_code)
+        
+        # Prüfe ob can_auto_fix=True aber keine action_type
+        if entry.get("can_auto_fix") and not entry.get("action_type"):
+            missing_quick_fix.append(error_code)
+    
+    return {
+        "valid": len(missing_next_steps) == 0,
+        "total_errors": len(ERROR_KNOWLEDGE_BASE),
+        "missing_next_steps": missing_next_steps,
+        "missing_quick_fix": missing_quick_fix,
+        "coverage_percent": 100.0 * (len(ERROR_KNOWLEDGE_BASE) - len(missing_next_steps)) / len(ERROR_KNOWLEDGE_BASE) if ERROR_KNOWLEDGE_BASE else 0
+    }
+
+
+# =============================================================================
+# Original Convenience Functions
 # =============================================================================
 
 def show_error(
