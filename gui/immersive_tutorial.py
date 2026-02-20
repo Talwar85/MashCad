@@ -306,14 +306,271 @@ class BadgeNotification(QFrame):
         self.anim.start()
 
 
+class SketchPreviewWidget(QFrame):
+    """Zeichnet eine animierte Skizze mit Linien."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(300, 300)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.progress = 0
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self._animate_step)
+        
+    def start_animation(self):
+        """Startet die Zeichen-Animation."""
+        self.progress = 0
+        self.animation_timer.start(50)
+        
+    def _animate_step(self):
+        """Animiert den Zeichen-Fortschritt."""
+        self.progress += 2
+        if self.progress >= 100:
+            self.animation_timer.stop()
+        self.update()
+        
+    def paintEvent(self, event):
+        """Zeichnet die Skizze."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Grid zeichnen
+        pen = QPen(QColor("#2d3748"), 1)
+        painter.setPen(pen)
+        
+        cx, cy = self.width() // 2, self.height() // 2
+        
+        # Horizontale Grid-Linien
+        for i in range(-5, 6):
+            y = cy + i * 25
+            painter.drawLine(cx - 125, y, cx + 125, y)
+        
+        # Vertikale Grid-Linien
+        for i in range(-5, 6):
+            x = cx + i * 25
+            painter.drawLine(x, cy - 125, x, cy + 125)
+        
+        # Rechteck-Skizze (animiert)
+        if self.progress > 0:
+            rect_progress = min(self.progress, 100)
+            
+            pen = QPen(QColor("#4299e1"), 3)
+            painter.setPen(pen)
+            
+            # Rechteck 100x60
+            rect = QRect(cx - 50, cy - 30, 100, 60)
+            
+            # Zeichne Linien basierend auf Progress
+            if rect_progress > 10:
+                painter.drawLine(rect.left(), rect.top(), 
+                               rect.left() + min(rect_progress - 10, 100), rect.top())
+            if rect_progress > 35:
+                painter.drawLine(rect.right(), rect.top(), 
+                               rect.right(), rect.top() + min(rect_progress - 35, 60))
+            if rect_progress > 60:
+                painter.drawLine(rect.right(), rect.bottom(), 
+                               rect.right() - min(rect_progress - 60, 100), rect.bottom())
+            if rect_progress > 85:
+                painter.drawLine(rect.left(), rect.bottom(), 
+                               rect.left(), rect.bottom() - min(rect_progress - 85, 60))
+            
+            # Maßlinien
+            if rect_progress > 95:
+                pen = QPen(QColor("#48bb78"), 2)
+                painter.setPen(pen)
+                # Horizontale Maßlinie
+                painter.drawLine(rect.left(), rect.bottom() + 15, 
+                               rect.right(), rect.bottom() + 15)
+                painter.drawLine(rect.left(), rect.bottom() + 10,
+                               rect.left(), rect.bottom() + 20)
+                painter.drawLine(rect.right(), rect.bottom() + 10,
+                               rect.right(), rect.bottom() + 20)
+                
+                # Text
+                painter.setPen(QColor("#48bb78"))
+                painter.setFont(QFont("Segoe UI", 10))
+                painter.drawText(cx - 15, rect.bottom() + 30, "100mm")
+        
+        painter.end()
+
+
+class ExtrudePreviewWidget(QFrame):
+    """Zeichnet eine animierte 3D-Extrusion."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(300, 300)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.depth = 0
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self._animate_step)
+        
+    def start_animation(self):
+        """Startet die Extrusions-Animation."""
+        self.depth = 0
+        self.animation_timer.start(30)
+        
+    def _animate_step(self):
+        """Animiert die Extrusion."""
+        self.depth += 2
+        if self.depth >= 60:
+            self.animation_timer.stop()
+        self.update()
+        
+    def paintEvent(self, event):
+        """Zeichnet die 3D-Box."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        cx, cy = self.width() // 2, self.height() // 2
+        
+        # 3D-Box Parameter
+        width, height = 100, 60
+        depth = self.depth
+        
+        # Perspektivischer Offset
+        offset_x, offset_y = 30, -25
+        
+        # Farben
+        front_color = QColor("#4299e1")
+        top_color = QColor("#3182ce")
+        side_color = QColor("#2c5282")
+        
+        # Vorderseite
+        front = QRect(cx - width//2, cy - height//2, width, height)
+        
+        # Hintere Flächen (versetzt)
+        back_tl = QPoint(front.left() + offset_x, front.top() + offset_y)
+        back_tr = QPoint(front.right() + offset_x, front.top() + offset_y)
+        back_bl = QPoint(front.left() + offset_x, front.bottom() + offset_y)
+        back_br = QPoint(front.right() + offset_x, front.bottom() + offset_y)
+        
+        # Tiefe-Skalierung (je mehr depth, desto mehr sichtbar)
+        scale = depth / 60
+        
+        # Seitenfläche (rechts)
+        if depth > 0:
+            side_points = [
+                QPoint(front.right(), front.top()),
+                QPoint(back_tr.x(), back_tr.y()),
+                QPoint(back_br.x(), back_br.y()),
+                QPoint(front.right(), front.bottom())
+            ]
+            painter.setBrush(QBrush(side_color))
+            painter.setPen(Qt.NoPen)
+            painter.drawPolygon(side_points)
+        
+        # Deckelfläche (oben)
+        if depth > 0:
+            top_points = [
+                QPoint(front.left(), front.top()),
+                QPoint(back_tl.x(), back_tl.y()),
+                QPoint(back_tr.x(), back_tr.y()),
+                QPoint(front.right(), front.top())
+            ]
+            painter.setBrush(QBrush(top_color))
+            painter.drawPolygon(top_points)
+        
+        # Vorderseite (immer sichtbar)
+        painter.setBrush(QBrush(front_color))
+        painter.setPen(QPen(QColor("#63b3ed"), 2))
+        painter.drawRect(front)
+        
+        # Grid auf Vorderseite
+        painter.setPen(QPen(QColor("#2b6cb0"), 1))
+        for i in range(1, 4):
+            x = front.left() + i * (width // 4)
+            painter.drawLine(x, front.top(), x, front.bottom())
+        for i in range(1, 3):
+            y = front.top() + i * (height // 3)
+            painter.drawLine(front.left(), y, front.right(), y)
+        
+        # Extrusions-Indikator
+        if depth > 0 and depth < 60:
+            painter.setPen(QPen(QColor("#48bb78"), 2))
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(front.right() + 10, cy, f"{depth}mm")
+        
+        painter.end()
+
+
+class FilletPreviewWidget(QFrame):
+    """Zeichnet eine animierte Abrundung."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(300, 300)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.fillet_progress = 0
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self._animate_step)
+        
+    def start_animation(self):
+        """Startet die Fillet-Animation."""
+        self.fillet_progress = 0
+        self.animation_timer.start(40)
+        
+    def _animate_step(self):
+        """Animiert die Abrundung."""
+        self.fillet_progress += 3
+        if self.fillet_progress >= 100:
+            self.animation_timer.stop()
+        self.update()
+        
+    def paintEvent(self, event):
+        """Zeichnet die abgerundete Box."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        cx, cy = self.width() // 2, self.height() // 2
+        
+        # Box mit abgerundeten Ecken
+        width, height = 120, 80
+        fillet_radius = int(15 * (self.fillet_progress / 100))
+        
+        rect = QRect(cx - width//2, cy - height//2, width, height)
+        
+        # Gradient für 3D-Effekt
+        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        gradient.setColorAt(0, QColor("#ed8936"))
+        gradient.setColorAt(1, QColor("#c05621"))
+        
+        painter.setBrush(QBrush(gradient))
+        painter.setPen(QPen(QColor("#f6ad55"), 2))
+        
+        if fillet_radius > 0:
+            painter.drawRoundedRect(rect, fillet_radius, fillet_radius)
+        else:
+            painter.drawRect(rect)
+        
+        # Kanten-Highlight
+        if self.fillet_progress > 50:
+            highlight_pen = QPen(QColor("#fbd38d"), 3)
+            painter.setPen(highlight_pen)
+            painter.setBrush(Qt.NoBrush)
+            
+            # Highlight die abgerundete Ecke
+            corner = QRect(rect.right() - 30, rect.bottom() - 30, 30, 30)
+            painter.drawArc(corner, 0, 90 * 16)
+        
+        # Radius-Indikator
+        if 0 < self.fillet_progress < 100:
+            painter.setPen(QPen(QColor("#48bb78"), 2))
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(rect.right() + 10, cy, f"R{fillet_radius}mm")
+        
+        painter.end()
+
+
 class Viewport3DWidget(QFrame):
-    """Echtes 3D-Viewport-Widget für das Tutorial."""
+    """Echtes 3D-Viewport-Widget für das Tutorial mit animierten Vorschauen."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(500, 400)
         self._setup_ui()
-        self.current_mode = "empty"  # empty, sketch, solid
+        self.current_mode = "empty"
+        self.preview_widgets = []
         
     def _setup_ui(self):
         self.setStyleSheet("""
@@ -366,57 +623,75 @@ class Viewport3DWidget(QFrame):
         
         layout.addWidget(toolbar)
         
-        # 3D Viewport Area
-        self.viewport_area = QFrame()
-        self.viewport_area.setStyleSheet("""
-            QFrame {
-                background: qradialgradient(
-                    cx: 0.5, cy: 0.5, radius: 0.8,
-                    stop: 0 #1a202c,
-                    stop: 1 #0f1419
-                );
-                border-bottom-left-radius: 10px;
-                border-bottom-right-radius: 10px;
-            }
-        """)
+        # Content Stack
+        self.content_stack = QStackedWidget()
+        self.content_stack.setStyleSheet("background: transparent; border: none;")
         
-        viewport_layout = QVBoxLayout(self.viewport_area)
+        # Empty Page
+        empty_page = QWidget()
+        empty_layout = QVBoxLayout(empty_page)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        welcome = QLabel("🚀")
+        welcome.setStyleSheet("font-size: 64px; background: transparent;")
+        welcome.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(welcome)
         
-        # Grid-Lines (simuliert)
-        self.grid = QLabel()
-        self.grid.setStyleSheet("""
+        welcome_text = QLabel("Tutorial Demo\nBereit...")
+        welcome_text.setStyleSheet("""
+            color: #718096;
+            font-size: 16px;
             background: transparent;
-            border: none;
+            text-align: center;
         """)
-        self.grid.setAlignment(Qt.AlignCenter)
-        viewport_layout.addWidget(self.grid)
+        welcome_text.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(welcome_text)
         
-        # Content-Label für Demo-Inhalte
-        self.content_label = QLabel()
-        self.content_label.setAlignment(Qt.AlignCenter)
-        self.content_label.setStyleSheet("""
-            font-size: 72px;
-            background: transparent;
-            border: none;
-        """)
-        viewport_layout.addWidget(self.content_label)
+        self.content_stack.addWidget(empty_page)
         
-        layout.addWidget(self.viewport_area, stretch=1)
+        # Sketch Page
+        self.sketch_preview = SketchPreviewWidget()
+        self.content_stack.addWidget(self.sketch_preview)
+        
+        # Extrude Page
+        self.extrude_preview = ExtrudePreviewWidget()
+        self.content_stack.addWidget(self.extrude_preview)
+        
+        # Fillet Page
+        self.fillet_preview = FilletPreviewWidget()
+        self.content_stack.addWidget(self.fillet_preview)
+        
+        layout.addWidget(self.content_stack, stretch=1)
+        
+    def show_empty(self):
+        """Zeigt Empty-Seite."""
+        self.current_mode = "empty"
+        self.content_stack.setCurrentIndex(0)
+        self.mode_indicator.setText("● Ready")
+        self.mode_indicator.setStyleSheet("color: #718096; font-size: 11px; font-weight: bold;")
         
     def show_sketch(self):
-        """Zeigt Sketch-Preview."""
+        """Zeigt Sketch-Preview mit Animation."""
         self.current_mode = "sketch"
-        self.content_label.setText("📝")
+        self.content_stack.setCurrentIndex(1)
         self.mode_indicator.setText("● Sketch Mode")
         self.mode_indicator.setStyleSheet("color: #4299e1; font-size: 11px; font-weight: bold;")
-        self._animate_content()
+        self.sketch_preview.start_animation()
         
     def show_extrude(self):
-        """Zeigt Extrude-Preview."""
-        self.current_mode = "solid"
-        self.content_label.setText("📦")
+        """Zeigt Extrude-Preview mit Animation."""
+        self.current_mode = "extrude"
+        self.content_stack.setCurrentIndex(2)
         self.mode_indicator.setText("● 3D Preview")
         self.mode_indicator.setStyleSheet("color: #48bb78; font-size: 11px; font-weight: bold;")
+        self.extrude_preview.start_animation()
+        
+    def show_fillet(self):
+        """Zeigt Fillet-Preview mit Animation."""
+        self.current_mode = "fillet"
+        self.content_stack.setCurrentIndex(3)
+        self.mode_indicator.setText("● Feature Preview")
+        self.mode_indicator.setStyleSheet("color: #ed8936; font-size: 11px; font-weight: bold;")
+        self.fillet_preview.start_animation()
         self._animate_content()
         
     def show_fillet(self):
@@ -904,7 +1179,9 @@ class ImmersiveTutorial(QDialog):
         
     def _update_viewport(self, step: ImmersiveStep):
         """Aktualisiert den 3D-Viewport."""
-        if step.viewport_content == "sketch":
+        if step.viewport_content == "empty":
+            self.viewport_3d.show_empty()
+        elif step.viewport_content == "sketch":
             self.viewport_3d.show_sketch()
         elif step.viewport_content == "extrude":
             self.viewport_3d.show_extrude()
