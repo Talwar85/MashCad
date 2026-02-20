@@ -350,27 +350,38 @@ class LiveDemoViewport(QWidget):
         w, h = 100, 60
         x, y = cx - w//2, cy - h//2
         
-        # Animierter Pfad
-        if progress > 10:
-            # Obere Linie
-            p.drawLine(x, y, x + min(progress - 10, 100), y)
-        if progress > 35:
-            # Rechte Linie
-            p.drawLine(x + w, y, x + w, y + min(progress - 35, 60))
-        if progress > 60:
-            # Untere Linie
-            p.drawLine(x + w, y + h, x + w - min(progress - 60, 100), y + h)
-        if progress > 85:
-            # Linke Linie
-            p.drawLine(x, y + h, x, y + h - min(progress - 85, 60))
+        # Animierter Pfad - 4 Seiten des Rechtecks
+        # Obere Linie (0-25%)
+        if progress > 0:
+            line_progress = min(progress * 4, 100)  # 0-100% der oberen Linie
+            end_x = x + (w * line_progress / 100)
+            p.drawLine(int(x), int(y), int(end_x), int(y))
+            
+        # Rechte Linie (25-50%)
+        if progress > 25:
+            line_progress = min((progress - 25) * 4, 100)
+            end_y = y + (h * line_progress / 100)
+            p.drawLine(int(x + w), int(y), int(x + w), int(end_y))
+            
+        # Untere Linie (50-75%) - von rechts nach links
+        if progress > 50:
+            line_progress = min((progress - 50) * 4, 100)
+            end_x = (x + w) - (w * line_progress / 100)
+            p.drawLine(int(x + w), int(y + h), int(end_x), int(y + h))
+            
+        # Linke Linie (75-100%) - von unten nach oben
+        if progress > 75:
+            line_progress = min((progress - 75) * 4, 100)
+            end_y = (y + h) - (h * line_progress / 100)
+            p.drawLine(int(x), int(y + h), int(x), int(end_y))
             
         # Maßlinien am Ende
-        if progress > 95:
+        if progress >= 95:
             pen = QPen(QColor("#48bb78"), 2)
             p.setPen(pen)
-            p.drawLine(x, y + h + 15, x + w, y + h + 15)
+            p.drawLine(int(x), int(y + h + 15), int(x + w), int(y + h + 15))
             p.setFont(QFont("Segoe UI", 9))
-            p.drawText(cx - 20, y + h + 30, "100mm")
+            p.drawText(int(cx - 20), int(y + h + 30), "100mm")
             
     def _draw_extrude(self, p: QPainter, cx: int, cy: int):
         """Zeichnet animierte Extrusion."""
@@ -830,17 +841,17 @@ class InteractiveTutorialV2(QObject):
             TutorialChallenge(
                 challenge_type=TutorialChallengeType.CREATE_SKETCH,
                 title="Erstellen Sie eine Skizze",
-                description="Klicken Sie auf 'Neue Skizze' im Hauptfenster. Ich erkenne es automatisch!",
+                description="1. Klicken Sie auf 'Neue Skizze'\n2. Wählen Sie die XY-Ebene (die blaue Fläche)\n3. Der Sketch-Editor öffnet sich automatisch",
                 target_name="_getting_started_overlay",
-                hint="Das Spotlight zeigt Ihnen wo der Button ist.",
+                hint="Klicken Sie 'Neue Skizze' → Dann die blaue XY-Ebene auswählen",
                 xp_reward=100
             ),
             TutorialChallenge(
                 challenge_type=TutorialChallengeType.DRAW_RECTANGLE,
                 title="Zeichnen Sie ein Rechteck",
-                description="Im Sketch-Editor: Wählen Sie das Rechteck-Werkzeug, zeichnen Sie ein Rechteck, dann klicken Sie 'Fertig stellen'.",
+                description="Im Sketch-Editor:\n1. Wählen Sie das Rechteck-Werkzeug\n2. Ziehen Sie ein Rechteck auf\n3. Klicken Sie 'Fertig stellen'",
                 target_name="",
-                hint="Werkzeugleiste → Rechteck-Werkzeug → Dann 'Fertig stellen' klicken",
+                hint="Werkzeugleiste → Rechteck-Werkzeug → Auf Grid ziehen → Fertig stellen",
                 xp_reward=150
             ),
             TutorialChallenge(
@@ -986,11 +997,12 @@ class InteractiveTutorialV2(QObject):
         # Nächste Aktion bestimmen
         next_actions = {
             0: "Klicken Sie 'Weiter'",
-            1: "Zeichnen Sie ein Rechteck im Sketch-Editor",
-            2: "Klicken Sie 'Fertig stellen' um den Sketch zu schließen",
-            3: "Klicken Sie 'Extrudieren' um 3D zu erstellen",
-            4: "Wählen Sie eine Kante und wenden Sie 'Chamfer' an",
-            5: "Tutorial abschließen"
+            1: "Wählen Sie die XY-Ebene (blaue Fläche)",
+            2: "Zeichnen Sie ein Rechteck im Sketch-Editor",
+            3: "Klicken Sie 'Fertig stellen' um den Sketch zu schließen",
+            4: "Klicken Sie 'Extrudieren' um 3D zu erstellen",
+            5: "Wählen Sie eine Kante und wenden Sie 'Chamfer' an",
+            6: "Tutorial abschließen"
         }
         next_action = next_actions.get(self.current_step, "")
         
