@@ -21,8 +21,10 @@ Date: 2026-02-19
 Branch: feature/v1-ux-aiB
 """
 
+from typing import Optional, Callable, Dict
+
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QScrollArea, QWidget,
     QFrame, QListWidget, QListWidgetItem, QCheckBox,
     QTabWidget, QSizePolicy, QSpacerItem
@@ -31,7 +33,9 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QColor
 from loguru import logger
 
-from modeling.error_diagnostics import ErrorExplanation, ErrorSeverity, ErrorCategory
+from modeling.error_diagnostics import (
+    ErrorExplanation, ErrorSeverity, ErrorCategory, ErrorActionType
+)
 from gui.design_tokens import DesignTokens
 from i18n import tr
 
@@ -46,19 +50,33 @@ class ErrorDetailsDialog(QDialog):
     - Schritt-für-Schritt Lösungsvorschläge
     - Technische Details (optional)
     - Auto-Fix Option (falls verfügbar)
+    - "Take Action" Button für behebbare Fehler
+    - "Copy Details" Button für Support-Zwecke
     """
     
-    def __init__(self, explanation: ErrorExplanation, parent=None, show_auto_fix: bool = True):
+    # Signals for actions
+    action_triggered = None  # Will be connected via callback
+    
+    def __init__(
+        self,
+        explanation: ErrorExplanation,
+        parent=None,
+        show_auto_fix: bool = True,
+        action_callback: Optional[Callable[[str, Dict], bool]] = None
+    ):
         """
         Args:
             explanation: ErrorExplanation vom ErrorDiagnostics
             parent: Parent Widget
             show_auto_fix: Ob Auto-Fix Button angezeigt werden soll
+            action_callback: Optional callback für Aktions-Button
         """
         super().__init__(parent)
         self.explanation = explanation
         self.show_auto_fix = show_auto_fix
+        self.action_callback = action_callback
         self.auto_fix_clicked = False
+        self.action_clicked = False
         self._setup_ui()
         
     def _setup_ui(self):
@@ -313,18 +331,30 @@ class ErrorDetailsDialog(QDialog):
         return frame
         
     def _create_buttons(self, layout):
-        """Erstellt die Button-Leiste."""
+        """Erstellt die Button-Leiste mit Take Action und Copy Details."""
         btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
         
-        # Copy Details Button
-        copy_btn = QPushButton(tr("Details kopieren"))
+        # Left side: Copy Details Button
+        copy_btn = QPushButton(tr("📋 Details kopieren"))
+        copy_btn.setToolTip(tr("Kopiert alle Fehlerdetails in die Zwischenablage"))
         copy_btn.clicked.connect(self._copy_details)
         btn_layout.addWidget(copy_btn)
         
+        btn_layout.addStretch()
+        
+        # Right side: Action buttons
+        # Take Action Button (falls action_type definiert)
+        if self.explanation.action_type and self.show_auto_fix:
+            action_btn_text = self.explanation.get_action_button_text()
+            action_btn = QPushButton(f"🔧 {action_btn_text}")
+            action_btn.setObjectName("action")
+            action_btn.setToolTip(tr("Führt die empfohlene Aktion aus"))
+            action_btn.clicked.connect(self._on_take_action)
+            btn_layout.addWidget(action_btn)
+        
         # Help Button (falls Docs verfügbar)
         if self.explanation.related_docs:
-            help_btn = QPushButton(tr("Hilfe"))
+            help_btn = QPushButton(tr("❓ Hilfe"))
             help_btn.clicked.connect(self._open_help)
             btn_layout.addWidget(help_btn)
         
@@ -335,6 +365,27 @@ class ErrorDetailsDialog(QDialog):
         btn_layout.addWidget(close_btn)
         
         layout.addLayout(btn_layout)
+        
+    def _on_take_action(self):
+        """Handler für Take Action Button."""
+        self.action_clicked = True
+        
+        # Führe Callback aus falls vorhanden
+        if self.action_callback:
+            try:
+                success = self.action_callback(
+                    self.explanation.error_code,
+                    self.explanation.context
+                )
+                if success:
+                    self.accept()
+                    return
+            except Exception as e:
+                logger.exception(f"Action callback failed: {e}")
+        
+        # Falls kein Callback oder fehlgeschlagen, emittiere Signal-ähnliches Verhalten
+        self.auto_fix_clicked = True  # Für Backwards-Kompatibilität
+        self.accept()
         
     def _set_severity_icon(self):
         """Setzt das Severity-Icon basierend auf dem Schweregrad."""
@@ -447,6 +498,15 @@ Next Actions:
                 background-color: #fafafa;
                 border-bottom: 2px solid #2196F3;
             }
+            QPushButton {
+                padding: 8px 16px;
+                border-radius: 4px;
+                border: 1px solid #ddd;
+                background-color: #f5f5f5;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
             QPushButton#primary {
                 background-color: #2196F3;
                 color: white;
@@ -466,6 +526,17 @@ Next Actions:
             }
             QPushButton#success:hover {
                 background-color: #45a049;
+            }
+            QPushButton#action {
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton#action:hover {
+                background-color: #F57C00;
             }
         """
 

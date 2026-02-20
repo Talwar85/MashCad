@@ -52,6 +52,19 @@ class ErrorSeverity(Enum):
     CRITICAL = "critical"   # Kritischer Fehler, Blockierung
 
 
+class ErrorActionType(Enum):
+    """Typen von Aktionen die bei Fehlern ausgeführt werden können."""
+    SELECT_REFERENCE = "select_reference"    # Referenz neu auswählen
+    EDIT_FEATURE = "edit_feature"            # Feature bearbeiten
+    UNDO = "undo"                            # Rückgängig machen
+    VALIDATE_GEOMETRY = "validate_geometry"  # Geometrie validieren
+    OPEN_SETTINGS = "open_settings"          # Einstellungen öffnen
+    SHOW_DOCS = "show_docs"                  # Dokumentation anzeigen
+    REPAIR_GEOMETRY = "repair_geometry"      # Geometrie reparieren
+    RETRY = "retry"                          # Operation wiederholen
+    CUSTOM = "custom"                        # Benutzerdefinierte Aktion
+
+
 @dataclass
 class ErrorExplanation:
     """
@@ -68,6 +81,8 @@ class ErrorExplanation:
         related_docs: Links zu Dokumentation
         can_auto_fix: Ob automatische Behebung möglich
         auto_fix_action: Beschreibung der Auto-Fix Aktion
+        action_type: Typ der empfohlenen Aktion (für UI-Buttons)
+        action_callback: Optionaler Callback für die Aktion
     """
     error_code: str
     category: ErrorCategory
@@ -79,6 +94,8 @@ class ErrorExplanation:
     related_docs: List[str] = field(default_factory=list)
     can_auto_fix: bool = False
     auto_fix_action: str = ""
+    action_type: Optional[ErrorActionType] = None
+    action_callback: Optional[Callable] = None
     context: Dict[str, Any] = field(default_factory=dict)
     
     def to_user_message(self, include_technical: bool = False) -> str:
@@ -108,7 +125,26 @@ class ErrorExplanation:
             "next_actions": self.next_actions,
             "can_auto_fix": self.can_auto_fix,
             "auto_fix_action": self.auto_fix_action,
+            "action_type": self.action_type.value if self.action_type else None,
         }
+    
+    def get_action_button_text(self) -> str:
+        """Gibt den Text für den Aktions-Button zurück."""
+        if self.auto_fix_action:
+            return self.auto_fix_action
+        
+        # Fallback basierend auf action_type
+        action_texts = {
+            ErrorActionType.SELECT_REFERENCE: "Referenz auswählen",
+            ErrorActionType.EDIT_FEATURE: "Feature bearbeiten",
+            ErrorActionType.UNDO: "Rückgängig",
+            ErrorActionType.VALIDATE_GEOMETRY: "Geometrie prüfen",
+            ErrorActionType.OPEN_SETTINGS: "Einstellungen",
+            ErrorActionType.SHOW_DOCS: "Hilfe anzeigen",
+            ErrorActionType.REPAIR_GEOMETRY: "Reparieren",
+            ErrorActionType.RETRY: "Erneut versuchen",
+        }
+        return action_texts.get(self.action_type, "Aktion ausführen")
 
 
 # =============================================================================
@@ -374,6 +410,132 @@ ERROR_KNOWLEDGE_BASE: Dict[str, Dict[str, Any]] = {
         ],
     },
     
+    # === TNP (Topology Naming Protocol) Errors ===
+    "tnp_ref_missing": {
+        "category": ErrorCategory.REFERENCE,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Referenz fehlt",
+        "description": "Die referenzierte Kante oder Fläche existiert nicht mehr. Die Topologie hat sich geändert.",
+        "technical_details": "TNP reference missing - shape no longer exists in updated topology",
+        "next_actions": [
+            "Wählen Sie eine neue Referenz-Kante oder-Fläche aus",
+            "Öffnen Sie das Feature und aktualisieren Sie die Referenz",
+            "Prüfen Sie ob vorangegangene Operationen die Geometrie verändert haben"
+        ],
+        "can_auto_fix": True,
+        "auto_fix_action": "Neue Referenz auswählen",
+        "action_type": "select_reference",
+    },
+    "tnp_ref_mismatch": {
+        "category": ErrorCategory.REFERENCE,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Referenz-Typ stimmt nicht überein",
+        "description": "Die Referenz entspricht nicht dem erwarteten Typ (Kante statt Fläche oder umgekehrt).",
+        "technical_details": "TNP reference type mismatch - expected different shape type",
+        "next_actions": [
+            "Bearbeiten Sie das Feature um die Referenzen zu aktualisieren",
+            "Wählen Sie eine Referenz des korrekten Typs",
+            "Prüfen Sie die Feature-Parameter auf Konsistenz"
+        ],
+        "can_auto_fix": True,
+        "auto_fix_action": "Feature bearbeiten",
+        "action_type": "edit_feature",
+    },
+    "tnp_ref_ambiguous": {
+        "category": ErrorCategory.REFERENCE,
+        "severity": ErrorSeverity.WARNING,
+        "title": "Mehrdeutige Topologie-Referenz",
+        "description": "Die Referenz konnte nicht eindeutig zugeordnet werden. Mehrere ähnliche Geometrien gefunden.",
+        "technical_details": "TNP ambiguous reference - multiple candidates match the reference criteria",
+        "next_actions": [
+            "Wählen Sie die gewünschte Geometrie explizit aus",
+            "Verwenden Sie spezifischere Auswahlkriterien",
+            "Benennen Sie Geometrien zur besseren Unterscheidung"
+        ],
+    },
+    
+    # === Rebuild Errors ===
+    "rebuild_failed": {
+        "category": ErrorCategory.OPERATION,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Neuberechnung fehlgeschlagen",
+        "description": "Das Feature konnte nach Parameter-Änderung nicht neu berechnet werden.",
+        "technical_details": "Feature rebuild failed - dependency graph evaluation error",
+        "next_actions": [
+            "Machen Sie die letzte Operation rückgängig und versuchen Sie andere Parameter",
+            "Prüfen Sie abhängige Features auf Fehler",
+            "Vereinfachen Sie die Feature-Hierarchie"
+        ],
+        "can_auto_fix": True,
+        "auto_fix_action": "Rückgängig machen",
+        "action_type": "undo",
+    },
+    "rebuild_circular_dependency": {
+        "category": ErrorCategory.DEPENDENCY,
+        "severity": ErrorSeverity.CRITICAL,
+        "title": "Zirkuläre Abhängigkeit",
+        "description": "Es wurde eine zirkuläre Abhängigkeit zwischen Features erkannt.",
+        "technical_details": "Circular dependency detected in feature graph",
+        "next_actions": [
+            "Überprüfen Sie die Feature-Reihenfolge",
+            "Entfernen Sie sich gegenseitig referenzierende Features",
+            "Strukturieren Sie das Modell neu"
+        ],
+    },
+    "rebuild_missing_input": {
+        "category": ErrorCategory.DEPENDENCY,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Fehlendes Eingabe-Feature",
+        "description": "Ein für die Berechnung benötigtes Feature fehlt oder ist unterdrückt.",
+        "technical_details": "Missing input feature in dependency chain",
+        "next_actions": [
+            "Aktivieren Sie unterdrückte Features",
+            "Stellen Sie gelöschte Features wieder her",
+            "Überprüfen Sie die Feature-Abhängigkeiten"
+        ],
+    },
+    
+    # === Export Errors ===
+    "export_failed": {
+        "category": ErrorCategory.IMPORT_EXPORT,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Export fehlgeschlagen",
+        "description": "Die Geometrie konnte nicht exportiert werden. Möglicherweise sind ungültige Solids vorhanden.",
+        "technical_details": "Export operation failed - geometry validation error",
+        "next_actions": [
+            "Überprüfen Sie die Geometrie mit dem Validierungs-Werkzeug",
+            "Stellen Sie sicher dass alle Bodies gültige Solids sind",
+            "Reparieren Sie nicht-manifold Geometrie vor dem Export"
+        ],
+        "can_auto_fix": True,
+        "auto_fix_action": "Geometrie validieren",
+        "action_type": "validate_geometry",
+    },
+    "export_empty_scene": {
+        "category": ErrorCategory.IMPORT_EXPORT,
+        "severity": ErrorSeverity.WARNING,
+        "title": "Leere Szene",
+        "description": "Es gibt keine sichtbare Geometrie zum Exportieren.",
+        "technical_details": "No visible geometry in scene for export",
+        "next_actions": [
+            "Erstellen Sie Geometrie bevor Sie exportieren",
+            "Blenden Sie ausgeblendete Bodies ein",
+            "Stellen Sie sicher dass mindestens ein Body sichtbar ist"
+        ],
+    },
+    "export_invalid_mesh": {
+        "category": ErrorCategory.IMPORT_EXPORT,
+        "severity": ErrorSeverity.RECOVERABLE,
+        "title": "Ungültiges Mesh",
+        "description": "Das generierte Mesh enthält Fehler (z.B. nicht-dreieckige Faces, degenerierte Vertices).",
+        "technical_details": "Mesh generation produced invalid triangles or degenerate vertices",
+        "next_actions": [
+            "Erhöhen Sie die Mesh-Auflösung",
+            "Reparieren Sie die Quellgeometrie",
+            "Verwenden Sie ein anderes Export-Format"
+        ],
+    },
+    
     # === System Errors ===
     "system_memory": {
         "category": ErrorCategory.SYSTEM,
@@ -445,6 +607,14 @@ class ErrorDiagnostics:
         kb_entry = ERROR_KNOWLEDGE_BASE.get(error_code)
         
         if kb_entry:
+            # Parse action_type if present
+            action_type = None
+            if "action_type" in kb_entry:
+                try:
+                    action_type = ErrorActionType(kb_entry["action_type"])
+                except ValueError:
+                    pass
+            
             explanation = ErrorExplanation(
                 error_code=error_code,
                 category=kb_entry["category"],
@@ -455,6 +625,7 @@ class ErrorDiagnostics:
                 next_actions=list(kb_entry.get("next_actions", [])),
                 can_auto_fix=kb_entry.get("can_auto_fix", False),
                 auto_fix_action=kb_entry.get("auto_fix_action", ""),
+                action_type=action_type,
                 context=context
             )
         else:
