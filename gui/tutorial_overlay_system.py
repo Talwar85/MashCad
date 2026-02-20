@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QGraphicsDropShadowEffect,
     QApplication, QGraphicsOpacityEffect, QSplitter,
     QMainWindow, QDockWidget, QToolBar, QMenuBar,
-    QStatusBar, QSizePolicy
+    QStatusBar, QSizePolicy, QProgressBar
 )
 from PySide6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QSize, 
