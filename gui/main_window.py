@@ -8239,9 +8239,9 @@ class MainWindow(QMainWindow):
             logger.error(f"Fehler beim Öffnen: {e}")
 
     def _start_tutorial(self):
-        """Startet das kontextuelle Overlay-Tutorial (12/10 Experience)."""
-        from gui.tutorial_overlay_system import start_contextual_tutorial
-        self._tutorial = start_contextual_tutorial(self)
+        """Startet das wirklich interaktive Tutorial V2."""
+        from gui.interactive_tutorial_v2 import start_interactive_tutorial_v2
+        self._tutorial = start_interactive_tutorial_v2(self)
 
     def _export_stl(self):
         """STL Export mit Quality-Dialog und Surface Texture Support.
