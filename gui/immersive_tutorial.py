@@ -702,14 +702,19 @@ class Viewport3DWidget(QFrame):
         self._animate_content()
         
     def _animate_content(self):
-        """Animiert den Content."""
-        # Pulse Animation
-        self.anim = QPropertyAnimation(self.content_label, b"font-size")
-        self.anim.setDuration(600)
-        self.anim.setStartValue(60)
-        self.anim.setKeyValueAt(0.5, 84)
-        self.anim.setEndValue(72)
-        self.anim.setEasingCurve(QEasingCurve.OutElastic)
+        """Animiert den Content mit Fade-In Effekt."""
+        # Opacity-Animation statt font-size (Qt-Property)
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        
+        effect = QGraphicsOpacityEffect(self.content_label)
+        effect.setOpacity(0)
+        self.content_label.setGraphicsEffect(effect)
+        
+        self.anim = QPropertyAnimation(effect, b"opacity")
+        self.anim.setDuration(400)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
         self.anim.start()
 
 
