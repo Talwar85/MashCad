@@ -296,16 +296,12 @@ class MainWindow(
         
         body._build123d_solid = solid
         
-        # Tessellate for viewport
-        try:
-            from ocp_tessellate.tessellator import tessellate
-            import pyvista as pv
-            
-            vertices, triangles = tessellate(solid, 0.1, 0.1)
-            mesh = pv.PolyData(vertices, triangles)
-            body.vtk_mesh = mesh
-        except Exception as e:
-            logger.debug(f"Tessellation failed: {e}")
+        # Invalidiere Mesh-Cache, damit vtk_mesh lazy neu tesselliert wird
+        if hasattr(body, 'invalidate_mesh'):
+            body.invalidate_mesh()
+        
+        # Viewport aktualisieren via update_single_body
+        self._update_single_body(body)
     
     def _trigger_viewport_update(self):
         """Startet den Timer für das Update (Debounce)."""
@@ -322,8 +318,7 @@ class MainWindow(
 
         # Bodies rendern
         for body in self.document.get_all_bodies():
-            if self.viewport_3d.is_body_visible(body.id):
-                self._update_single_body(body)
+            self._update_single_body(body)
 
         # Sketches rendern
         visible_sketches = self.browser.get_visible_sketches()
@@ -336,41 +331,19 @@ class MainWindow(
         self._update_getting_started()
     
     def _update_single_body(self, body):
-        """Aktualisiert einen einzelnen Body im Viewport."""
+        """Aktualisiert einen einzelnen Body im Viewport via viewport.update_single_body()."""
         if not hasattr(self, 'viewport_3d') or not self.viewport_3d:
             return
-
-        mesh = self.viewport_3d.get_body_mesh(body.id)
-        if mesh is None:
-            self._update_body_mesh(body)
-            mesh = self.viewport_3d.get_body_mesh(body.id)
-
-        if mesh is not None:
-            color = getattr(body, 'color', (0.6, 0.6, 0.8))
-            self.viewport_3d.set_body_mesh(body.id, mesh, color)
+        try:
+            color = getattr(body, 'color', None)
+            inactive = self._is_body_in_inactive_component(body)
+            self.viewport_3d.update_single_body(body, color=color, inactive_component=inactive)
+        except Exception as e:
+            logger.debug(f"Body update fehlgeschlagen für {body.name}: {e}")
 
     def _update_body_mesh(self, body, mesh_override=None):
-        """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport."""
-        if not hasattr(self, 'viewport_3d'):
-            return
-
-        mesh = mesh_override or getattr(body, 'vtk_mesh', None)
-        if mesh is None:
-            solid = getattr(body, '_build123d_solid', None)
-            if solid is not None:
-                try:
-                    from ocp_tessellate.tessellator import tessellate
-                    import pyvista as pv
-                    vertices, triangles = tessellate(solid, 0.1, 0.1)
-                    mesh = pv.PolyData(vertices, triangles)
-                    body.vtk_mesh = mesh
-                except Exception as e:
-                    logger.debug(f"Mesh-Tessellation fehlgeschlagen für {body.name}: {e}")
-                    return
-
-        if mesh is not None:
-            color = getattr(body, 'color', (0.6, 0.6, 0.8))
-            self.viewport_3d.set_body_mesh(body.id, mesh, color)
+        """Aktualisiert Body-Mesh im Viewport. Delegiert an viewport.update_single_body()."""
+        self._update_single_body(body)
 
     def _update_getting_started(self):
         """Versteckt Getting-Started Overlay wenn Dokument nicht mehr leer ist."""

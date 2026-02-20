@@ -144,3 +144,16 @@ class PrimitiveDialog(QDialog):
             self.accept()
         except ValueError as e:
             logger.error(f"Invalid input: {e}")
+
+    def get_parameters(self) -> dict:
+        """Return parameter dict for the selected primitive type."""
+        ptype = getattr(self, 'result_type', self.primitive_type)
+        if ptype == "box":
+            return {'length': self.length, 'width': self.width, 'height': self.height}
+        elif ptype == "cylinder":
+            return {'radius': self.radius, 'height': self.height}
+        elif ptype == "sphere":
+            return {'radius': self.radius}
+        elif ptype == "cone":
+            return {'bottom_radius': self.bottom_radius, 'top_radius': self.top_radius, 'height': self.height}
+        return {}

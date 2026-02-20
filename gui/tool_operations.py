@@ -45,11 +45,15 @@ class ToolMixin:
         from i18n import tr
         
         action_handlers = {
-            # Primitives
+            # Primitives (short + prefixed keys from tool_panel_3d)
             'box': lambda: self._primitive_dialog('box'),
+            'primitive_box': lambda: self._primitive_dialog('box'),
             'cylinder': lambda: self._primitive_dialog('cylinder'),
+            'primitive_cylinder': lambda: self._primitive_dialog('cylinder'),
             'sphere': lambda: self._primitive_dialog('sphere'),
+            'primitive_sphere': lambda: self._primitive_dialog('sphere'),
             'cone': lambda: self._primitive_dialog('cone'),
+            'primitive_cone': lambda: self._primitive_dialog('cone'),
             'torus': lambda: self._primitive_dialog('torus'),
             
             # Sketch
@@ -69,35 +73,47 @@ class ToolMixin:
             'hole': self._hole_dialog,
             'thread': self._thread_dialog,
             'split': self._split_body_dialog,
+            'split_body': self._split_body_dialog,
             
-            # Boolean
+            # Boolean (short + prefixed keys from tool_panel_3d)
             'union': lambda: self._boolean_operation_dialog('Union'),
+            'boolean_union': lambda: self._boolean_operation_dialog('Union'),
             'cut': lambda: self._boolean_operation_dialog('Cut'),
+            'boolean_cut': lambda: self._boolean_operation_dialog('Cut'),
             'intersect': lambda: self._boolean_operation_dialog('Intersect'),
+            'boolean_intersect': lambda: self._boolean_operation_dialog('Intersect'),
             
-            # Transform
+            # Transform (short + prefixed keys from tool_panel_3d)
             'move': lambda: self._start_transform_mode('move'),
             'rotate': lambda: self._start_transform_mode('rotate'),
             'scale': lambda: self._start_transform_mode('scale'),
             'mirror': self._mirror_body,
+            'mirror_body': self._mirror_body,
             'copy': self._copy_body,
+            'copy_body': self._copy_body,
             'point_to_point': self._start_point_to_point_move,
             
-            # View
+            # View / Inspect
             'section_view': self._toggle_section_view,
             'measure': self._start_measure_mode,
+            'wall_thickness': self._wall_thickness_dialog,
             
             # Import/Export
             'import_mesh': self._import_mesh_dialog,
             'import_step': self._import_step,
             'import_svg': self._import_svg,
             'stl_to_cad': self._on_stl_to_cad,
+            'export_stl': self._export_stl,
+            'export_step': self._export_step,
+            'convert_to_brep': self._convert_selected_body_to_brep,
             
-            # Special
+            # Special (short + prefixed keys from tool_panel_3d)
             'brep_cleanup': self._toggle_brep_cleanup,
             'texture': self._start_texture_mode,
+            'surface_texture': self._start_texture_mode,
             'lattice': self._start_lattice,
             'nsided_patch': self._nsided_patch_dialog,
+            'sketch_agent': self._sketch_agent_dialog,
         }
 
         handler = action_handlers.get(action)

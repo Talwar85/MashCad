@@ -83,6 +83,7 @@ class ViewportMixin:
     def _update_single_body(self, body):
         """
         Aktualisiert einen einzelnen Body im Viewport.
+        Delegiert an viewport_3d.update_single_body() für korrekte Tessellation.
         
         Args:
             body: Der zu aktualisierende Body
@@ -90,48 +91,16 @@ class ViewportMixin:
         if not hasattr(self, 'viewport_3d') or not self.viewport_3d:
             return
 
-        # Mesh holen
-        mesh = self.viewport_3d.get_body_mesh(body.id)
-        if mesh is None:
-            # Versuche Mesh zu laden
-            self._update_body_mesh(body)
-            mesh = self.viewport_3d.get_body_mesh(body.id)
-
-        if mesh is not None:
-            # Farbe bestimmen
-            color = body.get('color', (0.6, 0.6, 0.8))
-            if hasattr(body, 'color'):
-                color = body.color
-
-            # Im Viewport setzen
-            self.viewport_3d.set_body_mesh(body.id, mesh, color)
+        try:
+            color = getattr(body, 'color', None)
+            inactive = self._is_body_in_inactive_component(body)
+            self.viewport_3d.update_single_body(body, color=color, inactive_component=inactive)
+        except Exception as e:
+            logger.debug(f"Body update fehlgeschlagen für {body.name}: {e}")
 
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
-        if not hasattr(self, 'viewport_3d'):
-            return
-
-        mesh = mesh_override or getattr(body, 'vtk_mesh', None)
-        if mesh is None:
-            # Fallback: Versuche aus build123d Solid zu tessellieren
-            solid = getattr(body, '_build123d_solid', None)
-            if solid is not None:
-                try:
-                    from ocp_tessellate.tessellator import tessellate
-                    vertices, triangles = tessellate(solid, 0.1, 0.1)
-                    import pyvista as pv
-                    mesh = pv.PolyData(vertices, triangles)
-                    body.vtk_mesh = mesh
-                except Exception as e:
-                    logger.debug(f"Mesh-Tessellation fehlgeschlagen für {body.name}: {e}")
-                    return
-
-        if mesh is not None:
-            # Farbe bestimmen
-            color = getattr(body, 'color', (0.6, 0.6, 0.8))
-            
-            # Im Viewport setzen
-            self.viewport_3d.set_body_mesh(body.id, mesh, color)
+        self._update_single_body(body)
 
     def _update_getting_started(self):
         """Versteckt Getting-Started Overlay wenn Dokument nicht mehr leer ist."""

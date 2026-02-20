@@ -29,7 +29,12 @@ if hasattr(circle, 'native_ocp_data') and circle.native_ocp_data:
 profiles = sketch.closed_profiles
 print(f'  Closed Profiles: {len(profiles)}')
 for i, prof in enumerate(profiles):
-    print(f'    Profile {i}: {len(prof.elements)} elements')
+    # Profile can be a dict (for circles/ellipses) or a list of lines
+    if isinstance(prof, dict):
+        prof_type = prof.get('type', 'unknown')
+        print(f'    Profile {i}: {prof_type}')
+    else:
+        print(f'    Profile {i}: {len(prof)} lines')
 
 doc = Document('TestDoc')
 body = Body('TestBody', document=doc)

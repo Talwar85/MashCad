@@ -852,7 +852,7 @@ class FeatureMixin:
             
             # Feature-Details im Panel anzeigen
             if hasattr(self, 'feature_detail_panel'):
-                self.feature_detail_panel.set_feature(feature, body)
+                self.feature_detail_panel.show_feature(feature, body)
     
     # =========================================================================
     # Rollback

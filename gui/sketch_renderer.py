@@ -332,6 +332,34 @@ class SketchRendererMixin:
                     line_rect = QRectF(p1, p2).normalized().adjusted(-2,-2,2,2)
                     if not update_rect.intersects(line_rect): continue
                 p.drawLine(p1, p2)
+            
+            # Arc preview for offset tool
+            for arc_data in getattr(self, '_offset_preview_arcs', []):
+                arc_cx = arc_data['cx']
+                arc_cy = arc_data['cy']
+                arc_r = arc_data['radius']
+                sa = arc_data['start_angle']
+                ea = arc_data['end_angle']
+                sweep = ea - sa
+                while sweep < 0:
+                    sweep += 360
+                while sweep > 360:
+                    sweep -= 360
+                if sweep < 0.1:
+                    sweep = 360
+                steps = max(16, int(sweep / 3))
+                arc_path = QPainterPath()
+                for i in range(steps + 1):
+                    t = i / steps
+                    angle_rad = math.radians(sa + sweep * t)
+                    wx = arc_cx + arc_r * math.cos(angle_rad)
+                    wy = arc_cy + arc_r * math.sin(angle_rad)
+                    sp = self.world_to_screen(QPointF(wx, wy))
+                    if i == 0:
+                        arc_path.moveTo(sp)
+                    else:
+                        arc_path.lineTo(sp)
+                p.drawPath(arc_path)
     
     def _draw_axes(self, p):
         """Zeichnet Koordinatenachsen (rotieren mit der Ansicht)."""

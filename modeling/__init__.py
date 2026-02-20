@@ -51,6 +51,12 @@ from modeling.features.import_feature import ImportFeature
 from modeling.construction import ConstructionPlane
 
 # =============================================================================
+# SKETCH - Import from sketcher module
+# =============================================================================
+
+from sketcher.sketch import Sketch
+
+# =============================================================================
 # HELPER MODULES - Re-export for backward compatibility
 # =============================================================================
 
@@ -222,6 +228,9 @@ __all__ = [
     
     # Construction
     'ConstructionPlane',
+    
+    # Sketch
+    'Sketch',
     
     # Geometry utils
     'solid_metrics',

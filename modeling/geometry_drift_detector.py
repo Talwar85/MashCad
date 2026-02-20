@@ -20,7 +20,7 @@ from OCP.GProp import GProp_GProps
 from OCP.BRepGProp import BRepGProp
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_VERTEX, TopAbs_FACE, TopAbs_EDGE
-from OCP.BRep import BRep
+from OCP.BRep import BRep_Tool
 from OCP.gp import gp_Pnt, gp_Vec
 
 logger = logging.getLogger(__name__)
@@ -457,7 +457,7 @@ class GeometryDriftDetector:
         
         while explorer.More() and len(positions) < max_vertices:
             vertex = explorer.Current()
-            pnt = BRep.Pnt_s(vertex)
+            pnt = BRep_Tool.Pnt_s(vertex)
             positions.append((pnt.X(), pnt.Y(), pnt.Z()))
             explorer.Next()
         
