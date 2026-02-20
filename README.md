@@ -1,5 +1,8 @@
 # MashCAD
 
+[![CI](../../actions/workflows/ci.yml/badge.svg?branch=main)](../../actions/workflows/ci.yml)
+[![Gates](../../actions/workflows/gates.yml/badge.svg?branch=main)](../../actions/workflows/gates.yml)
+
 **EN:** Open-source parametric CAD application built with Python. Combines a constraint-based 2D sketcher with 3D modeling, powered by Build123d (OpenCASCADE).
 
 **DE:** Open-Source parametrische CAD-Anwendung in Python. Verbindet einen Constraint-basierten 2D-Sketcher mit 3D-Modellierung, basierend auf Build123d (OpenCASCADE).

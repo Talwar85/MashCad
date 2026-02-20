@@ -25,6 +25,12 @@ wheels/
 *.egg
 clean_pycache.sh
 nul
+# Allow CI scripts
+!scripts/gate_ci.sh
+
+# Allow docs/CI_GUIDE.md
+!docs/CI_GUIDE.md
+
 *.sh
 .claude
 tests/
