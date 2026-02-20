@@ -353,6 +353,7 @@ class FirstRunWizard(QDialog):
     First-Run Wizard für neue Nutzer.
     
     Zeigt sich beim ersten Start und führt durch grundlegende Workflows.
+    Bietet Option zum Starten des interaktiven Tutorials.
     """
     
     CONFIG_FILE = "first_run_config.json"
@@ -366,6 +367,7 @@ class FirstRunWizard(QDialog):
         super().__init__(parent)
         self.main_window = main_window
         self.current_page = 0
+        self._start_tutorial_requested = False
         self._setup_ui()
         self._load_config()
         
@@ -457,6 +459,23 @@ class FirstRunWizard(QDialog):
         self.finish_btn.clicked.connect(self._finish)
         self.finish_btn.setVisible(False)
         btn_layout.addWidget(self.finish_btn)
+        
+        # Tutorial-Buttons (nur auf der letzten Seite sichtbar)
+        self.tutorial_btn = QPushButton(tr("Tutorial starten 📚"))
+        self.tutorial_btn.setObjectName("tutorial")
+        self.tutorial_btn.clicked.connect(self._start_tutorial_and_finish)
+        self.tutorial_btn.setVisible(False)
+        self.tutorial_btn.setStyleSheet("""
+            QPushButton#tutorial {
+                background-color: #9C27B0;
+                color: white;
+                border: none;
+            }
+            QPushButton#tutorial:hover {
+                background-color: #7B1FA2;
+            }
+        """)
+        btn_layout.addWidget(self.tutorial_btn)
         
         layout.addWidget(btn_frame)
         
@@ -555,29 +574,52 @@ class FirstRunWizard(QDialog):
         self.next_btn.setVisible(not is_last)
         self.finish_btn.setVisible(is_last)
         
+        # Zeige Tutorial-Button auf der letzten Seite
+        from config.feature_flags import is_enabled
+        self.tutorial_btn.setVisible(is_last and is_enabled("first_run_tutorial"))
+        
     def _update_progress(self):
         """Aktualisiert die Progress-Bar."""
         progress = ((self.current_page + 1) / len(self.pages)) * 100
         self.progress.setValue(int(progress))
+    
+    def _start_tutorial_and_finish(self):
+        """Startet das Tutorial und beendet den Wizard."""
+        self._start_tutorial_requested = True
+        self._finish()
         
     def _finish(self):
         """Beendet den Wizard."""
         self._save_config()
         
-        # Starte Tutorial wenn gewünscht
-        if self.main_window and hasattr(self.main_window, 'start_interactive_tutorial'):
-            reply = QMessageBox.question(
-                self,
-                tr("Interaktives Tutorial"),
-                tr("Möchten Sie jetzt ein interaktives Tutorial starten?"),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            if reply == QMessageBox.Yes:
-                self.main_window.start_interactive_tutorial()
+        # Starte Tutorial wenn gewünscht (via TutorialManager)
+        if self._start_tutorial_requested:
+            self._start_interactive_tutorial()
         
         self.accept()
         logger.info("First-run wizard completed")
+    
+    def _start_interactive_tutorial(self):
+        """Startet das interaktive Tutorial über den TutorialManager."""
+        try:
+            from gui.tutorial_manager import get_tutorial_manager
+            from config.feature_flags import is_enabled
+            
+            if is_enabled("first_run_tutorial"):
+                manager = get_tutorial_manager(self.main_window)
+                manager.initialize()
+                manager.start_tutorial()
+                
+                # Wenn Main Window eine Start-Methode hat, rufe sie auf
+                if self.main_window and hasattr(self.main_window, 'start_guided_tutorial'):
+                    self.main_window.start_guided_tutorial()
+                logger.info("Guided tutorial started from first-run wizard")
+        except Exception as e:
+            logger.warning(f"Failed to start interactive tutorial: {e}")
+    
+    def should_start_tutorial(self) -> bool:
+        """Gibt zurück ob das Tutorial gestartet werden soll."""
+        return self._start_tutorial_requested
         
     def reject(self):
         """Überschreibt reject um Config zu speichern."""

@@ -64,6 +64,9 @@ FEATURE_FLAG_DEFAULTS = {
     "ocp_brep_cache": True,
     "ocp_incremental_rebuild": True,
     "ocp_brep_persistence": True,
+    
+    # UX-001: First-Run Guided Flow
+    "first_run_tutorial": True,
 }
 
 

@@ -135,6 +135,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     
     # QA-006: Performance Regression Gate
     "performance_regression_gate": True,  # Enable performance benchmarking and regression detection
+    
+    # UX-001: First-Run Guided Flow
+    "first_run_tutorial": True,  # Enable5-step guided tutorial for new users
 }
 
 
