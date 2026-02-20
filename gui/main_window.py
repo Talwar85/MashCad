@@ -8239,9 +8239,9 @@ class MainWindow(QMainWindow):
             logger.error(f"Fehler beim Öffnen: {e}")
 
     def _start_tutorial(self):
-        """Startet das wirklich interaktive Tutorial V2."""
-        from gui.interactive_tutorial_v2 import start_interactive_tutorial_v2
-        self._tutorial = start_interactive_tutorial_v2(self)
+        """Startet das komplette Workflow-Tutorial für Anfänger."""
+        from gui.tutorial_complete_workflow import start_complete_tutorial
+        self._tutorial = start_complete_tutorial(self)
 
     def _export_stl(self):
         """STL Export mit Quality-Dialog und Surface Texture Support.
@@ -11808,8 +11808,13 @@ class MainWindow(QMainWindow):
         if not body: return logger.warning("Kein Körper ausgewählt!")
         
         # Einfacher Dialog: Achse + Winkel
-        dlg = VectorInputDialog("Rotieren", ("X-Achse (0/1):", "Y-Achse (0/1):", "Z-Achse (0/1):", "Winkel (°):"), (0,0,1,90), self)
-        # Hack: Label 4 ist Winkel. Wir nutzen VectorInputDialog generisch.
+        # VectorInputDialog ist generisch und akzeptiert beliebige Labels/Defaults
+        dlg = VectorInputDialog(
+            title="Rotieren",
+            labels=("X-Achse (0/1):", "Y-Achse (0/1):", "Z-Achse (0/1):", "Winkel (°):"),
+            defaults=(0, 0, 1, 90),
+            parent=self
+        )
         if dlg.exec():
             ax, ay, az, angle = dlg.get_values()
             if angle == 0: return
