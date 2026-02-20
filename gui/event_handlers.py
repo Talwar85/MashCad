@@ -113,7 +113,8 @@ class EventHandlersMixin:
         
         # Mode-specific shortcuts
         if self.viewport_3d.revolve_mode:
-            if handled := self._handle_revolve_shortcuts(k):
+            handled = self._handle_revolve_shortcuts(k)
+            if handled:
                 return handled
         
         # E - Extrude
@@ -124,7 +125,8 @@ class EventHandlersMixin:
         
         # 3D Mode shortcuts
         if self.mode == "3d":
-            if handled := self._handle_3d_mode_shortcuts(k, event):
+            handled = self._handle_3d_mode_shortcuts(k, event)
+            if handled:
                 return handled
         
         # Hole mode shortcuts
@@ -136,7 +138,8 @@ class EventHandlersMixin:
         
         # Draft mode shortcuts
         if self._draft_mode:
-            if handled := self._handle_draft_shortcuts(k):
+            handled = self._handle_draft_shortcuts(k)
+            if handled:
                 return handled
         
         # Confirmation for Revolve / Extrude / Offset Plane / Hole / Draft
@@ -145,12 +148,14 @@ class EventHandlersMixin:
         
         # Plane Selection Shortcuts
         if self.viewport_3d.plane_select_mode:
-            if handled := self._handle_plane_selection_shortcuts(k):
+            handled = self._handle_plane_selection_shortcuts(k)
+            if handled:
                 return handled
         
         # 3D Mode Shortcuts (when not in extrude mode)
         if self.mode == "3d" and not self.viewport_3d.extrude_mode:
-            if handled := self._handle_3d_global_shortcuts(k):
+            handled = self._handle_3d_global_shortcuts(k)
+            if handled:
                 return handled
         
         return False
