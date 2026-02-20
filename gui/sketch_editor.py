@@ -35,7 +35,18 @@ import os
 import numpy as np
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
-from config.feature_flags import is_enabled  # Nur für sketch_input_logging Debug-Flag
+from config.feature_flags import is_enabled, FEATURE_FLAGS  # Nur für sketch_input_logging Debug-Flag
+
+# SU-005: Drag Performance Monitoring
+try:
+    from sketcher.performance_monitor import (
+        FrameTimer, PerformanceStats, DragPerformanceTracker,
+        ThrottledUpdate, get_performance_tracker
+    )
+    HAS_PERFORMANCE_MONITOR = True
+except ImportError:
+    HAS_PERFORMANCE_MONITOR = False
+    logger.warning("Performance monitor module not found. Drag performance tracking disabled.")
 
 try:
     from gui.design_tokens import DesignTokens
@@ -893,7 +904,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_live_solve = False
         self._direct_edit_pending_solve = False
         self._direct_edit_last_live_solve_ts = 0.0
-        self._direct_edit_live_solve_interval_s = 1.0 / 30.0
+        # SU-005: Use feature flag for throttle interval (default 16ms for60 FPS)
+        self._direct_edit_live_solve_interval_s = FEATURE_FLAGS.get("sketch_solver_throttle_ms", 16) / 1000.0
+        
+        # SU-005: Drag Performance Tracking
+        self._drag_performance_tracker = None
+        if HAS_PERFORMANCE_MONITOR and is_enabled("sketch_performance_monitoring"):
+            self._drag_performance_tracker = DragPerformanceTracker()
         # W20 P1: Arc Direct Edit State
         self._direct_edit_arc = None
         self._direct_edit_start_start_angle = 0.0
@@ -4819,6 +4836,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
         
+        # SU-005: Begin performance tracking for drag operation
+        if self._drag_performance_tracker is not None:
+            self._drag_performance_tracker.begin_drag()
+        
         # W16 Paket B: Kontext für Navigation-Hints aktualisieren
         self._hint_context = 'direct_edit'
         self._show_tool_hint()  # Sofort Navigation-Hint aktualisieren
@@ -5223,8 +5244,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return False
 
     def _maybe_live_solve_during_direct_drag(self):
-        """Gedrosseltes Live-Solve für komplexe AbhÄngigkeiten beim Drag."""
+        """Gedrosseltes Live-Solve für komplexe Abhängigkeiten beim Drag.
+        
+        SU-005: Enhanced with performance monitoring and feature flag integration.
+        """
         if not self._direct_edit_live_solve:
+            return
+
+        # SU-005: Check feature flag for drag optimization
+        if not is_enabled("sketch_drag_optimization"):
+            # Legacy behavior - always solve
+            try:
+                self.sketch.solve()
+            except Exception as e:
+                logger.debug(f"Direct drag solve failed: {e}")
             return
 
         now = time.perf_counter()
@@ -5232,10 +5265,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self._direct_edit_pending_solve = True
             return
 
+        # SU-005: Track solver time for performance monitoring
+        solve_start = time.perf_counter()
         try:
             self.sketch.solve()
         except Exception as e:
             logger.debug(f"Direct drag solve failed: {e}")
+        solve_elapsed_ms = (time.perf_counter() - solve_start) * 1000.0
+
+        # SU-005: Record solver time if performance tracking is enabled
+        if self._drag_performance_tracker is not None:
+            self._drag_performance_tracker.record_solver_time(solve_elapsed_ms)
 
         self._direct_edit_last_live_solve_ts = now
         self._direct_edit_pending_solve = False
@@ -9856,6 +9896,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         W25: Zentralisierte Methode zum Zurücksetzen aller Direct-Edit-ZustÄnde.
         Sorgt für konsistente Zustandsbereinigung nach ESC/Finish/Rechtsklick.
         """
+        # SU-005: End performance tracking and log stats
+        if self._drag_performance_tracker is not None and self._drag_performance_tracker.is_dragging():
+            self._drag_performance_tracker.end_drag()
+            stats = self._drag_performance_tracker.get_drag_stats()
+            if stats.get('frame_stats', {}).get('frame_count', 0) > 0:
+                logger.debug(f"Drag performance: {stats}")
+        
         self._direct_edit_dragging = False
         self._direct_edit_mode = None
         self._direct_edit_circle = None

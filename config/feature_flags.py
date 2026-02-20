@@ -128,6 +128,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "solver_smooth_penalties": True,  # P1: Smooth tangent penalties
     "solver_experimental_staged": True,  # P3: Staged solve (experimental)
     
+    # SU-005: Sketch Drag Performance Optimization (60 FPS target)
+    "sketch_drag_optimization": True,  # Enable throttled solver updates during drag
+    "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls (60 FPS = 16ms)
+    "sketch_performance_monitoring": False,  # Enable performance stats collection (debug)
+    
     # QA-006: Performance Regression Gate
     "performance_regression_gate": True,  # Enable performance benchmarking and regression detection
 }
