@@ -2,6 +2,7 @@
 MashCad - Unified Main Window
 V3.0: Refactored with MessageManager, modular structure
 V3.1: AR-004 Phase 1 Split - Extracted menu_actions and event_handlers modules
+V3.2: AR-005 Phase 2 Split - Extracted sketch_operations, feature_operations, viewport_operations, tool_operations modules
 """
 
 import sys
@@ -68,6 +69,12 @@ from gui.feature_controller import FeatureController  # W17 Paket C: Feature UI-
 from gui.menu_actions import MenuActionsMixin
 from gui.event_handlers import EventHandlersMixin
 
+# AR-005 Phase 2 Split: Import additional extracted modules
+from gui.sketch_operations import SketchMixin
+from gui.feature_operations import FeatureMixin
+from gui.viewport_operations import ViewportMixin
+from gui.tool_operations import ToolMixin
+
 # STL Reconstruction (TNP-Exempt)
 try:
     from sketching.analysis.mesh_quality_checker import MeshQualityChecker, check_mesh_quality
@@ -102,9 +109,17 @@ if not HAS_PYVISTA:
     sys.exit(1)
 
 
-# AR-004 Phase 1 Split: Multiple inheritance from extracted mixins
+# AR-005 Phase 2 Split: Multiple inheritance from all extracted mixins
 # Mixins must come BEFORE QMainWindow for proper MRO (Method Resolution Order)
-class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
+class MainWindow(
+    MenuActionsMixin,
+    EventHandlersMixin,
+    SketchMixin,
+    FeatureMixin,
+    ViewportMixin,
+    ToolMixin,
+    QMainWindow
+):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MashCAD")
@@ -160,7 +175,25 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
         self._update_timer = QTimer()
         self._update_timer.setSingleShot(True)
         self._update_timer.setInterval(50) # 50ms warten
-        self._update_timer.timeout.connect(self._update_viewport_all_impl)                                                                   
+        self._update_timer.timeout.connect(self._update_viewport_all_impl)
+        
+        # ======================================================
+        # Live Preview System (High-Priority TODOs 2026)
+        # Debounced preview for textures, patterns, fillets, etc.
+        # ======================================================
+        from config.feature_flags import is_enabled, FEATURE_FLAGS
+        self._preview_timers = {}  # feature_type -> QTimer
+        self._preview_configs = {}  # feature_type -> config dict
+        self._preview_debounce_ms = FEATURE_FLAGS.get("preview_debounce_ms", 150)
+        
+        # Initialize preview timers for each feature type
+        for feature_type in ['texture', 'pattern', 'shell', 'fillet', 'chamfer']:
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda ft=feature_type: self._execute_live_preview(ft))
+            self._preview_timers[feature_type] = timer
+            self._preview_configs[feature_type] = None
+        
         self._apply_theme()
         self._create_ui()
         self._create_menus()
@@ -246,6 +279,130 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
     def _clear_transient_previews(self, reason: str = "", *, clear_interaction_modes: bool = False):
         """Delegiert an PreviewManager."""
         self.preview_manager.clear_transient_previews(reason, clear_interaction_modes=clear_interaction_modes)
+
+    # ======================================================
+    # Live Preview System (High-Priority TODOs 2026)
+    # ======================================================
+    
+    def _execute_live_preview(self, feature_type: str):
+        """
+        Execute debounced live preview for a feature type.
+        
+        Called by the preview timers after debounce delay.
+        Dispatches to the appropriate preview handler.
+        
+        Args:
+            feature_type: One of 'texture', 'pattern', 'shell', 'fillet', 'chamfer'
+        """
+        from config.feature_flags import is_enabled, FEATURE_FLAGS
+        
+        config = self._preview_configs.get(feature_type)
+        if not config:
+            return
+        
+        try:
+            if feature_type == 'texture':
+                self._execute_texture_live_preview(config)
+            elif feature_type == 'pattern':
+                self._execute_pattern_live_preview(config)
+            elif feature_type == 'shell':
+                if is_enabled("live_preview_shell"):
+                    self._execute_shell_live_preview(config)
+            elif feature_type == 'fillet':
+                if is_enabled("live_preview_fillet"):
+                    self._execute_fillet_live_preview(config)
+            elif feature_type == 'chamfer':
+                if is_enabled("live_preview_chamfer"):
+                    self._execute_chamfer_live_preview(config)
+        except Exception as e:
+            logger.debug(f"Live preview error for {feature_type}: {e}")
+    
+    def _execute_texture_live_preview(self, config: dict):
+        """
+        Execute texture live preview with LOD optimization.
+        
+        Uses lower subdivision count for faster preview during slider drag.
+        """
+        body = config.get('body')
+        if not body:
+            return
+        
+        # Clear previous texture previews for this body
+        self._preview_clear_group(f"texture_preview_{body.id}", render=False)
+        
+        # Use live preview subdivisions (lower quality, faster)
+        from config.feature_flags import FEATURE_FLAGS
+        preview_subs = FEATURE_FLAGS.get("preview_subdivisions_live", 3)
+        
+        # Store quality setting for viewport to use
+        if hasattr(self.viewport_3d, '_preview_quality'):
+            self.viewport_3d._preview_quality = "live"
+        
+        # Refresh texture previews with live quality
+        self.viewport_3d.refresh_texture_previews(body.id)
+        
+        logger.debug(f"Texture live preview updated for body {body.id}")
+    
+    def _execute_pattern_live_preview(self, config: dict):
+        """Execute pattern live preview (delegates to existing _update_pattern_preview)."""
+        params = config.get('params', {})
+        self._update_pattern_preview(params)
+    
+    def _execute_shell_live_preview(self, config: dict):
+        """
+        Execute shell live preview.
+        
+        Creates a temporary shell preview showing the wall thickness.
+        """
+        # TODO: Implement shell preview when live_preview_shell is enabled
+        pass
+    
+    def _execute_fillet_live_preview(self, config: dict):
+        """
+        Execute fillet live preview.
+        
+        Creates a temporary fillet preview showing the radius.
+        """
+        # TODO: Implement fillet preview when live_preview_fillet is enabled
+        pass
+    
+    def _execute_chamfer_live_preview(self, config: dict):
+        """
+        Execute chamfer live preview.
+        
+        Creates a temporary chamfer preview showing the size.
+        """
+        # TODO: Implement chamfer preview when live_preview_chamfer is enabled
+        pass
+    
+    def _request_live_preview(self, feature_type: str, config: dict):
+        """
+        Request a live preview with debouncing.
+        
+        Call this from UI handlers when parameters change.
+        
+        Args:
+            feature_type: One of 'texture', 'pattern', 'shell', 'fillet', 'chamfer'
+            config: Feature-specific configuration dict
+        """
+        from config.feature_flags import is_enabled
+        
+        flag_name = f"live_preview_{feature_type}"
+        if not is_enabled(flag_name):
+            return
+        
+        self._preview_configs[feature_type] = config
+        self._preview_timers[feature_type].start(self._preview_debounce_ms)
+    
+    def _cancel_live_preview(self, feature_type: str):
+        """
+        Cancel a pending live preview.
+        
+        Call this when the user cancels or exits a feature mode.
+        """
+        if feature_type in self._preview_timers:
+            self._preview_timers[feature_type].stop()
+        self._preview_configs[feature_type] = None
 
 
 
@@ -8977,7 +9134,19 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
 
     def _on_pattern_parameters_changed(self, params: dict):
         """Handler für Live-Preview wenn Parameter geändert werden."""
-        if self._pattern_mode:
+        if not getattr(self, '_pattern_mode', False):
+            return
+        
+        from config.feature_flags import is_enabled
+        
+        if is_enabled("live_preview_patterns"):
+            # Use debounced live preview system
+            self._request_live_preview('pattern', {
+                'params': params,
+                'body': self._pattern_target_body
+            })
+        else:
+            # Direct update (legacy behavior)
             self._update_pattern_preview(params)
 
     def _update_pattern_preview(self, params: dict):
@@ -9816,10 +9985,23 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
     def _on_fillet_radius_changed(self, radius):
         """
         Callback wenn der Radius geändert wird.
-        Aktuell nur für spätere Preview-Funktionalität reserviert.
+        Verwendet das Live-Preview-System für performante Vorschau.
         """
-        # TODO: Live-Preview wenn Performance es erlaubt
-        pass
+        from config.feature_flags import is_enabled
+        
+        if not is_enabled("live_preview_fillet"):
+            return
+        
+        if not getattr(self, '_fillet_mode', False) or not getattr(self, '_fillet_target_body', None):
+            return
+        
+        # Request debounced live preview
+        self._request_live_preview('fillet', {
+            'radius': radius,
+            'body': self._fillet_target_body,
+            'edge_indices': list(getattr(self, '_fillet_edge_indices', [])),
+            'mode': getattr(self, '_fillet_chamfer_mode', 'fillet')
+        })
 
     def _on_fillet_cancelled(self):
         """Bricht die Fillet/Chamfer-Operation ab."""
@@ -10087,10 +10269,22 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
     def _on_shell_thickness_changed(self, thickness: float):
         """
         Callback wenn die Wandstärke geändert wird.
-        Aktuell nur für spätere Preview-Funktionalität reserviert.
+        Verwendet das Live-Preview-System für performante Vorschau.
         """
-        # TODO: Live-Preview wenn Performance es erlaubt
-        pass
+        from config.feature_flags import is_enabled
+        
+        if not is_enabled("live_preview_shell"):
+            return
+        
+        if not getattr(self, '_shell_mode', False) or not getattr(self, '_shell_target_body', None):
+            return
+        
+        # Request debounced live preview
+        self._request_live_preview('shell', {
+            'thickness': thickness,
+            'body': self._shell_target_body,
+            'opening_faces': list(getattr(self, '_shell_opening_faces', []))
+        })
 
     def _on_shell_cancelled(self):
         """Bricht die Shell-Operation ab."""
@@ -10334,13 +10528,27 @@ class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
 
     def _on_texture_preview_requested(self, config: dict):
         """
-        Preview für Textur (optional - aktuell nicht implementiert).
-
-        Note: Live-Preview würde Normal-Map-Rendering im Shader erfordern.
-        Für MVP: Kein Preview, nur Export-Zeit Anwendung.
+        Live-Preview für Texturen mit Debouncing.
+        
+        Verwendet das zentrale Live-Preview-System für performante
+        Vorschau während der Parameter-Änderung.
         """
-        # TODO: Optional - Normal-Map Preview im Viewport
-        pass
+        from config.feature_flags import is_enabled
+        
+        if not is_enabled("live_preview_textures"):
+            return
+        
+        if not self._texture_mode or not self._texture_target_body:
+            return
+        
+        # Store config and start debounce timer
+        self._preview_configs['texture'] = {
+            'config': config,
+            'body': self._texture_target_body,
+            'face_selectors': list(getattr(self, '_texture_face_selectors', [])),
+            'face_indices': list(getattr(self, '_texture_face_indices', []))
+        }
+        self._preview_timers['texture'].start(self._preview_debounce_ms)
 
     def _on_texture_cancelled(self):
         """Bricht die Textur-Operation ab."""
