@@ -584,17 +584,51 @@ class SketchMixin:
     
     def _on_sketch_tool_selected(self, tool_name: str):
         """Verarbeitet Tool-Auswahl aus dem Sketch-ToolPanel"""
-        from gui.sketch_editor import SketchTool
+        from gui.sketch_tools import SketchTool
         
         tool_map = {
+            # Draw tools
             'line': SketchTool.LINE,
-            'rect': SketchTool.RECTANGLE,
+            'rectangle': SketchTool.RECTANGLE,
             'circle': SketchTool.CIRCLE,
-            'arc': SketchTool.ARC,
-            'point': SketchTool.POINT,
-            'select': SketchTool.SELECT,
-            'dimension': SketchTool.DIMENSION,
+            'ellipse': SketchTool.ELLIPSE,
+            'polygon': SketchTool.POLYGON,
+            'arc_3point': SketchTool.ARC_3POINT,
+            'slot': SketchTool.SLOT,
             'spline': SketchTool.SPLINE,
+            'point': SketchTool.POINT,
+            'project': SketchTool.PROJECT,
+            # Shapes
+            'gear': SketchTool.GEAR,
+            'star': SketchTool.STAR,
+            'nut': SketchTool.NUT,
+            'text': SketchTool.TEXT,
+            # Modify tools
+            'select': SketchTool.SELECT,
+            'move': SketchTool.MOVE,
+            'copy': SketchTool.COPY,
+            'rotate': SketchTool.ROTATE,
+            'mirror': SketchTool.MIRROR,
+            'scale': SketchTool.SCALE,
+            'trim': SketchTool.TRIM,
+            'offset': SketchTool.OFFSET,
+            'fillet_2d': SketchTool.FILLET_2D,
+            'chamfer_2d': SketchTool.CHAMFER_2D,
+            # Patterns
+            'pattern_linear': SketchTool.PATTERN_LINEAR,
+            'pattern_circular': SketchTool.PATTERN_CIRCULAR,
+            # Constraints
+            'dimension': SketchTool.DIMENSION,
+            'dimension_angle': SketchTool.DIMENSION_ANGLE,
+            'horizontal': SketchTool.HORIZONTAL,
+            'vertical': SketchTool.VERTICAL,
+            'parallel': SketchTool.PARALLEL,
+            'perpendicular': SketchTool.PERPENDICULAR,
+            'equal': SketchTool.EQUAL,
+            'concentric': SketchTool.CONCENTRIC,
+            'tangent': SketchTool.TANGENT,
         }
         if tool_name in tool_map:
             self.sketch_editor.set_tool(tool_map[tool_name])
+        else:
+            logger.warning(f"Unknown sketch tool: {tool_name}")
