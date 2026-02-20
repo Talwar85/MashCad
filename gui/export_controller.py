@@ -443,8 +443,90 @@ class ExportController(QObject):
             logger.exception("STEP Export Error")
             QMessageBox.warning(None, tr("Export Fehler"), str(e))
             return False
-        
-    def export_svg(self) -> bool:
+            
+        def export_3mf(self) -> bool:
+            """
+            Exportiert als 3MF (3D Manufacturing Format).
+            
+            3MF ist ein modernes Format für additive Fertigung mit:
+            - Vollständige Geometrie-Informationen
+            - Farbe und Material Support
+            - Kompakte ZIP-basierte Struktur
+            
+            Returns:
+                bool: True wenn Export erfolgreich
+            """
+            from config.feature_flags import is_enabled
+            
+            # Feature Flag Check
+            if not is_enabled("export_3mf"):
+                QMessageBox.warning(
+                    None,
+                    tr("Export Fehler"),
+                    tr("3MF Export ist nicht aktiviert.")
+                )
+                return False
+            
+            bodies = self._get_visible_bodies()
+            if not bodies:
+                QMessageBox.warning(
+                    None,
+                    tr("Export Fehler"),
+                    tr("Keine sichtbaren Bodies zum Exportieren.")
+                )
+                return False
+            
+            # Pre-flight Validierung
+            validation_issues = self._run_preflight_validation(bodies)
+            if validation_issues:
+                self.validation_warnings.emit(validation_issues)
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self._mw,
+                tr("Export als 3MF"),
+                "",
+                "3MF Files (*.3mf)"
+            )
+            
+            if not filepath:
+                return False
+            
+            # Ensure .3mf extension
+            if not filepath.lower().endswith('.3mf'):
+                filepath += '.3mf'
+            
+            try:
+                from modeling.export_kernel import ExportKernel, ExportOptions, ExportFormat, ExportQuality
+                
+                options = ExportOptions(
+                    format=ExportFormat._3MF,
+                    quality=ExportQuality.FINE
+                )
+                result = ExportKernel.export_bodies(bodies, filepath, options)
+                
+                if result.success:
+                    msg = tr(f"3MF Export erfolgreich: {result.triangle_count:,} Dreiecke, {result.file_size_kb:.1f} KB")
+                    self._mw.statusBar().showMessage(msg, 5000)
+                    logger.info(f"3MF Export: {filepath} ({result.triangle_count} triangles)")
+                    return True
+                else:
+                    QMessageBox.warning(
+                        None,
+                        tr("Export Fehler"),
+                        result.error_message
+                    )
+                    return False
+                    
+            except ImportError as e:
+                logger.error(f"ExportKernel nicht verfügbar: {e}")
+                QMessageBox.critical(None, tr("Export Fehler"), tr("Export-Modul nicht verfügbar."))
+                return False
+            except Exception as e:
+                logger.exception("3MF Export Error")
+                QMessageBox.warning(None, tr("Export Fehler"), str(e))
+                return False
+            
+        def export_svg(self) -> bool:
         """
         Exportiert aktiven Sketch als SVG.
         

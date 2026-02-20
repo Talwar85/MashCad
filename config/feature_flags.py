@@ -69,6 +69,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "boolean_argument_analyzer": True,  # Pre-Check: BOPAlgo_ArgumentAnalyzer Input-Validierung
     "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
     
+    # Export Formats (PR-001: 3MF Export)
+    "export_3mf": True,  # 3MF Export Implementation
+    
     # Export Validation (PR-002: Manifold/Free-Bounds Pflichtcheck)
     "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export (G4 Printability)
     "export_normals_check": False,  # Normalen-Konsistenz-Check (optional, performance-intensiv)

@@ -907,6 +907,7 @@ class MainWindow(QMainWindow):
         self._update_recent_files_menu()
         file_menu.addSeparator()
         file_menu.addAction(tr("Export STL..."), self._export_stl)
+        file_menu.addAction(tr("Export 3MF..."), self._export_3mf)
         file_menu.addAction(tr("Export STEP..."), self._export_step)
         file_menu.addAction(tr("Import STEP..."), self._import_step)
         file_menu.addAction(tr("Export SVG..."), self._export_svg)
@@ -8465,6 +8466,15 @@ class MainWindow(QMainWindow):
             logger.error(f"STEP Export Fehler: {e}")
             import traceback
             traceback.print_exc()
+
+    def _export_3mf(self):
+        """3MF Export via ExportController."""
+        # Delegate to ExportController
+        if hasattr(self, 'export_controller'):
+            return self.export_controller.export_3mf()
+        else:
+            logger.error("ExportController nicht verfügbar")
+            QMessageBox.warning(self, tr("Export Fehler"), tr("Export-Controller nicht initialisiert."))
 
     def _export_svg(self):
         """Export visible bodies as SVG (projected edges onto a plane)."""

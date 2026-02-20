@@ -513,13 +513,195 @@ class ExportKernel:
         filepath: Path,
         options: ExportOptions
     ) -> ExportResult:
-        """3MF Export Implementierung (Placeholder)."""
-        # TODO: Implement 3MF Export
-        return ExportResult(
-            success=False,
-            error_code="NOT_IMPLEMENTED",
-            error_message="3MF Export ist noch nicht implementiert."
-        )
+        """
+        3MF Export Implementierung.
+        
+        3MF ist ein ZIP-Archiv mit XML-Struktur:
+        - [Content_Types].xml: MIME-Type Definitionen
+        - _rels/.rels: Beziehungen
+        - 3D/3dmodel.model: Mesh-Daten (Vertices, Triangles)
+        
+        Spec: https://3mf.io/specification/
+        """
+        import zipfile
+        import uuid
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom import minidom
+        
+        try:
+            from modeling.cad_tessellator import CADTessellator
+        except ImportError:
+            return ExportResult(
+                success=False,
+                error_code="MISSING_DEPENDENCY",
+                error_message="CADTessellator wird für 3MF Export benötigt."
+            )
+        
+        try:
+            # Sammle alle Mesh-Daten
+            all_vertices = []
+            all_triangles = []
+            object_id = 1
+            
+            for candidate in candidates:
+                solid = candidate.get_solid()
+                if solid is None:
+                    continue
+                
+                # Tessellate
+                try:
+                    verts, faces_tris = CADTessellator.tessellate_for_export(
+                        solid,
+                        linear_deflection=options.linear_deflection,
+                        angular_tolerance=options.angular_tolerance
+                    )
+                except Exception as e:
+                    logger.warning(f"Tessellation failed for {candidate.name}: {e}")
+                    continue
+                
+                if not verts or not faces_tris:
+                    continue
+                
+                # Skalierung anwenden
+                scale = options.scale
+                if abs(scale - 1.0) > 1e-6:
+                    verts = [(v[0] * scale, v[1] * scale, v[2] * scale) for v in verts]
+                
+                # Vertex-Offset für dieses Objekt
+                vertex_offset = len(all_vertices)
+                
+                # Vertices hinzufügen
+                all_vertices.extend(verts)
+                
+                # Triangles mit Offset hinzufügen
+                for tri in faces_tris:
+                    all_triangles.append((
+                        tri[0] + vertex_offset,
+                        tri[1] + vertex_offset,
+                        tri[2] + vertex_offset,
+                        object_id
+                    ))
+                
+                object_id += 1
+            
+            if not all_vertices or not all_triangles:
+                return ExportResult(
+                    success=False,
+                    error_code="NO_MESH_DATA",
+                    error_message="Keine Mesh-Daten zum Exportieren generiert."
+                )
+            
+            # Generiere eindeutige IDs
+            model_uuid = str(uuid.uuid4())
+            
+            # Erstelle 3D Model XML
+            ns = {
+                '': 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02',
+                'm': 'http://schemas.microsoft.com/3dmanufacturing/material/2015/02'
+            }
+            
+            # Root Element
+            model = Element('model')
+            model.set('unit', 'millimeter')
+            model.set('xml:lang', 'en-US')
+            model.set('xmlns', ns[''])
+            
+            # Resources
+            resources = SubElement(model, 'resources')
+            
+            # Object (Mesh)
+            obj = SubElement(resources, 'object')
+            obj.set('id', '1')
+            obj.set('type', 'model')
+            
+            mesh = SubElement(obj, 'mesh')
+            
+            # Vertices
+            vertices_elem = SubElement(mesh, 'vertices')
+            for i, v in enumerate(all_vertices):
+                vertex = SubElement(vertices_elem, 'vertex')
+                vertex.set('x', f"{v[0]:.6f}")
+                vertex.set('y', f"{v[1]:.6f}")
+                vertex.set('z', f"{v[2]:.6f}")
+            
+            # Triangles
+            triangles_elem = SubElement(mesh, 'triangles')
+            for tri in all_triangles:
+                triangle = SubElement(triangles_elem, 'triangle')
+                triangle.set('v1', str(tri[0]))
+                triangle.set('v2', str(tri[1]))
+                triangle.set('v3', str(tri[2]))
+            
+            # Build (Instanziierung)
+            build = SubElement(model, 'build')
+            item = SubElement(build, 'item')
+            item.set('objectid', '1')
+            
+            # XML zu String
+            xml_bytes = tostring(model, encoding='utf-8')
+            
+            # Pretty-print XML
+            xml_dom = minidom.parseString(xml_bytes)
+            xml_pretty = xml_dom.toprettyxml(indent='  ', encoding='utf-8')
+            
+            # Entferne die XML-Deklaration aus dem pretty-print (wir fügen unsere eigene hinzu)
+            xml_lines = xml_pretty.split(b'\n')
+            if xml_lines[0].startswith(b'<?xml'):
+                xml_content = b'\n'.join(xml_lines[1:])
+            else:
+                xml_content = xml_pretty
+            
+            # Content_Types.xml
+            content_types = b'''<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+</Types>'''
+            
+            # _rels/.rels
+            rels = b'''<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>'''
+            
+            # 3D Model XML mit Deklaration
+            model_xml = b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_content
+            
+            # Erstelle Verzeichnis falls nötig
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Schreibe 3MF Datei (ZIP)
+            with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('[Content_Types].xml', content_types)
+                zf.writestr('_rels/.rels', rels)
+                zf.writestr('3D/3dmodel.model', model_xml)
+            
+            file_size = filepath.stat().st_size if filepath.exists() else 0
+            
+            logger.info(f"3MF Export erfolgreich: {len(all_vertices)} Vertices, {len(all_triangles)} Triangles")
+            
+            return ExportResult(
+                success=True,
+                filepath=str(filepath),
+                format=ExportFormat._3MF,
+                file_size_bytes=file_size,
+                triangle_count=len(all_triangles),
+                body_count=len(candidates)
+            )
+            
+        except zipfile.BadZipFile as e:
+            return ExportResult(
+                success=False,
+                error_code="ZIP_ERROR",
+                error_message=f"Fehler beim Erstellen des 3MF-Archivs: {e}"
+            )
+        except Exception as e:
+            logger.exception(f"3MF Export Error: {e}")
+            return ExportResult(
+                success=False,
+                error_code="3MF_EXPORT_ERROR",
+                error_message=str(e)
+            )
     
     @staticmethod
     def _export_obj(
@@ -657,7 +839,7 @@ class ExportKernel:
             {"format": "STL", "extension": ".stl", "description": "Standard Tessellation Language"},
             {"format": "STEP", "extension": ".step", "description": "ISO 10303 (AP214/AP242)"},
             {"format": "STEP", "extension": ".stp", "description": "ISO 10303 (kurze Extension)"},
-            {"format": "3MF", "extension": ".3mf", "description": "3D Manufacturing Format (geplant)"},
+            {"format": "3MF", "extension": ".3mf", "description": "3D Manufacturing Format"},
             {"format": "OBJ", "extension": ".obj", "description": "Wavefront OBJ"},
             {"format": "PLY", "extension": ".ply", "description": "Polygon File Format"},
         ]
@@ -676,6 +858,12 @@ def export_stl(bodies: List[Any], filepath: str, **kwargs) -> ExportResult:
 def export_step(bodies: List[Any], filepath: str, **kwargs) -> ExportResult:
     """Shortcut für STEP Export."""
     options = ExportOptions(format=ExportFormat.STEP, **kwargs)
+    return ExportKernel.export_bodies(bodies, filepath, options)
+
+
+def export_3mf(bodies: List[Any], filepath: str, **kwargs) -> ExportResult:
+    """Shortcut für 3MF Export."""
+    options = ExportOptions(format=ExportFormat._3MF, **kwargs)
     return ExportKernel.export_bodies(bodies, filepath, options)
 
 
