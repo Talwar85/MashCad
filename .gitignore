@@ -28,25 +28,20 @@ nul
 # Allow CI scripts
 !scripts/gate_ci.sh
 
-# Allow docs/CI_GUIDE.md
-!docs/CI_GUIDE.md
-
-# Allow docs/user_guide/
-!docs/user_guide/
-!docs/user_guide/**
-
 *.sh
 .claude
 tests/
-docs/
 roadmap_gemini/
 roadmap_kimi/
 roadmap_ctp/
 .roo/
 mcp.json
 
-# Allow docs/KNOWN_LIMITATIONS.md (must come after docs/ ignore)
+# Docs: Ignore all by default, allow specific files
+docs/*
+!docs/CI_GUIDE.md
 !docs/KNOWN_LIMITATIONS.md
+!docs/user_guide/
 
 
 # Virtual environments
