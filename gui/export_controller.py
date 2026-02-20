@@ -525,9 +525,9 @@ class ExportController(QObject):
                 logger.exception("3MF Export Error")
                 QMessageBox.warning(None, tr("Export Fehler"), str(e))
                 return False
-            
+        
         def export_svg(self) -> bool:
-        """
+            """
         Exportiert aktiven Sketch als SVG.
         
         Returns:
