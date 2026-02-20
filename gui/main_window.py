@@ -1,6 +1,7 @@
 """
 MashCad - Unified Main Window
 V3.0: Refactored with MessageManager, modular structure
+V3.1: AR-004 Phase 1 Split - Extracted menu_actions and event_handlers modules
 """
 
 import sys
@@ -10,6 +11,7 @@ import math
 import uuid
 import numpy as np
 from loguru import logger
+import warnings
 
 
 from PySide6.QtWidgets import (
@@ -62,6 +64,10 @@ from gui.sketch_controller import SketchController  # W16 Paket D: Sketch UI-Orc
 from gui.export_controller import ExportController  # W17 Paket C: Export UI-Orchestrierung
 from gui.feature_controller import FeatureController  # W17 Paket C: Feature UI-Orchestrierung
 
+# AR-004 Phase 1 Split: Import extracted modules
+from gui.menu_actions import MenuActionsMixin
+from gui.event_handlers import EventHandlersMixin
+
 # STL Reconstruction (TNP-Exempt)
 try:
     from sketching.analysis.mesh_quality_checker import MeshQualityChecker, check_mesh_quality
@@ -96,7 +102,9 @@ if not HAS_PYVISTA:
     sys.exit(1)
 
 
-class MainWindow(QMainWindow):
+# AR-004 Phase 1 Split: Multiple inheritance from extracted mixins
+# Mixins must come BEFORE QMainWindow for proper MRO (Method Resolution Order)
+class MainWindow(MenuActionsMixin, EventHandlersMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MashCAD")
