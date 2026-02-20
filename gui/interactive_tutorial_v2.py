@@ -560,10 +560,47 @@ class InteractiveTutorialPanel(QFrame):
         """)
         card_layout.addWidget(self.status_label)
         
+        # Hint (direkt im Panel sichtbar)
+        self.hint_frame = QFrame()
+        self.hint_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1a365d;
+                border: 1px solid #4299e1;
+                border-radius: 8px;
+            }
+        """)
+        hint_layout = QVBoxLayout(self.hint_frame)
+        hint_layout.setContentsMargins(12, 12, 12, 12)
+        hint_layout.setSpacing(4)
+        
+        hint_header = QLabel("💡 Hinweis")
+        hint_header.setStyleSheet("""
+            color: #4299e1;
+            font-size: 10px;
+            font-weight: bold;
+            background: transparent;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        """)
+        hint_layout.addWidget(hint_header)
+        
+        self.hint_label = QLabel()
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setStyleSheet("""
+            color: #e2e8f0;
+            font-size: 12px;
+            background: transparent;
+            line-height: 1.4;
+        """)
+        hint_layout.addWidget(self.hint_label)
+        
+        self.hint_frame.hide()  # Initial versteckt
+        card_layout.addWidget(self.hint_frame)
+        
         # Buttons
         btn_layout = QHBoxLayout()
         
-        self.hint_btn = QPushButton("💡 Hinweis")
+        self.hint_btn = QPushButton("💡 Hinweis anzeigen")
         self.hint_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -663,6 +700,12 @@ class InteractiveTutorialPanel(QFrame):
         self.progress_label.setText(f"{step} / {total}")
         self.progress_bar.setValue(int((step / total) * 100))
         
+        # Hinweis direkt anzeigen
+        if challenge.hint:
+            self.set_hint(challenge.hint)
+        else:
+            self.hint_frame.hide()
+        
         # Badge Farbe je nach Typ
         colors = {
             TutorialChallengeType.CLICK_BUTTON: ("#9f7aea", "CLICK"),
@@ -729,13 +772,20 @@ class InteractiveTutorialPanel(QFrame):
         """Aktualisiert XP-Anzeige."""
         self.xp_label.setText(f"{xp} XP")
         
+    def set_hint(self, hint_text: str):
+        """Setzt den Hinweis-Text direkt im Panel."""
+        self.hint_label.setText(hint_text)
+        self.hint_frame.show()
+        self.hint_btn.setText("💡 Hinweis verbergen")
+        
     def _show_hint(self):
-        """Zeigt Hinweis."""
-        QMessageBox.information(
-            self,
-            "💡 Hinweis",
-            "Schauen Sie auf das hervorgehobene Element in der App!"
-        )
+        """Toggle Hinweis Sichtbarkeit."""
+        if self.hint_frame.isVisible():
+            self.hint_frame.hide()
+            self.hint_btn.setText("💡 Hinweis anzeigen")
+        else:
+            self.hint_frame.show()
+            self.hint_btn.setText("💡 Hinweis verbergen")
 
 
 class InteractiveTutorialV2(QObject):
