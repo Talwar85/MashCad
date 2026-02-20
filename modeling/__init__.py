@@ -99,6 +99,60 @@ from modeling.shape_builders import (
 )
 
 
+# ==================== AR-003: PHASE 2 SPLIT - NEW MODULES ====================
+# Import from extracted modules for maintainability
+# These imports provide backward compatibility while moving code to dedicated modules
+from modeling.feature_operations import (
+    # TNP failure tracking
+    record_tnp_failure,
+    consume_tnp_failure,
+    # Error code classification
+    classify_error_code,
+    default_next_action_for_code,
+    # Operation error details
+    build_operation_error_details,
+    normalize_status_details_for_load,
+    # Safe operation wrapper
+    safe_operation,
+    # Legacy aliases for backward compatibility
+    _record_tnp_failure,
+    _consume_tnp_failure,
+    _classify_error_code,
+    _default_next_action_for_code,
+    _build_operation_error_details,
+    _normalize_status_details_for_load,
+    _safe_operation,
+)
+
+from modeling.body_state import (
+    # ShapeID serialization
+    serialize_shape_id,
+    deserialize_shape_id,
+    serialize_shape_ids,
+    deserialize_shape_ids,
+    # Feature serialization
+    serialize_feature,
+    serialize_feature_base,
+    # Body state comparison
+    compare_body_states,
+    body_state_summary,
+    # BREP serialization
+    serialize_brep,
+    deserialize_brep,
+    # Legacy aliases for backward compatibility
+    _serialize_shape_id,
+    _deserialize_shape_id,
+    _serialize_shape_ids,
+    _deserialize_shape_ids,
+    _serialize_feature,
+    _serialize_feature_base,
+    _compare_body_states,
+    _body_state_summary,
+    _serialize_brep,
+    _deserialize_brep,
+)
+
+
 # ==================== IMPORTS ====================
 HAS_BUILD123D = False
 HAS_OCP = False
