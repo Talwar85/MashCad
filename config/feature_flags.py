@@ -146,6 +146,35 @@ FEATURE_FLAGS: Dict[str, bool] = {
     
     # UX-001: First-Run Guided Flow
     "first_run_tutorial": True,  # Enable5-step guided tutorial for new users
+    
+    # ======================================================
+    # Live Preview System (High-Priority TODOs 2026)
+    # ======================================================
+    # Debounced preview system for interactive feature editing
+    
+    "live_preview_textures": True,    # Live texture preview with debouncing
+    "live_preview_patterns": True,    # Live pattern preview (already partially implemented)
+    "live_preview_shell": False,      # Live shell thickness preview (experimental)
+    "live_preview_fillet": False,     # Live fillet radius preview (experimental)
+    "live_preview_chamfer": False,    # Live chamfer size preview (experimental)
+    
+    # Preview Quality Settings
+    "preview_debounce_ms": 150,       # Debounce delay in milliseconds
+    "preview_subdivisions_live": 3,   # Mesh subdivisions for live preview (fast)
+    "preview_subdivisions_final": 5,  # Mesh subdivisions for final apply (quality)
+    
+    # Normal Map Preview (Phase 3 - Advanced)
+    "normal_map_preview": False,      # Normal map visualization in viewport
+    "normal_map_shader": False,       # Shader-based normal mapping (requires VTK shader hooks)
+    
+    # TNP Enhancements
+    "detailed_boolean_history": True, # Enhanced Boolean history extraction for TNP
+    
+    # Helix Fitting
+    "helix_fitting_enabled": True,    # Helix parameter fitting via scipy least_squares
+    
+    # QA-010: RC Burn-in Mode
+    "rc_burn_in_mode": False,         # Enable RC burn-in testing mode (only True during RC phase)
 }
 
 
