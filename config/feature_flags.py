@@ -127,6 +127,9 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "solver_pre_validation": True,  # P1: Early contradiction detection
     "solver_smooth_penalties": True,  # P1: Smooth tangent penalties
     "solver_experimental_staged": True,  # P3: Staged solve (experimental)
+    
+    # QA-006: Performance Regression Gate
+    "performance_regression_gate": True,  # Enable performance benchmarking and regression detection
 }
 
 

@@ -1,0 +1,51 @@
+{
+  "simple_extrude": {
+    "target_ms": 100,
+    "max_ms": 200,
+    "last_measured_ms": null,
+    "iterations": 0,
+    "description": "Simple rectangular face extrusion (10x10mm to 10mm height)"
+  },
+  "boolean_union": {
+    "target_ms": 200,
+    "max_ms": 500,
+    "last_measured_ms": null,
+    "iterations": 0,
+    "description": "Boolean union of two overlapping 10mm cubes"
+  },
+  "fillet_10_edges": {
+    "target_ms": 150,
+    "max_ms": 300,
+    "last_measured_ms": null,
+    "iterations": 0,
+    "description": "Fillet operation on up to 10 edges with 1mm radius"
+  },
+  "stl_export": {
+    "target_ms": 500,
+    "max_ms": 1000,
+    "last_measured_ms": null,
+    "iterations": 0,
+    "description": "STL export of 20mm cube"
+  },
+  "full_rebuild": {
+    "target_ms": 1000,
+    "max_ms": 2000,
+    "last_measured_ms": null,
+    "iterations": 0,
+    "description": "Full model rebuild: box + extrude + boolean + fillet"
+  },
+  "_metadata": {
+    "version": "1.0.0",
+    "created": "2026-02-20",
+    "qa_task": "QA-006",
+    "description": "Performance baselines for MashCAD Sprint 1 Regression Gate",
+    "regression_threshold": 1.20,
+    "notes": [
+      "target_ms: Expected performance under normal conditions",
+      "max_ms: Maximum acceptable time before failure",
+      "Regression is flagged when >20% over target_ms",
+      "Failure is flagged when over max_ms or operation errors",
+      "Run 'python -m modeling.performance_benchmark' to update baselines"
+    ]
+  }
+}
