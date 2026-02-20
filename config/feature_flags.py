@@ -164,6 +164,18 @@ def set_flag(flag: str, value: bool) -> None:
     FEATURE_FLAGS[flag] = value
 
 
+# Alias for set_flag (CH-006 compatibility)
+def set_enabled(flag: str, value: bool) -> None:
+    """
+    Alias for set_flag - sets a feature flag at runtime.
+    
+    Args:
+        flag: Name of the feature flag
+        value: New value
+    """
+    set_flag(flag, value)
+
+
 def get_all_flags() -> Dict[str, bool]:
     """Gibt alle Feature-Flags zurück."""
     return FEATURE_FLAGS.copy()

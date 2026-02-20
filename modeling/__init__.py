@@ -123,6 +123,33 @@ if _project_root not in sys.path:
 from sketcher import Sketch
 
 
+# ==================== OCP COMPATIBILITY VALIDATION (CH-006) ====================
+# Startup validation for OCP API compatibility
+# This runs on import to catch API issues early
+
+def _run_ocp_compatibility_check():
+    """
+    Run OCP compatibility validation on module import.
+    
+    Logs warnings for missing/changed APIs and updates feature flags
+    based on availability.
+    """
+    try:
+        from modeling.ocp_compatibility import OCP_COMPATIBILITY
+        OCP_COMPATIBILITY.initialize()
+        
+        # Store reference for later access
+        global OCP_COMPAT
+        OCP_COMPAT = OCP_COMPATIBILITY
+        
+    except Exception as e:
+        logger.warning(f"OCP compatibility check failed: {e}")
+        # Continue anyway - compatibility module is optional
+
+# Run compatibility check on import
+_run_ocp_compatibility_check()
+
+
 # ==================== HELPER FUNCTIONS ====================
 
 def _solid_metrics(solid):

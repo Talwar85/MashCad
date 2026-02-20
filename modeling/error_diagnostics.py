@@ -359,6 +359,45 @@ ERROR_KNOWLEDGE_BASE: Dict[str, Dict[str, Any]] = {
             "Kontaktieren Sie den Support falls das Problem besteht"
         ],
     },
+    # CH-006: OCP API Compatibility Errors
+    "ocp_api_unavailable": {
+        "category": ErrorCategory.DEPENDENCY,
+        "severity": ErrorSeverity.CRITICAL,
+        "title": "OCP API nicht verfügbar",
+        "description": "Eine erforderliche OCP API-Klasse oder -Methode ist in der installierten Version nicht verfügbar.",
+        "technical_details": "OCP API class/method not found - version mismatch or missing feature",
+        "next_actions": [
+            "Aktualisieren Sie OCP auf die neueste Version: pip install --upgrade ocp",
+            "Prüfen Sie die OCP-Version mit: python -c \"import OCP; print(OCP.__version__)\"",
+            "Konsultieren Sie die Dokumentation für kompatible Versionen",
+            "Verwenden Sie eine alternative Operation falls verfügbar"
+        ],
+    },
+    "ocp_api_version_mismatch": {
+        "category": ErrorCategory.DEPENDENCY,
+        "severity": ErrorSeverity.WARNING,
+        "title": "OCP Version inkompatibel",
+        "description": "Die installierte OCP-Version unterscheidet sich von der erwarteten Version. Einige Funktionen sind möglicherweise eingeschränkt.",
+        "technical_details": "OCP version mismatch - some APIs may be unavailable or behave differently",
+        "next_actions": [
+            "Prüfen Sie die aktuelle OCP-Version",
+            "Vergleichen Sie mit der empfohlenen Version (7.8.x)",
+            "Führen Sie ein Upgrade durch falls nötig",
+            "Einige erweiterte Funktionen sind möglicherweise nicht verfügbar"
+        ],
+    },
+    "ocp_feature_degraded": {
+        "category": ErrorCategory.DEPENDENCY,
+        "severity": ErrorSeverity.INFO,
+        "title": "OCP Feature eingeschränkt",
+        "description": "Eine optionale OCP-Funktion ist nicht verfügbar. Die Anwendung funktioniert weiterhin, aber mit eingeschränkten Funktionen.",
+        "technical_details": "Optional OCP API not available - feature degraded",
+        "next_actions": [
+            "Grundlegende Funktionen bleiben verfügbar",
+            "Für volle Funktionalität OCP aktualisieren",
+            "Siehe Protokoll für Details zu fehlenden APIs"
+        ],
+    },
     "dependency_build123d_unavailable": {
         "category": ErrorCategory.DEPENDENCY,
         "severity": ErrorSeverity.CRITICAL,
