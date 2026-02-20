@@ -700,9 +700,14 @@ class InteractiveTutorialPanel(QFrame):
         elif challenge.challenge_type == TutorialChallengeType.EXTRUDE_SHAPE:
             self.demo_viewport.show_extrude_demo()
             
-    def show_success(self, xp: int):
-        """Zeigt Success-Status."""
-        self.status_label.setText(f"✅ {self.challenge_title.text()} geschafft! +{xp} XP")
+    def show_success(self, xp: int, next_action: str = ""):
+        """Zeigt Success-Status und nächste Aktion."""
+        if next_action:
+            text = f"✅ Geschafft! +{xp} XP\n➡️ {next_action}"
+        else:
+            text = f"✅ {self.challenge_title.text()} geschafft! +{xp} XP"
+            
+        self.status_label.setText(text)
         self.status_label.setStyleSheet("""
             color: #48bb78;
             font-size: 12px;
@@ -772,9 +777,9 @@ class InteractiveTutorialV2(QObject):
             TutorialChallenge(
                 challenge_type=TutorialChallengeType.DRAW_RECTANGLE,
                 title="Zeichnen Sie ein Rechteck",
-                description="Im Sketch-Editor: Wählen Sie das Rechteck-Werkzeug und zeichnen Sie ein Rechteck.",
+                description="Im Sketch-Editor: Wählen Sie das Rechteck-Werkzeug, zeichnen Sie ein Rechteck, dann klicken Sie 'Fertig stellen'.",
                 target_name="",
-                hint="Werkzeugleiste → Rechteck-Werkzeug",
+                hint="Werkzeugleiste → Rechteck-Werkzeug → Dann 'Fertig stellen' klicken",
                 xp_reward=150
             ),
             TutorialChallenge(
@@ -903,8 +908,18 @@ class InteractiveTutorialV2(QObject):
         self.total_xp += challenge.xp_reward
         self.panel.update_xp(self.total_xp)
         
+        # Nächste Aktion bestimmen
+        next_actions = {
+            0: "Klicken Sie 'Weiter'",
+            1: "Zeichnen Sie ein Rechteck im Sketch-Editor",
+            2: "Klicken Sie 'Fertig stellen' um den Sketch zu schließen",
+            3: "Klicken Sie 'Extrudieren' um 3D zu erstellen",
+            4: "Tutorial abschließen"
+        }
+        next_action = next_actions.get(self.current_step, "")
+        
         # Success anzeigen
-        self.panel.show_success(challenge.xp_reward)
+        self.panel.show_success(challenge.xp_reward, next_action)
         
         # Spotlight entfernen
         if self.spotlight:
