@@ -8238,9 +8238,9 @@ class MainWindow(QMainWindow):
             logger.error(f"Fehler beim Öffnen: {e}")
 
     def _start_tutorial(self):
-        """Startet das Enhanced Tutorial."""
-        from gui.enhanced_tutorial import EnhancedTutorial
-        tutorial = EnhancedTutorial(
+        """Startet das Immersive Tutorial (12/10 Experience)."""
+        from gui.immersive_tutorial import ImmersiveTutorial
+        tutorial = ImmersiveTutorial(
             main_window=self,
             document=self.document,
             viewport=self.viewport_3d
