@@ -53,6 +53,10 @@ from sketcher.constraint_diagnostics import (
     SuggestionInfo,
     ConflictSeverity,
     ConstraintDiagnosisType,
+    # SU-003: Enhanced Conflict Explanations
+    ConflictExplanationTemplates,
+    get_conflict_explanation,
+    format_conflict_explanation,
     # Legacy API für Rückwärtskompatibilität
     ConstraintDiagnostics,
     ConstraintDiagnosis,
@@ -707,7 +711,7 @@ class ConstraintDiagnosticsDialog(QDialog):
         self.summary_list.setText("\n".join(summary_parts) if summary_parts else tr("Keine Probleme gefunden"))
         
     def _update_conflicts(self, d: ConstraintDiagnosticsResult):
-        """Aktualisiert den Konflikte-Tab."""
+        """Aktualisiert den Konflikte-Tab mit SU-003 Enhanced Explanations."""
         self.conflicts_tree.clear()
         
         for conflict in d.conflicting_constraints:
@@ -725,8 +729,20 @@ class ConstraintDiagnosticsDialog(QDialog):
             item.setText(2, conflict.explanation)
             item.setText(3, conflict.suggested_resolution)
             
-            # Daten speichern
+            # SU-003: Erweiterte Daten speichern
             item.setData(0, Qt.UserRole, conflict)
+            
+            # SU-003: Resolution Steps als Tooltip
+            if hasattr(conflict, 'resolution_steps') and conflict.resolution_steps:
+                steps_text = "\n".join(f"• {step}" for step in conflict.resolution_steps)
+                item.setToolTip(2, f"<b>Lösungsschritte:</b><br>{steps_text}")
+            
+            # SU-003: Affected Geometry anzeigen
+            if hasattr(conflict, 'affected_geometry') and conflict.affected_geometry:
+                geo_text = ", ".join(conflict.affected_geometry[:3])
+                if len(conflict.affected_geometry) > 3:
+                    geo_text += f" (+{len(conflict.affected_geometry) - 3})"
+                item.setToolTip(1, f"Betroffene Geometrie: {geo_text}")
             
             # Severity-Farbe
             if conflict.severity == ConflictSeverity.CRITICAL:
@@ -902,15 +918,167 @@ class ConstraintDiagnosticsDialog(QDialog):
     # === Action Handlers ===
     
     def _on_conflict_double_clicked(self, item, column):
-        """Handler für Doppelklick auf Konflikt."""
+        """SU-003: Handler für Doppelklick auf Konflikt mit erweiterten Details."""
         conflict = item.data(0, Qt.UserRole)
         if conflict and isinstance(conflict, ConflictInfo):
+            # SU-003: Erweiterte Konflikt-Details anzeigen
+            self._show_conflict_details_dialog(conflict)
+    
+    def _show_conflict_details_dialog(self, conflict: ConflictInfo):
+        """
+        SU-003: Zeigt einen erweiterten Konflikt-Details-Dialog.
+        
+        Zeigt:
+        - Detaillierte Erklärung
+        - Schritt-für-Schritt-Lösungsvorschläge
+        - Betroffene Geometrie
+        - Auto-Resolve Option (falls verfügbar)
+        """
+        from PySide6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+            QTextEdit, QFrame, QScrollArea, QWidget
+        )
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("Konflikt-Details"))
+        dlg.setMinimumWidth(500)
+        dlg.setMinimumHeight(400)
+        
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header mit Severity
+        header_layout = QHBoxLayout()
+        
+        severity_icons = {
+            ConflictSeverity.CRITICAL: ("🔴", "#dc3545"),
+            ConflictSeverity.HIGH: ("🟠", "#fd7e14"),
+            ConflictSeverity.MEDIUM: ("🟡", "#ffc107"),
+            ConflictSeverity.LOW: ("🟢", "#28a745")
+        }
+        icon, color = severity_icons.get(conflict.severity, ("⚪", "#6c757d"))
+        
+        severity_label = QLabel(icon)
+        severity_label.setStyleSheet(f"font-size: 32px;")
+        header_layout.addWidget(severity_label)
+        
+        title_layout = QVBoxLayout()
+        type_label = QLabel(conflict.conflict_type)
+        type_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {color};")
+        title_layout.addWidget(type_label)
+        
+        severity_text = QLabel(f"Schweregrad: {conflict.severity.value.upper()}")
+        severity_text.setStyleSheet("color: #6c757d; font-size: 12px;")
+        title_layout.addWidget(severity_text)
+        
+        header_layout.addLayout(title_layout, stretch=1)
+        layout.addLayout(header_layout)
+        
+        # Trennlinie
+        line1 = QFrame()
+        line1.setFrameShape(QFrame.HLine)
+        line1.setStyleSheet("background-color: #dee2e6;")
+        layout.addWidget(line1)
+        
+        # Erklärung
+        explanation_group = QLabel("<b>📝 Erklärung</b>")
+        explanation_group.setStyleSheet("font-size: 14px;")
+        layout.addWidget(explanation_group)
+        
+        explanation_text = QTextEdit()
+        explanation_text.setReadOnly(True)
+        explanation_text.setPlainText(conflict.explanation)
+        explanation_text.setMaximumHeight(120)
+        explanation_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        layout.addWidget(explanation_text)
+        
+        # SU-003: Resolution Steps
+        if hasattr(conflict, 'resolution_steps') and conflict.resolution_steps:
+            steps_group = QLabel("<b>🔧 Lösungsschritte</b>")
+            steps_group.setStyleSheet("font-size: 14px;")
+            layout.addWidget(steps_group)
+            
+            steps_container = QWidget()
+            steps_layout = QVBoxLayout(steps_container)
+            steps_layout.setSpacing(5)
+            steps_layout.setContentsMargins(10, 5, 10, 5)
+            steps_container.setStyleSheet("""
+                QWidget {
+                    background-color: #d4edda;
+                    border: 1px solid #28a745;
+                    border-radius: 8px;
+                }
+            """)
+            
+            for i, step in enumerate(conflict.resolution_steps, 1):
+                step_label = QLabel(f"{i}. {step}")
+                step_label.setWordWrap(True)
+                step_label.setStyleSheet("background: transparent; padding: 3px;")
+                steps_layout.addWidget(step_label)
+            
+            layout.addWidget(steps_container)
+        
+        # SU-003: Affected Geometry
+        if hasattr(conflict, 'affected_geometry') and conflict.affected_geometry:
+            geo_group = QLabel("<b>📍 Betroffene Geometrie</b>")
+            geo_group.setStyleSheet("font-size: 14px;")
+            layout.addWidget(geo_group)
+            
+            geo_text = ", ".join(conflict.affected_geometry)
+            geo_label = QLabel(geo_text)
+            geo_label.setWordWrap(True)
+            geo_label.setStyleSheet("""
+                QLabel {
+                    background-color: #e7f3ff;
+                    border: 1px solid #0078d4;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+            """)
+            layout.addWidget(geo_label)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        # SU-003: Auto-Resolve Button (falls verfügbar)
+        if conflict.auto_fixable and conflict.constraints:
+            auto_resolve_btn = QPushButton(tr("🔧 Automatisch lösen"))
+            auto_resolve_btn.setObjectName("primary")
+            auto_resolve_btn.clicked.connect(lambda: self._auto_resolve_single_conflict(conflict, dlg))
+            btn_layout.addWidget(auto_resolve_btn)
+        
+        close_btn = QPushButton(tr("Schließen"))
+        close_btn.clicked.connect(dlg.accept)
+        btn_layout.addWidget(close_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # Styling
+        dlg.setStyleSheet(DesignTokens.stylesheet_dialog())
+        
+        dlg.exec()
+    
+    def _auto_resolve_single_conflict(self, conflict: ConflictInfo, parent_dialog):
+        """SU-003: Löst einen einzelnen Konflikt automatisch."""
+        if conflict.constraints:
+            # Entferne den letzten Constraint im Konflikt
+            constraint_to_remove = conflict.constraints[-1]
+            self._remove_constraint(constraint_to_remove, None)
+            parent_dialog.accept()
+            self.run_diagnosis()
             QMessageBox.information(
                 self,
-                tr("Konflikt-Details"),
-                f"<b>{conflict.conflict_type}</b><br><br>"
-                f"{conflict.explanation}<br><br>"
-                f"<b>Lösung:</b> {conflict.suggested_resolution}"
+                tr("Auto-Lösung"),
+                tr(f"Constraint '{constraint_to_remove.type.name}' wurde entfernt")
             )
             
     def _on_redundant_double_clicked(self, item, column):

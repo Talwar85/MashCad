@@ -106,13 +106,18 @@ class ConflictInfo:
     """
     Informationen über einen Constraint-Konflikt.
     
+    SU-003 Enhancement: Detaillierte Konflikt-Erklärungen mit Lösungsschritten.
+    
     Attributes:
         constraints: Liste der in Konflikt stehenden Constraints
         conflict_type: Art des Konflikts
-        explanation: Menschlich lesbare Erklärung
-        suggested_resolution: Vorgeschlagene Lösung
+        explanation: Menschlich lesbare Erklärung (Deutsch)
+        suggested_resolution: Vorgeschlagene Lösung (Kurzfassung)
         severity: Schweregrad des Konflikts
         auto_fixable: Ob der Konflikt automatisch behoben werden kann
+        resolution_steps: Schritt-für-Schritt-Lösungsanleitung (SU-003)
+        affected_geometry: IDs der betroffenen Geometrie-Elemente (SU-003)
+        visual_hint: Hinweis für UI-Hervorhebung (SU-003)
     """
     constraints: List[Constraint]
     conflict_type: str
@@ -120,6 +125,10 @@ class ConflictInfo:
     suggested_resolution: str
     severity: ConflictSeverity = ConflictSeverity.HIGH
     auto_fixable: bool = False
+    # SU-003: Neue Felder für erweiterte Konflikt-Erklärungen
+    resolution_steps: List[str] = field(default_factory=list)
+    affected_geometry: List[str] = field(default_factory=list)
+    visual_hint: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Konvertiert zu Dictionary."""
@@ -130,7 +139,11 @@ class ConflictInfo:
             'explanation': self.explanation,
             'suggested_resolution': self.suggested_resolution,
             'severity': self.severity.value,
-            'auto_fixable': self.auto_fixable
+            'auto_fixable': self.auto_fixable,
+            # SU-003: Neue Felder
+            'resolution_steps': self.resolution_steps,
+            'affected_geometry': self.affected_geometry,
+            'visual_hint': self.visual_hint
         }
 
 
@@ -279,6 +292,217 @@ class ConstraintDiagnosticsResult:
             'diagnosis_type': self.diagnosis_type.name,
             'status': self.status.name
         }
+
+
+# =============================================================================
+# SU-003: Conflict Explanation Templates
+# =============================================================================
+
+class ConflictExplanationTemplates:
+    """
+    SU-003: Templates für detaillierte Konflikt-Erklärungen auf Deutsch.
+    
+    Jeder Konflikt-Typ hat:
+    - explanation: Detaillierte deutsche Beschreibung
+    - resolution_steps: Schritt-für-Schritt-Lösungsanleitung
+    - visual_hint: Hinweis für UI-Hervorhebung
+    """
+    
+    # GEOMETRIC_IMPOSSIBLE: HORIZONTAL + VERTICAL + LENGTH>0
+    GEOMETRIC_IMPOSSIBLE = {
+        'explanation': (
+            "Eine Linie kann nicht gleichzeitig horizontal und vertikal sein, "
+            "wenn sie eine Länge größer als 0 hat. Eine horizontale Linie verläuft "
+            "parallel zur X-Achse (Δy = 0), eine vertikale Linie parallel zur Y-Achse (Δx = 0). "
+            "Beide Bedingungen gleichzeitig würden eine Linie der Länge 0 erfordern."
+        ),
+        'resolution_steps': [
+            "Entferne den HORIZONTAL-Constraint",
+            "ODER entferne den VERTICAL-Constraint",
+            "ODER setze die Länge auf 0 (Punkt)"
+        ],
+        'visual_hint': 'highlight_line_with_both_constraints'
+    }
+    
+    # PERPENDICULAR_PARALLEL_CONFLICT
+    PERPENDICULAR_PARALLEL_CONFLICT = {
+        'explanation': (
+            "Zwei Linien können nicht gleichzeitig rechtwinklig (90°) und parallel (0° oder 180°) "
+            "zueinander sein. Diese Bedingungen sind geometrisch widersprüchlich. "
+            "Parallele Linien haben denselben Winkel, während rechtwinklige Linien einen "
+            "Winkelunterschied von genau 90° haben."
+        ),
+        'resolution_steps': [
+            "Entferne den PERPENDICULAR-Constraint",
+            "ODER entferne den PARALLEL-Constraint",
+            "Prüfe ob die richtigen Linien ausgewählt wurden"
+        ],
+        'visual_hint': 'highlight_two_lines_with_constraints'
+    }
+    
+    # NEGATIVE_DIMENSION
+    NEGATIVE_DIMENSION = {
+        'explanation': (
+            "Längen, Radien und Durchmesser müssen positive Werte sein. "
+            "Ein negativer Wert ist geometrisch nicht möglich und führt zu "
+            "ungültigen Berechnungen im Solver."
+        ),
+        'resolution_steps': [
+            "Ändere den Wert zu einer positiven Zahl",
+            "Prüfe ob der korrekte Constraint-Typ verwendet wurde"
+        ],
+        'visual_hint': 'highlight_dimension_with_error'
+    }
+    
+    # SELF_REFERENTIAL
+    SELF_REFERENTIAL = {
+        'explanation': (
+            "Ein COINCIDENT-Constraint verweist auf denselben Punkt zweimal. "
+            "Ein Punkt ist immer koinzident mit sich selbst - dieser Constraint "
+            "ist daher sinnlos und sollte entfernt werden."
+        ),
+        'resolution_steps': [
+            "Entferne diesen Constraint",
+            "Prüfe ob versehentlich derselbe Punkt zweimal ausgewählt wurde"
+        ],
+        'visual_hint': 'highlight_single_point'
+    }
+    
+    # CONFLICTING_DIMENSIONS (gleicher Typ, verschiedene Werte)
+    CONFLICTING_DIMENSIONS = {
+        'explanation': (
+            "Dasselbe Geometrie-Element hat mehrere Dimensions-Constraints mit "
+            "unterschiedlichen Werten. Ein Element kann nur eine Länge, einen Radius "
+            "oder einen Durchmesser haben."
+        ),
+        'resolution_steps': [
+            "Entferne alle bis auf einen LENGTH/RADIUS/DIAMETER-Constraint",
+            "ODER gleiche die Werte an",
+            "Prüfe ob die Constraints unterschiedliche Elemente betreffen sollten"
+        ],
+        'visual_hint': 'highlight_element_with_multiple_dimensions'
+    }
+    
+    # CONFLICTING_RADII
+    CONFLICTING_RADII = {
+        'explanation': (
+            "Ein Kreis oder Bogen hat mehrere RADIUS-Constraints mit "
+            "unterschiedlichen Werten. Ein Kreis kann nur einen Radius haben."
+        ),
+        'resolution_steps': [
+            "Entferne alle bis auf einen RADIUS-Constraint",
+            "ODER gleiche die Radien-Werte an",
+            "Prüfe ob die Constraints unterschiedliche Kreise betreffen sollten"
+        ],
+        'visual_hint': 'highlight_circle_with_multiple_radii'
+    }
+    
+    # ZERO_LENGTH_LINE
+    ZERO_LENGTH_LINE = {
+        'explanation': (
+            "Eine Linie mit Länge 0 ist ein Punkt und hat keine Richtung. "
+            "Constraints wie HORIZONTAL oder VERTICAL sind bei einer Linie der Länge 0 "
+            "nicht sinnvoll definiert."
+        ),
+        'resolution_steps': [
+            "Setze eine positive Länge für die Linie",
+            "ODER entferne die Linie und verwende einen Punkt"
+        ],
+        'visual_hint': 'highlight_zero_length_line'
+    }
+    
+    # INVALID_ANGLE
+    INVALID_ANGLE = {
+        'explanation': (
+            "Der Winkel-Constraint hat einen ungültigen Wert. "
+            "Winkel sollten typischerweise zwischen -360° und 360° liegen."
+        ),
+        'resolution_steps': [
+            "Korrigiere den Winkelwert",
+            "Prüfe ob der Winkel in Grad oder Radiant angegeben wurde"
+        ],
+        'visual_hint': 'highlight_angle_constraint'
+    }
+    
+    # OVER_CONSTRAINED_POINT
+    OVER_CONSTRAINED_POINT = {
+        'explanation': (
+            "Ein Punkt hat mehr Constraints als Freiheitsgrade (2: x, y). "
+            "Dies führt zu einer überbestimmten Situation, die nicht lösbar ist."
+        ),
+        'resolution_steps': [
+            "Entferne einen der Constraints für diesen Punkt",
+            "Prüfe welche Constraints wirklich notwendig sind"
+        ],
+        'visual_hint': 'highlight_over_constrained_point'
+    }
+    
+    # TANGENT_IMPOSSIBLE
+    TANGENT_IMPOSSIBLE = {
+        'explanation': (
+            "Die TANGENT-Bedingung kann mit den aktuellen Geometrien nicht erfüllt werden. "
+            "Dies tritt auf, wenn die Geometrien zu weit entfernt sind oder andere "
+            "Constraints die Tangenten-Bedingung verhindern."
+        ),
+        'resolution_steps': [
+            "Verschiebe die Geometrien näher zueinander",
+            "ODER entferne andere widersprüchliche Constraints",
+            "Prüfe ob TANGENT für diese Geometrie-Kombination möglich ist"
+        ],
+        'visual_hint': 'highlight_tangent_candidates'
+    }
+
+
+def get_conflict_explanation(conflict_type: str) -> Dict[str, Any]:
+    """
+    SU-003: Holt die Erklärung für einen Konflikt-Typ.
+    
+    Args:
+        conflict_type: Der Konflikt-Typ als String
+        
+    Returns:
+        Dictionary mit 'explanation', 'resolution_steps', 'visual_hint'
+    """
+    template = getattr(ConflictExplanationTemplates, conflict_type, None)
+    if template:
+        return template.copy()
+    
+    # Fallback für unbekannte Konflikt-Typen
+    return {
+        'explanation': f"Unbekannter Konflikt-Typ: {conflict_type}",
+        'resolution_steps': ["Manuelle Überprüfung erforderlich"],
+        'visual_hint': None
+    }
+
+
+def format_conflict_explanation(
+    conflict_type: str,
+    entity_names: Optional[List[str]] = None,
+    values: Optional[List[Any]] = None
+) -> str:
+    """
+    SU-003: Formatiert eine Konflikt-Erklärung mit Entity-Namen und Werten.
+    
+    Args:
+        conflict_type: Der Konflikt-Typ
+        entity_names: Liste der betroffenen Entity-Namen
+        values: Liste der beteiligten Werte
+        
+    Returns:
+        Formatierte Erklärung als String
+    """
+    template = get_conflict_explanation(conflict_type)
+    explanation = template['explanation']
+    
+    if entity_names:
+        entities_str = ", ".join(entity_names)
+        explanation = f"{explanation}\n\nBetroffene Elemente: {entities_str}"
+    
+    if values:
+        values_str = ", ".join(str(v) for v in values)
+        explanation = f"{explanation}\nWerte: {values_str}"
+    
+    return explanation
 
 
 # =============================================================================
@@ -646,6 +870,8 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
     """
     Findet widersprüchliche Constraints.
     
+    SU-003 Enhancement: Verwendet detaillierte Erklärungs-Templates.
+    
     Konflikte entstehen wenn:
     - Geometrisch unmögliche Kombinationen (HORIZONTAL + VERTICAL + LENGTH>0)
     - Widersprüchliche Dimensions-Constraints
@@ -658,7 +884,7 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
         Liste von ConflictInfo für gefundene Konflikte
     """
     conflicts = []
-    constraints = [c for c in sketch.constraints 
+    constraints = [c for c in sketch.constraints
                   if getattr(c, 'enabled', True) and c.is_valid()]
     
     # Gruppiere Constraints nach betroffenen Entities
@@ -682,15 +908,23 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
         )
         
         if has_horizontal and has_vertical and has_nonzero_length:
-            conflicting = [c for c in line_constraints 
+            conflicting = [c for c in line_constraints
                          if c.type in (ConstraintType.HORIZONTAL, ConstraintType.VERTICAL, ConstraintType.LENGTH)]
+            
+            # SU-003: Hole Template und erstelle erweiterte ConflictInfo
+            template = get_conflict_explanation("GEOMETRIC_IMPOSSIBLE")
+            line_id = getattr(line, 'id', '?')
+            
             conflicts.append(ConflictInfo(
                 constraints=conflicting,
                 conflict_type="GEOMETRIC_IMPOSSIBLE",
-                explanation=f"Linie {getattr(line, 'id', '?')} kann nicht gleichzeitig horizontal und vertikal sein mit Länge > 0",
-                suggested_resolution="Entfernen Sie HORIZONTAL oder VERTICAL, oder setzen Sie LENGTH auf 0",
+                explanation=f"{template['explanation']}\n\nBetroffen: Linie {line_id}",
+                suggested_resolution="Entferne HORIZONTAL oder VERTICAL, oder setze LENGTH auf 0",
                 severity=ConflictSeverity.CRITICAL,
-                auto_fixable=False
+                auto_fixable=False,
+                resolution_steps=template['resolution_steps'],
+                affected_geometry=[line_id],
+                visual_hint=template['visual_hint']
             ))
     
     # Konflikt 2: Gegensätzliche Dimensions-Constraints
@@ -703,13 +937,20 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
         if len(length_constraints) >= 2:
             values = [c.value for c in length_constraints]
             if len(set(round(v, 3) for v in values)) > 1:  # Unterschiedliche Werte (gerundet)
+                # SU-003: Hole Template
+                template = get_conflict_explanation("CONFLICTING_DIMENSIONS")
+                entity_names = [getattr(e, 'id', str(id(e))) for c in length_constraints for e in c.entities]
+                
                 conflicts.append(ConflictInfo(
                     constraints=length_constraints,
                     conflict_type="CONFLICTING_DIMENSIONS",
-                    explanation=f"Widersprüchliche Längen-Constraints: {values}",
-                    suggested_resolution="Entfernen Sie alle bis auf einen LENGTH-Constraint",
+                    explanation=f"{template['explanation']}\n\nWerte: {values}",
+                    suggested_resolution="Entferne alle bis auf einen LENGTH-Constraint",
                     severity=ConflictSeverity.HIGH,
-                    auto_fixable=True  # Könnte automatisch den ersten behalten
+                    auto_fixable=True,
+                    resolution_steps=template['resolution_steps'],
+                    affected_geometry=list(set(entity_names)),
+                    visual_hint=template['visual_hint']
                 ))
         
         # Radius-Constraints
@@ -720,13 +961,20 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
         if len(radius_constraints) >= 2:
             values = [c.value for c in radius_constraints]
             if len(set(round(v, 3) for v in values)) > 1:
+                # SU-003: Hole Template
+                template = get_conflict_explanation("CONFLICTING_RADII")
+                entity_names = [getattr(e, 'id', str(id(e))) for c in radius_constraints for e in c.entities]
+                
                 conflicts.append(ConflictInfo(
                     constraints=radius_constraints,
                     conflict_type="CONFLICTING_RADII",
-                    explanation=f"Widersprüchliche Radius-Constraints: {values}",
-                    suggested_resolution="Entfernen Sie alle bis auf einen RADIUS-Constraint",
+                    explanation=f"{template['explanation']}\n\nWerte: {values}",
+                    suggested_resolution="Entferne alle bis auf einen RADIUS-Constraint",
                     severity=ConflictSeverity.HIGH,
-                    auto_fixable=True
+                    auto_fixable=True,
+                    resolution_steps=template['resolution_steps'],
+                    affected_geometry=list(set(entity_names)),
+                    visual_hint=template['visual_hint']
                 ))
     
     # Konflikt 3: COINCIDENT auf demselben Punkt (Selbstreferenz)
@@ -735,28 +983,42 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
             entities = getattr(c, 'entities', [])
             if len(entities) == 2:
                 if entities[0] is entities[1]:
+                    # SU-003: Hole Template
+                    template = get_conflict_explanation("SELF_REFERENTIAL")
+                    point_id = getattr(entities[0], 'id', str(id(entities[0])))
+                    
                     conflicts.append(ConflictInfo(
                         constraints=[c],
                         conflict_type="SELF_REFERENTIAL",
-                        explanation="COINCIDENT-Constraint verweist auf denselben Punkt",
-                        suggested_resolution="Entfernen Sie diesen Constraint",
+                        explanation=template['explanation'],
+                        suggested_resolution="Entferne diesen Constraint",
                         severity=ConflictSeverity.MEDIUM,
-                        auto_fixable=True
+                        auto_fixable=True,
+                        resolution_steps=template['resolution_steps'],
+                        affected_geometry=[point_id],
+                        visual_hint=template['visual_hint']
                     ))
     
     # Konflikt 4: Negative Dimensions
     for c in constraints:
-        if c.type in (ConstraintType.LENGTH, ConstraintType.DISTANCE, 
+        if c.type in (ConstraintType.LENGTH, ConstraintType.DISTANCE,
                       ConstraintType.RADIUS, ConstraintType.DIAMETER):
             value = getattr(c, 'value', None)
             if value is not None and value < 0:
+                # SU-003: Hole Template
+                template = get_conflict_explanation("NEGATIVE_DIMENSION")
+                entity_names = [getattr(e, 'id', str(id(e))) for e in c.entities]
+                
                 conflicts.append(ConflictInfo(
                     constraints=[c],
                     conflict_type="NEGATIVE_DIMENSION",
-                    explanation=f"{c.type.name} hat negativen Wert: {value}",
-                    suggested_resolution="Setzen Sie einen positiven Wert",
+                    explanation=f"{template['explanation']}\n\n{c.type.name} = {value}",
+                    suggested_resolution="Setze einen positiven Wert",
                     severity=ConflictSeverity.HIGH,
-                    auto_fixable=False
+                    auto_fixable=False,
+                    resolution_steps=template['resolution_steps'],
+                    affected_geometry=entity_names,
+                    visual_hint=template['visual_hint']
                 ))
     
     # Konflikt 5: PERPENDICULAR + PARALLEL auf denselben Linien
@@ -774,15 +1036,24 @@ def detect_conflicting_constraints(sketch) -> List[ConflictInfo]:
             has_parallel = any(c.type == ConstraintType.PARALLEL for c in shared_constraints)
             
             if has_perpendicular and has_parallel:
-                conflicting = [c for c in shared_constraints 
+                conflicting = [c for c in shared_constraints
                              if c.type in (ConstraintType.PERPENDICULAR, ConstraintType.PARALLEL)]
+                
+                # SU-003: Hole Template
+                template = get_conflict_explanation("PERPENDICULAR_PARALLEL_CONFLICT")
+                line1_id = getattr(line1, 'id', '?')
+                line2_id = getattr(line2, 'id', '?')
+                
                 conflicts.append(ConflictInfo(
                     constraints=conflicting,
                     conflict_type="PERPENDICULAR_PARALLEL_CONFLICT",
-                    explanation=f"Linien {getattr(line1, 'id', '?')} und {getattr(line2, 'id', '?')} können nicht gleichzeitig senkrecht und parallel sein",
-                    suggested_resolution="Entfernen Sie PERPENDICULAR oder PARALLEL",
+                    explanation=f"{template['explanation']}\n\nBetroffen: Linien {line1_id} und {line2_id}",
+                    suggested_resolution="Entferne PERPENDICULAR oder PARALLEL",
                     severity=ConflictSeverity.CRITICAL,
-                    auto_fixable=False
+                    auto_fixable=False,
+                    resolution_steps=template['resolution_steps'],
+                    affected_geometry=[line1_id, line2_id],
+                    visual_hint=template['visual_hint']
                 ))
     
     return conflicts

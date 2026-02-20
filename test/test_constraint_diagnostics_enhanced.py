@@ -943,5 +943,337 @@ class TestIntegration:
         assert len(conflicts) == 0
 
 
+# =============================================================================
+# SU-003: Enhanced Conflict Explanation Tests
+# =============================================================================
+
+@pytest.mark.skipif(
+    not DEPENDENCIES_AVAILABLE,
+    reason="ConstraintDiagnostics dependencies not available"
+)
+class TestSU003ConflictExplanations:
+    """SU-003: Tests für erweiterte Konflikt-Erklärungen."""
+    
+    def test_conflict_info_has_resolution_steps(self):
+        """Test dass ConflictInfo resolution_steps enthält."""
+        from sketcher.constraint_diagnostics import ConflictInfo, ConflictSeverity
+        
+        conflict = ConflictInfo(
+            constraints=[Mock()],
+            conflict_type="GEOMETRIC_IMPOSSIBLE",
+            explanation="Test explanation",
+            suggested_resolution="Test resolution",
+            severity=ConflictSeverity.CRITICAL,
+            auto_fixable=False,
+            resolution_steps=["Schritt 1", "Schritt 2"],
+            affected_geometry=["line_1"],
+            visual_hint="highlight_line"
+        )
+        
+        assert conflict.resolution_steps == ["Schritt 1", "Schritt 2"]
+        assert conflict.affected_geometry == ["line_1"]
+        assert conflict.visual_hint == "highlight_line"
+    
+    def test_conflict_info_to_dict_includes_new_fields(self):
+        """Test dass to_dict() die neuen SU-003 Felder enthält."""
+        from sketcher.constraint_diagnostics import ConflictInfo, ConflictSeverity
+        
+        conflict = ConflictInfo(
+            constraints=[Mock()],
+            conflict_type="TEST_CONFLICT",
+            explanation="Test",
+            suggested_resolution="Fix",
+            severity=ConflictSeverity.HIGH,
+            auto_fixable=True,
+            resolution_steps=["Step 1", "Step 2"],
+            affected_geometry=["geo_1", "geo_2"],
+            visual_hint="highlight_elements"
+        )
+        
+        d = conflict.to_dict()
+        
+        assert 'resolution_steps' in d
+        assert d['resolution_steps'] == ["Step 1", "Step 2"]
+        assert 'affected_geometry' in d
+        assert d['affected_geometry'] == ["geo_1", "geo_2"]
+        assert 'visual_hint' in d
+        assert d['visual_hint'] == "highlight_elements"
+    
+    def test_get_conflict_explanation_geometric_impossible(self):
+        """Test Template für GEOMETRIC_IMPOSSIBLE."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("GEOMETRIC_IMPOSSIBLE")
+        
+        assert 'explanation' in template
+        assert 'resolution_steps' in template
+        assert 'visual_hint' in template
+        assert "horizontal" in template['explanation'].lower()
+        assert "vertikal" in template['explanation'].lower()
+        assert len(template['resolution_steps']) >= 2
+    
+    def test_get_conflict_explanation_perpendicular_parallel(self):
+        """Test Template für PERPENDICULAR_PARALLEL_CONFLICT."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("PERPENDICULAR_PARALLEL_CONFLICT")
+        
+        assert 'explanation' in template
+        assert "rechtwinklig" in template['explanation'].lower() or "90°" in template['explanation']
+        assert "parallel" in template['explanation'].lower()
+        assert len(template['resolution_steps']) >= 2
+    
+    def test_get_conflict_explanation_negative_dimension(self):
+        """Test Template für NEGATIVE_DIMENSION."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("NEGATIVE_DIMENSION")
+        
+        assert 'explanation' in template
+        assert "positiv" in template['explanation'].lower()
+        assert len(template['resolution_steps']) >= 1
+    
+    def test_get_conflict_explanation_self_referential(self):
+        """Test Template für SELF_REFERENTIAL."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("SELF_REFERENTIAL")
+        
+        assert 'explanation' in template
+        assert "COINCIDENT" in template['explanation'] or "koinzident" in template['explanation'].lower()
+        assert len(template['resolution_steps']) >= 1
+    
+    def test_get_conflict_explanation_conflicting_dimensions(self):
+        """Test Template für CONFLICTING_DIMENSIONS."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("CONFLICTING_DIMENSIONS")
+        
+        assert 'explanation' in template
+        assert "widersprüchlich" in template['explanation'].lower() or "unterschiedlich" in template['explanation'].lower()
+        assert len(template['resolution_steps']) >= 2
+    
+    def test_get_conflict_explanation_unknown_type(self):
+        """Test Fallback für unbekannten Konflikt-Typ."""
+        from sketcher.constraint_diagnostics import get_conflict_explanation
+        
+        template = get_conflict_explanation("UNKNOWN_CONFLICT_TYPE")
+        
+        assert 'explanation' in template
+        assert 'resolution_steps' in template
+        assert "Unbekannt" in template['explanation'] or "unbekannt" in template['explanation'].lower()
+    
+    def test_format_conflict_explanation_with_entities(self):
+        """Test format_conflict_explanation mit Entity-Namen."""
+        from sketcher.constraint_diagnostics import format_conflict_explanation
+        
+        explanation = format_conflict_explanation(
+            "GEOMETRIC_IMPOSSIBLE",
+            entity_names=["Line_1", "Line_2"],
+            values=[100, 50]
+        )
+        
+        assert "Line_1" in explanation
+        assert "Line_2" in explanation
+        assert "100" in explanation
+        assert "50" in explanation
+    
+    def test_conflict_detection_includes_resolution_steps(self):
+        """Test dass detect_conflicting_constraints resolution_steps setzt."""
+        start = Point2D(0, 0)
+        end = Point2D(100, 0)
+        line = Line2D(start, end)
+        
+        sketch = Mock()
+        sketch.points = [start, end]
+        sketch.lines = [line]
+        sketch.circles = []
+        sketch.arcs = []
+        
+        # Konflikt erzeugen: HORIZONTAL + VERTICAL + LENGTH
+        h = make_horizontal(line)
+        v = make_vertical(line)
+        l = make_length(line, 100)
+        sketch.constraints = [h, v, l]
+        
+        conflicts = detect_conflicting_constraints(sketch)
+        
+        assert len(conflicts) > 0
+        conflict = conflicts[0]
+        
+        # SU-003: Prüfe neue Felder
+        assert hasattr(conflict, 'resolution_steps')
+        assert len(conflict.resolution_steps) >= 2
+        assert hasattr(conflict, 'affected_geometry')
+        assert len(conflict.affected_geometry) > 0
+        assert hasattr(conflict, 'visual_hint')
+    
+    def test_conflict_detection_self_referential_includes_resolution(self):
+        """Test dass SELF_REFERENTIAL Konflikt resolution_steps enthält."""
+        point = Point2D(50, 50)
+        
+        sketch = Mock()
+        sketch.points = [point]
+        sketch.lines = []
+        sketch.circles = []
+        sketch.arcs = []
+        
+        # Selbstreferenziellen COINCIDENT Constraint erzeugen
+        c = make_coincident(point, point)
+        sketch.constraints = [c]
+        
+        conflicts = detect_conflicting_constraints(sketch)
+        
+        assert len(conflicts) > 0
+        conflict = conflicts[0]
+        
+        assert conflict.conflict_type == "SELF_REFERENTIAL"
+        assert hasattr(conflict, 'resolution_steps')
+        assert len(conflict.resolution_steps) >= 1
+    
+    def test_conflict_detection_negative_dimension_includes_resolution(self):
+        """Test dass NEGATIVE_DIMENSION Konflikt resolution_steps enthält."""
+        start = Point2D(0, 0)
+        end = Point2D(100, 0)
+        line = Line2D(start, end)
+        
+        sketch = Mock()
+        sketch.points = [start, end]
+        sketch.lines = [line]
+        sketch.circles = []
+        sketch.arcs = []
+        
+        # Negativen LENGTH Constraint erzeugen
+        l = make_length(line, -50)
+        sketch.constraints = [l]
+        
+        conflicts = detect_conflicting_constraints(sketch)
+        
+        assert len(conflicts) > 0
+        conflict = conflicts[0]
+        
+        assert conflict.conflict_type == "NEGATIVE_DIMENSION"
+        assert hasattr(conflict, 'resolution_steps')
+        assert len(conflict.resolution_steps) >= 1
+    
+    def test_conflict_detection_perpendicular_parallel_includes_resolution(self):
+        """Test dass PERPENDICULAR_PARALLEL_CONFLICT resolution_steps enthält."""
+        start1 = Point2D(0, 0)
+        end1 = Point2D(100, 0)
+        line1 = Line2D(start1, end1)
+        
+        start2 = Point2D(0, 0)
+        end2 = Point2D(0, 100)
+        line2 = Line2D(start2, end2)
+        
+        sketch = Mock()
+        sketch.points = [start1, end1, start2, end2]
+        sketch.lines = [line1, line2]
+        sketch.circles = []
+        sketch.arcs = []
+        
+        # PERPENDICULAR und PARALLEL auf dieselben Linien
+        perp = make_perpendicular(line1, line2)
+        par = make_parallel(line1, line2)
+        sketch.constraints = [perp, par]
+        
+        conflicts = detect_conflicting_constraints(sketch)
+        
+        assert len(conflicts) > 0
+        conflict = conflicts[0]
+        
+        assert conflict.conflict_type == "PERPENDICULAR_PARALLEL_CONFLICT"
+        assert hasattr(conflict, 'resolution_steps')
+        assert len(conflict.resolution_steps) >= 2
+        assert hasattr(conflict, 'affected_geometry')
+        assert len(conflict.affected_geometry) == 2
+
+
+@pytest.mark.skipif(
+    not DEPENDENCIES_AVAILABLE,
+    reason="ConstraintDiagnostics dependencies not available"
+)
+class TestConflictExplanationTemplates:
+    """SU-003: Tests für ConflictExplanationTemplates Klasse."""
+    
+    def test_all_templates_have_required_fields(self):
+        """Test dass alle Templates die erforderlichen Felder haben."""
+        from sketcher.constraint_diagnostics import ConflictExplanationTemplates
+        
+        template_names = [
+            'GEOMETRIC_IMPOSSIBLE',
+            'PERPENDICULAR_PARALLEL_CONFLICT',
+            'NEGATIVE_DIMENSION',
+            'SELF_REFERENTIAL',
+            'CONFLICTING_DIMENSIONS',
+            'CONFLICTING_RADII',
+            'ZERO_LENGTH_LINE',
+            'INVALID_ANGLE',
+            'OVER_CONSTRAINED_POINT',
+            'TANGENT_IMPOSSIBLE'
+        ]
+        
+        for name in template_names:
+            template = getattr(ConflictExplanationTemplates, name, None)
+            assert template is not None, f"Template {name} nicht gefunden"
+            assert 'explanation' in template, f"Template {name} hat kein 'explanation' Feld"
+            assert 'resolution_steps' in template, f"Template {name} hat kein 'resolution_steps' Feld"
+            assert 'visual_hint' in template, f"Template {name} hat kein 'visual_hint' Feld"
+    
+    def test_templates_are_german(self):
+        """Test dass alle Erklärungen auf Deutsch sind."""
+        from sketcher.constraint_diagnostics import ConflictExplanationTemplates
+        
+        # Deutsche Schlüsselwörter die in den Erklärungen vorkommen sollten
+        german_keywords = [
+            "kann nicht", "müssen", "entfernen", "hinzufügen",
+            "positiv", "negativ", "Wert", "Constraint", "Linie",
+            "Punkt", "Winkel", "parallel", "senkrecht"
+        ]
+        
+        template_names = [
+            'GEOMETRIC_IMPOSSIBLE',
+            'PERPENDICULAR_PARALLEL_CONFLICT',
+            'NEGATIVE_DIMENSION',
+            'SELF_REFERENTIAL',
+            'CONFLICTING_DIMENSIONS'
+        ]
+        
+        for name in template_names:
+            template = getattr(ConflictExplanationTemplates, name)
+            explanation = template['explanation']
+            
+            # Mindestens ein deutsches Schlüsselwort sollte vorhanden sein
+            has_german = any(kw.lower() in explanation.lower() for kw in german_keywords)
+            assert has_german, f"Template {name} scheint nicht auf Deutsch zu sein"
+    
+    def test_resolution_steps_are_actionable(self):
+        """Test dass Resolution Steps aktionsorientiert sind."""
+        from sketcher.constraint_diagnostics import ConflictExplanationTemplates
+        
+        action_keywords = ["Entferne", "ODER", "setze", "prüfe", "ändere", "verschiebe"]
+        
+        template_names = [
+            'GEOMETRIC_IMPOSSIBLE',
+            'PERPENDICULAR_PARALLEL_CONFLICT',
+            'NEGATIVE_DIMENSION',
+            'SELF_REFERENTIAL',
+            'CONFLICTING_DIMENSIONS'
+        ]
+        
+        for name in template_names:
+            template = getattr(ConflictExplanationTemplates, name)
+            steps = template['resolution_steps']
+            
+            assert len(steps) >= 1, f"Template {name} hat keine Resolution Steps"
+            
+            # Mindestens ein Step sollte ein Aktions-Keyword enthalten
+            has_action = any(
+                any(kw in step for kw in action_keywords)
+                for step in steps
+            )
+            assert has_action, f"Template {name} Steps sind nicht aktionsorientiert"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
