@@ -31,6 +31,10 @@ nul
 # Allow docs/CI_GUIDE.md
 !docs/CI_GUIDE.md
 
+# Allow docs/user_guide/
+!docs/user_guide/
+!docs/user_guide/**
+
 *.sh
 .claude
 tests/
