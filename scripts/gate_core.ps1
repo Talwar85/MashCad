@@ -15,7 +15,7 @@ $ErrorActionPreference = "Continue"
 
 $CORE_TESTS_FULL = @(
     "test/test_feature_error_status.py",
-    "test/test_tnp_v4_feature_refs.py",
+    "test/test_tnp_v4_1_regression_suite.py",
     "test/test_trust_gate_core_workflow.py",
     "test/test_cad_workflow_trust.py",
     "test/test_brepopengun_offset_api.py",
@@ -35,7 +35,7 @@ $CORE_TESTS_FULL = @(
 $CORE_TESTS_RED_FLAG = @(
     "test/test_showstopper_red_flag_pack.py",
     "test/test_feature_error_status.py",
-    "test/test_tnp_v4_feature_refs.py",
+    "test/test_tnp_v4_1_regression_suite.py",
     "test/test_feature_edit_robustness.py",
     "test/test_project_roundtrip_persistence.py",
     "test/test_parametric_reference_modelset.py"
@@ -70,6 +70,14 @@ Write-Host "Profile: $Profile"
 Write-Host "SkipUxBoundSuites: $SkipUxBoundSuites"
 Write-Host "DryRun: $DryRun"
 Write-Host "Tests: $($CORE_TESTS.Count) suites"
+Write-Host ""
+
+Write-Host "=== Environment Debug ===" -ForegroundColor Yellow
+Write-Host "Working Directory: $(Get-Location)"
+conda run -n cad_env python --version
+conda run -n cad_env python -m pytest --version
+Write-Host "Test files in test/: $(@(Get-ChildItem test/test_*.py).Count)"
+Write-Host "Selected test suites: $($CORE_TESTS.Count)"
 Write-Host ""
 
 if ($DryRun) {
@@ -108,7 +116,9 @@ if ($DryRun) {
 $start = Get-Date
 
 # Run tests and capture output
-$result = & conda run -n cad_env python -m pytest -q $CORE_TESTS 2>&1
+# Join array with spaces for proper expansion through conda run
+$testArgs = $CORE_TESTS -join " "
+$result = & conda run -n cad_env python -m pytest -q $testArgs 2>&1
 $exitCode = $LASTEXITCODE
 
 $end = Get-Date

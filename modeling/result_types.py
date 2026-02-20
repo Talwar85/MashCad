@@ -262,15 +262,26 @@ class BooleanResult(OperationResult):
     - history: BRepTools_History object from OCP Boolean operation
     - Tracks wie sich Faces/Edges durch Boolean-Op geändert haben
     - Ermöglicht 95-99% TNP-Robustheit (statt 70-80% mit Geometric Naming)
+    
+    High-Priority TODO 2026:
+    - history_details: Detailed mapping of modified/generated/deleted shapes
+    - Enables precise TNP tracking for complex Boolean operations
     """
     operation_type: str = ""  # "fuse", "cut", "intersect"
     history: Any = None  # BRepTools_History (OCP) - für Phase 2 TNP
+    history_details: Dict[str, Any] = None  # Detailed history mapping (High-Priority TODO)
+    
+    def __post_init__(self):
+        """Initialize history_details if not set."""
+        if self.history_details is None:
+            self.history_details = {}
 
     @classmethod
     def from_operation(cls, op_type: str, solid: Any,
                        status: ResultStatus = ResultStatus.SUCCESS,
                        message: str = "",
-                       history: Any = None) -> "BooleanResult":
+                       history: Any = None,
+                       history_details: Dict[str, Any] = None) -> "BooleanResult":
         """
         Create from a boolean operation.
 
@@ -280,13 +291,15 @@ class BooleanResult(OperationResult):
             status: Operation status
             message: Description
             history: BRepTools_History (Phase 2 TNP)
+            history_details: Detailed shape mappings (High-Priority TODO 2026)
         """
         result = cls(
             status=status,
             value=solid,
             message=message or f"Boolean {op_type} completed",
             operation_type=op_type,
-            history=history
+            history=history,
+            history_details=history_details or {}
         )
         return result
 

@@ -366,3 +366,144 @@ def sample_heightmap_at_uvs(
 
     # Sampeln
     return heightmap[py, px]
+
+
+def generate_normal_map_from_heightmap(
+    heightmap: np.ndarray,
+    strength: float = 1.0
+) -> np.ndarray:
+    """
+    Generiert eine Normal-Map aus einer Height-Map.
+    
+    High-Priority TODO 2026: Normal-Map Preview im Viewport
+    
+    Die Normal-Map repräsentiert die Oberflächennormalen als RGB-Farben:
+    - R = X-Komponente (mapped from -1..1 to 0..255)
+    - G = Y-Komponente (mapped from -1..1 to 0..255)
+    - B = Z-Komponente (mapped from -1..1 to 0..255)
+    
+    Args:
+        heightmap: 2D Height-Map Array (size x size), Werte 0-1
+        strength: Stärke der Normalen-Berechnung (höher = stärkere Krümmung)
+        
+    Returns:
+        RGB Normal-Map Array (size x size x 3), Werte 0-1
+    """
+    # Sobel-Operatoren für Gradient-Berechnung
+    # Gx = rechter Pixel - linker Pixel
+    # Gy = unterer Pixel - oberer Pixel
+    
+    size = heightmap.shape[0]
+    
+    # Padding für Randbehandlung (wrap-around)
+    padded = np.pad(heightmap, 1, mode='wrap')
+    
+    # Gradienten berechnen
+    # dx = (rechts - links) / 2
+    dx = (padded[1:-1, 2:] - padded[1:-1, :-2]) / 2.0
+    # dy = (unten - oben) / 2
+    dy = (padded[2:, 1:-1] - padded[:-2, 1:-1]) / 2.0
+    
+    # Stärke anwenden
+    dx = dx * strength
+    dy = dy * strength
+    
+    # Normalen berechnen: N = (-dx, -dy, 1) normalisiert
+    # Z-Komponente ist 1 (zeigt aus der Oberfläche heraus)
+    z_component = np.ones_like(dx)
+    
+    # Länge für Normalisierung
+    length = np.sqrt(dx**2 + dy**2 + z_component**2)
+    length = np.maximum(length, 1e-10)  # Division durch Null vermeiden
+    
+    # Normalisierte Normalen (Werte -1 bis 1)
+    nx = -dx / length
+    ny = -dy / length
+    nz = z_component / length
+    
+    # Map von -1..1 auf 0..1 für RGB-Darstellung
+    normal_map = np.zeros((size, size, 3), dtype=np.float32)
+    normal_map[:, :, 0] = nx * 0.5 + 0.5  # R = X
+    normal_map[:, :, 1] = ny * 0.5 + 0.5  # G = Y
+    normal_map[:, :, 2] = nz * 0.5 + 0.5  # B = Z
+    
+    return normal_map
+
+
+def sample_normal_map_at_uvs(
+    normal_map: np.ndarray,
+    uvs: np.ndarray,
+    scale: float = 1.0,
+    rotation: float = 0.0
+) -> np.ndarray:
+    """
+    Sampelt Normal-Map an gegebenen UV-Koordinaten.
+    
+    Args:
+        normal_map: 3D Normal-Map Array (size x size x 3)
+        uvs: UV-Koordinaten Array (N, 2) in mm
+        scale: Pattern-Skalierung in mm
+        rotation: Pattern-Rotation in Grad
+        
+    Returns:
+        Normal-Vektoren Array (N, 3) mit Werten 0-1
+    """
+    # Rotation anwenden
+    angle = np.radians(rotation)
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    u_rot = uvs[:, 0] * cos_a - uvs[:, 1] * sin_a
+    v_rot = uvs[:, 0] * sin_a + uvs[:, 1] * cos_a
+    
+    # Skalieren auf Pattern-Raum (0-1)
+    u_scaled = (u_rot / scale) % 1.0
+    v_scaled = (v_rot / scale) % 1.0
+    
+    # In Pixel-Koordinaten umrechnen
+    size = normal_map.shape[0]
+    px = (u_scaled * (size - 1)).astype(int)
+    py = (v_scaled * (size - 1)).astype(int)
+    
+    # Clampen
+    px = np.clip(px, 0, size - 1)
+    py = np.clip(py, 0, size - 1)
+    
+    # Sampeln (N, 3)
+    return normal_map[py, px]
+
+
+def apply_normal_perturbation(
+    vertex_normals: np.ndarray,
+    tangent_normals: np.ndarray,
+    blend_factor: float = 1.0
+) -> np.ndarray:
+    """
+    Wendet Normal-Map-Perturbation auf Vertex-Normalen an.
+    
+    High-Priority TODO 2026: Normal-Map Preview im Viewport
+    
+    Transformiert Tangent-Space-Normalen in World-Space durch
+    Kombination mit den ursprünglichen Vertex-Normalen.
+    
+    Vereinfachter Ansatz: Direkte Blending der Normalen.
+    Für korrekte Ergebnisse wäre eine TBN-Matrix erforderlich.
+    
+    Args:
+        vertex_normals: Original Vertex-Normalen (N, 3), normalisiert
+        tangent_normals: Normal-Map-Werte (N, 3), Werte 0-1
+        blend_factor: Stärke der Perturbation (0 = keine, 1 = voll)
+        
+    Returns:
+        Perturbierte Normalen (N, 3), normalisiert
+    """
+    # Normal-Map von 0-1 auf -1 bis 1 transformieren
+    perturbation = (tangent_normals - 0.5) * 2.0
+    
+    # Blending: N_final = normalize(N_original + perturbation * blend)
+    perturbed = vertex_normals + perturbation * blend_factor
+    
+    # Normalisieren
+    lengths = np.linalg.norm(perturbed, axis=1, keepdims=True)
+    lengths = np.maximum(lengths, 1e-10)
+    perturbed = perturbed / lengths
+    
+    return perturbed

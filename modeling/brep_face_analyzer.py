@@ -696,12 +696,16 @@ class BRepFaceAnalyzer:
         Tier 3 OCP Feature Audit: Helix-Erkennung via Edge-Sampling.
         Prüft ob Edges auf BSpline-Flächen einen helikalischen Verlauf haben
         (konstanter Radius zur Achse + monotone Z-Komponente).
+        
+        High-Priority TODO 2026: Enhanced with scipy least_squares fitting
+        for accurate helix parameter extraction.
 
         Returns:
             Liste erkannter THREAD-Features
         """
         import math
         from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from config.feature_flags import is_enabled
 
         features = []
 
@@ -719,7 +723,7 @@ class BRepFaceAnalyzer:
                 edge = explorer.Current()
                 try:
                     curve = BRepAdaptor_Curve(edge)
-                    n_samples = 20
+                    n_samples = 50  # Increased for better fitting
                     first = curve.FirstParameter()
                     last = curve.LastParameter()
                     if abs(last - first) < 1e-10:
@@ -729,9 +733,12 @@ class BRepFaceAnalyzer:
                     step = (last - first) / (n_samples - 1)
                     points = [curve.Value(first + i * step) for i in range(n_samples)]
 
+                    # Convert to numpy array for analysis
+                    points_np = np.array([[p.X(), p.Y(), p.Z()] for p in points])
+                    
                     # Berechne Radius zur Z-Achse und Z-Werte
-                    radii = [math.sqrt(p.X()**2 + p.Y()**2) for p in points]
-                    z_values = [p.Z() for p in points]
+                    radii = np.sqrt(points_np[:, 0]**2 + points_np[:, 1]**2)
+                    z_values = points_np[:, 2]
 
                     mean_radius = np.mean(radii)
                     if mean_radius < 1e-6:
@@ -741,30 +748,166 @@ class BRepFaceAnalyzer:
                     radius_std = np.std(radii)
 
                     # Prüfe: Radius ~ konstant UND Z monoton steigend/fallend
-                    z_diffs = [z_values[i+1] - z_values[i] for i in range(len(z_values)-1)]
-                    z_monotonic = all(d >= -1e-6 for d in z_diffs) or all(d <= 1e-6 for d in z_diffs)
+                    z_diffs = np.diff(z_values)
+                    z_monotonic = np.all(z_diffs >= -1e-6) or np.all(z_diffs <= 1e-6)
                     z_range = abs(z_values[-1] - z_values[0])
 
                     # Helix-Kriterien: Radius-Variation < 10%, Z steigt monoton, Z-Range > 0
                     if radius_std < 0.1 * mean_radius and z_monotonic and z_range > 0.1:
-                        features.append(DetectedFeature(
-                            feature_type=FeatureType.THREAD,
-                            face_indices={face.idx},
-                            confidence=0.8,
-                            parameters={
-                                "radius": float(mean_radius),
-                                "pitch": float(z_range),
-                                "direction": "up" if z_values[-1] > z_values[0] else "down"
-                            }
-                        ))
+                        # Use scipy fitting if enabled for better parameter extraction
+                        helix_params = None
+                        if is_enabled("helix_fitting_enabled"):
+                            helix_params = self._fit_helix_parameters(points_np)
+                        
+                        if helix_params:
+                            # Use fitted parameters
+                            features.append(DetectedFeature(
+                                feature_type=FeatureType.THREAD,
+                                face_indices={face.idx},
+                                confidence=0.9,  # Higher confidence with fitting
+                                parameters=helix_params
+                            ))
+                            logger.debug(f"  Helix (fitted): Face {face.idx}, R={helix_params['radius']:.3f}mm, "
+                                       f"Pitch={helix_params['pitch']:.3f}mm, fit_quality={helix_params['fit_quality']:.4f}")
+                        else:
+                            # Fallback to simple estimation
+                            features.append(DetectedFeature(
+                                feature_type=FeatureType.THREAD,
+                                face_indices={face.idx},
+                                confidence=0.8,
+                                parameters={
+                                    "radius": float(mean_radius),
+                                    "pitch": float(z_range),
+                                    "direction": "up" if z_values[-1] > z_values[0] else "down",
+                                    "fit_quality": 0.0
+                                }
+                            ))
+                            logger.debug(f"  Helix (estimated): Face {face.idx}, R={mean_radius:.2f}mm, Pitch={z_range:.2f}mm")
                         found_helix = True
-                        logger.debug(f"  Helix erkannt: Face {face.idx}, R={mean_radius:.2f}mm, Pitch={z_range:.2f}mm")
                 except Exception as e:
                     logger.debug(f"  Helix-Check fehlgeschlagen für Face {face.idx}: {e}")
 
                 explorer.Next()
 
         return features
+    
+    def _fit_helix_parameters(self, points: np.ndarray) -> Optional[Dict[str, Any]]:
+        """
+        Fit helix parameters from sampled points using scipy least_squares.
+        
+        High-Priority TODO 2026: Accurate helix parameter extraction
+        
+        Helix equation (cylindrical coordinates):
+            r = const
+            θ = t
+            z = pitch * t / (2 * π)
+        
+        In Cartesian:
+            x = cx + r * cos(θ)
+            y = cy + r * sin(θ)
+            z = z0 + pitch * θ / (2 * π)
+        
+        Args:
+            points: Nx3 numpy array of sampled points
+            
+        Returns:
+            Dict with radius, pitch, axis_origin, axis_direction, fit_quality
+            or None if fitting fails
+        """
+        try:
+            from scipy.optimize import least_squares
+        except ImportError:
+            logger.debug("scipy not available for helix fitting, using estimation")
+            return None
+        
+        try:
+            n_points = len(points)
+            if n_points < 10:
+                return None
+            
+            # Initial estimates
+            center_xy = np.mean(points[:, :2], axis=0)
+            radius_init = np.mean(np.sqrt(
+                (points[:, 0] - center_xy[0])**2 + 
+                (points[:, 1] - center_xy[1])**2
+            ))
+            
+            # Estimate pitch from z-range and angular range
+            angles = np.arctan2(points[:, 1] - center_xy[1], points[:, 0] - center_xy[0])
+            # Unwrap angles to handle 2π discontinuity
+            angles_unwrapped = np.unwrap(angles)
+            angle_range = angles_unwrapped[-1] - angles_unwrapped[0]
+            
+            z_range = points[:, 2].max() - points[:, 2].min()
+            if abs(angle_range) > 0.1:
+                pitch_init = z_range / (angle_range / (2 * np.pi))
+            else:
+                pitch_init = z_range
+            
+            z0_init = points[:, 2].min()
+            
+            def helix_residuals(params):
+                """Residual function for least squares fitting."""
+                r, pitch, cx, cy, z0 = params
+                
+                residuals = []
+                for i, (x, y, z) in enumerate(points):
+                    # Compute angle from z position
+                    if abs(pitch) > 1e-6:
+                        theta = (z - z0) * (2 * np.pi) / pitch
+                    else:
+                        theta = 0
+                    
+                    # Expected x, y
+                    x_expected = cx + r * np.cos(theta)
+                    y_expected = cy + r * np.sin(theta)
+                    
+                    residuals.extend([x - x_expected, y - y_expected])
+                
+                return residuals
+            
+            # Fit using least squares
+            result = least_squares(
+                helix_residuals,
+                x0=[radius_init, pitch_init, center_xy[0], center_xy[1], z0_init],
+                bounds=(
+                    [0.1, 0.01, -np.inf, -np.inf, -np.inf],  # Lower bounds
+                    [np.inf, np.inf, np.inf, np.inf, np.inf]   # Upper bounds
+                ),
+                max_nfev=200
+            )
+            
+            # Calculate fit quality (normalized residual)
+            residual_norm = np.sqrt(np.sum(np.array(result.fun)**2))
+            point_spread = np.max(np.linalg.norm(points - np.mean(points, axis=0), axis=1))
+            fit_quality = residual_norm / (point_spread * n_points) if point_spread > 0 else 1.0
+            
+            # Accept fit if quality is good enough
+            FIT_QUALITY_THRESHOLD = 0.05  # 5% error threshold
+            
+            if fit_quality < FIT_QUALITY_THRESHOLD and result.success:
+                r, pitch, cx, cy, z0 = result.x
+                
+                # Determine direction from z trend
+                direction = "up" if pitch > 0 else "down"
+                
+                return {
+                    'radius': float(abs(r)),
+                    'pitch': float(abs(pitch)),
+                    'axis_origin': (float(cx), float(cy), float(z0)),
+                    'axis_direction': (0.0, 0.0, 1.0),  # Assuming Z-axis helix
+                    'direction': direction,
+                    'fit_quality': float(fit_quality),
+                    'n_points': n_points,
+                    'angle_range_rad': float(angle_range)
+                }
+            else:
+                logger.debug(f"Helix fit quality too low: {fit_quality:.4f} > {FIT_QUALITY_THRESHOLD}")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Helix fitting failed: {e}")
+            return None
 
     def _detect_fillet(self, face: AnalyzedFace) -> Optional[DetectedFeature]:
         """Erkennt Fillets (kleine Zylinder zwischen 2 tangenten Flaechen)."""

@@ -2129,20 +2129,14 @@ class ShapeNamingService:
                         logger.debug(f"TNP BRepFeat: Mapped {old_shape_id.uuid[:8]} → {new_shape_id.uuid[:8]} (score={best_score:.3f})")
 
             # === Phase 3: Registriere alle neuen Edges (z.B. Side-Edges von Extrusion) ===
-            # BUG FIX: Korrekte Iteration über manual_mappings.items()
+            # Hinweis: Iteration über manual_mappings.items() - Werte sind immer Listen
             mappings_for_unmapped = []
             if manual_mappings:
-                for old_uuid, new_uuid_or_list in manual_mappings.items():
-                    if isinstance(new_uuid_or_list, list):
-                        # Liste von neuen UUIDs
-                        for new_uuid in new_uuid_or_list:
-                            mappings_for_unmapped.append(
-                                type('Mapping', (), {'new_shape_uuid': new_uuid})()
-                            )
-                    elif isinstance(new_uuid_or_list, str):
-                        # Einzelne UUID
+                for old_uuid, new_uuid_list in manual_mappings.items():
+                    # Liste von neuen UUIDs
+                    for new_uuid in new_uuid_list:
                         mappings_for_unmapped.append(
-                            type('Mapping', (), {'new_shape_uuid': new_uuid_or_list})()
+                            type('Mapping', (), {'new_shape_uuid': new_uuid})()
                         )
 
             new_edge_count = self._register_unmapped_edges(

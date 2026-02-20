@@ -1,0 +1,39 @@
+{
+	"mcpServers": {
+		"filesystem": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-filesystem",
+				"C:/LiteCad"
+			],
+			"disabled": false,
+			"alwaysAllow": [
+				"create_directory",
+				"list_directory",
+				"read_text_file",
+				"search_files",
+				"read_multiple_files",
+				"write_file",
+				"edit_file"
+			]
+		},
+		"sequentialthinking": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@modelcontextprotocol/server-sequential-thinking"
+			]
+		},
+		"context7": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@upstash/context7-mcp"
+			],
+			"env": {
+				"DEFAULT_MINIMUM_TOKENS": ""
+			}
+		}
+	}
+}

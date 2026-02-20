@@ -10,14 +10,23 @@ Problem solved:
 - Failed Boolean operations automatically rollback
 - User can always continue working after errors
 
+PI-006 Enhancement: Rollback Consistency Validation
+- State capture before transactions
+- Validation after rollback
+- Automatic cleanup for orphaned data
+
 Author: Claude (Architecture Refactoring Phase 1)
 Date: 2026-01-22
+Updated: 2026-02-20 (PI-006: Rollback Consistency)
 """
 
 import copy
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, TYPE_CHECKING
 from dataclasses import dataclass
 from loguru import logger
+
+if TYPE_CHECKING:
+    from modeling.rollback_validator import RollbackValidator, RollbackState, ValidationResult
 
 
 class BooleanOperationError(Exception):
@@ -237,21 +246,31 @@ class BodyTransaction:
         - Body state is restored to snapshot
         - Exception is logged but suppressed
         - User can continue working
+
+    PI-006 Enhancement:
+        - Optional rollback validation via feature flag
+        - Automatic orphan detection and cleanup
     """
 
-    def __init__(self, body: 'Body', operation_name: str = "Operation"):
+    def __init__(self, body: 'Body', operation_name: str = "Operation", validate_rollback: bool = None):
         """
         Initialize transaction.
 
         Args:
             body: The Body to protect
             operation_name: Human-readable operation description for logging
+            validate_rollback: Override feature flag for rollback validation
         """
         self._body = body
         self._operation_name = operation_name
         self._snapshot: Optional[BodySnapshot] = None
         self._committed = False
         self._entered = False
+        
+        # PI-006: Rollback validation support
+        self._validate_rollback = validate_rollback
+        self._pre_state: Optional['RollbackState'] = None
+        self._validator: Optional['RollbackValidator'] = None
 
     def __enter__(self) -> 'BodyTransaction':
         """
@@ -274,6 +293,9 @@ class BodyTransaction:
 
         # TNP v4.0: Snapshot des ShapeNamingService erstellen
         self._snapshot.create_tnp_snapshot(self._body)
+        
+        # PI-006: Capture rollback validation state if enabled
+        self._capture_validation_state()
 
         logger.debug(f"📸 Transaction started: {self._operation_name}")
         return self
@@ -320,6 +342,78 @@ class BodyTransaction:
             return False  # Propagate unexpected exceptions
 
         return False
+
+    def _capture_validation_state(self) -> None:
+        """PI-006: Capture state for rollback validation if enabled."""
+        # Check if rollback validation is enabled
+        if self._validate_rollback is None:
+            try:
+                from config.feature_flags import FEATURE_FLAGS
+                self._validate_rollback = FEATURE_FLAGS.get("rollback_validation", False)
+            except Exception:
+                self._validate_rollback = False
+        
+        if not self._validate_rollback:
+            return
+        
+        try:
+            from modeling.rollback_validator import RollbackValidator
+            self._validator = RollbackValidator(
+                document=getattr(self._body, '_document', None)
+            )
+            self._pre_state = self._validator.capture_state(
+                self._operation_name,
+                getattr(self._body, 'name', None)
+            )
+            logger.debug(f"[PI-006] Pre-rollback state captured")
+        except Exception as e:
+            logger.warning(f"[PI-006] Failed to capture validation state: {e}")
+            self._validator = None
+            self._pre_state = None
+
+    def _validate_after_rollback(self) -> bool:
+        """
+        PI-006: Validate state consistency after rollback.
+        
+        Returns:
+            True if validation passed, False if issues detected
+        """
+        if not self._validator or not self._pre_state:
+            return True
+        
+        try:
+            from modeling.rollback_validator import RollbackValidator
+            
+            # Capture post-rollback state
+            post_state = self._validator.capture_state(
+                f"{self._operation_name} (post-rollback)",
+                getattr(self._body, 'name', None)
+            )
+            
+            # Validate rollback consistency
+            result = self._validator.validate_rollback(self._pre_state, post_state)
+            
+            if not result.is_valid:
+                logger.warning(f"[PI-006] Rollback validation FAILED")
+                for error in result.errors:
+                    logger.error(f"  {error}")
+                
+                # Attempt automatic cleanup
+                if result.orphans_detected > 0:
+                    cleaned = self._validator.cleanup_orphans(result.orphan_details)
+                    logger.info(f"[PI-006] Auto-cleaned {cleaned} orphaned items")
+                
+                return False
+            else:
+                logger.debug(f"[PI-006] Rollback validation passed")
+                if result.warnings:
+                    for warning in result.warnings:
+                        logger.debug(f"  {warning}")
+                return True
+                
+        except Exception as e:
+            logger.warning(f"[PI-006] Rollback validation error: {e}")
+            return True  # Don't fail on validation errors
 
     def _rollback(self, exc_type, exc_val):
         """
@@ -368,6 +462,9 @@ class BodyTransaction:
                 logger.warning(f"⏪ Transaction rolled back: {self._operation_name} (not committed)")
 
             logger.info(f"✓ Body state restored to pre-operation snapshot")
+            
+            # PI-006: Validate rollback consistency
+            self._validate_after_rollback()
 
         except Exception as rollback_error:
             # Critical: Rollback itself failed!

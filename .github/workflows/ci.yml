@@ -1,0 +1,300 @@
+# MashCAD Cross-Platform CI Matrix (QA-007)
+# Runs Core-Gate, UI-Gate, Hygiene-Gate on Windows + Linux
+# Uses matrix strategy for parallel execution
+
+name: CI
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**' ]
+  pull_request:
+    branches: [ main, develop ]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Core-Gate: Must always pass on all platforms
+  core-gate:
+    name: Core-Gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Miniconda (Windows)
+      if: runner.os == 'Windows'
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: '3.11'
+        miniforge-version: latest
+        activate-environment: cad_env
+        auto-activate-base: false
+
+    - name: Setup Miniconda (Linux)
+      if: runner.os == 'Linux'
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: '3.11'
+        miniforge-version: latest
+        activate-environment: cad_env
+        auto-activate-base: false
+
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-xinerama0 libxcb-cursor0 libxkbcommon-x11-0 \
+          libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+          libxcb-render-util0 libxcb-shape0 libdbus-1-3 \
+          libgl1-mesa-glx libgl1-mesa-dev libegl1-mesa
+
+    - name: Install Python dependencies
+      shell: bash -el {0}
+      run: |
+        conda install -c conda-forge -y \
+          pytest \
+          pyside6 \
+          build123d \
+          ocp \
+          vtk \
+          pyvista \
+          pyvistaqt \
+          numpy \
+          scipy \
+          shapely \
+          ezdxf \
+          loguru \
+          trimesh \
+          matplotlib \
+          pillow \
+          lib3mf
+        pip install ocp-tessellate
+
+    - name: Verify environment
+      shell: bash -el {0}
+      run: |
+        python --version
+        python -m pytest --version
+        python -c "import build123d; print('build123d OK')"
+        python -c "import OCP; print('OCP OK')"
+
+    - name: Run Core-Gate (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path roadmap_ctp | Out-Null
+        powershell -ExecutionPolicy Bypass -File scripts/gate_core.ps1 -JsonOut roadmap_ctp/core_gate_summary.json 2>&1 | Tee-Object -FilePath test_output_core.txt
+
+    - name: Run Core-Gate (Linux)
+      if: runner.os == 'Linux'
+      shell: bash -el {0}
+      run: |
+        mkdir -p roadmap_ctp
+        bash scripts/gate_ci.sh core
+
+    - name: Upload Core-Gate Evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-gate-evidence-${{ matrix.os }}
+        path: |
+          test_output*.txt
+          roadmap_ctp/core_gate_summary.json
+        if-no-files-found: warn
+        retention-days: 7
+
+  # UI-Gate: Platform-specific behavior
+  ui-gate:
+    name: UI-Gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: core-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Miniconda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: '3.11'
+        miniforge-version: latest
+        activate-environment: cad_env
+        auto-activate-base: false
+
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-xinerama0 libxcb-cursor0 libxkbcommon-x11-0 \
+          libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+          libxcb-render-util0 libxcb-shape0 libdbus-1-3 \
+          libgl1-mesa-glx libgl1-mesa-dev libegl1-mesa \
+          libxcb-glx0 libxcb1 libx11-xcb1 libglu1-mesa \
+          libxrender1 libxi6 libxrandr2 libxcursor1 libxcomposite1 \
+          libfontconfig1 libfreetype6 xvfb
+
+    - name: Install Python dependencies
+      shell: bash -el {0}
+      run: |
+        conda install -c conda-forge -y \
+          pytest pytest-qt \
+          pyside6 \
+          build123d \
+          ocp \
+          vtk \
+          pyvista \
+          pyvistaqt \
+          numpy \
+          scipy \
+          shapely \
+          ezdxf \
+          loguru \
+          trimesh \
+          matplotlib \
+          pillow \
+          lib3mf
+        pip install ocp-tessellate
+
+    - name: Run UI-Gate (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      id: ui-gate-windows
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/gate_ui.ps1
+      continue-on-error: true
+
+    - name: Run UI-Gate (Linux)
+      if: runner.os == 'Linux'
+      shell: bash -el {0}
+      id: ui-gate-linux
+      run: |
+        xvfb-run -a bash scripts/gate_ci.sh ui
+      continue-on-error: true
+      env:
+        QT_QPA_PLATFORM: offscreen
+
+    - name: Report UI Status
+      if: always()
+      run: |
+        echo "UI-Gate completed (BLOCKED_INFRA issues don't fail CI)"
+
+  # Hygiene-Gate: Warning only (non-blocking)
+  hygiene-gate:
+    name: Hygiene-Gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Hygiene Check (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/hygiene_check.ps1
+      continue-on-error: true
+
+    - name: Run Hygiene Check (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        bash scripts/gate_ci.sh hygiene
+      continue-on-error: true
+
+    # Strict mode for release branches
+    - name: Run Hygiene Check - Strict Mode (main/release)
+      if: |
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
+        runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/hygiene_check.ps1 -FailOnUntracked
+      continue-on-error: false
+
+  # Evidence Generation Job
+  evidence:
+    name: Generate Evidence
+    runs-on: windows-latest
+    needs: [core-gate, ui-gate, hygiene-gate]
+    if: always()
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Miniconda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: '3.11'
+        miniforge-version: latest
+        activate-environment: cad_env
+        auto-activate-base: false
+
+    - name: Install dependencies
+      shell: bash -el {0}
+      run: |
+        conda install -c conda-forge -y pytest
+        pip install -r requirements.txt
+
+    - name: Generate Gate Evidence
+      shell: pwsh
+      run: |
+        powershell -ExecutionPolicy Bypass -File scripts/generate_gate_evidence.ps1
+      continue-on-error: true
+
+    - name: Upload Evidence Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-evidence
+        path: |
+          roadmap_ctp/QA_EVIDENCE_W*_*.md
+        if-no-files-found: warn
+        retention-days: 30
+
+  # Summary Job
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [core-gate, ui-gate, hygiene-gate]
+    if: always()
+
+    steps:
+    - name: Generate Summary
+      run: |
+        echo "## Cross-Platform CI Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Platform | Core-Gate | UI-Gate | Hygiene-Gate |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-----------|---------|--------------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Windows row
+        $coreWin = if ("${{ needs.core-gate.result }}" -eq "success") { "✅ PASS" } else { "❌ FAIL" }
+        $uiWin = if ("${{ needs.ui-gate.result }}" -eq "success") { "✅ PASS" } else { "⚠️ BLOCKED_INFRA" }
+        $hygWin = if ("${{ needs.hygiene-gate.result }}" -eq "success") { "✅ CLEAN" } else { "⚠️ WARNING" }
+        echo "| Windows | $coreWin | $uiWin | $hygWin |" >> $GITHUB_STEP_SUMMARY
+        
+        # Linux row (same results since matrix)
+        echo "| Linux | $coreWin | $uiWin | $hygWin |" >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Check Overall Status
+      if: needs.core-gate.result != 'success'
+      run: |
+        echo "::error::Core-Gate failed - blocking merge"
+        exit 1

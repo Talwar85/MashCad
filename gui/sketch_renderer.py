@@ -64,6 +64,88 @@ class SketchRendererMixin:
         c = self.world_to_screen(QPointF(arc.center.x, arc.center.y))
         r = arc.radius * self.view_scale
         return QRectF(c.x() - r, c.y() - r, 2*r, 2*r).adjusted(-10, -10, 10, 10)
+
+    def _get_profile_bounds(self, profile_data):
+        """
+        Berechnet Screen-Bounds für ein Profil (für Frustum Culling).
+        Unterstützt: circle, lines, polygon Profile.
+        Returns: QRectF oder None wenn Profil ungültig
+        """
+        if not profile_data or len(profile_data) < 2:
+            return None
+        
+        profile_type = profile_data[0]
+        data = profile_data[1]
+        
+        if profile_type == 'circle':
+            # Kreis-Profil: Zentrum + Radius
+            circle = data
+            c = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
+            r = circle.radius * self.view_scale
+            return QRectF(c.x() - r, c.y() - r, 2*r, 2*r).adjusted(-10, -10, 10, 10)
+        
+        elif profile_type == 'lines':
+            # Linien-Profil: Bounding-Box über alle Punkte
+            lines = data
+            if not lines:
+                return None
+            # Sammle alle Start- und Endpunkte
+            points = []
+            for line in lines:
+                points.append(self.world_to_screen(QPointF(line.start.x, line.start.y)))
+                points.append(self.world_to_screen(QPointF(line.end.x, line.end.y)))
+            
+            if not points:
+                return None
+            
+            # Berechne Bounding-Box
+            min_x = min(p.x() for p in points)
+            max_x = max(p.x() for p in points)
+            min_y = min(p.y() for p in points)
+            max_y = max(p.y() for p in points)
+            return QRectF(min_x, min_y, max_x - min_x, max_y - min_y).adjusted(-10, -10, 10, 10)
+        
+        elif profile_type == 'polygon':
+            # Polygon-Profil (Shapely): exterior + interiors
+            coords = list(data.exterior.coords)
+            if len(coords) < 3:
+                return None
+            
+            # Exterieure Koordinaten
+            screen_pts = [self.world_to_screen(QPointF(c[0], c[1])) for c in coords]
+            min_x = min(p.x() for p in screen_pts)
+            max_x = max(p.x() for p in screen_pts)
+            min_y = min(p.y() for p in screen_pts)
+            max_y = max(p.y() for p in screen_pts)
+            
+            # Interiors (Löcher) auch berücksichtigen
+            for interior in data.interiors:
+                hole_coords = list(interior.coords)
+                if len(hole_coords) >= 3:
+                    hole_pts = [self.world_to_screen(QPointF(c[0], c[1])) for c in hole_coords]
+                    min_x = min(min_x, min(p.x() for p in hole_pts))
+                    max_x = max(max_x, max(p.x() for p in hole_pts))
+                    min_y = min(min_y, min(p.y() for p in hole_pts))
+                    max_y = max(max_y, max(p.y() for p in hole_pts))
+            
+            return QRectF(min_x, min_y, max_x - min_x, max_y - min_y).adjusted(-10, -10, 10, 10)
+        
+        return None
+
+    def _is_profile_visible(self, profile_bounds, viewport_rect):
+        """
+        Prüft ob Profil-Bounds im Viewport sichtbar ist (Frustum Culling).
+        
+        Args:
+            profile_bounds: QRectF der Profil-Bounding-Box in Screen-Koordinaten
+            viewport_rect: QRectF des sichtbaren Viewports
+            
+        Returns:
+            True wenn das Profil (teilweise) sichtbar ist
+        """
+        if profile_bounds is None or viewport_rect is None:
+            return True  # Fallback: zeichnen wenn unklar
+        return profile_bounds.intersects(viewport_rect)
     
 
     def _draw_canvas(self, p, update_rect=None):
@@ -167,60 +249,64 @@ class SketchRendererMixin:
     def _draw_profiles(self, p, update_rect=None):
         if not self.closed_profiles: return
 
-        # Performance: Profile nur zeichnen, wenn ihr Bounding-Box sichtbar ist
-        # Da Polygon-Check teuer ist, machen wir das hier grob über world_to_screen des ersten Punktes
+        # Viewport-Rect für Frustum Culling berechnen
+        viewport_rect = QRectF(0, 0, self.width(), self.height())
+        
+        # Profile culling counter für Performance-Debugging (optional)
+        _profiles_culled = 0
+        _profiles_drawn = 0
         
         for profile_data in self.closed_profiles:
-            # TODO: Culling für Profile implementieren
-            # Aktuell zeichnen wir alle, da Profile oft groß sind
-            # und QPainterPath Clipping effizient ist.
-            
-            # ... (Rest des Codes aus _draw_profiles hier einfügen, unverändert) ...
-            # Der Inhalt bleibt identisch zum originalen Code, wir ändern nur die Signatur
-            
-            # COPY-PASTE vom Original _draw_profiles Logik hier:
-            from PySide6.QtGui import QPainterPath
-            def profile_to_path(profile_data, scale, offset_func):
-                path = QPainterPath()
-                # Handle both 2-tuple and 3-tuple formats
-                profile_type = profile_data[0]
-                data = profile_data[1]
-                if profile_type == 'circle':
-                    circle = data
-                    center = offset_func(QPointF(circle.center.x, circle.center.y))
-                    radius = circle.radius * scale
-                    path.addEllipse(center, radius, radius)
-                elif profile_type == 'lines':
-                    lines = data
-                    if len(lines) >= 3:
-                        points = [offset_func(QPointF(l.start.x, l.start.y)) for l in lines]
-                        if points:
-                            path.moveTo(points[0])
-                            for pt in points[1:]: path.lineTo(pt)
-                            path.closeSubpath()
-                elif profile_type == 'polygon':
-                    coords = list(data.exterior.coords)
-                    if len(coords) >= 3:
-                        screen_pts = [offset_func(QPointF(c[0], c[1])) for c in coords]
-                        path.moveTo(screen_pts[0])
-                        for pt in screen_pts[1:]: path.lineTo(pt)
-                        path.closeSubpath()
-                    for interior in data.interiors:
-                        hole_coords = list(interior.coords)
-                        if len(hole_coords) >= 3:
-                            hole_pts = [offset_func(QPointF(c[0], c[1])) for c in hole_coords]
-                            path.moveTo(hole_pts[0])
-                            for pt in hole_pts[1:]: path.lineTo(pt)
-                            path.closeSubpath()
-                return path
-
             if not profile_data: continue
             
-            path = profile_to_path(profile_data, self.view_scale, self.world_to_screen)
+            # PHASE 1: Frustum Culling - Berechne BBox VOR dem Path-Bau
+            # Dies spart teure path-Konstruktion für nicht-sichtbare Profile
+            profile_bounds = self._get_profile_bounds(profile_data)
             
-            # QUICK CHECK: Wenn Path komplett außerhalb Update-Rect -> Skip
-            if update_rect and not update_rect.intersects(path.boundingRect()):
+            if not self._is_profile_visible(profile_bounds, viewport_rect):
+                _profiles_culled += 1
                 continue
+            
+            # PHASE 2: Update-Rect Culling (für partielle Redraws)
+            if update_rect and profile_bounds and not update_rect.intersects(profile_bounds):
+                _profiles_culled += 1
+                continue
+            
+            _profiles_drawn += 1
+            
+            # PHASE 3: Path-Konstruktion nur für sichtbare Profile
+            from PySide6.QtGui import QPainterPath
+            path = QPainterPath()
+            
+            profile_type = profile_data[0]
+            data = profile_data[1]
+            if profile_type == 'circle':
+                circle = data
+                center = self.world_to_screen(QPointF(circle.center.x, circle.center.y))
+                radius = circle.radius * self.view_scale
+                path.addEllipse(center, radius, radius)
+            elif profile_type == 'lines':
+                lines = data
+                if len(lines) >= 3:
+                    points = [self.world_to_screen(QPointF(l.start.x, l.start.y)) for l in lines]
+                    if points:
+                        path.moveTo(points[0])
+                        for pt in points[1:]: path.lineTo(pt)
+                        path.closeSubpath()
+            elif profile_type == 'polygon':
+                coords = list(data.exterior.coords)
+                if len(coords) >= 3:
+                    screen_pts = [self.world_to_screen(QPointF(c[0], c[1])) for c in coords]
+                    path.moveTo(screen_pts[0])
+                    for pt in screen_pts[1:]: path.lineTo(pt)
+                    path.closeSubpath()
+                for interior in data.interiors:
+                    hole_coords = list(interior.coords)
+                    if len(hole_coords) >= 3:
+                        hole_pts = [self.world_to_screen(QPointF(c[0], c[1])) for c in hole_coords]
+                        path.moveTo(hole_pts[0])
+                        for pt in hole_pts[1:]: path.lineTo(pt)
+                        path.closeSubpath()
 
             path.setFillRule(Qt.OddEvenFill)
             is_hovered = (profile_data == self.hovered_face)
@@ -228,6 +314,10 @@ class SketchRendererMixin:
             color = DesignTokens.COLOR_PROFILE_HOVER if is_hovered else DesignTokens.COLOR_PROFILE_FILL
             p.setBrush(QBrush(color))
             p.drawPath(path)
+        
+        # Debug-Output (nur bei vielen Culled Profiles)
+        if _profiles_culled > 5:
+            logger.debug(f"Profile Culling: {_profiles_drawn} drawn, {_profiles_culled} culled")
 
         # Offset Preview
         if self.offset_preview_lines:

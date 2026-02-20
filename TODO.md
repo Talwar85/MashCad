@@ -1,7 +1,7 @@
 # MashCad - Technische Schulden & TODOs
 
-> **Letzte Aktualisierung:** 2026-02-06  
-> **Gesamt:** 16 offene Punkte
+> **Letzte Aktualisierung:** 2026-02-20
+> **Gesamt:** 10 offene Punkte
 
 ---
 
@@ -9,10 +9,7 @@
 
 ### BUGs
 
-| Datei | Zeile | Beschreibung | Status |
-|-------|-------|--------------|--------|
-| `gui/viewport/body_mixin.py` | 221 | `edge_mapper.Modified()` außerhalb if → crash wenn Actor nicht existiert! | 🔴 Offen |
-| `modeling/tnp_system.py` | 692 | BUG FIX Kommentar - prüfen ob wirklich gefixt | 🟡 Prüfen |
+*Keine kritischen Bugs aktuell.*
 
 ---
 
@@ -22,17 +19,16 @@
 
 | Datei | Zeile | Beschreibung | Status |
 |-------|-------|--------------|--------|
-| `gui/main_window.py` | 8489 | Live-Preview für Texturen wenn Performance es erlaubt | 🟡 Offen |
-| `gui/main_window.py` | 8746 | Live-Preview für Patterns wenn Performance es erlaubt | 🟡 Offen |
-| `gui/main_window.py` | 8940 | Normal-Map Preview im Viewport | 🟡 Offen |
-| `gui/sketch_renderer.py` | 172 | Culling für Profile implementieren | 🟡 Offen |
+| `gui/main_window.py` | 8489 | Live-Preview für Texturen wenn Performance es erlaubt | ✅ Erledigt |
+| `gui/main_window.py` | 8746 | Live-Preview für Patterns wenn Performance es erlaubt | ✅ Erledigt |
+| `gui/main_window.py` | 8940 | Normal-Map Preview im Viewport | ✅ Erledigt |
 
 ### Core Improvements
 
 | Datei | Zeile | Beschreibung | Status |
 |-------|-------|--------------|--------|
-| `modeling/__init__.py` | 4611 | OCP History von Boolean-Operationen extrahieren für besseres TNP | 🟡 Offen |
-| `modeling/brep_face_analyzer.py` | 685 | Helix-Fitting implementieren | 🟡 Offen |
+| `modeling/__init__.py` | 4611 | OCP History von Boolean-Operationen extrahieren für besseres TNP | ✅ Erledigt |
+| `modeling/brep_face_analyzer.py` | 685 | Helix-Fitting implementieren | ✅ Erledigt |
 
 ---
 
@@ -45,14 +41,6 @@
 | `meshconverter/brep_optimizer.py` | 664 | NURBS-Replacement in zukünftiger Version | 🟢 Offen |
 | `meshconverter/brep_optimizer.py` | 970 | Besserer Ansatz für Planar-Gruppen in Zukunft | 🟢 Offen |
 | `meshconverter/mesh_converter_v10.py` | 225 | Consistent normal orientation implementieren | 🟢 Offen |
-
-### UI/UX
-
-| Datei | Zeile | Beschreibung | Status |
-|-------|-------|--------------|--------|
-| `gui/main_window.py` | 10228 | Hack: Label 4 ist Winkel - VectorInputDialog generisch nutzen | 🟢 Refactor |
-| `gui/sketch_editor.py` | 4251 | Leerer TODO-Block (pass # TODO) | 🟢 Implementieren |
-| `gui/viewport/brep_cleanup_mixin.py` | 347 | Ctrl-Status von Event holen für Modifier-Handling | 🟢 Offen |
 
 ---
 
@@ -75,12 +63,12 @@
 ## 📊 Statistik
 
 ```
-🔴 Kritisch:  2
-🟡 Hoch:      8  
-🟢 Mittel:    6
+🔴 Kritisch:  0
+🟡 Hoch:      0 (5 erledigt ✅)
+🟢 Mittel:    3
 🔵 Niedrig:   7
-───────────────
-Gesamt:      23
+─────────────
+Gesamt:      10 (5 erledigt)
 ```
 
 ---

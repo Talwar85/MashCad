@@ -25,13 +25,23 @@ wheels/
 *.egg
 clean_pycache.sh
 nul
+# Allow CI scripts
+!scripts/gate_ci.sh
+
 *.sh
 .claude
 tests/
-docs/
 roadmap_gemini/
 roadmap_kimi/
 roadmap_ctp/
+.roo/
+mcp.json
+
+# Docs: Ignore all by default, allow specific files
+docs/*
+!docs/CI_GUIDE.md
+!docs/KNOWN_LIMITATIONS.md
+!docs/user_guide/
 
 
 # Virtual environments
@@ -66,3 +76,5 @@ test/_debug_*.py
 
 # PyInstaller
 # Note: MashCAD.spec is intentionally tracked as it's our build configuration
+
+first_run_config.json

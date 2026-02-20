@@ -56,6 +56,103 @@ from modeling.ocp_helpers import (
 )
 
 
+# ==================== AR-002: PHASE 1 SPLIT - NEW MODULES ====================
+# Import from extracted modules for maintainability
+# These imports provide backward compatibility while moving code to dedicated modules
+from modeling.geometry_utils import (
+    solid_metrics,
+    canonicalize_indices,
+    get_face_center,
+    get_face_area,
+    validate_plane_normal,
+    format_index_refs_for_error,
+    format_shape_refs_for_error,
+    collect_feature_reference_diagnostics,
+    collect_feature_reference_payload,
+    # Legacy aliases for backward compatibility
+    _solid_metrics,
+    _canonicalize_indices,
+    _get_face_center,
+    _get_face_area,
+    _format_index_refs_for_error,
+    _format_shape_refs_for_error,
+    _collect_feature_reference_diagnostics,
+    _collect_feature_reference_payload,
+)
+
+from modeling.shape_builders import (
+    convert_legacy_nsided_edge_selectors,
+    convert_legacy_edge_selectors,
+    convert_line_profiles_to_polygons,
+    filter_profiles_by_selector,
+    get_plane_from_sketch,
+    lookup_geometry_for_polygon,
+    make_wire_from_mixed_geometry,
+    # Legacy aliases for backward compatibility
+    _convert_legacy_nsided_edge_selectors,
+    _convert_legacy_edge_selectors,
+    _convert_line_profiles_to_polygons,
+    _filter_profiles_by_selector,
+    _get_plane_from_sketch,
+    _lookup_geometry_for_polygon,
+    _make_wire_from_mixed_geometry,
+)
+
+
+# ==================== AR-003: PHASE 2 SPLIT - NEW MODULES ====================
+# Import from extracted modules for maintainability
+# These imports provide backward compatibility while moving code to dedicated modules
+from modeling.feature_operations import (
+    # TNP failure tracking
+    record_tnp_failure,
+    consume_tnp_failure,
+    # Error code classification
+    classify_error_code,
+    default_next_action_for_code,
+    # Operation error details
+    build_operation_error_details,
+    normalize_status_details_for_load,
+    # Safe operation wrapper
+    safe_operation,
+    # Legacy aliases for backward compatibility
+    _record_tnp_failure,
+    _consume_tnp_failure,
+    _classify_error_code,
+    _default_next_action_for_code,
+    _build_operation_error_details,
+    _normalize_status_details_for_load,
+    _safe_operation,
+)
+
+from modeling.body_state import (
+    # ShapeID serialization
+    serialize_shape_id,
+    deserialize_shape_id,
+    serialize_shape_ids,
+    deserialize_shape_ids,
+    # Feature serialization
+    serialize_feature,
+    serialize_feature_base,
+    # Body state comparison
+    compare_body_states,
+    body_state_summary,
+    # BREP serialization
+    serialize_brep,
+    deserialize_brep,
+    # Legacy aliases for backward compatibility
+    _serialize_shape_id,
+    _deserialize_shape_id,
+    _serialize_shape_ids,
+    _deserialize_shape_ids,
+    _serialize_feature,
+    _serialize_feature_base,
+    _compare_body_states,
+    _body_state_summary,
+    _serialize_brep,
+    _deserialize_brep,
+)
+
+
 # ==================== IMPORTS ====================
 HAS_BUILD123D = False
 HAS_OCP = False
@@ -123,59 +220,39 @@ if _project_root not in sys.path:
 from sketcher import Sketch
 
 
-# ==================== HELPER FUNCTIONS ====================
+# ==================== OCP COMPATIBILITY VALIDATION (CH-006) ====================
+# Startup validation for OCP API compatibility
+# This runs on import to catch API issues early
 
-def _solid_metrics(solid):
+def _run_ocp_compatibility_check():
     """
-    Geometry-Fingerprint (volume, faces, edges) eines Solids.
-
-    Args:
-        solid: Build123d Solid oder None
-
-    Returns:
-        dict mit keys 'volume', 'faces', 'edges' oder None bei Fehler
+    Run OCP compatibility validation on module import.
+    
+    Logs warnings for missing/changed APIs and updates feature flags
+    based on availability.
     """
-    if solid is None:
-        return None
     try:
-        return {
-            "volume": float(solid.volume),
-            "faces": len(list(solid.faces())),
-            "edges": len(list(solid.edges())),
-        }
-    except Exception:
-        return None
+        from modeling.ocp_compatibility import OCP_COMPATIBILITY
+        OCP_COMPATIBILITY.initialize()
+        
+        # Store reference for later access
+        global OCP_COMPAT
+        OCP_COMPAT = OCP_COMPATIBILITY
+        
+    except Exception as e:
+        logger.warning(f"OCP compatibility check failed: {e}")
+        # Continue anyway - compatibility module is optional
+
+# Run compatibility check on import
+_run_ocp_compatibility_check()
 
 
-def _canonicalize_indices(indices):
-    """
-    Normalisiert Topologie-Indizes fuer Determinismus.
-
-    EPIC X2: Stellt sicher dass edge_indices, face_indices etc.
-    immer sortiert und entdupliziert sind. Dies ist kritisch fuer:
-    - Rebuild-Idempotenz
-    - Save/Load Konsistenz
-    - TNP Reference Stability
-
-    Args:
-        indices: Liste von Indizes (int, float, oder andere)
-
-    Returns:
-        Sorted list of unique non-negative integers
-    """
-    if not indices:
-        return []
-
-    canonical = set()
-    for idx in indices:
-        try:
-            i = int(idx)
-            if i >= 0:
-                canonical.add(i)
-        except (ValueError, TypeError):
-            continue
-
-    return sorted(canonical)
+# ==================== HELPER FUNCTIONS ====================
+# NOTE: Helper functions have been moved to modeling/geometry_utils.py
+# and modeling/shape_builders.py for better maintainability.
+# They are imported at the top of this file for backward compatibility.
+# Direct access to these functions still works but consider importing
+# from the new modules directly for new code.
 
 
 # ==================== DATENSTRUKTUREN ====================
@@ -553,106 +630,25 @@ class Body:
         self._pending_tnp_failure = None
 
     def _get_face_center(self, face):
-        """Helper for TNP registration."""
-        try:
-            from OCP.GProp import GProp_GProps
-            from OCP.BRepGProp import BRepGProp
-            props = GProp_GProps()
-            BRepGProp.LinearProperties_s(face, props)
-            p = props.CentreOfMass()
-            return p
-        except Exception:
-            from OCP.gp import gp_Pnt
-            return gp_Pnt(0,0,0)
+        """Helper for TNP registration - delegates to geometry_utils."""
+        return get_face_center(face)
 
     def _get_face_area(self, face):
-        """Helper for TNP registration."""
-        try:
-            from OCP.GProp import GProp_GProps
-            from OCP.BRepGProp import BRepGProp
-            props = GProp_GProps()
-            BRepGProp.SurfaceProperties_s(face, props)
-            return props.Mass()
-        except Exception:
-            return 0.0
+        """Helper for TNP registration - delegates to geometry_utils."""
+        return get_face_area(face)
 
+    # NOTE: Static methods below delegate to shape_builders module for maintainability
+    # These are kept as static methods for backward compatibility with existing code
+    
     @staticmethod
     def _convert_legacy_nsided_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
-        """
-        Konvertiert legacy NSided edge_selectors zu GeometricEdgeSelector-Dicts.
-
-        Altes Format:
-        - (cx, cy, cz)
-        - ((cx, cy, cz), (dx, dy, dz))
-        """
-        if not edge_selectors:
-            return []
-
-        def _as_vec3(value):
-            if not isinstance(value, (list, tuple)) or len(value) < 3:
-                return None
-            try:
-                return [float(value[0]), float(value[1]), float(value[2])]
-            except Exception:
-                return None
-
-        migrated = []
-        for selector in edge_selectors:
-            center = None
-            direction = None
-
-            if isinstance(selector, (list, tuple)):
-                if len(selector) == 2 and isinstance(selector[0], (list, tuple)):
-                    center = _as_vec3(selector[0])
-                    direction = _as_vec3(selector[1])
-                else:
-                    center = _as_vec3(selector)
-
-            if center is None:
-                continue
-
-            if direction is None or abs(direction[0]) + abs(direction[1]) + abs(direction[2]) < 1e-12:
-                direction = [1.0, 0.0, 0.0]
-
-            migrated.append({
-                "center": center,
-                "direction": direction,
-                "length": 0.0,
-                "curve_type": "unknown",
-                "tolerance": 25.0,
-            })
-
-        return migrated
+        """Delegates to shape_builders module - see convert_legacy_nsided_edge_selectors."""
+        return convert_legacy_nsided_edge_selectors(edge_selectors)
 
     @staticmethod
     def _convert_legacy_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
-        """
-        Konvertiert legacy Fillet/Chamfer edge_selectors zu GeometricEdgeSelector-Dicts.
-
-        Altes Format:
-        - (cx, cy, cz)
-        """
-        if not edge_selectors:
-            return []
-
-        migrated = []
-        for selector in edge_selectors:
-            if not isinstance(selector, (list, tuple)) or len(selector) < 3:
-                continue
-            try:
-                center = [float(selector[0]), float(selector[1]), float(selector[2])]
-            except Exception:
-                continue
-
-            migrated.append({
-                "center": center,
-                "direction": [1.0, 0.0, 0.0],
-                "length": 0.0,
-                "curve_type": "unknown",
-                "tolerance": 25.0,
-            })
-
-        return migrated
+        """Delegates to shape_builders module - see convert_legacy_edge_selectors."""
+        return convert_legacy_edge_selectors(edge_selectors)
 
     # === PHASE 2: Lazy-Loaded Properties ===
     @property
@@ -1051,192 +1047,27 @@ class Body:
             traceback.print_exc()
             return False
             
+    # NOTE: These static methods delegate to geometry_utils module for maintainability
+    # They are kept here for backward compatibility with existing code
+    
     @staticmethod
     def _format_index_refs_for_error(label: str, refs, max_items: int = 3) -> str:
-        """Formatiert Index-Referenzen kompakt fÃ¼r Fehlermeldungen."""
-        if refs is None:
-            return ""
-        values = refs if isinstance(refs, (list, tuple)) else [refs]
-        normalized = []
-        for raw in values:
-            try:
-                idx = int(raw)
-            except Exception:
-                continue
-            if idx >= 0:
-                normalized.append(idx)
-        if not normalized:
-            return ""
-        preview = normalized[:max_items]
-        suffix = "..." if len(normalized) > max_items else ""
-        return f"{label}={preview}{suffix}"
+        """Delegates to geometry_utils module."""
+        return format_index_refs_for_error(label, refs, max_items)
 
     @staticmethod
     def _format_shape_refs_for_error(label: str, refs, max_items: int = 3) -> str:
-        """Formatiert ShapeID-Referenzen kompakt fÃ¼r Fehlermeldungen."""
-        if refs is None:
-            return ""
-        values = refs if isinstance(refs, (list, tuple)) else [refs]
-        tokens = []
-        for raw in values:
-            if raw is None:
-                continue
-            try:
-                raw_uuid = getattr(raw, "uuid", None)
-                if raw_uuid:
-                    shape_type = getattr(raw, "shape_type", None)
-                    shape_name = shape_type.name if hasattr(shape_type, "name") else (str(shape_type) if shape_type else "?")
-                    local_index = getattr(raw, "local_index", None)
-                    token = f"{shape_name}:{str(raw_uuid)[:8]}"
-                    if local_index is not None:
-                        token += f"@{local_index}"
-                    tokens.append(token)
-                    continue
-                if isinstance(raw, dict):
-                    shape_name = raw.get("shape_type", "?")
-                    feature_id = raw.get("feature_id", "?")
-                    local_index = raw.get("local_index", raw.get("local_id", "?"))
-                    tokens.append(f"{shape_name}:{feature_id}@{local_index}")
-            except Exception:
-                continue
-        if not tokens:
-            return ""
-        preview = tokens[:max_items]
-        suffix = "..." if len(tokens) > max_items else ""
-        return f"{label}={preview}{suffix}"
+        """Delegates to geometry_utils module."""
+        return format_shape_refs_for_error(label, refs, max_items)
 
     def _collect_feature_reference_diagnostics(self, feature, max_parts: int = 6) -> str:
-        """
-        Baut eine kompakte Referenz-Zusammenfassung fÃ¼r Statusmeldungen.
-
-        Wird an Fehlermeldungen angehÃ¤ngt, damit GUI/Tooltip direkt zeigen kann,
-        welche Topologie-Referenzen betroffen waren.
-        """
-        if feature is None:
-            return ""
-
-        parts = []
-
-        def _add(part: str) -> None:
-            if part:
-                parts.append(part)
-
-        # Face-Referenzen
-        _add(self._format_index_refs_for_error("face_indices", getattr(feature, "face_indices", None)))
-        _add(self._format_index_refs_for_error("opening_face_indices", getattr(feature, "opening_face_indices", None)))
-        _add(self._format_index_refs_for_error("face_index", getattr(feature, "face_index", None)))
-        _add(self._format_index_refs_for_error("profile_face_index", getattr(feature, "profile_face_index", None)))
-
-        # Edge-Referenzen
-        _add(self._format_index_refs_for_error("edge_indices", getattr(feature, "edge_indices", None)))
-        path_data = getattr(feature, "path_data", None)
-        if isinstance(path_data, dict):
-            _add(self._format_index_refs_for_error("path.edge_indices", path_data.get("edge_indices", None)))
-
-        # ShapeID-Referenzen
-        _add(self._format_shape_refs_for_error("face_shape_ids", getattr(feature, "face_shape_ids", None)))
-        _add(self._format_shape_refs_for_error("opening_face_shape_ids", getattr(feature, "opening_face_shape_ids", None)))
-        _add(self._format_shape_refs_for_error("edge_shape_ids", getattr(feature, "edge_shape_ids", None)))
-        _add(self._format_shape_refs_for_error("face_shape_id", getattr(feature, "face_shape_id", None)))
-        _add(self._format_shape_refs_for_error("profile_shape_id", getattr(feature, "profile_shape_id", None)))
-        _add(self._format_shape_refs_for_error("path_shape_id", getattr(feature, "path_shape_id", None)))
-
-        if not parts:
-            return ""
-
-        if len(parts) > max_parts:
-            hidden = len(parts) - max_parts
-            parts = parts[:max_parts]
-            parts.append(f"+{hidden} weitere")
-        return "; ".join(parts)
+        """Delegates to geometry_utils module."""
+        return collect_feature_reference_diagnostics(feature, max_parts)
 
     @staticmethod
     def _collect_feature_reference_payload(feature) -> dict:
-        """
-        Liefert maschinenlesbare Referenzdaten fÃ¼r Status-Details.
-        """
-        if feature is None:
-            return {}
-
-        payload = {}
-
-        def _indices(value):
-            values = value if isinstance(value, (list, tuple)) else [value]
-            out = []
-            for raw in values:
-                try:
-                    idx = int(raw)
-                except Exception:
-                    continue
-                if idx >= 0:
-                    out.append(idx)
-            return out
-
-        def _shape_tokens(value):
-            values = value if isinstance(value, (list, tuple)) else [value]
-            out = []
-            for raw in values:
-                if raw is None:
-                    continue
-                try:
-                    raw_uuid = getattr(raw, "uuid", None)
-                    if raw_uuid:
-                        shape_type = getattr(raw, "shape_type", None)
-                        shape_name = shape_type.name if hasattr(shape_type, "name") else (str(shape_type) if shape_type else "?")
-                        local_index = getattr(raw, "local_index", None)
-                        token = f"{shape_name}:{str(raw_uuid)[:8]}"
-                        if local_index is not None:
-                            token += f"@{local_index}"
-                        out.append(token)
-                        continue
-                    if isinstance(raw, dict):
-                        shape_name = raw.get("shape_type", "?")
-                        feature_id = raw.get("feature_id", "?")
-                        local_index = raw.get("local_index", raw.get("local_id", "?"))
-                        out.append(f"{shape_name}:{feature_id}@{local_index}")
-                except Exception:
-                    continue
-            return out
-
-        face_indices = _indices(getattr(feature, "face_indices", None))
-        if face_indices:
-            payload["face_indices"] = face_indices
-
-        opening_face_indices = _indices(getattr(feature, "opening_face_indices", None))
-        if opening_face_indices:
-            payload["opening_face_indices"] = opening_face_indices
-
-        face_index = _indices(getattr(feature, "face_index", None))
-        if face_index:
-            payload["face_index"] = face_index
-
-        profile_face_index = _indices(getattr(feature, "profile_face_index", None))
-        if profile_face_index:
-            payload["profile_face_index"] = profile_face_index
-
-        edge_indices = _indices(getattr(feature, "edge_indices", None))
-        if edge_indices:
-            payload["edge_indices"] = edge_indices
-
-        path_data = getattr(feature, "path_data", None)
-        if isinstance(path_data, dict):
-            path_edge_indices = _indices(path_data.get("edge_indices", None))
-            if path_edge_indices:
-                payload["path.edge_indices"] = path_edge_indices
-
-        for key in (
-            "face_shape_ids",
-            "opening_face_shape_ids",
-            "edge_shape_ids",
-            "face_shape_id",
-            "profile_shape_id",
-            "path_shape_id",
-        ):
-            tokens = _shape_tokens(getattr(feature, key, None))
-            if tokens:
-                payload[key] = tokens
-
-        return payload
+        """Delegates to geometry_utils module."""
+        return collect_feature_reference_payload(feature)
 
     def _record_tnp_failure(
         self,
@@ -6613,6 +6444,40 @@ class Body:
                 else:
                     logger.warning(f"âš ï¸ {self.name}: BREP mit Warnungen ({n_faces} Faces) - {validation.message}")
 
+                # PI-008: Geometry Drift Detection
+                if is_enabled("geometry_drift_detection"):
+                    try:
+                        from modeling.geometry_drift_detector import GeometryDriftDetector, DriftThresholds
+                        
+                        detector = GeometryDriftDetector()
+                        
+                        # Check if we have a cached baseline for this body
+                        baseline_key = f"body_{self.id}_baseline"
+                        baseline = detector.get_cached_baseline(baseline_key)
+                        
+                        if baseline is not None:
+                            # Detect drift against the baseline
+                            ocp_shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                            metrics = detector.detect_drift(ocp_shape, baseline)
+                            
+                            if not detector.is_drift_acceptable(metrics):
+                                warnings = detector.get_drift_warnings(metrics)
+                                for warning in warnings:
+                                    logger.warning(f"Geometry Drift: {warning}")
+                                # Store drift info for UI/debugging
+                                self._last_drift_metrics = metrics
+                            else:
+                                logger.debug(f"Geometry Drift Check: OK (vertex={metrics.vertex_drift:.2e}, volume={metrics.volume_drift:.4%})")
+                                self._last_drift_metrics = None
+                        else:
+                            # Capture baseline on first rebuild
+                            ocp_shape = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+                            detector.capture_baseline(ocp_shape, baseline_key)
+                            logger.debug(f"Geometry Drift: Baseline captured for '{self.name}'")
+                            self._last_drift_metrics = None
+                    except Exception as drift_error:
+                        logger.debug(f"Geometry Drift Detection skipped: {drift_error}")
+
                 # Phase 8.2: Automatische Referenz-Migration nach Rebuild
                 self._migrate_tnp_references(current_solid)
             except Exception as finalize_error:
@@ -8073,171 +7938,16 @@ class Body:
             logger.error(f"[LEGACY] Extrude Fehler: {e}")
             return None
 
+    # NOTE: These methods delegate to shape_builders module for maintainability
+    # They are kept here for backward compatibility with existing code
+    
     def _convert_line_profiles_to_polygons(self, line_profiles: list) -> list:
-        """
-        Konvertiert Profile zu Shapely Polygons fÃ¼r Legacy-Code.
-
-        UnterstÃ¼tzt folgende Formate:
-        1. List[Line2D] - vom Sketch _find_closed_profiles()
-        2. ShapelyPolygon - bereits vom UI vorkonvertiert
-        3. Dict {'type': 'ellipse', 'geometry': Ellipse2D} - native Ellipse Profile (TNP v4.1)
-        4. Dict {'type': 'circle', 'geometry': Circle2D} - native Circle Profile (TNP v4.1)
-
-        Args:
-            line_profiles: Liste von Profilen (List[Line2D], ShapelyPolygon, oder Dict)
-
-        Returns:
-            Liste von Shapely Polygon Objekten und/oder Dict-Profilen (native)
-        """
-        from shapely.geometry import Polygon as ShapelyPoly
-
-        polygons = []
-        for profile in line_profiles:
-            if not profile:
-                continue
-
-            # Fall 0: Native Ellipse/Circle/Slot Profile (TNP v4.1) - direkt weiterleiten
-            if isinstance(profile, dict):
-                profile_type = profile.get('type')
-                if profile_type in ('ellipse', 'circle', 'slot'):
-                    # Native Profile werden nicht konvertiert, sondern direkt verwendet
-                    polygons.append(profile)
-                    continue
-
-            # Fall 1: Bereits ein Shapely Polygon (vom UI)
-            if hasattr(profile, 'exterior') and hasattr(profile, 'area'):
-                if profile.is_valid and profile.area > 0:
-                    polygons.append(profile)
-                continue
-
-            # Fall 2: List[Line2D] - vom Sketch _find_closed_profiles()
-            coords = []
-            try:
-                for line in profile:
-                    if hasattr(line, 'start') and hasattr(line.start, 'x'):
-                        coords.append((line.start.x, line.start.y))
-                    elif isinstance(line, tuple) and len(line) == 2:
-                        coords.append(line)
-            except Exception:
-                continue
-
-            # Shapely Polygon erstellen
-            if len(coords) >= 3:
-                try:
-                    poly = ShapelyPoly(coords)
-                    if poly.is_valid and poly.area > 0:
-                        polygons.append(poly)
-                    else:
-                        logger.warning(f"[PROFILE] UngÃ¼ltiges/degeneriertes Polygon mit {len(coords)} Punkten")
-                except Exception as e:
-                    logger.warning(f"[PROFILE] Polygon-Erstellung fehlgeschlagen: {e}")
-
-        return polygons
+        """Delegates to shape_builders module - see convert_line_profiles_to_polygons."""
+        return convert_line_profiles_to_polygons(line_profiles)
 
     def _filter_profiles_by_selector(self, profiles: list, selector: list, tolerance: float = 5.0) -> list:
-        """
-        CAD Kernel First: Filtert Profile anhand ihrer Centroids.
-
-        Der Selektor enthÃ¤lt Centroids [(cx, cy), ...] der ursprÃ¼nglich gewÃ¤hlten Profile.
-        Bei Sketch-Ã„nderungen kÃ¶nnen Profile sich verschieben - wir matchen mit Toleranz.
-
-        WICHTIG: FÃ¼r jeden Selektor wird nur das BESTE Match (kleinste Distanz) verwendet!
-        Das verhindert dass bei Ã¼berlappenden Toleranzbereichen mehrere Profile gematcht werden.
-
-        FAIL-FAST: Wenn kein Match gefunden wird, geben wir eine LEERE Liste zurÃ¼ck,
-        NICHT alle Profile! Das ist CAD Kernel First konform.
-
-        Args:
-            profiles: Liste von Shapely Polygons oder Dict-Profilen (Ellipse/Circle)
-            selector: Liste von (cx, cy) Tupeln (gespeicherte Centroids)
-            tolerance: Abstand-Toleranz fÃ¼r Centroid-Match in mm
-
-        Returns:
-            Gefilterte Liste von Profilen die zum Selektor passen (kann leer sein!)
-        """
-        if not profiles or not selector:
-            return list(profiles) if profiles else []
-
-        import math
-        matched = []
-        used_profile_indices = set()  # Verhindert doppeltes Matchen
-
-        # Hilfsfunktion: Centroid aus Profil ermitteln
-        def get_profile_centroid(profile):
-            """Ermittelt den Centroid eines Profils (Shapely oder Dict)."""
-            if isinstance(profile, dict):
-                # Native Ellipse/Circle Profil
-                geometry = profile.get('geometry')
-                if geometry:
-                    if hasattr(geometry, 'center'):
-                        # Ellipse2D oder Circle2D
-                        return geometry.center.x, geometry.center.y
-            # Shapely Polygon
-            if hasattr(profile, 'centroid'):
-                c = profile.centroid
-                return c.x, c.y
-            return None
-
-        # Debug: Zeige alle verfÃ¼gbaren Profile
-        if is_enabled("extrude_debug"):
-            logger.debug(f"[SELECTOR] {len(profiles)} Profile verfÃ¼gbar, {len(selector)} Selektoren")
-        for i, profile in enumerate(profiles):
-            try:
-                centroid = get_profile_centroid(profile)
-                if centroid:
-                    cx, cy = centroid
-                    if hasattr(profile, 'area'):
-                        logger.debug(f"  Profile {i}: centroid=({cx:.2f}, {cy:.2f}), area={profile.area:.1f}")
-                    else:
-                        logger.debug(f"  Profile {i}: centroid=({cx:.2f}, {cy:.2f}) [native]")
-            except Exception as e:
-                logger.debug(f"[__init__.py] Fehler: {e}")
-                pass
-
-        if is_enabled("extrude_debug"):
-            logger.debug(f"[SELECTOR] Selektoren: {selector}")
-
-        # FÃ¼r JEDEN Selektor das BESTE Match finden (nicht alle innerhalb Toleranz!)
-        for sel_cx, sel_cy in selector:
-            best_match_idx = None
-            best_match_dist = float('inf')
-
-            for i, profile in enumerate(profiles):
-                if i in used_profile_indices:
-                    continue  # Bereits verwendet
-
-                try:
-                    centroid = get_profile_centroid(profile)
-                    if centroid is None:
-                        continue
-                    cx, cy = centroid
-                    dist = math.hypot(cx - sel_cx, cy - sel_cy)
-
-                    # Nur innerhalb Toleranz UND besser als bisheriges Match
-                    if dist < tolerance and dist < best_match_dist:
-                        best_match_idx = i
-                        best_match_dist = dist
-                except Exception as e:
-                    logger.warning(f"Centroid-Berechnung fehlgeschlagen: {e}")
-                    continue
-
-            # Bestes Match fÃ¼r diesen Selektor hinzufÃ¼gen
-            if best_match_idx is not None:
-                matched.append(profiles[best_match_idx])
-                used_profile_indices.add(best_match_idx)
-                centroid = get_profile_centroid(profiles[best_match_idx])
-                if centroid and is_enabled("extrude_debug"):
-                    logger.debug(f"[SELECTOR] BEST MATCH: ({centroid[0]:.2f}, {centroid[1]:.2f}) â‰ˆ ({sel_cx:.2f}, {sel_cy:.2f}), dist={best_match_dist:.2f}")
-            else:
-                if is_enabled("extrude_debug"):
-                    logger.warning(f"[SELECTOR] NO MATCH for selector ({sel_cx:.2f}, {sel_cy:.2f})")
-
-        # FAIL-FAST: Kein Fallback auf alle Profile!
-        if not matched:
-            if is_enabled("extrude_debug"):
-                logger.warning(f"[SELECTOR] Kein Profil-Match! Selector passt zu keinem der {len(profiles)} Profile.")
-
-        return matched
+        """Delegates to shape_builders module - see filter_profiles_by_selector."""
+        return filter_profiles_by_selector(profiles, selector, tolerance)
 
     def _compute_extrude_part_brepfeat(self, feature: 'ExtrudeFeature', current_solid):
         """
@@ -9500,48 +9210,15 @@ class Body:
             traceback.print_exc()
             return None
 
+    # NOTE: These methods delegate to shape_builders module for maintainability
+    
     def _lookup_geometry_for_polygon(self, poly, sketch):
-        """
-        Looks up the original geometry list for a polygon from the sketch's mapping.
-
-        Args:
-            poly: Shapely Polygon
-            sketch: Sketch object that may have _profile_geometry_map
-
-        Returns:
-            List of (geom_type, geom_obj) or None if not found
-        """
-        if not hasattr(sketch, '_profile_geometry_map'):
-            return None
-
-        # Create lookup key from polygon bounds + area
-        bounds = poly.bounds
-        key = (round(bounds[0], 2), round(bounds[1], 2),
-               round(bounds[2], 2), round(bounds[3], 2),
-               round(poly.area, 2))
-
-        geometry_list = sketch._profile_geometry_map.get(key)
-        if geometry_list:
-            logger.debug(f"  â†’ Found geometry mapping for polygon: {len(geometry_list)} segments")
-            return geometry_list
-
-        # Fuzzy matching if exact key not found
-        for map_key, geom_list in sketch._profile_geometry_map.items():
-            if (abs(map_key[4] - key[4]) < 0.5 and  # Area within 0.5
-                abs(map_key[0] - key[0]) < 1 and
-                abs(map_key[1] - key[1]) < 1):
-                logger.debug(f"  â†’ Found geometry mapping (fuzzy): {len(geom_list)} segments")
-                return geom_list
-
-        return None
+        """Delegates to shape_builders module - see lookup_geometry_for_polygon."""
+        return lookup_geometry_for_polygon(poly, sketch)
 
     def _get_plane_from_sketch(self, sketch):
-        origin = getattr(sketch, 'plane_origin', (0,0,0))
-        normal = getattr(sketch, 'plane_normal', (0,0,1))
-        x_dir = getattr(sketch, 'plane_x_dir', None)
-        if x_dir:
-            return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
-        return Plane(origin=origin, z_dir=normal)
+        """Delegates to shape_builders module - see get_plane_from_sketch."""
+        return get_plane_from_sketch(sketch)
 
     def _update_mesh_from_solid(self, solid):
         """

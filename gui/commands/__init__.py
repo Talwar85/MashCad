@@ -3,6 +3,7 @@ from .feature_commands import (
     AddFeatureCommand,
     DeleteFeatureCommand,
     EditFeatureCommand,
+    ReorderFeatureCommand,
 )
 from .transform_command import TransformCommand
 from .component_commands import (

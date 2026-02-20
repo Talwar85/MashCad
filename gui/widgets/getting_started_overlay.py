@@ -77,6 +77,25 @@ class _IconWidget(QWidget):
             for pt in [(8, 28), (18, 6), (28, 28), (13, 17), (23, 17), (18, 17)]:
                 p.drawEllipse(QPointF(*pt), 1.8, 1.8)
 
+        elif self._type == "tutorial":
+            # Play button / graduation cap symbol
+            # Cap top
+            p.setBrush(QColor(self._accent.red(), self._accent.green(), self._accent.blue(), 40))
+            p.drawPolygon(QPolygonF([
+                QPointF(6, 14), QPointF(18, 6), QPointF(30, 14), QPointF(18, 22),
+            ]))
+            # Cap bottom line
+            p.drawLine(6, 14, 30, 14)
+            # Tassel
+            p.drawLine(28, 16, 28, 26)
+            p.setBrush(self._accent)
+            p.drawEllipse(QPointF(28, 26), 2, 2)
+            # Play triangle overlay
+            p.setBrush(self._accent)
+            p.drawPolygon(QPolygonF([
+                QPointF(14, 16), QPointF(14, 24), QPointF(22, 20),
+            ]))
+
         p.end()
 
 
@@ -84,13 +103,14 @@ class GettingStartedOverlay(QWidget):
     """Transparent overlay centered in the viewport with quick-start actions."""
     action_triggered = Signal(str)
     recent_file_requested = Signal(str)
+    tutorial_requested = Signal()  # New signal for tutorial
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TranslucentBackground)
         recent_count = min(len(get_recent_files()), 3)
-        height = 280 + (recent_count * 28 + 40 if recent_count > 0 else 0)
+        height = 340 + (recent_count * 28 + 40 if recent_count > 0 else 0)
         self.setFixedSize(320, height)
         self._build_ui()
 
@@ -228,6 +248,9 @@ class GettingStartedOverlay(QWidget):
 
             card_lay.addWidget(row)
 
+        # Tutorial button
+        self._add_tutorial_button(card_lay)
+
         # Recent files section
         recent = get_recent_files()
         if recent:
@@ -264,6 +287,70 @@ class GettingStartedOverlay(QWidget):
 
         lay.addWidget(card)
 
+    def _add_tutorial_button(self, card_lay):
+        """Add the tutorial/help button."""
+        # Separator line
+        sep = QLabel()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: rgba(255, 255, 255, 8); border: none; margin: 8px 0;")
+        card_lay.addWidget(sep)
+
+        # Tutorial row
+        tutorial_accent = "#f59e0b"  # Amber color
+        row = QWidget()
+        row.setCursor(Qt.PointingHandCursor)
+        row.setFixedHeight(52)
+        row.setStyleSheet(f"""
+            QWidget#gsRow {{
+                background: rgba(255, 255, 255, 4);
+                border: 1px solid rgba(255, 255, 255, 6);
+                border-left: 3px solid transparent;
+                border-radius: 10px;
+            }}
+            QWidget#gsRow:hover {{
+                background: rgba(255, 255, 255, 8);
+                border-left: 3px solid {tutorial_accent};
+            }}
+        """)
+        row.setObjectName("gsRow")
+
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(10, 6, 14, 6)
+        row_lay.setSpacing(12)
+
+        icon = _IconWidget("tutorial", tutorial_accent)
+        row_lay.addWidget(icon)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        lbl = QLabel(tr("Start Tutorial"))
+        lbl.setStyleSheet(f"""
+            color: #d4d8e4;
+            font-size: 13px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+        """)
+        text_col.addWidget(lbl)
+
+        desc = QLabel(tr("Learn the basics in 5 minutes"))
+        desc.setStyleSheet("""
+            color: #4a5060;
+            font-size: 10px;
+            background: transparent;
+            border: none;
+        """)
+        text_col.addWidget(desc)
+        row_lay.addLayout(text_col, 1)
+
+        # Make entire row clickable
+        click_btn = QPushButton(row)
+        click_btn.setStyleSheet("background: transparent; border: none;")
+        click_btn.setCursor(Qt.PointingHandCursor)
+        click_btn.clicked.connect(self._on_tutorial_click)
+
+        card_lay.addWidget(row)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # Make invisible click buttons fill their parent rows
@@ -277,6 +364,11 @@ class GettingStartedOverlay(QWidget):
 
     def _on_recent_click(self, path):
         self.recent_file_requested.emit(path)
+        self.hide()
+
+    def _on_tutorial_click(self):
+        """Handle tutorial button click."""
+        self.tutorial_requested.emit()
         self.hide()
 
     def center_on_parent(self):

@@ -223,3 +223,90 @@ def test_downstream_blocked_feature_recovers_after_upstream_fix():
     recovered_details = chamfer.status_details or {}
     assert recovered_details.get("code") != "blocked_by_upstream_error"
     assert recovered_details.get("status_class") != "BLOCKED"
+
+
+def test_feature_reorder_maintains_geometry():
+    """Verify geometry is unchanged after reorder (when valid)."""
+    _, body = _make_doc_box_body("pi007_reorder", length=30.0, width=20.0, height=10.0)
+    base_volume = float(body._build123d_solid.volume)
+    
+    # Add two fillets on different edges
+    fillet1 = FilletFeature(radius=0.5, edge_indices=[0, 1])
+    body.add_feature(fillet1)
+    assert _is_success(fillet1)
+    
+    fillet2 = FilletFeature(radius=0.5, edge_indices=[2, 3])
+    body.add_feature(fillet2)
+    assert _is_success(fillet2)
+    
+    volume_before_reorder = float(body._build123d_solid.volume)
+    
+    # Reorder features (swap positions)
+    success = body.reorder_features(0, 1)
+    assert success
+    
+    # Verify geometry is still valid and volume unchanged
+    assert body._build123d_solid is not None
+    volume_after_reorder = float(body._build123d_solid.volume)
+    assert volume_after_reorder == pytest.approx(volume_before_reorder, rel=1e-6, abs=1e-6)
+
+
+def test_feature_reorder_updates_dependency_graph():
+    """Verify dependency graph correctly updated after reorder."""
+    from modeling.feature_dependency import FeatureDependencyGraph
+    
+    _, body = _make_doc_box_body("pi007_dep_graph", length=30.0, width=20.0, height=10.0)
+    
+    fillet1 = FilletFeature(radius=0.5, edge_indices=[0, 1])
+    body.add_feature(fillet1)
+    
+    fillet2 = FilletFeature(radius=0.5, edge_indices=[2, 3])
+    body.add_feature(fillet2)
+    
+    # Get initial feature order
+    initial_order = [f.id for f in body.features]
+    
+    # Reorder
+    body.reorder_features(0, 1)
+    
+    # Verify new order
+    new_order = [f.id for f in body.features]
+    assert new_order[0] == initial_order[1]
+    assert new_order[1] == initial_order[0]
+    
+    # Verify dependency graph can be rebuilt without errors
+    if hasattr(body, '_dependency_graph') and body._dependency_graph:
+        dep_graph = FeatureDependencyGraph(body)
+        dep_graph.rebuild()
+        assert dep_graph.is_valid()
+
+
+def test_reorder_feature_command_undo_restores_original_order():
+    """Test ReorderFeatureCommand undo restores original feature order."""
+    from gui.commands.feature_commands import ReorderFeatureCommand
+    
+    _, body = _make_doc_box_body("pi007_cmd_undo", length=30.0, width=20.0, height=10.0)
+    
+    fillet1 = FilletFeature(radius=0.5, edge_indices=[0, 1])
+    body.add_feature(fillet1)
+    
+    fillet2 = FilletFeature(radius=0.5, edge_indices=[2, 3])
+    body.add_feature(fillet2)
+    
+    # Store original order
+    original_order = [f.id for f in body.features]
+    
+    # Create and execute command
+    cmd = ReorderFeatureCommand(body, old_index=0, new_index=1, main_window=None)
+    cmd.redo()  # First redo skips (QUndoCommand pattern)
+    cmd.redo()  # Second redo performs the reorder
+    
+    # Verify reorder happened
+    order_after_redo = [f.id for f in body.features]
+    assert order_after_redo[0] == original_order[1]
+    assert order_after_redo[1] == original_order[0]
+    
+    # Undo should restore original order
+    cmd.undo()
+    order_after_undo = [f.id for f in body.features]
+    assert order_after_undo == original_order

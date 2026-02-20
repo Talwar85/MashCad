@@ -43,6 +43,8 @@ FEATURE_FLAGS: Dict[str, bool] = {
 
     # Assembly System (Phase 1-6)
     "assembly_system": True,  # Hierarchische Component-Struktur wie CAD
+    "mate_system_v1": True,  # AS-002: Mate constraints between components
+    "mate_solver": True,  # AS-003: Mate-Solver Base Kernel for assembly constraint solving
 
     # Performance Optimizations (2026 Performance Plan)
     "optimized_actor_pooling": True,  # Phase 2: VTK Actor Pooling Optimierung
@@ -68,7 +70,23 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "boolean_post_validation": True,  # Post-Check: BRepCheck_Analyzer + ShapeFix nach Booleans
     "boolean_argument_analyzer": True,  # Pre-Check: BOPAlgo_ArgumentAnalyzer Input-Validierung
     "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
-    "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export
+    
+    # Export Formats (PR-001: 3MF Export)
+    "export_3mf": True,  # 3MF Export Implementation
+    
+    # Export Validation (PR-002: Manifold/Free-Bounds Pflichtcheck)
+    "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export (G4 Printability)
+    "export_normals_check": False,  # Normalen-Konsistenz-Check (optional, performance-intensiv)
+    "export_auto_repair": True,  # Auto-Repair Integration mit GeometryHealer
+    
+    # Geometry Drift Detection (PI-008: Sprint 3)
+    "geometry_drift_detection": True,  # Early detection of accumulated numerical errors
+    
+    # PR-010: Printability Trust Gate
+    "printability_trust_gate": True,  # Printability-Validierung vor Export
+    "printability_min_score": 60,  # Mindest-Score für Export (0-100)
+    "printability_block_on_critical": True,  # Export bei CRITICAL Issues blockieren
+    
     "boolean_tolerance_monitoring": True,  # Post-Check: ShapeAnalysis_ShapeTolerance nach Booleans
 
     # OCP Feature Audit Tier 3
@@ -114,6 +132,49 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "solver_pre_validation": True,  # P1: Early contradiction detection
     "solver_smooth_penalties": True,  # P1: Smooth tangent penalties
     "solver_experimental_staged": True,  # P3: Staged solve (experimental)
+    
+    # SU-005: Sketch Drag Performance Optimization (60 FPS target)
+    "sketch_drag_optimization": True,  # Enable throttled solver updates during drag
+    "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls (60 FPS = 16ms)
+    "sketch_performance_monitoring": False,  # Enable performance stats collection (debug)
+    
+    # QA-006: Performance Regression Gate
+    "performance_regression_gate": True,  # Enable performance benchmarking and regression detection
+    
+    # PI-006: Rollback Consistency Validation
+    "rollback_validation": True,  # Enable rollback state validation and orphan detection
+    
+    # UX-001: First-Run Guided Flow
+    "first_run_tutorial": True,  # Enable5-step guided tutorial for new users
+    
+    # ======================================================
+    # Live Preview System (High-Priority TODOs 2026)
+    # ======================================================
+    # Debounced preview system for interactive feature editing
+    
+    "live_preview_textures": True,    # Live texture preview with debouncing
+    "live_preview_patterns": True,    # Live pattern preview (already partially implemented)
+    "live_preview_shell": False,      # Live shell thickness preview (experimental)
+    "live_preview_fillet": False,     # Live fillet radius preview (experimental)
+    "live_preview_chamfer": False,    # Live chamfer size preview (experimental)
+    
+    # Preview Quality Settings
+    "preview_debounce_ms": 150,       # Debounce delay in milliseconds
+    "preview_subdivisions_live": 3,   # Mesh subdivisions for live preview (fast)
+    "preview_subdivisions_final": 5,  # Mesh subdivisions for final apply (quality)
+    
+    # Normal Map Preview (Phase 3 - Advanced)
+    "normal_map_preview": False,      # Normal map visualization in viewport
+    "normal_map_shader": False,       # Shader-based normal mapping (requires VTK shader hooks)
+    
+    # TNP Enhancements
+    "detailed_boolean_history": True, # Enhanced Boolean history extraction for TNP
+    
+    # Helix Fitting
+    "helix_fitting_enabled": True,    # Helix parameter fitting via scipy least_squares
+    
+    # QA-010: RC Burn-in Mode
+    "rc_burn_in_mode": False,         # Enable RC burn-in testing mode (only True during RC phase)
 }
 
 
@@ -146,6 +207,18 @@ def set_flag(flag: str, value: bool) -> None:
         value: Neuer Wert
     """
     FEATURE_FLAGS[flag] = value
+
+
+# Alias for set_flag (CH-006 compatibility)
+def set_enabled(flag: str, value: bool) -> None:
+    """
+    Alias for set_flag - sets a feature flag at runtime.
+    
+    Args:
+        flag: Name of the feature flag
+        value: New value
+    """
+    set_flag(flag, value)
 
 
 def get_all_flags() -> Dict[str, bool]:
