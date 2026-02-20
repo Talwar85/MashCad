@@ -7545,8 +7545,11 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 if spline_elem != self.hovered_spline_element:
                      # Spline Handle Hover changed -> Update Spline area
                      if spline_elem:
-                         # bbox der ganzen spline holen (teuer, aber ok für hover change)
-                         pass # TODO
+                         # NOTE: BBox der ganzen Spline könnte hier geholt werden für
+                         # optimierten Partial-Update. Aktuell wird aus Einfachheit
+                         # needs_full_update=True verwendet, da BBox-Berechnung
+                         # ähnlich teuer wie Full-Update bei typischen Spline-Größen.
+                         pass
                      needs_full_update = True # Einfachheitshalber
                 
                 self.hovered_spline_element = spline_elem

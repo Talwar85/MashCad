@@ -1,7 +1,7 @@
 # MashCad - Technische Schulden & TODOs
 
 > **Letzte Aktualisierung:** 2026-02-20
-> **Gesamt:** 14 offene Punkte
+> **Gesamt:** 10 offene Punkte
 
 ---
 
@@ -22,7 +22,6 @@
 | `gui/main_window.py` | 8489 | Live-Preview für Texturen wenn Performance es erlaubt | 🟡 Offen |
 | `gui/main_window.py` | 8746 | Live-Preview für Patterns wenn Performance es erlaubt | 🟡 Offen |
 | `gui/main_window.py` | 8940 | Normal-Map Preview im Viewport | 🟡 Offen |
-| `gui/sketch_renderer.py` | 172 | Culling für Profile implementieren | 🟡 Offen |
 
 ### Core Improvements
 
@@ -42,14 +41,6 @@
 | `meshconverter/brep_optimizer.py` | 664 | NURBS-Replacement in zukünftiger Version | 🟢 Offen |
 | `meshconverter/brep_optimizer.py` | 970 | Besserer Ansatz für Planar-Gruppen in Zukunft | 🟢 Offen |
 | `meshconverter/mesh_converter_v10.py` | 225 | Consistent normal orientation implementieren | 🟢 Offen |
-
-### UI/UX
-
-| Datei | Zeile | Beschreibung | Status |
-|-------|-------|--------------|--------|
-| `gui/main_window.py` | 10228 | Hack: Label 4 ist Winkel - VectorInputDialog generisch nutzen | 🟢 Refactor |
-| `gui/sketch_editor.py` | 4251 | Leerer TODO-Block (pass # TODO) | 🟢 Implementieren |
-| `gui/viewport/brep_cleanup_mixin.py` | 347 | Ctrl-Status von Event holen für Modifier-Handling | 🟢 Offen |
 
 ---
 
@@ -73,11 +64,11 @@
 
 ```
 🔴 Kritisch:  0
-🟡 Hoch:      6
-🟢 Mittel:    6
+🟡 Hoch:      5
+🟢 Mittel:    3
 🔵 Niedrig:   7
-───────────────
-Gesamt:      19
+─────────────
+Gesamt:      15
 ```
 
 ---

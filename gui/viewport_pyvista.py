@@ -2966,8 +2966,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if event.button() == Qt.LeftButton:
                     pos = event.position() if hasattr(event, 'position') else event.pos()
                     x, y = int(pos.x()), int(pos.y())
+                    # Ctrl-Status vom Event holen für Multi-Select
+                    is_multi_select = bool(event.modifiers() & Qt.ControlModifier)
                     if hasattr(self, '_brep_cleanup_handle_click'):
-                        self._brep_cleanup_handle_click(x, y)
+                        self._brep_cleanup_handle_click(x, y, is_multi_select)
                         return True
                 return False
 
