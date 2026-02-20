@@ -148,29 +148,45 @@ class ExportController(QObject):
         if not filepath.lower().endswith('.stl'):
             filepath += '.stl'
         
-        # Pre-flight Validierung
+        # PR-010: Printability Trust Gate Check
+        gate_result = self._run_printability_gate_check(bodies)
+        if gate_result is not None:
+            from modeling.printability_gate import GateStatus
+            
+            if gate_result.status == GateStatus.FAIL:
+                # Export blockiert - zeige Dialog
+                self._show_printability_preflight_dialog(gate_result)
+                return False
+            elif gate_result.status == GateStatus.WARN:
+                # Warnung - zeige Dialog mit Override-Option
+                if not self._show_printability_preflight_dialog(gate_result):
+                    return False
+            # PASS: Export fortsetzen
+        
+        # Pre-flight Validierung (legacy)
         validation_issues = self._run_preflight_validation(bodies)
         if validation_issues:
             self.validation_warnings.emit(validation_issues)
             
-            # Zeige Warnungen falls kritische Issues
-            critical_issues = [i for i in validation_issues 
-                             if i.severity.value == "error"]
-            if critical_issues:
-                msg = tr("Kritische Probleme gefunden:\n\n")
-                for issue in critical_issues[:5]:
-                    msg += f"• {issue.message}\n"
-                msg += tr("\nTrotzdem exportieren?")
-                
-                reply = QMessageBox.warning(
-                    self._mw,
-                    tr("Export Validierung"),
-                    msg,
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if reply != QMessageBox.Yes:
-                    return False
+            # Zeige Warnungen falls kritische Issues (nur wenn Gate nicht aktiv)
+            if gate_result is None:
+                critical_issues = [i for i in validation_issues
+                                 if i.severity.value == "error"]
+                if critical_issues:
+                    msg = tr("Kritische Probleme gefunden:\n\n")
+                    for issue in critical_issues[:5]:
+                        msg += f"• {issue.message}\n"
+                    msg += tr("\nTrotzdem exportieren?")
+                    
+                    reply = QMessageBox.warning(
+                        self._mw,
+                        tr("Export Validierung"),
+                        msg,
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        return False
         
         self.export_started.emit("STL")
         
@@ -206,6 +222,139 @@ class ExportController(QObject):
         except Exception as e:
             logger.warning(f"Preflight validation failed: {e}")
             return []
+    
+    def _run_printability_gate_check(self, bodies: List) -> Optional['GateResult']:
+        """
+        Führt Printability Trust Gate Check durch (PR-010).
+        
+        Returns:
+            GateResult oder None wenn Gate deaktiviert/Fehler
+        """
+        try:
+            from config.feature_flags import is_enabled
+            
+            # Skip wenn Feature deaktiviert
+            if not is_enabled("printability_trust_gate"):
+                logger.debug("Printability Trust Gate deaktiviert")
+                return None
+            
+            from modeling.printability_gate import PrintabilityGate, GateStatus
+            
+            gate = PrintabilityGate()
+            
+            # Check alle Bodies
+            worst_result = None
+            for body in bodies:
+                solid = getattr(body, '_build123d_solid', None)
+                if solid is not None:
+                    result = gate.check(solid)
+                    if worst_result is None or result.score.overall_score < worst_result.score.overall_score:
+                        worst_result = result
+            
+            return worst_result
+            
+        except Exception as e:
+            logger.warning(f"Printability gate check failed: {e}")
+            return None
+    
+    def _show_printability_preflight_dialog(self, gate_result: 'GateResult') -> bool:
+        """
+        Zeigt den Printability Preflight Dialog.
+        
+        Returns:
+            True wenn Export fortgesetzt werden soll
+        """
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QScrollArea, QWidget
+        from PySide6.QtCore import Qt
+        from modeling.printability_gate import GateStatus
+        
+        dialog = QDialog(self._mw)
+        dialog.setWindowTitle(tr("Printability Check"))
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Header mit Score
+        score = gate_result.score
+        header = QLabel(
+            f"<h2>{score.get_grade()} - Score: {score.overall_score}/100</h2>"
+            f"<p>{gate_result.get_summary()}</p>"
+        )
+        layout.addWidget(header)
+        
+        # Score Details
+        details = QLabel(
+            f"<b>Kategorie-Scores:</b><br>"
+            f"• Manifold: {score.manifold_score}/100<br>"
+            f"• Normalen: {score.normals_score}/100<br>"
+            f"• Wandstärke: {score.wall_thickness_score}/100<br>"
+            f"• Überhänge: {score.overhang_score}/100"
+        )
+        layout.addWidget(details)
+        
+        # Issues falls vorhanden
+        if gate_result.blocking_issues or gate_result.warning_issues:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll_widget = QWidget()
+            scroll_layout = QVBoxLayout(scroll_widget)
+            
+            if gate_result.blocking_issues:
+                scroll_layout.addWidget(QLabel("<b>Blockierende Probleme:</b>"))
+                for issue in gate_result.blocking_issues[:10]:
+                    icon = "🔴" if issue.severity.value == "critical" else "🟠"
+                    issue_label = QLabel(f"{icon} {issue.message}")
+                    issue_label.setWordWrap(True)
+                    scroll_layout.addWidget(issue_label)
+            
+            if gate_result.warning_issues:
+                scroll_layout.addWidget(QLabel("<b>Warnungen:</b>"))
+                for issue in gate_result.warning_issues[:10]:
+                    issue_label = QLabel(f"🟡 {issue.message}")
+                    issue_label.setWordWrap(True)
+                    scroll_layout.addWidget(issue_label)
+            
+            scroll.setWidget(scroll_widget)
+            layout.addWidget(scroll)
+        
+        # Buttons
+        button_layout = QVBoxLayout()
+        
+        if gate_result.status == GateStatus.FAIL:
+            # Export blockiert
+            msg = QLabel(tr("<b>Export ist blockiert aufgrund kritischer Probleme.</b>"))
+            msg.setStyleSheet("color: red;")
+            layout.addWidget(msg)
+            
+            close_btn = QPushButton(tr("Schließen"))
+            close_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(close_btn)
+        elif gate_result.status == GateStatus.WARN:
+            # Warnung - Export mit Bestätigung möglich
+            msg = QLabel(tr("Export mit Warnungen möglich. Trotzdem exportieren?"))
+            msg.setStyleSheet("color: orange;")
+            layout.addWidget(msg)
+            
+            export_btn = QPushButton(tr("Trotzdem exportieren"))
+            export_btn.clicked.connect(dialog.accept)
+            button_layout.addWidget(export_btn)
+            
+            cancel_btn = QPushButton(tr("Abbrechen"))
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+        else:
+            # PASS
+            ok_btn = QPushButton(tr("Exportieren"))
+            ok_btn.clicked.connect(dialog.accept)
+            button_layout.addWidget(ok_btn)
+            
+            cancel_btn = QPushButton(tr("Abbrechen"))
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        return dialog.exec() == QDialog.Accepted
         
     def _export_stl_async(self, bodies, filepath, options):
         """Startet asynchronen STL Export über ExportKernel."""

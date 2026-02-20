@@ -74,6 +74,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     "export_normals_check": False,  # Normalen-Konsistenz-Check (optional, performance-intensiv)
     "export_auto_repair": True,  # Auto-Repair Integration mit GeometryHealer
     
+    # PR-010: Printability Trust Gate
+    "printability_trust_gate": True,  # Printability-Validierung vor Export
+    "printability_min_score": 60,  # Mindest-Score für Export (0-100)
+    "printability_block_on_critical": True,  # Export bei CRITICAL Issues blockieren
+    
     "boolean_tolerance_monitoring": True,  # Post-Check: ShapeAnalysis_ShapeTolerance nach Booleans
 
     # OCP Feature Audit Tier 3
