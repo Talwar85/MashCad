@@ -72,6 +72,7 @@ class TutorialActionDetector(QObject):
     extrusion_done = Signal(float)  # distance
     dimension_added = Signal()
     fillet_applied = Signal(float)  # radius
+    chamfer_applied = Signal(float)  # distance
     button_clicked = Signal(str)  # button_name
     
     def __init__(self, main_window):
@@ -111,6 +112,9 @@ class TutorialActionDetector(QObject):
         
         # Prüfe auf Extrusion (neue Bodies)
         self._check_extrusion()
+        
+        # Prüfe auf Chamfer/Fillet
+        self._check_chamfer()
             
     def _count_sketches(self) -> int:
         """Zählt aktive Sketches."""
@@ -181,6 +185,11 @@ class TutorialActionDetector(QObject):
                 
         except Exception as e:
             logger.debug(f"[Tutorial] Extrusion check error: {e}")
+            
+    def _check_chamfer(self):
+        """Prüft ob Chamfer/Fillet angewendet wurde."""
+        # Für jetzt: Manueller Button, da Feature-Erkennung komplex ist
+        pass
         
     def simulate_detection(self, action_type: str):
         """Simuliert eine Erkennung (für Testing)."""
@@ -742,6 +751,8 @@ class InteractiveTutorialPanel(QFrame):
             self.demo_viewport.show_sketch_demo()
         elif challenge.challenge_type == TutorialChallengeType.EXTRUDE_SHAPE:
             self.demo_viewport.show_extrude_demo()
+        elif challenge.challenge_type == TutorialChallengeType.APPLY_FILLET:
+            self.demo_viewport.show_fillet_demo()
             
     def show_success(self, xp: int, next_action: str = ""):
         """Zeigt Success-Status und nächste Aktion."""
@@ -841,6 +852,14 @@ class InteractiveTutorialV2(QObject):
                 xp_reward=200
             ),
             TutorialChallenge(
+                challenge_type=TutorialChallengeType.APPLY_FILLET,
+                title="Fasen (Chamfer) anwenden",
+                description="Wählen Sie eine Kante des 3D-Körpers und wenden Sie 'Chamfer' an, um eine Fase zu erstellen.",
+                target_name="",
+                hint="Kante auswählen → Chamfer-Werkzeug → Abstand einstellen",
+                xp_reward=250
+            ),
+            TutorialChallenge(
                 challenge_type=TutorialChallengeType.CLICK_BUTTON,
                 title="Glückwunsch!",
                 description="Sie haben alle Challenges gemeistert! Sie sind jetzt bereit für eigene Projekte.",
@@ -855,6 +874,7 @@ class InteractiveTutorialV2(QObject):
         self.detector.sketch_created.connect(self._on_sketch_created)
         self.detector.rectangle_drawn.connect(self._on_rectangle_drawn)
         self.detector.extrusion_done.connect(self._on_extrusion_done)
+        self.detector.chamfer_applied.connect(self._on_chamfer_applied)
         
     def start(self):
         """Startet das Tutorial."""
@@ -950,6 +970,11 @@ class InteractiveTutorialV2(QObject):
         if self.current_step == 3:  # Challenge 4: Extrude
             self._complete_challenge()
             
+    def _on_chamfer_applied(self, distance: float):
+        """Wird aufgerufen wenn Chamfer angewendet wurde."""
+        if self.current_step == 4:  # Challenge 5: Chamfer
+            self._complete_challenge()
+            
     def _complete_challenge(self):
         """Schließt aktuelle Challenge ab."""
         challenge = self.challenges[self.current_step]
@@ -964,7 +989,8 @@ class InteractiveTutorialV2(QObject):
             1: "Zeichnen Sie ein Rechteck im Sketch-Editor",
             2: "Klicken Sie 'Fertig stellen' um den Sketch zu schließen",
             3: "Klicken Sie 'Extrudieren' um 3D zu erstellen",
-            4: "Tutorial abschließen"
+            4: "Wählen Sie eine Kante und wenden Sie 'Chamfer' an",
+            5: "Tutorial abschließen"
         }
         next_action = next_actions.get(self.current_step, "")
         
