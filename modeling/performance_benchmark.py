@@ -494,7 +494,7 @@ class PerformanceBenchmark:
                 # Cleanup
                 try:
                     tmp_path.unlink()
-                except:
+                except Exception:
                     pass
                 
             except Exception as e:

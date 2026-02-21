@@ -214,7 +214,7 @@ class BodyRebuildMixin:
         # === PHASE 7: Inkrementeller Rebuild mit Checkpoints ===
         start_index = 0
         current_solid = None
-        use_incremental = is_enabled("feature_dependency_tracking") and changed_feature_id is not None
+        use_incremental = changed_feature_id is not None
 
         if use_incremental:
             # Dependency Graph aktualisieren

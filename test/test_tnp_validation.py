@@ -234,7 +234,7 @@ def test_body_transaction_tnp():
             # Volume ist eine Eigenschaft von Solid
             try:
                 vol = body._build123d_solid.volume
-            except:
+            except Exception:
                 # Fallback: Berechnung
                 vol = body._build123d_solid.wrapped.Shape().Volume() if hasattr(body._build123d_solid, 'wrapped') else 20**3
             assert abs(vol - 20**3) < 10.0, f"Body nicht korrekt geändert: vol={vol}"

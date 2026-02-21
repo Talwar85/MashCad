@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import inspect
 import numpy as np
+from loguru import logger
 
 from .geometry import Point2D, Line2D, Circle2D, Arc2D
 
@@ -202,9 +203,9 @@ class ConstraintSolver:
             )
             
         except Exception as e:
-            # Fallback auf direkte Implementierung wenn neues Interface fehlschlägt
+            logger.warning(f"[Solver] UnifiedSolver failed, falling back to legacy: {e}")
             return self._solve_legacy(points, lines, circles, arcs, constraints,
-                                      progress_callback, callback_interval)
+                                       progress_callback, callback_interval)
     
     def _solve_legacy(self, points, lines, circles, arcs, constraints, 
                       progress_callback=None, callback_interval=10) -> SolverResult:

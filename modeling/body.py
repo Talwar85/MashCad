@@ -472,11 +472,6 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             on_ready: Optional callback(body_id, mesh, edges, face_info)
                       Wenn None, wird das Mesh direkt in den Cache geschrieben.
         """
-        if not is_enabled("async_tessellation"):
-            # Synchroner Fallback
-            self._regenerate_mesh()
-            return
-
         if self._build123d_solid is None:
             return
 
@@ -512,9 +507,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         self.features.append(feature)
 
         # Phase 7: Feature im Dependency Graph registrieren
-        from config.feature_flags import is_enabled
-        if is_enabled("feature_dependency_tracking"):
-            self._dependency_graph.add_feature(feature.id, len(self.features) - 1)
+        self._dependency_graph.add_feature(feature.id, len(self.features) - 1)
 
         if rebuild:
             self._rebuild(changed_feature_id=feature.id)
@@ -524,13 +517,11 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             feature_index = self.features.index(feature)
 
             # Phase 7: Checkpoints nach diesem Feature invalidieren
-            from config.feature_flags import is_enabled
-            if is_enabled("feature_dependency_tracking"):
-                self._dependency_graph.remove_feature(feature.id)
-                # LÃ¶sche Checkpoints ab diesem Index
-                for idx in list(self._solid_checkpoints.keys()):
-                    if idx >= feature_index:
-                        del self._solid_checkpoints[idx]
+            self._dependency_graph.remove_feature(feature.id)
+            # LÃ¶sche Checkpoints ab diesem Index
+            for idx in list(self._solid_checkpoints.keys()):
+                if idx >= feature_index:
+                    del self._solid_checkpoints[idx]
 
             self.features.remove(feature)
             self._rebuild()
@@ -548,21 +539,15 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             logger.error(f"Feature '{feature.id}' nicht in Body '{self.name}' gefunden")
             return
 
-        from config.feature_flags import is_enabled
+        feature_index = self.features.index(feature)
 
-        if is_enabled("feature_dependency_tracking"):
-            feature_index = self.features.index(feature)
+        # Checkpoints ab diesem Feature invalidieren
+        for idx in list(self._solid_checkpoints.keys()):
+            if idx >= feature_index:
+                del self._solid_checkpoints[idx]
 
-            # Checkpoints ab diesem Feature invalidieren
-            for idx in list(self._solid_checkpoints.keys()):
-                if idx >= feature_index:
-                    del self._solid_checkpoints[idx]
-
-            # Inkrementeller Rebuild
-            self._rebuild(changed_feature_id=feature.id)
-        else:
-            # Fallback: Voller Rebuild
-            self._rebuild()
+        # Inkrementeller Rebuild
+        self._rebuild(changed_feature_id=feature.id)
             
     def convert_to_brep(self, mode: str = "auto"):
         """

@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QGraphicsDropShadowEffect,
     QApplication, QToolTip
 )
-from PySide6.QtCore import Qt, QRect, QPoint, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QRect, QPoint, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont, QPolygon
 from loguru import logger
 from typing import List, Optional, Callable

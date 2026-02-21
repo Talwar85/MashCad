@@ -20,7 +20,7 @@ from modeling.geometry_drift_detector import (
     is_drift_acceptable,
     get_drift_warnings,
 )
-from test.ocp_test_utils import create_test_box, create_test_cylinder
+from ocp_test_utils import create_test_box, create_test_cylinder
 
 
 class TestDriftMetrics:

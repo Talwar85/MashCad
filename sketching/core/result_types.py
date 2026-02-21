@@ -35,7 +35,7 @@ class PartResult:
             return 0.0
         try:
             return self.solid.volume
-        except:
+        except Exception:
             return 0.0
 
     @property
@@ -45,7 +45,7 @@ class PartResult:
             return 0
         try:
             return len(list(self.solid.faces()))
-        except:
+        except Exception:
             return 0
 
 

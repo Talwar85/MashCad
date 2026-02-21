@@ -1251,7 +1251,7 @@ class TestConflictExplanationTemplates:
         """Test dass Resolution Steps aktionsorientiert sind."""
         from sketcher.constraint_diagnostics import ConflictExplanationTemplates
         
-        action_keywords = ["Entferne", "ODER", "setze", "prüfe", "ändere", "verschiebe"]
+        action_keywords = ["Entferne", "ODER", "setze", "prüfe", "ändere", "verschiebe", "Ändere", "Prüfe"]
         
         template_names = [
             'GEOMETRIC_IMPOSSIBLE',

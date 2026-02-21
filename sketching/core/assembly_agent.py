@@ -279,7 +279,7 @@ class AssemblyAgent:
                 elif hasattr(normal, '__iter__'):
                     return list(normal)
             return None
-        except:
+        except Exception:
             return None
 
     @property

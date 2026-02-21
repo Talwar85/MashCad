@@ -124,7 +124,7 @@ def test_fillet_single_edge():
     edge_index = edge_index_of(body._build123d_solid, edges[0])
 
     fillet = FilletFeature(radius=1.0, edge_indices=[edge_index])
-    new_solid = body._ocp_fillet(body._build123d_solid, [edges[0]], 1.0)
+    new_solid = body._ocp_fillet(body._build123d_solid, [edges[0]], 1.0, feature_id=fillet.id)
 
     assert new_solid is not None
     assert new_solid.is_valid()
@@ -148,7 +148,7 @@ def test_fillet_multiple_edges():
     edge_indices = [edge_index_of(body._build123d_solid, e) for e in fillet_edges]
 
     fillet = FilletFeature(radius=0.5, edge_indices=edge_indices)
-    new_solid = body._ocp_fillet(body._build123d_solid, fillet_edges, 0.5)
+    new_solid = body._ocp_fillet(body._build123d_solid, fillet_edges, 0.5, feature_id=fillet.id)
 
     assert new_solid is not None
     assert new_solid.is_valid()
@@ -174,7 +174,7 @@ def test_chamfer_single_edge():
     edge_index = edge_index_of(body._build123d_solid, edges[0])
 
     chamfer = ChamferFeature(distance=0.5, edge_indices=[edge_index])
-    new_solid = body._ocp_chamfer(body._build123d_solid, [edges[0]], 0.5)
+    new_solid = body._ocp_chamfer(body._build123d_solid, [edges[0]], 0.5, feature_id=chamfer.id)
 
     assert new_solid is not None
     assert new_solid.is_valid()
@@ -198,7 +198,7 @@ def test_chamfer_multiple_edges():
     edge_indices = [edge_index_of(body._build123d_solid, e) for e in chamfer_edges]
 
     chamfer = ChamferFeature(distance=0.5, edge_indices=edge_indices)
-    new_solid = body._ocp_chamfer(body._build123d_solid, chamfer_edges, 0.5)
+    new_solid = body._ocp_chamfer(body._build123d_solid, chamfer_edges, 0.5, feature_id=chamfer.id)
 
     assert new_solid is not None
     assert new_solid.is_valid()
@@ -261,7 +261,7 @@ def test_loft_three_profiles():
 # ============================================================================
 
 def test_shell_simple():
-    """Einfache Shell-Operation"""
+    """Einfache Shell-Operation (geschlossener Hohlkörper)"""
     doc = Document("Shell Test")
     body = Body("ShellBody", document=doc)
     doc.add_body(body)
@@ -270,13 +270,8 @@ def test_shell_simple():
     solid = bd.Solid.make_box(10, 10, 10)
     body._build123d_solid = solid
 
-    # Top Face finden
-    from modeling.topology_indexing import face_index_of
-    faces = list(body._build123d_solid.faces())
-    top_face = max(faces, key=lambda f: f.center().Z)
-    face_index = face_index_of(body._build123d_solid, top_face)
-
-    shell = ShellFeature(thickness=1.0, face_indices=[face_index])
+    # Shell ohne Öffnungs-Faces erstellt geschlossenen Hohlkörper
+    shell = ShellFeature(thickness=1.0, face_indices=[], face_shape_ids=[])
 
     # Shell verwenden direkt OCP-First (_compute_shell)
     result = body._compute_shell(shell, body._build123d_solid)

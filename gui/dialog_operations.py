@@ -143,7 +143,7 @@ class DialogMixin:
             if hasattr(self, '_stl_preview_actor'):
                 try:
                     self.viewport_3d.plotter.remove_actor(self._stl_preview_actor)
-                except:
+                except Exception:
                     pass
             
             # Add mesh with transparency for reference
@@ -298,7 +298,7 @@ class DialogMixin:
             if hasattr(self, '_highlight_actor'):
                 try:
                     self.viewport_3d.plotter.remove_actor(self._highlight_actor)
-                except:
+                except Exception:
                     pass
             
             if feature_type == "hole" and index < len(analysis.holes):
@@ -337,7 +337,7 @@ class DialogMixin:
                 for actor in self._stl_feature_actors:
                     try:
                         self.viewport_3d.plotter.remove_actor(actor)
-                    except:
+                    except Exception:
                         pass
                 del self._stl_feature_actors
             
@@ -439,7 +439,8 @@ class DialogMixin:
                     for actor_name in self.viewport_3d._body_actors[body.id]:
                         try:
                             self.viewport_3d.plotter.remove_actor(actor_name)
-                        except: pass
+                        except Exception:
+                            pass
                     del self.viewport_3d._body_actors[body.id]
                 
                 if body.id in self.viewport_3d.bodies:
@@ -505,7 +506,8 @@ class DialogMixin:
                     for actor_name in self.viewport_3d._body_actors[body.id]:
                         try:
                             self.viewport_3d.plotter.remove_actor(actor_name)
-                        except: pass
+                        except Exception:
+                            pass
                     del self.viewport_3d._body_actors[body.id]
                 
                 if body.id in self.viewport_3d.bodies:

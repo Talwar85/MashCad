@@ -257,6 +257,60 @@ class ExportKernel:
             )
     
     @staticmethod
+    def export_shape(
+        shape: Any,
+        filepath: Union[str, Path],
+        options: Optional[ExportOptions] = None
+    ) -> ExportResult:
+        """
+        Exportiert ein einzelnes TopoDS_Shape.
+        
+        Args:
+            shape: TopoDS_Shape oder ähnliches OCP-Shape
+            filepath: Zielpfad für die Export-Datei
+            options: Export-Optionen (oder Default)
+            
+        Returns:
+            ExportResult mit Erfolgsstatus und Metadaten
+        """
+        if options is None:
+            options = ExportOptions()
+        
+        filepath = Path(filepath)
+        
+        # Format aus Extension ableiten falls nicht explizit gesetzt
+        if options.format is None:
+            options.format = ExportKernel._detect_format_from_extension(filepath)
+        
+        logger.info(f"Exporting shape to {filepath} ({options.format.value})")
+        
+        # Route zum Format-spezifischen Exporter für einzelne Shapes
+        try:
+            if options.format == ExportFormat.STL:
+                return ExportKernel._export_shape_stl(shape, filepath, options)
+            elif options.format in (ExportFormat.STEP, ExportFormat.STEP_AP214, ExportFormat.STEP_AP242):
+                return ExportKernel._export_shape_step(shape, filepath, options)
+            elif options.format == ExportFormat._3MF:
+                return ExportKernel._export_shape_3mf(shape, filepath, options)
+            elif options.format == ExportFormat.OBJ:
+                return ExportKernel._export_shape_obj(shape, filepath, options)
+            elif options.format == ExportFormat.PLY:
+                return ExportKernel._export_shape_ply(shape, filepath, options)
+            else:
+                return ExportResult(
+                    success=False,
+                    error_code="UNSUPPORTED_FORMAT",
+                    error_message=f"Format {options.format.value} wird nicht unterstützt."
+                )
+        except Exception as e:
+            logger.exception(f"Export failed: {e}")
+            return ExportResult(
+                success=False,
+                error_code="EXPORT_EXCEPTION",
+                error_message=str(e)
+            )
+    
+    @staticmethod
     def export_with_validation(
         bodies: List[Any],
         filepath: Union[str, Path],
@@ -790,6 +844,199 @@ class ExportKernel:
                 error_code="PLY_EXPORT_ERROR",
                 error_message=str(e)
             )
+    
+    @staticmethod
+    def _export_shape_stl(
+        shape: Any,
+        filepath: Path,
+        options: ExportOptions
+    ) -> ExportResult:
+        """STL Export für einzelnes TopoDS_Shape."""
+        try:
+            import pyvista as pv
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.TopLoc import TopLoc_Location
+            from OCP.BRep import BRep_Tool
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.TopoDS import TopoDS
+            
+            # Direct OCP tessellation for raw TopoDS_Shape
+            ocp_shape = shape
+            
+            # Apply meshing
+            mesh = BRepMesh_IncrementalMesh(ocp_shape, options.linear_deflection)
+            mesh.Perform()
+            
+            # Collect vertices and triangles
+            all_vertices = []
+            all_faces = []
+            vertex_offset = 0
+            
+            # Explore faces and extract triangles
+            explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+            while explorer.More():
+                face = TopoDS.Face_s(explorer.Current())
+                
+                location = TopLoc_Location()
+                triangulation = BRep_Tool.Triangulation_s(face, location)
+                
+                if triangulation is not None:
+                    # Get vertices
+                    n_verts = triangulation.NbNodes()
+                    n_tris = triangulation.NbTriangles()
+                    
+                    # Add vertices
+                    for i in range(1, n_verts + 1):
+                        p = triangulation.Node(i)
+                        # Apply location transformation if needed
+                        if not location.IsIdentity():
+                            p = p.Transformed(location.Transformation())
+                        all_vertices.append((p.X(), p.Y(), p.Z()))
+                    
+                    # Add triangles
+                    for i in range(1, n_tris + 1):
+                        tri = triangulation.Triangle(i)
+                        v1, v2, v3 = tri.Get()
+                        all_faces.append((
+                            v1 - 1 + vertex_offset,
+                            v2 - 1 + vertex_offset,
+                            v3 - 1 + vertex_offset
+                        ))
+                    
+                    vertex_offset += n_verts
+                
+                explorer.Next()
+            
+            if not all_vertices or not all_faces:
+                return ExportResult(
+                    success=False,
+                    error_code="NO_MESH_DATA",
+                    error_message="Keine Mesh-Daten zum Exportieren generiert."
+                )
+            
+            # Erstelle PolyData
+            faces = []
+            for t in all_faces:
+                faces.extend([3, t[0], t[1], t[2]])
+            polydata = pv.PolyData(np.array(all_vertices), np.array(faces))
+            
+            # Skalierung anwenden
+            if abs(options.scale - 1.0) > 1e-6:
+                polydata.points *= options.scale
+            
+            # Speichern
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            polydata.save(str(filepath), binary=options.binary)
+            
+            file_size = filepath.stat().st_size if filepath.exists() else 0
+            
+            return ExportResult(
+                success=True,
+                filepath=str(filepath),
+                format=ExportFormat.STL,
+                file_size_bytes=file_size,
+                triangle_count=polydata.n_cells,
+                body_count=1
+            )
+            
+        except ImportError as e:
+            return ExportResult(
+                success=False,
+                error_code="MISSING_DEPENDENCY",
+                error_message=f"Fehlende Abhängigkeit: {e}"
+            )
+        except Exception as e:
+            logger.exception(f"STL export failed: {e}")
+            return ExportResult(
+                success=False,
+                error_code="STL_EXPORT_ERROR",
+                error_message=str(e)
+            )
+    
+    @staticmethod
+    def _export_shape_step(
+        shape: Any,
+        filepath: Path,
+        options: ExportOptions
+    ) -> ExportResult:
+        """STEP Export für einzelnes TopoDS_Shape."""
+        try:
+            from OCP.STEPControl import STEPControl_Writer, STEPControl_AsIs
+            from OCP.IFSelect import IFSelect_RetDone
+            
+            writer = STEPControl_Writer()
+            status = writer.Transfer(shape, STEPControl_AsIs)
+            
+            if status != IFSelect_RetDone:
+                return ExportResult(
+                    success=False,
+                    error_code="STEP_TRANSFER_FAILED",
+                    error_message="STEP Transfer fehlgeschlagen."
+                )
+            
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            write_status = writer.Write(str(filepath))
+            
+            if write_status != IFSelect_RetDone:
+                return ExportResult(
+                    success=False,
+                    error_code="STEP_WRITE_FAILED",
+                    error_message="STEP Write fehlgeschlagen."
+                )
+            
+            file_size = filepath.stat().st_size if filepath.exists() else 0
+            
+            return ExportResult(
+                success=True,
+                filepath=str(filepath),
+                format=ExportFormat.STEP,
+                file_size_bytes=file_size,
+                body_count=1
+            )
+            
+        except ImportError as e:
+            return ExportResult(
+                success=False,
+                error_code="MISSING_DEPENDENCY",
+                error_message=f"Fehlende Abhängigkeit: {e}"
+            )
+        except Exception as e:
+            return ExportResult(
+                success=False,
+                error_code="STEP_EXPORT_ERROR",
+                error_message=str(e)
+            )
+    
+    @staticmethod
+    def _export_shape_3mf(
+        shape: Any,
+        filepath: Path,
+        options: ExportOptions
+    ) -> ExportResult:
+        """3MF Export für einzelnes TopoDS_Shape - wraps shape in candidate."""
+        candidate = ExportCandidate(solid=shape, name="shape")
+        return ExportKernel._export_3mf([candidate], filepath, options)
+    
+    @staticmethod
+    def _export_shape_obj(
+        shape: Any,
+        filepath: Path,
+        options: ExportOptions
+    ) -> ExportResult:
+        """OBJ Export für einzelnes TopoDS_Shape - wraps shape in candidate."""
+        candidate = ExportCandidate(solid=shape, name="shape")
+        return ExportKernel._export_obj([candidate], filepath, options)
+    
+    @staticmethod
+    def _export_shape_ply(
+        shape: Any,
+        filepath: Path,
+        options: ExportOptions
+    ) -> ExportResult:
+        """PLY Export für einzelnes TopoDS_Shape - wraps shape in candidate."""
+        candidate = ExportCandidate(solid=shape, name="shape")
+        return ExportKernel._export_ply([candidate], filepath, options)
     
     @staticmethod
     def estimate_triangle_count(

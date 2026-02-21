@@ -11,6 +11,11 @@ from loguru import logger
 from config.feature_flags import is_enabled
 from modeling.tnp_system import ShapeType
 
+from modeling.features.extrude import ExtrudeFeature
+from modeling.features.advanced import (
+    ThreadFeature, HoleFeature, DraftFeature, ShellFeature, HollowFeature
+)
+
 
 class BodyResolveMixin:
     """
@@ -436,12 +441,6 @@ class BodyResolveMixin:
         2. Topologie-Indizes via topology_indexing.face_from_index
         3. GeometricFaceSelector-Fallback nur ohne Topologie-Referenzen.
         """
-        # Import here to avoid circular imports
-        from modeling.features.extrude import ExtrudeFeature
-        from modeling.features.advanced import (
-            ThreadFeature, HoleFeature, DraftFeature, ShellFeature, HollowFeature
-        )
-        
         if solid is None or not hasattr(solid, 'faces'):
             return []
 
@@ -525,30 +524,36 @@ class BodyResolveMixin:
                 return face_a is face_b
 
         def _face_index(face_obj):
-            for idx, candidate in enumerate(all_faces):
+            for face_idx, candidate in enumerate(all_faces):
                 if _same_face(candidate, face_obj):
-                    return idx
+                    return face_idx
             return None
 
-        def _append_unique(face_obj, shape_id=None, topo_index=None, source=None) -> None:
+        def _append_source_face(collection, face_obj) -> None:
+            for existing in collection:
+                if _same_face(existing, face_obj):
+                    return
+            collection.append(face_obj)
+
+        def _append_face(face_obj, shape_id=None, selector_index=None, topo_index=None, source=None) -> None:
             if face_obj is None:
                 return
             for existing in resolved_faces:
                 if _same_face(existing, face_obj):
                     if source == "shape":
-                        if not any(_same_face(f, face_obj) for f in resolved_faces_from_shape):
-                            resolved_faces_from_shape.append(face_obj)
+                        _append_source_face(resolved_faces_from_shape, existing)
                     elif source == "index":
-                        if not any(_same_face(f, face_obj) for f in resolved_faces_from_index):
-                            resolved_faces_from_index.append(face_obj)
+                        _append_source_face(resolved_faces_from_index, existing)
                     return
             resolved_faces.append(face_obj)
             if source == "shape":
-                resolved_faces_from_shape.append(face_obj)
+                _append_source_face(resolved_faces_from_shape, face_obj)
             elif source == "index":
-                resolved_faces_from_index.append(face_obj)
+                _append_source_face(resolved_faces_from_index, face_obj)
             if shape_id is not None:
                 resolved_shape_ids.append(shape_id)
+            if selector_index is not None:
+                resolved_selector_indices.add(selector_index)
             if topo_index is None:
                 topo_index = _face_index(face_obj)
             if topo_index is not None:
@@ -559,9 +564,360 @@ class BodyResolveMixin:
                 except Exception:
                     pass
 
-        # Resolution logic continues... (this is a partial extraction)
-        # The full implementation would continue here
-        
+        valid_face_indices = []
+        for raw_idx in face_indices:
+            try:
+                face_idx = int(raw_idx)
+            except Exception:
+                continue
+            if face_idx >= 0 and face_idx not in valid_face_indices:
+                valid_face_indices.append(face_idx)
+
+        def _resolve_by_indices() -> None:
+            if not valid_face_indices:
+                return
+            try:
+                from modeling.topology_indexing import face_from_index
+
+                for face_idx in valid_face_indices:
+                    resolved_face = face_from_index(solid, face_idx)
+                    _append_face(resolved_face, topo_index=face_idx, source="index")
+            except Exception as e:
+                logger.debug(f"{feature.name}: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
+
+        def _resolve_by_shape_ids() -> None:
+            if not service:
+                return
+            for idx, shape_id in enumerate(shape_ids):
+                if not hasattr(shape_id, 'uuid'):
+                    continue
+                try:
+                    resolved_ocp, method = service.resolve_shape_with_method(
+                        shape_id,
+                        solid,
+                        log_unresolved=False,
+                    )
+                    shape_resolution_methods[str(getattr(shape_id, "uuid", "") or "")] = (
+                        str(method or "").strip().lower()
+                    )
+                    if resolved_ocp is None:
+                        continue
+                    from build123d import Face
+                    resolved_face = Face(resolved_ocp)
+                    _append_face(
+                        resolved_face,
+                        shape_id=shape_id,
+                        selector_index=idx,
+                        source="shape",
+                    )
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(
+                            f"{feature.name}: Face via ShapeID aufgelÃ¶st "
+                            f"(method={method})"
+                        )
+                except Exception as e:
+                    logger.debug(f"{feature.name}: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
+
+        expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
+        single_ref_pair = bool(
+            single_shape_attr
+            and expected_shape_refs == 1
+            and len(valid_face_indices) == 1
+        )
+        shape_ids_index_aligned = True
+        if expected_shape_refs > 0 and valid_face_indices and not single_ref_pair:
+            for sid in shape_ids:
+                if not hasattr(sid, "uuid"):
+                    continue
+                local_idx = getattr(sid, "local_index", None)
+                if not isinstance(local_idx, int) or not (0 <= int(local_idx) < len(valid_face_indices)):
+                    shape_ids_index_aligned = False
+                    break
+        strict_dual_face_refs = (
+            strict_face_feature
+            and expected_shape_refs > 0
+            and bool(valid_face_indices)
+            and len(valid_face_indices) == expected_shape_refs
+            and (shape_ids_index_aligned or single_ref_pair)
+        )
+        prefer_shape_first = bool(
+            single_shape_attr
+            and expected_shape_refs > 0
+            and (not valid_face_indices or shape_ids_index_aligned or single_ref_pair)
+        )
+
+        # TNP v4.0:
+        # - Extrude/Thread (single-face): shape-first fÃ¼r semantische StabilitÃ¤t.
+        # - Alle anderen: index-first, um Topologie-Indizes als PrimÃ¤rreferenz zu nutzen.
+        if prefer_shape_first:
+            _resolve_by_shape_ids()
+            if strict_dual_face_refs or (len(resolved_shape_ids) < expected_shape_refs and valid_face_indices):
+                _resolve_by_indices()
+        elif valid_face_indices:
+            _resolve_by_indices()
+            indices_complete = len(resolved_face_indices) >= len(valid_face_indices)
+            if strict_dual_face_refs or not indices_complete:
+                _resolve_by_shape_ids()
+        else:
+            _resolve_by_shape_ids()
+            _resolve_by_indices()
+
+        strict_topology_mismatch = False
+        if strict_dual_face_refs:
+            if (
+                len(resolved_faces_from_index) < len(valid_face_indices)
+                or len(resolved_faces_from_shape) < expected_shape_refs
+            ):
+                strict_topology_mismatch = True
+            else:
+                for idx_face in resolved_faces_from_index:
+                    if not any(_same_face(idx_face, shape_face) for shape_face in resolved_faces_from_shape):
+                        strict_topology_mismatch = True
+                        break
+                if not strict_topology_mismatch:
+                    for shape_face in resolved_faces_from_shape:
+                        if not any(_same_face(shape_face, idx_face) for idx_face in resolved_faces_from_index):
+                            strict_topology_mismatch = True
+                            break
+        if strict_dual_face_refs and strict_topology_mismatch and single_ref_pair:
+            shape_resolved = bool(resolved_faces_from_shape)
+            index_resolved = bool(resolved_faces_from_index)
+            pair_conflict = False
+            if shape_resolved and index_resolved:
+                pair_conflict = not any(
+                    _same_face(resolved_faces_from_shape[0], idx_face)
+                    for idx_face in resolved_faces_from_index
+                )
+
+            weak_shape_resolution = False
+            if shape_resolved and expected_shape_refs == 1:
+                for sid in shape_ids:
+                    sid_uuid = str(getattr(sid, "uuid", "") or "")
+                    if not sid_uuid:
+                        continue
+                    method = shape_resolution_methods.get(sid_uuid, "")
+                    weak_shape_resolution = method in {"geometric", "geometry_hash"}
+                    break
+
+            if index_resolved and (not shape_resolved):
+                resolved_faces = list(resolved_faces_from_index)
+                resolved_shape_ids = []
+                strict_topology_mismatch = False
+                single_ref_pair_index_preferred = True
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(
+                        f"{feature.name}: single_ref_pair Face-ShapeID nicht aufloesbar -> "
+                        "verwende index-basierte Face-Aufloesung."
+                    )
+            elif index_resolved and shape_resolved and pair_conflict and weak_shape_resolution:
+                resolved_faces = list(resolved_faces_from_index)
+                resolved_shape_ids = []
+                strict_topology_mismatch = False
+                single_ref_pair_index_preferred = True
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="drift",
+                    reference_kind="face",
+                    reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                    expected=max(len(valid_face_indices), expected_shape_refs),
+                    resolved=len(resolved_faces),
+                    strict=False,
+                )
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning(
+                        f"{feature.name}: single_ref_pair Shape/Index-Konflikt mit schwacher "
+                        "Face-Shape-Aufloesung (geometric/hash) -> index-basierte Face-Aufloesung bevorzugt."
+                    )
+            else:
+                if is_enabled("tnp_debug_logging"):
+                    reason = "Shape/Index-Konflikt" if pair_conflict else "strict single_ref_pair mismatch"
+                    logger.warning(f"{feature.name}: {reason} -> Abbruch ohne Fallback.")
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="mismatch",
+                    reference_kind="face",
+                    reason="single_ref_pair_conflict" if pair_conflict else "strict_single_ref_pair_mismatch",
+                    expected=max(len(valid_face_indices), expected_shape_refs),
+                    resolved=max(len(resolved_face_indices), len(resolved_shape_ids)),
+                    strict=bool(strict_face_feature),
+                )
+                return []
+
+        has_topological_refs = bool(valid_face_indices or expected_shape_refs > 0)
+        unresolved_topology_refs = (
+            (valid_face_indices and len(resolved_face_indices) < len(valid_face_indices))
+            or (
+                expected_shape_refs > 0
+                and not valid_face_indices
+                and len(resolved_shape_ids) < expected_shape_refs
+            )
+        )
+        if strict_dual_face_refs and strict_topology_mismatch:
+            unresolved_topology_refs = True
+        # Strict fÃ¼r single-face Referenzen: wenn ShapeID vorhanden aber nicht
+        # auflÃ¶sbar, nicht still auf potentiell falschen Index degradieren.
+        if (
+            prefer_shape_first
+            and expected_shape_refs > 0
+            and len(resolved_shape_ids) < expected_shape_refs
+            and not single_ref_pair_index_preferred
+        ):
+            unresolved_topology_refs = True
+
+        if has_topological_refs and unresolved_topology_refs:
+            mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
+            logger.warning(
+                f"{feature.name}: Face-Referenz ist ungÃ¼ltig (ShapeID/face_indices). "
+                f"Kein Geometric-Fallback.{mismatch_hint}"
+            )
+            self._record_tnp_failure(
+                feature=feature,
+                category="mismatch" if strict_topology_mismatch else "missing_ref",
+                reference_kind="face",
+                reason="shape_index_mismatch" if strict_topology_mismatch else "unresolved_topology_reference",
+                expected=max(len(valid_face_indices), expected_shape_refs),
+                resolved=max(len(resolved_face_indices), len(resolved_shape_ids)),
+                strict=bool(strict_face_feature),
+            )
+            return []
+
+        need_selector_recovery = (not has_topological_refs) and (not resolved_faces)
+
+        # 3) Geometric selector fallback (nur Recovery)
+        if need_selector_recovery:
+            for idx, selector_data in enumerate(selectors):
+                if idx in resolved_selector_indices:
+                    continue
+
+                try:
+                    if isinstance(selector_data, dict):
+                        geo_sel = GeometricFaceSelector.from_dict(selector_data)
+                    elif hasattr(selector_data, 'find_best_match'):
+                        geo_sel = selector_data
+                    else:
+                        continue
+                except Exception:
+                    continue
+
+                best_face = geo_sel.find_best_match(all_faces)
+                if best_face is None:
+                    continue
+
+                shape_id = None
+                if service:
+                    try:
+                        shape_id = service.find_shape_id_by_face(best_face)
+                        if shape_id is None and hasattr(best_face, 'wrapped'):
+                            fc = best_face.center()
+                            area = best_face.area if hasattr(best_face, 'area') else 0.0
+                            shape_id = service.register_shape(
+                                ocp_shape=best_face.wrapped,
+                                shape_type=ShapeType.FACE,
+                                feature_id=feature.id,
+                                local_index=idx,
+                                geometry_data=(fc.X, fc.Y, fc.Z, area)
+                            )
+                    except Exception as e:
+                        logger.debug(f"{feature.name}: Face-ShapeID Registrierung fehlgeschlagen: {e}")
+
+                _append_face(best_face, shape_id=shape_id, selector_index=idx)
+
+        if not resolved_faces:
+            return []
+
+        def _face_sort_key(face_obj):
+            face_idx = _face_index(face_obj)
+            if face_idx is not None:
+                return (0, int(face_idx))
+            try:
+                center = face_obj.center()
+                area = float(face_obj.area if hasattr(face_obj, "area") else 0.0)
+                return (
+                    1,
+                    round(float(center.X), 6),
+                    round(float(center.Y), 6),
+                    round(float(center.Z), 6),
+                    round(area, 6),
+                )
+            except Exception:
+                return (2, str(face_obj))
+
+        resolved_faces = sorted(resolved_faces, key=_face_sort_key)
+        resolved_face_indices = sorted(
+            {
+                int(idx)
+                for idx in resolved_face_indices
+                if isinstance(idx, int) and int(idx) >= 0
+            }
+        )
+
+        # PI-002: ShapeIDs in derselben stabilen Reihenfolge wie Face-Indizes persistieren.
+        if service is not None and resolved_faces:
+            canonical_shape_ids = []
+            for local_idx, face_obj in enumerate(resolved_faces):
+                shape_id = None
+                try:
+                    shape_id = service.find_shape_id_by_face(face_obj, require_exact=True)
+                except Exception:
+                    shape_id = None
+                if shape_id is None:
+                    try:
+                        shape_id = service.find_shape_id_by_face(face_obj)
+                    except Exception:
+                        shape_id = None
+                if shape_id is None and hasattr(face_obj, "wrapped"):
+                    try:
+                        fc = face_obj.center()
+                        area = face_obj.area if hasattr(face_obj, "area") else 0.0
+                        shape_id = service.register_shape(
+                            ocp_shape=face_obj.wrapped,
+                            shape_type=ShapeType.FACE,
+                            feature_id=feature.id,
+                            local_index=local_idx,
+                            geometry_data=(fc.X, fc.Y, fc.Z, area),
+                        )
+                    except Exception:
+                        shape_id = None
+                if shape_id is not None:
+                    canonical_shape_ids.append(shape_id)
+            if canonical_shape_ids:
+                resolved_shape_ids = canonical_shape_ids
+
+        # Persistiere aktualisierte Referenzen zurÃ¼ck ins Feature
+        try:
+            updated_selectors = [
+                GeometricFaceSelector.from_face(face).to_dict()
+                for face in resolved_faces
+            ]
+            # Nicht-topologische Zusatzdaten (z. B. cell_ids fÃ¼rs Overlay) beibehalten.
+            for idx, updated in enumerate(updated_selectors):
+                if idx >= len(selectors):
+                    continue
+                original = selectors[idx]
+                if not isinstance(original, dict):
+                    continue
+                for key, value in original.items():
+                    if key not in updated:
+                        updated[key] = value
+            if single_selector_attr:
+                setattr(feature, single_selector_attr, updated_selectors[0] if updated_selectors else None)
+            else:
+                setattr(feature, selector_attr, updated_selectors)
+        except Exception as e:
+            logger.debug(f"{feature.name}: Selector-Update fehlgeschlagen: {e}")
+
+        if single_shape_attr:
+            if resolved_shape_ids:
+                setattr(feature, single_shape_attr, resolved_shape_ids[0])
+        elif resolved_shape_ids:
+            setattr(feature, shape_attr, resolved_shape_ids)
+
+        if single_index_attr:
+            if resolved_face_indices:
+                setattr(feature, single_index_attr, resolved_face_indices[0])
+        elif resolved_face_indices:
+            setattr(feature, index_attr, resolved_face_indices)
+
         return resolved_faces
 
     def _resolve_faces_for_shell(self, solid, face_selectors: List[dict],

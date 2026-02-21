@@ -712,7 +712,8 @@ class STLFeatureAnalyzer:
                     best_normal = np.array([a, b, -1]) / length
                     if best_normal[2] < 0: best_normal = -best_normal # Point up
                     best_plane = (model_z, 'z', best_normal)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"RANSAC Z-plane fitting failed: {e}")
 
             # Wenn wir dominante Ebene haben
             if best_plane and best_score > (len(centers) * 0.1): # Min 10% Inliers
@@ -1408,7 +1409,7 @@ class STLFeatureAnalyzer:
                return True, (centroid, normal, mean_r)
 
            return False, None
-        except:
+        except Exception:
            return False, None
 
     def _merge_holes(self, holes1: List[HoleInfo], holes2: List[HoleInfo]) -> List[HoleInfo]:

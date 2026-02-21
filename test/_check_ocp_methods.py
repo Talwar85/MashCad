@@ -52,28 +52,28 @@ except ImportError:
 try:
     from OCP.BRepFeat import BRepFeat_MakePrism, BRepFeat_MakeDPrism
     print('8. BRepFeat_MakePrism/DPrism - Local prism operations')
-except:
+except ImportError:
     print('8. BRepFeat not available')
 
 # Check for shape modification
 try:
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
     print('9. BRepBuilderAPI_Copy - Copy shapes')
-except:
+except ImportError:
     print('9. BRepBuilderAPI_Copy not available')
 
 # Check for direct face replacement
 try:
     from OCP.BRepTools import BRepTools_ReShape
     print('10. BRepTools_ReShape - Replace faces in shapes')
-except:
+except ImportError:
     print('10. BRepTools_ReShape not available')
 
 # Check for BRepLib
 try:
     from OCP.BRepLib import BRepLib
     print('11. BRepLib - Various shape operations')
-except:
+except ImportError:
     print('11. BRepLib not available')
 
 print('\n=== Key API for cylindrical face radius modification ===')

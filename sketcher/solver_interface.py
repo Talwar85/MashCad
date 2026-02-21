@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Union
 from enum import Enum, auto
 import time
+from loguru import logger
 
 from .constraints import Constraint, ConstraintStatus
 
@@ -178,7 +179,7 @@ class UnifiedConstraintSolver:
                     return backend
                 
                 # Backend kann nicht lösen -> Fallback
-                print(f"[Solver] Backend '{backend_name}' cannot solve: {reason}")
+                logger.warning(f"[Solver] Backend '{backend_name}' cannot solve: {reason}")
             
             # Fallback-Kette durchlaufen
             for fallback_type in self._fallback_chain:
@@ -186,11 +187,11 @@ class UnifiedConstraintSolver:
                 if backend is not None:
                     can_solve, _ = backend.can_solve(problem)
                     if can_solve:
-                        print(f"[Solver] Falling back to {fallback_type.value}")
+                        logger.warning(f"[Solver] Falling back to {fallback_type.value}")
                         return backend
             
         except Exception as e:
-            print(f"[Solver] Error selecting backend: {e}")
+            logger.error(f"[Solver] Error selecting backend: {e}")
         
         # Ultimate fallback: Default Backend
         return SolverBackendRegistry.get_default()

@@ -90,28 +90,17 @@ class BodyExtrudeMixin:
 
     def _compute_extrude_part(self, feature):
         """
-        Phase 2-3: OCP-First ExtrudeFeature Implementation mit Feature-Flag-Steuerung.
+        Phase 2-3: OCP-First ExtrudeFeature Implementation.
 
         Architektur:
-        - ocp_first_extrude=True: Nutzt OCPExtrudeHelper mit TNP Integration
-        - ocp_first_extrude=False: Legacy Pfad (bestehende Implementation)
+        - Nutzt OCPExtrudeHelper mit TNP Integration
 
         TNP v4.0 Integration:
         1. Mit Sketch: Profile aus sketch.closed_profiles (immer aktuell)
         2. Ohne Sketch (Push/Pull): BRepFeat_MakePrism (MANDATORY OCP-First)
         3. Ohne Sketch (Face aus BREP): OCP MakePrism direkte Extrusion
-
-        FALLBACK: Wenn OCP-First None zurÃ¼ckgibt, wird automatisch Legacy versucht.
         """
-        if is_enabled("ocp_first_extrude"):
-            result = self._compute_extrude_part_ocp_first(feature)
-            # Fallback: Wenn OCP-First fehlschlÃ¤gt, versuche Legacy
-            if result is None:
-                logger.warning("[OCP-FIRST] Fehlgeschlagen, versuche Legacy-Fallback...")
-                return self._compute_extrude_part_legacy(feature)
-            return result
-        else:
-            return self._compute_extrude_part_legacy(feature)
+        return self._compute_extrude_part_ocp_first(feature)
 
     def _compute_extrude_part_ocp_first(self, feature):
         """
@@ -216,7 +205,7 @@ class BodyExtrudeMixin:
                 native_faces = self._create_faces_from_native_circles(sketch, plane, getattr(feature, 'profile_selector', None))
                 if native_faces:
                     for face in native_faces:
-                        solid = self._extrude_single_face(face, feature, naming_service)
+                        solid = self._extrude_single_face(face, feature, plane, naming_service)
                         if solid:
                             solids.append(solid)
 
@@ -225,7 +214,7 @@ class BodyExtrudeMixin:
                 native_arc_faces = self._create_faces_from_native_arcs(sketch, plane, getattr(feature, 'profile_selector', None))
                 if native_arc_faces:
                     for face in native_arc_faces:
-                        solid = self._extrude_single_face(face, feature, naming_service)
+                        solid = self._extrude_single_face(face, feature, plane, naming_service)
                         if solid:
                             solids.append(solid)
 
@@ -234,7 +223,7 @@ class BodyExtrudeMixin:
                 ellipse_faces = self._extrude_sketch_ellipses(sketch, plane, getattr(feature, 'profile_selector', None))
                 if ellipse_faces:
                     for face in ellipse_faces:
-                        solid = self._extrude_single_face(face, feature, naming_service)
+                        solid = self._extrude_single_face(face, feature, plane, naming_service)
                         if solid:
                             solids.append(solid)
 
@@ -249,7 +238,7 @@ class BodyExtrudeMixin:
                     wire = Wire.make_polygon(pts_3d)
                     face = make_face(wire)
 
-                    solid = self._extrude_single_face(face, feature, naming_service)
+                    solid = self._extrude_single_face(face, feature, plane, naming_service)
                     if solid:
                         solids.append(solid)
 
@@ -270,7 +259,7 @@ class BodyExtrudeMixin:
             logger.error(f"[OCP-FIRST] Extrusion fehlgeschlagen: {e}")
             return None
 
-    def _extrude_single_face(self, face, feature, naming_service):
+    def _extrude_single_face(self, face, feature, plane, naming_service):
         """
         Extrudiert eine einzelne Face mit OCP-First.
         """
@@ -278,11 +267,14 @@ class BodyExtrudeMixin:
         from build123d import Solid
 
         try:
+            # Die OCPExtrudeHelper Methode erwartet einen Richtungsvektor
+            dir_vec = plane.z_dir * getattr(feature, 'direction', 1)
+            
             # OCPExtrudeHelper verwenden
             result = OCPExtrudeHelper.extrude(
                 face=face,
                 distance=feature.distance,
-                direction=feature.direction,
+                direction=dir_vec,
                 naming_service=naming_service,
                 feature_id=feature.id
             )
@@ -291,87 +283,6 @@ class BodyExtrudeMixin:
             logger.debug(f"Single face extrusion failed: {e}")
             return None
 
-    def _compute_extrude_part_legacy(self, feature):
-        """
-        Legacy Extrude-Implementation (Build123d-basiert).
-        
-        Wird nur noch als Fallback verwendet wenn OCP-First fehlschlÃ¤gt.
-        """
-        from build123d import BuildPart, BuildSketch, Plane, Vector, extrude, Solid
-        from build123d import Wire, make_face
-        import math
-
-        sketch = feature.sketch
-        distance = feature.distance
-        direction = feature.direction  # 1 oder -1
-
-        if is_enabled("extrude_debug"):
-            logger.debug(f"[LEGACY] Extrude: distance={distance}, direction={direction}")
-
-        # Plane bestimmen
-        if sketch:
-            plane = self._get_plane_from_sketch(sketch)
-        else:
-            # Reconstruct plane from saved feature data
-            from build123d import Plane as B3DPlane
-            origin = Vector(*feature.plane_origin)
-            normal = Vector(*feature.plane_normal)
-            if feature.plane_x_dir:
-                x_dir = Vector(*feature.plane_x_dir)
-                plane = B3DPlane(origin=origin, z_dir=normal, x_dir=x_dir)
-            else:
-                plane = B3DPlane(origin=origin, z_dir=normal)
-
-        # Profile bestimmen
-        polys_to_extrude = []
-        
-        if sketch:
-            sketch_profiles = getattr(sketch, 'closed_profiles', [])
-            profile_selector = getattr(feature, 'profile_selector', [])
-
-            if sketch_profiles and profile_selector:
-                shapely_profiles = self._convert_line_profiles_to_polygons(sketch_profiles)
-                polys_to_extrude = self._filter_profiles_by_selector(
-                    shapely_profiles, profile_selector
-                )
-            elif sketch_profiles:
-                polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
-        elif hasattr(feature, 'precalculated_polys') and feature.precalculated_polys:
-            polys_to_extrude = list(feature.precalculated_polys)
-
-        if not polys_to_extrude:
-            raise ValueError("Keine Profile zum Extrudieren gefunden")
-
-        solids = []
-        for poly in polys_to_extrude:
-            try:
-                coords = list(poly.exterior.coords)[:-1]
-                if len(coords) < 3:
-                    continue
-
-                pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                wire = Wire.make_polygon(pts_3d)
-                face = make_face(wire)
-
-                # Extrusion
-                extrude_vec = plane.z_dir * (distance * direction)
-                with BuildPart() as part:
-                    extrude(face, amount=distance * direction)
-                    
-                if part.part is not None:
-                    solids.append(part.part)
-
-            except Exception as e:
-                logger.debug(f"[LEGACY] Polygon-Extrusion fehlgeschlagen: {e}")
-
-        if not solids:
-            return None
-
-        result = solids[0]
-        for s in solids[1:]:
-            result = result.fuse(s)
-
-        return result
 
     def _compute_extrude_part_brepfeat(self, feature, current_solid):
         """
@@ -381,7 +292,7 @@ class BodyExtrudeMixin:
         """
         from OCP.BRepFeat import BRepFeat_MakePrism
         from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
-        from OCP.gp import gp_Vec
+        from OCP.gp import gp_Vec, gp_Dir
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopAbs import TopAbs_FACE
         from build123d import Solid, Face
@@ -437,28 +348,32 @@ class BodyExtrudeMixin:
                     face_to_extrude = Face(face_shape)
             except Exception as e:
                 logger.debug(f"BRepFeat: Face-BREP Deserialisierung fehlgeschlagen: {e}")
-
         if face_to_extrude is None:
             raise ValueError("BRepFeat: Keine Face-Referenz auflÃ¶sbar")
 
+        # BRepFeat_MakePrism requires gp_Dir (not gp_Vec) for Direction parameter
+        from OCP.gp import gp_Dir
+        from OCP.TopoDS import TopoDS_Face, TopoDS
+        
         # Extrusions-Vektor berechnen
         normal = feature.plane_normal if hasattr(feature, 'plane_normal') else (0, 0, 1)
         amount = feature.distance * feature.direction
         extrude_vec = gp_Vec(normal[0] * amount, normal[1] * amount, normal[2] * amount)
+        extrude_dir = gp_Dir(extrude_vec)
 
         # BRepFeat_MakePrism ausfÃ¼hren
         ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
         ocp_face = face_to_extrude.wrapped if hasattr(face_to_extrude, 'wrapped') else face_to_extrude
 
         prism_maker = BRepFeat_MakePrism(
-            ocp_solid,
-            ocp_face,
-            None,  # sketch face (not needed for this mode)
-            extrude_vec,
-            1,  # fuse mode
-            False  # modify
+            ocp_solid,                     # Sbase
+            ocp_face,                      # Pbase
+            TopoDS.Face_s(ocp_face),        # Skface
+            extrude_dir,                   # Direction
+            1,                             # Fuse
+            False                          # Modify
         )
-        prism_maker.Perform()
+        prism_maker.Perform(abs(amount))
 
         if not prism_maker.IsDone():
             raise ValueError("BRepFeat_MakePrism fehlgeschlagen")

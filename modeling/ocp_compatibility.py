@@ -838,21 +838,11 @@ class OCPCompatibility:
     def _update_feature_flags(self) -> None:
         """Update feature flags based on OCP availability."""
         try:
-            from config.feature_flags import set_enabled
-            
             if self._feature_availability:
-                # Disable features that require unavailable APIs
-                if not self._feature_availability.get("advanced_boolean", False):
-                    # Self-intersection check requires BOPAlgo_CheckerSI
-                    set_enabled("boolean_self_intersection_check", False)
-                    logger.info("Disabled boolean_self_intersection_check (API unavailable)")
-                
                 if not self._feature_availability.get("advanced_offset", False):
                     # Shell/hollow requires BRepOffsetAPI_MakeThickSolid
                     logger.info("Advanced offset operations may be limited")
                     
-        except ImportError:
-            logger.debug("Feature flags module not available for update")
         except Exception as e:
             logger.debug(f"Could not update feature flags: {e}")
     

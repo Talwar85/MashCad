@@ -28,6 +28,12 @@ from modeling.component import Component
 # Feature imports
 from modeling.features.base import Feature, FeatureType
 from modeling.features.extrude import ExtrudeFeature, PushPullFeature
+from modeling.features.fillet_chamfer import FilletFeature, ChamferFeature
+from modeling.features.revolve import RevolveFeature
+from modeling.features.pattern import PatternFeature
+from modeling.features.transform import TransformFeature
+from modeling.features.boolean import BooleanFeature
+from modeling.features.import_feature import ImportFeature
 from modeling.features.advanced import (
     LoftFeature, SweepFeature, ShellFeature, HoleFeature,
     DraftFeature, SplitFeature, ThreadFeature, HollowFeature,
@@ -73,73 +79,53 @@ class Document:
             logger.debug(f"TNP v4.0: ShapeNamingService initialisiert fÃ¼r '{name}'")
 
         # =========================================================================
-        # Assembly System (Phase 1)
+        # Assembly System (Phase 1) - Permanent aktiviert
         # =========================================================================
-        # Feature Flag prÃ¼fen
-        self._assembly_enabled = is_enabled("assembly_system")
-
-        if self._assembly_enabled:
-            # NEU: Component-basierte Architektur
-            self.root_component: Component = Component(name="Root")
-            self.root_component.is_active = True
-            self._active_component: Optional[Component] = self.root_component
-            logger.info(f"[ASSEMBLY] Component-System aktiviert fuer '{name}'")
-        else:
-            # Legacy: Direkte Listen (fÃ¼r Backward-Compatibility)
-            self.root_component = None
-            self._active_component = None
-
-        # Diese Listen werden immer verwendet (delegieren zu active_component wenn assembly_enabled)
-        self._bodies: List[Body] = []
-        self._sketches: List[Sketch] = []
-        self._planes: List[ConstructionPlane] = []
+        # Component-basierte Architektur
+        self.root_component: Component = Component(name="Root")
+        self.root_component.is_active = True
+        self._active_component: Optional[Component] = self.root_component
+        logger.info(f"[ASSEMBLY] Component-System aktiviert fuer '{name}'")
 
     # =========================================================================
-    # Properties fÃ¼r Backward-Compatibility
+    # Properties - Delegieren zu active_component
     # =========================================================================
-    # Diese Properties delegieren zu active_component wenn Assembly aktiviert
 
     @property
     def bodies(self) -> List[Body]:
-        """Bodies der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
-        if self._assembly_enabled and self._active_component:
+        """Bodies der aktiven Component."""
+        if self._active_component:
             return self._active_component.bodies
-        return self._bodies
+        return []
 
     @bodies.setter
     def bodies(self, value: List[Body]):
-        if self._assembly_enabled and self._active_component:
+        if self._active_component:
             self._active_component.bodies = value
-        else:
-            self._bodies = value
 
     @property
     def sketches(self) -> List[Sketch]:
-        """Sketches der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
-        if self._assembly_enabled and self._active_component:
+        """Sketches der aktiven Component."""
+        if self._active_component:
             return self._active_component.sketches
-        return self._sketches
+        return []
 
     @sketches.setter
     def sketches(self, value: List[Sketch]):
-        if self._assembly_enabled and self._active_component:
+        if self._active_component:
             self._active_component.sketches = value
-        else:
-            self._sketches = value
 
     @property
     def planes(self) -> List[ConstructionPlane]:
-        """Planes der aktiven Component (oder direkte Liste bei Legacy-Modus)."""
-        if self._assembly_enabled and self._active_component:
+        """Planes der aktiven Component."""
+        if self._active_component:
             return self._active_component.planes
-        return self._planes
+        return []
 
     @planes.setter
     def planes(self, value: List[ConstructionPlane]):
-        if self._assembly_enabled and self._active_component:
+        if self._active_component:
             self._active_component.planes = value
-        else:
-            self._planes = value
 
     # =========================================================================
     # Assembly-spezifische Methoden
@@ -147,7 +133,7 @@ class Document:
 
     @property
     def active_component(self) -> Optional[Component]:
-        """Gibt die aktive Component zurÃ¼ck (oder None wenn Assembly deaktiviert)."""
+        """Gibt die aktive Component zurÃ¼ck."""
         return self._active_component
 
     def set_active_component(self, comp: Component) -> bool:
@@ -160,10 +146,6 @@ class Document:
         Returns:
             True wenn erfolgreich
         """
-        if not self._assembly_enabled:
-            logger.warning("Assembly-System nicht aktiviert")
-            return False
-
         if self._active_component:
             self._active_component.is_active = False
 
@@ -174,28 +156,25 @@ class Document:
 
     def get_all_bodies(self) -> List[Body]:
         """
-        Gibt alle Bodies im Dokument zurÃ¼ck (rekursiv bei Assembly).
+        Gibt alle Bodies im Dokument zurÃ¼ck (rekursiv).
 
         Returns:
             Liste aller Bodies
         """
-        if self._assembly_enabled and self.root_component:
+        if self.root_component:
             return self.root_component.get_all_bodies(recursive=True)
-        return self._bodies
+        return []
 
     def get_all_sketches(self) -> List[Sketch]:
-        """Gibt alle Sketches im Dokument zurÃ¼ck (rekursiv bei Assembly)."""
-        if self._assembly_enabled and self.root_component:
+        """Gibt alle Sketches im Dokument zurÃ¼ck (rekursiv)."""
+        if self.root_component:
             return self.root_component.get_all_sketches(recursive=True)
-        return self._sketches
+        return []
 
     def find_body_by_id(self, body_id: str) -> Optional[Body]:
-        """Findet Body nach ID (rekursiv bei Assembly)."""
-        if self._assembly_enabled and self.root_component:
+        """Findet Body nach ID (rekursiv)."""
+        if self.root_component:
             return self.root_component.find_body_by_id(body_id)
-        for body in self._bodies:
-            if body.id == body_id:
-                return body
         return None
 
     def new_component(self, name: str = None, parent: Component = None) -> Optional[Component]:
@@ -207,12 +186,8 @@ class Document:
             parent: Parent-Component (default: active_component)
 
         Returns:
-            Neue Component oder None wenn Assembly deaktiviert
+            Neue Component
         """
-        if not self._assembly_enabled:
-            logger.warning("Assembly-System nicht aktiviert")
-            return None
-
         parent = parent or self._active_component or self.root_component
         return parent.add_sub_component(name)
 
@@ -228,13 +203,9 @@ class Document:
 
         body._document = self
 
-        if self._assembly_enabled:
-            target = component or self._active_component or self.root_component
-            if target and body not in target.bodies:
-                target.bodies.append(body)
-        else:
-            if body not in self._bodies:
-                self._bodies.append(body)
+        target = component or self._active_component or self.root_component
+        if target and body not in target.bodies:
+            target.bodies.append(body)
 
         if set_active:
             self.active_body = body
@@ -535,9 +506,6 @@ class Document:
 
     def _load_assembly_format(self, data: dict):
         """LÃ¤dt Dokument aus Assembly-Format (v9.0+)."""
-        # KRITISCH: Assembly-Flag setzen, damit Properties korrekt delegieren
-        self._assembly_enabled = True
-
         # Root Component laden
         root_data = data.get("root_component", {})
         if root_data:
@@ -572,12 +540,8 @@ class Document:
     def _build_root_component_payload(self) -> dict:
         """
         Liefert serialisierbare Root-Component-Daten.
-
-        Wenn Assembly aktiv ist, wird die bestehende Root-Component genutzt.
-        Andernfalls werden die flachen Dokumentlisten in eine Root-Component
-        gemappt (ohne Legacy-Format zu schreiben).
         """
-        if self._assembly_enabled and self.root_component:
+        if self.root_component:
             return self.root_component.to_dict()
 
         return {
@@ -588,27 +552,9 @@ class Document:
             "visible": True,
             "is_active": True,
             "expanded": True,
-            "bodies": [body.to_dict() for body in self._bodies],
-            "sketches": [
-                {
-                    **sketch.to_dict(),
-                    "plane_origin": list(sketch.plane_origin) if hasattr(sketch, 'plane_origin') else [0, 0, 0],
-                    "plane_normal": list(sketch.plane_normal) if hasattr(sketch, 'plane_normal') else [0, 0, 1],
-                    "plane_x_dir": list(sketch.plane_x_dir) if hasattr(sketch, 'plane_x_dir') and sketch.plane_x_dir else None,
-                    "plane_y_dir": list(sketch.plane_y_dir) if hasattr(sketch, 'plane_y_dir') and sketch.plane_y_dir else None,
-                }
-                for sketch in self._sketches
-            ],
-            "planes": [
-                {
-                    "id": plane.id,
-                    "name": plane.name,
-                    "origin": list(plane.origin),
-                    "normal": list(plane.normal),
-                    "x_dir": list(plane.x_dir),
-                }
-                for plane in self._planes
-            ],
+            "bodies": [],
+            "sketches": [],
+            "planes": [],
             "sub_components": [],
         }
 

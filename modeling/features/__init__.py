@@ -2,7 +2,7 @@
 
 from .fillet_chamfer import FilletFeature, ChamferFeature
 from .base import Feature, FeatureType
-from .extrude import ExtrudeFeature
+from .extrude import ExtrudeFeature, PushPullFeature
 from .revolve import RevolveFeature
 from .pattern import PatternFeature
 from .transform import TransformFeature
@@ -11,12 +11,16 @@ from .import_feature import ImportFeature
 from .advanced import (
     ShellFeature,
     DraftFeature,
-    ScaleFeature,
-    MirrorFeature,
     HoleFeature,
     ThreadFeature,
     LoftFeature,
     SweepFeature,
+    PrimitiveFeature,
+    HollowFeature,
+    LatticeFeature,
+    NSidedPatchFeature,
+    SplitFeature,
+    SurfaceTextureFeature,
 )
 
 __all__ = [
@@ -25,6 +29,7 @@ __all__ = [
     "FilletFeature",
     "ChamferFeature",
     "ExtrudeFeature",
+    "PushPullFeature",
     "RevolveFeature",
     "PatternFeature",
     "TransformFeature",
@@ -32,10 +37,14 @@ __all__ = [
     "ImportFeature",
     "ShellFeature",
     "DraftFeature",
-    "ScaleFeature",
-    "MirrorFeature",
     "HoleFeature",
     "ThreadFeature",
     "LoftFeature",
     "SweepFeature",
+    "PrimitiveFeature",
+    "HollowFeature",
+    "LatticeFeature",
+    "NSidedPatchFeature",
+    "SplitFeature",
+    "SurfaceTextureFeature",
 ]
