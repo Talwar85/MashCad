@@ -99,19 +99,9 @@ class BodyRenderingMixin:
         existing_actors = self._body_actors.get(bid, ())
 
         # Check if we can reuse existing actors (mesh changed check)
-        # Phase 2.1: Redundanter Renderer-Check entfernt (Feature Flag)
-        if is_enabled("optimized_actor_pooling"):
-            # OPTIMIZED: Nur existing_actors prüfen (renderer check redundant)
-            can_reuse_mesh = (n_mesh in existing_actors and mesh_obj is not None)
-            can_reuse_edge = (n_edge in existing_actors and edge_mesh_obj is not None)
-        else:
-            # LEGACY: Mit redundantem Renderer-Check
-            can_reuse_mesh = (n_mesh in existing_actors and
-                             n_mesh in self.plotter.renderer.actors and
-                             mesh_obj is not None)
-            can_reuse_edge = (n_edge in existing_actors and
-                             n_edge in self.plotter.renderer.actors and
-                             edge_mesh_obj is not None)
+        # Phase 2.1: Redundanter Renderer-Check entfernt
+        can_reuse_mesh = (n_mesh in existing_actors and mesh_obj is not None)
+        can_reuse_edge = (n_edge in existing_actors and edge_mesh_obj is not None)
 
         # Only remove if we can't reuse
         if bid in self._body_actors and not (can_reuse_mesh or can_reuse_edge):
@@ -224,22 +214,12 @@ class BodyRenderingMixin:
                             lighting=False,
                         )
 
-                        # Phase 2.2: Duplicate Mapper SetInputData entfernt (Feature Flag)
-                        if is_enabled("optimized_actor_pooling"):
-                            if n_edge in self.plotter.renderer.actors:
-                                edge_actor = self.plotter.renderer.actors[n_edge]
-                                edge_mapper = edge_actor.GetMapper()
-                                edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                                edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
-                        else:
-                            if n_edge in self.plotter.renderer.actors:
-                                edge_actor = self.plotter.renderer.actors[n_edge]
-                                edge_mapper = edge_actor.GetMapper()
-                                if edge_mapper is not None:
-                                    edge_mapper.SetInputData(edge_mesh_obj)
-                                    edge_mapper.Modified()
-                                    edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
-                                    edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+                        # Phase 2.2: Duplicate Mapper SetInputData entfernt
+                        if n_edge in self.plotter.renderer.actors:
+                            edge_actor = self.plotter.renderer.actors[n_edge]
+                            edge_mapper = edge_actor.GetMapper()
+                            edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                            edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
 
                     actors_list.append(n_edge)
                 
@@ -405,62 +385,11 @@ class BodyRenderingMixin:
                     col = data.get('color', (0.5, 0.5, 0.5))
                     actor.GetProperty().SetColor(*col)
 
-    def _draw_body_face_highlight(self, pos, normal):
-        """Zeichnet Highlight auf gehoverter Body-Fläche"""
-        self._clear_body_face_highlight()
-        try:
-            center = np.array(pos)
-            n = np.array(normal)
-            norm_len = np.linalg.norm(n)
-            if norm_len < 1e-6:
-                return
-            n = n / norm_len
-
-            # FIX: Sicherstellen dass Normal zur Kamera zeigt (nicht ins Body hinein)
-            cam_pos = np.array(self.plotter.camera_position[0])
-            view_dir = center - cam_pos
-            view_dir = view_dir / np.linalg.norm(view_dir)
-            if np.dot(n, view_dir) > 0:
-                n = -n
-
-            # Orthogonale Vektoren berechnen
-            if abs(n[2]) < 0.9:
-                u = np.cross(n, [0, 0, 1])
-            else:
-                u = np.cross(n, [1, 0, 0])
-            u = u / np.linalg.norm(u)
-            v = np.cross(n, u)
-
-            # OFFSET: Highlight leicht vom Body weg (Z-Fighting vermeiden)
-            offset_center = center + n * 0.5
-
-            # Quadrat erstellen
-            size = 15.0
-            pts = [
-                offset_center + size * (-u - v),
-                offset_center + size * (u - v),
-                offset_center + size * (u + v),
-                offset_center + size * (-u + v),
-            ]
-
-            import pyvista as pv
-            quad = pv.PolyData(np.array(pts), faces=[4, 0, 1, 2, 3])
-
-            self.plotter.add_mesh(
-                quad, color='#00aaff', opacity=0.4,
-                name='body_face_hover', pickable=False
-            )
-            request_render(self.plotter)
-
-        except Exception as e:
-            logger.debug(f"Draw highlight error: {e}")
-
-    def _clear_body_face_highlight(self):
-        """Entfernt das Body-Face Highlight"""
-        try:
-            self.plotter.remove_actor('body_face_hover')
-        except Exception as e:
-            logger.debug(f"[body_mixin] Fehler beim Entfernen des Highlights: {e}")
+    # HINWEIS: Die folgenden Methoden werden von viewport_pyvista.py bereitgestellt (MRO):
+    # - _draw_body_face_highlight() -> viewport_pyvista.py:6706
+    # - _clear_body_face_highlight() -> viewport_pyvista.py:6773
+    # - _clear_face_actors() -> viewport_pyvista.py:7080
+    # Diese wurden entfernt (waren Dead Code)
 
     def _draw_body_face_selection(self, pos, normal):
         """Zeichnet Selection-Highlight für selektierte Body-Fläche"""
@@ -499,11 +428,5 @@ class BodyRenderingMixin:
         except Exception:
             pass
 
-    def _clear_face_actors(self):
-        """Entfernt alle Face-Overlay Actors"""
-        for actor in self._face_actors:
-            try:
-                self.plotter.remove_actor(actor)
-            except Exception as e:
-                logger.debug(f"[body_mixin] Fehler beim Entfernen des Face-Actors: {e}")
-        self._face_actors.clear()
+    # HINWEIS: _clear_face_actors() wird von viewport_pyvista.py:7080 bereitgestellt (MRO)
+    # Die Methode wurde hier entfernt (war Dead Code)

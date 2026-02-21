@@ -23,6 +23,8 @@ def create_model() -> TopoDS_Shape:
     
     Creates a unit cube with all 12 edges filleted with radius 0.1.
     """
+    from OCP.TopoDS import TopoDS
+    
     # Create unit cube
     box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(1, 1, 1))
     shape = box.Shape()
@@ -33,7 +35,7 @@ def create_model() -> TopoDS_Shape:
     # Explore all edges and add them to fillet
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
     while explorer.More():
-        edge = explorer.Current()
+        edge = TopoDS.Edge(explorer.Current())  # Proper OCP casting
         fillet.Add(0.1, edge)  # 0.1 radius fillet
         explorer.Next()
     

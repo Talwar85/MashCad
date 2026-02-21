@@ -791,8 +791,8 @@ class ProjectBrowser(QFrame):
         self.plane_visibility = {}
         self.component_visibility = {}  # Phase 3 Assembly
 
-        # Phase 3 Assembly: Feature Flag prüfen
-        self._assembly_enabled = is_enabled("assembly_system")
+        # Assembly System ist permanent aktiviert
+        self._assembly_enabled = True
 
         # W21: Refresh-Blocker um Flackern zu vermeiden
         self._refresh_pending = False

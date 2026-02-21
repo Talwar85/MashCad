@@ -286,7 +286,7 @@ class PerfectConverter(AsyncMeshConverter):
                 count += 1
                 explorer.Next()
             return count
-        except:
+        except Exception:
             return 0
 
 

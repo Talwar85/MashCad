@@ -198,6 +198,7 @@ from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
 from gui.viewport.section_view_mixin import SectionViewMixin
 from gui.viewport.selection_mixin import SelectionMixin  # Paket B: Unified Selection API
+from gui.viewport.feature_preview_mixin import FeaturePreviewMixin  # Live Preview für Shell, Fillet, Chamfer
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled  # Performance Plan Phase 3
@@ -259,7 +260,7 @@ class OverlayHomeButton(QToolButton):
         """)
 
 
-class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin):
+class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyRenderingMixin, TransformMixinV3, EdgeSelectionMixin, SectionViewMixin, FeaturePreviewMixin):
     view_changed = Signal()
     plane_clicked = Signal(str)
     custom_plane_clicked = Signal(tuple, tuple)
@@ -537,19 +538,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         Returns:
             Gecachter VTK CellPicker mit entsprechender Toleranz
         """
-        if not is_enabled("picker_pooling"):
-            # LEGACY: Immer neuen Picker erstellen
-            import vtk
-            picker = vtk.vtkCellPicker()
-            if tolerance_type == "coarse":
-                picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
-            elif tolerance_type == "measure":
-                picker.SetTolerance(0.005)
-            else:
-                picker.SetTolerance(Tolerances.PICKER_TOLERANCE)
-            return picker
-
-        # OPTIMIZED: Picker wiederverwenden
+        # Picker wiederverwenden
         import vtk
         if tolerance_type == "coarse":
             if self._picker_coarse is None:
@@ -798,12 +787,12 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         else:
             # Fallback falls MSAA nicht geht
             try: self.plotter.enable_anti_aliasing('fxaa')
-            except: pass
+            except Exception: pass
         # --- PERFORMANCE & FIX END ---
 
         # UI Cleanup: Entferne Standard-Achsen
         try: self.plotter.hide_axes()
-        except: pass
+        except Exception: pass
         
         # ViewCube Widget — wird verzögert erstellt (siehe _create_cam_widget)
         self._cam_widget = None
@@ -856,7 +845,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         try:
             if hasattr(self.plotter, 'iren') and self.plotter.iren:
                 self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
-        except: pass
+        except Exception: pass
 
         # FPS-Observer an VTK RenderWindow anhängen
         from gui.viewport.render_queue import RenderQueue
@@ -1202,7 +1191,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.setCursor(Qt.CrossCursor)
 
         # Phase 3: Performance - Marker einmal erstellen (statt 60x/sec)
-        if is_enabled("reuse_hover_markers") and HAS_PYVISTA:
+        if HAS_PYVISTA:
             import pyvista as pv
             if self._p2p_hover_marker_mesh is None:
                 self._p2p_hover_marker_mesh = pv.Sphere(center=(0, 0, 0), radius=1.5)
@@ -1223,18 +1212,11 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         # Phase 3: Performance - Marker cleanup
         try:
-            if is_enabled("reuse_hover_markers"):
-                # OPTIMIZED: Actors bleiben cached, nur verstecken
-                if hasattr(self, '_p2p_hover_marker_actor') and self._p2p_hover_marker_actor:
-                    self._p2p_hover_marker_actor.SetVisibility(False)
-                if hasattr(self, '_p2p_start_marker_actor') and self._p2p_start_marker_actor:
-                    self._p2p_start_marker_actor.SetVisibility(False)
-            else:
-                # LEGACY: Komplett entfernen
-                if hasattr(self, 'plotter') and self.plotter:
-                    self.plotter.remove_actor("p2p_hover_marker", render=False)
-                    self.plotter.remove_actor("p2p_start_marker", render=False)
-                    self.plotter.remove_actor("p2p_line", render=True)
+            # Actors bleiben cached, nur verstecken
+            if hasattr(self, '_p2p_hover_marker_actor') and self._p2p_hover_marker_actor:
+                self._p2p_hover_marker_actor.SetVisibility(False)
+            if hasattr(self, '_p2p_start_marker_actor') and self._p2p_start_marker_actor:
+                self._p2p_start_marker_actor.SetVisibility(False)
         except Exception as e:
             logger.debug(f"[viewport] P2P cleanup warning: {e}")
         logger.info("Point-to-Point Mode abgebrochen")
@@ -1297,10 +1279,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         # 9. Sweep Highlights
         try:
             self.plotter.remove_actor('sweep_profile_highlight')
-        except: pass
+        except Exception: pass
         try:
             self.plotter.remove_actor('sweep_path_highlight')
-        except: pass
+        except Exception: pass
 
         # 10. Sonstige bekannte Highlight-Namen
         highlight_patterns = [
@@ -1312,7 +1294,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if pattern in name:
                     try:
                         self.plotter.remove_actor(name)
-                    except: pass
+                    except Exception: pass
                     break
 
         request_render(self.plotter)
@@ -1335,7 +1317,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         
     def _draw_grid(self, size=200, spacing=10):
         try: self.plotter.remove_actor('grid_main')
-        except: pass
+        except Exception: pass
         n_lines = int(size/spacing)+1
         lines = []
         h = size/2
@@ -1475,7 +1457,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             mesh_name = actors[0] # Wir prüfen Visibility am Mesh
             actor = self.plotter.renderer.actors.get(mesh_name)
             if actor: return bool(actor.GetVisibility())
-        except: pass
+        except Exception:
+            pass
         return False
         
     def _draw_axes(self, length=50):
@@ -1483,7 +1466,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.plotter.remove_actor('axis_x_org')
             self.plotter.remove_actor('axis_y_org')
             self.plotter.remove_actor('axis_z_org')
-        except: pass
+        except Exception: pass
         self.plotter.add_mesh(pv.Line((0,0,0),(length,0,0)), color='#ff4444', line_width=3, name='axis_x_org')
         self.plotter.add_mesh(pv.Line((0,0,0),(0,length,0)), color='#44ff44', line_width=3, name='axis_y_org')
         self.plotter.add_mesh(pv.Line((0,0,0),(0,0,length)), color='#4444ff', line_width=3, name='axis_z_org')
@@ -3120,39 +3103,29 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 body_id, point = self.pick_point_on_geometry(x, y, snap_to_vertex=True, log_pick=False)
                 if point:
                     # Phase 3: Performance - Marker-Position updaten statt neu erstellen
-                    if is_enabled("reuse_hover_markers"):
-                        # OPTIMIZED: Reuse existing marker, only update position
-                        if self._p2p_hover_marker_actor is None:
-                            # Erster Hover: Erstelle Actor einmal
-                            import pyvista as pv
-                            self.plotter.add_mesh(
-                                self._p2p_hover_marker_mesh,
-                                color='orange',
-                                opacity=0.8,
-                                name='p2p_hover_marker'
-                            )
-                            if 'p2p_hover_marker' in self.plotter.renderer.actors:
-                                self._p2p_hover_marker_actor = self.plotter.renderer.actors['p2p_hover_marker']
-
-                        # Update Position via VTK Transform (FAST!)
-                        if self._p2p_hover_marker_actor:
-                            self._p2p_hover_marker_actor.SetPosition(point)
-                            self._p2p_hover_marker_actor.SetVisibility(True)
-                    else:
-                        # LEGACY: Neu erstellen bei jedem Hover (60x/sec!)
+                    # Reuse existing marker, only update position
+                    if self._p2p_hover_marker_actor is None:
+                        # Erster Hover: Erstelle Actor einmal
                         import pyvista as pv
-                        sphere = pv.Sphere(center=point, radius=1.5)
-                        self.plotter.remove_actor('p2p_hover_marker', render=False)
-                        self.plotter.add_mesh(sphere, color='orange', opacity=0.8, name='p2p_hover_marker')
+                        self.plotter.add_mesh(
+                            self._p2p_hover_marker_mesh,
+                            color='orange',
+                            opacity=0.8,
+                            name='p2p_hover_marker'
+                        )
+                        if 'p2p_hover_marker' in self.plotter.renderer.actors:
+                            self._p2p_hover_marker_actor = self.plotter.renderer.actors['p2p_hover_marker']
+
+                    # Update Position via VTK Transform (FAST!)
+                    if self._p2p_hover_marker_actor:
+                        self._p2p_hover_marker_actor.SetPosition(point)
+                        self._p2p_hover_marker_actor.SetVisibility(True)
                 else:
                     # Kein Treffer: Verstecke Marker
-                    if is_enabled("reuse_hover_markers") and self._p2p_hover_marker_actor:
-                        # OPTIMIZED: Nur verstecken statt entfernen
+                    if self._p2p_hover_marker_actor:
+                        # Nur verstecken statt entfernen
                         self._p2p_hover_marker_actor.SetVisibility(False)
                         request_render(self.plotter)
-                    else:
-                        # LEGACY: Entfernen
-                        self.plotter.remove_actor('p2p_hover_marker', render=True)
                 return True
 
             # Mouse Click: Wähle Punkt
@@ -3161,12 +3134,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 x, y = int(pos.x()), int(pos.y())
 
                 # WICHTIG: Verstecke Hover-Marker BEVOR wir picken (sonst blockt er den Pick!)
-                if is_enabled("reuse_hover_markers") and self._p2p_hover_marker_actor:
-                    # OPTIMIZED: Nur verstecken, nicht entfernen (Actor bleibt gecacht)
+                if self._p2p_hover_marker_actor:
+                    # Nur verstecken, nicht entfernen (Actor bleibt gecacht)
                     self._p2p_hover_marker_actor.SetVisibility(False)
-                else:
-                    # LEGACY: Komplett entfernen
-                    self.plotter.remove_actor('p2p_hover_marker', render=False)
 
                 body_id, point = self.pick_point_on_geometry(x, y)
                 if point:
@@ -3177,25 +3147,19 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                         self.point_to_point_start_picked.emit(point)
 
                         # Phase 3: Performance - Start-Marker cachen
-                        if is_enabled("reuse_hover_markers"):
-                            # OPTIMIZED: Reuse cached start marker
-                            if self._p2p_start_marker_actor is None:
-                                self.plotter.add_mesh(
-                                    self._p2p_start_marker_mesh,
-                                    color='yellow',
-                                    name='p2p_start_marker'
-                                )
-                                if 'p2p_start_marker' in self.plotter.renderer.actors:
-                                    self._p2p_start_marker_actor = self.plotter.renderer.actors['p2p_start_marker']
+                        # Reuse cached start marker
+                        if self._p2p_start_marker_actor is None:
+                            self.plotter.add_mesh(
+                                self._p2p_start_marker_mesh,
+                                color='yellow',
+                                name='p2p_start_marker'
+                            )
+                            if 'p2p_start_marker' in self.plotter.renderer.actors:
+                                self._p2p_start_marker_actor = self.plotter.renderer.actors['p2p_start_marker']
 
-                            if self._p2p_start_marker_actor:
-                                self._p2p_start_marker_actor.SetPosition(point)
-                                self._p2p_start_marker_actor.SetVisibility(True)
-                        else:
-                            # LEGACY: Neu erstellen
-                            import pyvista as pv
-                            sphere = pv.Sphere(center=point, radius=2.0)
-                            self.plotter.add_mesh(sphere, color='yellow', name='p2p_start_marker')
+                        if self._p2p_start_marker_actor:
+                            self._p2p_start_marker_actor.SetPosition(point)
+                            self._p2p_start_marker_actor.SetVisibility(True)
 
                         logger.success(f"✅ Start-Punkt gewählt. Jetzt Ziel-Punkt klicken.")
                     else:
@@ -3699,21 +3663,22 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.plotter.add_mesh(arrow, color='lime', name='plane_hover_arrow')
 
             self.plotter.update()
-        except: pass
+        except Exception as e:
+            logger.debug(f"Plane hover highlight failed: {e}")
     
     def _clear_plane_hover_highlight(self):
         """Entfernt Plane-Hover-Highlight"""
         try:
             self.plotter.remove_actor('plane_hover')
-        except: pass
+        except Exception: pass
         try:
             self.plotter.remove_actor('plane_hover_arrow')
-        except: pass
+        except Exception: pass
 
     def _set_opacity(self, key, val):
         try: 
             self.plotter.renderer.actors.get(self._plane_actors[key]).GetProperty().SetOpacity(val)
-        except: pass
+        except Exception: pass
 
     def _pick_plane_at_position(self, x, y):
         """
@@ -3914,7 +3879,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if bid in self._body_actors:
             for n in self._body_actors[bid]: 
                 try: self.plotter.remove_actor(n)
-                except: pass
+                except Exception: pass
         
         mesh = mesh.clean() # Wichtig für Rendering
         mesh.compute_normals(inplace=True)
@@ -4739,7 +4704,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         # 1. Alte Sketch-Actors entfernen
         for n in self._sketch_actors:
             try: self.plotter.remove_actor(n)
-            except: pass
+            except Exception: pass
         self._sketch_actors.clear()
 
         # 2. Sketches rendern
@@ -5048,7 +5013,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                     try:
                         n = np.array(normals, dtype=np.float32)
                         if len(n) == len(v): mesh.point_data["Normals"] = n
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"Failed to set normals: {e}")
                 
                 n_mesh = f"body_{bid}_m"
                 # Phase 4 Assembly: Inaktive Components grau/transparent
@@ -5080,24 +5046,31 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             logger.error(f"add_body error: {e}")
 
     def set_body_visibility(self, body_id, visible):
-        if body_id not in self._body_actors: return
+        logger.debug(f"[viewport] set_body_visibility called for {body_id}=>{visible}")
+        if body_id not in self._body_actors:
+            logger.debug(f"[viewport] body_id {body_id} not in _body_actors")
+            return
         try:
             # FIX: Iteriere über alle Actors (Mesh, Edges, OCP-Lines...)
             actors = self._body_actors[body_id]
+            logger.debug(f"[viewport] actors to hide: {actors}")
             for name in actors:
                 if name in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[name].SetVisibility(visible)
+                    actor = self.plotter.renderer.actors[name]
+                    actor.visibility = bool(visible)
+                    logger.debug(f"[viewport] -> set actor {name} visibilty to {visible}")
+                else:
+                    logger.debug(f"[viewport] -> actor {name} NOT FOUND in renderer")
             request_render(self.plotter)
-        except: pass
-    
-    def set_all_bodies_visible(self, visible):
+        except Exception as e:
+            logger.error(f"[viewport] set_body_visibility failed: {e}")
         """Setzt alle Bodies sichtbar/unsichtbar"""
         for body_id in self._body_actors:
             try:
                 m, e = self._body_actors[body_id]
                 self.plotter.renderer.actors[m].SetVisibility(visible)
                 self.plotter.renderer.actors[e].SetVisibility(visible)
-            except: pass
+            except Exception: pass
         request_render(self.plotter)
 
     def set_all_bodies_opacity(self, opacity: float):
@@ -5118,7 +5091,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if edge_actor:
                     # Edges etwas sichtbarer lassen für bessere Orientierung
                     edge_actor.GetProperty().SetOpacity(min(1.0, opacity + 0.3))
-            except: pass
+            except Exception: pass
         request_render(self.plotter)
 
     def set_body_opacity(self, body_id: str, opacity: float):
@@ -5143,7 +5116,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             # Speichere Opacity im Body-Dict für spätere Referenz
             if body_id in self.bodies:
                 self.bodies[body_id]['opacity'] = opacity
-        except: pass
+        except Exception: pass
         request_render(self.plotter)
 
     def clear_bodies(self, only_body_id: str = None):
@@ -5194,15 +5167,13 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             color: Optional - Farbe
             inactive_component: True wenn in inaktiver Component
         """
-        from config.feature_flags import is_enabled
-
         default_color = (0.7, 0.7, 0.7)
         col = color if color else getattr(body, 'color', default_color)
         if col is None:
             col = default_color
 
         # Phase 9: Async Tessellation
-        if is_enabled("async_tessellation") and hasattr(body, 'request_async_tessellation'):
+        if hasattr(body, 'request_async_tessellation'):
             if not hasattr(body, '_mesh_cache_valid') or not body._mesh_cache_valid:
                 # Mesh ist invalid → async tessellieren
                 def _on_async_mesh_ready(body_id, mesh, edges, face_info):
@@ -5225,7 +5196,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 body.request_async_tessellation(on_ready=_on_async_mesh_ready)
                 return True
 
-        # Synchroner Pfad (Feature-Flag aus oder Mesh bereits im Cache)
+        # Synchroner Pfad (Mesh bereits im Cache)
         if not hasattr(body, 'vtk_mesh') or body.vtk_mesh is None:
             return False
 
@@ -5961,7 +5932,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         try:
             tris = triangulate(poly)
             valid_tris = [t for t in tris if poly.contains(t.centroid)]
-        except: return [], []
+        except Exception:
+            return [], []
         verts = []; faces = []; v_map = {}
         def add(x,y,z):
             k = (round(x,4), round(y,4), round(z,4))
@@ -6763,10 +6735,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """Entfernt Body-Face-Highlight"""
         try:
             self.plotter.remove_actor('body_face_highlight')
-        except: pass
+        except Exception: pass
         try:
             self.plotter.remove_actor('body_face_arrow')
-        except: pass
+        except Exception: pass
         # Kein render hier - wird beim nächsten Hover gemacht
 
     def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal, cell_id=None):
@@ -7007,7 +6979,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def _clear_preview(self):
         if self._preview_actor: 
             try: self.plotter.remove_actor(self._preview_actor)
-            except: pass; self._preview_actor=None
+            except Exception:
+                pass
+            self._preview_actor = None
 
     def _draw_selectable_faces(self):
         """Zeichnet NUR die gehoverte und ausgewählte Flächen - nicht alle"""
@@ -7067,7 +7041,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def _clear_face_actors(self):
         for n in self._face_actors:
             try: self.plotter.remove_actor(n)
-            except: pass
+            except Exception: pass
         self._face_actors.clear()
 
     def _render_sketch(self, s):
@@ -7165,7 +7139,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def _hide_selection_planes(self):
         for n in ['xy','xz','yz']: 
             try: self.plotter.remove_actor(n)
-            except: pass
+            except Exception: pass
         self._plane_actors.clear()
 
     def set_view(self, view_name):

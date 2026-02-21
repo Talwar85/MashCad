@@ -876,6 +876,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.offset_start_pos = None
         self.offset_profile = None  # Das Profil das geoffsetet wird
         self.offset_preview_lines = []  # Preview der Offset-Linien
+        self._offset_preview_arcs = []  # Preview der Offset-Arcs
         
         # Spline-Editing (Fusion360-Style)
         self.spline_dragging = False
@@ -3917,6 +3918,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self.offset_profile = None
         self.offset_start_pos = None
         self.offset_preview_lines = []
+        self._offset_preview_arcs = []
 
         # Direct edit reset
         self._direct_hover_handle = None
@@ -5683,13 +5685,19 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
                     self._direct_edit_drag_moved = True
 
-                    # W28: Dirty-Rect Update statt Full Redraw
-                    dirty_new = self._get_polygon_dirty_rect(polygon)
-                    dirty = dirty_old.united(dirty_new)
-                    if dirty.isEmpty():
+                    # W35: Nut Constraint Fix Live-Solve support
+                    self._maybe_live_solve_during_direct_drag()
+
+                    if self._direct_edit_live_solve:
                         self.request_update()
                     else:
-                        self.update(dirty.toAlignedRect())
+                        # W28: Dirty-Rect Update statt Full Redraw
+                        dirty_new = self._get_polygon_dirty_rect(polygon)
+                        dirty = dirty_old.united(dirty_new)
+                        if dirty.isEmpty():
+                            self.request_update()
+                        else:
+                            self.update(dirty.toAlignedRect())
                 return
 
             # Original vertex drag mode
@@ -8407,19 +8415,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             self.request_update()
             return
 
-        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_points and not self.selected_splines:
+        if not self.selected_lines and not self.selected_circles and not self.selected_arcs and not self.selected_ellipses and not self.selected_points and not self.selected_splines:
             return
         self._save_undo()
         
         # W34-fix: Wenn Polygon-Linien gelöscht werden, auch den Treiberkreis und Punkte löschen
-        # Sammle alle Treiberkreise der zu löschenden Linien
         driver_circles_to_delete = set()
         for line in self.selected_lines:
             driver_circle = self._find_polygon_driver_circle_for_line(line)
             if driver_circle is not None:
                 driver_circles_to_delete.add(id(driver_circle))
         
-        # Sammle alle Polygon-Punkte (Punkte mit POINT_ON_CIRCLE zu diesen Kreisen)
         polygon_points_to_delete = set()
         for c in self.sketch.constraints:
             if c.type.name == "POINT_ON_CIRCLE" and len(c.entities) >= 2:
@@ -8427,45 +8433,89 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                 circle_entity = c.entities[1]
                 if id(circle_entity) in driver_circles_to_delete:
                     polygon_points_to_delete.add(id(point_entity))
-        
-        deleted_count = len(self.selected_lines) + len(self.selected_circles) + len(self.selected_arcs) + len(self.selected_ellipses) + len(self.selected_points) + len(self.selected_splines)
-        
-        # Lösche Linien
-        for line in self.selected_lines[:]:
-            self.sketch.delete_line(line)
-        
-        # Lösche Kreise (inkl. Polygon-Treiberkreise)
+
+        # W35-fix: Cascade delete für Slots
+        slot_roots_to_delete = set()
+        for line in self.selected_lines:
+            if getattr(line, '_slot_center_line', False):
+                slot_roots_to_delete.add(id(line))
+            elif getattr(line, '_slot_parent_center_line', None) is not None:
+                slot_roots_to_delete.add(id(line._slot_parent_center_line))
+                
+        for arc in self.selected_arcs:
+            if getattr(arc, '_slot_arc', False):
+                for l in getattr(self.sketch, 'lines', []):
+                    if getattr(l, '_slot_center_line', False) and getattr(l, 'start', None) and getattr(l, 'end', None):
+                        if l.start.id == arc.center.id or l.end.id == arc.center.id:
+                            slot_roots_to_delete.add(id(l))
+                            break
+
+        slot_lines_to_delete = set()
+        slot_arcs_to_delete = set()
+        slot_points_to_delete = set()
+
+        for l in getattr(self.sketch, 'lines', []):
+            if id(l) in slot_roots_to_delete:
+                slot_lines_to_delete.add(id(l))
+                if getattr(l, 'start', None): slot_points_to_delete.add(id(l.start))
+                if getattr(l, 'end', None): slot_points_to_delete.add(id(l.end))
+            elif getattr(l, '_slot_parent_center_line', None) is not None:
+                if id(l._slot_parent_center_line) in slot_roots_to_delete:
+                    slot_lines_to_delete.add(id(l))
+                    if getattr(l, 'start', None): slot_points_to_delete.add(id(l.start))
+                    if getattr(l, 'end', None): slot_points_to_delete.add(id(l.end))
+
+        for l in getattr(self.sketch, 'lines', []):
+            if getattr(l, '_slot_skeleton_line', False):
+                if (getattr(l, 'start', None) and id(l.start) in slot_points_to_delete) or \
+                   (getattr(l, 'end', None) and id(l.end) in slot_points_to_delete):
+                    slot_lines_to_delete.add(id(l))
+
+        for arc in getattr(self.sketch, 'arcs', []):
+            if getattr(arc, '_slot_arc', False):
+                if (getattr(arc, '_start_marker', None) and id(arc._start_marker) in slot_points_to_delete) or \
+                   (getattr(arc, '_end_marker', None) and id(arc._end_marker) in slot_points_to_delete) or \
+                   (getattr(arc, 'center', None) and id(arc.center) in slot_points_to_delete):
+                    slot_arcs_to_delete.add(id(arc))
+
+        # Zusammenführen der zu löschenden Elemente
+        lines_to_delete = list(self.selected_lines)
+        for line in getattr(self.sketch, 'lines', []):
+            if id(line) in slot_lines_to_delete and line not in lines_to_delete:
+                lines_to_delete.append(line)
+                
         circles_to_delete = list(self.selected_circles)
-        for circle in self.sketch.circles:
-            if id(circle) in driver_circles_to_delete:
-                if circle not in circles_to_delete:
-                    circles_to_delete.append(circle)
+        for circle in getattr(self.sketch, 'circles', []):
+            if id(circle) in driver_circles_to_delete and circle not in circles_to_delete:
+                circles_to_delete.append(circle)
+                
+        arcs_to_delete = list(self.selected_arcs)
+        for arc in getattr(self.sketch, 'arcs', []):
+            if id(arc) in slot_arcs_to_delete and arc not in arcs_to_delete:
+                arcs_to_delete.append(arc)
+                
+        points_to_delete = list(self.selected_points)
+        for pt in getattr(self.sketch, 'points', []):
+            if (id(pt) in polygon_points_to_delete or id(pt) in slot_points_to_delete) and pt not in points_to_delete:
+                points_to_delete.append(pt)
+
+        # Eigentliches Löschen durchführen
+        for line in lines_to_delete:
+            self.sketch.delete_line(line)
         for circle in circles_to_delete:
             self.sketch.delete_circle(circle)
-        
-        for arc in self.selected_arcs[:]:
+        for arc in arcs_to_delete:
             self.sketch.delete_arc(arc)
-        
-        # Lösche Ellipsen
         for ellipse in self.selected_ellipses[:]:
             self.sketch.delete_ellipse(ellipse)
-        
-        # Lösche ausgewählte Punkte + Polygon-Punkte
-        points_to_delete = list(self.selected_points)
-        for pt in self.sketch.points:
-            if id(pt) in polygon_points_to_delete:
-                if pt not in points_to_delete:
-                    points_to_delete.append(pt)
         for pt in points_to_delete:
             if pt in self.sketch.points:
                 self.sketch.points.remove(pt)
-        
         for spline in self.selected_splines[:]:
             if spline in self.sketch.splines:
                 self.sketch.splines.remove(spline)
-        
-        # Update count with deleted polygon elements (circles + points from driver circles)
-        deleted_count += len(driver_circles_to_delete) + len(polygon_points_to_delete)
+
+        deleted_count = len(lines_to_delete) + len(circles_to_delete) + len(arcs_to_delete) + len(self.selected_ellipses) + len(points_to_delete) + len(self.selected_splines)
         
         self._clear_selection()
         self._find_closed_profiles()

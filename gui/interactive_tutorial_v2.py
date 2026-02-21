@@ -121,7 +121,7 @@ class TutorialActionDetector(QObject):
         try:
             if hasattr(self.mw, 'document') and self.mw.document:
                 return len(self.mw.document.sketches)
-        except:
+        except Exception:
             pass
         return 0
         

@@ -751,23 +751,6 @@ class CADTessellator:
             - vertices: List von (x, y, z) Tuples
             - faces: List von Triangle-Indices (0-based)
         """
-        from config.feature_flags import is_enabled
-
-        if not is_enabled("export_cache"):
-            # LEGACY: Keine Caching, direkt tessellieren
-            try:
-                b3d_mesh = solid.tessellate(
-                    tolerance=linear_deflection,
-                    angular_tolerance=angular_tolerance
-                )
-                verts = [(v.X, v.Y, v.Z) for v in b3d_mesh[0]]
-                faces = list(b3d_mesh[1])
-                return verts, faces
-            except Exception as e:
-                logger.error(f"Export tessellation failed: {e}")
-                return None, None
-
-        # OPTIMIZED: Mit Caching
         try:
             # Cache-Key aus Geometrie + Export-Parametern
             geom_hash = CADTessellator._get_geometry_hash(solid)

@@ -181,7 +181,7 @@ class VisualComparator:
                 solid_mesh = result.solid.mesh
                 pl.add_mesh(solid_mesh, color="#c42b1c", show_edges=True, edge_color="#ffffff")
                 pl.add_text(f"Simple\n{result.face_count} Faces", font_size=12)
-            except:
+            except Exception:
                 pl.add_text("Simple\nNo Mesh", font_size=12)
         else:
             pl.add_text("Simple\nFailed", font_size=12)
@@ -194,7 +194,7 @@ class VisualComparator:
                 solid_mesh = result.solid.mesh
                 pl.add_mesh(solid_mesh, color="#4ec9b0", show_edges=True, edge_color="#ffffff")
                 pl.add_text(f"Current V10\n{result.face_count} Faces", font_size=12)
-            except:
+            except Exception:
                 pl.add_text("Current V10\nNo Mesh", font_size=12)
         else:
             pl.add_text("Current V10\nFailed", font_size=12)
@@ -207,7 +207,7 @@ class VisualComparator:
                 solid_mesh = result.solid.mesh
                 pl.add_mesh(solid_mesh, color="#569cd6", show_edges=True, edge_color="#ffffff")
                 pl.add_text(f"Perfect\n{result.face_count} Faces", font_size=12)
-            except:
+            except Exception:
                 pl.add_text("Perfect\nNo Mesh", font_size=12)
         else:
             pl.add_text("Perfect\nFailed", font_size=12)

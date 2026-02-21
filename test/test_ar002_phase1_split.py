@@ -53,7 +53,7 @@ class TestGeometryUtils:
         """Test canonicalize_indices handles invalid values."""
         from modeling.geometry_utils import canonicalize_indices
         result = canonicalize_indices([3, 'a', 2, None, 1.5])
-        assert result == [1.5, 2, 3]
+        assert result == [1, 2, 3]  # 1.5 -> int(1.5) = 1, 'a' and None skipped
 
     def test_validate_plane_normal_zero(self):
         """Test validate_plane_normal with zero vector."""

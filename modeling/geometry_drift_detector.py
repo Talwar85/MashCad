@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple, Dict, Any
 import math
 import logging
 
-from OCP.TopoDS import TopoDS_Shape
+from OCP.TopoDS import TopoDS_Shape, TopoDS
 from OCP.BRepAdaptor import BRepAdaptor_Surface, BRepAdaptor_Curve
 from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
@@ -20,7 +20,7 @@ from OCP.GProp import GProp_GProps
 from OCP.BRepGProp import BRepGProp
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_VERTEX, TopAbs_FACE, TopAbs_EDGE
-from OCP.BRep import BRep
+from OCP.BRep import BRep_Tool
 from OCP.gp import gp_Pnt, gp_Vec
 
 logger = logging.getLogger(__name__)
@@ -456,8 +456,8 @@ class GeometryDriftDetector:
         explorer = TopExp_Explorer(shape, TopAbs_VERTEX)
         
         while explorer.More() and len(positions) < max_vertices:
-            vertex = explorer.Current()
-            pnt = BRep.Pnt_s(vertex)
+            vertex = TopoDS.Vertex_s(explorer.Current())
+            pnt = BRep_Tool.Pnt_s(vertex)
             positions.append((pnt.X(), pnt.Y(), pnt.Z()))
             explorer.Next()
         
@@ -470,7 +470,7 @@ class GeometryDriftDetector:
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         
         while explorer.More() and len(normals) < max_faces:
-            face = explorer.Current()
+            face = TopoDS.Face_s(explorer.Current())
             adaptor = BRepAdaptor_Surface(face)
             
             # Get normal at center of face

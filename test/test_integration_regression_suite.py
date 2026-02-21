@@ -67,7 +67,8 @@ def test_workflow_extrude_fillet_chamfer():
     edge_indices = [edge_index_of(body._build123d_solid, e) for e in fillet_edges]
 
     fillet = FilletFeature(radius=1.0, edge_indices=edge_indices)
-    solid2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0)
+    fillet.feature_id = "fillet_test_001"  # OCP-First requires feature_id
+    solid2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0, feature_id=fillet.feature_id)
 
     assert solid2 is not None
     assert solid2.is_valid()
@@ -107,13 +108,20 @@ def test_workflow_shell():
 
     # Shell OCP-First (_compute_shell)
     from modeling.topology_indexing import face_index_of
+    from modeling.geometric_selector import GeometricFaceSelector
 
     # Top Face finden
     faces = list(body._build123d_solid.faces())
     top_face = max(faces, key=lambda f: f.center().Z)
     face_index = face_index_of(body._build123d_solid, top_face)
+    
+    # Create geometric selector for TNP v4.0
+    face_selector = GeometricFaceSelector.from_face(top_face)
 
     shell = ShellFeature(thickness=2.0, face_indices=[face_index])
+    # TNP v4.0 uses opening_face_selectors with nested geometric_selector
+    shell.opening_face_selectors = [{"geometric_selector": face_selector.to_dict()}]
+    shell.feature_id = "shell_test_001"
     result = body._compute_shell(shell, body._build123d_solid)
 
     assert result is not None

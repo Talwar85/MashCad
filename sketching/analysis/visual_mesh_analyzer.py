@@ -125,7 +125,7 @@ class VisualMeshAnalyzer:
             self.points = mesh.points
             try:
                 self.normals = mesh.cell_normals
-            except:
+            except Exception:
                 self.normals = None
             self.bounds = mesh.bounds
 
@@ -678,7 +678,7 @@ class VisualMeshAnalyzer:
             hull_area = hull.volume  # volume = area für 2D
             convexity = contour.area / hull_area if hull_area > 0 else 0.0
             return float(np.clip(convexity, 0.0, 1.0))
-        except:
+        except Exception:
             return 1.0
 
     def _project_2d_to_3d(self, point_2d: Tuple[float, float],

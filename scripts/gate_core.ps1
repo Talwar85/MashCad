@@ -116,9 +116,9 @@ if ($DryRun) {
 $start = Get-Date
 
 # Run tests and capture output
-# Join array with spaces for proper expansion through conda run
-$testArgs = $CORE_TESTS -join " "
-$result = & conda run -n cad_env python -m pytest -q $testArgs 2>&1
+# Pass array directly for correct expansion using direct python path instead of buggy conda run
+$pythonCmd = "C:\Users\User\miniforge3\envs\cad_env\python.exe"
+$result = & $pythonCmd -m pytest -q $CORE_TESTS 2>&1
 $exitCode = $LASTEXITCODE
 
 $end = Get-Date

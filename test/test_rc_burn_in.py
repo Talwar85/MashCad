@@ -25,34 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.feature_flags import is_enabled, set_flag
 
 
-# Command-line option for iterations
-def pytest_addoption(parser):
-    parser.addoption(
-        "--iterations",
-        action="store",
-        default=100,
-        type=int,
-        help="Number of iterations for stress tests"
-    )
-    parser.addoption(
-        "--memory-samples",
-        action="store",
-        default=10,
-        type=int,
-        help="Number of memory samples to take"
-    )
-
-
-@pytest.fixture
-def iterations(request):
-    """Get iteration count from command line."""
-    return request.config.getoption("--iterations")
-
-
-@pytest.fixture
-def memory_samples(request):
-    """Get memory sample count from command line."""
-    return request.config.getoption("--memory-samples")
+# Note: pytest_addoption, iterations, and memory_samples fixtures
+# are now defined in test/conftest.py for global availability
 
 
 @pytest.fixture

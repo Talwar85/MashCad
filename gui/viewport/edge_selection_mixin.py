@@ -676,7 +676,8 @@ class EdgeSelectionMixin:
                 mapper.SetResolveCoincidentTopologyToPolygonOffset()
                 offset = -5 * priority
                 mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(offset, offset)
-        except: pass
+        except Exception:
+            pass
 
     def _clear_edge_actors(self):
         """V8: Entfernt alle Batch-Actors."""

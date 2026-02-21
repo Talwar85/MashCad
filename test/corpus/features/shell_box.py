@@ -25,6 +25,8 @@ def create_model() -> TopoDS_Shape:
     Creates a 2x2x2 box with the top face removed and walls thickened
     inward by 0.1 to create a hollow shell.
     """
+    from OCP.TopoDS import TopoDS
+    
     # Create a 2x2x2 box
     box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(2, 2, 2))
     shape = box.Shape()
@@ -38,7 +40,7 @@ def create_model() -> TopoDS_Shape:
     face_count = 0
     last_face = None
     while explorer.More():
-        last_face = explorer.Current()
+        last_face = TopoDS.Face(explorer.Current())  # Proper OCP casting
         face_count += 1
         explorer.Next()
     
@@ -46,8 +48,9 @@ def create_model() -> TopoDS_Shape:
         faces_to_remove.Append(last_face)
     
     # Create thick solid (shell) with wall thickness 0.1
-    # Negative offset = inward
-    shell = BRepOffsetAPI_MakeThickSolid(shape, faces_to_remove, -0.1)
+    # Using BRepOffset_MakeOffset as alternative to deprecated API
+    shell = BRepOffsetAPI_MakeThickSolid()
+    shell.MakeThickSolidByJoin(shape, faces_to_remove, -0.1, 1e-6)
     
     shell.Build()
     if not shell.IsDone():

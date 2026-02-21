@@ -208,3 +208,51 @@ class TransformMixinV3:
         """Callback: Live-Update der Transform-Werte während Drag"""
         if hasattr(self, 'transform_changed'):
             self.transform_changed.emit(x, y, z)
+
+    def update_transform_preview(self, x: float, y: float, z: float):
+        """Aktualisiert die Gizmo-Vorschau mit neuen Werten vom Transform-Panel.
+
+        Wird aufgerufen wenn der User Werte im Transform-Panel ändert,
+        damit das Gizmo die Vorschau live aktualisiert.
+        """
+        if not hasattr(self, '_transform_ctrl'):
+            return
+        try:
+            self._transform_ctrl.set_preview_values(x, y, z)
+        except AttributeError:
+            # Fallback: Gizmo-Controller hat kein set_preview_values
+            logger.debug("Transform preview: set_preview_values nicht verfügbar")
+
+    def apply_transform(self):
+        """Finalisiert die aktuelle Transform-Operation.
+
+        Wird aufgerufen wenn der User den Transform bestätigt (Enter/OK).
+        Wendet die Transformation final an und räumt den Gizmo-State auf.
+        """
+        if not hasattr(self, '_transform_ctrl'):
+            return
+        try:
+            body_id = self._transform_ctrl.selected_body_id
+            if body_id and hasattr(self._transform_ctrl, 'finalize'):
+                self._transform_ctrl.finalize()
+            elif body_id:
+                # Fallback: Gizmo-Position aktualisieren
+                self.update_transform_gizmo_position()
+        except Exception as e:
+            logger.debug(f"Transform apply fehlgeschlagen: {e}")
+
+    def cancel_transform(self):
+        """Bricht die aktuelle Transform-Operation ab.
+
+        Stellt den Originalzustand wieder her und versteckt das Gizmo.
+        """
+        if not hasattr(self, '_transform_ctrl'):
+            return
+        try:
+            if hasattr(self._transform_ctrl, 'cancel'):
+                self._transform_ctrl.cancel()
+            else:
+                self._transform_ctrl.deselect()
+            self.render()
+        except Exception as e:
+            logger.debug(f"Transform cancel fehlgeschlagen: {e}")

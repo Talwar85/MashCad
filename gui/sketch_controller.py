@@ -66,6 +66,9 @@ class SketchController(QObject):
         """UI-Zustand für 3D-Modus einstellen."""
         mw = self._mw
         
+        # FIX: Mode-Variable synchronisieren
+        mw.mode = "3d"
+        
         # Stack-Indizes
         mw.tool_stack.setCurrentIndex(0)  # 3D-ToolPanel
         mw.center_stack.setCurrentIndex(0)  # Viewport
@@ -82,6 +85,9 @@ class SketchController(QObject):
     def _enter_sketch_mode(self, prev_mode: str):
         """UI-Zustand für Sketch-Modus einstellen."""
         mw = self._mw
+        
+        # FIX: Mode-Variable synchronisieren
+        mw.mode = "sketch"
         
         # Stack-Indizes
         mw.tool_stack.setCurrentIndex(1)  # 2D-ToolPanel

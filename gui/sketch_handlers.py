@@ -335,6 +335,11 @@ class SketchHandlersMixin:
                     self.selected_points.remove(hit)
                 else:
                     self.selected_points.append(hit)
+            elif isinstance(hit, Ellipse2D):
+                if hit in self.selected_ellipses:
+                    self.selected_ellipses.remove(hit)
+                else:
+                    self.selected_ellipses.append(hit)
             elif hasattr(hit, "control_points"):
                 if hit in self.selected_splines:
                     self.selected_splines.remove(hit)
@@ -1917,46 +1922,56 @@ class SketchHandlersMixin:
     def _point_at_t(self, line, t):
         return QPointF(line.start.x + t*(line.end.x-line.start.x), line.start.y + t*(line.end.y-line.start.y))
     
-    def _find_connected_profile(self, start_line):
-        """Findet alle zusammenhängenden Linien die ein Profil bilden"""
+    def _find_connected_profile(self, start_entity):
+        """Findet alle zusammenhängenden Linien UND Arcs die ein Profil bilden"""
         TOL = 0.5
         
         def pt_match(p1, p2):
             return math.hypot(p1[0] - p2[0], p1[1] - p2[1]) < TOL
         
-        def line_endpoints(l):
-            return [(l.start.x, l.start.y), (l.end.x, l.end.y)]
+        def entity_endpoints(e):
+            """Returns list of (x, y) endpoint tuples for lines and arcs."""
+            if hasattr(e, 'start') and hasattr(e, 'end') and not hasattr(e, 'start_angle'):
+                # Line2D
+                return [(e.start.x, e.start.y), (e.end.x, e.end.y)]
+            elif hasattr(e, 'start_angle') and hasattr(e, 'end_angle'):
+                # Arc2D
+                sp = e.start_point
+                ep = e.end_point
+                return [(sp.x, sp.y), (ep.x, ep.y)]
+            return []
         
-        # Sammle alle nicht-Konstruktionslinien
-        all_lines = [l for l in self.sketch.lines if not l.construction]
-        if start_line not in all_lines:
-            return [start_line]
+        # Sammle alle nicht-Konstruktionslinien UND Arcs
+        all_entities = [l for l in self.sketch.lines if not l.construction]
+        all_entities += [a for a in self.sketch.arcs if not a.construction]
         
-        # Finde zusammenhängende Linien via BFS
-        profile = [start_line]
-        used = {id(start_line)}
+        if start_entity not in all_entities:
+            return [start_entity]
+        
+        # Finde zusammenhängende Entitäten via BFS
+        profile = [start_entity]
+        used = {id(start_entity)}
         
         changed = True
         while changed:
             changed = False
-            for line in all_lines:
-                if id(line) in used:
+            for entity in all_entities:
+                if id(entity) in used:
                     continue
                 
-                # Prüfe ob diese Linie an eine Linie im Profil anschließt
-                line_pts = line_endpoints(line)
-                for profile_line in profile:
-                    profile_pts = line_endpoints(profile_line)
-                    for lp in line_pts:
+                ent_pts = entity_endpoints(entity)
+                for profile_ent in profile:
+                    profile_pts = entity_endpoints(profile_ent)
+                    for ep in ent_pts:
                         for pp in profile_pts:
-                            if pt_match(lp, pp):
-                                profile.append(line)
-                                used.add(id(line))
+                            if pt_match(ep, pp):
+                                profile.append(entity)
+                                used.add(id(entity))
                                 changed = True
                                 break
-                        if id(line) in used:
+                        if id(entity) in used:
                             break
-                    if id(line) in used:
+                    if id(entity) in used:
                         break
         
         return profile
@@ -1982,74 +1997,132 @@ class SketchHandlersMixin:
         
         return lines
     
-    def _compute_offset_lines(self, profile_lines, distance, direction_outward=True):
+    def _compute_offset_data(self, profile_entities, distance, direction_outward=True):
         """
-        Berechnet Offset-Linien für ein Profil.
+        Berechnet Offset-Daten für ein Profil (Linien UND Arcs).
         
         Args:
-            profile_lines: Liste von Linien die das Profil bilden
+            profile_entities: Liste von Linien und Arcs die das Profil bilden
             distance: Offset-Abstand (positiv = nach außen, negativ = nach innen)
-            direction_outward: Wird ignoriert - Richtung wird durch Vorzeichen von distance bestimmt
         
         Returns:
-            Liste von (x1, y1, x2, y2, orig_line) Tupeln
+            Liste von dicts:
+              {'type': 'line', 'x1', 'y1', 'x2', 'y2', 'orig': entity}
+              {'type': 'arc', 'cx', 'cy', 'radius', 'start_angle', 'end_angle', 'orig': entity}
         """
-        if not profile_lines:
+        if not profile_entities:
             return []
         
         # Berechne Zentrum des Profils
         cx, cy = 0, 0
         count = 0
-        for line in profile_lines:
-            cx += line.start.x + line.end.x
-            cy += line.start.y + line.end.y
-            count += 2
+        for ent in profile_entities:
+            if hasattr(ent, 'start') and hasattr(ent, 'end') and not hasattr(ent, 'start_angle'):
+                cx += ent.start.x + ent.end.x
+                cy += ent.start.y + ent.end.y
+                count += 2
+            elif hasattr(ent, 'center') and hasattr(ent, 'start_angle'):
+                sp = ent.start_point
+                ep = ent.end_point
+                cx += sp.x + ep.x
+                cy += sp.y + ep.y
+                count += 2
         if count == 0:
             return []
         cx /= count
         cy /= count
         
-        offset_lines = []
-        for line in profile_lines:
-            dx = line.end.x - line.start.x
-            dy = line.end.y - line.start.y
-            length = math.hypot(dx, dy)
-            if length < 0.01:
-                continue
+        offset_data = []
+        for ent in profile_entities:
+            if hasattr(ent, 'start') and hasattr(ent, 'end') and not hasattr(ent, 'start_angle'):
+                # ---- Line2D ----
+                dx = ent.end.x - ent.start.x
+                dy = ent.end.y - ent.start.y
+                length = math.hypot(dx, dy)
+                if length < 0.01:
+                    continue
+                
+                nx, ny = -dy/length, dx/length
+                mid_x = (ent.start.x + ent.end.x) / 2
+                mid_y = (ent.start.y + ent.end.y) / 2
+                to_center_x = cx - mid_x
+                to_center_y = cy - mid_y
+                dot = nx * to_center_x + ny * to_center_y
+                if dot > 0:
+                    nx, ny = -nx, -ny
+                
+                d = distance
+                x1 = ent.start.x + nx * d
+                y1 = ent.start.y + ny * d
+                x2 = ent.end.x + nx * d
+                y2 = ent.end.y + ny * d
+                offset_data.append({'type': 'line', 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'orig': ent})
             
-            # Normale berechnen (senkrecht zur Linie)
-            nx, ny = -dy/length, dx/length
-            
-            # Bestimme ob diese Normale nach außen (weg vom Zentrum) zeigt
-            mid_x = (line.start.x + line.end.x) / 2
-            mid_y = (line.start.y + line.end.y) / 2
-            
-            # Vektor vom Zentrum zur Linienmitte
-            to_center_x = cx - mid_x
-            to_center_y = cy - mid_y
-            
-            # Wenn Normale zum Zentrum zeigt, umkehren
-            dot = nx * to_center_x + ny * to_center_y
-            if dot > 0:
-                # Normale zeigt zum Zentrum, also umkehren für "nach außen"
-                nx, ny = -nx, -ny
-            
-            # Jetzt zeigt (nx, ny) immer nach außen
-            # Positiver distance = nach außen, negativer = nach innen
-            d = distance
-            
-            x1 = line.start.x + nx * d
-            y1 = line.start.y + ny * d
-            x2 = line.end.x + nx * d
-            y2 = line.end.y + ny * d
-            
-            offset_lines.append((x1, y1, x2, y2, line))
+            elif hasattr(ent, 'center') and hasattr(ent, 'start_angle'):
+                # ---- Arc2D ---- concentric offset
+                arc_cx, arc_cy = ent.center.x, ent.center.y
+                # Determine outward direction: away from profile centroid
+                vec_x = arc_cx - cx
+                vec_y = arc_cy - cy
+                # If center is outside profile centroid, outward = towards center (larger radius)
+                # Use midpoint of the arc instead
+                mid_param = ent.point_at_parameter(0.5)
+                mid_vec_x = mid_param.x - cx
+                mid_vec_y = mid_param.y - cy
+                # Radial direction at midpoint
+                rad_x = mid_param.x - arc_cx
+                rad_y = mid_param.y - arc_cy
+                # If radial direction points same way as centroid->midpoint, outward = positive radius change
+                dot = rad_x * mid_vec_x + rad_y * mid_vec_y
+                if dot > 0:
+                    new_r = ent.radius + distance
+                else:
+                    new_r = ent.radius - distance
+                
+                if new_r > 0.01:
+                    offset_data.append({
+                        'type': 'arc',
+                        'cx': arc_cx, 'cy': arc_cy,
+                        'radius': new_r,
+                        'start_angle': ent.start_angle,
+                        'end_angle': ent.end_angle,
+                        'orig': ent
+                    })
         
-        # Ecken verbinden (Linien verlängern/trimmen)
-        if len(offset_lines) > 1:
-            offset_lines = self._connect_offset_corners(offset_lines)
+        # Ecken verbinden (nur Linien)
+        line_items = [d for d in offset_data if d['type'] == 'line']
+        if len(line_items) > 1:
+            # Convert to legacy tuple format for _connect_offset_corners
+            tuples = [(d['x1'], d['y1'], d['x2'], d['y2'], d['orig']) for d in line_items]
+            connected = self._connect_offset_corners(tuples)
+            # Write back
+            li = 0
+            for i, d in enumerate(offset_data):
+                if d['type'] == 'line':
+                    x1, y1, x2, y2, orig = connected[li]
+                    offset_data[i] = {'type': 'line', 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'orig': orig}
+                    li += 1
         
-        return offset_lines
+        return offset_data
+
+    def _compute_offset_lines(self, profile_lines, distance, direction_outward=True):
+        """Legacy wrapper: returns (x1, y1, x2, y2, orig) tuples for backward compat."""
+        data = self._compute_offset_data(profile_lines, distance, direction_outward)
+        result = []
+        for d in data:
+            if d['type'] == 'line':
+                result.append((d['x1'], d['y1'], d['x2'], d['y2'], d['orig']))
+            elif d['type'] == 'arc':
+                # Fallback: approximate arc as line from start to end
+                arc_r = d['radius']
+                sa = math.radians(d['start_angle'])
+                ea = math.radians(d['end_angle'])
+                x1 = d['cx'] + arc_r * math.cos(sa)
+                y1 = d['cy'] + arc_r * math.sin(sa)
+                x2 = d['cx'] + arc_r * math.cos(ea)
+                y2 = d['cy'] + arc_r * math.sin(ea)
+                result.append((x1, y1, x2, y2, d['orig']))
+        return result
     
     def _connect_offset_corners(self, offset_lines):
         """Verbindet Offset-Linien an den Ecken"""
@@ -2158,6 +2231,14 @@ class SketchHandlersMixin:
                 self._start_offset_preview()
                 return
             
+            # Prüfe Arc (z.B. Fillet-Bogen)
+            arc = self._find_arc_at(pos)
+            if arc:
+                self.offset_profile = self._find_connected_profile(arc)
+                self.tool_data['offset_type'] = 'profile'
+                self._start_offset_preview()
+                return
+            
             face = self._find_face_at(pos)
             if face:
                 face_type = face[0]
@@ -2234,17 +2315,21 @@ class SketchHandlersMixin:
             else:
                 self.offset_preview_lines = []
         else:
-            # Profil-Preview
+            # Profil-Preview (lines + arcs)
             if not self.offset_profile:
                 self.offset_preview_lines = []
+                self._offset_preview_arcs = []
                 return
             
-            # Berechne Offset-Linien
-            offset_data = self._compute_offset_lines(self.offset_profile, self.offset_distance)
+            offset_data = self._compute_offset_data(self.offset_profile, self.offset_distance)
             
             self.offset_preview_lines = []
-            for x1, y1, x2, y2, _ in offset_data:
-                self.offset_preview_lines.append((x1, y1, x2, y2))
+            self._offset_preview_arcs = []
+            for d in offset_data:
+                if d['type'] == 'line':
+                    self.offset_preview_lines.append((d['x1'], d['y1'], d['x2'], d['y2']))
+                elif d['type'] == 'arc':
+                    self._offset_preview_arcs.append(d)
         
         self.request_update()
 
@@ -2274,23 +2359,32 @@ class SketchHandlersMixin:
             
             self._save_undo()
             
-            # Berechne finale Offset-Linien
-            offset_data = self._compute_offset_lines(self.offset_profile, self.offset_distance)
+            # Berechne finale Offset-Daten (Linien + Arcs)
+            offset_data = self._compute_offset_data(self.offset_profile, self.offset_distance)
             
-            # Erstelle neue Linien
+            # Erstelle neue Geometrie
             created = 0
-            for x1, y1, x2, y2, _ in offset_data:
-                if math.hypot(x2-x1, y2-y1) > 0.01:
-                    self.sketch.add_line(x1, y1, x2, y2)
-                    created += 1
+            for d in offset_data:
+                if d['type'] == 'line':
+                    if math.hypot(d['x2']-d['x1'], d['y2']-d['y1']) > 0.01:
+                        self.sketch.add_line(d['x1'], d['y1'], d['x2'], d['y2'])
+                        created += 1
+                elif d['type'] == 'arc':
+                    if d['radius'] > 0.01:
+                        self.sketch.add_arc(
+                            d['cx'], d['cy'], d['radius'],
+                            d['start_angle'], d['end_angle']
+                        )
+                        created += 1
             
             self.sketched_changed.emit()
             self._find_closed_profiles()
-            self.status_message.emit(tr("Offset applied ({count} lines) | Next element").format(count=created))
+            self.status_message.emit(tr("Offset applied ({count} elements) | Next element").format(count=created))
         
         # Reset
         self.offset_profile = None
         self.offset_preview_lines = []
+        self._offset_preview_arcs = []
         self.tool_step = 0
         self.tool_data = {}
         self.dim_input.hide()
@@ -3679,7 +3773,9 @@ class SketchHandlersMixin:
             self.sketch.add_radius(const_circle, hex_radius)
             hole_circle = self.sketch.add_circle(center.x(), center.y(), hole_radius, construction=self.construction_mode)
             self.sketch.add_radius(hole_circle, hole_radius)
-            self.sketch.add_concentric(const_circle, hole_circle)
+            # W35: Nut Constraint Fix
+            # Concentric evaluates center distance dynamically. Coincident binds them completely in the solver.
+            self.sketch.add_coincident(const_circle.center, hole_circle.center)
             self.sketch.solve()
             self.sketched_changed.emit()
             self._find_closed_profiles()

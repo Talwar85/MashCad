@@ -25,6 +25,8 @@ def create_model() -> TopoDS_Shape:
     Creates a stepped block with varying fillet radii,
     testing the fillet algorithm on edge transitions.
     """
+    from OCP.TopoDS import TopoDS
+    
     # Create a stepped block by using multiple boxes
     # Base: 0,0,0 to 3,3,1
     base = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(3, 3, 1))
@@ -42,7 +44,7 @@ def create_model() -> TopoDS_Shape:
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
     edge_count = 0
     while explorer.More():
-        edge = explorer.Current()
+        edge = TopoDS.Edge(explorer.Current())  # Proper OCP casting
         # Vary radius based on edge position
         radius = 0.1 if edge_count < 4 else 0.2
         fillet.Add(radius, edge)

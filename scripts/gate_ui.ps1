@@ -116,7 +116,8 @@ $stderr = @()
 $exitCode = 0
 
 try {
-    $result = & conda run -n cad_env python -m pytest -q $UI_TESTS 2>&1
+    $pythonCmd = "C:\Users\User\miniforge3\envs\cad_env\python.exe"
+    $result = & $pythonCmd -m pytest -q $UI_TESTS 2>&1
     $exitCode = $LASTEXITCODE
 
     # Split stdout/stderr logic based on object type

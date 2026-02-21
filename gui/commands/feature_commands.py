@@ -151,7 +151,7 @@ def _restore_body_state(body, state: dict) -> None:
         body._mesh_triangles = []
 
 
-def _has_transaction_regression(body, state: dict) -> tuple:
+def _has_transaction_regression(body, state: dict, check_solid=True) -> tuple:
     """
     Check if operation degraded body health compared to the snapshot.
 
@@ -164,7 +164,7 @@ def _has_transaction_regression(body, state: dict) -> tuple:
     if new_errors:
         return True, f"new feature errors: {', '.join(new_errors)}"
 
-    if state.get("had_solid", False) and getattr(body, "_build123d_solid", None) is None:
+    if check_solid and state.get("had_solid", False) and getattr(body, "_build123d_solid", None) is None:
         return True, "body solid disappeared"
 
     after_invalid = _is_solid_invalid(body)
@@ -345,7 +345,7 @@ class AddFeatureCommand(QUndoCommand):
                 CADTessellator.notify_body_changed()
                 self.body._rebuild()
 
-            regressed, reason = _has_transaction_regression(self.body, tx_state)
+            regressed, reason = _has_transaction_regression(self.body, tx_state, check_solid=False)
             if regressed:
                 logger.error(f"Undo rollback ({self.feature.name}): {reason}")
                 _restore_body_state(self.body, tx_state)

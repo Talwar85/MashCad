@@ -7,186 +7,145 @@ Neue Features werden mit Flag=False eingeführt und nach Validierung aktiviert.
 
 Nach Validierung werden Features als Standard-Code integriert und Flags entfernt.
 Diese Datei enthält nur noch aktive Debug-Flags und experimentelle Features.
+
+Bereits integrierte Features (Flags entfernt):
+==============================================
+Phase 1-3 (Performance & Boolean):
+- optimized_actor_pooling, reuse_hover_markers, picker_pooling
+- bbox_early_rejection, export_cache, async_tessellation
+- feature_dependency_tracking, feature_solid_caching
+- boolean_self_intersection_check, boolean_post_validation
+- boolean_argument_analyzer, boolean_tolerance_monitoring
+- ocp_glue_auto_detect, adaptive_tessellation
+
+Phase 4 (OCP-First Migration):
+- ocp_first_extrude, ocp_brep_cache
+- ocp_incremental_rebuild, ocp_brep_persistence
+
+Phase 5 (Core Features):
+- assembly_system, batch_fillets, native_ocp_helix
+
+Weitere entfernte Flags:
+- parallel_rebuild (OCP/OpenCASCADE ist nicht thread-safe)
+- use_solver_constraints, solver_visual_feedback, etc. (nicht implementiert)
 """
 
 from typing import Dict
 
 # Feature Flag Registry
 # =====================
-# HINWEIS: Die meisten Feature-Flags wurden nach erfolgreicher Validierung
-# entfernt (Januar 2026). Die entsprechenden Features sind jetzt Standard:
-#
-# - Kreis-Intersection Fixes (Phase 1)
-# - Kreis-Überlappung Profile Detection (Phase 1b)
-# - Build123d Profile-Detection (Phase 2)
-# - DOF-Anzeige (Phase 3)
-# - Extrahierte Trim/Extend/Fillet/Chamfer Operationen (Phase 4)
-# - TNP Face-Selection mit Hash (Phase 7)
-# - Smart Dimension Entry UX (Phase 8)
-# - ShapeUpgrade_UnifySameDomain (Phase 14) - aktiv in Rebuild-Pipeline
-#
-# Nicht umsetzbar (entfernt):
-# - parallel_rebuild (Phase 15) - OCP/OpenCASCADE ist nicht thread-safe
-#
-# Die Flags unten sind für aktives Debugging oder experimentelle Features.
+# Nur noch Debug-Flags und experimentelle Features.
 
 FEATURE_FLAGS: Dict[str, bool] = {
-    # Debug-Modi
+    # ========================================================================
+    # Debug-Modi (für development/troubleshooting)
+    # ========================================================================
     "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
-    "tnp_debug_logging": False,  # TNP v4.0 Shape-Tracking Debug (sehr verbose, nur in Tests aktivieren)
-    "sketch_debug": False,  # Sketch-Editor Debug ([Orientation], [PROFILE], [Auto-Align])
-    "extrude_debug": False,  # Extrude Operation Debug ([EXTRUDE DEBUG], [SELECTOR])
-    "viewport_debug": False,  # Viewport/Mesh Debug (Mesh regeneration, Actors)
-
-    # UX Features
-    "sketch_orientation_indicator": False,  # Zeigt 3D-Orientierung im Sketch-Editor (deaktiviert - Auto-Align löst das Problem)
-
-    # Assembly System (Phase 1-6)
-    "assembly_system": True,  # Hierarchische Component-Struktur wie CAD
-    "mate_system_v1": True,  # AS-002: Mate constraints between components
-    "mate_solver": True,  # AS-003: Mate-Solver Base Kernel for assembly constraint solving
-
-    # Performance Optimizations (2026 Performance Plan)
-    "optimized_actor_pooling": True,  # Phase 2: VTK Actor Pooling Optimierung
-    "reuse_hover_markers": True,  # Phase 3: Hover-Marker wiederverwenden
-    "picker_pooling": True,  # Phase 4: Picker-Pool statt neu erstellen
-    "bbox_early_rejection": True,  # Phase 5: BBox Check vor Boolean-Ops (PERMANENT)
-    "export_cache": True,  # Phase 6: Tessellation-Cache für STL Export
-    "feature_dependency_tracking": True,  # Phase 7: Feature Dependency Graph
-    "feature_solid_caching": True,  # Phase 8: In Phase 7 integriert (_solid_checkpoints)
-    "async_tessellation": True,  # Phase 9: Background Mesh Generation
-    # Phase 10: BooleanEngineV4 ist jetzt STANDARD - kein Flag mehr nötig
-    "ocp_advanced_flags": True,  # Phase 11: SetFuzzyValue + SetRunParallel (AKTIV)
-    "ocp_glue_auto_detect": True,  # Auto-Erkennung von coinciding Faces → GlueShift für ~90% Speedup
-    "batch_fillets": True,  # Phase 12: Fillet/Chamfer History-Extraction für TNP
-    "wall_thickness_analysis": True,  # Phase 13: BRepExtrema Wandstärken-Analyse (AKTIV)
-    "self_heal_strict": True,  # Strict: atomischer Rollback bei invalider Geometrie statt stiller Weiterverarbeitung
-    # PI-003: Wenn Topologie-Referenzen vorhanden sind, kein Geometric-Selector-Recovery.
-    # Verhindert stilles "falsches" Recovery bei TNP-Mismatch.
-    "strict_topology_fallback_policy": True,
-
-    # Boolean Robustness (OCP Feature Audit 2026)
-    "boolean_self_intersection_check": True,  # Pre-Check: BOPAlgo_CheckerSI vor Booleans
-    "boolean_post_validation": True,  # Post-Check: BRepCheck_Analyzer + ShapeFix nach Booleans
-    "boolean_argument_analyzer": True,  # Pre-Check: BOPAlgo_ArgumentAnalyzer Input-Validierung
-    "adaptive_tessellation": True,  # Deflection proportional zur Modellgröße
+    "tnp_debug_logging": False,  # TNP v4.0 Shape-Tracking Debug (sehr verbose)
+    "sketch_debug": False,  # Sketch-editor Debug ([Orientation], [PROFILE])
+    "extrude_debug": False,  # Extrude Operation Debug ([EXTRUDE DEBUG])
+    "viewport_debug": False,  # Viewport/Mesh Debug (Mesh regeneration)
+    "sketch_performance_monitoring": False,  # Performance stats collection
     
+    # ========================================================================
+    # UX Features
+    # ========================================================================
+    "sketch_orientation_indicator": False,  # 3D-Orientierung im Sketch-Editor
+    
+    # ========================================================================
+    # Assembly System (Phase 1-6) - Permanent aktiviert
+    # ========================================================================
+    "mate_system_v1": True,  # AS-002: Mate constraints between components
+    "mate_solver": True,  # AS-003: Mate-Solver Base Kernel
+    
+    # ========================================================================
     # Export Formats (PR-001: 3MF Export)
+    # ========================================================================
     "export_3mf": True,  # 3MF Export Implementation
     
-    # Export Validation (PR-002: Manifold/Free-Bounds Pflichtcheck)
-    "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export (G4 Printability)
-    "export_normals_check": False,  # Normalen-Konsistenz-Check (optional, performance-intensiv)
-    "export_auto_repair": True,  # Auto-Repair Integration mit GeometryHealer
+    # ========================================================================
+    # Export Validation (PR-002)
+    # ========================================================================
+    "export_free_bounds_check": True,  # Offene-Kanten-Check vor STL Export
+    "export_normals_check": False,  # Normalen-Konsistenz-Check (optional)
+    "export_auto_repair": True,  # Auto-Repair Integration
     
-    # Geometry Drift Detection (PI-008: Sprint 3)
-    "geometry_drift_detection": True,  # Early detection of accumulated numerical errors
-    
-    # PR-010: Printability Trust Gate
+    # ========================================================================
+    # Geometry & Printability
+    # ========================================================================
+    "geometry_drift_detection": True,  # Early detection of numerical errors
     "printability_trust_gate": True,  # Printability-Validierung vor Export
     "printability_min_score": 60,  # Mindest-Score für Export (0-100)
     "printability_block_on_critical": True,  # Export bei CRITICAL Issues blockieren
     
-    "boolean_tolerance_monitoring": True,  # Post-Check: ShapeAnalysis_ShapeTolerance nach Booleans
-
-    # OCP Feature Audit Tier 3
-    "mesh_converter_adaptive_tolerance": True,  # Adaptive Sewing-Toleranz + Post-Sewing Validation
-    "loft_sweep_hardening": True,  # SetMaxDegree + MakePipeShell Fallback für Loft/Sweep
-
-    # Thread/Helix (Native OCP)
-    "native_ocp_helix": True,  # Native Geom_CylindricalSurface Helix statt build123d BSpline-Approximation
-
-    # Cylindrical Face Edit (Fusion360-style Radius Edit)
-    "cylindrical_face_edit": False,  # Phase 1: Zylindrische Faces radius-modifizieren (Hole/Pocket/Solid)
-
-    # OCP-First Migration (2026 CAD Kernel Nearness Plan)
-    # ======================================================
-    # Phase A-E (Feb 2026): OCP-First komplett abgeschlossen
-    # - Revolve: Direktes OCP BRepPrimAPI_MakeRevol (Phase C)
-    # - Loft: Direktes OCP BRepOffsetAPI_ThruSections (Phase D)
-    # - Sweep: Direktes OCP BRepOffsetAPI_MakePipe/MakePipeShell (Phase E)
-    # - Shell/Hollow: Direktes OCP BRepOffsetAPI_MakeThickSolid (Phase F)
-    # - Fillet, Chamfer: OCP-First Helper ohne Fallback-Kaskade (Phase B)
-    # - ocp_first_revolve, loft, sweep, shell, hollow entfernt (Phase A)
-    # - ocp_first_fillet, chamfer entfernt (Phase B)
-    #
-    # Verbleibendes Flag:
-    # - ocp_first_extrude: OCPExtrudeHelper (mit TNP)
-    #
-    # Nach Abschluss aller Phasen wird auch ocp_first_extrude entfernt.
-
-    # Phase 2-3: Extrude (OCP-First mit Helper-Klasse)
-    "ocp_first_extrude": True,
-
-    # Phase 7: BREP Caching
-    "ocp_brep_cache": True,
-
-    # Phase 8: Incremental Rebuild
-    "ocp_incremental_rebuild": True,
-
-    # Phase 9: BREP Persistence
-    "ocp_brep_persistence": True,
+    # ========================================================================
+    # OCP Advanced Features
+    # ========================================================================
+    "ocp_advanced_flags": True,  # SetFuzzyValue + SetRunParallel
+    "wall_thickness_analysis": True,  # BRepExtrema Wandstärken-Analyse
+    "self_heal_strict": True,  # Atomischer Rollback bei invalider Geometrie
+    "strict_topology_fallback_policy": True,  # Kein Geometric-Selector-Recovery bei TNP-Mismatch
+    "mesh_converter_adaptive_tolerance": True,  # Adaptive Sewing-Toleranz
+    "loft_sweep_hardening": True,  # SetMaxDegree + MakePipeShell Fallback
+    "detailed_boolean_history": True,  # Enhanced Boolean history for TNP
+    "helix_fitting_enabled": True,  # Helix parameter fitting via scipy
     
-    # W35: Solver Stabilization (P0-P4)
+    # ========================================================================
+    # Solver Configuration (W35: Stabilization P0-P4)
+    # ========================================================================
     "solver_backend": "staged",  # Options: "scipy_lm", "scipy_trf", "staged"
     "solver_pre_validation": True,  # P1: Early contradiction detection
     "solver_smooth_penalties": True,  # P1: Smooth tangent penalties
     "solver_experimental_staged": True,  # P3: Staged solve (experimental)
     
-    # SU-005: Sketch Drag Performance Optimization (60 FPS target)
-    "sketch_drag_optimization": True,  # Enable throttled solver updates during drag
-    "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls (60 FPS = 16ms)
-    "sketch_performance_monitoring": False,  # Enable performance stats collection (debug)
+    # ========================================================================
+    # Sketch Performance (SU-005: 60 FPS target)
+    # ========================================================================
+    "sketch_drag_optimization": True,  # Throttled solver updates during drag
+    "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls
     
-    # QA-006: Performance Regression Gate
-    "performance_regression_gate": True,  # Enable performance benchmarking and regression detection
+    # ========================================================================
+    # QA & Validation
+    # ========================================================================
+    "performance_regression_gate": True,  # Performance benchmarking
+    "rollback_validation": True,  # Rollback state validation
     
-    # PI-006: Rollback Consistency Validation
-    "rollback_validation": True,  # Enable rollback state validation and orphan detection
+    # ========================================================================
+    # UX: First-Run Experience
+    # ========================================================================
+    "first_run_tutorial": True,  # 5-step guided tutorial for new users
     
-    # UX-001: First-Run Guided Flow
-    "first_run_tutorial": True,  # Enable5-step guided tutorial for new users
-    
-    # ======================================================
-    # Live Preview System (High-Priority TODOs 2026)
-    # ======================================================
-    # Debounced preview system for interactive feature editing
-    
-    "live_preview_textures": True,    # Live texture preview with debouncing
-    "live_preview_patterns": True,    # Live pattern preview (already partially implemented)
-    "live_preview_shell": False,      # Live shell thickness preview (experimental)
-    "live_preview_fillet": False,     # Live fillet radius preview (experimental)
-    "live_preview_chamfer": False,    # Live chamfer size preview (experimental)
+    # ========================================================================
+    # Live Preview System
+    # ========================================================================
+    "live_preview_textures": True,  # Live texture preview with debouncing
+    "live_preview_patterns": True,  # Live pattern preview
+    "live_preview_shell": True,  # Live shell thickness preview
+    "live_preview_fillet": True,  # Live fillet radius preview
+    "live_preview_chamfer": True,  # Live chamfer size preview
     
     # Preview Quality Settings
-    "preview_debounce_ms": 150,       # Debounce delay in milliseconds
-    "preview_subdivisions_live": 3,   # Mesh subdivisions for live preview (fast)
-    "preview_subdivisions_final": 5,  # Mesh subdivisions for final apply (quality)
+    "preview_debounce_ms": 150,  # Debounce delay in milliseconds
+    "preview_subdivisions_live": 3,  # Mesh subdivisions for live preview
+    "preview_subdivisions_final": 5,  # Mesh subdivisions for final apply
     
-    # Normal Map Preview (Phase 3 - Advanced)
-    "normal_map_preview": False,      # Normal map visualization in viewport
-    "normal_map_shader": False,       # Shader-based normal mapping (requires VTK shader hooks)
+    # ========================================================================
+    # Normal Map Preview (Phase 3 - Advanced, experimental)
+    # ========================================================================
+    "normal_map_preview": False,  # Normal map visualization
+    "normal_map_shader": False,  # Shader-based normal mapping
     
-    # TNP Enhancements
-    "detailed_boolean_history": True, # Enhanced Boolean history extraction for TNP
-    
-    # Helix Fitting
-    "helix_fitting_enabled": True,    # Helix parameter fitting via scipy least_squares
-    
-    # QA-010: RC Burn-in Mode
-    "rc_burn_in_mode": False,         # Enable RC burn-in testing mode (only True during RC phase)
+    # ========================================================================
+    # Experimental Features
+    # ========================================================================
+    "cylindrical_face_edit": False,  # Fusion360-style Radius Edit
+    "rc_burn_in_mode": False,  # RC burn-in testing mode
 }
 
 
 def is_enabled(flag: str) -> bool:
     """
     Prüft ob ein Feature-Flag aktiviert ist.
-    
-    WICHTIG: Für OCP-First Flags:
-    - Default = False (alter Build123d Code)
-    - Nach Validierung = True (neuer OCP Code)
-    - Kein dauerhafter Fallback! Flags werden nach Validierung entfernt.
-    - TNP Integration ist in beiden Pfaden obligatorisch!
     
     Args:
         flag: Name des Feature-Flags

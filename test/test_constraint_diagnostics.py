@@ -268,7 +268,7 @@ class TestConflictDetection:
         mock_sketch.arcs = []
         
         # Prüfe auf Konflikte
-        conflicts = ConstraintDiagnostics._find_conflicts(mock_sketch)
+        conflicts = ConstraintDiagnostics._find_conflicts_legacy(mock_sketch)
         
         # Sollte mindestens einen Konflikt finden
         assert len(conflicts) >= 1
@@ -291,7 +291,7 @@ class TestSuggestionGeneration:
         mock_sketch.constraints = []
         
         unconstrained = [mock_point]
-        suggestions = ConstraintDiagnostics._generate_suggestions(mock_sketch, unconstrained)
+        suggestions = ConstraintDiagnostics._generate_suggestions_legacy(mock_sketch, unconstrained)
         
         # Sollte FIX-Vorschlag enthalten
         assert any(s.constraint_type == ConstraintType.FIXED for s in suggestions)

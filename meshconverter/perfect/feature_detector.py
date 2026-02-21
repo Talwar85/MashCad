@@ -320,7 +320,7 @@ class FeatureDetector:
             # -> Die kleinste Varianz sollte sehr klein sein
             variances = pca.explained_variance_ratio_
             return variances[2] < 0.1  # Kleinste Varianz < 10%
-        except:
+        except Exception:
             return False
 
     def _fit_cylinder_to_region(
@@ -363,5 +363,5 @@ class FeatureDetector:
 
             return center, axis, float(radius)
 
-        except:
+        except Exception:
             return np.zeros(3), np.array([0, 0, 1]), 1.0

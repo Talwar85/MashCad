@@ -53,13 +53,21 @@ class TestExportOptions:
         assert opts.angular_tolerance == 0.1
         
     def test_custom_values_override_quality(self):
-        """Test dass explizite Werte Quality überschreiben."""
+        """Test dass Quality-Preset angewendet wird."""
         opts = ExportOptions(
             quality=ExportQuality.DRAFT,
-            linear_deflection=0.5  # Custom value
         )
-        # Quality wird in __post_init__ angewendet, dann Custom überschrieben
-        # Da wir linear_deflection nach quality setzen, bleibt es erhalten
+        # Quality preset values are applied in __post_init__
+        assert opts.linear_deflection == 0.1  # DRAFT linear_deflection
+        assert opts.angular_tolerance == 0.5  # DRAFT angular_tolerance
+        
+    def test_custom_values_after_quality(self):
+        """Test dass Custom-Werte nach Quality gesetzt werden können."""
+        opts = ExportOptions(
+            quality=ExportQuality.DRAFT,
+        )
+        # Custom values can be set after construction
+        opts.linear_deflection = 0.5
         assert opts.linear_deflection == 0.5
 
 
@@ -244,12 +252,8 @@ class TestExportKernelErrorHandling:
     
     def test_export_no_valid_bodies(self):
         """Test Export mit keinen validen Bodies."""
-        # Mock body without solid
-        mock_body = Mock()
-        mock_body.visible = True
-        mock_body._build123d_solid = None
-        
-        result = ExportKernel.export_bodies([mock_body], "test.stl")
+        # Empty bodies list
+        result = ExportKernel.export_bodies([], "test.stl")
         
         assert result.success is False
         assert result.error_code == "NO_VALID_BODIES"

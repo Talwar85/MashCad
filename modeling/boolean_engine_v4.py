@@ -658,9 +658,6 @@ class BooleanEngineV4:
         Returns:
             BOPAlgo_GlueShift wenn coinciding Faces erkannt, None sonst
         """
-        if not is_enabled("ocp_glue_auto_detect"):
-            return None
-
         try:
             from OCP.BRepExtrema import BRepExtrema_DistShapeShape
             from OCP.Bnd import Bnd_Box
@@ -942,9 +939,6 @@ class BooleanEngineV4:
         Returns:
             Fehlermeldung wenn Self-Intersection gefunden, None wenn OK
         """
-        if not is_enabled("boolean_self_intersection_check"):
-            return None
-
         try:
             from OCP.BOPAlgo import BOPAlgo_CheckerSI
 
@@ -991,9 +985,6 @@ class BooleanEngineV4:
         Returns:
             Fehlermeldung wenn Probleme gefunden, None wenn OK
         """
-        if not is_enabled("boolean_argument_analyzer"):
-            return None
-
         try:
             from OCP.BOPAlgo import BOPAlgo_ArgumentAnalyzer
 
@@ -1039,9 +1030,6 @@ class BooleanEngineV4:
         Raises:
             BooleanOperationError wenn Shape irreparabel kaputt
         """
-        if not is_enabled("boolean_post_validation"):
-            return result_shape
-
         try:
             analyzer = BRepCheck_Analyzer(result_shape)
 
@@ -1087,9 +1075,6 @@ class BooleanEngineV4:
             result_shape: OCP TopoDS_Shape nach Boolean
             operation: Operation-Name für Logging
         """
-        if not is_enabled("boolean_tolerance_monitoring"):
-            return
-
         try:
             from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
 
