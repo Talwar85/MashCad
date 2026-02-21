@@ -421,6 +421,7 @@ class SurfaceTextureFeature(Feature):
     invert: bool = False
     type_params: dict = field(default_factory=dict)
     export_subdivisions: int = 2
+    quality_mode: int = 1  # 0=Fast, 1=Balanced, 2=Detailed
     face_shape_ids: List = None
     face_indices: List = None
     face_selectors: List[dict] = field(default_factory=list)

@@ -104,6 +104,35 @@ class SurfaceTexturePanel(QFrame):
         type_layout.addWidget(self.type_combo)
         main_layout.addLayout(type_layout)
 
+        # === Quality Mode ===
+        quality_layout = QHBoxLayout()
+        quality_layout.setSpacing(8)
+        quality_layout.addWidget(QLabel(tr("Quality:")))
+
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItems([
+            tr("Fast"),
+            tr("Balanced"),
+            tr("Detailed"),
+        ])
+        self.quality_combo.setCurrentIndex(1)  # Default: Balanced
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
+        self.quality_combo.setMinimumWidth(140)
+        quality_layout.addWidget(self.quality_combo)
+        quality_layout.addStretch()
+        main_layout.addLayout(quality_layout)
+
+        # Quality-Info Label
+        self.quality_info = QLabel()
+        self.quality_info.setStyleSheet(
+            f"color: {DesignTokens.COLOR_TEXT_MUTED.name()}; font-size: 10px; border: none; padding: 2px;"
+        )
+        self.quality_info.setWordWrap(True)
+        main_layout.addWidget(self.quality_info)
+
+        # Initiale Quality-Info setzen
+        self._update_quality_info(1)
+
         # === Common Parameters ===
         params_group = QGroupBox(tr("Parameters"))
         params_layout = QFormLayout(params_group)
@@ -342,6 +371,21 @@ class SurfaceTexturePanel(QFrame):
             self.custom_path_label.setText(os.path.basename(path))
             self._emit_preview()
 
+    def _on_quality_changed(self, index: int):
+        """Handler wenn Quality-Modus geändert wird."""
+        self._update_quality_info(index)
+        self._emit_preview()
+
+    def _update_quality_info(self, index: int):
+        """Aktualisiert die Quality-Info basierend auf dem ausgewählten Modus."""
+        quality_texts = {
+            0: tr("Fast preview - Low detail, good for quick adjustments"),
+            1: tr("Balanced - Good quality with reasonable performance (Default)"),
+            2: tr("Detailed - High quality, slower preview"),
+        }
+
+        self.quality_info.setText(quality_texts.get(index, ""))
+
     def _emit_preview(self):
         """Sendet Preview-Signal wenn aktiviert."""
         if self.preview_check.isChecked():
@@ -366,6 +410,9 @@ class SurfaceTexturePanel(QFrame):
         """Gibt die aktuelle Textur-Konfiguration zurück."""
         texture_type = self.type_combo.currentText().lower()
 
+        # Quality-Modus bestimmen
+        quality_mode = self.quality_combo.currentIndex()  # 0=Fast, 1=Balanced, 2=Detailed
+
         config = {
             "texture_type": texture_type,
             "scale": self.scale_spin.value(),
@@ -373,6 +420,7 @@ class SurfaceTexturePanel(QFrame):
             "rotation": self.rotation_spin.value(),
             "invert": self.invert_check.isChecked(),
             "solid_base": self.solid_base_check.isChecked(),
+            "quality_mode": quality_mode,  # 0=Fast, 1=Balanced, 2=Detailed
             "type_params": self._get_type_params(texture_type),
         }
 

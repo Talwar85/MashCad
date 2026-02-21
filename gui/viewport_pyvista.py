@@ -5701,20 +5701,20 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             from modeling.texture_exporter import TextureExporter
 
             # Preview-Einstellungen: Adaptive Subdivisions basierend auf Quality-Modus
-            # Live Preview (während Slider-Drag): Weniger Subdivisions für Performance
-            # Final Preview (nach Apply): Mehr Subdivisions für Qualität
-            from config.feature_flags import FEATURE_FLAGS
-            
-            # Check for quality mode from live preview system
-            quality_mode = getattr(self, '_preview_quality', 'final')
-            if quality_mode == 'live':
-                preview_subdivisions = FEATURE_FLAGS.get("preview_subdivisions_live", 3)
-            else:
-                preview_subdivisions = FEATURE_FLAGS.get("preview_subdivisions_final", 5)
-            
-            # 3 subdivisions = ~500 Vertices (schnell)
-            # 5 subdivisions = ~2000 Vertices (gut sichtbar)
-            # 6 subdivisions = ~8000 Vertices (sehr detailliert)
+            # Quality-Modus aus Feature lesen: 0=Fast, 1=Balanced, 2=Detailed
+            quality_mode = getattr(texture_feature, 'quality_mode', 1)  # Default: Balanced
+
+            # Subdivisions basierend auf Quality-Modus
+            if quality_mode == 0:  # Fast
+                preview_subdivisions = 2  # ~250 Vertices (sehr schnell)
+            elif quality_mode == 1:  # Balanced (Default)
+                preview_subdivisions = 3  # ~500 Vertices (gute Balance)
+            else:  # Detailed (2)
+                preview_subdivisions = 5  # ~2000 Vertices (hohe Qualität)
+
+            # 2 subdivisions = ~250 Vertices (sehr schnell, weniger Details)
+            # 3 subdivisions = ~500 Vertices (gute Balance)
+            # 5 subdivisions = ~2000 Vertices (hohe Qualität)
 
             # Kopie erstellen um Original nicht zu verändern
             face_mesh = face_mesh.copy()
