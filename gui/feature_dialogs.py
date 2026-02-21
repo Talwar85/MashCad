@@ -66,7 +66,7 @@ class FeatureDialogsMixin:
                 return ((bbox.min.X + bbox.max.X) / 2,
                         (bbox.min.Y + bbox.max.Y) / 2,
                         (bbox.min.Z + bbox.max.Z) / 2)
-            except:
+            except Exception:
                 pass
         
         mesh = self.viewport_3d.get_body_mesh(body.id)
@@ -251,6 +251,9 @@ class FeatureDialogsMixin:
     def _on_shell_thickness_changed(self, thickness: float):
         """Handler wenn Shell-Dicke geändert wird."""
         if hasattr(self.viewport_3d, 'update_shell_preview'):
+            # Setze target body ID für Preview
+            if hasattr(self.viewport_3d, '_shell_target_body_id'):
+                self.viewport_3d._shell_target_body_id = self._shell_target_body.id if self._shell_target_body else None
             self.viewport_3d.update_shell_preview(thickness, self._shell_opening_faces)
 
     def _on_shell_cancelled(self):
@@ -264,6 +267,11 @@ class FeatureDialogsMixin:
         self._shell_opening_faces = []
         self._shell_opening_face_shape_ids = []
         self._shell_opening_face_indices = []
+
+        # Preview entfernen
+        if hasattr(self.viewport_3d, 'clear_all_feature_previews'):
+            self.viewport_3d.clear_all_feature_previews()
+
         self.viewport_3d.set_shell_mode(False)
         self.shell_panel.hide()
         self.statusBar().clearMessage()

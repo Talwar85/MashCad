@@ -239,15 +239,32 @@ class MainWindow(
     
     def _execute_shell_live_preview(self, config: dict):
         """Execute shell live preview."""
-        pass  # TODO: Implement when live_preview_shell is enabled
-    
+        thickness = config.get('thickness', 0.0)
+        opening_faces = config.get('opening_faces', [])
+
+        # Viewport-Preview aufrufen
+        if hasattr(self.viewport_3d, 'update_shell_preview'):
+            # Setze target body ID für Preview
+            if hasattr(self, '_shell_target_body') and self._shell_target_body:
+                self.viewport_3d._shell_target_body_id = self._shell_target_body.id
+
+            self.viewport_3d.update_shell_preview(thickness, opening_faces)
+
     def _execute_fillet_live_preview(self, config: dict):
         """Execute fillet live preview."""
-        pass  # TODO: Implement when live_preview_fillet is enabled
-    
+        radius = config.get('radius', 0.0)
+
+        # Viewport-Preview aufrufen
+        if hasattr(self.viewport_3d, 'update_fillet_preview'):
+            self.viewport_3d.update_fillet_preview(radius)
+
     def _execute_chamfer_live_preview(self, config: dict):
         """Execute chamfer live preview."""
-        pass  # TODO: Implement when live_preview_chamfer is enabled
+        distance = config.get('distance', 0.0)
+
+        # Viewport-Preview aufrufen
+        if hasattr(self.viewport_3d, 'update_chamfer_preview'):
+            self.viewport_3d.update_chamfer_preview(distance)
     
     def _request_live_preview(self, feature_type: str, config: dict):
         """Request a live preview with debouncing."""

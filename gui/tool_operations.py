@@ -593,13 +593,17 @@ class ToolMixin:
         """Bricht Fillet/Chamfer-Operation ab."""
         self._fillet_mode = None
         self._fillet_target_body = None
-        
+
         if hasattr(self.viewport_3d, 'set_edge_selection_mode'):
             self.viewport_3d.set_edge_selection_mode(False)
-        
+
+        # Preview entfernen
+        if hasattr(self.viewport_3d, 'clear_all_feature_previews'):
+            self.viewport_3d.clear_all_feature_previews()
+
         if hasattr(self, 'fillet_panel'):
             self.fillet_panel.hide()
-        
+
         self.statusBar().clearMessage()
 
     def _start_shell(self):
