@@ -48,11 +48,13 @@ Du bist CAD-Kernel Experte mit tiefer Erfahrung in 3D CAD Software-Entwicklung.
 ## Projekt-Status
 
 ### Aktueller Branch
-`feature/v1-roadmap-execution`
+`bugfix/live-preview-optimizations`
 
 ### Roadmap & Planung
-- **Vollständige Roadmap:** [`V1_EXECUTION_PLAN.md`](V1_EXECUTION_PLAN.md)
 - **CTP-Dokumentation:** [`roadmap_ctp/`](roadmap_ctp/)
+
+### Produktionsreife-Plan
+- **Vollständiger Plan:** [`plans/PRODUCTION_READINESS_PLAN.md`](plans/PRODUCTION_READINESS_PLAN.md)
 
 ### OCP-First Migration: ✅ ABGESCHLOSSEN
 Alle9 Phasen der OCP-First Migration sind vollständig implementiert und getestet.

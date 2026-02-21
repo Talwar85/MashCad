@@ -15,7 +15,8 @@
 				"search_files",
 				"read_multiple_files",
 				"write_file",
-				"edit_file"
+				"edit_file",
+				"get_file_info"
 			]
 		},
 		"sequentialthinking": {
