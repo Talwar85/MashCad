@@ -392,7 +392,7 @@ class TestGracefulDegradation:
         """Test that decorator handles AttributeError gracefully."""
         @ocp_api_guard(fallback="fallback")
         def func_with_attribute_error():
-            raise AttributeError("API not found")
+            raise AttributeError("OCP API not found")
         
         # Should catch the error and return fallback
         # Note: Only catches if error message contains OCP keywords

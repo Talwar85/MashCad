@@ -180,8 +180,8 @@ def test_fillet_edge_tracking():
         for i in range(3)
     ]
 
-    # Führe Fillet aus (direkt auf Body)
-    result_solid = body._ocp_fillet(solid, fillet_edges, 1.0)
+    # Führe Fillet aus (direkt auf Body) - feature_id is required for OCP-First
+    result_solid = body._ocp_fillet(solid, fillet_edges, 1.0, feature_id=feature.id)
 
     assert result_solid is not None
     assert result_solid.is_valid()
@@ -218,8 +218,8 @@ def test_chamfer_edge_tracking():
         )
     ]
 
-    # Führe Chamfer aus (direkt auf Body)
-    result_solid = body._ocp_chamfer(solid, [edge], 1.0)
+    # Führe Chamfer aus (direkt auf Body) - feature_id is required for OCP-First
+    result_solid = body._ocp_chamfer(solid, [edge], 1.0, feature_id=feature.id)
 
     assert result_solid is not None
     assert result_solid.is_valid()
