@@ -20,6 +20,21 @@ param(
 
 $ErrorActionPreference = "Continue"
 
+# ============================================================================
+# UTF-8 Encoding Setup (CRITICAL for Windows/PowerShell)
+# Prevents UnicodeEncodeError when Pylint outputs emojis/special characters
+# ============================================================================
+$PreviousOutputEncoding = [Console]::OutputEncoding
+$PreviousStdOutEncoding = $OutputEncoding
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+    # Some environments don't support setting Console::OutputEncoding
+}
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+
 # Directories to check
 $DIRECTORIES = @("modeling", "gui", "sketcher", "config")
 
