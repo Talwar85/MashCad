@@ -1171,7 +1171,13 @@ class BodyResolveMixin:
             _resolve_by_indices()
 
         # Geometric selector fallback
-        if not resolved_edges and geometric_selectors:
+        # TNP v4.1: Block selector fallback when topological refs were provided but failed
+        has_topo_refs = bool(edge_shape_ids) or bool(valid_edge_indices)
+        topo_refs_failed = has_topo_refs and not resolved_edges
+        strict_policy = is_enabled("strict_topology_fallback_policy")
+        allow_selector_fallback = geometric_selectors and not resolved_edges and not (topo_refs_failed and strict_policy)
+
+        if allow_selector_fallback:
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
 

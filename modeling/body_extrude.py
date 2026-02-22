@@ -288,16 +288,13 @@ class BodyExtrudeMixin:
         """
         Push/Pull Extrusion fÃ¼r Body-Faces mit BRepFeat_MakePrism.
         
-        BRepFeat_MakePrism ist der Standard fÃ¼r Feature-basierte Extrusion
-        und muss korrekt funktionieren.
+        Delegiert an die kanonische brepfeat_prism() Implementierung
+        in brepfeat_operations.py fÃ¼r konsistente Normal-Berechnung
+        und Sketch-Face-Erkennung.
         """
-        from OCP.BRepFeat import BRepFeat_MakePrism
-        from OCP.TopoDS import TopoDS_Face, TopoDS_Shape, TopoDS
-        from OCP.gp import gp_Vec, gp_Dir
-        from OCP.TopExp import TopExp_Explorer
-        from OCP.TopAbs import TopAbs_FACE
-        from OCP.ShapeFix import ShapeFix_Shape
-        from build123d import Solid, Face
+        from modeling.brepfeat_operations import brepfeat_prism
+        from OCP.TopoDS import TopoDS_Shape
+        from build123d import Face
         import uuid
 
         if current_solid is None:
@@ -336,6 +333,7 @@ class BodyExtrudeMixin:
             try:
                 from OCP.BRepTools import BRepTools
                 from OCP.BRep import BRep_Builder
+                from OCP.TopoDS import TopoDS_Shape
                 
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
                     f.write(feature.face_brep)
@@ -354,41 +352,25 @@ class BodyExtrudeMixin:
         if face_to_extrude is None:
             raise ValueError("Push/Pull: Keine Face-Referenz auflÃ¶sbar")
 
-        # Extrusions-Vektor berechnen
-        normal = feature.plane_normal if hasattr(feature, 'plane_normal') else (0, 0, 1)
-        amount = feature.distance * feature.direction
-        extrude_vec = gp_Vec(normal[0] * amount, normal[1] * amount, normal[2] * amount)
-        extrude_dir = gp_Dir(extrude_vec)
-        
-        ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
+        # OCP Face extrahieren
         ocp_face = face_to_extrude.wrapped if hasattr(face_to_extrude, 'wrapped') else face_to_extrude
 
-        # BRepFeat_MakePrism ausfÃ¼hren
-        prism_maker = BRepFeat_MakePrism(
-            ocp_solid,                      # Sbase
-            ocp_face,                       # Pbase
-            TopoDS.Face_s(ocp_face),        # Skface
-            extrude_dir,                    # Direction
-            1,                              # Fuse
-            False                           # Modify
+        # Fuse-Modus aus Feature-Direction bestimmen
+        # direction=1 -> Join (fuse=True), direction=-1 -> Cut (fuse=False)
+        fuse_mode = getattr(feature, 'direction', 1) >= 0
+        height = abs(feature.distance)
+
+        # Kanonische brepfeat_prism() verwenden
+        result_solid = brepfeat_prism(
+            base_solid=current_solid,
+            face=ocp_face,
+            height=height,
+            fuse=fuse_mode,
+            unify=True
         )
-        prism_maker.Perform(abs(amount))
 
-        if not prism_maker.IsDone():
+        if result_solid is None:
             raise ValueError("BRepFeat_MakePrism fehlgeschlagen")
-
-        result_shape = prism_maker.Shape()
-        
-        # ShapeFix zur Sicherstellung gÃ¼ltiger B-Rep
-        try:
-            fix = ShapeFix_Shape(result_shape)
-            fix.Perform()
-            result_shape = fix.Shape()
-            logger.debug("[Push/Pull] ShapeFix angewendet")
-        except Exception as e:
-            logger.debug(f"[Push/Pull] ShapeFix Ã¼bersprungen: {e}")
-        
-        result_solid = Solid(result_shape)
 
         # TNP-Registrierung
         if self._document and hasattr(self._document, '_shape_naming_service'):
