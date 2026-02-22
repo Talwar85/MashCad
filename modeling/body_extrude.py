@@ -306,6 +306,7 @@ class BodyExtrudeMixin:
 
         # Face-Referenz auflÃ¶sen
         face_to_extrude = None
+        resolved_face_index = None  # Track resolved index for healing
         
         # 1. Versuche Face Ã¼ber ShapeID
         if hasattr(feature, 'face_shape_id') and feature.face_shape_id:
@@ -317,6 +318,14 @@ class BodyExtrudeMixin:
                     )
                     if resolved_ocp is not None:
                         face_to_extrude = Face(resolved_ocp)
+                        # TNP v4.2: Heal stale face_index by finding actual index
+                        try:
+                            from modeling.topology_indexing import face_index_of
+                            resolved_face_index = face_index_of(current_solid, face_to_extrude)
+                            if resolved_face_index is not None:
+                                feature.face_index = resolved_face_index
+                        except Exception:
+                            pass  # Index healing is optional
                 except Exception as e:
                     logger.debug(f"Push/Pull: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 

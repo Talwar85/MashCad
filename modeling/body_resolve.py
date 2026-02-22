@@ -1177,6 +1177,7 @@ class BodyResolveMixin:
         strict_policy = is_enabled("strict_topology_fallback_policy")
         allow_selector_fallback = geometric_selectors and not resolved_edges and not (topo_refs_failed and strict_policy)
 
+        selector_recovery_used = False
         if allow_selector_fallback:
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
@@ -1188,10 +1189,23 @@ class BodyResolveMixin:
                         geo_sel = selector_data
                     else:
                         continue
-                    _append_unique(geo_sel.find_best_match(all_edges))
+                    matched = geo_sel.find_best_match(all_edges)
+                    if matched is not None:
+                        _append_unique(matched)
+                        selector_recovery_used = True
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP v4.0: GeometricEdgeSelector-AuflÃ¶sung fehlgeschlagen: {e}")
+
+            # Record drift when selector recovery was used
+            if selector_recovery_used and not strict_policy:
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="drift",
+                    reference_kind="edge",
+                    reason="selector_recovery_used",
+                    strict=False,
+                )
 
         # Update feature references
         if resolved_edge_indices:
@@ -1221,6 +1235,21 @@ class BodyResolveMixin:
 
         total_refs = max(len(edge_shape_ids), len(valid_edge_indices), len(geometric_selectors))
         found = len(resolved_edges)
+
+        # TNP v4.2: Record missing_ref failure when refs were provided but nothing resolved
+        if total_refs > 0 and found == 0 and strict_edge_feature:
+            self._record_tnp_failure(
+                feature=feature,
+                category="missing_ref",
+                reference_kind="edge",
+                reason="no_edges_resolved_from_refs",
+                expected=total_refs,
+                resolved=0,
+                strict=True,
+            )
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(f"TNP v4.2: No edges resolved for {feature_name} with {total_refs} refs")
+
         if is_enabled("tnp_debug_logging"):
             if total_refs == 0:
                 logger.warning("TNP v4.0: Feature hat keine Edge-Referenzen")

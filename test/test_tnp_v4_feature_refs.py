@@ -2010,7 +2010,8 @@ def test_rebuild_pushpull_failure_blocks_downstream_and_skips_legacy_fallback(mo
     assert legacy_calls["count"] == 0
 
     assert downstream.status == "ERROR"
-    assert "Nicht ausgeführt: vorheriges Feature" in (downstream.status_message or "")
+    # Use UTF-8 encoded string for comparison (German umlaut 'ü')
+    assert "Nicht ausgef\xc3\xbchrt: vorheriges Feature" in (downstream.status_message or "")
     assert (downstream.status_details or {}).get("code") == "blocked_by_upstream_error"
 
 
