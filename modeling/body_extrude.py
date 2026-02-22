@@ -436,9 +436,6 @@ class BodyExtrudeMixin:
             x_dir = Vector(*sketch.plane_x_dir)
             y_dir = Vector(*sketch.plane_y_dir)
 
-            if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
-                y_dir = z_dir.cross(x_dir)
-
             center_3d = origin + x_dir * cx + y_dir * cy
 
             rot_rad = math.radians(rotation)

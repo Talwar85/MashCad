@@ -91,9 +91,25 @@ class SketchMixin:
             # PERFEKT: Wir haben eine stabile Achse vom Detector
             x_dir = x_dir_override
             # Y berechnen (Kreuzprodukt)
-            n_vec = np.array(normal)
-            x_vec = np.array(x_dir)
+            n_vec = np.array(normal, dtype=np.float64)
+            n_vec = n_vec / np.linalg.norm(n_vec) if np.linalg.norm(n_vec) > 0 else np.array([0, 0, 1])
+            x_vec = np.array(x_dir, dtype=np.float64)
+            x_vec = x_vec / np.linalg.norm(x_vec) if np.linalg.norm(x_vec) > 0 else np.array([1, 0, 0])
             y_vec = np.cross(n_vec, x_vec)
+            
+            # FIX: Handle parallel vectors - cross product yields zero vector
+            y_vec_norm = np.linalg.norm(y_vec)
+            if y_vec_norm < 1e-10:
+                # x_dir is parallel to normal - recalculate both axes properly
+                if abs(n_vec[2]) < 0.9:
+                    x_vec = np.cross(n_vec, [0.0, 0.0, 1.0])
+                else:
+                    x_vec = np.cross(n_vec, [1.0, 0.0, 0.0])
+                x_vec = x_vec / np.linalg.norm(x_vec)
+                y_vec = np.cross(n_vec, x_vec)
+                y_vec = y_vec / np.linalg.norm(y_vec)
+                x_dir = tuple(x_vec)
+            
             y_dir = tuple(y_vec)
         else:
             # Fallback: Raten (das was bisher Probleme machte)
