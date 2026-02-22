@@ -51,7 +51,9 @@ Du bist CAD-Kernel Experte mit tiefer Erfahrung in 3D CAD Software-Entwicklung.
 `bugfix/live-preview-optimizations`
 
 ### Roadmap & Planung
-- **CTP-Dokumentation:** [`roadmap_ctp/`](roadmap_ctp/)
+- **V1 Master Index:** [`roadmap_ctp/v1/00_INDEX.md`](roadmap_ctp/v1/00_INDEX.md)
+- **Executive Entry:** [`plans/PRODUCTION_READINESS_PLAN.md`](plans/PRODUCTION_READINESS_PLAN.md)
+- **Historische Basis:** [`roadmap_ctp/origin/`](roadmap_ctp/origin/) (superseded)
 
 ### Produktionsreife-Plan
 - **Vollständiger Plan:** [`plans/PRODUCTION_READINESS_PLAN.md`](plans/PRODUCTION_READINESS_PLAN.md)

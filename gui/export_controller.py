@@ -100,7 +100,7 @@ class ExportController(QObject):
         
         # Importiere ExportKernel
         try:
-            from modeling.export_kernel import ExportKernel, ExportOptions, ExportQuality
+            from modeling.export_kernel import ExportKernel, ExportOptions, ExportQuality, ExportFormat
             from modeling.export_validator import ExportValidator
         except ImportError as e:
             logger.error(f"ExportKernel nicht verfügbar: {e}")

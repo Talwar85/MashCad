@@ -68,7 +68,7 @@ except ImportError as e:
     logger.warning(f"! build123d nicht gefunden: {e}")
 
 # Core imports
-import modeling.brep_cache as brep_cache
+from . import brep_cache
 from modeling.cad_tessellator import CADTessellator
 from config.tolerances import Tolerances
 from config.feature_flags import is_enabled

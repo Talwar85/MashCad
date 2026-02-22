@@ -578,16 +578,16 @@ class FeatureDialogsMixin:
 
     def _activate_brep_cleanup_for_body(self, body):
         """Startet BREP Cleanup fuer einen Body."""
-        from modeling.brep_face_analyzer import BREPFaceAnalyzer
+        from modeling.brep_face_analyzer import BRepFaceAnalyzer
         
         self._brep_cleanup_body = body
         
         # Analyze faces
         if body._build123d_solid:
-            analyzer = BREPFaceAnalyzer(body._build123d_solid)
-            similar_faces = analyzer.find_similar_faces()
+            analyzer = BRepFaceAnalyzer()
+            result = analyzer.analyze(body._build123d_solid)
             # Show results in panel
-            logger.info(f"BREP Cleanup: {len(similar_faces)} ähnliche Flächengruppen gefunden")
+            logger.info(f"BREP Cleanup: {len(result.features)} Features erkannt")
 
     def _close_brep_cleanup(self):
         """Schliesst BREP Cleanup Modus."""
@@ -1044,7 +1044,7 @@ class FeatureDialogsMixin:
     
     def set_selection_mode(self, mode):
         """Setzt den Selection-Modus."""
-        from gui.geometry_detector import SelectionFilter
+        from gui.geometry_detector import GeometryDetector
         
         if hasattr(self.viewport_3d, 'set_selection_mode'):
             self.viewport_3d.set_selection_mode(mode)

@@ -46,12 +46,14 @@ However, the py-slvs constraint solver does not support spline geometry. This me
 - Spline-to-geometry constraints (tangent to spline, point on spline) are limited
 - Complex sketches with splines may not solve correctly
 
-**Workaround:**
-- Use the scipy fallback solver for sketches containing splines
-- Manually position spline control points before adding other constraints
-- Import complex spline profiles from DXF rather than creating interactively
+**Current Approach:**
+- Spline control points are positioned interactively without full constraint solving
+- Complex spline profiles should be imported from DXF rather than created interactively
+- Full spline constraint support requires py-slvs integration
 
-**Planned for V2:** Yes - full spline constraint support with py-slvs integration.
+**V1 Status:** Spline support is limited but functional for import workflows. Full interactive spline constraint solving is a V2 priority.
+
+> **Note:** Per the [Zero Fallback Policy](../roadmap_ctp/v1/03_ZERO_FALLBACK_POLICY.md), silent fallback solvers are not permitted. Sketches with splines will use interactive positioning without automatic constraint solving until full py-slvs support is implemented.
 
 ---
 
@@ -333,26 +335,27 @@ When creating sketches on certain planes, the Y-direction vector may be incorrec
 
 ---
 
-### TNP Failures on Complex Topology
+### TNP Reliability (V1 Focus Area)
 
-**Issue:** Topology Naming Protocol (TNP) may fail on complex changes
+**Status:** TNP reliability is a V1 gate requirement
 
-TNP tracks faces/edges through modeling operations. It may fail when:
-- Multiple Boolean operations on same body
-- Complex fillet patterns
-- Dramatic geometry changes (e.g., shell after many features)
+The Topology Naming Protocol (TNP) v4.0 tracks faces/edges through modeling operations. Per the [TNP 100% Reliability Program](../roadmap_ctp/v1/05_TNP_100_RELIABILITY_PROGRAM.md), V1 requires:
 
-Symptoms:
-- Face references become invalid
-- Features fail to regenerate
-- "Face not found" errors
+- **100% reference resolution** in the TNP test corpus
+- **Deterministic rebuild** - identical inputs produce identical topology signatures
+- **No silent reference failures** - all TNP errors must be explicit and actionable
 
-**Workaround:**
-- Avoid deep feature trees on single body
-- Use "recompute" to rebuild from scratch
-- Reference stable features (base planes, axes) when possible
+Known challenging scenarios (under active hardening):
+- Multiple Boolean operations on the same body
+- Complex fillet patterns with edge chaining
+- Shell operations after deep feature trees
 
-**Planned Fix:** V2 - TNP system redesign planned.
+**If you encounter TNP issues:**
+1. Report with exact reproduction steps and model file
+2. Use "Recompute" to force a clean rebuild
+3. Check the [TNP Debug Panel](../gui/widgets/tnp_stats_panel.py) for diagnostics
+
+> **V1 Commitment:** TNP failures are release-blocking. No V1 release will ship with known TNP reliability issues in the supported workflow corpus.
 
 ---
 

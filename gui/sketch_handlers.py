@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QInputDialog, QDialog, QVBoxLayout,
                                QFormLayout, QLineEdit, QDialogButtonBox, QDoubleSpinBox, 
                                QFontComboBox, QWidget, QLabel, QSpinBox, QCheckBox)
 
-from sketcher import Point2D, Line2D, Circle2D, Arc2D, Constraint, ConstraintType
+from sketcher import Point2D, Line2D, Circle2D, Arc2D, Ellipse2D, Constraint, ConstraintType
 from i18n import tr
 try:
     from gui.sketch_feedback import (

@@ -508,8 +508,14 @@ class MenuActionsMixin:
                 self.active_sketch = sketch
             
             # Parse SVG and add geometry
-            from gui.svg_import import import_svg_to_sketch
-            import_svg_to_sketch(path, sketch)
+            # NOTE: svg_import module not yet implemented - placeholder for future SVG parsing
+            logger.warning(f"SVG Import noch nicht implementiert: {path}")
+            QMessageBox.information(
+                self,
+                tr("Nicht implementiert"),
+                tr("SVG Import wird in einer zukünftigen Version verfügbar sein.")
+            )
+            return
             
             # Update UI
             if hasattr(self, 'sketch_editor'):
