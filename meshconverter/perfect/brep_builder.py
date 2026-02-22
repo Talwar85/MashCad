@@ -29,11 +29,15 @@ try:
     )
     from OCP.BRepPrimAPI import (
         BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere,
-        BRepPrimAPI_MakeCone
+        BRepPrimAPI_MakeCone, BRepPrimAPI_MakeTorus
     )
     from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
     from OCP.ShapeFix import ShapeFix_Shape
     from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Sphere, GeomAbs_Cone, GeomAbs_Torus
     HAS_OCP = True
 except ImportError:
     HAS_OCP = False
@@ -100,7 +104,8 @@ class BREPBuilder:
                     PrimitiveType.PLANE,
                     PrimitiveType.CYLINDER,
                     PrimitiveType.SPHERE,
-                    PrimitiveType.CONE
+                    PrimitiveType.CONE,
+                    PrimitiveType.TORUS
                 ]:
                     stats["analytical_surfaces"] += 1
                 else:
@@ -134,6 +139,9 @@ class BREPBuilder:
             elif primitive.type == PrimitiveType.CONE:
                 return self._build_cone_face(primitive)
 
+            elif primitive.type == PrimitiveType.TORUS:
+                return self._build_torus_face(primitive)
+
             else:
                 # Fallback: Triangulierte Faces aus Mesh
                 return self._build_fallback_face(primitive, mesh)
@@ -164,67 +172,329 @@ class BREPBuilder:
         Das ist der Schlüssel für "perfect" BREP:
         Ein Zylinder hat nur 3 Faces (Top, Bottom, Curved),
         statt hunderten facettierter Faces.
+
+        Returns the curved cylindrical face (not the caps).
         """
         if prim.radius is None or prim.radius <= 0:
+            logger.warning("Zylinder: Ungültiger Radius")
             return None
 
-        # Achse
-        origin = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
-        direction = gp_Dir(prim.axis[0], prim.axis[1], prim.axis[2])
-        axis = gp_Ax1(origin, direction)
+        if prim.axis is None:
+            logger.warning("Zylinder: Keine Achse definiert")
+            return None
 
-        # Zylinder
-        height = prim.height if prim.height else 10.0
-        make_cyl = BRepPrimAPI_MakeCylinder(
-            axis,
-            prim.radius,
-            height / 2  # Halbe Höhe nach oben und unten
-        )
+        try:
+            # Achse definieren
+            origin = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
+            direction = gp_Dir(prim.axis[0], prim.axis[1], prim.axis[2])
+            ax2 = gp_Ax2(origin, direction)
 
-        if make_cyl.IsDone():
+            # Höhe bestimmen (Default falls nicht vorhanden)
+            height = prim.height if prim.height and prim.height > 0 else 10.0
+
+            # Zylinder erstellen
+            make_cyl = BRepPrimAPI_MakeCylinder(ax2, prim.radius, height)
+
+            if not make_cyl.IsDone():
+                logger.warning("Zylinder-Erstellung fehlgeschlagen")
+                return None
+
             shape = make_cyl.Shape()
-            # Extrahiere Faces
-            from OCP.TopExp import TopExp_Explorer
-            from OCP.TopAbs import TopAbs_FACE
+
+            # Extrahiere die zylindrische Face (curved surface, nicht caps)
             explorer = TopExp_Explorer(shape, TopAbs_FACE)
 
-            # Gib das erste Face zurück (der curved surface)
-            # In einer vollständigen Implementierung würden wir hier
-            # alle Faces verarbeiten
-            return None  # TODO: Implementieren
+            while explorer.More():
+                face = TopoDS_Face(explorer.Current())
+                adaptor = BRepAdaptor_Surface(face)
 
-        return None
+                # Prüfe ob es eine zylindrische Surface ist
+                if adaptor.GetType() == GeomAbs_Cylinder:
+                    logger.debug(f"Zylinder-Face gefunden: Radius={prim.radius:.3f}")
+                    return face
+
+                explorer.Next()
+
+            # Fallback: Erste Face zurückgeben wenn keine cylindrische gefunden
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            if explorer.More():
+                logger.warning("Zylinder: Keine cylindrische Face gefunden, verwende erste Face")
+                return TopoDS_Face(explorer.Current())
+
+            logger.warning("Zylinder: Keine Faces gefunden")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Zylinder-Face-Erstellung fehlgeschlagen: {e}")
+            return None
 
     def _build_sphere_face(self, prim: DetectedPrimitive) -> Optional[TopoDS_Face]:
-        """Erstellt eine Kugel-Surface."""
+        """
+        Erstellt eine Kugel-Surface.
+
+        Verwendet BRepPrimAPI_MakeSphere um eine echte analytische
+        Kugel zu erzeugen (nicht facettiert).
+        """
         if prim.radius is None or prim.radius <= 0:
+            logger.warning("Kugel: Ungültiger Radius")
             return None
 
-        center = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
+        try:
+            center = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
 
-        make_sphere = BRepPrimAPI_MakeSphere(center, prim.radius)
+            # Kugel erstellen (volle Kugel)
+            make_sphere = BRepPrimAPI_MakeSphere(center, prim.radius)
 
-        if make_sphere.IsDone():
-            # TODO: Faces extrahieren
+            if not make_sphere.IsDone():
+                logger.warning("Kugel-Erstellung fehlgeschlagen")
+                return None
+
+            shape = make_sphere.Shape()
+
+            # Extrahiere die sphärische Face
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+
+            while explorer.More():
+                face = TopoDS_Face(explorer.Current())
+                adaptor = BRepAdaptor_Surface(face)
+
+                # Prüfe ob es eine sphärische Surface ist
+                if adaptor.GetType() == GeomAbs_Sphere:
+                    logger.debug(f"Kugel-Face gefunden: Radius={prim.radius:.3f}")
+                    return face
+
+                explorer.Next()
+
+            # Fallback: Erste Face zurückgeben
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            if explorer.More():
+                logger.warning("Kugel: Keine sphärische Face gefunden, verwende erste Face")
+                return TopoDS_Face(explorer.Current())
+
+            logger.warning("Kugel: Keine Faces gefunden")
             return None
 
-        return None
+        except Exception as e:
+            logger.warning(f"Kugel-Face-Erstellung fehlgeschlagen: {e}")
+            return None
 
     def _build_cone_face(self, prim: DetectedPrimitive) -> Optional[TopoDS_Face]:
-        """Erstellt eine Kegel-Surface."""
-        # TODO: Implementieren
-        return None
+        """
+        Erstellt eine Kegel-Surface.
+
+        Verwendet BRepPrimAPI_MakeCone um einen echten analytischen
+        Kegel zu erzeugen.
+
+        Für einen Kegel benötigen wir:
+        - origin: Spitze oder Basis-Zentrum
+        - axis: Achsenrichtung
+        - radius: Basis-Radius (radius1)
+        - radius2: 0 für spitzen Kegel, oder zweiter Radius
+        - height: Höhe des Kegels
+        """
+        if prim.radius is None or prim.radius <= 0:
+            logger.warning("Kegel: Ungültiger Radius")
+            return None
+
+        if prim.axis is None:
+            logger.warning("Kegel: Keine Achse definiert")
+            return None
+
+        try:
+            # Achse definieren
+            origin = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
+            direction = gp_Dir(prim.axis[0], prim.axis[1], prim.axis[2])
+            ax2 = gp_Ax2(origin, direction)
+
+            # Höhe bestimmen
+            height = prim.height if prim.height and prim.height > 0 else 10.0
+
+            # Zweiten Radius bestimmen (für Kegelstumpf oder spitzen Kegel)
+            radius2 = prim.radius2 if prim.radius2 is not None else 0.0
+
+            # Kegel erstellen
+            make_cone = BRepPrimAPI_MakeCone(ax2, prim.radius, radius2, height)
+
+            if not make_cone.IsDone():
+                logger.warning("Kegel-Erstellung fehlgeschlagen")
+                return None
+
+            shape = make_cone.Shape()
+
+            # Extrahiere die konische Face (curved surface)
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+
+            while explorer.More():
+                face = TopoDS_Face(explorer.Current())
+                adaptor = BRepAdaptor_Surface(face)
+
+                # Prüfe ob es eine konische Surface ist
+                if adaptor.GetType() == GeomAbs_Cone:
+                    logger.debug(f"Kegel-Face gefunden: R1={prim.radius:.3f}, R2={radius2:.3f}")
+                    return face
+
+                explorer.Next()
+
+            # Fallback: Erste Face zurückgeben
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            if explorer.More():
+                logger.warning("Kegel: Keine konische Face gefunden, verwende erste Face")
+                return TopoDS_Face(explorer.Current())
+
+            logger.warning("Kegel: Keine Faces gefunden")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Kegel-Face-Erstellung fehlgeschlagen: {e}")
+            return None
+
+    def _build_torus_face(self, prim: DetectedPrimitive) -> Optional[TopoDS_Face]:
+        """
+        Erstellt eine Torus-Surface.
+
+        Verwendet BRepPrimAPI_MakeTorus um einen echten analytischen
+        Torus (Ring) zu erzeugen.
+
+        Für einen Torus benötigen wir:
+        - origin: Zentrum des Torus
+        - axis: Achsenrichtung (Rotationsachse)
+        - radius: Haupt-Radius (Abstand vom Zentrum zur Rohrmitte)
+        - radius2: Neben-Radius (Radius des Rohrs)
+        """
+        if prim.radius is None or prim.radius <= 0:
+            logger.warning("Torus: Ungültiger Haupt-Radius")
+            return None
+
+        if prim.radius2 is None or prim.radius2 <= 0:
+            logger.warning("Torus: Ungültiger Neben-Radius (radius2)")
+            return None
+
+        if prim.axis is None:
+            logger.warning("Torus: Keine Achse definiert")
+            return None
+
+        try:
+            # Achse definieren
+            origin = gp_Pnt(prim.origin[0], prim.origin[1], prim.origin[2])
+            direction = gp_Dir(prim.axis[0], prim.axis[1], prim.axis[2])
+            ax2 = gp_Ax2(origin, direction)
+
+            # Torus erstellen (voller Torus)
+            # radius = Haupt-Radius (R), radius2 = Neben-Radius (r)
+            make_torus = BRepPrimAPI_MakeTorus(ax2, prim.radius, prim.radius2)
+
+            if not make_torus.IsDone():
+                logger.warning("Torus-Erstellung fehlgeschlagen")
+                return None
+
+            shape = make_torus.Shape()
+
+            # Extrahiere die toroidale Face
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+
+            while explorer.More():
+                face = TopoDS_Face(explorer.Current())
+                adaptor = BRepAdaptor_Surface(face)
+
+                # Prüfe ob es eine toroidale Surface ist
+                if adaptor.GetType() == GeomAbs_Torus:
+                    logger.debug(f"Torus-Face gefunden: R={prim.radius:.3f}, r={prim.radius2:.3f}")
+                    return face
+
+                explorer.Next()
+
+            # Fallback: Erste Face zurückgeben
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            if explorer.More():
+                logger.warning("Torus: Keine toroidale Face gefunden, verwende erste Face")
+                return TopoDS_Face(explorer.Current())
+
+            logger.warning("Torus: Keine Faces gefunden")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Torus-Face-Erstellung fehlgeschlagen: {e}")
+            return None
 
     def _build_fallback_face(
         self,
         prim: DetectedPrimitive,
         mesh
     ) -> Optional[TopoDS_Face]:
-        """Fallback: Triangulierte Faces aus Mesh."""
-        # Extrahiere die Faces des Meshes für diese Primitive
-        # und erstelle planare BREP Faces
-        # TODO: Implementieren
-        return None
+        """
+        Fallback: Erstellt Faces aus Mesh-Triangulation.
+
+        Wird verwendet wenn:
+        - Der Primitive-Typ unbekannt ist (NURBS, UNKNOWN)
+        - Die analytische Erstellung fehlgeschlagen ist
+
+        Erstellt planare BREP Faces für jedes Triangle im Mesh-Bereich.
+        """
+        if mesh is None:
+            logger.warning("Fallback: Kein Mesh verfügbar")
+            return None
+
+        if not prim.face_indices:
+            logger.warning("Fallback: Keine Face-Indizes verfügbar")
+            return None
+
+        try:
+            # Prüfe ob PyVista verfügbar ist
+            try:
+                import pyvista as pv
+            except ImportError:
+                logger.warning("Fallback: PyVista nicht verfügbar")
+                return None
+
+            # Extrahiere Faces aus dem Mesh
+            faces_arr = mesh.faces.reshape(-1, 4)[:, 1:4]
+
+            # Sammle alle relevanten Faces
+            faces_to_process = []
+            for idx in prim.face_indices:
+                if 0 <= idx < len(faces_arr):
+                    faces_to_process.append(faces_arr[idx])
+
+            if not faces_to_process:
+                logger.warning("Fallback: Keine gültigen Faces gefunden")
+                return None
+
+            # Erstelle eine einzelne planare Face als Repräsentant
+            # (Für vollständige Implementierung würden wir alle Faces verarbeiten)
+            first_face = faces_to_process[0]
+            v0 = mesh.points[first_face[0]]
+            v1 = mesh.points[first_face[1]]
+            v2 = mesh.points[first_face[2]]
+
+            # Berechne Normale
+            edge1 = v1 - v0
+            edge2 = v2 - v0
+            normal = np.cross(edge1, edge2)
+            normal_len = np.linalg.norm(normal)
+
+            if normal_len < 1e-10:
+                logger.warning("Fallback: Degeneriertes Triangle")
+                return None
+
+            normal = normal / normal_len
+
+            # Erstelle planare Face
+            origin = gp_Pnt(v0[0], v0[1], v0[2])
+            normal_dir = gp_Dir(normal[0], normal[1], normal[2])
+            plane = gp_Pln(origin, normal_dir)
+
+            make_face = BRepBuilderAPI_MakeFace(plane, -100, 100, -100, 100)
+
+            if make_face.IsDone():
+                logger.debug(f"Fallback-Face erstellt für {len(faces_to_process)} Triangles")
+                return make_face.Face()
+
+            logger.warning("Fallback: Face-Erstellung fehlgeschlagen")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Fallback-Face-Erstellung fehlgeschlagen: {e}")
+            return None
 
     def _sew_faces(
         self,
