@@ -21,10 +21,13 @@ from modeling.brep_persistence import BREPPersistence, BREPMetadata, get_global_
 # SKIP CONDITIONAL
 # ============================================================================
 
-pytestmark = pytest.mark.skipif(
-    not HAS_OCP,
-    reason="OpenCASCADE (OCP) nicht verfügbar - Tests überspringen"
-)
+# Test markers for pytest selection (combined with skipif)
+pytestmark = [
+    pytest.mark.skipif(not HAS_OCP, reason="OpenCASCADE (OCP) nicht verfügbar - Tests überspringen"),
+    pytest.mark.kernel,
+    pytest.mark.ocp,
+    pytest.mark.fast,
+]
 
 
 # ============================================================================

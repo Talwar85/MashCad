@@ -26,6 +26,9 @@ from modeling.tnp_system import ShapeID, ShapeType
 from modeling.topology_indexing import edge_index_of, face_index_of
 from modeling.boolean_engine_v4 import BooleanEngineV4
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.tnp, pytest.mark.kernel, pytest.mark.fast]
+
 
 # ============================================================================
 # 1. TNP v4.1 Basis-Features Tests

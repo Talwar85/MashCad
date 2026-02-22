@@ -21,6 +21,9 @@ from modeling import Body, Document
 from modeling.boolean_engine_v4 import BooleanEngineV4, VolumeCache
 from modeling.result_types import ResultStatus
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.boolean, pytest.mark.kernel, pytest.mark.medium]
+
 
 # ============================================================================
 # FIXTURES

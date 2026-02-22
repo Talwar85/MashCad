@@ -31,6 +31,9 @@ from ocp_test_utils import (
 )
 from config.feature_flags import is_enabled, set_flag, get_all_flags
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.kernel, pytest.mark.ocp, pytest.mark.fast]
+
 
 # ============================================================================
 # SKIP CONDITIONAL - Nur Tests laufen wenn OCP verfügbar

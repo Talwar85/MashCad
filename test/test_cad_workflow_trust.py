@@ -38,6 +38,9 @@ from sketcher.sketch import Sketch, SketchState
 from sketcher.geometry import Point2D, Line2D, Circle2D, Arc2D
 from sketcher.operations.trim import TrimOperation
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.kernel, pytest.mark.slow, pytest.mark.regression]
+
 # ---------------------------------------------------------------------------
 # Konfigurierbare Durchläufe
 # ---------------------------------------------------------------------------

@@ -13,6 +13,9 @@ from loguru import logger
 
 from modeling.brep_cache import BREPCache, get_global_cache, clear_global_cache, CacheEntry
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.kernel, pytest.mark.ocp, pytest.mark.fast]
+
 
 # ============================================================================
 # BASIC CACHE OPERATIONS TESTS

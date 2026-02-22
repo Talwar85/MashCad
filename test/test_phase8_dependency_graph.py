@@ -15,6 +15,9 @@ from modeling.feature_dependency import (
     clear_global_dependency_graph
 )
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.kernel, pytest.mark.ocp, pytest.mark.fast]
+
 
 # ============================================================================
 # BASIC GRAPH OPERATIONS TESTS

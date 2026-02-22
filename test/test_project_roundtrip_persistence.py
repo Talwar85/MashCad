@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from build123d import Solid
 from shapely.geometry import Polygon
 
@@ -22,6 +23,9 @@ from modeling import (
 from modeling.geometric_selector import GeometricFaceSelector
 from modeling.topology_indexing import edge_index_of, face_index_of
 from modeling.tnp_system import ShapeID, ShapeType
+
+# Test markers for pytest selection
+pytestmark = [pytest.mark.io, pytest.mark.medium, pytest.mark.regression]
 
 
 def _shape_id(shape_type: ShapeType, feature_id: str, local_index: int) -> ShapeID:

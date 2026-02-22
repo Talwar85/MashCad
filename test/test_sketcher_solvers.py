@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from typing import List, Any, Optional, Tuple
 import uuid
 
+# Test markers for pytest selection
+pytestmark = [pytest.mark.solver, pytest.mark.fast]
+
 # ============================================================================
 # Fixtures for Mock Geometry and Constraints
 # ============================================================================
