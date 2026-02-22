@@ -1174,7 +1174,7 @@ def test_sweep_resolve_path_requires_shape_index_consistency(monkeypatch):
     assert mismatch_edge is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_edge.wrapped, "direct"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1203,7 +1203,7 @@ def test_sweep_resolve_path_single_ref_pair_geometric_conflict_prefers_index(mon
     assert mismatch_edge is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_edge.wrapped, "geometric"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1237,7 +1237,7 @@ def test_sweep_resolve_path_single_ref_pair_shape_missing_prefers_index(monkeypa
     sweep.path_shape_id = _make_shape_id(ShapeType.EDGE, "sweep_path_shape_missing", 0)
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return None, "unresolved"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1272,7 +1272,7 @@ def test_safe_operation_emits_drift_warning_for_sweep_path_single_ref_pair_geome
     assert mismatch_edge is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_edge.wrapped, "geometric"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1454,7 +1454,7 @@ def test_compute_sweep_requires_profile_shape_index_consistency(monkeypatch):
     assert mismatch_face is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_face.wrapped, "direct"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1484,7 +1484,7 @@ def test_compute_sweep_profile_single_ref_pair_geometric_conflict_prefers_index(
     assert mismatch_face is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_face.wrapped, "geometric"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1523,7 +1523,7 @@ def test_compute_sweep_profile_single_ref_pair_shape_missing_prefers_index(monke
     feature.profile_shape_id = _make_shape_id(ShapeType.FACE, "sweep_profile_shape_missing", 0)
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return None, "unresolved"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)
@@ -1564,7 +1564,7 @@ def test_safe_operation_emits_drift_warning_for_sweep_profile_single_ref_pair_ge
     assert mismatch_face is not None
 
     def _resolve_shape(_shape_id, _solid, *, log_unresolved=True):
-        assert log_unresolved is True
+        assert log_unresolved is False
         return mismatch_face.wrapped, "geometric"
 
     monkeypatch.setattr(doc._shape_naming_service, "resolve_shape_with_method", _resolve_shape)

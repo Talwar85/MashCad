@@ -101,7 +101,8 @@ class BodyResolveMixin:
                 if feature and feature.path_shape_id and shape_service:
                     try:
                         resolved_ocp, method = shape_service.resolve_shape_with_method(
-                            feature.path_shape_id, source_solid
+                            feature.path_shape_id, source_solid,
+                            log_unresolved=False,
                         )
                         path_shape_resolution_method = str(method or "").strip().lower()
                         if resolved_ocp is not None:
@@ -942,7 +943,10 @@ class BodyResolveMixin:
             if shape_id and self._document and hasattr(self._document, '_shape_naming_service'):
                 try:
                     service = self._document._shape_naming_service
-                    resolved_ocp, method = service.resolve_shape_with_method(shape_id, solid)
+                    resolved_ocp, method = service.resolve_shape_with_method(
+                        shape_id, solid,
+                        log_unresolved=False,
+                    )
                     if resolved_ocp is not None:
                         from build123d import Face
                         resolved_face = Face(resolved_ocp)

@@ -29,22 +29,22 @@ class BodyExtrudeMixin:
 
         Wird verwendet fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen (Zylinder, etc.),
         wo keine Polygon-Extraktion mÃ¶glich ist.
+
+        Delegiert an OCPExtrudeHelper.extrude() als kanonische BRepPrimAPI-Implementierung.
         """
         try:
             from OCP.BRepTools import BRepTools
-            from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
+            from OCP.TopoDS import TopoDS_Shape
             from OCP.BRep import BRep_Builder
-            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-            from OCP.gp import gp_Vec
-            from build123d import Solid
+            from build123d import Face, Vector
+            from modeling.ocp_helpers import OCPExtrudeHelper
+            from modeling.tnp_system import ShapeNamingService
 
-            # Face aus BREP-String deserialisieren
             face_brep = feature.face_brep
             if not face_brep:
                 logger.error("Extrude: face_brep ist leer!")
                 return None
 
-            # BREP in temporÃ¤re Datei schreiben und lesen
             with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
                 f.write(face_brep)
                 temp_path = f.name
@@ -58,26 +58,25 @@ class BodyExtrudeMixin:
                 logger.error("Extrude: Face aus BREP konnte nicht gelesen werden!")
                 return None
 
-            # Extrusions-Richtung aus plane_normal
             normal = feature.plane_normal
             amount = feature.distance * feature.direction
+            direction = Vector(normal[0], normal[1], normal[2])
 
-            extrude_vec = gp_Vec(
-                normal[0] * amount,
-                normal[1] * amount,
-                normal[2] * amount
+            naming_service = None
+            if self._document and hasattr(self._document, '_shape_naming_service'):
+                naming_service = self._document._shape_naming_service
+            if naming_service is None:
+                naming_service = ShapeNamingService()
+
+            feature_id = getattr(feature, 'id', None) or 'face_brep_extrude'
+
+            solid = OCPExtrudeHelper.extrude(
+                face=Face(face_shape),
+                direction=direction,
+                distance=amount,
+                naming_service=naming_service,
+                feature_id=feature_id,
             )
-
-            # BRepPrimAPI_MakePrism fÃ¼r Extrusion
-            prism_maker = BRepPrimAPI_MakePrism(face_shape, extrude_vec)
-            prism_maker.Build()
-
-            if not prism_maker.IsDone():
-                logger.error("Extrude: BRepPrimAPI_MakePrism fehlgeschlagen!")
-                return None
-
-            prism_shape = prism_maker.Shape()
-            solid = Solid(prism_shape)
 
             logger.info(f"Extrude: Face aus BREP erfolgreich extrudiert (type={feature.face_type}, vol={solid.volume:.2f})")
             return solid
@@ -234,9 +233,26 @@ class BodyExtrudeMixin:
                     if len(coords) < 3:
                         continue
 
-                    pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                    wire = Wire.make_polygon(pts_3d)
-                    face = make_face(wire)
+                    # Circle-Detection: Polygon-Punkte auf Kreis prüfen
+                    circle_info = self._detect_circle_from_points(coords)
+                    if circle_info and len(coords) >= 8:
+                        cx, cy = circle_info['center']
+                        radius = circle_info['radius']
+                        try:
+                            from build123d import Plane as B3DPlane
+                            center_3d = plane.from_local_coords((cx, cy))
+                            circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                            face = make_face(Wire.make_circle(radius, circle_plane))
+                            logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
+                        except Exception as e:
+                            logger.debug(f"[OCP-FIRST] Native Kreis-Erstellung fehlgeschlagen, Polygon-Fallback: {e}")
+                            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                            wire = Wire.make_polygon(pts_3d)
+                            face = make_face(wire)
+                    else:
+                        pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                        wire = Wire.make_polygon(pts_3d)
+                        face = make_face(wire)
 
                     solid = self._extrude_single_face(face, feature, plane, naming_service)
                     if solid:
@@ -314,7 +330,8 @@ class BodyExtrudeMixin:
                 try:
                     service = self._document._shape_naming_service
                     resolved_ocp, method = service.resolve_shape_with_method(
-                        feature.face_shape_id, current_solid
+                        feature.face_shape_id, current_solid,
+                        log_unresolved=False,
                     )
                     if resolved_ocp is not None:
                         face_to_extrude = Face(resolved_ocp)
