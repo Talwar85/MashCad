@@ -5,11 +5,13 @@ Contains the _rebuild() method and related rebuild logic.
 This mixin is designed to be inherited by the Body class.
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from loguru import logger
 
 from config.feature_flags import is_enabled
-from modeling.document import SplitResult
+
+if TYPE_CHECKING:
+    from modeling.document import SplitResult
 
 
 class BodyRebuildMixin:
@@ -791,7 +793,8 @@ class BodyRebuildMixin:
                             result = self._compute_split(feature, current_solid)
                             # Falls SplitResult zurÃ¼ckkommt (keep_side == "both"):
                             # Das sollte nur beim ersten Split passieren, nicht wÃ¤hrend Rebuild
-                            if isinstance(result, SplitResult):
+                            # Use duck typing to avoid circular import: check for SplitResult attributes
+                            if hasattr(result, 'body_above') and hasattr(result, 'body_below') and hasattr(result, 'split_plane'):
                                 # WÃ¤hrend Rebuild sollte das nicht passieren - Warnung!
                                 logger.warning("Split returned SplitResult during rebuild - using body_above as fallback")
                                 return result.body_above

@@ -98,8 +98,8 @@ foreach ($dir in $DIRECTORIES) {
         continue
     }
     
-    # Run Pylint with project config
-    $pylintOutput = & pylint $dir --output-format=text 2>&1
+    # Run Pylint with project config (use python -m pylint to avoid PATH issues)
+    $pylintOutput = & python -m pylint $dir --output-format=text 2>&1
     $pylintExitCode = $LASTEXITCODE
     
     # Parse score from output
