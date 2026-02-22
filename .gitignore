@@ -6,6 +6,11 @@ __pycache__/
 *.so
 .Python
 build/
+
+# Backup artifacts
+*.backup
+*.backup[0-9]
+$null
 handoffs/
 develop-eggs/
 dist/

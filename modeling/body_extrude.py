@@ -286,20 +286,22 @@ class BodyExtrudeMixin:
 
     def _compute_extrude_part_brepfeat(self, feature, current_solid):
         """
-        BRepFeat-basierte Extrusion fÃ¼r Push/Pull auf Body-Faces.
+        Push/Pull Extrusion fÃ¼r Body-Faces mit BRepFeat_MakePrism.
         
-        Verwendet BRepFeat_MakePrism fÃ¼r TNP-robuste Join/Cut-Operationen.
+        BRepFeat_MakePrism ist der Standard fÃ¼r Feature-basierte Extrusion
+        und muss korrekt funktionieren.
         """
         from OCP.BRepFeat import BRepFeat_MakePrism
-        from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
+        from OCP.TopoDS import TopoDS_Face, TopoDS_Shape, TopoDS
         from OCP.gp import gp_Vec, gp_Dir
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopAbs import TopAbs_FACE
+        from OCP.ShapeFix import ShapeFix_Shape
         from build123d import Solid, Face
         import uuid
 
         if current_solid is None:
-            raise ValueError("BRepFeat Extrusion benÃ¶tigt einen aktuellen Solid")
+            raise ValueError("Push/Pull Extrusion benÃ¶tigt einen aktuellen Solid")
 
         # Feature-ID sicherstellen
         if not hasattr(feature, 'id') or feature.id is None:
@@ -319,7 +321,7 @@ class BodyExtrudeMixin:
                     if resolved_ocp is not None:
                         face_to_extrude = Face(resolved_ocp)
                 except Exception as e:
-                    logger.debug(f"BRepFeat: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
+                    logger.debug(f"Push/Pull: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
         # 2. Versuche Face Ã¼ber Index
         if face_to_extrude is None and hasattr(feature, 'face_index') and feature.face_index is not None:
@@ -327,7 +329,7 @@ class BodyExtrudeMixin:
                 from modeling.topology_indexing import face_from_index
                 face_to_extrude = face_from_index(current_solid, int(feature.face_index))
             except Exception as e:
-                logger.debug(f"BRepFeat: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
+                logger.debug(f"Push/Pull: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
 
         # 3. Versuche Face aus BREP
         if face_to_extrude is None and hasattr(feature, 'face_brep') and feature.face_brep:
@@ -347,31 +349,28 @@ class BodyExtrudeMixin:
                 if not face_shape.IsNull():
                     face_to_extrude = Face(face_shape)
             except Exception as e:
-                logger.debug(f"BRepFeat: Face-BREP Deserialisierung fehlgeschlagen: {e}")
-        if face_to_extrude is None:
-            raise ValueError("BRepFeat: Keine Face-Referenz auflÃ¶sbar")
+                logger.debug(f"Push/Pull: Face-BREP Deserialisierung fehlgeschlagen: {e}")
 
-        # BRepFeat_MakePrism requires gp_Dir (not gp_Vec) for Direction parameter
-        from OCP.gp import gp_Dir
-        from OCP.TopoDS import TopoDS_Face, TopoDS
-        
+        if face_to_extrude is None:
+            raise ValueError("Push/Pull: Keine Face-Referenz auflÃ¶sbar")
+
         # Extrusions-Vektor berechnen
         normal = feature.plane_normal if hasattr(feature, 'plane_normal') else (0, 0, 1)
         amount = feature.distance * feature.direction
         extrude_vec = gp_Vec(normal[0] * amount, normal[1] * amount, normal[2] * amount)
         extrude_dir = gp_Dir(extrude_vec)
-
-        # BRepFeat_MakePrism ausfÃ¼hren
+        
         ocp_solid = current_solid.wrapped if hasattr(current_solid, 'wrapped') else current_solid
         ocp_face = face_to_extrude.wrapped if hasattr(face_to_extrude, 'wrapped') else face_to_extrude
 
+        # BRepFeat_MakePrism ausfÃ¼hren
         prism_maker = BRepFeat_MakePrism(
-            ocp_solid,                     # Sbase
-            ocp_face,                      # Pbase
+            ocp_solid,                      # Sbase
+            ocp_face,                       # Pbase
             TopoDS.Face_s(ocp_face),        # Skface
-            extrude_dir,                   # Direction
-            1,                             # Fuse
-            False                          # Modify
+            extrude_dir,                    # Direction
+            1,                              # Fuse
+            False                           # Modify
         )
         prism_maker.Perform(abs(amount))
 
@@ -379,6 +378,16 @@ class BodyExtrudeMixin:
             raise ValueError("BRepFeat_MakePrism fehlgeschlagen")
 
         result_shape = prism_maker.Shape()
+        
+        # ShapeFix zur Sicherstellung gÃ¼ltiger B-Rep
+        try:
+            fix = ShapeFix_Shape(result_shape)
+            fix.Perform()
+            result_shape = fix.Shape()
+            logger.debug("[Push/Pull] ShapeFix angewendet")
+        except Exception as e:
+            logger.debug(f"[Push/Pull] ShapeFix Ã¼bersprungen: {e}")
+        
         result_solid = Solid(result_shape)
 
         # TNP-Registrierung
@@ -388,10 +397,9 @@ class BodyExtrudeMixin:
                 service.register_solid_faces(result_solid, feature.id)
                 service.register_solid_edges(result_solid, feature.id)
             except Exception as e:
-                logger.debug(f"BRepFeat TNP-Registrierung fehlgeschlagen: {e}")
+                logger.debug(f"Push/Pull TNP-Registrierung fehlgeschlagen: {e}")
 
         return result_solid
-
     def _extrude_sketch_ellipses(self, sketch, plane, profile_selector=None):
         """
         TNP v4.1: Erstellt native OCP Ellipse Faces aus Sketch-Ellipsen.
@@ -674,6 +682,49 @@ class BodyExtrudeMixin:
         # This would require more complex logic to detect closed arc loops
         # For now, return empty - arcs are typically part of polygons
         return faces
+
+    def _heal_brepfeat_result(self, shape):
+        """
+        OCP-First Geometry Healing for BRepFeat_MakePrism results.
+        
+        BRepFeat_MakePrism can create edges with degenerate tangent vectors
+        at junction points, which causes chamfer operations to fail with
+        "gp_Vec::Normalize() - vector has zero norm" errors.
+        
+        This method uses OCP's ShapeFix utilities to clean up the geometry.
+        
+        Args:
+            shape: TopoDS_Shape from BRepFeat_MakePrism
+            
+        Returns:
+            Healed TopoDS_Shape with valid edge geometry
+        """
+        from OCP.ShapeFix import ShapeFix_Shape
+        from OCP.BRepTools import BRepTools
+        
+        try:
+            # Step 1: Basic shape fix
+            fix = ShapeFix_Shape(shape)
+            fix.Perform()
+            healed_shape = fix.Shape()
+            
+            # Step 2: Cleanup redundant representations
+            BRepTools.Clean_s(healed_shape)
+            
+            # Step 3: Final shape fix pass
+            fix2 = ShapeFix_Shape(healed_shape)
+            fix2.Perform()
+            healed_shape = fix2.Shape()
+            
+            # Note: ShapeFix_Shape already handles wire fixing internally,
+            # so explicit per-face wire fixing is not needed
+            
+            logger.debug(f"[_heal_brepfeat_result] Healing complete, shape valid: {not healed_shape.IsNull()}")
+            return healed_shape
+            
+        except Exception as e:
+            logger.warning(f"[_heal_brepfeat_result] Healing failed, returning original: {e}")
+            return shape
 
 
 __all__ = ['BodyExtrudeMixin']

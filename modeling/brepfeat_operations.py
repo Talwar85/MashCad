@@ -33,7 +33,7 @@ try:
         BRepFeat_MakeRevol
     )
     from OCP.gp import gp_Dir, gp_Ax1, gp_Pnt, gp_Vec
-    from OCP.TopoDS import TopoDS_Shape, TopoDS_Face, TopoDS_Solid
+    from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Face, TopoDS_Solid
     from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_FACE
@@ -79,12 +79,72 @@ def _count_faces(shape: 'TopoDS_Shape') -> int:
     return count
 
 
+def _find_sketch_face(base_solid: 'TopoDS_Shape', profile_face: 'TopoDS_Face') -> Optional['TopoDS_Face']:
+    """
+    Findet die Face des Base-Solids, auf der das Profil liegt.
+
+    Iteriert über alle Faces des Solids und prüft ob das Profil
+    auf der gleichen Oberfläche liegt (koplanar für Planes,
+    gleiche Achse für Zylinder, etc.).
+
+    Returns:
+        Die Sketch-Face des Base-Solids oder None
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Plane, GeomAbs_Cylinder
+
+    profile_adaptor = BRepAdaptor_Surface(profile_face)
+    profile_type = profile_adaptor.GetType()
+
+    exp = TopExp_Explorer(base_solid, TopAbs_FACE)
+    while exp.More():
+        candidate = TopoDS.Face_s(exp.Current())
+        try:
+            cand_adaptor = BRepAdaptor_Surface(candidate)
+            if cand_adaptor.GetType() != profile_type:
+                exp.Next()
+                continue
+
+            if profile_type == GeomAbs_Plane:
+                p_plane = profile_adaptor.Plane()
+                c_plane = cand_adaptor.Plane()
+                p_ax = p_plane.Axis()
+                c_ax = c_plane.Axis()
+                # Gleiche Ebene: parallele Normalen + gleicher Abstand
+                if p_ax.Direction().IsParallel(c_ax.Direction(), 1e-4):
+                    dist = p_ax.Location().Distance(c_ax.Location())
+                    # Projizierte Distanz entlang der Normalen
+                    dx = c_ax.Location().X() - p_ax.Location().X()
+                    dy = c_ax.Location().Y() - p_ax.Location().Y()
+                    dz = c_ax.Location().Z() - p_ax.Location().Z()
+                    d = p_ax.Direction()
+                    proj_dist = abs(dx * d.X() + dy * d.Y() + dz * d.Z())
+                    if proj_dist < 1e-3:
+                        return candidate
+
+            elif profile_type == GeomAbs_Cylinder:
+                p_cyl = profile_adaptor.Cylinder()
+                c_cyl = cand_adaptor.Cylinder()
+                # Gleicher Zylinder: gleiche Achse + gleicher Radius
+                if (abs(p_cyl.Radius() - c_cyl.Radius()) < 1e-3 and
+                        p_cyl.Axis().Direction().IsParallel(c_cyl.Axis().Direction(), 1e-4)):
+                    ax_dist = p_cyl.Axis().Location().Distance(c_cyl.Axis().Location())
+                    if ax_dist < 1e-3:
+                        return candidate
+        except Exception:
+            pass
+        exp.Next()
+
+    return None
+
+
 def brepfeat_prism(
     base_solid: 'Solid',
     face: 'TopoDS_Face',
     height: float,
     fuse: bool = True,
-    unify: bool = True
+    unify: bool = True,
+    sketch_face: 'TopoDS_Face' = None
 ) -> Optional['Solid']:
     """
     Extrudiert eine Face mit BRepFeat_MakePrism (lokale Operation).
@@ -100,6 +160,8 @@ def brepfeat_prism(
         height: Extrusionshöhe (positiv = in Normal-Richtung)
         fuse: True = Join/Fuse, False = Cut
         unify: UnifySameDomain anwenden
+        sketch_face: Face des Base-Solids auf der das Profil liegt.
+                     Wenn None, wird automatisch gesucht.
 
     Returns:
         Neues Solid oder None bei Fehler
@@ -109,23 +171,20 @@ def brepfeat_prism(
 
     try:
         from OCP.BRepAdaptor import BRepAdaptor_Surface
-        from OCP.BRepGProp import BRepGProp
-        from OCP.GProp import GProp_GProps
+        from OCP.gp import gp_Pnt
 
-        # Face-Normal berechnen
-        props = GProp_GProps()
-        BRepGProp.SurfaceProperties_s(face, props)
-        center = props.CentreOfMass()
-
+        # Face-Normal korrekt berechnen via Kreuzprodukt der Tangenten
         adaptor = BRepAdaptor_Surface(face)
         u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2
         v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2
 
-        pnt = adaptor.Value(u_mid, v_mid)
-        normal_vec = gp_Vec()
-        adaptor.D1(u_mid, v_mid, pnt, gp_Vec(), normal_vec)
+        pnt_out = gp_Pnt()
+        d1u = gp_Vec()
+        d1v = gp_Vec()
+        adaptor.D1(u_mid, v_mid, pnt_out, d1u, d1v)
+        normal_vec = d1u.Crossed(d1v)
 
-        # Fallback: Plane-Normal
+        # Fallback: Plane-Normal wenn Kreuzprodukt degeneriert
         if normal_vec.Magnitude() < 1e-6:
             from OCP.GeomAbs import GeomAbs_Plane
             if adaptor.GetType() == GeomAbs_Plane:
@@ -146,13 +205,20 @@ def brepfeat_prism(
         if height < 0:
             direction = gp_Dir(-normal.X(), -normal.Y(), -normal.Z())
 
+        # Sketch-Face auf dem Base-Solid finden
+        if sketch_face is None:
+            sketch_face = _find_sketch_face(base_solid.wrapped, face)
+            if sketch_face is None:
+                sketch_face = face
+                logger.debug("BRepFeat_MakePrism: Sketch-Face nicht auf Solid gefunden, nutze Profil-Face")
+
         logger.debug(f"BRepFeat_MakePrism: fuse={fuse}, height={abs_height:.2f}")
 
         prism = BRepFeat_MakePrism()
         prism.Init(
             base_solid.wrapped,  # Base shape
             face,                # Profile face
-            face,                # Sketch face (same)
+            sketch_face,         # Face des Base-Solids
             direction,           # Direction
             fuse_mode,           # 1=Fuse, 0=Cut
             False                # Modify (False = copy)
