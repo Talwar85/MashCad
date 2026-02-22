@@ -605,13 +605,21 @@ class ShapeNamingService:
         return self._operations[-1] if self._operations else None
     
     def get_stats(self) -> Dict[str, int]:
-        """Statistiken für Debugging"""
+        """Statistiken für Debugging
+        
+        Counts faces/edges from _shapes (source of truth) instead of _spatial_index.
+        This ensures correct counts even when compute_signature() fails silently
+        (e.g., in parallel test execution with xdist).
+        """
+        # Count from _shapes (source of truth), not _spatial_index
+        faces = sum(1 for r in self._shapes.values() if r.shape_id.shape_type == ShapeType.FACE)
+        edges = sum(1 for r in self._shapes.values() if r.shape_id.shape_type == ShapeType.EDGE)
         return {
             'total_shapes': len(self._shapes),
             'operations': len(self._operations),
             'features': len(self._by_feature),
-            'edges': len(self._spatial_index[ShapeType.EDGE]),
-            'faces': len(self._spatial_index[ShapeType.FACE])
+            'edges': edges,
+            'faces': faces
         }
 
     _CONSUMING_FEATURE_TYPES = frozenset([
