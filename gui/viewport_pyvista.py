@@ -223,16 +223,83 @@ HAS_BUILD123D = False
 try:
     import build123d
     HAS_BUILD123D = True
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug(f"build123d not available: {e}")
 
 HAS_SHAPELY = False
 try:
     from shapely.geometry import LineString, Polygon, Point
     from shapely.ops import polygonize, unary_union, triangulate
     HAS_SHAPELY = True
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug(f"shapely not available: {e}")
+
+
+# =============================================================================
+# G1 Core Stability: Safe Exception Handling Helpers
+# =============================================================================
+
+def _log_suppressed_exception(context: str, error: Exception, level: str = "debug") -> None:
+    """
+    Log a suppressed exception with context for observability.
+    
+    G1 Core Stability: Replaces silent exception-swallowing patterns
+    with structured logging while preserving application stability.
+    
+    Args:
+        context: Description of the operation that failed
+        error: The caught exception
+        level: Log level ('debug', 'warning', 'error')
+    """
+    log_msg = f"[viewport] {context}: {error}"
+    if level == "error":
+        logger.error(log_msg)
+    elif level == "warning":
+        logger.warning(log_msg)
+    else:
+        logger.debug(log_msg)
+
+
+def _safe_remove_actor(plotter, actor_name: str, context: str = "actor removal") -> bool:
+    """
+    Safely remove an actor from the plotter with structured logging.
+    
+    G1 Core Stability: Centralizes safe actor removal with consistent
+    error handling and observability.
+    
+    Args:
+        plotter: The PyVista plotter instance
+        actor_name: Name of the actor to remove
+        context: Context string for logging
+        
+    Returns:
+        True if removal succeeded, False otherwise
+    """
+    try:
+        plotter.remove_actor(actor_name, render=False)
+        return True
+    except Exception as e:
+        _log_suppressed_exception(f"{context} ('{actor_name}')", e)
+        return False
+
+
+def _safe_actors_remove(plotter, actor_names: list, context: str = "batch actor removal") -> int:
+    """
+    Safely remove multiple actors from the plotter.
+    
+    Args:
+        plotter: The PyVista plotter instance
+        actor_names: List of actor names to remove
+        context: Context string for logging
+        
+    Returns:
+        Number of successfully removed actors
+    """
+    removed = 0
+    for name in actor_names:
+        if _safe_remove_actor(plotter, name, context):
+            removed += 1
+    return removed
 
 
 class OverlayHomeButton(QToolButton):
@@ -786,13 +853,17 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.plotter.ren_win.SetMultiSamples(4) # 4x oder 8x Glättung
         else:
             # Fallback falls MSAA nicht geht
-            try: self.plotter.enable_anti_aliasing('fxaa')
-            except Exception: pass
+            try:
+                self.plotter.enable_anti_aliasing('fxaa')
+            except Exception as e:
+                _log_suppressed_exception("FXAA anti-aliasing setup", e)
         # --- PERFORMANCE & FIX END ---
 
         # UI Cleanup: Entferne Standard-Achsen
-        try: self.plotter.hide_axes()
-        except Exception: pass
+        try:
+            self.plotter.hide_axes()
+        except Exception as e:
+            _log_suppressed_exception("hide_axes cleanup", e)
         
         # ViewCube Widget — wird verzögert erstellt (siehe _create_cam_widget)
         self._cam_widget = None
@@ -845,7 +916,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         try:
             if hasattr(self.plotter, 'iren') and self.plotter.iren:
                 self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
-        except Exception: pass
+        except Exception as e:
+            _log_suppressed_exception("EndInteractionEvent observer setup", e)
 
         # FPS-Observer an VTK RenderWindow anhängen
         from gui.viewport.render_queue import RenderQueue
@@ -875,8 +947,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             if self._cam_widget:
                 self.plotter.remove_actor(self._cam_widget)
                 self._cam_widget = None
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("cam_widget cleanup", e)
 
         try:
             widget = self.plotter.add_camera_orientation_widget()
@@ -1002,10 +1074,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self._projection_preview_label.hide()
         if HAS_PYVISTA:
             for actor_name in self._projection_preview_actor_names:
-                try:
-                    self.plotter.remove_actor(actor_name, render=False)
-                except Exception:
-                    pass
+                _safe_remove_actor(self.plotter, actor_name, "projection preview cleanup")
             if self._projection_preview_actor_names:
                 self._safe_request_render()
         self._projection_preview_actor_names = []
@@ -1084,7 +1153,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 actor.GetProperty().SetOpacity(0.8)
                 request_render(self.plotter)
         except Exception as e:
-            pass
+            _log_suppressed_exception("highlight_body", e)
 
     def unhighlight_body(self, body_id: str):
         """Entfernt das Highlighting von einem Body"""
@@ -1101,7 +1170,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 actor.GetProperty().SetOpacity(1.0)
                 request_render(self.plotter)
         except Exception as e:
-            pass
+            _log_suppressed_exception("unhighlight_body", e)
 
     def set_pending_transform_mode(self, active: bool):
         """Aktiviert/deaktiviert den pending transform mode für Body-Highlighting"""
@@ -1207,8 +1276,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.point_to_point_body_id = None
         try:
             self.setCursor(Qt.ArrowCursor)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("setCursor in P2P cancel", e)
 
         # Phase 3: Performance - Marker cleanup
         try:
@@ -1222,8 +1291,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         logger.info("Point-to-Point Mode abgebrochen")
         try:
             self.point_to_point_cancelled.emit()
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("point_to_point_cancelled emit", e)
 
     def highlight_edge(self, p1, p2):
         """Zeichnet eine rote Linie (genutzt für Fillet/Chamfer Vorschau)"""
@@ -1277,12 +1346,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._clear_plane_hover_highlight()
 
         # 9. Sweep Highlights
-        try:
-            self.plotter.remove_actor('sweep_profile_highlight')
-        except Exception: pass
-        try:
-            self.plotter.remove_actor('sweep_path_highlight')
-        except Exception: pass
+        _safe_remove_actor(self.plotter, 'sweep_profile_highlight', "sweep profile highlight cleanup")
+        _safe_remove_actor(self.plotter, 'sweep_path_highlight', "sweep path highlight cleanup")
 
         # 10. Sonstige bekannte Highlight-Namen
         highlight_patterns = [
@@ -1292,9 +1357,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         for name in list(self.plotter.renderer.actors.keys()):
             for pattern in highlight_patterns:
                 if pattern in name:
-                    try:
-                        self.plotter.remove_actor(name)
-                    except Exception: pass
+                    _safe_remove_actor(self.plotter, name, "pattern highlight cleanup")
                     break
 
         request_render(self.plotter)
@@ -1316,8 +1379,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         return None
         
     def _draw_grid(self, size=200, spacing=10):
-        try: self.plotter.remove_actor('grid_main')
-        except Exception: pass
+        _safe_remove_actor(self.plotter, 'grid_main', "grid cleanup")
         n_lines = int(size/spacing)+1
         lines = []
         h = size/2
@@ -1446,7 +1508,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             if dist_world == 0: return 0.1
             return dist_world / 100.0
             
-        except Exception:
+        except Exception as e:
+            _log_suppressed_exception("get_pixel_to_world_factor", e)
             return 0.1
     
     def is_body_visible(self, body_id):
@@ -1457,16 +1520,13 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             mesh_name = actors[0] # Wir prüfen Visibility am Mesh
             actor = self.plotter.renderer.actors.get(mesh_name)
             if actor: return bool(actor.GetVisibility())
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("is_body_visible", e)
         return False
         
     def _draw_axes(self, length=50):
-        try:
-            self.plotter.remove_actor('axis_x_org')
-            self.plotter.remove_actor('axis_y_org')
-            self.plotter.remove_actor('axis_z_org')
-        except Exception: pass
+        for axis_name in ['axis_x_org', 'axis_y_org', 'axis_z_org']:
+            _safe_remove_actor(self.plotter, axis_name, "axes cleanup")
         self.plotter.add_mesh(pv.Line((0,0,0),(length,0,0)), color='#ff4444', line_width=3, name='axis_x_org')
         self.plotter.add_mesh(pv.Line((0,0,0),(0,length,0)), color='#44ff44', line_width=3, name='axis_y_org')
         self.plotter.add_mesh(pv.Line((0,0,0),(0,0,length)), color='#4444ff', line_width=3, name='axis_z_org')
@@ -1480,10 +1540,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """
         # Alte Plane-Actors entfernen
         for name in list(self._construction_plane_actors.keys()):
-            try:
-                self.plotter.remove_actor(name)
-            except Exception:
-                pass
+            _safe_remove_actor(self.plotter, name, "construction plane cleanup")
         self._construction_plane_actors.clear()
 
         for cp in planes:
@@ -1528,8 +1585,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         try:
             self.plotter.update()
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("construction planes update", e)
 
     def set_construction_plane_visibility(self, plane_id, visible):
         """Setzt die Sichtbarkeit einer Konstruktionsebene."""
@@ -1538,12 +1595,12 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 try:
                     if actor_name in self.plotter.renderer.actors:
                         self.plotter.renderer.actors[actor_name].SetVisibility(visible)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log_suppressed_exception(f"construction plane visibility for {actor_name}", e)
         try:
             self.plotter.update()
-        except Exception:
-            pass
+        except Exception as e:
+            _log_suppressed_exception("construction plane visibility update", e)
 
     # ==================== REVOLVE MODE ====================
 
@@ -1651,10 +1708,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def clear_revolve_preview(self):
         """Entfernt die Revolve-Preview."""
         if self._revolve_preview_actor:
-            try:
-                self.plotter.remove_actor(self._revolve_preview_actor)
-            except Exception:
-                pass
+            _safe_remove_actor(self.plotter, self._revolve_preview_actor, "revolve preview cleanup")
             self._revolve_preview_actor = None
 
     # ==================== HOLE MODE ====================
@@ -1739,10 +1793,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def clear_hole_preview(self):
         """Entfernt die Hole-Preview."""
         if self._hole_preview_actor:
-            try:
-                self.plotter.remove_actor(self._hole_preview_actor)
-            except Exception:
-                pass
+            _safe_remove_actor(self.plotter, self._hole_preview_actor, "hole preview cleanup")
             self._hole_preview_actor = None
 
     # ==================== THREAD MODE ====================
@@ -1828,10 +1879,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def clear_thread_preview(self):
         """Entfernt die Thread-Preview."""
         if self._thread_preview_actor:
-            try:
-                self.plotter.remove_actor(self._thread_preview_actor)
-            except Exception:
-                pass
+            _safe_remove_actor(self.plotter, self._thread_preview_actor, "thread preview cleanup")
             self._thread_preview_actor = None
 
     def _detect_cylindrical_face(self, body_id: str, cell_id: int, click_pos) -> Optional[Tuple[float, Tuple[float, float, float], bool]]:
@@ -3668,17 +3716,14 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     
     def _clear_plane_hover_highlight(self):
         """Entfernt Plane-Hover-Highlight"""
-        try:
-            self.plotter.remove_actor('plane_hover')
-        except Exception: pass
-        try:
-            self.plotter.remove_actor('plane_hover_arrow')
-        except Exception: pass
+        _safe_remove_actor(self.plotter, 'plane_hover', "plane hover highlight clear")
+        _safe_remove_actor(self.plotter, 'plane_hover_arrow', "plane hover arrow clear")
 
     def _set_opacity(self, key, val):
-        try: 
+        try:
             self.plotter.renderer.actors.get(self._plane_actors[key]).GetProperty().SetOpacity(val)
-        except Exception: pass
+        except Exception as e:
+            _log_suppressed_exception(f"plane opacity set (key='{key}')", e)
 
     def _pick_plane_at_position(self, x, y):
         """
@@ -3877,9 +3922,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """Interne Hilfsfunktion um ein PyVista Mesh direkt als Body zu speichern"""
         # Alten Actor entfernen
         if bid in self._body_actors:
-            for n in self._body_actors[bid]: 
-                try: self.plotter.remove_actor(n)
-                except Exception: pass
+            for n in self._body_actors[bid]:
+                _safe_remove_actor(self.plotter, n, f"body actor cleanup (bid='{bid}')")
         
         mesh = mesh.clean() # Wichtig für Rendering
         mesh.compute_normals(inplace=True)
@@ -4703,8 +4747,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         # 1. Alte Sketch-Actors entfernen
         for n in self._sketch_actors:
-            try: self.plotter.remove_actor(n)
-            except Exception: pass
+            _safe_remove_actor(self.plotter, n, "sketch actor cleanup")
         self._sketch_actors.clear()
 
         # 2. Sketches rendern
@@ -5070,7 +5113,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 m, e = self._body_actors[body_id]
                 self.plotter.renderer.actors[m].SetVisibility(visible)
                 self.plotter.renderer.actors[e].SetVisibility(visible)
-            except Exception: pass
+            except Exception as e:
+                _log_suppressed_exception(f"body visibility set (body_id='{body_id}')", e)
         request_render(self.plotter)
 
     def set_all_bodies_opacity(self, opacity: float):
@@ -5091,7 +5135,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if edge_actor:
                     # Edges etwas sichtbarer lassen für bessere Orientierung
                     edge_actor.GetProperty().SetOpacity(min(1.0, opacity + 0.3))
-            except Exception: pass
+            except Exception as e:
+                _log_suppressed_exception(f"body opacity set (body_id='{body_id}')", e)
         request_render(self.plotter)
 
     def set_body_opacity(self, body_id: str, opacity: float):
@@ -5116,7 +5161,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             # Speichere Opacity im Body-Dict für spätere Referenz
             if body_id in self.bodies:
                 self.bodies[body_id]['opacity'] = opacity
-        except Exception: pass
+        except Exception as e:
+            _log_suppressed_exception(f"single body opacity set (body_id='{body_id}')", e)
         request_render(self.plotter)
 
     def clear_bodies(self, only_body_id: str = None):
@@ -6733,12 +6779,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     
     def _clear_body_face_highlight(self):
         """Entfernt Body-Face-Highlight"""
-        try:
-            self.plotter.remove_actor('body_face_highlight')
-        except Exception: pass
-        try:
-            self.plotter.remove_actor('body_face_arrow')
-        except Exception: pass
+        _safe_remove_actor(self.plotter, 'body_face_highlight', "body face highlight clear")
+        _safe_remove_actor(self.plotter, 'body_face_arrow', "body face arrow clear")
         # Kein render hier - wird beim nächsten Hover gemacht
 
     def _draw_full_face_hover(self, body_id, rounded_normal, raw_normal, cell_id=None):
@@ -7040,8 +7082,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
     def _clear_face_actors(self):
         for n in self._face_actors:
-            try: self.plotter.remove_actor(n)
-            except Exception: pass
+            _safe_remove_actor(self.plotter, n, "face actor cleanup")
         self._face_actors.clear()
 
     def _render_sketch(self, s):
@@ -7137,9 +7178,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._plane_actors = {'xy':'xy','xz':'xz','yz':'yz'}
 
     def _hide_selection_planes(self):
-        for n in ['xy','xz','yz']: 
-            try: self.plotter.remove_actor(n)
-            except Exception: pass
+        for n in ['xy','xz','yz']:
+            _safe_remove_actor(self.plotter, n, "selection plane cleanup")
         self._plane_actors.clear()
 
     def set_view(self, view_name):
