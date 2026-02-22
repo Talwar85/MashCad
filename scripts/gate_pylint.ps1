@@ -102,22 +102,33 @@ foreach ($dir in $DIRECTORIES) {
     $pylintOutput = & python -m pylint $dir --output-format=text 2>&1
     $pylintExitCode = $LASTEXITCODE
     
-    # Parse score from output
+    # Parse score from output - handle MatchInfo objects from Select-String properly
     $score = -1
-    $scoreLine = $pylintOutput | Select-String "rated at ([\d.]+)" | Select-Object -First 1
-    if ($scoreLine) {
-        if ($scoreLine -match "rated at ([\d.]+)") {
-            $score = [double]$Matches[1]
-        }
-    }
+    $parseError = $null
+    $scoreMatch = $pylintOutput | Select-String "rated at ([\d.]+)" | Select-Object -First 1
     
-    # Also try alternative format
-    if ($score -lt 0) {
-        $scoreLine = $pylintOutput | Select-String "Your code has been rated at ([\d.]+)" | Select-Object -First 1
-        if ($scoreLine) {
-            if ($scoreLine -match "rated at ([\d.]+)") {
-                $score = [double]$Matches[1]
+    if ($scoreMatch) {
+        # MatchInfo.Line contains the actual line text
+        $lineText = $scoreMatch.Line
+        if ($lineText -match "rated at ([\d.]+)") {
+            $scoreStr = $Matches[1]
+            # Use invariant culture to ensure "." is treated as decimal separator
+            try {
+                $score = [double]::Parse($scoreStr, [System.Globalization.CultureInfo]::InvariantCulture)
+            } catch {
+                $parseError = "Score value '$scoreStr' could not be parsed as double: $_"
             }
+        } else {
+            $parseError = "Line text did not match expected pattern: '$lineText'"
+        }
+    } else {
+        # No match found - check if pylint ran at all
+        if ($pylintOutput -match "No module named pylint") {
+            $parseError = "pylint module not found - ensure pylint is installed"
+        } elseif ($pylintOutput.Count -eq 0 -or $pylintOutput -eq $null) {
+            $parseError = "No output from pylint - command may have failed to execute"
+        } else {
+            $parseError = "Score pattern 'rated at X.XX' not found in pylint output"
         }
     }
     
@@ -126,11 +137,25 @@ foreach ($dir in $DIRECTORIES) {
         Score = $score
         ExitCode = $pylintExitCode
         Passed = $score -ge $FailThreshold
+        ParseError = $parseError
     }
     
     $PYLINT_RESULTS += $result
     
-    if ($result.Passed) {
+    # Treat parse failure (score -1) as hard failure, not silent success
+    if ($score -lt 0) {
+        Write-Host " [FAIL] Score parse error" -ForegroundColor Red
+        $OVERALL_PASS = $false
+        if ($parseError) {
+            Write-Host "    Diagnostic: $parseError" -ForegroundColor Yellow
+        }
+        if ($Verbose) {
+            Write-Host "    Raw output (first 10 lines):" -ForegroundColor Gray
+            $pylintOutput | Select-Object -First 10 | ForEach-Object {
+                Write-Host "    $_" -ForegroundColor Gray
+            }
+        }
+    } elseif ($result.Passed) {
         Write-Host " [PASS] Score: $score" -ForegroundColor Green
     } else {
         Write-Host " [FAIL] Score: $score (threshold: $FailThreshold)" -ForegroundColor Red
