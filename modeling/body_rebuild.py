@@ -9,6 +9,7 @@ from typing import Optional
 from loguru import logger
 
 from config.feature_flags import is_enabled
+from modeling.document import SplitResult
 
 
 class BodyRebuildMixin:

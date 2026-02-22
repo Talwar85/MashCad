@@ -398,9 +398,15 @@ class RollbackValidator:
             if hasattr(body, '_build123d_solid') and body._build123d_solid:
                 # Use BREP representation for hash
                 try:
-                    from modeling.brep_utils import BRepUtils
-                    brep = BRepUtils.to_brep(body._build123d_solid)
-                    hash_input += f"{body.name}:{hashlib.md5(brep.encode()).hexdigest()}:"
+                    from OCP.BRepTools import BRepTools
+                    from OCP.TopoDS import TopoDS_Shape
+                    import io
+                    
+                    shape = body._build123d_solid.wrapped
+                    stream = io.BytesIO()
+                    BRepTools.Write_s(shape, stream)
+                    brep_bytes = stream.getvalue()
+                    hash_input += f"{body.name}:{hashlib.md5(brep_bytes).hexdigest()}:"
                 except Exception:
                     # Fallback to string representation
                     hash_input += f"{body.name}:{str(body._build123d_solid)}:"
@@ -417,9 +423,15 @@ class RollbackValidator:
         for body in getattr(self._document, 'bodies', []):
             if hasattr(body, '_build123d_solid') and body._build123d_solid:
                 try:
-                    from modeling.brep_utils import BRepUtils
-                    brep = BRepUtils.to_brep(body._build123d_solid)
-                    hashes[body.name] = hashlib.md5(brep.encode()).hexdigest()
+                    from OCP.BRepTools import BRepTools
+                    from OCP.TopoDS import TopoDS_Shape
+                    import io
+                    
+                    shape = body._build123d_solid.wrapped
+                    stream = io.BytesIO()
+                    BRepTools.Write_s(shape, stream)
+                    brep_bytes = stream.getvalue()
+                    hashes[body.name] = hashlib.md5(brep_bytes).hexdigest()
                 except Exception:
                     hashes[body.name] = hashlib.md5(str(body._build123d_solid).encode()).hexdigest()
         

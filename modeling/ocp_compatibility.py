@@ -457,10 +457,11 @@ def get_ocp_version() -> OCPVersionInfo:
                 from importlib.metadata import version as get_version
                 info.ocp_package_version = get_version("ocp")
             except Exception:
-                # Fallback for older Python
+                # Fallback: try importlib.metadata.distribution
                 try:
-                    import pkg_resources
-                    info.ocp_package_version = pkg_resources.get_distribution("ocp").version
+                    from importlib.metadata import distribution
+                    dist = distribution("ocp")
+                    info.ocp_package_version = dist.version
                 except Exception:
                     pass
         except Exception:

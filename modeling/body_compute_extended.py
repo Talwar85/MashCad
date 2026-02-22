@@ -2313,7 +2313,11 @@ class BodyComputeExtendedMixin:
         
         try:
             import numpy as np
-            from circle_fit import hyper_fit
+            try:
+                from circle_fit import hyper_fit
+            except ImportError:
+                # circle_fit package not available
+                return None
             
             pts = np.array(points)
             x, y, r = hyper_fit(pts)

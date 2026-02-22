@@ -390,7 +390,7 @@ class TestModuleFunctions:
     
     def test_is_drift_acceptable_function(self):
         """Test module-level is_drift_acceptable function."""
-        box = create_box_solid(10, 10, 10)
+        box = create_test_box(10, 10, 10)
         baseline = capture_baseline(box.wrapped)
         metrics = detect_drift(box.wrapped, baseline)
         
@@ -398,7 +398,7 @@ class TestModuleFunctions:
     
     def test_get_drift_warnings_function(self):
         """Test module-level get_drift_warnings function."""
-        box = create_box_solid(10, 10, 10)
+        box = create_test_box(10, 10, 10)
         baseline = capture_baseline(box.wrapped)
         metrics = detect_drift(box.wrapped, baseline)
         
@@ -417,7 +417,7 @@ class TestDriftDetectionScenarios:
     def test_fillet_causes_minor_drift(self, detector):
         """Test that a fillet operation causes detectable but acceptable drift."""
         # Create a box
-        box = create_box_solid(10, 10, 10)
+        box = create_test_box(10, 10, 10)
         baseline = detector.capture_baseline(box.wrapped)
         
         # After a fillet, volume would decrease slightly
@@ -479,7 +479,7 @@ class TestEdgeCases:
     def test_empty_baseline_drift_detection(self):
         """Test drift detection with empty baseline."""
         detector = GeometryDriftDetector()
-        box = create_box_solid(10, 10, 10)
+        box = create_test_box(10, 10, 10)
         
         empty_baseline = DriftBaseline()
         metrics = detector.detect_drift(box.wrapped, empty_baseline)

@@ -414,7 +414,7 @@ class BooleanEngineV4:
 
             # 5. Execute OCP Boolean
             logger.debug(f"Executing OCP Boolean {operation}...")
-            result_shape, history = BooleanEngineV4._execute_ocp_boolean(
+            result_shape, history, op = BooleanEngineV4._execute_ocp_boolean(
                 shape1, shape2, operation, fuzzy_tolerance
             )
 
@@ -716,7 +716,7 @@ class BooleanEngineV4:
         shape2: Any,
         operation: str,
         fuzzy_tolerance: float
-    ) -> Tuple[Optional[Any], Optional[Any]]:
+    ) -> Tuple[Optional[Any], Optional[Any], Optional[Any]]:
         """
         Execute OpenCASCADE Boolean operation with robust settings.
 
@@ -731,7 +731,7 @@ class BooleanEngineV4:
             fuzzy_tolerance: Fuzzy value for robustness
 
         Returns:
-            (result_shape, history) or (None, None) on failure
+            (result_shape, history, bool_op) or (None, None, None) on failure
         """
         try:
             logger.debug(f"OCP Boolean {operation}: shape1 type={type(shape1).__name__}, shape2 type={type(shape2).__name__}")
@@ -745,7 +745,7 @@ class BooleanEngineV4:
                 op = BRepAlgoAPI_Common()
             else:
                 logger.debug(f"Unknown operation: {operation}")
-                return None, None
+                return None, None, None
 
             args_list = TopTools_ListOfShape()
             args_list.Append(shape1)
@@ -781,7 +781,7 @@ class BooleanEngineV4:
                     logger.debug(f"[boolean_engine_v4.py] Fehler: {e}")
                     pass
                 logger.warning("OpenCASCADE Boolean returned IsDone=False")
-                return None, None
+                return None, None, None
 
             result_shape = op.Shape()
             logger.debug(f"  Result shape type: {type(result_shape).__name__}")
@@ -789,7 +789,7 @@ class BooleanEngineV4:
             # Validate result is not null/empty
             if result_shape is None or result_shape.IsNull():
                 logger.warning("OCP Boolean returned null shape")
-                return None, None
+                return None, None, None
 
             # Debug: Check if result is different from input
             logger.info(f"Result shape id: {id(result_shape)}, Input shape1 id: {id(shape1)}")
@@ -808,13 +808,13 @@ class BooleanEngineV4:
                 logger.debug(f"  Could not extract history: {hist_err}")
                 history = None
 
-            return result_shape, history
+            return result_shape, history, op
 
         except Exception as e:
             logger.error(f"OCP Boolean execution failed with exception: {e}")
             import traceback
             traceback.print_exc()
-            return None, None
+            return None, None, None
 
     @staticmethod
     def _is_valid_shape(shape: Any) -> bool:
