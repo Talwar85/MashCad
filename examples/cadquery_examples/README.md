@@ -8,27 +8,32 @@ This directory contains example Build123d scripts that can be imported into Mash
 2. Select any `.py` file from this directory
 3. The script will be executed and the resulting 3D model will appear as a new Body
 
+Or use the **CadQuery Script Editor** (File → CadQuery Script Editor...) for live editing with parameter extraction.
+
 ## Examples
 
 ### Build123d Native Examples
 
 ### `bracket.py`
 Simple mounting bracket with two holes. Demonstrates:
-- Basic sketch creation
-- Extrusion
-- Boolean subtraction
+- BuildSketch with Rectangle
+- Circle subtraction using Mode.SUBTRACT
+- Locations for positioning
+- Fillet operation
 
 ### `parametric_knob.py`
 Parametric knob design with grip fins. Demonstrates:
-- Parameter-driven design
-- Circular patterns
+- Parameter-driven design (variables at top)
+- Polar array of features
+- Trigonometric positioning
 - Multiple boolean operations
 
 ### `flange_coupling.py`
 Mechanical flange with bolt holes. Demonstrates:
-- Circular hole patterns
-- Cylindrical bores
-- Trigonometric positioning
+- Circle primitive with extrusion
+- Polar array of bolt holes
+- Trigonometric positioning with sin/cos
+- Center bore subtraction
 
 ### CadQuery-Style Chaining (Phase 4)
 
@@ -40,10 +45,16 @@ result = cq.Workplane('XY').box(50, 30, 10).faces('>Z').fillet(2)
 ```
 
 ### `workplane_bracket.py`
-Bracket demonstrating chained operations.
+Bracket demonstrating chained operations:
+```python
+result = cq.Workplane('XY').box(100, 50, 10).edges('|Z').fillet(2)
+```
 
 ### `workplane_flange.py`
-Flange using cylinder primitives.
+Flange using cylinder primitives:
+```python
+result = cq.Workplane('XY').cylinder(50, 15).edges('|Z').fillet(3)
+```
 
 ## Writing Your Own Scripts
 
@@ -84,3 +95,5 @@ Scripts are executed in a sandboxed namespace. Access to:
 - File system (os, pathlib) - **BLOCKED**
 - Subprocess/network - **BLOCKED**
 - eval/exec - **BLOCKED**
+
+Allowed imports: `build123d`, `math`, `typing`

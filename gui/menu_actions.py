@@ -548,6 +548,26 @@ class MenuActionsMixin:
             logger.error(f"CadQuery Import Fehler: {e}")
             QMessageBox.critical(self, "Import Fehler", f"CadQuery Import fehlgeschlagen:\n{e}")
 
+    def _show_cadquery_editor(self):
+        """Show the CadQuery Script Editor dialog."""
+        from gui.cadquery_editor_dialog import CadQueryEditorDialog
+        from i18n import tr
+
+        try:
+            dialog = CadQueryEditorDialog(self.document, parent=self)
+            dialog.script_executed.connect(self._on_cadquery_script_executed)
+            dialog.exec()
+        except Exception as e:
+            logger.error(f"CadQuery Editor Fehler: {e}")
+            QMessageBox.critical(self, "Editor Fehler", f"Konnte Editor nicht öffnen:\n{e}")
+
+    def _on_cadquery_script_executed(self, bodies, script_name):
+        """Handle script execution - bodies already added to document."""
+        if bodies:
+            self.browser.refresh()
+            self._update_viewport_all_impl()
+            logger.success(f"CadQuery: {len(bodies)} Körper erstellt aus '{script_name}'")
+
     def _import_svg(self):
         """Import SVG as sketch geometry."""
         from i18n import tr
