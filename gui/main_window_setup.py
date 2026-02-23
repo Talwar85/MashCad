@@ -702,6 +702,7 @@ class SetupMixin:
         self.browser.feature_selected.connect(self._on_feature_selected)
         self.browser.feature_deleted.connect(self._on_feature_deleted)
         self.browser.rollback_changed.connect(self._on_rollback_changed)
+        self.browser.body_deleted.connect(self._on_body_deleted)
         self.browser.plane_selected.connect(self._on_browser_plane_selected)
         self.browser.construction_plane_selected.connect(self._on_construction_plane_selected)
 

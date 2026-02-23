@@ -879,7 +879,8 @@ class FeatureMixin:
         from gui.design_tokens import DesignTokens
 
         try:
-            dialog = CadQueryEditorDialog(self.document, parent=self)
+            # Create dialog with auto_execute enabled for live parameter updates
+            dialog = CadQueryEditorDialog(self.document, parent=self, auto_execute=True)
 
             # Lade das Script aus dem Feature
             if feature.script:
@@ -982,7 +983,15 @@ class FeatureMixin:
         self.browser.refresh()
         self.browser.show_rollback_bar(body)
         self.statusBar().showMessage(f"Rollback: {value}/{n} Features")
-    
+
+    def _on_body_deleted(self, body_id: str):
+        """Handle body deletion - remove from viewport."""
+        # Remove body actors from viewport
+        if hasattr(self.viewport_3d, 'clear_bodies'):
+            self.viewport_3d.clear_bodies(only_body_id=body_id)
+        # Full viewport refresh
+        self._update_viewport_all_impl()
+
     # =========================================================================
     # Helper Methods
     # =========================================================================

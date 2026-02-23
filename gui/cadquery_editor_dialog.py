@@ -162,15 +162,25 @@ class CadQueryEditorDialog(QDialog):
     - Execute button with error display
     - Load/Save functionality
     - Styled with DesignTokens
+    - Auto-execute mode for editing existing features
     """
 
     script_executed = Signal(list, str)  # bodies, script_name
 
-    def __init__(self, document, parent=None):
+    def __init__(self, document, parent=None, auto_execute=False):
+        """
+        Initialize the dialog.
+
+        Args:
+            document: Document instance
+            parent: Parent widget
+            auto_execute: If True, parameter changes trigger script execution
+        """
         super().__init__(parent)
         self.document = document
         self.current_file = None
         self.parameters = []
+        self._auto_execute = auto_execute
 
         self._setup_ui()
         self._connect_signals()
@@ -479,6 +489,10 @@ with b.BuildPart() as part:
         if isinstance(sender, ParameterWidget):
             # Update script with new parameter value
             self._update_parameter_in_script(sender.param_name, value)
+
+            # Auto-execute if enabled (for editing existing features)
+            if self._auto_execute:
+                self._execute_script()
 
     def _update_parameter_in_script(self, name: str, value: float):
         """Update a parameter value in the script."""

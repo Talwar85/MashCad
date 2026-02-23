@@ -751,6 +751,7 @@ class ProjectBrowser(QFrame):
     feature_deleted = Signal(object, object)  # (feature, body)
     visibility_changed = Signal()
     body_vis_changed = Signal(str, bool)
+    body_deleted = Signal(str)  # (body_id) - emitted when body is deleted
     plane_selected = Signal(str)
     construction_plane_selected = Signal(object)  # ConstructionPlane
     construction_plane_vis_changed = Signal(str, bool)  # (plane_id, visible)
@@ -1565,6 +1566,8 @@ class ProjectBrowser(QFrame):
             self.document.bodies.remove(b)
             self.refresh()
             self.visibility_changed.emit()
+            # Signal to update viewport (remove body actors)
+            self.body_deleted.emit(b.id)
 
     def _del_feature(self, feature, body):
         """Löscht ein Feature aus einem Body via UndoCommand"""
