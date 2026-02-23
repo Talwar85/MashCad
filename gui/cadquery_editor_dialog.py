@@ -8,6 +8,7 @@ Features:
 - Execute button with error display
 - Parameter panel (Phase 3)
 - Load/Save scripts
+- Styled with DesignTokens for consistency
 """
 
 import re
@@ -21,6 +22,23 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
 from loguru import logger
+
+try:
+    from gui.design_tokens import DesignTokens
+    HAS_DESIGN_TOKENS = True
+except ImportError:
+    HAS_DESIGN_TOKENS = False
+    # Fallback colors
+    class DesignTokens:
+        COLOR_BG_PANEL = QColor("#262626")
+        COLOR_BG_INPUT = QColor("#404040")
+        COLOR_TEXT_PRIMARY = QColor("#fafafa")
+        COLOR_TEXT_MUTED = QColor("#a3a3a3")
+        COLOR_PRIMARY = QColor("#2563eb")
+        COLOR_PRIMARY_HOVER = QColor("#3b82f6")
+        COLOR_SUCCESS = QColor("#22c55e")
+        COLOR_ERROR = QColor("#ef4444")
+        COLOR_BORDER = QColor("#404040")
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
@@ -143,6 +161,7 @@ class CadQueryEditorDialog(QDialog):
     - Parameter panel (Phase 3)
     - Execute button with error display
     - Load/Save functionality
+    - Styled with DesignTokens
     """
 
     script_executed = Signal(list, str)  # bodies, script_name
@@ -155,6 +174,7 @@ class CadQueryEditorDialog(QDialog):
 
         self._setup_ui()
         self._connect_signals()
+        self._apply_styling()
 
         # Load default example
         self._load_example_script()
@@ -165,6 +185,8 @@ class CadQueryEditorDialog(QDialog):
         self.resize(900, 700)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Toolbar
         toolbar = self._create_toolbar()
@@ -190,11 +212,13 @@ class CadQueryEditorDialog(QDialog):
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
+        self.error_label.setStyleSheet("padding: 12px; border-radius: 6px;")
         layout.addWidget(self.error_label)
 
     def _create_toolbar(self) -> QHBoxLayout:
         """Create toolbar with action buttons."""
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
 
         # Load button
         self.load_btn = QPushButton("Load")
@@ -211,18 +235,7 @@ class CadQueryEditorDialog(QDialog):
         # Execute button
         self.execute_btn = QPushButton("Execute")
         self.execute_btn.setToolTip("Execute script and create geometry")
-        self.execute_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.execute_btn.setProperty("primary", True)
         toolbar.addWidget(self.execute_btn)
 
         return toolbar
@@ -232,6 +245,7 @@ class CadQueryEditorDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         # Label
         label = QLabel("Script (Build123d/CadQuery):")
@@ -244,8 +258,12 @@ class CadQueryEditorDialog(QDialog):
             QTextEdit {
                 background-color: #1E1E1E;
                 color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 8px;
+                border: 1px solid #404040;
+                border-radius: 6px;
+                padding: 12px;
+            }
+            QTextEdit:focus {
+                border: 1px solid #2563eb;
             }
         """)
 
@@ -261,6 +279,7 @@ class CadQueryEditorDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         # Label
         label = QLabel("Parameters:")
@@ -270,9 +289,16 @@ class CadQueryEditorDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+        """)
 
         self.params_container = QWidget()
         self.params_layout = QVBoxLayout(self.params_container)
+        self.params_layout.setSpacing(8)
         self.params_layout.addStretch()
 
         scroll.setWidget(self.params_container)
@@ -286,6 +312,42 @@ class CadQueryEditorDialog(QDialog):
         self.save_btn.clicked.connect(self._save_script)
         self.execute_btn.clicked.connect(self._execute_script)
         self.editor.textChanged.connect(self._on_text_changed)
+
+    def _apply_styling(self):
+        """Apply DesignTokens styling."""
+        if HAS_DESIGN_TOKENS:
+            self.setStyleSheet(DesignTokens.stylesheet_dialog())
+        else:
+            # Fallback styling
+            self.setStyleSheet(f"""
+                QDialog {{
+                    background: {DesignTokens.COLOR_BG_PANEL.name()};
+                    color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                }}
+                QPushButton {{
+                    background: {DesignTokens.COLOR_BG_INPUT.name()};
+                    color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{
+                    background: #525252;
+                }}
+                QPushButton[primary="true"] {{
+                    background: {DesignTokens.COLOR_PRIMARY.name()};
+                    color: white;
+                    font-weight: bold;
+                }}
+                QPushButton[primary="true"]:hover {{
+                    background: {DesignTokens.COLOR_PRIMARY_HOVER.name()};
+                }}
+                QLabel {{
+                    color: {DesignTokens.COLOR_TEXT_PRIMARY.name()};
+                    font-size: 13px;
+                }}
+            """)
 
     def _load_example_script(self):
         """Load a simple example script."""
@@ -392,9 +454,10 @@ with b.BuildPart() as part:
         # Add parameter widgets
         for param in self.parameters:
             row = QHBoxLayout()
+            row.setSpacing(8)
 
             label = QLabel(f"{param.name}:")
-            label.setMinimumWidth(100)
+            label.setMinimumWidth(80)
 
             spinbox = ParameterWidget(param.name, param.value)
             spinbox.valueChanged.connect(self._on_parameter_changed)
@@ -433,19 +496,52 @@ with b.BuildPart() as part:
         """Show success message."""
         self.error_label.setVisible(True)
         self.error_label.setText(f"✓ {message}")
-        self.error_label.setStyleSheet("color: #4CAF50; background-color: #E8F5E9; padding: 8px; border-radius: 4px;")
+
+        if HAS_DESIGN_TOKENS:
+            bg = DesignTokens.COLOR_SUCCESS.name()
+        else:
+            bg = "#22c55e"
+
+        self.error_label.setStyleSheet(f"""
+            color: white;
+            background-color: {bg};
+            padding: 12px;
+            border-radius: 6px;
+        """)
 
     def _show_warning(self, message: str):
         """Show warning message."""
         self.error_label.setVisible(True)
         self.error_label.setText(f"⚠ {message}")
-        self.error_label.setStyleSheet("color: #FF9800; background-color: #FFF3E0; padding: 8px; border-radius: 4px;")
+
+        if HAS_DESIGN_TOKENS:
+            bg = "#FF9800"
+        else:
+            bg = "#FF9800"
+
+        self.error_label.setStyleSheet(f"""
+            color: white;
+            background-color: {bg};
+            padding: 12px;
+            border-radius: 6px;
+        """)
 
     def _show_error(self, message: str):
         """Show error message."""
         self.error_label.setVisible(True)
         self.error_label.setText(f"✗ {message}")
-        self.error_label.setStyleSheet("color: #F44336; background-color: #FFEBEE; padding: 8px; border-radius: 4px;")
+
+        if HAS_DESIGN_TOKENS:
+            bg = DesignTokens.COLOR_ERROR.name()
+        else:
+            bg = "#ef4444"
+
+        self.error_label.setStyleSheet(f"""
+            color: white;
+            background-color: {bg};
+            padding: 12px;
+            border-radius: 6px;
+        """)
 
     def set_script(self, code: str):
         """Set the script content."""
