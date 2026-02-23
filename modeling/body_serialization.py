@@ -28,6 +28,7 @@ from modeling.features.advanced import (
     LatticeFeature
 )
 from modeling.features.import_feature import ImportFeature
+from modeling.features.cadquery_feature import CadQueryFeature
 
 # OCP/build123d availability flags (set by body.py)
 HAS_OCP = False
@@ -119,6 +120,10 @@ def body_to_dict(body) -> dict:
             _serialize_primitive_feature(feat, feat_dict)
         elif isinstance(feat, ImportFeature):
             _serialize_import_feature(feat, feat_dict)
+        elif isinstance(feat, CadQueryFeature):
+            _serialize_cadquery_feature(feat, feat_dict)
+        elif feat_class == "CadQueryFeature":
+            _serialize_cadquery_feature(feat, feat_dict)
 
         features_data.append(feat_dict)
 
@@ -774,6 +779,16 @@ def _serialize_import_feature(feat, feat_dict: dict):
     })
 
 
+def _serialize_cadquery_feature(feat, feat_dict: dict):
+    """Serialize CadQueryFeature specific data."""
+    feat_dict.update({
+        "feature_class": "CadQueryFeature",
+        "script": feat.script,
+        "source_file": feat.source_file,
+        "parameters": [p.to_dict() for p in feat.parameters],
+    })
+
+
 def body_from_dict(cls, data: dict, body_class):
     """
     Deserialisiert Body aus Dictionary.
@@ -847,6 +862,8 @@ def body_from_dict(cls, data: dict, body_class):
             feat = _deserialize_primitive_feature(feat_dict, base_kwargs)
         elif feat_class == "ImportFeature":
             feat = _deserialize_import_feature(feat_dict, base_kwargs)
+        elif feat_class == "CadQueryFeature":
+            feat = _deserialize_cadquery_feature(feat_dict, base_kwargs)
         else:
             # Generic Feature
             feat = Feature(**base_kwargs)
@@ -1725,6 +1742,21 @@ def _deserialize_import_feature(feat_dict: dict, base_kwargs: dict) -> 'ImportFe
         brep_string=feat_dict.get("brep_string", ""),
         source_file=feat_dict.get("source_file", ""),
         source_type=feat_dict.get("source_type", ""),
+        **base_kwargs
+    )
+
+
+def _deserialize_cadquery_feature(feat_dict: dict, base_kwargs: dict) -> 'CadQueryFeature':
+    """Deserialize CadQueryFeature from dict."""
+    from modeling.features.cadquery_feature import Parameter
+
+    params_data = feat_dict.get("parameters", [])
+    parameters = [Parameter.from_dict(p) for p in params_data]
+
+    return CadQueryFeature(
+        script=feat_dict.get("script", ""),
+        source_file=feat_dict.get("source_file", ""),
+        parameters=parameters,
         **base_kwargs
     )
 

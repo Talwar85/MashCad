@@ -397,7 +397,7 @@ with b.BuildPart() as part:
                 self._show_error(f"Failed to save file: {e}")
 
     def _execute_script(self):
-        """Execute the current script and create bodies with ImportFeature."""
+        """Execute the current script and create bodies with CadQueryFeature."""
         from modeling.cadquery_importer import CadQueryImporter
 
         code = self.editor.toPlainText()
@@ -413,11 +413,12 @@ with b.BuildPart() as part:
         result = importer.execute_code(code, source=script_source)
 
         if result.success and result.solids:
-            # Create bodies with ImportFeature
+            # Create bodies with CadQueryFeature (editable!)
             bodies = importer.create_bodies_from_solids(
                 result.solids,
                 name=result.name,
-                script_source=script_source
+                script_source=script_source,
+                script=code  # Store script for editing
             )
 
             # Add bodies to document

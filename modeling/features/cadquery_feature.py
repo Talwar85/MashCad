@@ -1,13 +1,14 @@
 """
 CadQuery Feature for MashCad
 
-Phase 3: Parametric CadQuery scripts with parameter tracking.
+Editable parametric script feature that stores the script source
+and allows re-execution with parameter changes.
 """
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from loguru import logger
-from modeling.features import Feature
+from modeling.features import Feature, FeatureType
 
 
 @dataclass
@@ -20,6 +21,25 @@ class Parameter:
 
     def __str__(self):
         return f"{self.name} = {self.value}"
+
+    def to_dict(self) -> dict:
+        """Convert parameter to dict for serialization."""
+        return {
+            "name": self.name,
+            "value": self.value,
+            "default_value": self.default_value,
+            "description": self.description
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> 'Parameter':
+        """Create parameter from dict."""
+        return Parameter(
+            name=data.get("name", ""),
+            value=float(data.get("value", 0)),
+            default_value=float(data.get("default_value", 0)),
+            description=data.get("description", "")
+        )
 
 
 def extract_parameters_from_script(script: str) -> List[Parameter]:
@@ -112,38 +132,101 @@ def update_script_parameters(script: str, parameters: Dict[str, float]) -> str:
     return '\n'.join(result)
 
 
+@dataclass
 class CadQueryFeature(Feature):
     """
-    Feature representing a CadQuery script with parameters.
+    Editable CadQuery script feature.
+
+    Stores the script source and allows:
+    - Re-editing the script
+    - Changing parameters
+    - Re-executing to regenerate geometry
     """
 
-    def __init__(self, name: str, script: str, parameters: Optional[List[Parameter]] = None):
-        super().__init__(name)
-        self.script = script
-        self._parameters = parameters or extract_parameters_from_script(script)
+    script: str = ""
+    source_file: str = ""  # Original filename for reference
+    parameters: List[Parameter] = field(default_factory=list)
 
-    @property
-    def parameters(self) -> List[Parameter]:
-        """Get the feature parameters."""
-        return self._parameters
+    def __post_init__(self):
+        """Initialize feature type and extract parameters."""
+        self.type = FeatureType.CADQUERY
+        if not self.name or self.name == "Feature":
+            self.name = "CadQuery Script"
+        # Extract parameters if not provided
+        if not self.parameters and self.script:
+            self.parameters = extract_parameters_from_script(self.script)
 
     def get_parameter_value(self, name: str) -> Optional[float]:
         """Get a parameter value by name."""
-        for param in self._parameters:
+        for param in self.parameters:
             if param.name == name:
                 return param.value
         return None
 
     def set_parameter_value(self, name: str, value: float) -> bool:
-        """Set a parameter value by name."""
-        for param in self._parameters:
+        """Set a parameter value by name and update script."""
+        for param in self.parameters:
             if param.name == name:
                 param.value = value
                 self.script = update_script_parameters(self.script, {name: value})
                 return True
         return False
 
-    def update_script(self) -> str:
-        """Get the script with current parameter values."""
-        param_dict = {p.name: p.value for p in self._parameters}
+    def update_script_from_params(self) -> str:
+        """Get the script with current parameter values applied."""
+        param_dict = {p.name: p.value for p in self.parameters}
         return update_script_parameters(self.script, param_dict)
+
+    def execute(self, document) -> List[Any]:
+        """
+        Execute the script and return solids.
+
+        Args:
+            document: Document instance for execution context
+
+        Returns:
+            List of Build123d Solid objects
+        """
+        from modeling.cadquery_importer import CadQueryImporter
+
+        # Use the current script (with updated parameters)
+        script = self.update_script_from_params()
+
+        importer = CadQueryImporter(document)
+        result = importer.execute_code(script, source=self.source_file or self.name)
+
+        if result.success:
+            return result.solids
+        return []
+
+    def to_dict(self) -> dict:
+        """Convert feature to dict for serialization."""
+        return {
+            "feature_class": "CadQueryFeature",
+            "name": self.name,
+            "type": self.type.name if hasattr(self.type, 'name') else str(self.type),
+            "id": self.id,
+            "script": self.script,
+            "source_file": self.source_file,
+            "parameters": [p.to_dict() for p in self.parameters]
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'CadQueryFeature':
+        """Create feature from dict."""
+        params_data = data.get("parameters", [])
+        parameters = [Parameter.from_dict(p) for p in params_data]
+
+        return cls(
+            name=data.get("name", "CadQuery Script"),
+            script=data.get("script", ""),
+            source_file=data.get("source_file", ""),
+            parameters=parameters
+        )
+
+
+# Register the feature type
+try:
+    FeatureType.CADQUERY = "CADQUERY"
+except:
+    pass

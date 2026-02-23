@@ -513,18 +513,23 @@ class MenuActionsMixin:
             progress.setMinimumDuration(0)
             progress.setValue(10)
 
+            # Read the script file
+            script_path = Path(path)
+            script_content = script_path.read_text(encoding='utf-8')
+
             importer = CadQueryImporter(self.document)
-            result = importer.execute_script(path)
+            result = importer.execute_code(script_content, source=script_path.name)
 
             progress.setValue(50)
 
             if result.success and result.solids:
-                # Create bodies with ImportFeature
-                script_name = Path(path).name
+                # Create bodies with CadQueryFeature (editable!)
+                script_name = script_path.name
                 bodies = importer.create_bodies_from_solids(
                     result.solids,
                     name=result.name,
-                    script_source=script_name
+                    script_source=script_name,
+                    script=script_content  # Store script for editing
                 )
 
                 # Add bodies to document
