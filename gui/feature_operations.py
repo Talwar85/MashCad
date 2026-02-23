@@ -1009,7 +1009,7 @@ class FeatureMixin:
         """
         from modeling import Body, Feature, PushPullFeature
         from modeling.features import FeatureType
-        from modeling.body_compute_extended import face_index_of
+        from modeling.topology_indexing import face_index_of
         from modeling.geometric_selector import GeometricFaceSelector
         from gui.commands.feature_commands import AddFeatureCommand
         import build123d as b
