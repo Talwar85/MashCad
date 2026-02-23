@@ -481,23 +481,47 @@ class CadQueryImporter:
 
         return parameters
 
-    def create_bodies_from_solids(self, solids: List[Any], name: str = "CadQuery Import") -> List:
+    def create_bodies_from_solids(self, solids: List[Any], name: str = "CadQuery Import", script_source: str = "") -> List:
         """
-        Create Body objects from Build123d solids.
+        Create Body objects from Build123d solids with ImportFeature.
 
         Args:
             solids: List of Build123d Solid objects
             name: Base name for the bodies
+            script_source: Source script filename for reference
 
         Returns:
-            List of Body objects
+            List of Body objects with ImportFeature attached
         """
         from modeling import Body
+        from modeling.features import ImportFeature
+        from OCP.BRepTools import BRepTools
+        import io
 
         bodies = []
         for i, solid in enumerate(solids):
             body_name = f"{name}_{i+1}" if len(solids) > 1 else name
             body = Body(body_name, document=self.document)
+
+            # Serialize solid to BREP string for ImportFeature
+            brep_string = ""
+            try:
+                stream = io.BytesIO()
+                BRepTools.Write_s(solid.wrapped, stream)
+                brep_string = stream.getvalue().decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Failed to serialize solid for feature: {e}")
+
+            # Create ImportFeature
+            feature = ImportFeature(
+                name=f"Import {script_source or name}",
+                brep_string=brep_string,
+                source_file=script_source,
+                source_type="cadquery_script"
+            )
+
+            # Add feature to body
+            body.features.append(feature)
 
             # Set the solid
             body._build123d_solid = solid

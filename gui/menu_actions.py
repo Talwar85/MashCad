@@ -488,6 +488,7 @@ class MenuActionsMixin:
     def _import_cadquery_script(self):
         """Import CadQuery/Build123d script as new body."""
         from i18n import tr
+        from pathlib import Path
 
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -500,7 +501,6 @@ class MenuActionsMixin:
 
         try:
             from modeling.cadquery_importer import CadQueryImporter
-            from modeling import Body
 
             progress = QProgressDialog(
                 "Importiere CadQuery Script...",
@@ -519,16 +519,23 @@ class MenuActionsMixin:
             progress.setValue(50)
 
             if result.success and result.solids:
-                # Create bodies from solids
-                for solid in result.solids:
-                    body = Body.from_solid(solid, name=result.name, document=self.document)
+                # Create bodies with ImportFeature
+                script_name = Path(path).name
+                bodies = importer.create_bodies_from_solids(
+                    result.solids,
+                    name=result.name,
+                    script_source=script_name
+                )
+
+                # Add bodies to document
+                for body in bodies:
                     self.document.add_body(body)
 
                 progress.setValue(90)
 
                 self.browser.refresh()
                 self._update_viewport_all_impl()
-                logger.success(f"CadQuery Script importiert: {path} ({len(result.solids)} Körper)")
+                logger.success(f"CadQuery Script importiert: {path} ({len(bodies)} Körper)")
 
                 if result.warnings:
                     for warning in result.warnings:

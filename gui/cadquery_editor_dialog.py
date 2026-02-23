@@ -335,9 +335,8 @@ with b.BuildPart() as part:
                 self._show_error(f"Failed to save file: {e}")
 
     def _execute_script(self):
-        """Execute the current script and create bodies."""
+        """Execute the current script and create bodies with ImportFeature."""
         from modeling.cadquery_importer import CadQueryImporter
-        from modeling import Body
 
         code = self.editor.toPlainText()
 
@@ -348,15 +347,20 @@ with b.BuildPart() as part:
 
         # Execute
         importer = CadQueryImporter(self.document)
-        result = importer.execute_code(code, source=self.current_file.name if self.current_file else "script")
+        script_source = self.current_file.name if self.current_file else "editor.py"
+        result = importer.execute_code(code, source=script_source)
 
-        if result.success:
-            # Create bodies from solids
-            bodies = []
-            for solid in result.solids:
-                body = Body.from_solid(solid, name=f"{result.name}", document=self.document)
+        if result.success and result.solids:
+            # Create bodies with ImportFeature
+            bodies = importer.create_bodies_from_solids(
+                result.solids,
+                name=result.name,
+                script_source=script_source
+            )
+
+            # Add bodies to document
+            for body in bodies:
                 self.document.add_body(body)
-                bodies.append(body)
 
             self.script_executed.emit(bodies, result.name)
 
@@ -364,6 +368,9 @@ with b.BuildPart() as part:
                 self._show_warning("No solids were generated from the script")
             else:
                 self._show_success(f"Generated {len(bodies)} body(s)")
+        elif result.success:
+            # Success but no solids
+            self._show_warning("No solids were generated from the script")
         else:
             error_text = "\n".join(result.errors)
             self._show_error(f"Execution failed:\n{error_text}")
