@@ -901,7 +901,7 @@ class FeatureMixin:
 
             def execute_and_update():
                 """Führe Script aus und aktualisiere das Feature."""
-                from modeling import BodyTransaction
+                from modeling.body_transaction import BodyTransaction
                 from modeling.result_types import OperationResult
 
                 code = dialog.editor.toPlainText()
