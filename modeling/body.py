@@ -298,6 +298,27 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         """Delegates to shape_builders module - see convert_legacy_edge_selectors."""
         return convert_legacy_edge_selectors(edge_selectors)
 
+    @staticmethod
+    def from_solid(solid, name: str = "Imported Body", document=None) -> 'Body':
+        """
+        Create a Body from a Build123d Solid object.
+
+        This is used by importers (STEP, CadQuery, etc.) to create
+        Body objects from raw Build123d solids.
+
+        Args:
+            solid: Build123d Solid object
+            name: Name for the new body
+            document: Optional Document instance
+
+        Returns:
+            Body instance with the solid set
+        """
+        body = Body(name, document=document)
+        body._build123d_solid = solid
+        body.invalidate_mesh()
+        return body
+
     # === PHASE 2: Lazy-Loaded Properties ===
     @property
     def vtk_mesh(self):

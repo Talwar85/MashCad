@@ -484,7 +484,70 @@ class MenuActionsMixin:
         except Exception as e:
             logger.error(f"STEP Import Fehler: {e}")
             QMessageBox.critical(self, "Import Fehler", f"STEP Import fehlgeschlagen:\n{e}")
-    
+
+    def _import_cadquery_script(self):
+        """Import CadQuery/Build123d script as new body."""
+        from i18n import tr
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("CadQuery Script importieren"),
+            "",
+            "Python Files (*.py);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            from modeling.cadquery_importer import CadQueryImporter
+            from modeling import Body
+
+            progress = QProgressDialog(
+                "Importiere CadQuery Script...",
+                "Abbrechen",
+                0, 100,
+                self
+            )
+            progress.setWindowTitle("CadQuery Import")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(10)
+
+            importer = CadQueryImporter(self.document)
+            result = importer.execute_script(path)
+
+            progress.setValue(50)
+
+            if result.success and result.solids:
+                # Create bodies from solids
+                for solid in result.solids:
+                    body = Body.from_solid(solid, name=result.name, document=self.document)
+                    self.document.add_body(body)
+
+                progress.setValue(90)
+
+                self.browser.refresh()
+                self._update_viewport_all_impl()
+                logger.success(f"CadQuery Script importiert: {path} ({len(result.solids)} Körper)")
+
+                if result.warnings:
+                    for warning in result.warnings:
+                        logger.warning(f"CadQuery: {warning}")
+            else:
+                if result.errors:
+                    error_msg = "\n".join(result.errors)
+                    logger.error(f"CadQuery Import Fehler: {error_msg}")
+                    QMessageBox.critical(self, "Import Fehler", f"Script fehlgeschlagen:\n{error_msg}")
+                else:
+                    logger.warning("Keine Körper aus Script generiert")
+                    QMessageBox.information(self, "Import", "Script wurde ausgeführt aber keine Körper generiert.")
+
+            progress.close()
+
+        except Exception as e:
+            logger.error(f"CadQuery Import Fehler: {e}")
+            QMessageBox.critical(self, "Import Fehler", f"CadQuery Import fehlgeschlagen:\n{e}")
+
     def _import_svg(self):
         """Import SVG as sketch geometry."""
         from i18n import tr

@@ -645,6 +645,7 @@ class SetupMixin:
         file_menu.addAction(tr("Export 3MF..."), self._export_3mf)
         file_menu.addAction(tr("Export STEP..."), self._export_step)
         file_menu.addAction(tr("Import STEP..."), self._import_step)
+        file_menu.addAction(tr("Import CadQuery Script..."), self._import_cadquery_script)
         file_menu.addAction(tr("Export SVG..."), self._export_svg)
         file_menu.addAction(tr("Import SVG..."), self._import_svg)
         file_menu.addSeparator()
