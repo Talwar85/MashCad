@@ -580,9 +580,74 @@ class ToolMixin:
         """Bestätigt Fillet/Chamfer-Operation."""
         if not self._fillet_target_body:
             return
-        
-        # Implementierung in main_window.py
-        pass
+
+        body = self._fillet_target_body
+        mode = self._fillet_mode
+
+        # Hole selektierte Kanten vom Viewport
+        if not hasattr(self.viewport_3d, 'selected_edges'):
+            logger.warning("Viewport hat keine selected_edges")
+            return
+
+        edge_indices = list(self.viewport_3d.selected_edges) if self.viewport_3d.selected_edges else []
+
+        if not edge_indices:
+            logger.warning("Keine Kanten selektiert")
+            return
+
+        # Radius/Distance vom Panel holen
+        radius = self.fillet_panel.get_value() if hasattr(self.fillet_panel, 'get_value') else 2.0
+
+        # Feature erstellen
+        from modeling import FilletFeature, ChamferFeature
+        from modeling.geometric_selector import GeometricEdgeSelector
+        from modeling.body_compute_extended import edge_index_of
+        from gui.commands.feature_commands import AddFeatureCommand
+        import build123d as b
+
+        solid = body._build123d_solid
+        edges = list(solid.edges())
+
+        # Edges und Shape-IDs sammeln
+        edge_selectors = []
+        for edge_idx in edge_indices:
+            if 0 <= edge_idx < len(edges):
+                edge = edges[edge_idx]
+                geo_sel = GeometricEdgeSelector.from_edge(edge)
+                edge_selectors.append(geo_sel.to_dict())
+
+        # Feature erstellen
+        if mode == 'fillet':
+            feature = FilletFeature(
+                name=f"Fillet r{radius}",
+                radius=radius,
+                edge_selectors=edge_selectors
+            )
+        else:  # chamfer
+            feature = ChamferFeature(
+                name=f"Chamfer d{radius}",
+                distance=radius,
+                edge_selectors=edge_selectors
+            )
+
+        # Feature zum Body hinzufügen
+        cmd = AddFeatureCommand(
+            body, feature, self,
+            description=f"{mode.title()} {len(edge_indices)} edges"
+        )
+        self.undo_stack.push(cmd)
+
+        # UI aufräumen
+        self._on_fillet_cancelled()
+
+        # Body neu berechnen
+        try:
+            body._rebuild()
+            self._update_body_from_build123d(body, body._build123d_solid)
+            self.browser.refresh()
+            logger.success(f"{mode.title()}: {len(edge_indices)} Kanten, r={radius}")
+        except Exception as e:
+            logger.error(f"{mode.title()} fehlgeschlagen: {e}")
 
     def _on_fillet_radius_changed(self, radius):
         """Handler wenn Fillet-Radius geändert wird."""
