@@ -560,15 +560,19 @@ class ToolMixin:
         """Aktiviert Fillet/Chamfer-Modus für einen Body."""
         self._fillet_target_body = body
         self._fillet_mode = mode
-        
+
         # Edge-Selection aktivieren
-        self.viewport_3d.set_edge_selection_mode(True, body.id)
-        
+        if hasattr(self.viewport_3d, 'start_edge_selection_mode'):
+            filter_mode = "concave" if mode == "fillet" else "all"
+            self.viewport_3d.start_edge_selection_mode(body.id, filter_mode)
+        else:
+            logger.warning("Viewport hat keine start_edge_selection_mode Methode")
+
         # Panel anzeigen
         self.fillet_panel.set_mode(mode)
         self.fillet_panel.reset()
         self.fillet_panel.show_at(self.viewport_3d)
-        
+
         self.statusBar().showMessage(f"{mode.title()}: Kanten wählen")
 
     def _on_edge_selection_changed(self, count: int):
@@ -659,8 +663,8 @@ class ToolMixin:
         self._fillet_mode = None
         self._fillet_target_body = None
 
-        if hasattr(self.viewport_3d, 'set_edge_selection_mode'):
-            self.viewport_3d.set_edge_selection_mode(False)
+        if hasattr(self.viewport_3d, 'stop_edge_selection_mode'):
+            self.viewport_3d.stop_edge_selection_mode()
 
         # Preview entfernen
         if hasattr(self.viewport_3d, 'clear_all_feature_previews'):

@@ -189,10 +189,32 @@ class FeatureDialogsMixin:
         """Callback wenn im Pending-Mode ein Body für Shell angeklickt wird."""
         self._pending_shell_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
-        
+
         body = self.document.find_body_by_id(body_id)
         if body:
             self._activate_shell_for_body(body)
+
+    def _on_body_clicked_for_fillet(self, body_id: str):
+        """Callback wenn im Pending-Mode ein Body für Fillet/Chamfer angeklickt wird."""
+        # Check which mode is pending
+        if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
+            self._pending_fillet_mode = False
+            mode = 'fillet'
+        elif hasattr(self, '_pending_chamfer_mode') and self._pending_chamfer_mode:
+            self._pending_chamfer_mode = False
+            mode = 'chamfer'
+        else:
+            return  # No fillet/chamfer pending
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+
+        body = self.document.find_body_by_id(body_id)
+        if body:
+            # Import here to avoid circular import
+            from gui.tool_operations import ToolMixin
+            # Call the activate method - need to access it through self
+            if hasattr(self, '_activate_fillet_chamfer_for_body'):
+                self._activate_fillet_chamfer_for_body(body, mode)
 
     def _activate_shell_for_body(self, body):
         """Aktiviert Shell-Modus für einen Body."""
