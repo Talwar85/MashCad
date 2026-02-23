@@ -1003,7 +1003,7 @@ class FeatureMixin:
         Extrudiert eine Body-Fläche mit build123d (Push/Pull).
 
         Args:
-            face_data: Dict mit face_index, body_id, normal, center
+            face_data: Detectors Face-Objekt oder Dict mit face_index, body_id, normal, center
             height: Extrusionshöhe (+ = Pull, - = Push)
             operation: "cut" oder "join"
         """
@@ -1019,12 +1019,35 @@ class FeatureMixin:
             logger.warning("Kein Body oder Body hat keinen Solid")
             return
 
-        face_idx = face_data.get('face_index')
+        # Extractionsrichtung (umgekehrt wenn Push/negativ)
+        direction = -1 if height < 0 else 1
+        distance = abs(height)
+
+        # Operation-Typ bestimmen
+        if height < 0:
+            op_type = "cut"  # Push = Material entfernen
+        else:
+            op_type = "join"  # Pull = Material hinzufügen
+
+        # Face-Index und Normal ermitteln
+        if hasattr(face_data, 'face_index'):
+            # Detectors Face-Objekt
+            face_idx = face_data.face_index
+            face_body_id = face_data.owner_id
+            normal = getattr(face_data, 'normal', (0, 0, 1))
+            center = getattr(face_data, 'center', (0, 0, 0))
+        else:
+            # Dict format
+            face_idx = face_data.get('face_index')
+            face_body_id = face_data.get('body_id')
+            normal = face_data.get('normal', (0, 0, 1))
+            center = face_data.get('center', (0, 0, 0))
+
         if face_idx is None:
-            logger.warning("Kein face_index in face_data")
+            logger.warning("Kein face_index verfügbar")
             return
 
-        # Hole die Face
+        # Hole die Face aus dem Solid
         solid = body._build123d_solid
         faces = list(solid.faces())
 
@@ -1034,80 +1057,36 @@ class FeatureMixin:
 
         face = faces[face_idx]
 
-        # Hole Face-Normale für Extrusionsrichtung
+        # Erstelle GeometricFaceSelector für TNP
+        geo_sel = GeometricFaceSelector.from_face(face)
+
+        # PushPullFeature erstellen
+        feature = PushPullFeature(
+            name=f"PushPull: {op_type.capitalize()} {distance:.1f}mm",
+            face_index=face_idx,
+            distance=height,  # Mit Vorzeichen für Push/Pull
+            direction=direction,
+            operation=op_type.capitalize(),
+            face_selector=geo_sel.to_dict()
+        )
+
+        # Plane-Info speichern
+        feature.plane_origin = center
+        feature.plane_normal = normal
+
+        # Feature zum Body hinzufügen
+        cmd = AddFeatureCommand(
+            body, feature, self,
+            description=f"PushPull {op_type} {distance:.1f}mm"
+        )
+        self.undo_stack.push(cmd)
+
+        # Body neu berechnen
         try:
-            from OCP.BRepGprop import BRepGProp_Face
-            from OCP.GeomAbs import GeomAbs_Plane
-            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            body._rebuild()
+            self._update_body_from_build123d(body, body._build123d_solid)
+            self.browser.refresh()
 
-            normal = face_data.get('normal', (0, 0, 1))
-
-            # Erstelle GeometricFaceSelector für TNP
-            geo_sel = GeometricFaceSelector.from_face(face)
-
-            # Extrusionsrichtung (umgekehrt wenn Push/negativ)
-            direction = -1 if height < 0 else 1
-            distance = abs(height)
-
-            # Operation-Typ bestimmen
-            if height < 0:
-                op_type = "cut"  # Push = Material entfernen
-            else:
-                op_type = "join"  # Pull = Material hinzufügen
-
-            # PushPullFeature erstellen
-            feature = PushPullFeature(
-                name=f"PushPull: {op_type.capitalize()} {distance:.1f}mm",
-                face_index=face_idx,
-                distance=height,  # Mit Vorzeichen für Push/Pull
-                direction=direction,
-                operation=op_type.capitalize(),
-                face_selector=geo_sel.to_dict()
-            )
-
-            # Face-Geometrie speichern für Rebuild
-            try:
-                from OCP.BRepTools import BRepTools
-                from OCP.TopoDS import TopoDS_Face
-                from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-
-                # Face-BREP serialisieren
-                location = face.Location()
-                face_copy = face.Trsformed(location.Transformation())
-                face_moved = TopoDS_Face.DownCast(face_copy)
-
-                brep_string = ""
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as tmp:
-                    tmp_path = tmp.name
-                BRepTools.Write(face_moved, tmp_path)
-                with open(tmp_path, 'r') as f:
-                    brep_string = f.read()
-                os.unlink(tmp_path)
-
-                feature.face_brep = brep_string
-            except Exception as e:
-                logger.debug(f"Konnte Face-BREP nicht speichern: {e}")
-
-            # Plane-Info speichern
-            feature.plane_origin = face_data.get('center', (0, 0, 0))
-            feature.plane_normal = normal
-
-            # Feature zum Body hinzufügen
-            cmd = AddFeatureCommand(
-                body, feature, self,
-                description=f"PushPull {op_type} {distance:.1f}mm"
-            )
-            self.undo_stack.push(cmd)
-
-            # Body neu berechnen
-            try:
-                body._rebuild()
-                self._update_body_from_build123d(body, body._build123d_solid)
-                self.browser.refresh()
-
-                logger.success(f"Push/Pull: {face_idx} {op_type} {distance:.1f}mm")
-            except Exception as e:
-                logger.error(f"Push/Pull Rebuild fehlgeschlagen: {e}")
-
+            logger.success(f"Push/Pull: {face_idx} {op_type} {distance:.1f}mm")
         except Exception as e:
-            logger.exception(f"Push/Pull fehlgeschlagen: {e}")
+            logger.error(f"Push/Pull Rebuild fehlgeschlagen: {e}")
