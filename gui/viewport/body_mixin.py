@@ -340,6 +340,10 @@ class BodyRenderingMixin:
         for bid in self._body_actors:
             self.set_body_visibility(bid, visible)
 
+    def set_body_visible(self, body_id: str, visible: bool):
+        """Alias for set_body_visibility - for compatibility with feature_dialogs.py"""
+        self.set_body_visibility(body_id, visible)
+
     def clear_bodies(self):
         """Entfernt alle Körper"""
         for bid in list(self._body_actors.keys()):
