@@ -497,7 +497,7 @@ def test_rebuild_multi_feature_workflow():
     edge_indices = [edge_index_of(body._build123d_solid, e) for e in fillet_edges]
     fillet = FilletFeature(radius=1.0, edge_indices=edge_indices)
 
-    result2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0)
+    result2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0, feature_id=fillet.id)
     assert result2 is not None
     solid2 = result2
     body._build123d_solid = solid2
