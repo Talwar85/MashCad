@@ -949,11 +949,8 @@ class FeatureMixin:
             # Replace the execute method
             dialog._execute_script = execute_and_update
 
-            # Remove the script_executed connection (we handle it directly)
-            try:
-                dialog.script_executed.disconnect()
-            except:
-                pass
+            # Block the script_executed signal (we handle execution directly)
+            dialog.script_executed.block = True
 
             dialog.exec()
 
