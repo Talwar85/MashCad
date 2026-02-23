@@ -229,6 +229,10 @@ class BodyExtrudeMixin:
             # === Polygon-basierte Extrusion ===
             for poly in polys_to_extrude:
                 try:
+                    # Skip dict profiles (ellipse, circle, slot) - handled by native paths
+                    if isinstance(poly, dict):
+                        continue
+
                     coords = list(poly.exterior.coords)[:-1]  # Shapely schlieÃŸt Polygon
                     if len(coords) < 3:
                         continue
@@ -242,8 +246,36 @@ class BodyExtrudeMixin:
                             from build123d import Plane as B3DPlane
                             center_3d = plane.from_local_coords((cx, cy))
                             circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
-                            face = make_face(Wire.make_circle(radius, circle_plane))
-                            logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
+                            outer_wire = Wire.make_circle(radius, circle_plane)
+                            
+                            # Handle holes (interiors) for ring shapes
+                            hole_wires = []
+                            if hasattr(poly, 'interiors') and poly.interiors:
+                                for interior in poly.interiors:
+                                    hole_coords = list(interior.coords)[:-1]
+                                    if len(hole_coords) >= 8:
+                                        hole_circle_info = self._detect_circle_from_points(hole_coords)
+                                        if hole_circle_info:
+                                            hcx, hcy = hole_circle_info['center']
+                                            hradius = hole_circle_info['radius']
+                                            hole_center_3d = plane.from_local_coords((hcx, hcy))
+                                            hole_plane = B3DPlane(origin=hole_center_3d, z_dir=plane.z_dir)
+                                            # Create hole circle with reversed orientation
+                                            hole_wire = Wire.make_circle(hradius, hole_plane)
+                                            hole_wires.append(hole_wire)
+                                        else:
+                                            # Reverse polygon points for hole orientation
+                                            hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                            hole_wires.append(Wire.make_polygon(hole_pts_3d))
+                            
+                            if hole_wires:
+                                # Use Face constructor for proper hole handling
+                                from build123d import Face
+                                face = Face(outer_wire, hole_wires)
+                                logger.info(f"[OCP-FIRST] Ring erkannt: outer_r={radius:.2f}, {len(hole_wires)} holes")
+                            else:
+                                face = make_face(outer_wire)
+                                logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
                         except Exception as e:
                             logger.debug(f"[OCP-FIRST] Native Kreis-Erstellung fehlgeschlagen, Polygon-Fallback: {e}")
                             pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
@@ -251,8 +283,24 @@ class BodyExtrudeMixin:
                             face = make_face(wire)
                     else:
                         pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                        wire = Wire.make_polygon(pts_3d)
-                        face = make_face(wire)
+                        outer_wire = Wire.make_polygon(pts_3d)
+                        
+                        # Handle holes for non-circle polygons
+                        hole_wires = []
+                        if hasattr(poly, 'interiors') and poly.interiors:
+                            for interior in poly.interiors:
+                                hole_coords = list(interior.coords)[:-1]
+                                if len(hole_coords) >= 3:
+                                    # Reverse points for hole orientation
+                                    hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                    hole_wires.append(Wire.make_polygon(hole_pts_3d))
+                        
+                        if hole_wires:
+                            # Use Face constructor for proper hole handling
+                            from build123d import Face
+                            face = Face(outer_wire, hole_wires)
+                        else:
+                            face = make_face(outer_wire)
 
                     solid = self._extrude_single_face(face, feature, plane, naming_service)
                     if solid:
@@ -267,7 +315,15 @@ class BodyExtrudeMixin:
 
             result = solids[0]
             for s in solids[1:]:
-                result = result.fuse(s)
+                fused = result.fuse(s)
+                # Handle ShapeList return from fuse()
+                if hasattr(fused, '__iter__') and not isinstance(fused, type(result)):
+                    # Extract the first solid from ShapeList
+                    solids_list = list(fused)
+                    if solids_list:
+                        result = solids_list[0]
+                else:
+                    result = fused
 
             return result
 

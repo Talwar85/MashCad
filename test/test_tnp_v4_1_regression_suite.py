@@ -676,7 +676,8 @@ def test_complete_modeling_workflow_with_tnp():
         for i in range(4)
     ]
 
-    result2 = body._ocp_fillet(solid, fillet_edges, 2.0)
+    # feature_id is mandatory for OCP-First Fillet
+    result2 = body._ocp_fillet(solid, fillet_edges, 2.0, feature_id=fillet.id)
     assert result2 is not None
     assert result2.is_valid()
 

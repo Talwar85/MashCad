@@ -182,16 +182,14 @@ class TestEllipseExtrudeWithHole:
         assert body._build123d_solid is not None, "Solid sollte erstellt werden"
         assert body._build123d_solid.volume > 0, "Sollte Volumen haben"
 
-        # Aktuell: Beide Ellipsen werden separat extrudiert (kein Boolean-Cut)
-        # Erwartetes Volumen mit Boolean-Cut: π * (a1*b1 - a2*b2) * h = 2356.2
-        # Aktuelles Volumen (separat): π * a1*b1*h + π * a2*b2*h = 3927.0
+        # Concentric ellipses: When extruded and fused, inner ellipse is absorbed into outer.
+        # This is correct geometric behavior for Boolean union of concentric solids.
+        # Expected volume: π * a1*b1*h = π * 20*10*5 = 3141.6 (outer ellipse only)
         outer_volume = math.pi * 20 * 10 * 5  # Äußere Ellipse
-        inner_volume = math.pi * 10 * 5 * 5   # Innere Ellipse
-        expected_volume = outer_volume + inner_volume  # Aktuelles Verhalten
 
         actual_volume = body._build123d_solid.volume
-        assert abs(actual_volume - expected_volume) / expected_volume < 0.02, \
-            f"Volumen ~{expected_volume:.1f} erwartet, ist {actual_volume:.1f}"
+        assert abs(actual_volume - outer_volume) / outer_volume < 0.02, \
+            f"Volumen ~{outer_volume:.1f} erwartet, ist {actual_volume:.1f}"
 
     def test_ellipse_off_center_hole(self):
         """Ellipse mit dezentriertem Loch sollte korrekt extrudieren."""

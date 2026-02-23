@@ -20,7 +20,7 @@ HAS_BUILD123D = False
 HAS_OCP = False
 
 try:
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
     from OCP.BRepBuilderAPI import (
         BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
         BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
