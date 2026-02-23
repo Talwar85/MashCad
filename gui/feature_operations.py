@@ -845,15 +845,120 @@ class FeatureMixin:
         if data[0] == 'feature':
             feature = data[1]
             body = data[2]
-            
+
             # Feature im Viewport hervorheben
             if hasattr(self.viewport_3d, 'highlight_feature'):
                 self.viewport_3d.highlight_feature(body, feature)
-            
+
             # Feature-Details im Panel anzeigen
             if hasattr(self, 'feature_detail_panel'):
                 self.feature_detail_panel.show_feature(feature, body)
-    
+
+    def _edit_feature(self, data):
+        """Wird aufgerufen wenn ein Feature per Doppelklick bearbeitet werden soll."""
+        if not data or data[0] != 'feature':
+            return
+
+        feature = data[1]
+        body = data[2]
+
+        # CadQueryFeature: Öffne Script Editor
+        from modeling.features.cadquery_feature import CadQueryFeature
+        if isinstance(feature, CadQueryFeature):
+            self._edit_cadquery_feature(feature, body)
+            return
+
+        # SketchFeature: Öffne Sketch Editor
+        # ExtrudeFeature mit Sketch: Öffne Sketch Editor
+        # TODO: Andere Feature-Typen implementieren
+
+    def _edit_cadquery_feature(self, feature, body):
+        """Öffne den CadQuery Script Editor mit dem Feature-Script."""
+        from gui.cadquery_editor_dialog import CadQueryEditorDialog
+        from modeling.cadquery_importer import CadQueryImporter
+        from gui.design_tokens import DesignTokens
+
+        try:
+            dialog = CadQueryEditorDialog(self.document, parent=self)
+
+            # Lade das Script aus dem Feature
+            if feature.script:
+                dialog.set_script(feature.script)
+            else:
+                # Fallback: Versuche aus Source-File zu laden
+                if feature.source_file:
+                    try:
+                        from pathlib import Path
+                        script_path = Path(__file__).parent.parent / "examples" / "cadquery_examples" / feature.source_file
+                        if script_path.exists():
+                            dialog.set_script(script_path.read_text(encoding='utf-8'))
+                    except:
+                        pass
+
+            # Überschreibe das execute-Verhalten um das Feature zu aktualisieren
+            original_execute = dialog._execute_script
+
+            def execute_and_update():
+                """Führe Script aus und aktualisiere das Feature."""
+                from modeling import BodyTransaction
+                from modeling.result_types import OperationResult
+
+                code = dialog.editor.toPlainText()
+                script_source = dialog.current_file.name if dialog.current_file else feature.source_file
+
+                # Clear error display
+                dialog.error_label.setVisible(False)
+                dialog.error_label.setText("")
+                dialog.error_label.setStyleSheet("")
+
+                # Execute
+                importer = CadQueryImporter(self.document)
+                result = importer.execute_code(code, source=script_source)
+
+                if result.success and result.solids:
+                    # Use transaction for undo/redo support
+                    with BodyTransaction(body, f"Edit CadQuery Feature: {feature.name}") as txn:
+                        # Update the feature's script
+                        feature.script = code
+                        feature.source_file = script_source
+                        # Update parameters
+                        from modeling.features.cadquery_feature import extract_parameters_from_script
+                        feature.parameters = extract_parameters_from_script(code)
+
+                        # Update the solid
+                        if len(result.solids) > 0:
+                            body._build123d_solid = result.solids[0]
+                            body.invalidate_mesh()
+
+                        txn.commit()
+
+                    # Refresh UI
+                    self.browser.refresh()
+                    self._update_viewport_all_impl()
+
+                    dialog._show_success(f"Feature updated: {len(result.solids)} body(s)")
+                    dialog.accept()  # Close dialog on success
+
+                elif result.success:
+                    dialog._show_warning("No solids were generated from the script")
+                else:
+                    error_text = "\n".join(result.errors)
+                    dialog._show_error(f"Execution failed:\n{error_text}")
+
+            # Replace the execute method
+            dialog._execute_script = execute_and_update
+
+            # Remove the script_executed connection (we handle it directly)
+            try:
+                dialog.script_executed.disconnect()
+            except:
+                pass
+
+            dialog.exec()
+
+        except Exception as e:
+            logger.error(f"Fehler beim Öffnen des CadQuery Editors: {e}")
+
     # =========================================================================
     # Rollback
     # =========================================================================
