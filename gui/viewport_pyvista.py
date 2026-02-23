@@ -5201,6 +5201,28 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         request_render(self.plotter)
 
+    def set_body_visible(self, body_id: str, visible: bool):
+        """
+        Set visibility of a body.
+
+        Args:
+            body_id: ID of the body
+            visible: True to show, False to hide
+        """
+        if not HAS_PYVISTA:
+            return
+
+        actor_names = self._body_actors.get(body_id, [])
+        for name in actor_names:
+            try:
+                actor = self.plotter.actors.get(name)
+                if actor:
+                    actor.SetVisibility(visible)
+            except Exception as e:
+                logger.debug(f"[viewport] Error setting visibility for {name}: {e}")
+
+        request_render(self.plotter)
+
     def update_single_body(self, body, color=None, inactive_component=False):
         """
         Aktualisiert NUR EINEN Body - ohne andere Bodies zu berühren.
