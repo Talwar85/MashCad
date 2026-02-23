@@ -177,3 +177,60 @@ def _tnp_debug_logging_only_for_tnp_suite(request: pytest.FixtureRequest):
     else:
         # Non-TNP Tests: tnp_debug_logging bleibt False (via _global_feature_flag_isolation)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _global_singleton_isolation():
+    """
+    Reset all global singletons before/after each test.
+    
+    This is critical for xdist parallel test execution where tests
+    share the same worker process and global state can leak between tests.
+    
+    Global singletons reset:
+    - FeatureDependencyGraph (modeling.feature_dependency)
+    - BREPCache (modeling.brep_cache)
+    - BREPPersistence (modeling.brep_persistence)
+    - GeometryDriftDetector (modeling.geometry_drift_detector)
+    """
+    # Pre-Test: Reset all global singletons
+    try:
+        from modeling.feature_dependency import clear_global_dependency_graph
+        clear_global_dependency_graph()
+    except ImportError:
+        pass
+    
+    try:
+        from modeling.brep_cache import clear_global_cache
+        clear_global_cache()
+    except ImportError:
+        pass
+    
+    try:
+        from modeling.geometry_drift_detector import get_drift_detector
+        detector = get_drift_detector()
+        detector.clear_all_cache()
+    except ImportError:
+        pass
+    
+    yield
+    
+    # Post-Test: Reset all global singletons (cleanup)
+    try:
+        from modeling.feature_dependency import clear_global_dependency_graph
+        clear_global_dependency_graph()
+    except ImportError:
+        pass
+    
+    try:
+        from modeling.brep_cache import clear_global_cache
+        clear_global_cache()
+    except ImportError:
+        pass
+    
+    try:
+        from modeling.geometry_drift_detector import get_drift_detector
+        detector = get_drift_detector()
+        detector.clear_all_cache()
+    except ImportError:
+        pass
