@@ -80,6 +80,12 @@ class _FakeCamera:
     def GetViewAngle(self):
         return self._view_angle
 
+    def GetParallelProjection(self):
+        return False
+
+    def GetParallelScale(self):
+        return 1.0
+
 
 class _FakeRenderer:
     def __init__(self, actors):
@@ -89,6 +95,14 @@ class _FakeRenderer:
         return 1.0
 
 
+class _FakeInteractor:
+    def width(self):
+        return 800
+
+    def height(self):
+        return 600
+
+
 def _make_dummy_viewport():
     renderer = _FakeRenderer(
         {
@@ -96,7 +110,7 @@ def _make_dummy_viewport():
             "body_b1_e": _FakeActor(visible=True),
         }
     )
-    plotter = SimpleNamespace(renderer=renderer, camera=_FakeCamera())
+    plotter = SimpleNamespace(renderer=renderer, camera=_FakeCamera(), interactor=_FakeInteractor())
 
     vp = SimpleNamespace()
     vp.plotter = plotter
@@ -112,6 +126,8 @@ def _make_dummy_viewport():
     vp._frustum_culling_enabled = True
     vp._frustum_culled_body_ids = set()
     vp._frustum_culling_margin = 1.05
+    vp._frustum_enable_screen_size_test = True
+    vp._frustum_min_screen_radius_px = 1.5
     vp._body_actors = {"b1": ("body_b1_m", "body_b1_e")}
     vp.bodies = {
         "b1": {
@@ -123,6 +139,8 @@ def _make_dummy_viewport():
 
     vp._is_body_actor_visible = PyVistaViewport._is_body_actor_visible.__get__(vp, object)
     vp._get_camera_aspect_ratio = PyVistaViewport._get_camera_aspect_ratio.__get__(vp, object)
+    vp._get_viewport_pixel_size = PyVistaViewport._get_viewport_pixel_size.__get__(vp, object)
+    vp._estimate_projected_radius_px = PyVistaViewport._estimate_projected_radius_px.__get__(vp, object)
     vp._is_bounds_in_camera_frustum = PyVistaViewport._is_bounds_in_camera_frustum.__get__(vp, object)
     vp._apply_frustum_culling = PyVistaViewport._apply_frustum_culling.__get__(vp, object)
     vp._apply_lod_mesh_to_actor = PyVistaViewport._apply_lod_mesh_to_actor.__get__(vp, object)
@@ -190,6 +208,22 @@ def test_frustum_bounds_check_detects_outside_volume():
     assert vp._is_bounds_in_camera_frustum(outside_right) is False
 
 
+def test_frustum_screen_size_culls_tiny_far_body():
+    vp = _make_dummy_viewport()
+    vp._frustum_min_screen_radius_px = 2.0
+
+    tiny_far = (-0.05, 0.05, 389.95, 390.05, -0.05, 0.05)
+    assert vp._is_bounds_in_camera_frustum(tiny_far) is False
+
+
+def test_frustum_screen_size_keeps_medium_far_body():
+    vp = _make_dummy_viewport()
+    vp._frustum_min_screen_radius_px = 2.0
+
+    medium_far = (-1.5, 1.5, 388.5, 391.5, -1.5, 1.5)
+    assert vp._is_bounds_in_camera_frustum(medium_far) is True
+
+
 def test_apply_frustum_culling_hides_and_restores_bodies(monkeypatch):
     monkeypatch.setattr(viewport_mod, "HAS_PYVISTA", True)
     monkeypatch.setattr(viewport_mod, "request_render", lambda *_args, **_kwargs: None)
@@ -205,10 +239,12 @@ def test_apply_frustum_culling_hides_and_restores_bodies(monkeypatch):
         }
     )
     vp = SimpleNamespace(
-        plotter=SimpleNamespace(renderer=renderer, camera=_FakeCamera()),
+        plotter=SimpleNamespace(renderer=renderer, camera=_FakeCamera(), interactor=_FakeInteractor()),
         _frustum_culling_enabled=True,
         _frustum_culled_body_ids=set(),
         _frustum_culling_margin=1.05,
+        _frustum_enable_screen_size_test=True,
+        _frustum_min_screen_radius_px=1.5,
         _body_actors={
             "in": ("body_in_m", "body_in_e"),
             "out": ("body_out_m", "body_out_e"),
@@ -222,6 +258,8 @@ def test_apply_frustum_culling_hides_and_restores_bodies(monkeypatch):
     )
 
     vp._get_camera_aspect_ratio = PyVistaViewport._get_camera_aspect_ratio.__get__(vp, object)
+    vp._get_viewport_pixel_size = PyVistaViewport._get_viewport_pixel_size.__get__(vp, object)
+    vp._estimate_projected_radius_px = PyVistaViewport._estimate_projected_radius_px.__get__(vp, object)
     vp._is_bounds_in_camera_frustum = PyVistaViewport._is_bounds_in_camera_frustum.__get__(vp, object)
     vp._apply_frustum_culling = PyVistaViewport._apply_frustum_culling.__get__(vp, object)
 

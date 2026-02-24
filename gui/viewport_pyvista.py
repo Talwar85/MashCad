@@ -555,6 +555,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._frustum_culling_enabled = bool(is_enabled("viewport_frustum_culling"))
         self._frustum_culled_body_ids = set()
         self._frustum_culling_margin = 1.05
+        self._frustum_enable_screen_size_test = True
+        self._frustum_min_screen_radius_px = 1.5
 
         # Route direct viewport events through the same eventFilter logic.
         # Must be installed after state initialization because style/focus setup
@@ -786,6 +788,67 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         return 1.0
 
+    def _get_viewport_pixel_size(self) -> Tuple[int, int]:
+        """Best-effort viewport pixel size extraction."""
+        render_window = getattr(self.plotter, "render_window", None)
+        if render_window is not None and hasattr(render_window, "GetSize"):
+            try:
+                w, h = render_window.GetSize()
+                if w and h and w > 0 and h > 0:
+                    return int(w), int(h)
+            except Exception:
+                pass
+
+        interactor = getattr(self.plotter, "interactor", None)
+        if interactor is not None:
+            try:
+                if hasattr(interactor, "width") and hasattr(interactor, "height"):
+                    w = int(interactor.width())
+                    h = int(interactor.height())
+                    if w > 0 and h > 0:
+                        return w, h
+            except Exception:
+                pass
+
+        return (1280, 720)
+
+    def _estimate_projected_radius_px(self, radius: float, depth: float, camera, near_clip: float) -> float:
+        """
+        Estimate projected bounding-sphere radius in pixels.
+
+        Used for screen-size culling of tiny distant bodies.
+        """
+        radius = float(max(0.0, radius))
+        if radius <= 0.0:
+            return 0.0
+
+        _w, h = self._get_viewport_pixel_size()
+        if h <= 0:
+            return float("inf")
+
+        try:
+            if hasattr(camera, "GetParallelProjection") and bool(camera.GetParallelProjection()):
+                parallel_scale = float(camera.GetParallelScale()) if hasattr(camera, "GetParallelScale") else 1.0
+                parallel_scale = max(parallel_scale, 1e-9)
+                world_per_px = (2.0 * parallel_scale) / float(h)
+                return radius / max(world_per_px, 1e-12)
+        except Exception:
+            pass
+
+        try:
+            vfov_deg = float(camera.GetViewAngle())
+        except Exception:
+            vfov_deg = 60.0
+        vfov_deg = max(1.0, min(179.0, vfov_deg))
+        vfov_rad = math.radians(vfov_deg)
+
+        effective_depth = max(float(depth), float(near_clip), 1e-9)
+        half_height_world = math.tan(vfov_rad * 0.5) * effective_depth
+        if half_height_world <= 1e-12:
+            return float("inf")
+        ndc_radius = radius / half_height_world
+        return ndc_radius * (float(h) * 0.5)
+
     def _is_bounds_in_camera_frustum(self, bounds) -> bool:
         """Approximate frustum check using bounding sphere in camera space."""
         if bounds is None or len(bounds) != 6:
@@ -862,6 +925,12 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             return False
         if abs(y_cam) - radius > half_h:
             return False
+
+        if getattr(self, "_frustum_enable_screen_size_test", True):
+            projected_radius_px = self._estimate_projected_radius_px(radius, depth, camera, near_clip)
+            min_px = float(max(0.0, getattr(self, "_frustum_min_screen_radius_px", 0.0)))
+            if projected_radius_px < min_px:
+                return False
         return True
 
     def _apply_frustum_culling(self, force: bool = False) -> int:
