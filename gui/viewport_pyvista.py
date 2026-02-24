@@ -391,7 +391,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         
         # State
         self.sketches = []
-        self.bodies = {} 
+        self.bodies = {}
+        self._pending_body_refs = {}  # body_id -> Body reference (for async add_body timing)
         self.detected_faces = []
         self.active_selection_filter = GeometryDetector.SelectionFilter.ALL
         self.selected_faces = set()
@@ -5115,11 +5116,15 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.bodies[body_id]['body'] = body_obj
             self.bodies[body_id]['body_ref'] = body_obj
             self._lod_applied_quality.setdefault(body_id, self._lod_quality_high)
+            self._pending_body_refs.pop(body_id, None)
+        else:
+            # Async update path: Body may be added after this call.
+            self._pending_body_refs[body_id] = body_obj
 
-            # FIX Phase 7: Detector aktualisieren wenn Selection-Mode aktiv
-            # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)
-            if getattr(self, 'edge_select_mode', False) or getattr(self, 'face_selection_mode', False):
-                self._update_detector_for_picking()
+        # FIX Phase 7: Detector aktualisieren wenn Selection-Mode aktiv
+        # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)
+        if getattr(self, 'edge_select_mode', False) or getattr(self, 'face_selection_mode', False):
+            self._update_detector_for_picking()
 
     def set_body_appearance(self, body_id: str, opacity: float = None, color: tuple = None, inactive: bool = None):
         """

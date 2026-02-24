@@ -18,6 +18,12 @@ class _FakeMapper:
     def Modified(self):
         self.modified_calls += 1
 
+    def SetResolveCoincidentTopologyToPolygonOffset(self):
+        return None
+
+    def SetRelativeCoincidentTopologyPolygonOffsetParameters(self, *_args):
+        return None
+
 
 class _FakeActor:
     def __init__(self, visible=True):
@@ -32,6 +38,13 @@ class _FakeActor:
 
     def SetVisibility(self, value):
         self._visible = bool(value)
+
+    def GetProperty(self):
+        return SimpleNamespace(
+            SetRenderLinesAsTubes=lambda *_args: None,
+            SetLineWidth=lambda *_args: None,
+            SetColor=lambda *_args: None,
+        )
 
 
 class _FakeMesh:
@@ -122,3 +135,55 @@ def test_lod_camera_start_stops_timer_and_applies_interaction_lod():
 
     vp._lod_restore_timer.stop.assert_called_once()
     vp._apply_lod_to_visible_bodies.assert_called_once_with(interaction_active=True)
+
+
+def test_pending_body_ref_is_applied_when_body_actor_arrives(monkeypatch):
+    import gui.viewport.body_mixin as body_mixin_mod
+
+    monkeypatch.setattr(body_mixin_mod, "HAS_PYVISTA", True)
+    monkeypatch.setattr(body_mixin_mod, "request_render", lambda *_args, **_kwargs: None)
+
+    class _FakePlotter:
+        def __init__(self):
+            self.renderer = SimpleNamespace(actors={})
+
+        def add_mesh(self, _mesh, **kwargs):
+            name = kwargs["name"]
+            self.renderer.actors[name] = _FakeActor(visible=True)
+
+        def remove_actor(self, actor_name):
+            self.renderer.actors.pop(actor_name, None)
+
+    class _RenderableMesh:
+        def __init__(self):
+            self.point_data = {}
+            self.n_points = 3200
+
+        def compute_normals(self, **_kwargs):
+            return self
+
+    fake_body_ref = object()
+    mesh_obj = _RenderableMesh()
+    edge_mesh_obj = SimpleNamespace(n_lines=12)
+
+    viewport = SimpleNamespace(
+        plotter=_FakePlotter(),
+        _body_actors={},
+        bodies={},
+        detected_faces=[],
+        detector=SimpleNamespace(selection_faces=[]),
+        _section_view_enabled=False,
+        _pending_body_refs={"b1": fake_body_ref},
+    )
+    viewport.add_body = body_mixin_mod.BodyRenderingMixin.add_body.__get__(viewport, object)
+
+    viewport.add_body(
+        bid="b1",
+        name="Body 1",
+        mesh_obj=mesh_obj,
+        edge_mesh_obj=edge_mesh_obj,
+        color=(0.7, 0.7, 0.7),
+    )
+
+    assert viewport.bodies["b1"]["body_ref"] is fake_body_ref
+    assert "b1" not in viewport._pending_body_refs

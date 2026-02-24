@@ -234,6 +234,10 @@ class BodyRenderingMixin:
                     actors_list.append(n_edge)
                 
                 self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
+                pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
+                if pending_ref is not None:
+                    self.bodies[bid]["body"] = pending_ref
+                    self.bodies[bid]["body_ref"] = pending_ref
 
                 # PERFORMANCE Phase 5: Invalidate section cache for this body
                 # (mesh changed, so cached clipped versions are stale)
@@ -322,6 +326,10 @@ class BodyRenderingMixin:
                     
                 actors_list.append(n_mesh)
                 self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
+                pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
+                if pending_ref is not None:
+                    self.bodies[bid]["body"] = pending_ref
+                    self.bodies[bid]["body_ref"] = pending_ref
                 
             self._body_actors[bid] = tuple(actors_list)
 
