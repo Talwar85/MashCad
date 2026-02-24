@@ -3,11 +3,14 @@ Regression tests for robust plane basis normalization.
 """
 
 import math
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from modeling.geometry_utils import normalize_plane_axes
 from modeling.shape_builders import get_plane_from_sketch
 from modeling.component import Component
 from sketcher import Sketch
+from gui.sketch_operations import SketchMixin
 
 
 def _dot(a, b):
@@ -95,3 +98,44 @@ def test_component_from_dict_normalizes_sketch_plane_basis():
     assert abs(_dot(sketch.plane_normal, sketch.plane_x_dir)) < 1e-8
     assert abs(_dot(sketch.plane_normal, sketch.plane_y_dir)) < 1e-8
     assert abs(_dot(sketch.plane_x_dir, sketch.plane_y_dir)) < 1e-8
+
+
+class _SketchMixinHarness(SketchMixin):
+    def __init__(self):
+        self.created_sketches = []
+        self.document = SimpleNamespace(
+            sketches=self.created_sketches,
+            new_sketch=self._new_sketch,
+        )
+        self.viewport_3d = SimpleNamespace(_last_picked_body_id=None)
+        self.browser = SimpleNamespace(refresh=Mock())
+        self.sketch_editor = SimpleNamespace(sketch=None)
+        self._set_mode = Mock()
+        self._set_sketch_body_references = Mock()
+
+    def _new_sketch(self, name):
+        sketch = SimpleNamespace(name=name)
+        self.created_sketches.append(sketch)
+        return sketch
+
+    def _calculate_plane_axes(self, _normal):
+        return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+
+
+def test_create_sketch_at_passes_normalized_x_dir_to_reference_setup():
+    harness = _SketchMixinHarness()
+
+    harness._create_sketch_at(
+        origin=(0.0, 0.0, 0.0),
+        normal=(0.0, 0.0, 1.0),
+        x_dir_override=(0.0, 0.0, 1.0),  # invalid: parallel to normal
+    )
+
+    args = harness._set_sketch_body_references.call_args[0]
+    passed_origin = args[0]
+    passed_normal = args[1]
+    passed_x_dir = args[2]
+
+    assert passed_origin == (0.0, 0.0, 0.0)
+    assert _length(passed_x_dir) > 0.999
+    assert abs(_dot(passed_x_dir, passed_normal)) < 1e-8

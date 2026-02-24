@@ -11,6 +11,7 @@ W26 signal integration tests.
 W29: Headless-Hardening for stable CI execution.
 """
 
+import math
 import os
 import sys
 from types import SimpleNamespace
@@ -132,6 +133,31 @@ def test_mainwindow_projection_clear_calls_viewport():
     MainWindow._on_projection_preview_cleared(host)
 
     viewport.clear_projection_preview.assert_called_once()
+
+
+def test_set_reference_bodies_repairs_parallel_plane_axes(editor):
+    editor.set_reference_bodies(
+        [],
+        plane_normal=(0.0, 0.0, 1.0),
+        plane_origin=(0.0, 0.0, 0.0),
+        plane_x=(0.0, 0.0, 1.0),  # invalid: parallel to normal
+    )
+
+    x_dir = tuple(editor.sketch_plane_x_dir)
+    y_dir = tuple(editor.sketch_plane_y_dir)
+    normal = tuple(editor.sketch_plane_normal)
+
+    x_len = math.sqrt(sum(c * c for c in x_dir))
+    y_len = math.sqrt(sum(c * c for c in y_dir))
+    dot_nx = sum(a * b for a, b in zip(normal, x_dir))
+    dot_ny = sum(a * b for a, b in zip(normal, y_dir))
+    dot_xy = sum(a * b for a, b in zip(x_dir, y_dir))
+
+    assert x_len > 0.999
+    assert y_len > 0.999
+    assert abs(dot_nx) < 1e-8
+    assert abs(dot_ny) < 1e-8
+    assert abs(dot_xy) < 1e-8
 
 
 # W28: Neue Tests für Projection Robustness und Cursor Parity

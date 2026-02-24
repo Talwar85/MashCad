@@ -1848,32 +1848,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         self.reference_bodies = []
-        self.sketch_plane_normal = plane_normal
         self.sketch_plane_origin = plane_origin
 
         import numpy as np
 
         # Alles in float64 casten für PrÄzision
-        n = np.array(plane_normal, dtype=np.float64)
-        norm = np.linalg.norm(n)
-        n = n / norm if norm > 0 else np.array([0,0,1], dtype=np.float64)
-
-        if plane_x:
-            u = np.array(plane_x, dtype=np.float64)
-            u = u / np.linalg.norm(u)
-        else:
-            if self._safe_float(abs(n[2])) < 0.9:
-                u = np.cross(n, [0, 0, 1])
-            else:
-                u = np.cross(n, [1, 0, 0])
-            u = u / np.linalg.norm(u)
-
-        v = np.cross(n, u)
+        n_tuple, x_tuple, y_tuple = normalize_plane_axes(plane_normal, plane_x, None)
+        n = np.array(n_tuple, dtype=np.float64)
+        u = np.array(x_tuple, dtype=np.float64)
+        v = np.array(y_tuple, dtype=np.float64)
         origin = np.array(plane_origin, dtype=np.float64)
 
         # NEU: Speichere Achsen für Orientierungs-Indikator
-        self.sketch_plane_x_dir = tuple(u)
-        self.sketch_plane_y_dir = tuple(v)
+        self.sketch_plane_normal = tuple(n_tuple)
+        self.sketch_plane_x_dir = tuple(x_tuple)
+        self.sketch_plane_y_dir = tuple(y_tuple)
 
         # Berechne projizierten Welt-Origin auf die Sketch-Ebene
         # Welt-Origin (0,0,0) → projiziere auf Ebene

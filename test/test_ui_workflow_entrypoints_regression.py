@@ -10,7 +10,7 @@ Focus:
 import os
 import sys
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -18,15 +18,7 @@ from PySide6.QtWidgets import QApplication
 
 os.environ["QT_OPENGL"] = "software"
 
-with patch.dict(
-    "sys.modules",
-    {
-        "PySide6.QtWebEngineWidgets": Mock(),
-        "pyvista": Mock(),
-        "pyvistaqt": Mock(),
-    },
-):
-    from gui.main_window import MainWindow
+from gui.main_window import MainWindow
 
 
 def _qt_app():

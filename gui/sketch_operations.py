@@ -116,7 +116,8 @@ class SketchMixin:
         self.sketch_editor.sketch = s
         
         # Bodies als Referenz übergeben (für Snapping auf Kanten)
-        self._set_sketch_body_references(origin, normal)
+        # Nutzt dieselbe normalisierte X-Achse wie der Sketch selbst.
+        self._set_sketch_body_references(origin, normal, x_dir)
         
         self._set_mode("sketch")
         self.browser.refresh()
