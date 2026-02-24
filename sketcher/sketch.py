@@ -2169,6 +2169,21 @@ class Sketch:
             except ImportError:
                 logger.debug("Shapely nicht verfügbar für Profil-Wiederherstellung")
 
+        # FIX: Plane-Daten wiederherstellen (BUG in architecturvision dokumentiert)
+        # Plane-Daten MÜSSEN vor closed_profiles wiederhergestellt werden,
+        # da normalize_plane_basis() sie benötigt
+        if 'plane_origin' in data:
+            sketch.plane_origin = tuple(data['plane_origin'])
+        if 'plane_normal' in data:
+            sketch.plane_normal = tuple(data['plane_normal'])
+        if 'plane_x_dir' in data and data['plane_x_dir'] is not None:
+            sketch.plane_x_dir = tuple(data['plane_x_dir'])
+        if 'plane_y_dir' in data and data['plane_y_dir'] is not None:
+            sketch.plane_y_dir = tuple(data['plane_y_dir'])
+
+        # Normalisiere die Plane-Basis um parallele/degeneirierte Achsen zu korrigieren
+        sketch.normalize_plane_basis()
+
         return sketch
 
     def __repr__(self):

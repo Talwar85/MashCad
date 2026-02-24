@@ -139,3 +139,100 @@ def test_create_sketch_at_passes_normalized_x_dir_to_reference_setup():
     assert passed_origin == (0.0, 0.0, 0.0)
     assert _length(passed_x_dir) > 0.999
     assert abs(_dot(passed_x_dir, passed_normal)) < 1e-8
+
+
+def test_sketch_from_dict_restores_and_normalizes_plane_data():
+    """Test that Sketch.from_dict() restores plane data and normalizes invalid axes."""
+    sketch_data = {
+        "name": "TestSketch",
+        "id": "sk_123",
+        "points": [],
+        "lines": [],
+        "line_slot_markers": {},
+        "circles": [],
+        "arcs": [],
+        "arc_slot_markers": {},
+        "ellipses": [],
+        "splines": [],
+        "native_splines": [],
+        "constraints": [],
+        "closed_profiles": [],
+        # XZ-Ebene (Normal = Y-Achse)
+        "plane_origin": [10.0, 20.0, 30.0],
+        "plane_normal": [0.0, 1.0, 0.0],
+        # Invalid: parallel to normal
+        "plane_x_dir": [0.0, 1.0, 0.0],
+        "plane_y_dir": [0.0, 0.0, 0.0],
+    }
+
+    sketch = Sketch.from_dict(sketch_data)
+
+    # Plane-Daten müssen wiederhergestellt werden
+    assert sketch.plane_origin == (10.0, 20.0, 30.0), "plane_origin should be restored"
+    assert _length(sketch.plane_normal) > 0.999, "plane_normal should be unit length"
+    assert _length(sketch.plane_x_dir) > 0.999, "plane_x_dir should be unit length"
+    assert _length(sketch.plane_y_dir) > 0.999, "plane_y_dir should be unit length"
+
+    # Invalid Achsen müssen normalisiert werden
+    assert abs(_dot(sketch.plane_normal, sketch.plane_x_dir)) < 1e-8, "normal and x_dir should be orthogonal"
+    assert abs(_dot(sketch.plane_normal, sketch.plane_y_dir)) < 1e-8, "normal and y_dir should be orthogonal"
+    assert abs(_dot(sketch.plane_x_dir, sketch.plane_y_dir)) < 1e-8, "x_dir and y_dir should be orthogonal"
+
+
+def test_sketch_from_dict_with_valid_plane_data():
+    """Test that Sketch.from_dict() preserves valid plane data."""
+    sketch_data = {
+        "name": "TestSketch",
+        "id": "sk_456",
+        "points": [],
+        "lines": [],
+        "line_slot_markers": {},
+        "circles": [],
+        "arcs": [],
+        "arc_slot_markers": {},
+        "ellipses": [],
+        "splines": [],
+        "native_splines": [],
+        "constraints": [],
+        "closed_profiles": [],
+        # YZ-Ebene mit gültigen Achsen
+        "plane_origin": [5.0, 10.0, 15.0],
+        "plane_normal": [1.0, 0.0, 0.0],
+        "plane_x_dir": [0.0, 1.0, 0.0],
+        "plane_y_dir": [0.0, 0.0, 1.0],
+    }
+
+    sketch = Sketch.from_dict(sketch_data)
+
+    assert sketch.plane_origin == (5.0, 10.0, 15.0), "plane_origin should be preserved"
+    # Die Normalisierung sollte die gültigen Achsen erhalten (oder minimal ändern)
+    assert abs(_dot(sketch.plane_normal, sketch.plane_x_dir)) < 1e-8
+    assert abs(_dot(sketch.plane_normal, sketch.plane_y_dir)) < 1e-8
+
+
+def test_sketch_from_dict_without_plane_data_uses_defaults():
+    """Test that Sketch.from_dict() uses defaults when plane data is missing."""
+    sketch_data = {
+        "name": "TestSketch",
+        "id": "sk_789",
+        "points": [],
+        "lines": [],
+        "line_slot_markers": {},
+        "circles": [],
+        "arcs": [],
+        "arc_slot_markers": {},
+        "ellipses": [],
+        "splines": [],
+        "native_splines": [],
+        "constraints": [],
+        "closed_profiles": [],
+        # Keine Plane-Daten
+    }
+
+    sketch = Sketch.from_dict(sketch_data)
+
+    # Default-Werte (XY-Ebene)
+    assert sketch.plane_origin == (0.0, 0.0, 0.0), "default plane_origin should be (0,0,0)"
+    assert _length(sketch.plane_normal) > 0.999, "default plane_normal should be unit length"
+    assert _length(sketch.plane_x_dir) > 0.999, "default plane_x_dir should be unit length"
+    assert _length(sketch.plane_y_dir) > 0.999, "default plane_y_dir should be unit length"
