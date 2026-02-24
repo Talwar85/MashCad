@@ -45,6 +45,7 @@ class SolverResult:
     n_variables: int = 0
     n_constraints: int = 0
     dof: int = -1
+    error_code: str = ""
 
 
 class ConstraintSolver:
@@ -206,6 +207,7 @@ class ConstraintSolver:
                 n_variables=int(getattr(result, "n_variables", 0) or 0),
                 n_constraints=int(getattr(result, "n_constraints", 0) or 0),
                 dof=int(getattr(result, "dof", -1) if getattr(result, "dof", None) is not None else -1),
+                error_code=str(getattr(result, "error_code", "") or ""),
             )
             
         except Exception as e:

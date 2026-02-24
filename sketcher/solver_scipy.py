@@ -186,6 +186,7 @@ class SciPyBackendBase(ISolverBackend):
                 n_variables=total_n_vars,
                 n_constraints=0,
                 dof=total_n_vars,
+                error_code="no_constraints",
             )
 
         # Nur aktive und valide Constraints
@@ -211,6 +212,7 @@ class SciPyBackendBase(ISolverBackend):
                 n_variables=total_n_vars,
                 n_constraints=0,
                 dof=total_n_vars,
+                error_code="no_active_constraints",
             )
 
         # P1: Pre-validation
@@ -225,6 +227,7 @@ class SciPyBackendBase(ISolverBackend):
                     n_variables=total_n_vars,
                     n_constraints=len(active_constraints),
                     dof=dof_estimate,
+                    error_code="pre_validation_failed",
                 )
 
         # Variablen sammeln
@@ -243,6 +246,7 @@ class SciPyBackendBase(ISolverBackend):
                     n_variables=0,
                     n_constraints=len(active_constraints),
                     dof=0,
+                    error_code="",
                 )
             else:
                 return SolverResult(
@@ -253,6 +257,7 @@ class SciPyBackendBase(ISolverBackend):
                     n_variables=0,
                     n_constraints=len(active_constraints),
                     dof=0,
+                    error_code="inconsistent",
                 )
         
         x0 = np.array(x0_vals, dtype=np.float64)
@@ -410,6 +415,7 @@ class SciPyBackendBase(ISolverBackend):
                 n_variables=n_vars,
                 n_constraints=len(active_constraints),
                 dof=max(0, n_vars - n_effective_constraints),
+                error_code="" if success else ("non_converged" if not solver_converged else "inconsistent"),
             )
             
         except Exception as e:
@@ -418,7 +424,8 @@ class SciPyBackendBase(ISolverBackend):
                 False, 0, 0.0,
                 ConstraintStatus.INCONSISTENT,
                 f"Solver-Fehler: {e}",
-                backend_used=self.name
+                backend_used=self.name,
+                error_code="backend_exception",
             )
 
 

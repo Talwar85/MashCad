@@ -61,6 +61,7 @@ class SolverResult:
     n_variables: int = 0
     n_constraints: int = 0
     dof: int = -1
+    error_code: str = ""
 
 
 class ISolverBackend(ABC):

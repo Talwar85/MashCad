@@ -1038,7 +1038,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return status
         return ""
 
-    def _emit_solver_feedback(self, success: bool, message: str, dof: float = 0.0, status_name: str = "", context: str = "Solver", show_hud: bool = True):
+    def _emit_solver_feedback(
+        self,
+        success: bool,
+        message: str,
+        dof: float = 0.0,
+        status_name: str = "",
+        error_code: str = "",
+        context: str = "Solver",
+        show_hud: bool = True,
+    ):
         """
         Konsistentes UI-Feedback fuer Solver-Resultate.
         """
@@ -1047,7 +1056,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         import time
 
-        text = format_solver_failure_message(status_name, message, dof=dof, context=context)
+        text = format_solver_failure_message(
+            status_name,
+            message,
+            dof=dof,
+            error_code=error_code,
+            context=context,
+        )
         self.status_message.emit(text)
         logger.warning(text)
 
@@ -5923,6 +5938,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         status=getattr(result, "status", ""),
                         message=getattr(result, "message", "Solve failed"),
                         dof=getattr(result, "dof", None),
+                        error_code=getattr(result, "error_code", ""),
                     )
                 except ImportError:
                     error_msg = f"Direct edit: {getattr(result, 'message', 'Solve failed')}"
@@ -5932,6 +5948,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     message=error_msg,
                     dof=float(getattr(result, "dof", 0.0) or 0.0),
                     status_name=self._solver_status_name(result),
+                    error_code=str(getattr(result, "error_code", "") or ""),
                     context="Direct edit",
                     show_hud=True,
                 )

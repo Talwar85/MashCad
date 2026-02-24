@@ -1094,6 +1094,7 @@ class Sketch:
                 status=status,
                 message=message,
                 dof=dof,
+                error_code="",
             )
 
         if raw_name == "TOO_MANY_UNKNOWNS":
@@ -1104,6 +1105,7 @@ class Sketch:
                 status=ConstraintStatus.UNDER_CONSTRAINED,
                 message=message or f"Unterbestimmt: {dof} Freiheitsgrade",
                 dof=dof,
+                error_code="too_many_unknowns",
             )
 
         if raw_name == "INCONSISTENT":
@@ -1118,6 +1120,7 @@ class Sketch:
             status=status,
             message=message or "py-slvs konnte nicht loesen",
             dof=dof,
+            error_code="inconsistent" if raw_name == "INCONSISTENT" else "parametric_failed",
         )
 
     def _attach_solver_metadata(self, result: SolverResult) -> SolverResult:
@@ -1138,6 +1141,28 @@ class Sketch:
 
         try:
             result.dof = int(dof)
+        except Exception:
+            pass
+
+        try:
+            current_code = str(getattr(result, "error_code", "") or "").strip().lower()
+            if not current_code:
+                msg = str(getattr(result, "message", "") or "").lower()
+                status = getattr(result, "status", None)
+
+                inferred = ""
+                if "pre-validation failed" in msg:
+                    inferred = "pre_validation_failed"
+                elif "na" in msg and "inf" in msg:
+                    inferred = "nan_residuals"
+                elif "ung" in msg and "constraint" in msg:
+                    inferred = "invalid_constraints"
+                elif status == ConstraintStatus.OVER_CONSTRAINED:
+                    inferred = "inconsistent"
+                elif status == ConstraintStatus.INCONSISTENT:
+                    inferred = "inconsistent"
+
+                result.error_code = inferred
         except Exception:
             pass
 
