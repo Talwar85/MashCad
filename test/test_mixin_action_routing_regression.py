@@ -30,6 +30,9 @@ class _ViewportStub:
         self.cursor_calls = []
         self.edge_selection_callback_kwargs = []
         self.edge_selection_mode_calls = []
+        self.sweep_mode_calls = []
+        self.loft_mode_calls = []
+        self.extrude_mode_calls = []
 
     def set_pending_transform_mode(self, active):
         self.pending_mode_calls.append(bool(active))
@@ -42,6 +45,15 @@ class _ViewportStub:
 
     def start_edge_selection_mode(self, body_id, selection_mode):
         self.edge_selection_mode_calls.append((body_id, selection_mode))
+
+    def set_sweep_mode(self, enabled):
+        self.sweep_mode_calls.append(bool(enabled))
+
+    def set_loft_mode(self, enabled):
+        self.loft_mode_calls.append(bool(enabled))
+
+    def set_extrude_mode(self, enabled, enable_preview=True):
+        self.extrude_mode_calls.append((bool(enabled), bool(enable_preview)))
 
 
 class _Harness(FeatureDialogsMixin, ToolMixin):
@@ -60,7 +72,24 @@ class _Harness(FeatureDialogsMixin, ToolMixin):
             update_edge_count=lambda _n: None,
             show_at=lambda _vp: None,
         )
+        self.sweep_panel = SimpleNamespace(
+            reset=Mock(),
+            show_at=Mock(),
+        )
+        self.loft_panel = SimpleNamespace(
+            reset=Mock(),
+            show_at=Mock(),
+        )
+        self.transform_panel = SimpleNamespace(
+            set_mode=Mock(),
+            set_body_name=Mock(),
+            set_body=Mock(),
+            setToolTip=Mock(),
+            show=Mock(),
+        )
         self._status_bar = _StatusBarStub()
+        self._update_detector = Mock()
+        self._position_transform_panel = Mock()
 
         self._pending_transform_mode = None
         self._pending_split_mode = False
@@ -162,6 +191,56 @@ def test_activate_fillet_enables_edge_selection_with_all_filter():
     assert h._fillet_mode == "fillet"
     assert h._fillet_target_body is body
     assert h.viewport_3d.edge_selection_mode_calls[-1] == ("B17", "all")
+    assert h.viewport_3d.edge_selection_callback_kwargs
+    assert callable(h.viewport_3d.edge_selection_callback_kwargs[-1]["get_body_by_id"])
+
+
+def test_show_transform_ui_falls_back_to_set_body_when_set_body_name_missing():
+    h = _Harness()
+    h.transform_panel = SimpleNamespace(
+        set_mode=Mock(),
+        set_body=Mock(),
+        setToolTip=Mock(),
+        show=Mock(),
+    )
+    h.viewport_3d.show_transform_gizmo = Mock()
+
+    h._show_transform_ui("B1", "Body1", "move")
+
+    h.transform_panel.set_mode.assert_called_once_with("move")
+    h.transform_panel.set_body.assert_called_once_with("Body1")
+    h.transform_panel.show.assert_called_once()
+    h.viewport_3d.show_transform_gizmo.assert_called_once_with("B1", "move")
+
+
+def test_start_sweep_enables_face_picking_and_shows_panel():
+    h = _Harness()
+
+    h._start_sweep()
+
+    assert h._sweep_mode is True
+    assert h._sweep_phase == "profile"
+    assert h.viewport_3d.sweep_mode_calls[-1] is True
+    assert h.viewport_3d.extrude_mode_calls[-1] == (True, False)
+    h.sweep_panel.reset.assert_called_once()
+    h.sweep_panel.show_at.assert_called_once_with(h.viewport_3d)
+    h._update_detector.assert_called_once()
+    assert h._status_bar.last_message is not None
+
+
+def test_start_loft_enables_face_picking_and_shows_panel():
+    h = _Harness()
+
+    h._start_loft()
+
+    assert h._loft_mode is True
+    assert h._loft_profiles == []
+    assert h.viewport_3d.loft_mode_calls[-1] is True
+    assert h.viewport_3d.extrude_mode_calls[-1] == (True, False)
+    h.loft_panel.reset.assert_called_once()
+    h.loft_panel.show_at.assert_called_once_with(h.viewport_3d)
+    h._update_detector.assert_called_once()
+    assert h._status_bar.last_message is not None
 
 
 def test_pending_body_click_dispatch_table_covers_all_modes():
