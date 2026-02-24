@@ -1093,55 +1093,171 @@ class FeatureDialogsMixin:
     # =========================================================================
     # BREP Cleanup Operations
     # =========================================================================
-    
+
+    def _brep_cleanup_notify(self, title: str, message: str, level: str = "info"):
+        """BREP cleanup messages with status bar fallback."""
+        if hasattr(self, "show_notification"):
+            self.show_notification(title, message, level)
+            return
+        if hasattr(self, "statusBar"):
+            try:
+                self.statusBar().showMessage(message, 5000)
+            except Exception:
+                pass
+
     def _toggle_brep_cleanup(self):
-        """Startet BREP Cleanup Modus."""
+        """Start BREP cleanup mode."""
         from i18n import tr
-        
+
+        selected_bodies = self.browser.get_selected_bodies() if hasattr(self, "browser") else []
+        if selected_bodies:
+            body = selected_bodies[0]
+            self._pending_brep_cleanup_mode = False
+            self.viewport_3d.setCursor(Qt.ArrowCursor)
+            if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+                self.viewport_3d.set_pending_transform_mode(False)
+            self._activate_brep_cleanup_for_body(body)
+            return
+
         self._pending_brep_cleanup_mode = True
         self.viewport_3d.setCursor(Qt.CrossCursor)
-        self.statusBar().showMessage(tr("Wähle Body für BREP Cleanup"))
-        logger.info("BREP Cleanup: Klicke auf einen Body")
+        if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+            self.viewport_3d.set_pending_transform_mode(True)
+        self.statusBar().showMessage(tr("Choose body for BREP cleanup"))
+        logger.info("BREP cleanup: click a body")
 
     def _on_body_clicked_for_brep_cleanup(self, body_id: str):
-        """Callback wenn im Pending-Mode ein Body angeklickt wird."""
+        """Body picked while pending BREP cleanup mode."""
         self._pending_brep_cleanup_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
-        
+        if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+            self.viewport_3d.set_pending_transform_mode(False)
+
         body = self.document.find_body_by_id(body_id)
         if body:
             self._activate_brep_cleanup_for_body(body)
+        else:
+            self._brep_cleanup_notify("Body missing", f"Body {body_id} not found.", "warning")
 
     def _activate_brep_cleanup_for_body(self, body):
-        """Startet BREP Cleanup fuer einen Body."""
-        from modeling.brep_face_analyzer import BRepFaceAnalyzer
-        
+        """Activate BREP cleanup for a body."""
+        if not body:
+            return
+        if not hasattr(body, "_build123d_solid") or body._build123d_solid is None:
+            self._brep_cleanup_notify("No BREP", "Selected body has no BREP solid.", "warning")
+            return
+
         self._brep_cleanup_body = body
-        
-        # Analyze faces
-        if body._build123d_solid:
-            analyzer = BRepFaceAnalyzer()
-            result = analyzer.analyze(body._build123d_solid)
-            # Show results in panel
-            logger.info(f"BREP Cleanup: {len(result.features)} Features erkannt")
+
+        if hasattr(self.viewport_3d, "_get_body_by_id") and hasattr(self.document, "find_body_by_id"):
+            self.viewport_3d._get_body_by_id = lambda bid: self.document.find_body_by_id(bid)
+
+        if hasattr(self.viewport_3d, "start_brep_cleanup_mode"):
+            try:
+                started = self.viewport_3d.start_brep_cleanup_mode(body.id)
+                if started is False:
+                    self._brep_cleanup_notify("BREP cleanup", "Unable to start BREP cleanup mode.", "error")
+                    return
+            except Exception as e:
+                self._brep_cleanup_notify("BREP cleanup", f"Start failed: {e}", "error")
+                return
+        else:
+            try:
+                from modeling.brep_face_analyzer import BRepFaceAnalyzer
+
+                analyzer = BRepFaceAnalyzer()
+                result = analyzer.analyze(body._build123d_solid)
+                logger.info(f"BREP cleanup fallback analyzer found {len(result.features)} features")
+            except Exception as e:
+                logger.warning(f"BREP cleanup analyzer fallback failed: {e}")
+
+        logger.info(f"BREP cleanup active for body: {body.name}")
 
     def _close_brep_cleanup(self):
-        """Schliesst BREP Cleanup Modus."""
+        """Close BREP cleanup mode."""
         self._brep_cleanup_body = None
         self._pending_brep_cleanup_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, "set_pending_transform_mode"):
+            self.viewport_3d.set_pending_transform_mode(False)
+        if hasattr(self.viewport_3d, "stop_brep_cleanup_mode"):
+            try:
+                self.viewport_3d.stop_brep_cleanup_mode()
+            except Exception:
+                pass
 
     def _on_brep_cleanup_feature_selected(self, feature_idx: int, additive: bool = False):
-        """Feature im Panel ausgewaehlt."""
-        pass
+        """Feature selected in BREP cleanup panel."""
+        if hasattr(self.viewport_3d, "select_feature_by_index"):
+            self.viewport_3d.select_feature_by_index(feature_idx, additive)
+        else:
+            logger.warning("BREP cleanup: select_feature_by_index not available")
 
     def _on_brep_cleanup_merge(self):
-        """Merge-Button geklickt."""
-        logger.info("BREP Merge ausgeführt")
+        """Merge selected cleanup features."""
+        body = getattr(self, "_brep_cleanup_body", None)
+
+        if hasattr(self.viewport_3d, "execute_brep_cleanup_merge"):
+            try:
+                success = bool(self.viewport_3d.execute_brep_cleanup_merge())
+            except Exception as e:
+                self._brep_cleanup_notify("Merge failed", f"Could not merge faces: {e}", "error")
+                return
+
+            if success:
+                self._brep_cleanup_notify("Merge done", "Faces merged.", "success")
+                if hasattr(self, "browser"):
+                    self.browser.refresh()
+            else:
+                self._brep_cleanup_notify("Merge failed", "Could not merge faces.", "error")
+            return
+
+        if body is None and hasattr(self, "_get_active_body"):
+            body = self._get_active_body()
+        if not body:
+            self._brep_cleanup_notify("Merge failed", "No body selected for merge.", "warning")
+            return
+
+        try:
+            from modeling.brep_face_merger import merge_with_transaction
+
+            result = merge_with_transaction(body)
+            self._brep_cleanup_notify("Merge done", result.message, "success")
+            if hasattr(self, "_trigger_viewport_update"):
+                self._trigger_viewport_update()
+            if hasattr(self, "browser"):
+                self.browser.refresh()
+        except Exception as e:
+            self._brep_cleanup_notify("Merge failed", f"Could not merge faces: {e}", "error")
 
     def _on_brep_cleanup_merge_all(self):
-        """Alle-Merge-Button geklickt."""
-        logger.info("BREP Merge All ausgeführt")
-    
+        """Auto-merge all cleanup candidates."""
+        body = getattr(self, "_brep_cleanup_body", None)
+        if body is None and hasattr(self, "_get_active_body"):
+            body = self._get_active_body()
+        if not body:
+            self._brep_cleanup_notify("Auto merge failed", "No body selected for auto-merge.", "warning")
+            return
+
+        try:
+            from modeling.brep_face_merger import merge_with_transaction
+
+            result = merge_with_transaction(body)
+            self._brep_cleanup_notify("Auto merge done", result.message, "success")
+            if hasattr(self, "_trigger_viewport_update"):
+                self._trigger_viewport_update()
+            if hasattr(self, "browser"):
+                self.browser.refresh()
+
+            if hasattr(self.viewport_3d, "stop_brep_cleanup_mode") and hasattr(self.viewport_3d, "start_brep_cleanup_mode"):
+                try:
+                    self.viewport_3d.stop_brep_cleanup_mode()
+                    self.viewport_3d.start_brep_cleanup_mode(body.id)
+                except Exception:
+                    pass
+        except Exception as e:
+            self._brep_cleanup_notify("Auto merge failed", f"Auto merge failed: {e}", "error")
+
     # =========================================================================
     # TNP Operations
     # =========================================================================

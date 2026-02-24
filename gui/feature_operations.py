@@ -285,8 +285,9 @@ class FeatureMixin:
     
     def _on_toggle_bodies_visibility(self, hide: bool):
         """Legacy Handler - wird von bodies_visibility_state_changed ersetzt"""
-        # Wird noch für Kompatibilität aufgerufen, eigentliche Logik in _on_bodies_visibility_state_changed
-        pass
+        # Legacy bool-map:
+        # hide=True -> state 2 (versteckt), hide=False -> state 0 (normal)
+        self._on_bodies_visibility_state_changed(2 if bool(hide) else 0)
 
     def _on_bodies_visibility_state_changed(self, state: int):
         """
