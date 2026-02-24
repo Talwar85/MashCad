@@ -71,6 +71,7 @@ class _Harness(FeatureDialogsMixin, ToolMixin):
             reset=lambda: None,
             update_edge_count=lambda _n: None,
             show_at=lambda _vp: None,
+            isVisible=lambda: False,
         )
         self.sweep_panel = SimpleNamespace(
             reset=Mock(),
@@ -86,6 +87,10 @@ class _Harness(FeatureDialogsMixin, ToolMixin):
             set_body=Mock(),
             setToolTip=Mock(),
             show=Mock(),
+        )
+        self.nsided_patch_panel = SimpleNamespace(
+            update_edge_count=Mock(),
+            set_edge_count=Mock(),
         )
         self._status_bar = _StatusBarStub()
         self._update_detector = Mock()
@@ -241,6 +246,27 @@ def test_start_loft_enables_face_picking_and_shows_panel():
     h.loft_panel.show_at.assert_called_once_with(h.viewport_3d)
     h._update_detector.assert_called_once()
     assert h._status_bar.last_message is not None
+
+
+def test_edge_selection_changed_routes_sweep_path_edges():
+    h = _Harness()
+    h._sweep_mode = True
+    h._sweep_phase = "path"
+    h._on_edge_selected_for_sweep = Mock()
+    h.viewport_3d.get_selected_edges = lambda: ["e1", "e2"]
+
+    h._on_edge_selection_changed(2)
+
+    h._on_edge_selected_for_sweep.assert_called_once_with(["e1", "e2"])
+
+
+def test_edge_selection_changed_updates_nsided_patch_panel_count():
+    h = _Harness()
+    h._nsided_patch_mode = True
+
+    h._on_edge_selection_changed(3)
+
+    h.nsided_patch_panel.update_edge_count.assert_called_once_with(3)
 
 
 def test_pending_body_click_dispatch_table_covers_all_modes():

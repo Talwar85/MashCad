@@ -617,6 +617,17 @@ class ToolMixin:
             elif hasattr(self.fillet_panel, 'set_edge_count'):
                 self.fillet_panel.set_edge_count(count)
 
+        if getattr(self, '_nsided_patch_mode', False) and hasattr(self, 'nsided_patch_panel'):
+            if hasattr(self.nsided_patch_panel, 'update_edge_count'):
+                self.nsided_patch_panel.update_edge_count(count)
+            elif hasattr(self.nsided_patch_panel, 'set_edge_count'):
+                self.nsided_patch_panel.set_edge_count(count)
+
+        if getattr(self, '_sweep_mode', False) and getattr(self, '_sweep_phase', None) == 'path' and count > 0:
+            if hasattr(self.viewport_3d, 'get_selected_edges') and hasattr(self, '_on_edge_selected_for_sweep'):
+                edges = self.viewport_3d.get_selected_edges() or []
+                self._on_edge_selected_for_sweep(edges)
+
     def _on_fillet_confirmed(self):
         """
         Wendet Fillet/Chamfer über die Feature-Pipeline mit Undo/Redo an.
@@ -879,10 +890,16 @@ class ToolMixin:
 
     def _start_sweep(self):
         """Startet den Sweep-Modus."""
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
         self._sweep_mode = True
         self._sweep_phase = 'profile'
         self._sweep_profile_data = None
         self._sweep_path_data = None
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
 
         # Face picking for profile selection.
         if hasattr(self.viewport_3d, 'set_sweep_mode'):
@@ -900,6 +917,9 @@ class ToolMixin:
 
     def _start_loft(self):
         """Startet den Loft-Modus."""
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
         self._loft_mode = True
         self._loft_profiles = []
 

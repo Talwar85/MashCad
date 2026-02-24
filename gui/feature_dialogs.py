@@ -507,28 +507,145 @@ class FeatureDialogsMixin:
         """Handler wenn eine Fläche für Sweep selektiert wird."""
         if not self._sweep_mode or self._sweep_phase != 'profile':
             return
-        
-        # Store profile data
-        self._sweep_profile_data = {'face_id': face_id}
-        self.sweep_panel.set_profile_selected(True)
-        self._highlight_sweep_profile(self._sweep_profile_data)
-        
-        # Switch to path phase
-        self._sweep_phase = 'path'
-        if hasattr(self.viewport_3d, 'start_sketch_path_mode'):
+
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return
+
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
+
+        profile_data = {
+            "type": face.domain_type,
+            "owner_id": face.owner_id,
+            "face_id": face_id,
+            "plane_origin": face.plane_origin,
+            "plane_normal": face.plane_normal,
+            "plane_x": face.plane_x,
+            "plane_y": face.plane_y,
+            "shapely_poly": face.shapely_poly,
+        }
+
+        if face.domain_type == "body_face":
+            profile_data["body_id"] = face.owner_id
+            profile_data["ocp_face_id"] = getattr(face, "ocp_face_id", None)
+
+            target_body = self.document.find_body_by_id(face.owner_id) if hasattr(self.document, "find_body_by_id") else None
+            resolved_face = None
+            resolved_face_index = getattr(face, "ocp_face_id", None)
+            if (
+                target_body is not None
+                and getattr(target_body, "_build123d_solid", None) is not None
+                and hasattr(self, "_resolve_solid_face_from_pick")
+            ):
+                try:
+                    pick_position = getattr(face, "sample_point", None) or face.plane_origin
+                    resolved_face, resolved_face_index = self._resolve_solid_face_from_pick(
+                        target_body,
+                        face.owner_id,
+                        position=pick_position,
+                        ocp_face_id=getattr(face, "ocp_face_id", None),
+                    )
+                except Exception as e:
+                    logger.debug(f"Sweep: Profil-Face Auflösung fehlgeschlagen: {e}")
+
+            if resolved_face_index is not None:
+                try:
+                    resolved_face_index = int(resolved_face_index)
+                    self._sweep_profile_face_index = resolved_face_index
+                    profile_data["face_index"] = resolved_face_index
+                except Exception:
+                    resolved_face_index = None
+
+            if (
+                resolved_face is not None
+                and target_body is not None
+                and hasattr(self, "_find_or_register_face_shape_id")
+            ):
+                self._sweep_profile_shape_id = self._find_or_register_face_shape_id(
+                    target_body,
+                    resolved_face,
+                    local_index=0,
+                )
+
+            has_primary_ref = (
+                self._sweep_profile_shape_id is not None
+                or self._sweep_profile_face_index is not None
+            )
+            if resolved_face is not None and not has_primary_ref:
+                try:
+                    from modeling.geometric_selector import GeometricFaceSelector
+
+                    self._sweep_profile_geometric_selector = GeometricFaceSelector.from_face(resolved_face).to_dict()
+                except Exception as e:
+                    logger.debug(f"Sweep: Konnte Profil-GeometricSelector nicht erzeugen: {e}")
+
+        self._sweep_profile_data = profile_data
+        if hasattr(self.sweep_panel, "set_profile"):
+            self.sweep_panel.set_profile(profile_data)
+        self._highlight_sweep_profile(profile_data)
+
+        self._sweep_phase = "path"
+        if hasattr(self.viewport_3d, "start_sketch_path_mode"):
             self.viewport_3d.start_sketch_path_mode()
+        if hasattr(self.viewport_3d, "set_extrude_mode"):
+            self.viewport_3d.set_extrude_mode(True, enable_preview=False)
+        if hasattr(self, "_update_detector"):
+            self._update_detector()
+
+        path_body = None
+        if profile_data.get("body_id") and hasattr(self.document, "find_body_by_id"):
+            path_body = self.document.find_body_by_id(profile_data["body_id"])
+        if path_body is None:
+            for candidate in getattr(self.document, "bodies", []):
+                if getattr(candidate, "_build123d_solid", None) is not None:
+                    path_body = candidate
+                    break
+
+        if path_body is not None and hasattr(self.viewport_3d, "set_edge_selection_callbacks"):
+            resolver = getattr(self.document, "find_body_by_id", None)
+            if resolver is None:
+                resolver = lambda bid: next((b for b in getattr(self.document, "bodies", []) if b.id == bid), None)
+            self.viewport_3d.set_edge_selection_callbacks(get_body_by_id=resolver)
+        if path_body is not None and hasattr(self.viewport_3d, "start_edge_selection_mode"):
+            self.viewport_3d.start_edge_selection_mode(path_body.id)
+
         self.statusBar().showMessage("Sweep: Pfad wählen")
 
     def _on_edge_selected_for_sweep(self, edges: list):
         """Handler wenn Kanten für Sweep-Pfad selektiert werden."""
         if not self._sweep_mode or self._sweep_phase != 'path':
             return
-        
-        # Store path data
-        self._sweep_path_data = {'edges': edges}
-        self.sweep_panel.set_path_selected(True)
-        self._highlight_sweep_path(self._sweep_path_data)
-        
+
+        if not edges:
+            return
+
+        build123d_edges = list(self.viewport_3d.get_selected_edges()) if hasattr(self.viewport_3d, "get_selected_edges") else list(edges)
+        edge_indices = self.viewport_3d.get_selected_edge_topology_indices() if hasattr(self.viewport_3d, "get_selected_edge_topology_indices") else []
+        edge_indices = edge_indices or []
+        path_body_id = getattr(self.viewport_3d, "_edge_selection_body_id", None)
+
+        path_data = {
+            "type": "body_edge",
+            "body_id": path_body_id,
+            "edge_indices": edge_indices,
+            "build123d_edges": build123d_edges,
+        }
+
+        if not edge_indices:
+            try:
+                from modeling.geometric_selector import GeometricEdgeSelector
+
+                path_data["path_geometric_selector"] = GeometricEdgeSelector.from_edge(build123d_edges[0]).to_dict()
+            except Exception as e:
+                logger.debug(f"Sweep: Konnte GeometricEdgeSelector nicht erzeugen: {e}")
+
+        self._sweep_path_data = path_data
+        if hasattr(self.sweep_panel, "set_path"):
+            self.sweep_panel.set_path(path_data)
+        self._highlight_sweep_path(path_data)
+
         self.statusBar().showMessage("Sweep: Enter zum Bestätigen")
 
     def _on_sweep_confirmed(self):
@@ -536,28 +653,85 @@ class FeatureDialogsMixin:
         if not self._sweep_profile_data or not self._sweep_path_data:
             logger.warning("Sweep: Profil und Pfad erforderlich")
             return
-        
-        from modeling import SweepFeature
-        from gui.commands.feature_commands import AddFeatureCommand
-        
-        body = self._get_active_body()
-        if not body:
-            body = self.document.new_body()
-        
-        feature = SweepFeature(
-            profile=self._sweep_profile_data,
-            path=self._sweep_path_data,
-            operation=self.sweep_panel.get_operation()
-        )
-        
-        cmd = AddFeatureCommand(body, feature, self, description="Sweep")
-        self.undo_stack.push(cmd)
-        
-        self.browser.refresh()
-        self._update_viewport_all()
-        logger.success("Sweep erstellt")
-        
-        self._stop_sweep_mode()
+
+        from PySide6.QtWidgets import QMessageBox
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import SweepFeature, Body
+        from gui.commands.feature_commands import AddFeatureCommand, AddBodyCommand
+
+        operation = self.sweep_panel.get_operation() if hasattr(self.sweep_panel, "get_operation") else "New Body"
+        is_frenet = self.sweep_panel.is_frenet() if hasattr(self.sweep_panel, "is_frenet") else False
+        twist_angle = self.sweep_panel.get_twist_angle() if hasattr(self.sweep_panel, "get_twist_angle") else 0.0
+        scale_start = self.sweep_panel.get_scale_start() if hasattr(self.sweep_panel, "get_scale_start") else 1.0
+        scale_end = self.sweep_panel.get_scale_end() if hasattr(self.sweep_panel, "get_scale_end") else 1.0
+
+        try:
+            feature = SweepFeature(
+                profile_data=self._sweep_profile_data,
+                path_data=self._sweep_path_data,
+                is_frenet=is_frenet,
+                operation=operation,
+                twist_angle=twist_angle,
+                scale_start=scale_start,
+                scale_end=scale_end,
+            )
+            if self._sweep_profile_shape_id is not None:
+                feature.profile_shape_id = self._sweep_profile_shape_id
+            if self._sweep_profile_face_index is not None:
+                feature.profile_face_index = int(self._sweep_profile_face_index)
+            if (
+                self._sweep_profile_geometric_selector
+                and feature.profile_shape_id is None
+                and feature.profile_face_index is None
+            ):
+                feature.profile_geometric_selector = self._sweep_profile_geometric_selector
+
+            path_geo_selector = self._sweep_path_data.get("path_geometric_selector")
+            path_edge_indices = self._sweep_path_data.get("edge_indices") or []
+            if path_geo_selector and not path_edge_indices:
+                feature.path_geometric_selector = path_geo_selector
+
+            is_new_body = operation == "New Body" or not getattr(self.document, "bodies", [])
+            if is_new_body:
+                target_body = Body(name=f"Sweep_{len(getattr(self.document, 'bodies', [])) + 1}", document=self.document)
+                target_body.features.append(feature)
+                CADTessellator.notify_body_changed()
+                target_body._rebuild()
+
+                if not getattr(target_body, "_build123d_solid", None):
+                    raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
+
+                cmd = AddBodyCommand(self.document, target_body, self, description=f"Sweep ({operation})")
+                self.undo_stack.push(cmd)
+            else:
+                target_body = self._get_active_body()
+                if target_body is None:
+                    target_body = self.document.bodies[0] if getattr(self.document, "bodies", []) else None
+                if target_body is None:
+                    raise ValueError("Sweep-Zielkörper konnte nicht bestimmt werden")
+
+                cmd = AddFeatureCommand(target_body, feature, self, description=f"Sweep ({operation})")
+                self.undo_stack.push(cmd)
+
+                if not getattr(target_body, "_build123d_solid", None):
+                    self.undo_stack.undo()
+                    raise ValueError("Sweep konnte keinen gültigen Solid erzeugen")
+
+                if hasattr(self, "_update_body_from_build123d"):
+                    self._update_body_from_build123d(target_body, target_body._build123d_solid)
+
+            self._stop_sweep_mode()
+            if hasattr(self, "browser"):
+                self.browser.refresh()
+            if hasattr(self, "_update_viewport_all"):
+                self._update_viewport_all()
+
+            logger.success("Sweep erstellt")
+        except Exception as e:
+            logger.error(f"Sweep fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Sweep fehlgeschlagen:\n{str(e)}")
 
     def _on_sweep_cancelled(self):
         """Bricht die Sweep-Operation ab."""
@@ -568,14 +742,16 @@ class FeatureDialogsMixin:
         self._sweep_profile_data = None
         self._sweep_phase = 'profile'
         self._clear_sweep_highlight('profile')
-        self.sweep_panel.set_profile_selected(False)
+        if hasattr(self.sweep_panel, "clear_profile"):
+            self.sweep_panel.clear_profile()
 
     def _on_sweep_path_cleared(self):
         """Handler wenn Pfad-Auswahl entfernt wird."""
         self._sweep_path_data = None
         self._sweep_phase = 'path' if self._sweep_profile_data else 'profile'
         self._clear_sweep_highlight('path')
-        self.sweep_panel.set_path_selected(False)
+        if hasattr(self.sweep_panel, "clear_path"):
+            self.sweep_panel.clear_path()
 
     def _clear_sweep_highlight(self, element_type: str, render: bool = True):
         """Entfernt das Sweep-Highlight für Profil oder Pfad."""
@@ -596,17 +772,55 @@ class FeatureDialogsMixin:
         """Handler wenn Sketch-Element für Sweep-Pfad geklickt wird."""
         if not self._sweep_mode or self._sweep_phase != 'path':
             return
-        
-        # Store path data from sketch
-        sketch = next((s for s in self.document.get_all_sketches() if s.id == sketch_id), None)
-        if sketch:
-            self._sweep_path_data = {
-                'sketch_id': sketch_id,
-                'geom_type': geom_type,
-                'index': index
-            }
-            self.sweep_panel.set_path_selected(True)
-            self._highlight_sweep_path(self._sweep_path_data)
+
+        sketches = self.document.get_all_sketches() if hasattr(self.document, "get_all_sketches") else getattr(self.document, "sketches", [])
+        sketch = next((s for s in sketches if s.id == sketch_id), None)
+        if not sketch:
+            return
+
+        geom = None
+        if geom_type == "line" and 0 <= index < len(getattr(sketch, "lines", [])):
+            geom = sketch.lines[index]
+        elif geom_type == "arc" and 0 <= index < len(getattr(sketch, "arcs", [])):
+            geom = sketch.arcs[index]
+        elif geom_type == "spline" and 0 <= index < len(getattr(sketch, "splines", [])):
+            geom = sketch.splines[index]
+        if geom is None:
+            return
+
+        path_data = {
+            "type": "sketch_edge",
+            "geometry_type": geom_type,
+            "sketch_id": sketch_id,
+            "index": index,
+            "plane_origin": getattr(sketch, "plane_origin", (0, 0, 0)),
+            "plane_normal": getattr(sketch, "plane_normal", (0, 0, 1)),
+            "plane_x": getattr(sketch, "plane_x_dir", (1, 0, 0)),
+            "plane_y": getattr(sketch, "plane_y_dir", (0, 1, 0)),
+        }
+
+        if geom_type == "arc":
+            center = getattr(geom, "center", None)
+            if center is not None:
+                path_data["center"] = (center.x, center.y)
+            path_data["radius"] = getattr(geom, "radius", 1.0)
+            path_data["start_angle"] = getattr(geom, "start_angle", 0.0)
+            path_data["end_angle"] = getattr(geom, "end_angle", 90.0)
+        elif geom_type == "line":
+            path_data["start"] = (geom.start.x, geom.start.y)
+            path_data["end"] = (geom.end.x, geom.end.y)
+        elif geom_type == "spline":
+            ctrl_pts = getattr(geom, "control_points", None) or getattr(geom, "points", None) or []
+            if ctrl_pts and hasattr(ctrl_pts[0], "x") and hasattr(ctrl_pts[0], "y"):
+                path_data["control_points"] = [(p.x, p.y) for p in ctrl_pts]
+            else:
+                path_data["control_points"] = ctrl_pts
+
+        self._sweep_path_data = path_data
+        if hasattr(self.sweep_panel, "set_path"):
+            self.sweep_panel.set_path(path_data)
+        self._highlight_sweep_path(path_data)
+        self.statusBar().showMessage("Sweep: Enter zum Bestätigen")
 
     def _on_sweep_sketch_path_requested(self):
         """Handler wenn User Sketch-Pfad auswählen will."""
@@ -628,7 +842,12 @@ class FeatureDialogsMixin:
         self._sweep_profile_geometric_selector = None
         if hasattr(self.viewport_3d, 'stop_sketch_path_mode'):
             self.viewport_3d.stop_sketch_path_mode()
-        self.viewport_3d.set_sweep_mode(False)
+        if hasattr(self.viewport_3d, 'stop_edge_selection_mode'):
+            self.viewport_3d.stop_edge_selection_mode()
+        if hasattr(self.viewport_3d, 'set_sweep_mode'):
+            self.viewport_3d.set_sweep_mode(False)
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(False)
         self.sweep_panel.hide()
         self._clear_sweep_highlight('profile', render=False)
         self._clear_sweep_highlight('path', render=False)
@@ -649,46 +868,106 @@ class FeatureDialogsMixin:
         """Handler wenn eine Fläche für Loft selektiert wird."""
         if not self._loft_mode:
             return
-        
-        # Add profile
-        profile_data = {'face_id': face_id}
+
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face:
+            return
+
+        profile_data = {
+            "type": face.domain_type,
+            "face_id": face_id,
+            "plane_origin": face.plane_origin,
+            "plane_normal": face.plane_normal,
+            "plane_x": face.plane_x,
+            "plane_y": face.plane_y,
+            "shapely_poly": face.shapely_poly,
+        }
+        if face.domain_type == "body_face":
+            profile_data["body_id"] = face.owner_id
+            profile_data["ocp_face_id"] = getattr(face, "ocp_face_id", None)
+
         self._loft_profiles.append(profile_data)
-        
-        # Update UI
-        self.loft_panel.set_profile_count(len(self._loft_profiles))
+
+        if hasattr(self.loft_panel, "add_profile"):
+            self.loft_panel.add_profile(profile_data)
         self._highlight_loft_profile(profile_data, len(self._loft_profiles) - 1)
-        
-        # Update preview if we have enough profiles
+
         if len(self._loft_profiles) >= 2:
             self._update_loft_preview()
 
     def _on_loft_confirmed(self):
         """Handler wenn Loft bestätigt wird."""
-        if len(self._loft_profiles) < 2:
+        profiles = self.loft_panel.get_profiles() if hasattr(self.loft_panel, "get_profiles") else list(self._loft_profiles)
+        if len(profiles) < 2:
             logger.warning("Loft: Mindestens 2 Profile erforderlich")
             return
-        
-        from modeling import LoftFeature
-        from gui.commands.feature_commands import AddFeatureCommand
-        
-        body = self._get_active_body()
-        if not body:
-            body = self.document.new_body()
-        
-        feature = LoftFeature(
-            profiles=self._loft_profiles,
-            operation=self.loft_panel.get_operation(),
-            ruled=self.loft_panel.is_ruled()
-        )
-        
-        cmd = AddFeatureCommand(body, feature, self, description="Loft")
-        self.undo_stack.push(cmd)
-        
-        self.browser.refresh()
-        self._update_viewport_all()
-        logger.success("Loft erstellt")
-        
-        self._stop_loft_mode()
+
+        from PySide6.QtWidgets import QMessageBox
+        from modeling.cad_tessellator import CADTessellator
+        from modeling import LoftFeature, Body
+        from gui.commands.feature_commands import AddFeatureCommand, AddBodyCommand
+
+        operation = self.loft_panel.get_operation() if hasattr(self.loft_panel, "get_operation") else "New Body"
+        ruled = self.loft_panel.is_ruled() if hasattr(self.loft_panel, "is_ruled") else False
+
+        try:
+            profiles_sorted = sorted(
+                profiles,
+                key=lambda p: (
+                    p.get("plane_origin", (0, 0, 0))[2]
+                    if isinstance(p.get("plane_origin", (0, 0, 0)), (list, tuple))
+                    and len(p.get("plane_origin", (0, 0, 0))) >= 3
+                    else 0
+                ),
+            )
+
+            feature = LoftFeature(
+                profile_data=profiles_sorted,
+                operation=operation,
+                ruled=ruled,
+            )
+
+            is_new_body = operation == "New Body" or not getattr(self.document, "bodies", [])
+            if is_new_body:
+                target_body = Body(name=f"Loft_{len(getattr(self.document, 'bodies', [])) + 1}", document=self.document)
+                target_body.features.append(feature)
+                CADTessellator.notify_body_changed()
+                target_body._rebuild()
+
+                if not getattr(target_body, "_build123d_solid", None):
+                    raise ValueError("Loft konnte keinen gültigen Solid erzeugen")
+
+                cmd = AddBodyCommand(self.document, target_body, self, description=f"Loft ({operation})")
+                self.undo_stack.push(cmd)
+            else:
+                target_body = self._get_active_body()
+                if target_body is None:
+                    target_body = self.document.bodies[0] if getattr(self.document, "bodies", []) else None
+                if target_body is None:
+                    raise ValueError("Loft-Zielkörper konnte nicht bestimmt werden")
+
+                cmd = AddFeatureCommand(target_body, feature, self, description=f"Loft ({operation})")
+                self.undo_stack.push(cmd)
+
+                if not getattr(target_body, "_build123d_solid", None):
+                    self.undo_stack.undo()
+                    raise ValueError("Loft konnte keinen gültigen Solid erzeugen")
+
+                if hasattr(self, "_update_body_from_build123d"):
+                    self._update_body_from_build123d(target_body, target_body._build123d_solid)
+
+            self._stop_loft_mode()
+            if hasattr(self, "browser"):
+                self.browser.refresh()
+            if hasattr(self, "_update_viewport_all"):
+                self._update_viewport_all()
+
+            logger.success("Loft erstellt")
+        except Exception as e:
+            logger.error(f"Loft fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"Loft fehlgeschlagen:\n{str(e)}")
 
     def _on_loft_cancelled(self):
         """Bricht die Loft-Operation ab."""
@@ -698,7 +977,10 @@ class FeatureDialogsMixin:
         """Beendet den Loft-Modus und räumt auf."""
         self._loft_mode = False
         self._loft_profiles = []
-        self.viewport_3d.set_loft_mode(False)
+        if hasattr(self.viewport_3d, 'set_loft_mode'):
+            self.viewport_3d.set_loft_mode(False)
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(False)
         self.loft_panel.hide()
         self._clear_loft_highlights()
         self._clear_loft_preview()
