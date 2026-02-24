@@ -218,6 +218,18 @@ def test_show_transform_ui_falls_back_to_set_body_when_set_body_name_missing():
     h.viewport_3d.show_transform_gizmo.assert_called_once_with("B1", "move")
 
 
+def test_transform_live_update_syncs_visible_panel_values():
+    h = _Harness()
+    h.transform_panel = SimpleNamespace(
+        isVisible=lambda: True,
+        set_values=Mock(),
+    )
+
+    h._on_transform_values_live_update(1.0, 2.0, 3.0)
+
+    h.transform_panel.set_values.assert_called_once_with(1.0, 2.0, 3.0)
+
+
 def test_start_sweep_enables_face_picking_and_shows_panel():
     h = _Harness()
 

@@ -247,7 +247,11 @@ class ToolMixin:
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
-        pass  # Wird vom Viewport gehandhabt
+        if hasattr(self, 'transform_panel') and self.transform_panel and self.transform_panel.isVisible():
+            if hasattr(self.transform_panel, 'set_values'):
+                self.transform_panel.set_values(x, y, z)
+            elif hasattr(self.transform_panel, 'update_values'):
+                self.transform_panel.update_values(x, y, z)
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
