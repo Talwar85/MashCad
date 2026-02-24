@@ -20,6 +20,8 @@ class SolverBackendType(Enum):
     SCIPY_LM = "scipy_lm"           # SciPy Levenberg-Marquardt (default)
     SCIPY_TRF = "scipy_trf"         # SciPy Trust Region Reflective
     STAGED = "staged"               # W35 Experimental: Staged solver
+    CASADI_IPOPT = "casadi_ipopt"   # CasADi + IPOPT (LGPL3, open source)
+    INCREMENTAL = "incremental"     # W35 P4: Incremental solver for dragging
 
 
 @dataclass

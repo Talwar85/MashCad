@@ -98,6 +98,14 @@ try:
 except ImportError:
     sketch_logger = None
 
+# W35 P4: Incremental Solver for smooth dragging
+try:
+    from gui.incremental_drag_integration import IncrementalDragIntegration
+    HAS_INCREMENTAL_DRAG = True
+except ImportError:
+    HAS_INCREMENTAL_DRAG = False
+    IncrementalDragIntegration = None
+
 # Build123d für parametrische CAD-Operationen
 HAS_BUILD123D = False
 try:
@@ -913,6 +921,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._drag_performance_tracker = None
         if HAS_PERFORMANCE_MONITOR and is_enabled("sketch_performance_monitoring"):
             self._drag_performance_tracker = DragPerformanceTracker()
+
+        # W35 P4: Incremental Solver for smooth dragging
+        self._incremental_drag = None
+        if HAS_INCREMENTAL_DRAG and is_enabled("incremental_solver"):
+            try:
+                self._incremental_drag = IncrementalDragIntegration(self)
+                logger.info("[SketchEditor] Incremental drag integration initialized")
+            except Exception as e:
+                logger.warning(f"[SketchEditor] Failed to initialize incremental drag: {e}")
+                self._incremental_drag = None
+
         # W20 P1: Arc Direct Edit State
         self._direct_edit_arc = None
         self._direct_edit_start_start_angle = 0.0
@@ -4819,7 +4838,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_drag_moved = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
-        
+
+        # W35 P4: Start incremental solver for smooth dragging
+        if self._incremental_drag is not None:
+            # Determine the entity being dragged
+            entity_id = None
+            point = handle_hit.get("point")
+            if point:
+                entity_id = point.id
+            elif kind == "circle" and mode == "center":
+                circle = handle_hit.get("circle")
+                if circle:
+                    entity_id = circle.center.id
+            elif kind == "polygon" and mode == "center":
+                polygon = handle_hit.get("polygon")
+                if polygon and hasattr(polygon, 'center_point'):
+                    entity_id = polygon.center_point.id
+
+            if entity_id:
+                self._incremental_drag.start_drag(entity_id)
+
         # SU-005: Begin performance tracking for drag operation
         if self._drag_performance_tracker is not None:
             self._drag_performance_tracker.begin_drag()
@@ -5229,12 +5267,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _maybe_live_solve_during_direct_drag(self):
         """Gedrosseltes Live-Solve für komplexe Abhängigkeiten beim Drag.
-        
+
         SU-005: Enhanced with performance monitoring and feature flag integration.
+        W35 P4: Uses incremental solver for smooth 60 FPS dragging.
         """
         if not self._direct_edit_live_solve:
             return
 
+        # W35 P4: Try incremental solver first (if available and active)
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            now = time.perf_counter()
+            if (now - self._direct_edit_last_live_solve_ts) < self._direct_edit_live_solve_interval_s:
+                self._direct_edit_pending_solve = True
+                return
+
+            # Use incremental solver
+            world_x = self.mouse_world.x()
+            world_y = self.mouse_world.y()
+            result = self._incremental_drag.drag_move(world_x, world_y)
+
+            if result and result.get('success'):
+                # Track performance
+                solve_time_ms = result.get('solve_time_ms', 0)
+                if self._drag_performance_tracker is not None:
+                    self._drag_performance_tracker.record_solver_time(solve_time_ms)
+
+                self._direct_edit_last_live_solve_ts = now
+                self._direct_edit_pending_solve = False
+                self.request_update()
+                return
+
+        # Fallback to full solve
         # SU-005: Check feature flag for drag optimization
         if not is_enabled("sketch_drag_optimization"):
             # Legacy behavior - always solve
@@ -5887,6 +5950,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Schliesst Direct-Manipulation ab und propagiert UI-Updates.
 
         W33 EPIC AA1: Constraint-Rollback bei unloesbarem Drag.
+        W35 P4: Endet Incremental Solver und führt Final-Solve durch.
         """
         if not self._direct_edit_dragging:
             return
@@ -5894,10 +5958,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         moved = self._direct_edit_drag_moved
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
-        
+
         # WICHTIG: Ellipse und Slot VOR dem Reset speichern!
         dragged_ellipse = getattr(self, "_direct_edit_ellipse", None)
         dragged_slot = getattr(self, "_direct_edit_slot", None)
+
+        # W35 P4: End incremental solver drag (final precise solve)
+        incremental_result = None
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            incremental_result = self._incremental_drag.end_drag()
+            if incremental_result and incremental_result.get('stats'):
+                stats = incremental_result['stats']
+                logger.debug(f"[SketchEditor] Incremental drag complete: "
+                           f"{stats.get('drag_count', 0)} solves, "
+                           f"avg {stats.get('avg_drag_time_ms', 0):.2f}ms")
 
         # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
         self._reset_direct_edit_state()
@@ -9937,13 +10011,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         W25: Zentralisierte Methode zum Zurücksetzen aller Direct-Edit-ZustÄnde.
         Sorgt für konsistente Zustandsbereinigung nach ESC/Finish/Rechtsklick.
         """
+        # W35 P4: Cancel incremental solver drag if active
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            self._incremental_drag.cancel_drag()
+
         # SU-005: End performance tracking and log stats
         if self._drag_performance_tracker is not None and self._drag_performance_tracker.is_dragging():
             self._drag_performance_tracker.end_drag()
             stats = self._drag_performance_tracker.get_drag_stats()
             if stats.get('frame_stats', {}).get('frame_count', 0) > 0:
                 logger.debug(f"Drag performance: {stats}")
-        
+
         self._direct_edit_dragging = False
         self._direct_edit_mode = None
         self._direct_edit_circle = None

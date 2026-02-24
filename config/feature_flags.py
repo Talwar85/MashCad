@@ -103,6 +103,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # ========================================================================
     "sketch_drag_optimization": True,  # Throttled solver updates during drag
     "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls
+    "incremental_solver": True,  # W35 P4: Incremental solver for smooth dragging (60 FPS)
 
     # ========================================================================
     # Viewport LOD (Phase 1: Foundation Stabilization)
