@@ -192,6 +192,51 @@ def _remove_body_from_viewport(main_window, body_id: str) -> None:
         pass
 
 
+def _all_document_bodies(document):
+    """Returns all document bodies across components when available."""
+    if hasattr(document, "get_all_bodies"):
+        try:
+            return list(document.get_all_bodies() or [])
+        except Exception:
+            pass
+    return list(getattr(document, "bodies", []) or [])
+
+
+def _remove_body_from_document(document, body) -> bool:
+    """Removes a body from its owning component (component-aware)."""
+    if body is None:
+        return False
+
+    if hasattr(document, "find_body_component"):
+        try:
+            owner = document.find_body_component(body)
+            if owner is not None and body in getattr(owner, "bodies", []):
+                owner.bodies.remove(body)
+                return True
+        except Exception:
+            pass
+
+    try:
+        if body in getattr(document, "bodies", []):
+            document.bodies.remove(body)
+            return True
+    except Exception:
+        pass
+
+    body_id = getattr(body, "id", None)
+    for candidate in _all_document_bodies(document):
+        if candidate is body or (body_id is not None and getattr(candidate, "id", None) == body_id):
+            if hasattr(document, "find_body_component"):
+                try:
+                    owner = document.find_body_component(candidate)
+                    if owner is not None and candidate in getattr(owner, "bodies", []):
+                        owner.bodies.remove(candidate)
+                        return True
+                except Exception:
+                    pass
+    return False
+
+
 def _capture_document_state(document) -> dict:
     """Capture bodies + active body for atomic split command rollback."""
     return {
@@ -222,7 +267,7 @@ def _restore_document_state(document, state: dict) -> None:
 def _update_document_ui(main_window, document) -> None:
     """Refresh browser + body visuals for all bodies in current document."""
     try:
-        for body in document.bodies:
+        for body in _all_document_bodies(document):
             main_window._update_body_from_build123d(body, body._build123d_solid)
         main_window.browser.refresh()
     except Exception as e:
@@ -525,7 +570,7 @@ class AddBodyCommand(QUndoCommand):
 
         doc_state = _capture_document_state(self.document)
         try:
-            if self.body not in self.document.bodies:
+            if self.body not in _all_document_bodies(self.document):
                 self.document.add_body(self.body, set_active=False)
                 logger.debug(f"Redo: Added body {self.body.name}")
 
@@ -542,9 +587,8 @@ class AddBodyCommand(QUndoCommand):
 
         doc_state = _capture_document_state(self.document)
         try:
-            if self.body in self.document.bodies:
+            if _remove_body_from_document(self.document, self.body):
                 _remove_body_from_viewport(self.main_window, self.body.id)
-                self.document.bodies.remove(self.body)
                 logger.debug(f"Undo: Removed body {self.body.name}")
 
             CADTessellator.notify_body_changed()
@@ -626,14 +670,12 @@ class SplitBodyCommand(QUndoCommand):
             body_above = self.document.find_body_by_id(self.body_above_id) if self.body_above_id else None
             body_below = self.document.find_body_by_id(self.body_below_id) if self.body_below_id else None
 
-            if body_above and body_above in self.document.bodies:
+            if body_above and _remove_body_from_document(self.document, body_above):
                 _remove_body_from_viewport(self.main_window, body_above.id)
-                self.document.bodies.remove(body_above)
                 logger.debug(f"SplitBody undo: removed '{body_above.name}'")
 
-            if body_below and body_below in self.document.bodies:
+            if body_below and _remove_body_from_document(self.document, body_below):
                 _remove_body_from_viewport(self.main_window, body_below.id)
-                self.document.bodies.remove(body_below)
                 logger.debug(f"SplitBody undo: removed '{body_below.name}'")
 
             original_body = Body.from_dict(self.original_body_snapshot)
