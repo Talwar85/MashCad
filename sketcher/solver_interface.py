@@ -60,6 +60,7 @@ class SolverResult:
     solve_time_ms: float = 0.0
     n_variables: int = 0
     n_constraints: int = 0
+    dof: int = -1
 
 
 class ISolverBackend(ABC):
