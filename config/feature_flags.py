@@ -109,6 +109,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # ========================================================================
     "viewport_lod_system": True,  # Coarse mesh during camera interaction
     "viewport_frustum_culling": True,  # Hide out-of-frustum bodies during navigation
+    "viewport_mesh_instancing": True,  # Share identical mesh datasets between body actors
     
     # ========================================================================
     # QA & Validation

@@ -8,6 +8,7 @@ import numpy as np
 from loguru import logger
 from typing import Dict, Optional, Tuple
 import hashlib
+from collections import OrderedDict
 
 try:
     import pyvista as pv
@@ -72,6 +73,67 @@ class ActorPool:
         cls._mesh_hashes.clear()
 
 
+class MeshInstanceCache:
+    """
+    Memory-aware mesh instancing cache.
+
+    Reuses identical mesh/edge datasets across body actors to reduce memory and
+    mapper input churn for assemblies with repeated geometry.
+    """
+
+    _cache: "OrderedDict[str, Tuple[object, object]]" = OrderedDict()
+    MAX_ENTRIES = 256
+
+    @classmethod
+    def compute_key(cls, mesh_obj, edge_mesh_obj=None) -> Optional[str]:
+        """Create a stable key from geometric mesh characteristics."""
+        if mesh_obj is None:
+            return None
+        try:
+            mesh_bounds = tuple(float(v) for v in getattr(mesh_obj, "bounds", ()))
+            mesh_parts = (
+                int(getattr(mesh_obj, "n_points", 0)),
+                int(getattr(mesh_obj, "n_cells", 0)),
+                mesh_bounds,
+            )
+
+            edge_parts = ()
+            if edge_mesh_obj is not None:
+                edge_bounds = tuple(float(v) for v in getattr(edge_mesh_obj, "bounds", ()))
+                edge_parts = (
+                    int(getattr(edge_mesh_obj, "n_points", 0)),
+                    int(getattr(edge_mesh_obj, "n_lines", 0)),
+                    edge_bounds,
+                )
+
+            payload = repr((mesh_parts, edge_parts)).encode("utf-8")
+            return hashlib.sha1(payload).hexdigest()
+        except Exception:
+            return None
+
+    @classmethod
+    def get(cls, key: Optional[str]):
+        if not key:
+            return None
+        cached = cls._cache.get(key)
+        if cached is not None:
+            cls._cache.move_to_end(key)
+        return cached
+
+    @classmethod
+    def put(cls, key: Optional[str], mesh_obj, edge_mesh_obj=None):
+        if not key or mesh_obj is None:
+            return
+        cls._cache[key] = (mesh_obj, edge_mesh_obj)
+        cls._cache.move_to_end(key)
+        while len(cls._cache) > cls.MAX_ENTRIES:
+            cls._cache.popitem(last=False)
+
+    @classmethod
+    def clear_all(cls):
+        cls._cache.clear()
+
+
 class BodyRenderingMixin:
     """Mixin mit allen Body-Rendering Methoden"""
     
@@ -134,20 +196,35 @@ class BodyRenderingMixin:
         try:
             # Pfad A: Modernes PyVista Objekt
             if mesh_obj is not None:
-                has_normals = "Normals" in mesh_obj.point_data
-                if not has_normals:
-                    try:
-                        mesh_obj = mesh_obj.compute_normals(
-                            cell_normals=False,
-                            point_normals=True,
-                            split_vertices=True,
-                            feature_angle=30.0,
-                            consistent_normals=True,
-                            auto_orient_normals=True,
-                        )
-                        has_normals = True
-                    except Exception:
-                        pass
+                instancing_enabled = bool(is_enabled("viewport_mesh_instancing"))
+                instance_key = None
+                instance_hit = False
+                if instancing_enabled:
+                    instance_key = MeshInstanceCache.compute_key(mesh_obj, edge_mesh_obj)
+                    cached_pair = MeshInstanceCache.get(instance_key)
+                    if cached_pair is not None:
+                        mesh_obj, edge_mesh_obj = cached_pair
+                        instance_hit = True
+                        logger.debug(f"📦 Mesh instance hit for body {bid}")
+
+                if not instance_hit:
+                    has_normals = "Normals" in mesh_obj.point_data
+                    if not has_normals:
+                        try:
+                            mesh_obj = mesh_obj.compute_normals(
+                                cell_normals=False,
+                                point_normals=True,
+                                split_vertices=True,
+                                feature_angle=30.0,
+                                consistent_normals=True,
+                                auto_orient_normals=True,
+                            )
+                            has_normals = True
+                        except Exception:
+                            pass
+
+                    if instancing_enabled and instance_key is not None:
+                        MeshInstanceCache.put(instance_key, mesh_obj, edge_mesh_obj)
 
                 # PERFORMANCE: Actor Pooling - wiederverwendet Actor wenn möglich
                 if can_reuse_mesh and ActorPool.needs_update(n_mesh, mesh_obj):
@@ -427,6 +504,7 @@ class BodyRenderingMixin:
                 self._frustum_culled_body_ids.clear()
             if hasattr(self, '_pending_body_refs'):
                 self._pending_body_refs.clear()
+            MeshInstanceCache.clear_all()
             ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
 
