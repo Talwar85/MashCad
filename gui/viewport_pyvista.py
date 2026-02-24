@@ -552,6 +552,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._lod_restore_timer.setSingleShot(True)
         self._lod_restore_timer.setInterval(100)
         self._lod_restore_timer.timeout.connect(self._on_lod_restore_timeout)
+        self._frustum_culling_enabled = bool(is_enabled("viewport_frustum_culling"))
+        self._frustum_culled_body_ids = set()
+        self._frustum_culling_margin = 1.05
 
         # Route direct viewport events through the same eventFilter logic.
         # Must be installed after state initialization because style/focus setup
@@ -610,10 +613,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     def _on_camera_interaction_end(self):
         """End interaction callback: emit view change and restore quality LOD."""
         self.view_changed.emit()
-        if not getattr(self, "_lod_enabled", False):
-            return
         try:
-            self._lod_restore_timer.start()
+            self._apply_frustum_culling(force=False)
+            if getattr(self, "_lod_enabled", False):
+                self._lod_restore_timer.start()
         except Exception as e:
             _log_suppressed_exception("camera interaction end LOD", e)
 
@@ -622,6 +625,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if not getattr(self, "_lod_enabled", False):
             return
         self._apply_lod_to_visible_bodies(interaction_active=False)
+        self._apply_frustum_culling(force=False)
 
     def _is_body_actor_visible(self, body_id: str) -> bool:
         actor_names = self._body_actors.get(body_id)
@@ -759,6 +763,172 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         except Exception as e:
             _log_suppressed_exception(f"LOD actor update (body={body_id})", e)
             return False
+
+    def _get_camera_aspect_ratio(self) -> float:
+        """Best-effort camera aspect ratio extraction."""
+        renderer = getattr(self.plotter, "renderer", None)
+        if renderer is not None and hasattr(renderer, "GetTiledAspectRatio"):
+            try:
+                aspect = float(renderer.GetTiledAspectRatio())
+                if aspect > 1e-6:
+                    return aspect
+            except Exception:
+                pass
+
+        render_window = getattr(self.plotter, "render_window", None)
+        if render_window is not None and hasattr(render_window, "GetSize"):
+            try:
+                w, h = render_window.GetSize()
+                if h and h > 0:
+                    return float(w) / float(h)
+            except Exception:
+                pass
+
+        return 1.0
+
+    def _is_bounds_in_camera_frustum(self, bounds) -> bool:
+        """Approximate frustum check using bounding sphere in camera space."""
+        if bounds is None or len(bounds) != 6:
+            return True
+
+        try:
+            xmin, xmax, ymin, ymax, zmin, zmax = [float(v) for v in bounds]
+        except Exception:
+            return True
+
+        if not np.isfinite([xmin, xmax, ymin, ymax, zmin, zmax]).all():
+            return True
+
+        dx = max(0.0, xmax - xmin)
+        dy = max(0.0, ymax - ymin)
+        dz = max(0.0, zmax - zmin)
+        center = np.array(
+            [(xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5],
+            dtype=float,
+        )
+        radius = 0.5 * float(np.linalg.norm([dx, dy, dz]))
+        radius *= float(max(1.0, self._frustum_culling_margin))
+
+        camera = getattr(self.plotter, "camera", None)
+        if camera is None:
+            return True
+
+        try:
+            cam_pos = np.array(camera.GetPosition(), dtype=float)
+            cam_focal = np.array(camera.GetFocalPoint(), dtype=float)
+            cam_up = np.array(camera.GetViewUp(), dtype=float)
+        except Exception:
+            return True
+
+        forward = cam_focal - cam_pos
+        forward_norm = np.linalg.norm(forward)
+        if forward_norm < 1e-12:
+            return True
+        forward /= forward_norm
+
+        right = np.cross(forward, cam_up)
+        right_norm = np.linalg.norm(right)
+        if right_norm < 1e-12:
+            return True
+        right /= right_norm
+        up = np.cross(right, forward)
+
+        try:
+            near_clip, far_clip = camera.GetClippingRange()
+        except Exception:
+            near_clip, far_clip = 0.1, 1e9
+        near_clip = max(float(near_clip), 1e-6)
+        far_clip = max(float(far_clip), near_clip + 1e-3)
+
+        to_center = center - cam_pos
+        depth = float(np.dot(to_center, forward))
+        if depth + radius < near_clip:
+            return False
+        if depth - radius > far_clip:
+            return False
+
+        try:
+            vfov_deg = float(camera.GetViewAngle())
+        except Exception:
+            vfov_deg = 60.0
+        vfov_deg = max(1.0, min(179.0, vfov_deg))
+        vfov_rad = math.radians(vfov_deg)
+        half_h = math.tan(vfov_rad * 0.5) * max(depth, near_clip)
+        half_w = half_h * self._get_camera_aspect_ratio()
+
+        x_cam = float(np.dot(to_center, right))
+        y_cam = float(np.dot(to_center, up))
+        if abs(x_cam) - radius > half_w:
+            return False
+        if abs(y_cam) - radius > half_h:
+            return False
+        return True
+
+    def _apply_frustum_culling(self, force: bool = False) -> int:
+        """
+        Apply camera frustum culling to mesh/edge actors.
+
+        Returns:
+            Number of actors whose visibility changed.
+        """
+        if not getattr(self, "_frustum_culling_enabled", False):
+            return 0
+        if not HAS_PYVISTA or not hasattr(self, "plotter"):
+            return 0
+        renderer = getattr(self.plotter, "renderer", None)
+        if renderer is None or not hasattr(renderer, "actors"):
+            return 0
+
+        changed = 0
+        for body_id, actor_names in self._body_actors.items():
+            if not actor_names:
+                continue
+            mesh_actor = renderer.actors.get(actor_names[0])
+            if mesh_actor is None:
+                continue
+
+            body_data = self.bodies.get(body_id) or {}
+            requested_visible = bool(body_data.get("requested_visible", True))
+            in_frustum = True
+            if requested_visible:
+                bounds = mesh_actor.GetBounds() if hasattr(mesh_actor, "GetBounds") else None
+                in_frustum = self._is_bounds_in_camera_frustum(bounds)
+
+            desired_visible = requested_visible and in_frustum
+            try:
+                current_visible = bool(mesh_actor.GetVisibility())
+            except Exception:
+                current_visible = desired_visible
+
+            if force or current_visible != desired_visible:
+                try:
+                    mesh_actor.SetVisibility(desired_visible)
+                    changed += 1
+                except Exception as e:
+                    _log_suppressed_exception(f"frustum mesh visibility (body={body_id})", e)
+
+            if len(actor_names) > 1:
+                edge_actor = renderer.actors.get(actor_names[1])
+                if edge_actor is not None:
+                    try:
+                        edge_current = bool(edge_actor.GetVisibility())
+                    except Exception:
+                        edge_current = desired_visible
+                    if force or edge_current != desired_visible:
+                        try:
+                            edge_actor.SetVisibility(desired_visible)
+                        except Exception as e:
+                            _log_suppressed_exception(f"frustum edge visibility (body={body_id})", e)
+
+            if requested_visible and not in_frustum:
+                self._frustum_culled_body_ids.add(body_id)
+            else:
+                self._frustum_culled_body_ids.discard(body_id)
+
+        if changed > 0:
+            request_render(self.plotter)
+            logger.debug(f"[FrustumCulling] Updated visibility for {changed} bodies")
+        return changed
 
     def clear_selection(self):
         """
@@ -1117,6 +1287,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.plotter.view_isometric()
         self.plotter.reset_camera()
         self.view_changed.emit()
+        self._apply_frustum_culling(force=False)
+        if getattr(self, "_lod_enabled", False):
+            self._lod_restore_timer.start()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -5057,6 +5230,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         col = color if color else getattr(body, 'color', default_color)
         if col is None:
             col = default_color
+        requested_visible = bool(
+            self.bodies.get(body.id, {}).get('requested_visible', True)
+        )
 
         # Phase 9: Async Tessellation
         if hasattr(body, 'request_async_tessellation'):
@@ -5073,6 +5249,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                         mesh_obj=mesh,
                         edge_mesh_obj=edges,
                         color=col,
+                        visible=requested_visible,
                         inactive_component=inactive_component
                     )
                     if body_id in self.bodies:
@@ -5100,6 +5277,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             mesh_obj=body.vtk_mesh,
             edge_mesh_obj=body.vtk_edges,
             color=col,
+            visible=requested_visible,
             inactive_component=inactive_component
         )
 
@@ -6687,6 +6865,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 self.plotter.view_vector(views[view_name])
                 self.plotter.reset_camera()
                 self.view_changed.emit()
+                self._apply_frustum_culling(force=False)
+                if getattr(self, "_lod_enabled", False):
+                    self._lod_restore_timer.start()
             except Exception as e:
                 logger.debug(f"[viewport] Fehler beim Setzen der Ansicht {view_name}: {e}")
                 # Fallback
@@ -6700,6 +6881,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                     self.plotter.view_yz()
                 self.plotter.reset_camera()
                 self.view_changed.emit()
+                self._apply_frustum_culling(force=False)
+                if getattr(self, "_lod_enabled", False):
+                    self._lod_restore_timer.start()
 
     # ==================== MODALE NUMERISCHE EINGABE ====================
     def _show_numeric_input_overlay(self, text: str):

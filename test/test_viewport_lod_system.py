@@ -26,9 +26,10 @@ class _FakeMapper:
 
 
 class _FakeActor:
-    def __init__(self, visible=True):
+    def __init__(self, visible=True, bounds=None):
         self._visible = visible
         self._mapper = _FakeMapper()
+        self._bounds = bounds or (-1.0, 1.0, -1.0, 1.0, -1.0, 1.0)
 
     def GetMapper(self):
         return self._mapper
@@ -38,6 +39,9 @@ class _FakeActor:
 
     def SetVisibility(self, value):
         self._visible = bool(value)
+
+    def GetBounds(self):
+        return self._bounds
 
     def GetProperty(self):
         return SimpleNamespace(
@@ -53,14 +57,46 @@ class _FakeMesh:
         self.bounds = (0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
 
 
+class _FakeCamera:
+    def __init__(self):
+        self._position = (0.0, -10.0, 0.0)
+        self._focal = (0.0, 0.0, 0.0)
+        self._view_up = (0.0, 0.0, 1.0)
+        self._clip = (0.1, 1000.0)
+        self._view_angle = 60.0
+
+    def GetPosition(self):
+        return self._position
+
+    def GetFocalPoint(self):
+        return self._focal
+
+    def GetViewUp(self):
+        return self._view_up
+
+    def GetClippingRange(self):
+        return self._clip
+
+    def GetViewAngle(self):
+        return self._view_angle
+
+
+class _FakeRenderer:
+    def __init__(self, actors):
+        self.actors = actors
+
+    def GetTiledAspectRatio(self):
+        return 1.0
+
+
 def _make_dummy_viewport():
-    renderer = SimpleNamespace(
-        actors={
+    renderer = _FakeRenderer(
+        {
             "body_b1_m": _FakeActor(visible=True),
             "body_b1_e": _FakeActor(visible=True),
         }
     )
-    plotter = SimpleNamespace(renderer=renderer)
+    plotter = SimpleNamespace(renderer=renderer, camera=_FakeCamera())
 
     vp = SimpleNamespace()
     vp.plotter = plotter
@@ -73,15 +109,22 @@ def _make_dummy_viewport():
     vp._section_plane = "XY"
     vp._section_position = 0.0
     vp._section_invert = False
+    vp._frustum_culling_enabled = True
+    vp._frustum_culled_body_ids = set()
+    vp._frustum_culling_margin = 1.05
     vp._body_actors = {"b1": ("body_b1_m", "body_b1_e")}
     vp.bodies = {
         "b1": {
             "mesh": _FakeMesh(n_points=4000),
             "body_ref": SimpleNamespace(_build123d_solid=object()),
+            "requested_visible": True,
         }
     }
 
     vp._is_body_actor_visible = PyVistaViewport._is_body_actor_visible.__get__(vp, object)
+    vp._get_camera_aspect_ratio = PyVistaViewport._get_camera_aspect_ratio.__get__(vp, object)
+    vp._is_bounds_in_camera_frustum = PyVistaViewport._is_bounds_in_camera_frustum.__get__(vp, object)
+    vp._apply_frustum_culling = PyVistaViewport._apply_frustum_culling.__get__(vp, object)
     vp._apply_lod_mesh_to_actor = PyVistaViewport._apply_lod_mesh_to_actor.__get__(vp, object)
     vp._apply_lod_to_visible_bodies = PyVistaViewport._apply_lod_to_visible_bodies.__get__(vp, object)
     vp._on_camera_interaction_start = PyVistaViewport._on_camera_interaction_start.__get__(vp, object)
@@ -135,6 +178,68 @@ def test_lod_camera_start_stops_timer_and_applies_interaction_lod():
 
     vp._lod_restore_timer.stop.assert_called_once()
     vp._apply_lod_to_visible_bodies.assert_called_once_with(interaction_active=True)
+
+
+def test_frustum_bounds_check_detects_outside_volume():
+    vp = _make_dummy_viewport()
+
+    inside = (-1.0, 1.0, -1.0, 1.0, -1.0, 1.0)
+    outside_right = (20.0, 22.0, -1.0, 1.0, -1.0, 1.0)
+
+    assert vp._is_bounds_in_camera_frustum(inside) is True
+    assert vp._is_bounds_in_camera_frustum(outside_right) is False
+
+
+def test_apply_frustum_culling_hides_and_restores_bodies(monkeypatch):
+    monkeypatch.setattr(viewport_mod, "HAS_PYVISTA", True)
+    monkeypatch.setattr(viewport_mod, "request_render", lambda *_args, **_kwargs: None)
+
+    renderer = _FakeRenderer(
+        {
+            "body_in_m": _FakeActor(visible=True, bounds=(-1, 1, -1, 1, -1, 1)),
+            "body_in_e": _FakeActor(visible=True, bounds=(-1, 1, -1, 1, -1, 1)),
+            "body_out_m": _FakeActor(visible=True, bounds=(20, 22, -1, 1, -1, 1)),
+            "body_out_e": _FakeActor(visible=True, bounds=(20, 22, -1, 1, -1, 1)),
+            "body_hidden_m": _FakeActor(visible=True, bounds=(-1, 1, -1, 1, -1, 1)),
+            "body_hidden_e": _FakeActor(visible=True, bounds=(-1, 1, -1, 1, -1, 1)),
+        }
+    )
+    vp = SimpleNamespace(
+        plotter=SimpleNamespace(renderer=renderer, camera=_FakeCamera()),
+        _frustum_culling_enabled=True,
+        _frustum_culled_body_ids=set(),
+        _frustum_culling_margin=1.05,
+        _body_actors={
+            "in": ("body_in_m", "body_in_e"),
+            "out": ("body_out_m", "body_out_e"),
+            "hidden": ("body_hidden_m", "body_hidden_e"),
+        },
+        bodies={
+            "in": {"requested_visible": True},
+            "out": {"requested_visible": True},
+            "hidden": {"requested_visible": False},
+        },
+    )
+
+    vp._get_camera_aspect_ratio = PyVistaViewport._get_camera_aspect_ratio.__get__(vp, object)
+    vp._is_bounds_in_camera_frustum = PyVistaViewport._is_bounds_in_camera_frustum.__get__(vp, object)
+    vp._apply_frustum_culling = PyVistaViewport._apply_frustum_culling.__get__(vp, object)
+
+    changed = vp._apply_frustum_culling(force=False)
+
+    assert changed >= 1
+    assert renderer.actors["body_in_m"].GetVisibility() is True
+    assert renderer.actors["body_out_m"].GetVisibility() is False
+    assert renderer.actors["body_hidden_m"].GetVisibility() is False
+    assert "out" in vp._frustum_culled_body_ids
+    assert "hidden" not in vp._frustum_culled_body_ids
+
+    renderer.actors["body_out_m"]._bounds = (-1, 1, -1, 1, -1, 1)
+    renderer.actors["body_out_e"]._bounds = (-1, 1, -1, 1, -1, 1)
+    changed_restore = vp._apply_frustum_culling(force=False)
+    assert changed_restore >= 1
+    assert renderer.actors["body_out_m"].GetVisibility() is True
+    assert "out" not in vp._frustum_culled_body_ids
 
 
 def test_pending_body_ref_is_applied_when_body_actor_arrives(monkeypatch):

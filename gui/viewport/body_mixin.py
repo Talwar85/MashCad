@@ -156,7 +156,7 @@ class BodyRenderingMixin:
                     mapper = actor.GetMapper()
                     mapper.SetInputData(mesh_obj)
                     mapper.Modified()
-                    actor.SetVisibility(True)
+                    actor.SetVisibility(bool(visible))
                     logger.debug(f"♻️ Actor reused, mapper updated for {bid}: {mesh_obj.n_points} pts")
                     actors_list.append(n_mesh)
 
@@ -200,6 +200,7 @@ class BodyRenderingMixin:
                         edge_actor.GetProperty().SetRenderLinesAsTubes(False)
                         edge_actor.GetProperty().SetLineWidth(1.5)
                         edge_actor.GetProperty().SetColor(0.15, 0.15, 0.17)
+                        edge_actor.SetVisibility(bool(visible))
                         edge_mapper = edge_actor.GetMapper()
                         edge_mapper.SetInputData(edge_mesh_obj)
                         edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
@@ -233,7 +234,11 @@ class BodyRenderingMixin:
 
                     actors_list.append(n_edge)
                 
-                self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
+                self.bodies[bid] = {
+                    'mesh': mesh_obj,
+                    'color': col_rgb,
+                    'requested_visible': bool(visible),
+                }
                 pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
                 if pending_ref is not None:
                     self.bodies[bid]["body"] = pending_ref
@@ -325,13 +330,23 @@ class BodyRenderingMixin:
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)
                     
                 actors_list.append(n_mesh)
-                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
+                self.bodies[bid] = {
+                    'mesh': mesh,
+                    'color': col_rgb,
+                    'requested_visible': bool(visible),
+                }
                 pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
                 if pending_ref is not None:
                     self.bodies[bid]["body"] = pending_ref
                     self.bodies[bid]["body_ref"] = pending_ref
                 
             self._body_actors[bid] = tuple(actors_list)
+
+            if hasattr(self, '_apply_frustum_culling'):
+                try:
+                    self._apply_frustum_culling(force=False)
+                except Exception as e:
+                    logger.debug(f"[body_mixin] Frustum culling update fehlgeschlagen: {e}")
 
             # ✅ CRITICAL: Force render after Mapper update
             # Ensures VTK displays the new mesh immediately
@@ -344,11 +359,16 @@ class BodyRenderingMixin:
         """Setzt die Sichtbarkeit eines Körpers"""
         if body_id not in self._body_actors:
             return
+        if body_id in self.bodies:
+            self.bodies[body_id]['requested_visible'] = bool(visible)
         try:
             actors = self._body_actors[body_id]
-            for name in actors:
-                if name in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[name].SetVisibility(visible)
+            if hasattr(self, '_apply_frustum_culling'):
+                self._apply_frustum_culling(force=True)
+            else:
+                for name in actors:
+                    if name in self.plotter.renderer.actors:
+                        self.plotter.renderer.actors[name].SetVisibility(visible)
             request_render(self.plotter)
         except Exception as e:
             logger.error(f"Set visibility error: {e}")
@@ -383,6 +403,10 @@ class BodyRenderingMixin:
                 del self.bodies[only_body_id]
             if hasattr(self, '_lod_applied_quality'):
                 self._lod_applied_quality.pop(only_body_id, None)
+            if hasattr(self, '_frustum_culled_body_ids'):
+                self._frustum_culled_body_ids.discard(only_body_id)
+            if hasattr(self, '_pending_body_refs'):
+                self._pending_body_refs.pop(only_body_id, None)
             if hasattr(self, '_actor_to_body_cache'):
                 self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
                                               if v != only_body_id}
@@ -399,6 +423,10 @@ class BodyRenderingMixin:
             self.bodies.clear()
             if hasattr(self, '_lod_applied_quality'):
                 self._lod_applied_quality.clear()
+            if hasattr(self, '_frustum_culled_body_ids'):
+                self._frustum_culled_body_ids.clear()
+            if hasattr(self, '_pending_body_refs'):
+                self._pending_body_refs.clear()
             ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
 
@@ -413,6 +441,8 @@ class BodyRenderingMixin:
 
     def is_body_visible(self, body_id):
         """Prüft ob ein Körper sichtbar ist"""
+        if body_id in self.bodies and 'requested_visible' in self.bodies[body_id]:
+            return bool(self.bodies[body_id].get('requested_visible', True))
         if body_id not in self._body_actors:
             return False
         try:
