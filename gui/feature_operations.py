@@ -15,6 +15,7 @@ Usage:
 from typing import TYPE_CHECKING, Optional, List, Dict, Any, Tuple
 import numpy as np
 from loguru import logger
+from modeling.geometry_utils import normalize_plane_axes
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -329,17 +330,17 @@ class FeatureMixin:
                 sketch, visible = sketch_info
 
             if visible:
+                if hasattr(sketch, "normalize_plane_basis"):
+                    sketch.normalize_plane_basis()
                 x_dir = getattr(sketch, 'plane_x_dir', None)
                 y_dir = getattr(sketch, 'plane_y_dir', None)
-                
-                # Fallback Berechnung falls Achsen fehlen (bei alten Projekten)
-                if x_dir is None:
-                    x_dir, y_dir = self.viewport_3d._calculate_plane_axes(sketch.plane_normal)
+                normal = getattr(sketch, 'plane_normal', (0, 0, 1))
+                _normal, x_dir, y_dir = normalize_plane_axes(normal, x_dir, y_dir)
                 
                 self.viewport_3d.detector.process_sketch(
                     sketch, 
                     sketch.plane_origin, 
-                    sketch.plane_normal, 
+                    _normal, 
                     x_dir,
                     y_dir 
                 )
@@ -365,10 +366,15 @@ class FeatureMixin:
     def _get_plane_from_sketch(self, sketch):
         """Erstellt ein build123d Plane Objekt aus den Sketch-Metadaten"""
         from build123d import Plane, Vector
+        normal, x_dir, _y_dir = normalize_plane_axes(
+            getattr(sketch, 'plane_normal', (0, 0, 1)),
+            getattr(sketch, 'plane_x_dir', None),
+            getattr(sketch, 'plane_y_dir', None),
+        )
         return Plane(
             origin=Vector(sketch.plane_origin),
-            z_dir=Vector(sketch.plane_normal),
-            x_dir=Vector(sketch.plane_x_dir)
+            z_dir=Vector(normal),
+            x_dir=Vector(x_dir)
         )
     
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):

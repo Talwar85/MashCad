@@ -13,6 +13,7 @@ from typing import List, Optional
 from loguru import logger
 
 from config.feature_flags import is_enabled
+from modeling.geometry_utils import normalize_plane_axes
 
 
 class BodyExtrudeMixin:
@@ -514,9 +515,14 @@ class BodyExtrudeMixin:
                     continue
 
             origin = Vector(*sketch.plane_origin)
-            z_dir = Vector(*sketch.plane_normal)
-            x_dir = Vector(*sketch.plane_x_dir)
-            y_dir = Vector(*sketch.plane_y_dir)
+            z_norm, x_norm, y_norm = normalize_plane_axes(
+                getattr(sketch, "plane_normal", (0, 0, 1)),
+                getattr(sketch, "plane_x_dir", None),
+                getattr(sketch, "plane_y_dir", None),
+            )
+            z_dir = Vector(*z_norm)
+            x_dir = Vector(*x_norm)
+            y_dir = Vector(*y_norm)
 
             center_3d = origin + x_dir * cx + y_dir * cy
 

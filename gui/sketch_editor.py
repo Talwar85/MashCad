@@ -36,6 +36,7 @@ import numpy as np
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled, FEATURE_FLAGS  # Nur für sketch_input_logging Debug-Flag
+from modeling.geometry_utils import normalize_plane_axes
 
 # SU-005: Drag Performance Monitoring
 try:
@@ -1694,31 +1695,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Berechnet stabile X- und Y-Achsen.
         Returns native tuples of floats to avoid NumPy types leaking into logic.
         """
-        import numpy as np # Import lokal, falls global fehlt
-        
-        n = np.array(normal_vec, dtype=np.float64)
-        norm = np.linalg.norm(n)
-        if norm == 0: 
-            return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
-        
-        n = n / norm
-        
-        # Safe comparison avoiding numpy.bool output
-        # abs(n[2]) liefert numpy scalar, float() macht es sicher
-        if self._safe_float(abs(n[2])) > 0.999:
-            x_dir = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            x_dir = np.cross(y_dir, n)
-        else:
-            global_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            x_dir = np.cross(global_up, n)
-            x_dir = x_dir / np.linalg.norm(x_dir)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            
-        # CRITICAL: Convert back to native python tuple immediately
-        return tuple(map(float, x_dir)), tuple(map(float, y_dir))
+        _normal, x_dir, y_dir = normalize_plane_axes(normal_vec)
+        return x_dir, y_dir
 
     def to_native_float(self, value):
         """Sicheres Casting von NumPy → Python native"""

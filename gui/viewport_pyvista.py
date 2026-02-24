@@ -16,6 +16,7 @@ import uuid
 from loguru import logger
 from gui.geometry_detector import GeometryDetector
 import time
+from modeling.geometry_utils import normalize_plane_axes
 
 
 # =============================================================================
@@ -1115,25 +1116,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.plotter.reset_camera()
         
     def _calculate_plane_axes(self, normal_vec):
-        n = np.array(normal_vec)
-        norm = np.linalg.norm(n)
-        if norm == 0: return (1,0,0), (0,1,0)
-        n = n / norm
-        
-        if abs(n[2]) > 0.999:
-            x_dir = np.array([1.0, 0.0, 0.0])
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            x_dir = np.cross(y_dir, n)
-        else:
-            global_up = np.array([0.0, 0.0, 1.0])
-            x_dir = np.cross(global_up, n)
-            x_dir = x_dir / np.linalg.norm(x_dir)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            
-        # WICHTIG: Dies hat gefehlt!
-        return tuple(x_dir), tuple(y_dir)
+        _normal, x_dir, y_dir = normalize_plane_axes(normal_vec)
+        return x_dir, y_dir
         
     # start_transform ist jetzt im TransformMixin definiert
         

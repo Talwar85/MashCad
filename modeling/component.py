@@ -270,6 +270,8 @@ class Component:
                     sketch.plane_x_dir = tuple(sketch_data["plane_x_dir"])
                 if sketch_data.get("plane_y_dir"):
                     sketch.plane_y_dir = tuple(sketch_data["plane_y_dir"])
+                if hasattr(sketch, "normalize_plane_basis"):
+                    sketch.normalize_plane_basis()
                 comp.sketches.append(sketch)
             except Exception as e:
                 logger.warning(f"Sketch konnte nicht geladen werden: {e}")

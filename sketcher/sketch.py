@@ -90,6 +90,22 @@ class Sketch:
 
     # === TNP v4.1: Sketch-ShapeUUID Verwaltung ===
 
+    def normalize_plane_basis(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+        """
+        Normalisiert die Sketch-Ebenenbasis auf ein stabiles orthonormales Frame.
+        """
+        from modeling.geometry_utils import normalize_plane_axes
+
+        normal, x_dir, y_dir = normalize_plane_axes(
+            getattr(self, 'plane_normal', (0, 0, 1)),
+            getattr(self, 'plane_x_dir', None),
+            getattr(self, 'plane_y_dir', None),
+        )
+        self.plane_normal = normal
+        self.plane_x_dir = x_dir
+        self.plane_y_dir = y_dir
+        return normal, x_dir, y_dir
+
     def get_all_shape_uuids(self) -> Dict[str, str]:
         """
         Gibt alle ShapeUUIDs der Sketch-Geometrie zurück.
@@ -263,6 +279,8 @@ class Sketch:
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
 
+        self.normalize_plane_basis()
+
         center = Point2D(cx, cy)
         circle = Circle2D(center, radius, construction=construction)
 
@@ -306,6 +324,8 @@ class Sketch:
         """
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
+
+        self.normalize_plane_basis()
 
         center = Point2D(cx, cy)
         arc = Arc2D(center, radius, start_angle, end_angle, construction=construction)
@@ -365,6 +385,8 @@ class Sketch:
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
         
+        self.normalize_plane_basis()
+
         major_radius = max(0.01, float(major_radius))
         minor_radius = max(0.01, float(minor_radius))
         angle = float(angle_deg)

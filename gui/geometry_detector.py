@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
+from modeling.geometry_utils import normalize_plane_axes
 
 # Optional Imports
 try:
@@ -111,12 +112,11 @@ class GeometryDetector:
         from shapely.geometry import LineString, Polygon
         from shapely.ops import unary_union, polygonize
 
-        if plane_y_dir is None:
-             # Fallback Berechnung
-             n = np.array(plane_normal)
-             x = np.array(plane_x_dir)
-             y = np.cross(n, x)
-             plane_y_dir = tuple(y)
+        plane_normal, plane_x_dir, plane_y_dir = normalize_plane_axes(
+            plane_normal,
+            plane_x_dir,
+            plane_y_dir,
+        )
 
         # 1. Linien in Shapely konvertieren mit Welding
         lines = []

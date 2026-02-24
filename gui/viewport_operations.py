@@ -15,6 +15,7 @@ Usage:
 from typing import TYPE_CHECKING, Optional, List, Dict, Any, Tuple
 import numpy as np
 from loguru import logger
+from modeling.geometry_utils import normalize_plane_axes
 
 from PySide6.QtCore import Qt, QTimer, QPoint
 
@@ -500,27 +501,8 @@ class ViewportMixin:
         Berechnet stabile X- und Y-Achsen für eine Ebene basierend auf der Normalen.
         Muss IDENTISCH zu viewport_pyvista.py sein!
         """
-        n = np.array(normal_vec)
-        norm = np.linalg.norm(n)
-        if norm == 0:
-            return (1, 0, 0), (0, 1, 0)
-        n = n / norm
-        
-        # Globale Up-Vektor Strategie (Z-Up)
-        if abs(n[2]) > 0.999:
-            # Normale ist (0,0,1) oder (0,0,-1)
-            x_dir = np.array([1.0, 0.0, 0.0])
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            x_dir = np.cross(y_dir, n)
-        else:
-            global_up = np.array([0.0, 0.0, 1.0])
-            x_dir = np.cross(global_up, n)
-            x_dir = x_dir / np.linalg.norm(x_dir)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            
-        return tuple(x_dir), tuple(y_dir)
+        _normal, x_dir, y_dir = normalize_plane_axes(normal_vec)
+        return x_dir, y_dir
     
     def _find_component_for_body(self, body):
         """Findet die Component die einen Body enthält."""
