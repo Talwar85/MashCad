@@ -180,6 +180,29 @@ class Document:
             return self.root_component.find_body_by_id(body_id)
         return None
 
+    def find_body_component(self, body: Body) -> Optional[Component]:
+        """Findet die Component, die den angegebenen Body enthÃ¤lt."""
+        if body is None or self.root_component is None:
+            return None
+
+        body_id = getattr(body, "id", None)
+
+        def _search(comp: Component) -> Optional[Component]:
+            for candidate in comp.bodies:
+                if candidate is body:
+                    return comp
+                if body_id is not None and getattr(candidate, "id", None) == body_id:
+                    return comp
+
+            for sub in comp.sub_components:
+                found = _search(sub)
+                if found is not None:
+                    return found
+
+            return None
+
+        return _search(self.root_component)
+
     def new_component(self, name: str = None, parent: Component = None) -> Optional[Component]:
         """
         Erstellt neue Component.
@@ -284,13 +307,19 @@ class Document:
         body_below.split_side = "below"
 
         # 5. Original-Body aus Document entfernen
-        if body in self.bodies:
-            self.bodies.remove(body)
-            logger.debug(f"Split: Original-Body '{body.name}' entfernt")
+        target_component = self.find_body_component(body)
+        if target_component is None:
+            target_component = self._active_component or self.root_component
 
-        # 6. Beide neue Bodies hinzufÃ¼gen
-        self.add_body(body_above, set_active=False)
-        self.add_body(body_below, set_active=False)
+        if target_component and body in target_component.bodies:
+            target_component.bodies.remove(body)
+            logger.debug(
+                f"Split: Original-Body '{body.name}' aus Component '{target_component.name}' entfernt"
+            )
+
+        # 6. Beide neue Bodies in derselben Component hinzufÃ¼gen
+        self.add_body(body_above, component=target_component, set_active=False)
+        self.add_body(body_below, component=target_component, set_active=False)
 
         # Invalidate meshes fÃ¼r beide Bodies
         body_above.invalidate_mesh()
@@ -349,7 +378,7 @@ class Document:
         schema_enum = STEPSchema.AP242 if schema == "AP242" else STEPSchema.AP214
 
         # Bodies mit Solids sammeln
-        export_bodies = [b for b in self.bodies if hasattr(b, '_build123d_solid') and b._build123d_solid]
+        export_bodies = [b for b in self.get_all_bodies() if hasattr(b, '_build123d_solid') and b._build123d_solid]
 
         if not export_bodies:
             logger.warning("Keine Bodies mit BREP-Daten zum Exportieren")
@@ -1448,3 +1477,4 @@ class Document:
 
 
 __all__ = ['Document', 'SplitResult']
+
