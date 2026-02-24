@@ -93,6 +93,7 @@ class ToolMixin:
             'copy': '_copy_body',
             'copy_body': '_copy_body',
             'point_to_point': '_start_point_to_point_move',
+            'point_to_point_move': '_start_point_to_point_move',
             
             # View / Inspect
             'section_view': '_toggle_section_view',

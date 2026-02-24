@@ -136,11 +136,15 @@ def test_3d_action_dispatches_critical_handlers():
         "shell": "_start_shell",
         "sweep": "_start_sweep",
         "loft": "_start_loft",
+        "pattern": "_start_pattern",
         "measure": "_start_measure_mode",
+        "wall_thickness": "_wall_thickness_dialog",
         "section_view": "_toggle_section_view",
         "surface_texture": "_start_texture_mode",
         "lattice": "_start_lattice",
         "nsided_patch": "_nsided_patch_dialog",
+        "point_to_point": "_start_point_to_point_move",
+        "point_to_point_move": "_start_point_to_point_move",
     }
 
     for action, method_name in dispatch_map.items():
