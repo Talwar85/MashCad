@@ -535,3 +535,31 @@ def test_copy_transform_request_clones_feature_history():
     assert src_arg is body
     assert getattr(new_body_arg, "name", "").endswith("_copy")
     h.document.add_body.assert_called_once()
+
+
+def test_copy_transform_request_works_with_component_aware_lookup():
+    body = SimpleNamespace(
+        id="B1",
+        name="Body1",
+        _build123d_solid=_SolidStub(),
+        vtk_mesh=None,
+        features=[SimpleNamespace(id="f1")],
+    )
+    h = _Harness(body)
+    h._clone_body_feature_history = Mock(return_value=1)
+    h._update_body_from_build123d = Mock()
+    h.document = SimpleNamespace(
+        bodies=[],  # active component empty
+        get_all_bodies=lambda: [body],
+        find_body_by_id=lambda bid: body if bid == body.id else None,
+        add_body=Mock(),
+    )
+
+    with patch.dict(sys.modules, _install_copy_test_modules()):
+        h._on_body_copy_requested("B1", "move", {"translation": [1.0, 2.0, 3.0]})
+
+    assert h._clone_body_feature_history.call_count == 1
+    src_arg, new_body_arg = h._clone_body_feature_history.call_args[0]
+    assert src_arg is body
+    assert getattr(new_body_arg, "name", "").endswith("_copy")
+    h.document.add_body.assert_called_once()

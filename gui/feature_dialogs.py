@@ -41,6 +41,26 @@ class FeatureDialogsMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_document_bodies(self):
+        """Returns all bodies across components where supported."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
+
+    def _find_body_by_id_global(self, body_id: str):
+        """Component-aware body lookup with safe fallback."""
+        if hasattr(self.document, "find_body_by_id"):
+            try:
+                body = self.document.find_body_by_id(body_id)
+                if body is not None:
+                    return body
+            except Exception:
+                pass
+        return next((b for b in self._all_document_bodies() if getattr(b, "id", None) == body_id), None)
     
     # =========================================================================
     # Pattern Operations
@@ -775,9 +795,10 @@ class FeatureDialogsMixin:
             if path_geo_selector and not path_edge_indices:
                 feature.path_geometric_selector = path_geo_selector
 
-            is_new_body = operation == "New Body" or not getattr(self.document, "bodies", [])
+            all_bodies = self._all_document_bodies()
+            is_new_body = operation == "New Body" or not all_bodies
             if is_new_body:
-                target_body = Body(name=f"Sweep_{len(getattr(self.document, 'bodies', [])) + 1}", document=self.document)
+                target_body = Body(name=f"Sweep_{len(all_bodies) + 1}", document=self.document)
                 target_body.features.append(feature)
                 CADTessellator.notify_body_changed()
                 target_body._rebuild()
@@ -790,7 +811,7 @@ class FeatureDialogsMixin:
             else:
                 target_body = self._get_active_body()
                 if target_body is None:
-                    target_body = self.document.bodies[0] if getattr(self.document, "bodies", []) else None
+                    target_body = all_bodies[0] if all_bodies else None
                 if target_body is None:
                     raise ValueError("Sweep-Zielkörper konnte nicht bestimmt werden")
 
@@ -1011,9 +1032,10 @@ class FeatureDialogsMixin:
                 ruled=ruled,
             )
 
-            is_new_body = operation == "New Body" or not getattr(self.document, "bodies", [])
+            all_bodies = self._all_document_bodies()
+            is_new_body = operation == "New Body" or not all_bodies
             if is_new_body:
-                target_body = Body(name=f"Loft_{len(getattr(self.document, 'bodies', [])) + 1}", document=self.document)
+                target_body = Body(name=f"Loft_{len(all_bodies) + 1}", document=self.document)
                 target_body.features.append(feature)
                 CADTessellator.notify_body_changed()
                 target_body._rebuild()
@@ -1026,7 +1048,7 @@ class FeatureDialogsMixin:
             else:
                 target_body = self._get_active_body()
                 if target_body is None:
-                    target_body = self.document.bodies[0] if getattr(self.document, "bodies", []) else None
+                    target_body = all_bodies[0] if all_bodies else None
                 if target_body is None:
                     raise ValueError("Loft-Zielkörper konnte nicht bestimmt werden")
 
@@ -1473,7 +1495,7 @@ class FeatureDialogsMixin:
         logger.debug(f"Copy requested: {mode} on {body_id}")
         logger.debug(f"   data: {data}")
         
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body:
             logger.error(f"Body {body_id} nicht gefunden für Copy")
             return
@@ -1533,7 +1555,7 @@ class FeatureDialogsMixin:
         """Handler für Mirror-Operation."""
         logger.debug(f"Mirror requested: {plane} auf {body_id}")
         
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body:
             logger.error(f"Body {body_id} nicht gefunden für Mirror")
             return

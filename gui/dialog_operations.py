@@ -39,6 +39,30 @@ class DialogMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_bodies(self):
+        """Returns bodies across all components when available."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
+
+    def _find_body_by_id_global(self, body_id: str):
+        """Component-aware body lookup with fallback for legacy documents."""
+        if hasattr(self.document, "find_body_by_id"):
+            try:
+                body = self.document.find_body_by_id(body_id)
+                if body is not None:
+                    return body
+            except Exception:
+                pass
+        return next((b for b in self._all_bodies() if getattr(b, "id", None) == body_id), None)
+
+    def _has_cad_bodies(self) -> bool:
+        """True when at least one body has a CAD solid."""
+        return any(getattr(b, "_build123d_solid", None) for b in self._all_bodies())
     
     # =========================================================================
     # STL to CAD Reconstruction
@@ -478,7 +502,7 @@ class DialogMixin:
         if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
             self.viewport_3d.set_pending_transform_mode(False)
 
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body:
             logger.warning(f"Body {body_id} nicht gefunden")
             return
@@ -661,7 +685,7 @@ class DialogMixin:
     
     def _hole_dialog(self):
         """Startet interaktiven Hole-Workflow (Fusion-style)."""
-        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        has_bodies = self._has_cad_bodies()
         if not has_bodies:
             self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
             logger.warning("Hole: Keine Bodies mit Geometrie.")
@@ -795,7 +819,7 @@ class DialogMixin:
         """Body-Face wurde im Hole-Modus geklickt."""
         if not self._hole_mode:
             return
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body or not body._build123d_solid:
             self.statusBar().showMessage("Kein gültiger Body getroffen")
             return
@@ -850,7 +874,7 @@ class DialogMixin:
     
     def _thread_dialog(self):
         """Startet interaktiven Thread-Workflow (Fusion-style)."""
-        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        has_bodies = self._has_cad_bodies()
         if not has_bodies:
             self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
             logger.warning("Thread: Keine Bodies mit Geometrie.")
@@ -911,7 +935,7 @@ class DialogMixin:
         """Zylindrische Fläche wurde im Thread-Modus geklickt."""
         if not self._thread_mode:
             return
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body or not body._build123d_solid:
             self.statusBar().showMessage("Kein gültiger Body getroffen")
             return
@@ -1051,7 +1075,7 @@ class DialogMixin:
     
     def _draft_dialog(self):
         """Startet interaktiven Draft-Workflow (Fusion-style)."""
-        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        has_bodies = self._has_cad_bodies()
         if not has_bodies:
             self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
             return
@@ -1073,7 +1097,7 @@ class DialogMixin:
         if not self._draft_mode:
             return
 
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body or not body._build123d_solid:
             return
 
@@ -1248,7 +1272,7 @@ class DialogMixin:
     
     def _split_body_dialog(self):
         """Startet interaktiven Split-Workflow (PrusaSlicer-style)."""
-        has_bodies = any(b._build123d_solid for b in self.document.bodies if b._build123d_solid)
+        has_bodies = self._has_cad_bodies()
         if not has_bodies:
             self.statusBar().showMessage("Keine Bodies mit Geometrie vorhanden")
             return
@@ -1270,7 +1294,7 @@ class DialogMixin:
         """Body wurde im Split-Modus geklickt."""
         if not self._split_mode:
             return
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        body = self._find_body_by_id_global(body_id)
         if not body or not body._build123d_solid:
             return
 
@@ -1590,12 +1614,13 @@ class DialogMixin:
         """Führt Union, Cut oder Intersect aus"""
         from i18n import tr
         from gui.dialogs.input_dialogs import BooleanDialog
-        
+
         # Get selected bodies
         selected = self.browser.get_selected_bodies()
+        all_bodies = self._all_bodies()
         if len(selected) < 2:
             # Show dialog to select bodies
-            dialog = BooleanDialog(self.document.bodies, op_type, self)
+            dialog = BooleanDialog(all_bodies, op_type, self)
             if dialog.exec():
                 target, tool = dialog.get_selection()
             else:
@@ -1680,7 +1705,7 @@ class DialogMixin:
         self.nsided_patch_panel.reset()
 
         self.viewport_3d.set_edge_selection_callbacks(
-            get_body_by_id=lambda bid: next((b for b in self.document.bodies if b.id == bid), None)
+            get_body_by_id=self._find_body_by_id_global
         )
         if hasattr(self.viewport_3d, 'start_edge_selection_mode'):
             self.viewport_3d.start_edge_selection_mode(body.id)

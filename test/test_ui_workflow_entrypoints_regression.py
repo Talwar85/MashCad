@@ -68,6 +68,54 @@ def test_hole_dialog_enters_mode_and_opens_panel():
     assert sb.showMessage.call_count >= 1
 
 
+def test_hole_dialog_works_with_get_all_bodies_when_active_component_empty():
+    _qt_app()
+    mw, sb = _make_stub()
+    cad_body = _body_with_solid()
+    mw.document = SimpleNamespace(
+        bodies=[],
+        get_all_bodies=lambda: [cad_body],
+        find_body_by_id=lambda bid: cad_body if bid == cad_body.id else None,
+    )
+    mw._hide_transform_ui = Mock()
+    mw.viewport_3d = SimpleNamespace(set_hole_mode=Mock())
+    mw.hole_panel = SimpleNamespace(reset=Mock(), show_at=Mock(), hide=Mock())
+
+    MainWindow._hole_dialog(mw)
+
+    assert mw._hole_mode is True
+    mw.viewport_3d.set_hole_mode.assert_called_once_with(True)
+    mw.hole_panel.show_at.assert_called_once_with(mw.viewport_3d)
+    assert sb.showMessage.call_count >= 1
+
+
+def test_hole_face_click_resolves_body_via_find_body_by_id():
+    _qt_app()
+    mw, _sb = _make_stub()
+    cad_body = _body_with_solid()
+    mw._hole_mode = True
+    mw.document = SimpleNamespace(
+        bodies=[],
+        get_all_bodies=lambda: [cad_body],
+        find_body_by_id=lambda bid: cad_body if bid == cad_body.id else None,
+    )
+    mw.viewport_3d = SimpleNamespace(
+        _hole_position=None,
+        _hole_normal=None,
+        show_hole_preview=Mock(),
+    )
+    mw.hole_panel = SimpleNamespace(
+        get_diameter=Mock(return_value=5.0),
+        get_depth=Mock(return_value=8.0),
+    )
+    mw._resolve_solid_face_from_pick = Mock(return_value=(None, None))
+
+    MainWindow._on_body_face_clicked_for_hole(mw, "B1", 7, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0))
+
+    assert mw._hole_target_body is cad_body
+    mw.viewport_3d.show_hole_preview.assert_called_once()
+
+
 def test_draft_dialog_enters_mode_detects_faces_and_opens_panel():
     _qt_app()
     mw, sb = _make_stub()
@@ -90,6 +138,34 @@ def test_draft_dialog_enters_mode_detects_faces_and_opens_panel():
     mw.draft_panel.reset.assert_called_once()
     mw.draft_panel.show_at.assert_called_once_with(mw.viewport_3d)
     assert sb.showMessage.call_count >= 1
+
+
+def test_split_click_resolves_body_via_find_body_by_id():
+    _qt_app()
+    mw, _sb = _make_stub()
+    cad_body = _body_with_solid()
+    mw._split_mode = True
+    mw.document = SimpleNamespace(
+        bodies=[],
+        get_all_bodies=lambda: [cad_body],
+        find_body_by_id=lambda bid: cad_body if bid == cad_body.id else None,
+    )
+    mw.viewport_3d = SimpleNamespace(
+        setCursor=Mock(),
+        set_pending_transform_mode=Mock(),
+        set_split_mode=Mock(),
+        set_split_body=Mock(return_value=12.5),
+    )
+    mw.split_panel = SimpleNamespace(set_position=Mock())
+    mw._update_split_preview = Mock()
+
+    MainWindow._on_split_body_clicked(mw, "B1")
+
+    assert mw._split_target_body is cad_body
+    mw.viewport_3d.set_split_mode.assert_called_once_with(True)
+    mw.viewport_3d.set_split_body.assert_called_once_with("B1")
+    mw.split_panel.set_position.assert_called_once_with(12.5)
+    mw._update_split_preview.assert_called_once()
 
 
 def test_split_dialog_enters_pending_body_pick_and_opens_panel():
