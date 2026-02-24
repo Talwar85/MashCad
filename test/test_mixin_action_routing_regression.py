@@ -28,12 +28,20 @@ class _ViewportStub:
     def __init__(self):
         self.pending_mode_calls = []
         self.cursor_calls = []
+        self.edge_selection_callback_kwargs = []
+        self.edge_selection_mode_calls = []
 
     def set_pending_transform_mode(self, active):
         self.pending_mode_calls.append(bool(active))
 
     def setCursor(self, cursor):
         self.cursor_calls.append(cursor)
+
+    def set_edge_selection_callbacks(self, **kwargs):
+        self.edge_selection_callback_kwargs.append(kwargs)
+
+    def start_edge_selection_mode(self, body_id, selection_mode):
+        self.edge_selection_mode_calls.append((body_id, selection_mode))
 
 
 class _Harness(FeatureDialogsMixin, ToolMixin):
@@ -140,6 +148,20 @@ def test_pending_fillet_body_click_routes_to_activation():
     assert h._pending_fillet_mode is False
     assert h._pending_chamfer_mode is False
     assert h.viewport_3d.pending_mode_calls[-1] is False
+
+
+def test_activate_fillet_enables_edge_selection_with_all_filter():
+    """
+    Regression guard: fillet/chamfer must expose all edges for selection.
+    """
+    h = _Harness()
+    body = SimpleNamespace(id="B17", name="Body17", _build123d_solid=object())
+
+    h._activate_fillet_chamfer_for_body(body, "fillet")
+
+    assert h._fillet_mode == "fillet"
+    assert h._fillet_target_body is body
+    assert h.viewport_3d.edge_selection_mode_calls[-1] == ("B17", "all")
 
 
 def test_pending_body_click_dispatch_table_covers_all_modes():

@@ -434,13 +434,16 @@ class BodyRenderingMixin:
 
     def set_body_visibility(self, body_id, visible):
         """Setzt die Sichtbarkeit eines Körpers"""
-        if body_id not in self._body_actors:
-            return
         if body_id in self.bodies:
             self.bodies[body_id]['requested_visible'] = bool(visible)
+
+        actors = self._body_actors.get(body_id)
+        if not actors:
+            return
+
         try:
-            actors = self._body_actors[body_id]
-            if hasattr(self, '_apply_frustum_culling'):
+            use_frustum = bool(getattr(self, '_frustum_culling_enabled', False)) and hasattr(self, '_apply_frustum_culling')
+            if use_frustum:
                 self._apply_frustum_culling(force=True)
             else:
                 for name in actors:
