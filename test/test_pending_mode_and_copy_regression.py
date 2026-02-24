@@ -6,8 +6,9 @@ Focus:
 - Body copy path must clone feature history (not lose features).
 """
 
-from types import SimpleNamespace
-from unittest.mock import Mock
+import sys
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock, patch
 
 from PySide6.QtCore import Qt
 
@@ -72,6 +73,9 @@ class _PanelStub:
         self.set_target_body_calls = []
         self.set_body_calls = []
         self.clear_opening_faces_calls = 0
+        self.add_opening_face_calls = []
+        self.remove_opening_face_calls = []
+        self.update_face_count_calls = []
 
     def reset(self):
         self.reset_calls += 1
@@ -90,6 +94,15 @@ class _PanelStub:
 
     def clear_opening_faces(self):
         self.clear_opening_faces_calls += 1
+
+    def add_opening_face(self, face_selector):
+        self.add_opening_face_calls.append(face_selector)
+
+    def remove_opening_face(self, face_selector):
+        self.remove_opening_face_calls.append(face_selector)
+
+    def update_face_count(self, count):
+        self.update_face_count_calls.append(int(count))
 
 
 class _Harness(FeatureDialogsMixin, DialogMixin, ToolMixin):
@@ -193,6 +206,119 @@ def test_shell_pending_body_pick_activates_shell_panel_and_mode():
     assert h.shell_panel.show_at_calls == [h.viewport_3d]
     assert h.viewport_3d.set_shell_mode_calls[-1] is True
     assert h.viewport_3d.pending_transform_mode_calls[-1] is False
+
+
+def test_shell_face_selection_builds_selector_and_toggles_opening_face():
+    h = _Harness(_make_body())
+    h._shell_mode = True
+    h._shell_target_body = h._body
+    h._shell_opening_faces = []
+    h._shell_opening_face_shape_ids = []
+    h._shell_opening_face_indices = []
+
+    detector_face = SimpleNamespace(
+        id=5,
+        domain_type="body_face",
+        shapely_poly=None,
+        plane_origin=(1.0, 2.0, 3.0),
+        plane_normal=(0.0, 0.0, 1.0),
+        plane_x=(1.0, 0.0, 0.0),
+        plane_y=(0.0, 1.0, 0.0),
+        ocp_face_id=4,
+    )
+    h.viewport_3d.detector = SimpleNamespace(selection_faces=[detector_face])
+
+    resolved_face = object()
+    shape_id = object()
+    h._resolve_solid_face_from_pick = Mock(return_value=(resolved_face, 4))
+    h._find_or_register_face_shape_id = Mock(return_value=shape_id)
+
+    class _Selector:
+        def to_dict(self):
+            return {
+                "center": [1.0, 2.0, 3.0],
+                "normal": [0.0, 0.0, 1.0],
+                "area": 10.0,
+                "surface_type": "planar",
+                "tolerance": 10.0,
+            }
+
+    class _GeoSelector:
+        @staticmethod
+        def from_face(_face):
+            return _Selector()
+
+    fake_modeling = ModuleType("modeling")
+    fake_modeling.__path__ = []
+    fake_geometric_selector = ModuleType("modeling.geometric_selector")
+    fake_geometric_selector.GeometricFaceSelector = _GeoSelector
+
+    with patch.dict(
+        sys.modules,
+        {
+            "modeling": fake_modeling,
+            "modeling.geometric_selector": fake_geometric_selector,
+        },
+    ):
+        h._on_face_selected_for_shell(5)
+        assert len(h._shell_opening_faces) == 1
+        assert h._shell_opening_face_shape_ids == [shape_id]
+        assert h._shell_opening_face_indices == [4]
+        assert h.shell_panel.update_face_count_calls[-1] == 1
+
+        # Zweiter Klick auf die gleiche Fläche -> Toggle remove
+        h._on_face_selected_for_shell(5)
+        assert h._shell_opening_faces == []
+        assert h._shell_opening_face_shape_ids == []
+        assert h._shell_opening_face_indices == []
+        assert h.shell_panel.update_face_count_calls[-1] == 0
+
+
+def test_shell_confirmed_transfers_tnp_face_refs_into_feature():
+    h = _Harness(_make_body())
+    h._shell_target_body = h._body
+    h._shell_opening_faces = [{"center": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0]}]
+    shape_id = object()
+    h._shell_opening_face_shape_ids = [shape_id, None]
+    h._shell_opening_face_indices = [3, None, 3]
+    h.shell_panel.get_thickness = Mock(return_value=2.0)
+    h.undo_stack = SimpleNamespace(push=Mock(), undo=Mock())
+    h._update_body_from_build123d = Mock()
+    h._stop_shell_mode = Mock()
+
+    class _Cmd:
+        def __init__(self, body, feature, *_args, **_kwargs):
+            self.body = body
+            self.feature = feature
+
+    class _FakeShellFeature:
+        def __init__(self, *, thickness, opening_face_selectors):
+            self.thickness = thickness
+            self.opening_face_selectors = opening_face_selectors
+            self.face_shape_ids = []
+            self.face_indices = None
+            self.status = "OK"
+            self.status_message = ""
+
+    fake_modeling = ModuleType("modeling")
+    fake_modeling.__path__ = []
+    fake_modeling.ShellFeature = _FakeShellFeature
+    fake_tess_module = ModuleType("modeling.cad_tessellator")
+    fake_tess_module.CADTessellator = SimpleNamespace(notify_body_changed=Mock())
+
+    with patch.dict(
+        sys.modules,
+        {
+            "modeling": fake_modeling,
+            "modeling.cad_tessellator": fake_tess_module,
+        },
+    ), patch("gui.commands.feature_commands.AddFeatureCommand", _Cmd):
+        h._on_shell_confirmed()
+
+    pushed_cmd = h.undo_stack.push.call_args[0][0]
+    feature = pushed_cmd.feature
+    assert feature.face_shape_ids == [shape_id]
+    assert feature.face_indices == [3]
 
 
 def test_lattice_pending_body_pick_activates_lattice_panel():

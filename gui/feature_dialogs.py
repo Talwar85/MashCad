@@ -282,6 +282,8 @@ class FeatureDialogsMixin:
         if hasattr(self, '_update_detector'):
             self._update_detector()
 
+        if hasattr(self.shell_panel, 'set_target_body'):
+            self.shell_panel.set_target_body(body)
         if hasattr(self.shell_panel, 'clear_opening_faces'):
             self.shell_panel.clear_opening_faces()
         self.shell_panel.reset()
@@ -293,52 +295,130 @@ class FeatureDialogsMixin:
 
     def _on_face_selected_for_shell(self, face_id):
         """Handler wenn eine Fläche für Shell selektiert wird."""
-        from modeling.geometric_selector import GeometricFaceSelector
-
         if not self._shell_mode or not self._shell_target_body:
             return
 
         face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
-        if not face or not face.domain_type.startswith('body'):
+        if not face:
+            logger.warning(f"Shell: Face mit ID {face_id} nicht im Detector gefunden")
+            return
+        if not face.domain_type.startswith('body'):
+            logger.warning(f"Shell: Nur Body-Flächen erlaubt, aber domain_type={face.domain_type}")
             return
 
         try:
-            face_selector = GeometricFaceSelector.from_face_data({
-                'center_3d': face.center,
-                'normal': face.normal,
-                'area': face.area
-            })
-            self._shell_opening_faces.append(face_selector.to_dict())
-            if hasattr(self.shell_panel, 'add_opening_face'):
-                self.shell_panel.add_opening_face(face_id)
-            if hasattr(self.shell_panel, 'update_face_count'):
-                self.shell_panel.update_face_count(len(self._shell_opening_faces))
-            elif hasattr(self.shell_panel, 'set_opening_count'):
-                self.shell_panel.set_opening_count(len(self._shell_opening_faces))
+            from modeling.geometric_selector import GeometricFaceSelector
+
+            body = self._shell_target_body
+            if not body or not body._build123d_solid:
+                return
+
+            face_center = None
+            if getattr(face, "shapely_poly", None) is not None:
+                centroid = face.shapely_poly.centroid
+                plane_x = np.array(face.plane_x)
+                plane_y = np.array(face.plane_y)
+                origin = np.array(face.plane_origin)
+                face_center = origin + centroid.x * plane_x + centroid.y * plane_y
+            elif hasattr(face, 'plane_origin') and face.plane_origin is not None:
+                face_center = np.array(face.plane_origin)
+            else:
+                logger.warning("Shell: Kann Face-Center nicht bestimmen")
+                return
+
+            best_face, resolved_face_id = self._resolve_solid_face_from_pick(
+                body,
+                body.id,
+                position=face_center,
+                ocp_face_id=getattr(face, "ocp_face_id", None),
+            )
+
+            if best_face is not None:
+                geo_selector = GeometricFaceSelector.from_face(best_face)
+                face_selector = geo_selector.to_dict()
+                face_shape_id = self._find_or_register_face_shape_id(
+                    body,
+                    best_face,
+                    local_index=max(0, len(self._shell_opening_face_shape_ids)),
+                )
+            else:
+                face_selector = {
+                    "center": list(face_center),
+                    "normal": list(face.plane_normal),
+                    "area": 0.0,
+                    "surface_type": "unknown",
+                    "tolerance": 10.0,
+                }
+                face_shape_id = None
+                logger.warning("Shell: Konnte Face nicht finden, verwende Fallback")
         except Exception as e:
             logger.warning(f"Shell: Konnte Fläche nicht hinzufügen: {e}")
+            return
+
+        already_selected = False
+        center_arr = np.array(face_selector["center"], dtype=float)
+        for i, existing_sel in enumerate(self._shell_opening_faces):
+            existing_center = np.array(existing_sel.get("center", [0.0, 0.0, 0.0]), dtype=float)
+            if np.linalg.norm(existing_center - center_arr) < 0.1:
+                removed_selector = self._shell_opening_faces.pop(i)
+                if i < len(self._shell_opening_face_shape_ids):
+                    self._shell_opening_face_shape_ids.pop(i)
+                if i < len(self._shell_opening_face_indices):
+                    self._shell_opening_face_indices.pop(i)
+                if hasattr(self.shell_panel, 'remove_opening_face'):
+                    self.shell_panel.remove_opening_face(removed_selector)
+                already_selected = True
+                break
+
+        if not already_selected:
+            self._shell_opening_faces.append(face_selector)
+            self._shell_opening_face_shape_ids.append(face_shape_id)
+            self._shell_opening_face_indices.append(
+                int(resolved_face_id) if resolved_face_id is not None else None
+            )
+            if hasattr(self.shell_panel, 'add_opening_face'):
+                self.shell_panel.add_opening_face(face_selector)
+
+        if hasattr(self.shell_panel, 'update_face_count'):
+            self.shell_panel.update_face_count(len(self._shell_opening_faces))
+        elif hasattr(self.shell_panel, 'set_opening_count'):
+            self.shell_panel.set_opening_count(len(self._shell_opening_faces))
 
     def _on_shell_confirmed(self):
         """Handler wenn Shell bestätigt wird."""
-        if not self._shell_target_body:
+        body = self._shell_target_body
+        if not body:
+            logger.error("Shell: Kein Body ausgewählt")
             return
-        
+
+        from config.feature_flags import is_enabled
         from modeling import ShellFeature
         from modeling.cad_tessellator import CADTessellator
         from gui.commands.feature_commands import AddFeatureCommand
         from PySide6.QtWidgets import QMessageBox
-        
+
         thickness = self.shell_panel.get_thickness()
-        
+
         feature = ShellFeature(
             thickness=thickness,
             opening_face_selectors=self._shell_opening_faces.copy()
         )
-        
-        cmd = AddFeatureCommand(self._shell_target_body, feature, self, description="Shell")
+
+        face_shape_ids = [sid for sid in self._shell_opening_face_shape_ids if sid is not None]
+        face_indices = [idx for idx in self._shell_opening_face_indices if idx is not None]
+        feature.face_shape_ids = face_shape_ids
+        if face_indices:
+            feature.face_indices = sorted(set(int(i) for i in face_indices))
+        if is_enabled("tnp_debug_logging"):
+            logger.debug(
+                f"TNP v4.0: Shell refs prepared "
+                f"(shape_ids={len(face_shape_ids)}, indices={len(feature.face_indices or [])})"
+            )
+
+        cmd = AddFeatureCommand(body, feature, self, description=f"Shell ({thickness}mm)")
         self.undo_stack.push(cmd)
 
-        if self._shell_target_body._build123d_solid is None:
+        if body._build123d_solid is None:
             self.undo_stack.undo()
             QMessageBox.critical(self, "Fehler", "Shell fehlgeschlagen: Geometrie ungültig")
             return
@@ -350,9 +430,13 @@ class FeatureDialogsMixin:
             self._stop_shell_mode()
             self.browser.refresh()
             return
+        if feature.status == "WARNING":
+            msg = feature.status_message or "Fallback verwendet"
+            self.statusBar().showMessage(f"Shell mit Warnung: {msg}", 6000)
+            logger.warning(f"Shell mit Warnung: {msg}")
 
         CADTessellator.notify_body_changed()
-        self._update_body_from_build123d(self._shell_target_body, self._shell_target_body._build123d_solid)
+        self._update_body_from_build123d(body, body._build123d_solid)
         self.browser.refresh()
         logger.success(f"Shell mit {thickness}mm erstellt")
 

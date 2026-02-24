@@ -6,7 +6,8 @@ Covers regressions introduced during mixin refactor:
 - wrong dataclass constructor kwargs (profile_data/path_data)
 """
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 from gui.feature_dialogs import FeatureDialogsMixin
@@ -173,14 +174,21 @@ def test_sweep_confirmed_builds_feature_with_profile_data_and_path_data(monkeypa
             self.profile_geometric_selector = None
             self.path_geometric_selector = None
 
-    monkeypatch.setattr("modeling.SweepFeature", _FakeSweepFeature, raising=False)
-    monkeypatch.setattr(
-        "gui.commands.feature_commands.AddFeatureCommand",
-        lambda body, feature, *_args, **_kwargs: SimpleNamespace(body=body, feature=feature),
-        raising=False,
-    )
-
-    h._on_sweep_confirmed()
+    fake_modeling = ModuleType("modeling")
+    fake_modeling.__path__ = []
+    fake_modeling.SweepFeature = _FakeSweepFeature
+    fake_modeling.Body = object
+    fake_tess_module = ModuleType("modeling.cad_tessellator")
+    fake_tess_module.CADTessellator = SimpleNamespace(notify_body_changed=Mock())
+    with monkeypatch.context() as m:
+        m.setitem(sys.modules, "modeling", fake_modeling)
+        m.setitem(sys.modules, "modeling.cad_tessellator", fake_tess_module)
+        m.setattr(
+            "gui.commands.feature_commands.AddFeatureCommand",
+            lambda body, feature, *_args, **_kwargs: SimpleNamespace(body=body, feature=feature),
+            raising=False,
+        )
+        h._on_sweep_confirmed()
 
     assert captured["profile_data"] == expected_profile
     assert captured["path_data"] == expected_path
@@ -204,14 +212,21 @@ def test_loft_confirmed_builds_feature_with_profile_data(monkeypatch):
             captured["operation"] = operation
             captured["ruled"] = ruled
 
-    monkeypatch.setattr("modeling.LoftFeature", _FakeLoftFeature, raising=False)
-    monkeypatch.setattr(
-        "gui.commands.feature_commands.AddFeatureCommand",
-        lambda body, feature, *_args, **_kwargs: SimpleNamespace(body=body, feature=feature),
-        raising=False,
-    )
-
-    h._on_loft_confirmed()
+    fake_modeling = ModuleType("modeling")
+    fake_modeling.__path__ = []
+    fake_modeling.LoftFeature = _FakeLoftFeature
+    fake_modeling.Body = object
+    fake_tess_module = ModuleType("modeling.cad_tessellator")
+    fake_tess_module.CADTessellator = SimpleNamespace(notify_body_changed=Mock())
+    with monkeypatch.context() as m:
+        m.setitem(sys.modules, "modeling", fake_modeling)
+        m.setitem(sys.modules, "modeling.cad_tessellator", fake_tess_module)
+        m.setattr(
+            "gui.commands.feature_commands.AddFeatureCommand",
+            lambda body, feature, *_args, **_kwargs: SimpleNamespace(body=body, feature=feature),
+            raising=False,
+        )
+        h._on_loft_confirmed()
 
     assert captured["operation"] == "Join"
     assert captured["ruled"] is False

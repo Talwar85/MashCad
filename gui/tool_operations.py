@@ -873,20 +873,19 @@ class ToolMixin:
 
     def _start_shell(self):
         """Startet den Shell-Modus."""
-        self._shell_mode = False
-        self._shell_target_body = None
-        self._shell_opening_faces = []
-        
-        # Prüfe ob Body selektiert
-        body = self._get_active_body()
-        if body:
-            self._activate_shell_for_body(body)
-        else:
+        if hasattr(self, '_clear_transient_previews'):
+            self._clear_transient_previews(reason="start_shell", clear_interaction_modes=True)
+
+        selected_bodies = self.browser.get_selected_bodies() if hasattr(self, 'browser') else []
+        if not selected_bodies:
             self._pending_shell_mode = True
             self.viewport_3d.setCursor(Qt.CrossCursor)
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
-            self.statusBar().showMessage("Wähle einen Body für Shell")
+            self.statusBar().showMessage("Shell: Wähle einen Body")
+            return
+
+        self._activate_shell_for_body(selected_bodies[0])
 
     def _start_sweep(self):
         """Startet den Sweep-Modus."""
