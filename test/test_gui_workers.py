@@ -534,6 +534,45 @@ class TestTessellationManager:
             assert worker1._cancelled is True
             assert worker2._cancelled is True
 
+    def test_priority_queue_starts_highest_pending_first(self, mock_solid):
+        """Higher-priority queued body should start first when a slot frees up."""
+        from gui.workers.tessellation_worker import TessellationManager, TessellationWorker
+
+        with patch.object(TessellationWorker, 'start'):
+            manager = TessellationManager(max_concurrent=1)
+            on_ready = MagicMock()
+
+            worker_low = manager.request_tessellation("body_low", mock_solid, on_ready, priority=10)
+            worker_high = manager.request_tessellation("body_high", mock_solid, on_ready, priority=100)
+            worker_mid = manager.request_tessellation("body_mid", mock_solid, on_ready, priority=50)
+
+            assert "body_low" in manager._active_body_ids
+
+            worker_low.isRunning = MagicMock(return_value=False)
+            manager._cleanup_worker("body_low")
+            assert "body_high" in manager._active_body_ids
+
+            worker_high.isRunning = MagicMock(return_value=False)
+            manager._cleanup_worker("body_high")
+            assert "body_mid" in manager._active_body_ids
+
+            worker_mid.isRunning = MagicMock(return_value=False)
+            manager._cleanup_worker("body_mid")
+            assert not manager._active_body_ids
+
+    def test_is_tessellating_true_for_pending_request(self, mock_solid):
+        """Queued (not yet running) requests should still be reported as tessellating."""
+        from gui.workers.tessellation_worker import TessellationManager, TessellationWorker
+
+        with patch.object(TessellationWorker, 'start'):
+            manager = TessellationManager(max_concurrent=1)
+            on_ready = MagicMock()
+
+            manager.request_tessellation("body_active", mock_solid, on_ready, priority=100)
+            manager.request_tessellation("body_pending", mock_solid, on_ready, priority=10)
+
+            assert manager.is_tessellating("body_pending") is True
+
 
 # ============================================================================
 # Integration-style tests (with mocked Qt)

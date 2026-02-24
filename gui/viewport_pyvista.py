@@ -5329,7 +5329,15 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                         from gui.viewport.render_queue import request_render
                         request_render(self.plotter, immediate=True)
 
-                body.request_async_tessellation(on_ready=_on_async_mesh_ready)
+                request_priority = 100 if requested_visible else 10
+                if body.id in getattr(self, "_frustum_culled_body_ids", set()):
+                    request_priority = min(request_priority, 25)
+                if inactive_component:
+                    request_priority = min(request_priority, 50)
+                body.request_async_tessellation(
+                    on_ready=_on_async_mesh_ready,
+                    priority=request_priority,
+                )
                 return True
 
         # Synchroner Pfad (Mesh bereits im Cache)

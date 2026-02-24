@@ -7,13 +7,14 @@ class _FakeManager:
     def __init__(self):
         self.requests = []
 
-    def request_tessellation(self, body_id, solid, on_ready, on_error=None):
+    def request_tessellation(self, body_id, solid, on_ready, on_error=None, priority=0):
         self.requests.append(
             {
                 "body_id": body_id,
                 "solid": solid,
                 "on_ready": on_ready,
                 "on_error": on_error,
+                "priority": priority,
             }
         )
         return SimpleNamespace()
@@ -38,6 +39,7 @@ def test_request_async_tessellation_updates_cache_and_forwards_callback(monkeypa
     req = fake_manager.requests[0]
     assert req["body_id"] == body.id
     assert req["solid"] is body._build123d_solid
+    assert req["priority"] == 0
 
     mesh = SimpleNamespace(n_points=42)
     edges = SimpleNamespace(n_lines=7)
@@ -79,3 +81,16 @@ def test_request_async_tessellation_ignores_stale_callback(monkeypatch):
 
     assert body._mesh_cache is mesh_new
     assert callback_hits == ["second"]
+
+
+def test_request_async_tessellation_forwards_priority(monkeypatch):
+    body = Body("AsyncPriority")
+    body._build123d_solid = object()
+
+    fake_manager = _FakeManager()
+    monkeypatch.setattr(Body, "_shared_tessellation_manager", fake_manager)
+
+    body.request_async_tessellation(priority=77)
+
+    assert len(fake_manager.requests) == 1
+    assert fake_manager.requests[0]["priority"] == 77

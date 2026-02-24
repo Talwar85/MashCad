@@ -493,7 +493,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 pass  # Solid hat kein wrapped (selten)
 
-    def request_async_tessellation(self, on_ready=None):
+    def request_async_tessellation(self, on_ready=None, priority: int = 0):
         """
         Phase 9: Startet Tessellation im Hintergrund (Non-Blocking).
 
@@ -503,6 +503,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         Args:
             on_ready: Optional callback(body_id, mesh, edges, face_info)
                       Wenn None, wird das Mesh direkt in den Cache geschrieben.
+            priority: Scheduling-Priorität (höher = früherer Start)
         """
         if self._build123d_solid is None:
             return None
@@ -538,6 +539,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             solid=self._build123d_solid,
             on_ready=_on_mesh_ready,
             on_error=_on_mesh_error,
+            priority=int(priority),
         )
 
         # Worker-Referenz halten, damit er nicht garbage-collected wird
