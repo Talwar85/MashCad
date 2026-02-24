@@ -6,6 +6,7 @@ This mixin is designed to be inherited by the Body class.
 """
 
 import math
+import uuid
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
@@ -20,6 +21,19 @@ class BodyComputeExtendedMixin:
     These methods handle the computation of various CAD features
     like sweep, shell, hole, draft, split, thread, etc.
     """
+
+    def _ensure_ocp_feature_id(self, feature_id: Optional[str], op_name: str) -> str:
+        """
+        Stellt sicher, dass OCP-First Helper immer eine Feature-ID erhalten.
+
+        Legacy-Pfade rufen _ocp_fillet/_ocp_chamfer teils ohne feature_id auf.
+        Für TNP-Tracking wird dann eine deterministische Laufzeit-ID erzeugt.
+        """
+        if feature_id:
+            return feature_id
+        generated = f"{op_name}_{str(uuid.uuid4())[:8]}"
+        logger.warning(f"{op_name}: feature_id fehlte, verwende generierte ID '{generated}'")
+        return generated
 
     def _compute_sweep(self, feature: 'SweepFeature', current_solid):
         """
@@ -2243,14 +2257,16 @@ class BodyComputeExtendedMixin:
         from modeling.ocp_helpers import OCPFilletHelper
         
         naming_service = self._get_or_create_shape_naming_service()
-        return OCPFilletHelper.fillet(solid, edges, radius, naming_service, feature_id)
+        op_feature_id = self._ensure_ocp_feature_id(feature_id, "fillet")
+        return OCPFilletHelper.fillet(solid, edges, radius, naming_service, op_feature_id)
 
     def _ocp_chamfer(self, solid, edges, distance, feature_id: Optional[str] = None):
         """OCP helper for chamfer operation."""
         from modeling.ocp_helpers import OCPChamferHelper
         
         naming_service = self._get_or_create_shape_naming_service()
-        return OCPChamferHelper.chamfer(solid, edges, distance, naming_service, feature_id)
+        op_feature_id = self._ensure_ocp_feature_id(feature_id, "chamfer")
+        return OCPChamferHelper.chamfer(solid, edges, distance, naming_service, op_feature_id)
 
     # Transform
     def _apply_transform_feature(self, solid, feature):

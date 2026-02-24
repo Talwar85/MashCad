@@ -65,6 +65,10 @@ class MockInteractorWidget:
     def close(self):
         pass
 
+    def height(self):
+        # Default height used by picker coordinate conversion in headless tests.
+        return 800
+
 
 class MockPlotter:
     """
@@ -115,7 +119,7 @@ class MockPlotter:
         self._actors[name] = (mesh, kwargs)
         return name
 
-    def remove_actor(self, actor):
+    def remove_actor(self, actor, **_kwargs):
         """
         Entfernt einen Actor aus dem Mock-Registry.
 
@@ -155,6 +159,11 @@ class MockPlotter:
 
     def add_text(self, *args, **kwargs):
         return None
+
+    def add_point_labels(self, *args, **kwargs):
+        name = kwargs.get('name', f'labels_{len(self._actors)}')
+        self._actors[name] = ("labels", kwargs)
+        return name
 
     def add_camera_orientation_widget(self):
         return None
@@ -397,6 +406,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self.extrude_preview_enabled = True  # FIX: Separate flag for extrude preview (False for Loft/Shell)
         self._to_face_picking = False  # "Extrude to Face" Ziel-Pick-Modus
         self.measure_mode = False
+        self._measure_actor_names = []
         self.revolve_mode = False
         self._revolve_preview_actor = None
         self._revolve_axis = (0, 1, 0)
@@ -463,6 +473,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         self.pending_transform_mode = False  # NEU: Für Body-Highlighting
         self.point_to_point_mode = False  # NEU: Point-to-Point Move (wie CAD)
+        self._sweep_mode = False
+        self._loft_mode = False
         self.sketch_path_mode = False  # NEU: Sketch-Element-Selektion für Sweep-Pfad
         self.texture_face_mode = False  # NEU: Face-Selektion für Surface Texture
         self._texture_body_id = None  # Body für Texture-Selektion
@@ -1181,6 +1193,96 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.hover_body_id = None
         pass
 
+    def set_measure_mode(self, enabled: bool):
+        """Aktiviert/deaktiviert Measure-Picking im Viewport."""
+        self.measure_mode = bool(enabled)
+        if not self.measure_mode:
+            self.hovered_body_face = None
+            self._clear_body_face_highlight()
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.CrossCursor)
+
+    def clear_measure_actors(self, render: bool = True):
+        """Entfernt alle Measure-Visualisierungen aus dem Viewport."""
+        for actor_name in list(getattr(self, "_measure_actor_names", [])):
+            _safe_remove_actor(self.plotter, actor_name, "measure actor cleanup")
+        self._measure_actor_names = []
+        if render:
+            request_render(self.plotter)
+
+    def update_measure_visuals(self, points):
+        """
+        Zeichnet Measure-Visualisierung (Punkte, Linie, Distanzlabel).
+
+        Args:
+            points: Sequenz [p1, p2] mit 3D-Punkten oder None-Einträgen.
+        """
+        self.clear_measure_actors(render=False)
+
+        if not HAS_PYVISTA:
+            return
+
+        p1 = points[0] if points and len(points) > 0 else None
+        p2 = points[1] if points and len(points) > 1 else None
+
+        try:
+            if p1 is not None:
+                actor_name = "_measure_pt_1"
+                self.plotter.add_mesh(
+                    pv.Sphere(radius=0.3, center=p1),
+                    color="#00ff88",
+                    name=actor_name,
+                    pickable=False,
+                )
+                self._measure_actor_names.append(actor_name)
+
+            if p2 is not None:
+                actor_name = "_measure_pt_2"
+                self.plotter.add_mesh(
+                    pv.Sphere(radius=0.3, center=p2),
+                    color="#00ff88",
+                    name=actor_name,
+                    pickable=False,
+                )
+                self._measure_actor_names.append(actor_name)
+
+            if p1 is not None and p2 is not None:
+                p1n = np.array(p1, dtype=float)
+                p2n = np.array(p2, dtype=float)
+                dist = float(np.linalg.norm(p2n - p1n))
+
+                line_name = "_measure_line"
+                self.plotter.add_mesh(
+                    pv.Line(p1n, p2n),
+                    color="#ffaa00",
+                    line_width=3,
+                    name=line_name,
+                    pickable=False,
+                )
+                self._measure_actor_names.append(line_name)
+
+                if hasattr(self.plotter, "add_point_labels"):
+                    label_name = "_measure_label"
+                    mid = (p1n + p2n) / 2.0
+                    self.plotter.add_point_labels(
+                        [mid],
+                        [f"{dist:.2f} mm"],
+                        name=label_name,
+                        font_size=16,
+                        text_color="#ffaa00",
+                        point_color="#ffaa00",
+                        point_size=0,
+                        shape=None,
+                        fill_shape=False,
+                        pickable=False,
+                    )
+                    self._measure_actor_names.append(label_name)
+
+            request_render(self.plotter)
+        except Exception as e:
+            _log_suppressed_exception("measure visuals update", e)
+
     def pick_point_on_geometry(self, screen_x: int, screen_y: int, snap_to_vertex: bool = True, log_pick: bool = True):
         """
         Picked einen 3D-Punkt auf der Geometrie (CAD-Style).
@@ -1415,115 +1517,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         grid_size = spacing * 20
         self._draw_grid(size=grid_size, spacing=spacing)
     
-    def _cache_drag_direction_for_face_v2(self, face):
-        """
-        Berechnet den 2D-Bildschirmvektor UND speichert den 3D-Ankerpunkt
-        für korrekte Skalierung.
-        """
-        try:
-            # 1. Normale und Zentrum holen
-            normal = np.array(face.plane_normal, dtype=float)
-            if np.linalg.norm(normal) < 1e-6: normal = np.array([0,0,1], dtype=float)
-            
-            if face.domain_type == 'body_face':
-                 center = np.array(face.plane_origin, dtype=float)
-            else:
-                 poly = face.shapely_poly
-                 c2d = poly.centroid
-                 ox, oy, oz = face.plane_origin
-                 ux, uy, uz = face.plane_x
-                 vx, vy, vz = face.plane_y
-                 center = np.array([
-                     ox + c2d.x * ux + c2d.y * vx,
-                     oy + c2d.x * uy + c2d.y * vy,
-                     oz + c2d.x * uz + c2d.y * vz
-                 ], dtype=float)
-
-            # WICHTIG: 3D-Punkt für Skalierungsberechnung merken!
-            self._drag_anchor_3d = center
-
-            # 2. Vektor im Screen-Space berechnen
-            renderer = self.plotter.renderer
-            
-            def to_screen(pt_3d):
-                renderer.SetWorldPoint(pt_3d[0], pt_3d[1], pt_3d[2], 1.0)
-                renderer.WorldToDisplay()
-                disp = renderer.GetDisplayPoint()
-                return np.array([disp[0], disp[1]])
-
-            p1 = to_screen(center)
-            p2 = to_screen(center + normal * 10.0) # Testpunkt in Extrude-Richtung
-            
-            vec = p2 - p1
-            # Y-Achsen korrektur (VTK vs Qt)
-            vec[1] = -vec[1] 
-
-            length = np.linalg.norm(vec)
-            
-            if length < 1.0:
-                self._drag_screen_vector = np.array([0.0, -1.0])
-            else:
-                self._drag_screen_vector = vec / length
-                
-        except Exception as e:
-            logger.error(f" {e}")
-            self._drag_screen_vector = np.array([0.0, -1.0])
-            self._drag_anchor_3d = np.array([0,0,0])
-
-    def _get_pixel_to_world_scale(self, anchor_point_3d):
-        """
-        Berechnet, wie viele 'Welt-Einheiten' ein Pixel an der Position
-        des Objekts entspricht. Löst das Problem 'manchmal schnell, manchmal langsam'.
-        """
-        if anchor_point_3d is None: return 0.1
-        
-        try:
-            renderer = self.plotter.renderer
-            
-            # Projektion des Ankerpunkts
-            renderer.SetWorldPoint(*anchor_point_3d, 1.0)
-            renderer.WorldToDisplay()
-            p1_disp = renderer.GetDisplayPoint()
-            
-            # Wir gehen 100 Pixel zur Seite im Screen Space (beliebiger Wert > 0)
-            p2_disp_x = p1_disp[0] + 100.0
-            p2_disp_y = p1_disp[1]
-            p2_disp_z = p1_disp[2] # Gleiche Tiefe (Z-Buffer Wert) behalten!
-            
-            # Zurück in World Space
-            renderer.SetDisplayPoint(p2_disp_x, p2_disp_y, p2_disp_z)
-            renderer.DisplayToWorld()
-            world_pt = renderer.GetWorldPoint()
-            
-            if world_pt[3] != 0:
-                p2_world = np.array(world_pt[:3]) / world_pt[3]
-            else:
-                p2_world = np.array(world_pt[:3])
-
-            # Distanz in Welt-Einheiten
-            dist_world = np.linalg.norm(p2_world - anchor_point_3d)
-            
-            # Faktor: Welt-Einheiten pro Pixel
-            # Wenn 100 Pixel = 50mm sind, ist Faktor 0.5
-            if dist_world == 0: return 0.1
-            return dist_world / 100.0
-            
-        except Exception as e:
-            _log_suppressed_exception("get_pixel_to_world_factor", e)
-            return 0.1
-    
-    def is_body_visible(self, body_id):
-        if body_id not in self._body_actors: return False
-        try:
-            actors = self._body_actors[body_id]
-            if not actors: return False
-            mesh_name = actors[0] # Wir prüfen Visibility am Mesh
-            actor = self.plotter.renderer.actors.get(mesh_name)
-            if actor: return bool(actor.GetVisibility())
-        except Exception as e:
-            _log_suppressed_exception("is_body_visible", e)
-        return False
-        
     def _draw_axes(self, length=50):
         for axis_name in ['axis_x_org', 'axis_y_org', 'axis_z_org']:
             _safe_remove_actor(self.plotter, axis_name, "axes cleanup")
@@ -1911,7 +1904,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 return None
 
             # Hole das Solid vom Body
-            body_ref = body_data.get('body_ref')
+            body_ref = body_data.get('body_ref') or body_data.get('body')
             if not body_ref or not hasattr(body_ref, '_build123d_solid'):
                 logger.warning(f"Thread: Body {body_id} hat kein Solid")
                 return None
@@ -3609,24 +3602,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if self.selected_faces:
             self._cache_drag_direction_for_face(list(self.selected_faces)[0])
     
-    def _calculate_extrude_delta(self, current_pos):
-        """Berechnet delta mit dynamischer Skalierung."""
-        dx = current_pos.x() - self.drag_start_pos.x()
-        dy = current_pos.y() - self.drag_start_pos.y()
-        mouse_vec = np.array([dx, dy])
-        
-        # 1. Projektion auf die Zug-Achse (wie viel bewegen wir uns entlang des Pfeils?)
-        projection_pixels = np.dot(mouse_vec, self._drag_screen_vector)
-        
-        # 2. Umrechnung Pixel -> Millimeter
-        # Nutze den gespeicherten 3D-Ankerpunkt
-        anchor = getattr(self, '_drag_anchor_3d', None)
-        scale_factor = self._get_pixel_to_world_scale(anchor)
-        
-        # Das Resultat sollte sich jetzt "1 zu 1" anfühlen
-        return projection_pixels * scale_factor
-
-    # ==================== PICKING ====================
     def _highlight_plane_at_position(self, x, y):
         """
         Kombiniert Standard-Ebenen Highlight mit GeometryDetector Highlight.
@@ -3794,35 +3769,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             
    
         
-    def _handle_selection_click(self, x, y, is_multi):
-        """
-        CAD-Selection über GeometryDetector
-
-        W7 PAKET B: Uses Unified Selection API (toggle_face_selection).
-        """
-        ray_o, ray_d = self.get_ray_from_click(x, y)
-
-        # WICHTIG: self.pick nutzen
-        face_id = self.pick(
-            ray_o,
-            ray_d,
-            selection_filter=self.active_selection_filter
-        )
-
-        if face_id != -1:
-            # W7: Unified API - toggle_face_selection handles multi/single select
-            self.toggle_face_selection(face_id, is_multi=is_multi)
-
-            self._draw_selectable_faces()
-            self.face_selected.emit(face_id)
-            self._cache_drag_direction_for_face(face_id)
-
-        else:
-            # Background Click → Deselect
-            if not is_multi:
-                self.clear_face_selection()
-                self._draw_selectable_faces()
-
     def _on_face_clicked(self, point, hover_only=False):
         best_dist = float('inf')
         best_idx = -1
@@ -4001,6 +3947,37 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self._clear_body_face_highlight()
             self._clear_texture_face_highlights()
             request_render(self.plotter)
+
+    def set_sweep_mode(self, enabled: bool):
+        """
+        Aktiviert/Deaktiviert Sweep-Interaktionsmodus.
+
+        Der Sweep-Profil-Pick nutzt denselben Face-Picking-Pfad wie Extrude,
+        jedoch ohne Extrude-Preview.
+        """
+        self._sweep_mode = bool(enabled)
+        if self._sweep_mode:
+            self.set_extrude_mode(True, enable_preview=False)
+        else:
+            if hasattr(self, 'stop_sketch_path_mode'):
+                self.stop_sketch_path_mode()
+            # Nur deaktivieren, wenn Loft nicht parallel aktiv ist.
+            if not getattr(self, '_loft_mode', False):
+                self.set_extrude_mode(False)
+
+    def set_loft_mode(self, enabled: bool):
+        """
+        Aktiviert/Deaktiviert Loft-Interaktionsmodus.
+
+        Loft-Profil-Picks laufen über Face-Picking ohne Extrude-Preview.
+        """
+        self._loft_mode = bool(enabled)
+        if self._loft_mode:
+            self.set_extrude_mode(True, enable_preview=False)
+        else:
+            # Nur deaktivieren, wenn Sweep nicht parallel aktiv ist.
+            if not getattr(self, '_sweep_mode', False):
+                self.set_extrude_mode(False)
 
     # ==================== SKETCH PATH SELECTION MODE ====================
 
@@ -4189,21 +4166,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         return math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
 
-    def get_extrusion_data_for_kernel(self):
-        """Gibt die Shapely-Polygone für den Kernel zurück"""
-        data = []
-        for fid in self.selected_face_ids:
-            # FIX: Auch hier 'selection_faces' nutzen
-            face = next((f for f in self.detector.selection_faces if f.id == fid), None)
-            if face and face.domain_type.startswith('sketch'):
-                data.append({
-                    'poly': face.shapely_poly,
-                    'sketch_id': face.owner_id
-                })
-        return data
-        
-    
-
     def _draw_selectable_faces_from_detector(self):
         """
         PERFORMANCE FIX:
@@ -4391,42 +4353,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         except Exception as e:
             logger.debug(f"mark_edge_as_failed: {e}")
 
-    def get_ray_from_click(self, x, y):
-        """
-        Berechnet Ursprung und Richtung für Raycasting an Pixel x,y.
-        FIX: Robustere Koordinatenumrechnung für VTK.
-        """
-        renderer = self.plotter.renderer
-        
-        # Fenstergröße holen
-        w, h = self.plotter.window_size
-        
-        # WICHTIG: VTK Y-Koordinate ist invertiert (0 ist unten, Qt 0 ist oben)
-        # Wir nutzen hier die interactor-Größe, das ist oft genauer als window_size bei eingebetteten Widgets
-        if self.plotter.interactor:
-            ih = self.plotter.interactor.GetSize()[1]
-            y_vtk = ih - y
-        else:
-            y_vtk = h - y
-            
-        # 1. Startpunkt (Near Plane)
-        renderer.SetDisplayPoint(x, y_vtk, 0)
-        renderer.DisplayToWorld()
-        start = np.array(renderer.GetWorldPoint()[:3])
-        
-        # 2. Endpunkt (Far Plane)
-        renderer.SetDisplayPoint(x, y_vtk, 1)
-        renderer.DisplayToWorld()
-        end = np.array(renderer.GetWorldPoint()[:3])
-        
-        # 3. Richtung
-        direction = end - start
-        norm = np.linalg.norm(direction)
-        if norm > 0:
-            direction = direction / norm
-            
-        return tuple(start), tuple(direction)
-        
     def _restore_body_colors(self):
         """Stellt Original-Farben aller Bodies wieder her"""
         # FIX: Variable Anzahl von Actors unterstützen
@@ -4906,217 +4832,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self.plotter.add_mesh(mesh, color=const_color, line_width=1, name=name, pickable=False, opacity=const_opacity)
             self._sketch_actors.append(name)
 
-    def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None,
-                 verts=None, faces=None, normals=None, edges=None, edge_lines=None,
-                 opacity=1.0, pickable=True, inactive_component=False):
-        """
-        Fügt einen Körper hinzu. 
-        FIX: Erkennt automatisch Legacy-Listen-Aufrufe und verhindert den 'point_data' Crash.
-        """
-        if not HAS_PYVISTA: return
-        
-        # === AUTO-FIX: Argumente verschieben ===
-        # Wenn main_window eine Liste als 3. Argument übergibt, landete sie in mesh_obj.
-        # Das verursacht den Absturz. Wir fangen das hier ab.
-        if isinstance(mesh_obj, list):
-            verts = mesh_obj          # Die Liste sind eigentlich Vertices
-            faces = edge_mesh_obj     # Das nächste Argument sind Faces
-            # mesh_obj muss None sein, damit wir unten in den richtigen Pfad (B) laufen
-            mesh_obj = None           
-            edge_mesh_obj = None
-
-        # Alten Actor entfernen (Cleanup) - MAXIMAL AGGRESSIV
-        n_mesh_old = f"body_{bid}_m"
-        n_edge_old = f"body_{bid}_e"
-        
-        # METHODE 1: Direkt aus VTK Renderer Collection entfernen
-        # Das ist der zuverlässigste Weg, unabhängig von PyVista's Dictionary
-        try:
-            vtk_renderer = self.plotter.renderer
-            actors_collection = vtk_renderer.GetActors()
-            actors_collection.InitTraversal()
-            actors_to_remove = []
-            
-            for i in range(actors_collection.GetNumberOfItems()):
-                actor = actors_collection.GetNextActor()
-                if actor:
-                    actors_to_remove.append(actor)
-
-            # Jetzt die markierten Actors entfernen
-            # (Wir entfernen ALLE und fügen sie dann neu hinzu, außer die body_bid Actors)
-            for actor in actors_to_remove:
-                # Prüfe ob dieser Actor zu unserem Body gehört
-                # PyVista speichert den Namen im actors Dictionary
-                actor_name = None
-                for name, a in self.plotter.renderer.actors.items():
-                    if a is actor:
-                        actor_name = name
-                        break
-
-                # WICHTIG: Gizmo-Actors NICHT entfernen!
-                if actor_name and actor_name.startswith(f"body_{bid}"):
-                    # UserTransform zurücksetzen NUR für Body-Actors
-                    actor.SetUserTransform(None)
-                    vtk_renderer.RemoveActor(actor)
-                    if is_enabled("viewport_debug"):
-                        logger.debug(f"VTK: Actor '{actor_name}' aus Renderer entfernt")
-        except Exception as e:
-            logger.warning(f"VTK Cleanup fehlgeschlagen: {e}")
-        
-        # METHODE 2: PyVista Dictionary bereinigen
-        for old_name in [n_mesh_old, n_edge_old]:
-            try:
-                if old_name in self.plotter.renderer.actors:
-                    # Aus PyVista Dictionary entfernen
-                    del self.plotter.renderer.actors[old_name]
-                    logger.debug(f"PyVista Dict: '{old_name}' entfernt")
-            except Exception as e:
-                pass
-        
-        # METHODE 3: Standard PyVista API als Fallback
-        for old_name in [n_mesh_old, n_edge_old]:
-            try:
-                self.plotter.remove_actor(old_name)
-            except Exception as e:
-                logger.debug(f"[viewport] Fehler beim Entfernen Actor {old_name}: {e}")
-        
-        # Aus der internen Liste entfernen
-        if bid in self._body_actors:
-            for n in self._body_actors[bid]: 
-                try: 
-                    self.plotter.remove_actor(n)
-                except Exception as e: 
-                    logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
-            del self._body_actors[bid]
-        
-        # KRITISCH: Erzwinge Render nach dem Cleanup um sicherzustellen
-        # dass der alte Actor wirklich weg ist bevor wir den neuen hinzufügen
-        request_render(self.plotter, immediate=True)
-        
-        actors_list = []
-        if color is None: 
-            col_rgb = (0.5, 0.5, 0.5)
-        elif isinstance(color, str): 
-            # Wandelt "red", "blue" etc. in (1.0, 0.0, 0.0) um
-            c = QColor(color)
-            col_rgb = (c.redF(), c.greenF(), c.blueF())
-        else: 
-            # Ist schon Liste/Tuple
-            col_rgb = tuple(color)
-        try:
-            # === PFAD A: Modernes PyVista Objekt ===
-            if mesh_obj is not None:
-                n_mesh = f"body_{bid}_m"
-                has_normals = "Normals" in mesh_obj.point_data
-                
-                # DEBUG: Mesh-Koordinaten loggen
-                bounds = mesh_obj.bounds
-                center = mesh_obj.center
-                if is_enabled("viewport_debug"):
-                    logger.debug(f"Füge Mesh hinzu: {n_mesh}, {mesh_obj.n_points} Punkte")
-                    logger.debug(f"  Mesh bounds: X({bounds[0]:.1f} to {bounds[1]:.1f}), Y({bounds[2]:.1f} to {bounds[3]:.1f}), Z({bounds[4]:.1f} to {bounds[5]:.1f})")
-                    logger.debug(f"  Mesh center: ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f})")
-                
-                # Phase 4 Assembly: Inaktive Components grau/transparent
-                render_color = (0.5, 0.5, 0.5) if inactive_component else col_rgb
-                render_opacity = 0.35 if inactive_component else opacity
-
-                self.plotter.add_mesh(mesh_obj, color=render_color, name=n_mesh, show_edges=False,
-                                      smooth_shading=has_normals, pbr=not has_normals,
-                                      metallic=0.1, roughness=0.6, pickable=pickable and not inactive_component,
-                                      opacity=render_opacity)
-                
-                # Explizit sichtbar machen
-                if n_mesh in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[n_mesh].SetVisibility(True)
-                    if is_enabled("viewport_debug"):
-                        logger.debug(f"Actor '{n_mesh}' sichtbar gesetzt")
-                    
-                actors_list.append(n_mesh)
-                
-                if edge_mesh_obj is not None:
-                    n_edge = f"body_{bid}_e"
-                    if is_enabled("viewport_debug"):
-                        logger.debug(f"Füge Edges hinzu: {n_edge}, {edge_mesh_obj.n_lines} Linien")
-                    self.plotter.add_mesh(edge_mesh_obj, color="black", line_width=2, name=n_edge, pickable=False)
-                    actors_list.append(n_edge)
-                
-                self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb, 'body': None}
-
-            # === PFAD B: Legacy Listen (Verts/Faces) ===
-            elif verts and faces:
-                import numpy as np
-                import pyvista as pv
-                v = np.array(verts, dtype=np.float32)
-                f = []
-                for face in faces: f.extend([len(face)] + list(face))
-                mesh = pv.PolyData(v, np.array(f, dtype=np.int32))
-                
-                if normals:
-                    try:
-                        n = np.array(normals, dtype=np.float32)
-                        if len(n) == len(v): mesh.point_data["Normals"] = n
-                    except Exception as e:
-                        logger.debug(f"Failed to set normals: {e}")
-                
-                n_mesh = f"body_{bid}_m"
-                # Phase 4 Assembly: Inaktive Components grau/transparent
-                render_color = (0.5, 0.5, 0.5) if inactive_component else col_rgb
-                render_opacity = 0.35 if inactive_component else opacity
-                self.plotter.add_mesh(mesh, color=render_color, name=n_mesh, show_edges=False,
-                                      smooth_shading=True, pickable=pickable and not inactive_component,
-                                      opacity=render_opacity)
-                
-                if n_mesh in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[n_mesh].SetVisibility(True)
-                    
-                actors_list.append(n_mesh)
-                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb, 'body': None}
-
-            self._body_actors[bid] = tuple(actors_list)
-
-            # WICHTIG: Actor-Cache invalidieren für schnellen Hover-Lookup
-            if hasattr(self, '_actor_to_body_cache'):
-                self._rebuild_actor_body_cache()
-
-            # WICHTIG: Erzwinge Render nach dem Hinzufügen
-            request_render(self.plotter, immediate=True)
-
-            # Grid an Modellgroesse anpassen
-            self.update_grid_to_model()
-
-        except Exception as e:
-            logger.error(f"add_body error: {e}")
-
-    def set_body_visibility(self, body_id, visible):
-        logger.debug(f"[viewport] set_body_visibility called for {body_id}=>{visible}")
-        if body_id not in self._body_actors:
-            logger.debug(f"[viewport] body_id {body_id} not in _body_actors")
-            return
-        try:
-            # FIX: Iteriere über alle Actors (Mesh, Edges, OCP-Lines...)
-            actors = self._body_actors[body_id]
-            logger.debug(f"[viewport] actors to hide: {actors}")
-            for name in actors:
-                if name in self.plotter.renderer.actors:
-                    actor = self.plotter.renderer.actors[name]
-                    actor.visibility = bool(visible)
-                    logger.debug(f"[viewport] -> set actor {name} visibilty to {visible}")
-                else:
-                    logger.debug(f"[viewport] -> actor {name} NOT FOUND in renderer")
-            request_render(self.plotter)
-        except Exception as e:
-            logger.error(f"[viewport] set_body_visibility failed: {e}")
-        """Setzt alle Bodies sichtbar/unsichtbar"""
-        for body_id in self._body_actors:
-            try:
-                m, e = self._body_actors[body_id]
-                self.plotter.renderer.actors[m].SetVisibility(visible)
-                self.plotter.renderer.actors[e].SetVisibility(visible)
-            except Exception as e:
-                _log_suppressed_exception(f"body visibility set (body_id='{body_id}')", e)
-        request_render(self.plotter)
-
     def set_all_bodies_opacity(self, opacity: float):
         """
         Setzt die Transparenz aller Bodies (X-Ray Mode).
@@ -5163,64 +4878,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 self.bodies[body_id]['opacity'] = opacity
         except Exception as e:
             _log_suppressed_exception(f"single body opacity set (body_id='{body_id}')", e)
-        request_render(self.plotter)
-
-    def clear_bodies(self, only_body_id: str = None):
-        """
-        Entfernt Body-Actors aus dem Viewport.
-
-        Args:
-            only_body_id: Wenn angegeben, nur diesen Body entfernen (kein Flicker bei anderen).
-        """
-        if only_body_id:
-            # Nur einen Body entfernen - KEIN FLICKER für andere!
-            if only_body_id in self._body_actors:
-                for n in self._body_actors[only_body_id]:
-                    try:
-                        self.plotter.remove_actor(n)
-                    except Exception as e:
-                        logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
-                del self._body_actors[only_body_id]
-            if only_body_id in self.bodies:
-                del self.bodies[only_body_id]
-            if hasattr(self, '_actor_to_body_cache'):
-                self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
-                                              if v != only_body_id}
-        else:
-            # Alle Bodies entfernen
-            for names in self._body_actors.values():
-                for n in names:
-                    try:
-                        self.plotter.remove_actor(n)
-                    except Exception as e:
-                        logger.debug(f"[viewport] Fehler beim Entfernen Body-Actor {n}: {e}")
-            self._body_actors.clear()
-            self.bodies.clear()
-            if hasattr(self, '_actor_to_body_cache'):
-                self._actor_to_body_cache.clear()
-
-        request_render(self.plotter)
-
-    def set_body_visible(self, body_id: str, visible: bool):
-        """
-        Set visibility of a body.
-
-        Args:
-            body_id: ID of the body
-            visible: True to show, False to hide
-        """
-        if not HAS_PYVISTA:
-            return
-
-        actor_names = self._body_actors.get(body_id, [])
-        for name in actor_names:
-            try:
-                actor = self.plotter.actors.get(name)
-                if actor:
-                    actor.SetVisibility(visible)
-            except Exception as e:
-                logger.debug(f"[viewport] Error setting visibility for {name}: {e}")
-
         request_render(self.plotter)
 
     def update_single_body(self, body, color=None, inactive_component=False):
@@ -5281,16 +4938,17 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             inactive_component=inactive_component
         )
 
-        return True
+        if body.id in self.bodies:
+            self.bodies[body.id]['body'] = body
+            self.bodies[body.id]['body_ref'] = body
 
-    def get_body_mesh(self, body_id):
-        if body_id in self.bodies: return self.bodies[body_id]['mesh']
-        return None
+        return True
 
     def set_body_object(self, body_id: str, body_obj):
         """Setzt die Body-Objekt-Referenz für Texture-Previews."""
         if body_id in self.bodies:
             self.bodies[body_id]['body'] = body_obj
+            self.bodies[body_id]['body_ref'] = body_obj
 
             # FIX Phase 7: Detector aktualisieren wenn Selection-Mode aktiv
             # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)
@@ -6245,48 +5903,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             return result
         return []
     
-    def show_extrude_preview(self, height, operation="New Body"):
-        """Erzeugt die 3D-Vorschau mit operation-basierter Farbe."""
-        self._clear_preview()
-        self.extrude_height = height
-        
-        # FIX: Crash verhindert. Prüfung auf selection_faces statt faces
-        if not self.selected_face_ids or abs(height) < 0.1: return
-
-        try:
-            preview_meshes = []
-            for fid in self.selected_face_ids:
-                # FIX: Hier hieß es vorher self.detector.faces -> Jetzt self.detector.selection_faces
-                face = next((f for f in self.detector.selection_faces if f.id == fid), None)
-                
-                if face and face.display_mesh:
-                    normal = np.array(face.plane_normal)
-                    # Extrudiere das vorhandene Display-Mesh entlang der Normalen
-                    # capping=True schließt den Körper (oben/unten)
-                    p_mesh = face.display_mesh.extrude(normal * height, capping=True)
-                    preview_meshes.append(p_mesh)
-
-            if preview_meshes:
-                # Meshes verschmelzen für Performance
-                combined = preview_meshes[0]
-                for i in range(1, len(preview_meshes)):
-                    combined = combined.merge(preview_meshes[i])
-                
-                # Farbe basierend auf Operation (nicht mehr auf Vorzeichen)
-                op_colors = {
-                    "New Body": '#6699ff',  # Blau
-                    "Join": '#66ff66',      # Grün  
-                    "Cut": '#ff6666',       # Rot
-                    "Intersect": '#ffaa66'  # Orange
-                }
-                col = op_colors.get(operation, '#6699ff')
-                
-                self.plotter.add_mesh(combined, color=col, opacity=0.5, name='prev', pickable=False)
-                self._preview_actor = 'prev'
-                request_render(self.plotter)
-        except Exception as e:
-            logger.error(f" {e}")
-    
     def _calculate_body_face_extrusion(self, face, height):
         """Berechnet vollständige Extrusion für eine Body-Fläche inkl. Seitenwände"""
         try:
@@ -6409,301 +6025,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             import traceback
             traceback.print_exc()
             return [], []
-
-    def confirm_extrusion(self, operation="New Body"):
-        """Bestätigt Extrusion und sendet Signal (wird von Enter/Rechtsklick gerufen)"""
-        # 1. Daten sichern
-        faces = list(self.selected_face_ids)
-        height = self.extrude_height
-        
-        # 2. Aufräumen
-        self._clear_preview()
-        self.set_extrude_mode(False)
-        self.set_all_bodies_visible(True) # Bodies wieder sichtbar machen
-        
-        # 3. Validierung & Senden
-        if not faces:
-            return
-        if abs(height) < 0.001:
-            return
-
-        # Special Case: -1 (Legacy Body Face Selection) entfernen falls vorhanden
-        if -1 in faces: faces.remove(-1)
-        
-        if faces:
-            # Wir senden nur die IDs, das Main Window holt sich die Daten aus dem Detector
-            self.extrude_requested.emit(list(faces), height, operation)
-    
-   
-
-    def pick(self, x, y, selection_filter=None):
-        """
-        Präzises Picking mittels vtkCellPicker (Hardware-gestützt).
-        Löst das Problem, dass falsche/verdeckte Flächen gewählt werden.
-        """
-        if not hasattr(self, 'detector'): return -1
-        
-        # Lazy Import
-        if selection_filter is None:
-             from gui.geometry_detector import GeometryDetector
-             selection_filter = GeometryDetector.SelectionFilter.ALL
-
-        # Sammle alle Hits (Body + Sketch) um das beste zu wählen
-        all_hits = []  # (priority, distance, face_id)
-
-        # Ray für alle Berechnungen
-        ray_origin, ray_dir = self.get_ray_from_click(x, y)
-        ray_start = np.array(ray_origin)
-
-        # --- 1. BODY FACES (Hardware Picking) ---
-        # Wir fragen VTK: Was sieht die Kamera an Pixel x,y?
-        if "body_face" in selection_filter:
-            picker = self._get_picker("coarse")  # Phase 4: Reuse picker
-
-            height = self.plotter.interactor.height()
-            picker.Pick(x, height - y, 0, self.plotter.renderer)
-
-            cell_id = picker.GetCellId()
-            picked_actor = picker.GetActor()
-
-            if cell_id != -1 and picked_actor is not None:
-                pos = np.array(picker.GetPickPosition())
-                normal = np.array(picker.GetPickNormal())
-                body_dist = np.linalg.norm(pos - ray_start)
-
-                # SCHRITT 1: Actor → Body-ID zuordnen (actors sind NAMEN, nicht Objekte!)
-                picked_body_id = None
-                for bid, actor_names in self._body_actors.items():
-                    for name in actor_names:
-                        if self.plotter.renderer.actors.get(name) == picked_actor:
-                            picked_body_id = bid
-                            break
-                    if picked_body_id is not None:
-                        break
-
-                if picked_body_id is not None:
-                    # === METHODE 1: EXAKT via face_id cell_data ===
-                    body_data = self.bodies.get(picked_body_id)
-                    if body_data and 'mesh' in body_data:
-                        mesh = body_data['mesh']
-                        if mesh is not None and "face_id" in mesh.cell_data:
-                            face_ids = mesh.cell_data["face_id"]
-                            if 0 <= cell_id < len(face_ids):
-                                ocp_face_id = int(face_ids[cell_id])
-                                # Finde SelectionFace mit dieser OCP Face-ID
-                                found_match = False
-                                for face in self.detector.selection_faces:
-                                    if (face.domain_type == "body_face" and
-                                        face.owner_id == picked_body_id and
-                                        getattr(face, 'ocp_face_id', None) == ocp_face_id):
-                                        logger.trace(f"Pick EXAKT: cell_id={cell_id} → ocp_face_id={ocp_face_id}")
-                                        all_hits.append((5, body_dist, face.id))
-                                        found_match = True
-                                        break
-                                if not found_match:
-                                    # Throttling: Nur einmal pro Body warnen, nicht bei jedem Hover
-                                    # Nur warnen wenn es überhaupt SelectionFaces gibt (d.h. wir sind in einem Feature-Modus)
-                                    if self.detector.selection_faces:
-                                        warn_key = f"{picked_body_id}_{ocp_face_id}"
-                                        if not hasattr(self, '_selection_face_warnings'):
-                                            self._selection_face_warnings = set()
-                                        if warn_key not in self._selection_face_warnings:
-                                            self._selection_face_warnings.add(warn_key)
-                                            available_ids = [
-                                                getattr(f, 'ocp_face_id', None)
-                                                for f in self.detector.selection_faces
-                                                if f.domain_type == "body_face" and f.owner_id == picked_body_id
-                                            ]
-                                            logger.debug(f"Keine SelectionFace für ocp_face_id={ocp_face_id}! Verfügbar: {available_ids}")
-
-                    # === METHODE 2: FALLBACK - Heuristik (wenn keine face_id) ===
-                    if not all_hits:
-                        best_face = None
-                        best_score = float('inf')
-
-                        for face in self.detector.selection_faces:
-                            if face.domain_type != "body_face":
-                                continue
-                            if face.owner_id != picked_body_id:
-                                continue
-
-                            face_normal = np.array(face.plane_normal)
-                            dist_plane = abs(np.dot(pos - np.array(face.plane_origin), face_normal))
-                            dot_normal = abs(np.dot(normal, face_normal))
-
-                            if dist_plane < 5.0:
-                                score = (1.0 - dot_normal) * 5.0 + dist_plane
-                                if score < best_score:
-                                    best_score = score
-                                    best_face = face
-
-                        if best_face:
-                            logger.trace(f"Pick HEURISTIK: face.id={best_face.id}")
-                            all_hits.append((5, body_dist, best_face.id))
-
-        # --- 2. SKETCH FACES (Analytisches Picking) ---
-        # Sketches haben kein Mesh im CellPicker, daher hier weiter mathematisch
-
-        sketch_faces = [f for f in self.detector.selection_faces if f.domain_type.startswith("sketch")]
-        if sketch_faces:
-            logger.trace(f"[SKETCH PICK] Prüfe {len(sketch_faces)} Sketch-Faces, Filter={selection_filter}")
-
-        for face in self.detector.selection_faces:
-            if face.domain_type.startswith("sketch") and face.domain_type in selection_filter:
-                hit = self.detector._intersect_ray_plane(ray_origin, ray_dir, face.plane_origin, face.plane_normal)
-                if hit is None:
-                    continue
-
-                # Prüfen ob Punkt im 2D-Polygon liegt
-                proj_x, proj_y = self.detector._project_point_2d(hit, face.plane_origin, face.plane_x, face.plane_y)
-
-                # Performance: Erst Bounding Box Check im 2D
-                minx, miny, maxx, maxy = face.shapely_poly.bounds
-                if not (minx <= proj_x <= maxx and miny <= proj_y <= maxy):
-                    continue
-
-                # Prüfe contains() oder intersects() mit kleinem Puffer für Randtreffer
-                pt = Point(proj_x, proj_y)
-                try:
-                    # Erst exakte Prüfung
-                    if face.shapely_poly.contains(pt):
-                        dist = np.linalg.norm(np.array(hit) - ray_start)
-                        # Sketch-Faces haben höhere Priorität (10+) als Body-Faces (5)
-                        all_hits.append((face.pick_priority, dist, face.id))
-                    # Dann mit kleinem Puffer für Rand-Klicks (1mm Toleranz)
-                    elif face.shapely_poly.buffer(1.0).contains(pt):
-                        dist = np.linalg.norm(np.array(hit) - ray_start)
-                        all_hits.append((face.pick_priority - 1, dist, face.id))  # Niedrigere Priorität
-                except Exception:
-                    pass  # Polygon-Check Fehler ignorieren
-
-        # --- 3. BESTE AUSWÄHLEN (Priorität > Distanz) ---
-        if all_hits:
-            # Sortiere nach: Höchste Priorität zuerst, dann kürzeste Distanz
-            all_hits.sort(key=lambda h: (-h[0], h[1]))
-            best = all_hits[0]
-            return best[2]
-
-        return -1
-        
-    def _pick_body_face(self, x, y):
-        """Versucht eine planare Fläche auf einem 3D-Körper zu finden"""
-        cell_picker = self._get_picker("standard")  # Phase 4: Reuse picker
-        cell_picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
-        
-        if cell_picker.GetCellId() != -1:
-            # ... (Body ID Logik wie bisher) ...
-            
-            if body_id is not None:
-                normal = list(cell_picker.GetPickNormal())
-                pos = cell_picker.GetPickPosition()
-                
-                # BEREINIGUNG: Fast-Nullen und Fast-Einsen glätten
-                # Das verhindert Floating-Point Fehler bei geraden Flächen
-                for i in range(3):
-                    if abs(normal[i]) < 0.001: normal[i] = 0.0
-                    if abs(normal[i] - 1.0) < 0.001: normal[i] = 1.0
-                    if abs(normal[i] + 1.0) < 0.001: normal[i] = -1.0
-                
-                # Signal senden
-                self.custom_plane_clicked.emit(tuple(pos), tuple(normal))
-                
-                # NEU: Visualisierung der gewählten Ebene (optional)
-                self._draw_plane_hover_highlight(pos, normal)
-                return True
-        return False
-    
-    def _hover_body_face(self, x, y):
-        """Hebt Body-Flächen beim Hover hervor.
-
-        OPTIMIERT:
-        - O(1) Actor-zu-BodyID Lookup statt O(n*m)
-        - Wiederverwendung des CellPickers (kein new pro Call)
-        - Time-based Cache für identische Koordinaten
-        """
-        if not self.bodies:
-            return
-
-        try:
-            import vtk
-            import time
-
-            # PERFORMANCE: Check cache first (same coordinates within 8ms = reuse result)
-            current_time = time.time()
-            if self._hover_pick_cache is not None:
-                cache_time, cache_x, cache_y, _, _, _, _ = self._hover_pick_cache
-                if (current_time - cache_time < self._hover_pick_cache_ttl and
-                    cache_x == x and cache_y == y):
-                    # Cache hit - skip VTK pick entirely
-                    return
-
-            # PERFORMANCE: Reuse picker instead of creating new one each time
-            if self._body_cell_picker is None:
-                self._body_cell_picker = vtk.vtkCellPicker()
-                self._body_cell_picker.SetTolerance(Tolerances.PICKER_TOLERANCE_COARSE)
-
-            cell_picker = self._body_cell_picker
-            height = self.plotter.interactor.height()
-
-            picked = cell_picker.Pick(x, height - y, 0, self.plotter.renderer)
-            cell_id = cell_picker.GetCellId()
-
-            if picked and cell_id != -1:
-                actor = cell_picker.GetActor()
-                if actor is None or not actor.GetVisibility():
-                    # Update cache even on miss
-                    self._hover_pick_cache = (current_time, x, y, None, -1, None, None)
-                    if self.hovered_body_face is not None:
-                        self.hovered_body_face = None
-                        self._clear_body_face_highlight()
-                    return
-
-                # OPTIMIERUNG: O(1) Lookup mit gecachter Map
-                body_id = self._get_body_id_for_actor(actor)
-
-                # Debug: Zeige Hover-Status nur bei TRACE level (vermeidet Log-Spam)
-                if self.texture_face_mode and body_id is not None:
-                    logger.trace(f"Hover: cell_id={cell_id}, body_id={body_id}")
-
-                if body_id is not None:
-                    normal = cell_picker.GetPickNormal()
-                    pos = cell_picker.GetPickPosition()
-
-                    # Nur runden für Vergleich (verhindert Flackern bei minimalen Änderungen)
-                    rounded_normal = tuple(round(n, 2) for n in normal)
-                    new_hover = (body_id, cell_id, rounded_normal, tuple(pos))
-
-                    # Update cache with successful pick
-                    self._hover_pick_cache = (current_time, x, y, body_id, cell_id, rounded_normal, tuple(pos))
-
-                    if self.hovered_body_face != new_hover:
-                        self.hovered_body_face = new_hover
-                        # Full-face highlight für: Draft, Texture, Thread, Hole
-                        if self.draft_mode or self.texture_face_mode or self.thread_mode or self.hole_mode:
-                            self._draw_full_face_hover(body_id, rounded_normal, normal, cell_id)
-                        else:
-                            self._draw_body_face_highlight(pos, normal)
-
-                    if self._is_trace_assist_allowed():
-                        trace_face_id = self._resolve_trace_assist_face_id(body_id, pos)
-                        if trace_face_id is not None:
-                            self.show_trace_hint(trace_face_id)
-                        else:
-                            self.clear_trace_hint()
-                    else:
-                        self.clear_trace_hint()
-                    return
-
-            # Update cache for miss
-            self._hover_pick_cache = (current_time, x, y, None, -1, None, None)
-
-            if self.hovered_body_face is not None:
-                self.hovered_body_face = None
-                self._clear_body_face_highlight()
-            self.clear_trace_hint()
-
-        except Exception:
-            pass
 
     def _get_body_id_for_actor(self, picked_actor):
         """Findet Body-ID für einen gepickten VTK-Actor.
@@ -7010,35 +6331,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         # Zeige Preview
         self._draw_body_face_selection(pos, normal)
-    
-    def _draw_body_face_selection(self, pos, normal):
-        """Zeichnet Auswahl-Highlight auf Body-Face"""
-        try:
-            center = np.array(pos)
-            n = np.array(normal)
-            n = n / np.linalg.norm(n) if np.linalg.norm(n) > 0 else np.array([0,0,1])
-            
-            # Größerer Kreis für Auswahl
-            radius = 8.0
-            if abs(n[2]) < 0.9:
-                u = np.cross(n, [0, 0, 1])
-            else:
-                u = np.cross(n, [1, 0, 0])
-            u = u / np.linalg.norm(u)
-            v = np.cross(n, u)
-            
-            points = []
-            for i in range(33):
-                angle = i * 2 * math.pi / 32
-                p = center + radius * (math.cos(angle) * u + math.sin(angle) * v)
-                points.append(p)
-            
-            pts = np.array(points)
-            lines = pv.lines_from_points(pts)
-            self.plotter.add_mesh(lines, color='orange', line_width=4, name='body_face_selection')
-            self.plotter.update()
-        except Exception as e:
-            logger.debug(f"[viewport] Fehler beim Zeichnen Body-Face-Selection: {e}")
     
     def _clear_preview(self):
         if self._preview_actor: 

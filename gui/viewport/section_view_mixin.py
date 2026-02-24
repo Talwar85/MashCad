@@ -165,6 +165,10 @@ class SectionViewMixin:
             plane: "XY", "YZ", "XZ" oder "Custom"
             position: Position der Schnittebene (in mm)
         """
+        plane = str(plane).upper()
+        if plane not in {"XY", "YZ", "XZ"}:
+            plane = "XY"
+
         logger.info(f"🔪 Section View aktiviert: Ebene={plane}, Position={position}mm")
 
         self._section_view_enabled = True
@@ -219,8 +223,10 @@ class SectionViewMixin:
         # Entferne Schnittflächen-Highlights
         self._remove_section_highlights()
 
-        # ✅ WICHTIG: Force Render nach Wiederherstellung
-        self.plotter.render_window.Render()
+        # ✅ WICHTIG: Force Render nach Wiederherstellung (headless-safe)
+        render_window = getattr(self.plotter, "render_window", None)
+        if render_window is not None and hasattr(render_window, "Render"):
+            render_window.Render()
         request_render(self.plotter)
 
     def update_section_position(self, position: float):
@@ -238,6 +244,24 @@ class SectionViewMixin:
 
         # Re-enable mit neuer Position
         self.enable_section_view(self._section_plane, position)
+
+    def update_section_plane(self, plane: str):
+        """
+        Aktualisiert die aktive Schnittebene dynamisch.
+
+        Args:
+            plane: "XY", "YZ" oder "XZ"
+        """
+        plane = str(plane).upper()
+        if plane not in {"XY", "YZ", "XZ"}:
+            logger.debug(f"Section Plane ignoriert (ungültig): {plane}")
+            return
+
+        self._section_plane = plane
+        if self._section_view_enabled:
+            # Plane-Wechsel invalidiert bestehende Clip-Ergebnisse.
+            SectionClipCache.clear()
+            self.enable_section_view(self._section_plane, self._section_position)
 
     def toggle_section_invert(self):
         """Invertiert welche Seite der Schnittebene angezeigt wird."""

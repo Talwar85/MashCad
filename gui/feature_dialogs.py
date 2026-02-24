@@ -55,6 +55,8 @@ class FeatureDialogsMixin:
         self._pattern_mode = True
         self._pending_pattern_mode = True
         self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(True)
         self.statusBar().showMessage(tr("Wähle Body für Pattern"))
         logger.info("Pattern: Klicke auf einen Body")
 
@@ -94,15 +96,27 @@ class FeatureDialogsMixin:
         """Callback wenn im Pending-Mode ein Body für Pattern angeklickt wird."""
         self._pending_pattern_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
-        
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
         body = self.document.find_body_by_id(body_id)
         if body:
             self._activate_pattern_for_body(body)
 
     def _activate_pattern_for_body(self, body):
         """Aktiviert Pattern-Modus für einen Body."""
+        if getattr(body, '_build123d_solid', None) is None:
+            logger.warning("Pattern erfordert einen CAD-Body (kein Mesh).")
+            return
+
         self._pattern_mode = True
         self._pattern_target_body = body
+        self._pending_pattern_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        if hasattr(self.pattern_panel, 'set_target_body'):
+            self.pattern_panel.set_target_body(body)
         self.pattern_panel.reset()
         self.pattern_panel.show_at(self.viewport_3d)
         self.statusBar().showMessage("Pattern: Parameter einstellen")
@@ -127,7 +141,10 @@ class FeatureDialogsMixin:
         if not self._pattern_target_body:
             return
         
-        params = self.pattern_panel.get_parameters()
+        if hasattr(self.pattern_panel, 'get_pattern_data'):
+            params = self.pattern_panel.get_pattern_data()
+        else:
+            params = self.pattern_panel.get_parameters()
         self._execute_pattern(self._pattern_target_body, params)
         self._stop_pattern_mode()
 
@@ -138,14 +155,22 @@ class FeatureDialogsMixin:
     def _on_pattern_center_pick_requested(self):
         """Handler wenn User Custom Center auswählen will."""
         self._pattern_center_pick_mode = True
-        self.viewport_3d.set_center_pick_mode(True)
+        self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, 'set_measure_mode'):
+            self.viewport_3d.set_measure_mode(True)
+        else:
+            self.viewport_3d.measure_mode = True
         self.statusBar().showMessage("Klicke auf das gewünschte Zentrum")
 
     def _on_pattern_center_picked(self, point: tuple):
         """Handler wenn ein Zentrum-Punkt gepickt wurde."""
         self._pattern_center_pick_mode = False
-        self.viewport_3d.set_center_pick_mode(False)
-        self.pattern_panel.set_custom_center(point)
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_measure_mode'):
+            self.viewport_3d.set_measure_mode(False)
+        else:
+            self.viewport_3d.measure_mode = False
+        self.pattern_panel.set_custom_center(point[0], point[1], point[2])
         self.statusBar().showMessage(f"Zentrum gesetzt auf ({point[0]:.1f}, {point[1]:.1f}, {point[2]:.1f})")
 
     def _execute_pattern(self, body, params: dict):
@@ -177,6 +202,13 @@ class FeatureDialogsMixin:
         self._pattern_target_body = None
         self._pending_pattern_mode = False
         self._pattern_center_pick_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_measure_mode'):
+            self.viewport_3d.set_measure_mode(False)
+        else:
+            self.viewport_3d.measure_mode = False
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
         self.pattern_panel.hide()
         self._clear_pattern_preview()
         self.statusBar().clearMessage()
@@ -189,6 +221,8 @@ class FeatureDialogsMixin:
         """Callback wenn im Pending-Mode ein Body für Shell angeklickt wird."""
         self._pending_shell_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
 
         body = self.document.find_body_by_id(body_id)
         if body:
@@ -196,17 +230,25 @@ class FeatureDialogsMixin:
 
     def _on_body_clicked_for_fillet(self, body_id: str):
         """Callback wenn im Pending-Mode ein Body für Fillet/Chamfer angeklickt wird."""
-        # Check which mode is pending
-        if hasattr(self, '_pending_fillet_mode') and self._pending_fillet_mode:
-            self._pending_fillet_mode = False
-            mode = 'fillet'
-        elif hasattr(self, '_pending_chamfer_mode') and self._pending_chamfer_mode:
-            self._pending_chamfer_mode = False
+        # Check which mode is pending (string- und bool-kompatibel).
+        mode = None
+        pending_fillet = getattr(self, '_pending_fillet_mode', False)
+        pending_chamfer = getattr(self, '_pending_chamfer_mode', False)
+
+        if isinstance(pending_fillet, str):
+            mode = pending_fillet
+        elif pending_chamfer:
             mode = 'chamfer'
+        elif pending_fillet:
+            mode = 'fillet'
         else:
             return  # No fillet/chamfer pending
 
+        self._pending_fillet_mode = False
+        self._pending_chamfer_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
 
         body = self.document.find_body_by_id(body_id)
         if body:
@@ -218,32 +260,63 @@ class FeatureDialogsMixin:
 
     def _activate_shell_for_body(self, body):
         """Aktiviert Shell-Modus für einen Body."""
-        from i18n import tr
-        
+        if not hasattr(body, '_build123d_solid') or not body._build123d_solid:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
+            return
+
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
         self._shell_mode = True
         self._shell_target_body = body
         self._shell_opening_faces = []
         self._shell_opening_face_shape_ids = []
         self._shell_opening_face_indices = []
-        
+        self._pending_shell_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(True, enable_preview=False)
+        if hasattr(self, '_update_detector'):
+            self._update_detector()
+
+        if hasattr(self.shell_panel, 'clear_opening_faces'):
+            self.shell_panel.clear_opening_faces()
         self.shell_panel.reset()
         self.shell_panel.show_at(self.viewport_3d)
         self.viewport_3d.set_shell_mode(True)
-        
-        self.statusBar().showMessage(tr("Shell: Wähle Öffnungs-Flächen"))
+
+        self.statusBar().showMessage("Shell: Wähle Öffnungs-Flächen")
         logger.info(f"Shell-Modus für '{body.name}' - Flächen anklicken")
 
     def _on_face_selected_for_shell(self, face_id):
         """Handler wenn eine Fläche für Shell selektiert wird."""
-        if not self._shell_mode:
+        from modeling.geometric_selector import GeometricFaceSelector
+
+        if not self._shell_mode or not self._shell_target_body:
             return
-        # Toggle face selection
-        if face_id in self._shell_opening_faces:
-            self._shell_opening_faces.remove(face_id)
-        else:
-            self._shell_opening_faces.append(face_id)
-        
-        self.shell_panel.set_opening_count(len(self._shell_opening_faces))
+
+        face = next((f for f in self.viewport_3d.detector.selection_faces if f.id == face_id), None)
+        if not face or not face.domain_type.startswith('body'):
+            return
+
+        try:
+            face_selector = GeometricFaceSelector.from_face_data({
+                'center_3d': face.center,
+                'normal': face.normal,
+                'area': face.area
+            })
+            self._shell_opening_faces.append(face_selector.to_dict())
+            if hasattr(self.shell_panel, 'add_opening_face'):
+                self.shell_panel.add_opening_face(face_id)
+            if hasattr(self.shell_panel, 'update_face_count'):
+                self.shell_panel.update_face_count(len(self._shell_opening_faces))
+            elif hasattr(self.shell_panel, 'set_opening_count'):
+                self.shell_panel.set_opening_count(len(self._shell_opening_faces))
+        except Exception as e:
+            logger.warning(f"Shell: Konnte Fläche nicht hinzufügen: {e}")
 
     def _on_shell_confirmed(self):
         """Handler wenn Shell bestätigt wird."""
@@ -251,32 +324,56 @@ class FeatureDialogsMixin:
             return
         
         from modeling import ShellFeature
+        from modeling.cad_tessellator import CADTessellator
         from gui.commands.feature_commands import AddFeatureCommand
+        from PySide6.QtWidgets import QMessageBox
         
         thickness = self.shell_panel.get_thickness()
         
         feature = ShellFeature(
             thickness=thickness,
-            opening_faces=self._shell_opening_faces,
-            opening_face_indices=self._shell_opening_face_indices
+            opening_face_selectors=self._shell_opening_faces.copy()
         )
         
         cmd = AddFeatureCommand(self._shell_target_body, feature, self, description="Shell")
         self.undo_stack.push(cmd)
-        
+
+        if self._shell_target_body._build123d_solid is None:
+            self.undo_stack.undo()
+            QMessageBox.critical(self, "Fehler", "Shell fehlgeschlagen: Geometrie ungültig")
+            return
+
+        if feature.status == "ERROR":
+            msg = feature.status_message or "Kernel-Operation fehlgeschlagen"
+            self.statusBar().showMessage(f"Shell fehlgeschlagen: {msg}", 8000)
+            logger.error(f"Shell fehlgeschlagen: {msg}")
+            self._stop_shell_mode()
+            self.browser.refresh()
+            return
+
+        CADTessellator.notify_body_changed()
+        self._update_body_from_build123d(self._shell_target_body, self._shell_target_body._build123d_solid)
         self.browser.refresh()
-        self._update_viewport_all()
         logger.success(f"Shell mit {thickness}mm erstellt")
-        
+
         self._stop_shell_mode()
 
     def _on_shell_thickness_changed(self, thickness: float):
         """Handler wenn Shell-Dicke geändert wird."""
-        if hasattr(self.viewport_3d, 'update_shell_preview'):
-            # Setze target body ID für Preview
-            if hasattr(self.viewport_3d, '_shell_target_body_id'):
-                self.viewport_3d._shell_target_body_id = self._shell_target_body.id if self._shell_target_body else None
-            self.viewport_3d.update_shell_preview(thickness, self._shell_opening_faces)
+        from config.feature_flags import is_enabled
+
+        if not is_enabled("live_preview_shell"):
+            return
+
+        if not getattr(self, '_shell_mode', False) or not getattr(self, '_shell_target_body', None):
+            return
+
+        if hasattr(self, '_request_live_preview'):
+            self._request_live_preview('shell', {
+                'thickness': thickness,
+                'body': self._shell_target_body,
+                'opening_faces': list(getattr(self, '_shell_opening_faces', []))
+            })
 
     def _on_shell_cancelled(self):
         """Bricht die Shell-Operation ab."""
@@ -289,12 +386,19 @@ class FeatureDialogsMixin:
         self._shell_opening_faces = []
         self._shell_opening_face_shape_ids = []
         self._shell_opening_face_indices = []
+        self._pending_shell_mode = False
 
-        # Preview entfernen
-        if hasattr(self.viewport_3d, 'clear_all_feature_previews'):
+        if hasattr(self, '_cancel_live_preview'):
+            self._cancel_live_preview('shell')
+        elif hasattr(self.viewport_3d, 'clear_all_feature_previews'):
             self.viewport_3d.clear_all_feature_previews()
 
         self.viewport_3d.set_shell_mode(False)
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(False)
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
         self.shell_panel.hide()
         self.statusBar().clearMessage()
     
@@ -306,6 +410,8 @@ class FeatureDialogsMixin:
         """Callback wenn im Pending-Mode ein Body für Texture angeklickt wird."""
         self._pending_texture_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
         
         body = self.document.find_body_by_id(body_id)
         if body:
@@ -314,7 +420,10 @@ class FeatureDialogsMixin:
     def _on_texture_face_selected(self, count: int):
         """Callback wenn Texture-Faces im Viewport selektiert werden."""
         if hasattr(self, 'texture_panel') and self.texture_panel.isVisible():
-            self.texture_panel.set_selected_face_count(count)
+            if hasattr(self.texture_panel, 'set_face_count'):
+                self.texture_panel.set_face_count(count)
+            elif hasattr(self.texture_panel, 'set_selected_face_count'):
+                self.texture_panel.set_selected_face_count(count)
 
     def _on_texture_applied(self, config: dict):
         """Handler wenn Textur angewendet wird."""
@@ -323,12 +432,34 @@ class FeatureDialogsMixin:
         
         from modeling import SurfaceTextureFeature
         from gui.commands.feature_commands import AddFeatureCommand
+
+        selected_faces = []
+        if hasattr(self.viewport_3d, 'get_texture_selected_faces'):
+            selected_faces = self.viewport_3d.get_texture_selected_faces() or []
+        if not selected_faces:
+            logger.warning("Keine Faces selektiert für Textur")
+            return
+
+        face_selectors = []
+        for face_data in selected_faces:
+            face_selectors.append({
+                "center": list(face_data.get("center", (0.0, 0.0, 0.0))),
+                "normal": list(face_data.get("normal", (0.0, 0.0, 1.0))),
+                "area": float(face_data.get("area", 1.0)),
+                "surface_type": face_data.get("surface_type", "plane"),
+                "cell_ids": list(face_data.get("cell_ids", [])),
+            })
         
         feature = SurfaceTextureFeature(
-            texture_type=config.get('type', 'knurl'),
+            texture_type=config.get('texture_type', config.get('type', 'knurl')),
+            face_selectors=face_selectors,
             scale=config.get('scale', 1.0),
             depth=config.get('depth', 0.5),
-            **config
+            rotation=config.get('rotation', 0.0),
+            invert=config.get('invert', False),
+            solid_base=config.get('solid_base', True),
+            type_params=config.get('type_params', {}),
+            export_subdivisions=config.get('export_subdivisions', 4),
         )
         
         cmd = AddFeatureCommand(self._texture_target_body, feature, self, description="Texture")
@@ -336,6 +467,10 @@ class FeatureDialogsMixin:
         
         self.browser.refresh()
         self._update_viewport_all()
+        if hasattr(self.viewport_3d, 'set_body_object'):
+            self.viewport_3d.set_body_object(self._texture_target_body.id, self._texture_target_body)
+        if hasattr(self.viewport_3d, 'refresh_texture_previews'):
+            self.viewport_3d.refresh_texture_previews(self._texture_target_body.id)
         logger.success("Textur angewendet")
         
         self._stop_texture_mode()
@@ -354,6 +489,13 @@ class FeatureDialogsMixin:
         self._texture_mode = False
         self._texture_target_body = None
         self._pending_texture_mode = False
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        if hasattr(self.viewport_3d, 'stop_texture_face_mode'):
+            self.viewport_3d.stop_texture_face_mode()
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(False)
         self.texture_panel.hide()
         self.statusBar().clearMessage()
     
@@ -373,6 +515,8 @@ class FeatureDialogsMixin:
         
         # Switch to path phase
         self._sweep_phase = 'path'
+        if hasattr(self.viewport_3d, 'start_sketch_path_mode'):
+            self.viewport_3d.start_sketch_path_mode()
         self.statusBar().showMessage("Sweep: Pfad wählen")
 
     def _on_edge_selected_for_sweep(self, edges: list):
@@ -467,7 +611,9 @@ class FeatureDialogsMixin:
     def _on_sweep_sketch_path_requested(self):
         """Handler wenn User Sketch-Pfad auswählen will."""
         from i18n import tr
-        
+
+        if hasattr(self.viewport_3d, 'start_sketch_path_mode'):
+            self.viewport_3d.start_sketch_path_mode()
         self.statusBar().showMessage(tr("Klicke auf Sketch-Element für Pfad"))
         # Viewport handles the actual picking
 
@@ -480,6 +626,8 @@ class FeatureDialogsMixin:
         self._sweep_profile_shape_id = None
         self._sweep_profile_face_index = None
         self._sweep_profile_geometric_selector = None
+        if hasattr(self.viewport_3d, 'stop_sketch_path_mode'):
+            self.viewport_3d.stop_sketch_path_mode()
         self.viewport_3d.set_sweep_mode(False)
         self.sweep_panel.hide()
         self._clear_sweep_highlight('profile', render=False)
@@ -739,6 +887,63 @@ class FeatureDialogsMixin:
         if body:
             self._show_transform_ui(body.id, body.name, 'rotate')
 
+    def _clone_body_feature_history(self, source_body, target_body) -> int:
+        """
+        Klont die Feature-Historie von source_body nach target_body.
+
+        Shape-spezifische Referenzen werden geleert und Dependencies per ID remapped.
+        """
+        import copy
+        import uuid
+
+        source_features = list(getattr(source_body, "features", []) or [])
+        if not source_features:
+            return 0
+
+        id_map = {}
+        cloned_features = []
+
+        for feature in source_features:
+            try:
+                cloned = copy.deepcopy(feature)
+            except Exception as e:
+                logger.debug(f"Feature-Kopie fehlgeschlagen, überspringe: {e}")
+                continue
+
+            old_id = getattr(cloned, "id", None)
+            new_id = str(uuid.uuid4())[:8]
+            if old_id:
+                id_map[old_id] = new_id
+            cloned.id = new_id
+
+            if hasattr(cloned, "status"):
+                cloned.status = "OK"
+            if hasattr(cloned, "status_message"):
+                cloned.status_message = ""
+            if hasattr(cloned, "status_details"):
+                cloned.status_details = {}
+
+            # Shape-Referenzen nicht 1:1 übernehmen (werden bei Rebuild neu aufgelöst).
+            for attr_name in list(vars(cloned).keys()):
+                if attr_name.endswith("_shape_id"):
+                    setattr(cloned, attr_name, None)
+                elif attr_name.endswith("_shape_ids"):
+                    value = getattr(cloned, attr_name, None)
+                    if isinstance(value, list):
+                        setattr(cloned, attr_name, [])
+                    elif value is not None:
+                        setattr(cloned, attr_name, None)
+
+            cloned_features.append(cloned)
+
+        for feature in cloned_features:
+            dep = getattr(feature, "depends_on_feature_id", None)
+            if dep in id_map:
+                feature.depends_on_feature_id = id_map[dep]
+            target_body.add_feature(feature, rebuild=False)
+
+        return len(cloned_features)
+
     def _copy_body(self):
         """Kopiert den aktiven Body als neuen Body."""
         body = self._get_active_body()
@@ -755,11 +960,18 @@ class FeatureDialogsMixin:
             new_body._build123d_solid = body._build123d_solid.moved(Location((0, 0, 0)))
             CADTessellator.notify_body_changed()
             self._update_body_from_build123d(new_body, new_body._build123d_solid)
+        elif getattr(body, "vtk_mesh", None) is not None:
+            try:
+                new_body.vtk_mesh = body.vtk_mesh.copy(deep=True)
+            except Exception:
+                pass
+
+        self._clone_body_feature_history(body, new_body)
         
         self.document.add_body(new_body)
         self.browser.refresh()
         self._update_viewport_all()
-        logger.success(f"Body kopiert: {new_body.name}")
+        logger.success(f"Body kopiert: {new_body.name} ({len(new_body.features)} Features)")
 
     def _mirror_body(self):
         """Startet Mirror-Dialog für ausgewählten Body."""
@@ -821,6 +1033,9 @@ class FeatureDialogsMixin:
                         factor = 1.0
                     new_body._build123d_solid = new_body._build123d_solid.scaled(factor)
                     logger.success(f"Copy+Scale ({factor:.2f}) → {new_body.name}")
+
+                # Feature-Historie mitkopieren (inkl. remap von Feature-IDs).
+                self._clone_body_feature_history(body, new_body)
                 
                 self._update_body_from_build123d(new_body, new_body._build123d_solid)
                 self.document.add_body(new_body, set_active=False)
@@ -980,7 +1195,7 @@ class FeatureDialogsMixin:
             self._on_split_body_clicked(body_id)
             return
 
-        if getattr(self, '_pending_fillet_mode', False):
+        if getattr(self, '_pending_fillet_mode', False) or getattr(self, '_pending_chamfer_mode', False):
             self._on_body_clicked_for_fillet(body_id)
             return
 

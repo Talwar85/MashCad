@@ -8606,6 +8606,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return self._entity_kind(entity) == mode
 
     def _entity_pick_priority(self, entity) -> int:
+        # Ellipse-Handle-Punkte haben höchste Priorität (niedrigste Nummer)
+        if isinstance(entity, Point2D) and getattr(entity, '_ellipse_handle', None) is not None:
+            return -1  # Höchste Priorität für Ellipse-Handles
+
         # Linien/Flaechenkanten zuerst, Punkte zuletzt, damit Selektion stabil bleibt.
         # WICHTIG: Ellipsen-Achsen haben niedrigste Priorität (werden übersprungen)
         if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:

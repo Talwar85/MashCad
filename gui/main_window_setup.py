@@ -389,7 +389,7 @@ class SetupMixin:
             ExtrudeInputPanel, FilletChamferPanel, TransformPanel,
             ShellInputPanel, SweepInputPanel, LoftInputPanel,
             PatternInputPanel, NSidedPatchInputPanel, LatticeInputPanel,
-            CenterHintWidget, PointToPointMovePanel
+            CenterHintWidget, PointToPointMovePanel, MeasureInputPanel
         )
         from gui.input_panels import RevolveInputPanel, OffsetPlaneInputPanel, HoleInputPanel
         from gui.input_panels import ThreadInputPanel, DraftInputPanel, SplitInputPanel
@@ -588,6 +588,15 @@ class SetupMixin:
         self._p2p_body_id = None
         self._p2p_repick_body = False
 
+        # Measure Panel
+        self.measure_panel = MeasureInputPanel(self)
+        self.measure_panel.pick_point_requested.connect(self._on_measure_pick_requested)
+        self.measure_panel.clear_requested.connect(self._clear_measure_points)
+        self.measure_panel.close_requested.connect(self._close_measure_panel)
+        self.measure_panel.hide()
+        self._measure_mode = False
+        self._measure_points = [None, None]
+
         # Edge Selection Signal verbinden
         self.viewport_3d.edge_selection_changed.connect(self._on_edge_selection_changed)
 
@@ -773,6 +782,39 @@ class SetupMixin:
         # NEU: Body-Click für pending transform mode (Fix 1)
         if hasattr(self.viewport_3d, 'body_clicked'):
             self.viewport_3d.body_clicked.connect(self._on_viewport_body_clicked)
+
+        if hasattr(self.viewport_3d, 'point_to_point_move'):
+            self.viewport_3d.point_to_point_move.connect(self._on_point_to_point_move)
+        if hasattr(self.viewport_3d, 'point_to_point_start_picked'):
+            self.viewport_3d.point_to_point_start_picked.connect(self._on_point_to_point_start_picked)
+        if hasattr(self.viewport_3d, 'point_to_point_cancelled'):
+            self.viewport_3d.point_to_point_cancelled.connect(self._on_point_to_point_cancelled)
+
+        self.viewport_3d.transform_state = self.transform_state
+        if hasattr(self.viewport_3d, '_transform_ctrl'):
+            self.viewport_3d._transform_ctrl.transform_state = self.transform_state
+
+        if hasattr(self.viewport_3d, 'face_selected'):
+            self.viewport_3d.face_selected.connect(self._on_face_selected_for_extrude)
+        if hasattr(self.viewport_3d, 'target_face_selected'):
+            self.viewport_3d.target_face_selected.connect(self._on_target_face_selected)
+        if hasattr(self.viewport_3d, 'hole_face_clicked'):
+            self.viewport_3d.hole_face_clicked.connect(self._on_body_face_clicked_for_hole)
+        if hasattr(self.viewport_3d, 'thread_face_clicked'):
+            self.viewport_3d.thread_face_clicked.connect(self._on_cylindrical_face_clicked_for_thread)
+        if hasattr(self.viewport_3d, 'draft_face_clicked'):
+            self.viewport_3d.draft_face_clicked.connect(self._on_body_face_clicked_for_draft)
+        if hasattr(self.viewport_3d, 'split_body_clicked'):
+            self.viewport_3d.split_body_clicked.connect(self._on_split_body_clicked)
+        if hasattr(self.viewport_3d, 'split_drag_changed'):
+            self.viewport_3d.split_drag_changed.connect(self._on_split_drag)
+        if hasattr(self.viewport_3d, 'measure_point_picked'):
+            self.viewport_3d.measure_point_picked.connect(self._on_measure_point_picked)
+
+        if hasattr(self.viewport_3d, 'background_clicked'):
+            self.viewport_3d.background_clicked.connect(self._on_background_clicked)
+        if hasattr(self.viewport_3d, 'create_sketch_requested'):
+            self.viewport_3d.create_sketch_requested.connect(self._on_create_sketch_requested)
 
 
 # =============================================================================

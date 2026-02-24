@@ -278,24 +278,38 @@ class DraftFeature(Feature):
 @dataclass
 class SplitFeature(Feature):
     """
-    Split Body - Teilt den Körper an Ebene oder Fläche.
+    Split Body - Teilt den Koerper an Ebene oder Flaeche.
     """
     split_tool: str = "Plane"  # "Plane", "Face"
-    
+
     # Plane Split
     plane_origin: Tuple[float, float, float] = (0, 0, 0)
     plane_normal: Tuple[float, float, float] = (0, 0, 1)
-    
+
     # Face Split (TNP)
     tool_face_shape_id: Any = None
     tool_face_index: Optional[int] = None
-    
-    keep_both: bool = True  # Wenn False, wird die "obere" Hälfte behalten
+
+    # Legacy + aktuelle API:
+    # - keep_side: "above" | "below" | "both"
+    # - keep_both: historischer Alias (True => keep_side="both")
+    keep_side: str = "above"
+    keep_both: bool = False
 
     def __post_init__(self):
         self.type = FeatureType.SPLIT
         if not self.name or self.name == "Feature":
             self.name = "Split Body"
+
+        if bool(self.keep_both):
+            side = "both"
+        else:
+            side = str(self.keep_side or "").lower().strip()
+            if side not in {"above", "below", "both"}:
+                side = "above"
+
+        self.keep_side = side
+        self.keep_both = (side == "both")
 
 
 @dataclass
@@ -553,3 +567,4 @@ class LatticeFeature(Feature):
         self.type = FeatureType.LATTICE
         if not self.name or self.name == "Feature":
             self.name = "Lattice"
+

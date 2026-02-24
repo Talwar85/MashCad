@@ -76,12 +76,17 @@ class BodyRenderingMixin:
     """Mixin mit allen Body-Rendering Methoden"""
     
     def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None,
-                 verts=None, faces=None, normals=None, edges=None, edge_lines=None):
+                 verts=None, faces=None, normals=None, edges=None, edge_lines=None,
+                 visible=True, inactive_component=False):
         """
         Fügt einen Körper hinzu.
         Erkennt automatisch Legacy-Listen-Aufrufe.
 
         PERFORMANCE: Actor Pooling - wiederverwendet Actors statt Destroy/Recreate
+
+        Args:
+            visible: Soll der Body sichtbar sein? (Default: True)
+            inactive_component: Ist der Body in einer inaktiven Component? (Default: False)
         """
         if not HAS_PYVISTA:
             return
@@ -111,7 +116,7 @@ class BodyRenderingMixin:
                     ActorPool.clear_hash(n)
                 except Exception as e:
                     logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
-        
+
         actors_list = []
         # Verbesserte Standardfarbe: Warmes Silber-Grau (wie CAD)
         if color is None:
@@ -121,6 +126,10 @@ class BodyRenderingMixin:
             col_rgb = (c.redF(), c.greenF(), c.blueF())
         else:
             col_rgb = tuple(color)
+
+        # Inactive Component: Transparenz anwenden
+        if inactive_component:
+            col_rgb = (col_rgb[0] * 0.3, col_rgb[1] * 0.3, col_rgb[2] * 0.3)
 
         try:
             # Pfad A: Modernes PyVista Objekt
@@ -172,13 +181,13 @@ class BodyRenderingMixin:
 
                     if n_mesh in self.plotter.renderer.actors:
                         actor = self.plotter.renderer.actors[n_mesh]
-                        actor.SetVisibility(True)
+                        actor.SetVisibility(visible)
                         face_mapper = actor.GetMapper()
                         face_mapper.SetResolveCoincidentTopologyToPolygonOffset()
                         face_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(2, 2)
                         # Store hash for future comparisons
                         ActorPool._mesh_hashes[n_mesh] = ActorPool.compute_mesh_hash(mesh_obj)
-                        logger.debug(f"🆕 New actor created for {bid}: {mesh_obj.n_points} pts")
+                        logger.debug(f"🆕 New actor created for {bid}: {mesh_obj.n_points} pts, visible={visible}")
 
                     actors_list.append(n_mesh)
 
@@ -217,6 +226,7 @@ class BodyRenderingMixin:
                         # Phase 2.2: Duplicate Mapper SetInputData entfernt
                         if n_edge in self.plotter.renderer.actors:
                             edge_actor = self.plotter.renderer.actors[n_edge]
+                            edge_actor.SetVisibility(visible)
                             edge_mapper = edge_actor.GetMapper()
                             edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
                             edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
@@ -344,18 +354,40 @@ class BodyRenderingMixin:
         """Alias for set_body_visibility - for compatibility with feature_dialogs.py"""
         self.set_body_visibility(body_id, visible)
 
-    def clear_bodies(self):
-        """Entfernt alle Körper"""
-        for bid in list(self._body_actors.keys()):
-            for name in self._body_actors[bid]:
-                try:
-                    self.plotter.remove_actor(name)
-                    ActorPool.clear_hash(name)  # PERFORMANCE: Clear hash tracking
-                except Exception as e:
-                    logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
-        self._body_actors.clear()
-        self.bodies.clear()
-        ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
+    def clear_bodies(self, only_body_id: str = None):
+        """
+        Entfernt Body-Actors aus dem Viewport.
+
+        Args:
+            only_body_id: Wenn angegeben, nur diesen Body entfernen (kein Flicker für andere).
+        """
+        if only_body_id:
+            # Nur einen Body entfernen - KEIN FLICKER für andere!
+            if only_body_id in self._body_actors:
+                for n in self._body_actors[only_body_id]:
+                    try:
+                        self.plotter.remove_actor(n)
+                        ActorPool.clear_hash(n)
+                    except Exception as e:
+                        logger.debug(f"[body_mixin] Fehler beim Entfernen Body-Actor {n}: {e}")
+                del self._body_actors[only_body_id]
+            if only_body_id in self.bodies:
+                del self.bodies[only_body_id]
+            if hasattr(self, '_actor_to_body_cache'):
+                self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
+                                              if v != only_body_id}
+        else:
+            # Alle Bodies entfernen
+            for bid in list(self._body_actors.keys()):
+                for name in self._body_actors[bid]:
+                    try:
+                        self.plotter.remove_actor(name)
+                        ActorPool.clear_hash(name)  # PERFORMANCE: Clear hash tracking
+                    except Exception as e:
+                        logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
+            self._body_actors.clear()
+            self.bodies.clear()
+            ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
 
 

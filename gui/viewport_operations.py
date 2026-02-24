@@ -95,8 +95,25 @@ class ViewportMixin:
             color = getattr(body, 'color', None)
             inactive = self._is_body_in_inactive_component(body)
             self.viewport_3d.update_single_body(body, color=color, inactive_component=inactive)
+            if hasattr(self.viewport_3d, 'set_body_object'):
+                self.viewport_3d.set_body_object(body.id, body)
         except Exception as e:
             logger.debug(f"Body update fehlgeschlagen für {body.name}: {e}")
+
+    def _update_body_from_build123d(self, body, solid):
+        """
+        Aktualisiert einen Body aus einem build123d Solid und triggert Viewport-Refresh.
+
+        Diese Methode wird von mehreren Feature-Workflows erwartet
+        (Shell, Copy, Mirror, Transform etc.).
+        """
+        if body is None or solid is None:
+            return
+
+        body._build123d_solid = solid
+        if hasattr(body, 'invalidate_mesh'):
+            body.invalidate_mesh()
+        self._update_single_body(body)
 
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
@@ -201,7 +218,7 @@ class ViewportMixin:
             self._on_section_disabled()
         else:
             self.section_panel.show_at(self.viewport_3d)
-            self._on_section_enabled('xy', 0.0)
+            self._on_section_enabled('XY', 0.0)
 
     def _on_section_enabled(self, plane: str, position: float):
         """Section View wurde aktiviert."""
@@ -353,6 +370,8 @@ class ViewportMixin:
             self._getting_started_overlay.center_on_parent()
         if hasattr(self, "p2p_panel") and self.p2p_panel.isVisible():
             self.p2p_panel.show_at(self.viewport_3d)
+        if hasattr(self, "measure_panel") and self.measure_panel.isVisible():
+            self.measure_panel.show_at(self.viewport_3d)
         if hasattr(self, "section_panel") and self.section_panel.isVisible():
             if hasattr(self.section_panel, "clamp_to_parent"):
                 self.section_panel.clamp_to_parent()
