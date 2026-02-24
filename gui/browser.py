@@ -1242,7 +1242,8 @@ class ProjectBrowser(QFrame):
             collect_bodies(self.document.root_component)
         else:
             # Legacy: Alle Bodies sind "aktiv"
-            for body in self.document._bodies:
+            all_bodies = self.document.get_all_bodies() if hasattr(self.document, 'get_all_bodies') else self.document.bodies
+            for body in all_bodies:
                 vis = self.body_visibility.get(body.id, True)
                 result.append((body, vis, False))
 
@@ -1556,14 +1557,32 @@ class ProjectBrowser(QFrame):
             self.visibility_changed.emit()
 
     def _del_sketch(self, s):
-        if s in self.document.sketches:
+        removed = False
+        if self._assembly_enabled and hasattr(self.document, 'root_component') and self.document.root_component:
+            comp = self._find_component_containing(s, 'sketch')
+            if comp and s in comp.sketches:
+                comp.sketches.remove(s)
+                removed = True
+        elif s in self.document.sketches:
             self.document.sketches.remove(s)
+            removed = True
+
+        if removed:
             self.refresh()
             self.visibility_changed.emit()
     
     def _del_body(self, b):
-        if b in self.document.bodies:
+        removed = False
+        if self._assembly_enabled and hasattr(self.document, 'root_component') and self.document.root_component:
+            comp = self._find_component_containing(b, 'body')
+            if comp and b in comp.bodies:
+                comp.bodies.remove(b)
+                removed = True
+        elif b in self.document.bodies:
             self.document.bodies.remove(b)
+            removed = True
+
+        if removed:
             self.refresh()
             self.visibility_changed.emit()
             # Signal to update viewport (remove body actors)
