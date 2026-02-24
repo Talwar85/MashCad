@@ -42,8 +42,6 @@ class ToolMixin:
     
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
-        from i18n import tr
-        
         action_handlers = {
             # Primitives (short + prefixed keys from tool_panel_3d)
             'box': lambda: self._primitive_dialog('box'),
@@ -57,23 +55,23 @@ class ToolMixin:
             'torus': lambda: self._primitive_dialog('torus'),
             
             # Sketch
-            'new_sketch': self._new_sketch,
-            'offset_plane': self._start_offset_plane,
+            'new_sketch': '_new_sketch',
+            'offset_plane': '_start_offset_plane',
             
             # Features
-            'extrude': self._extrude_dialog,
-            'revolve': self._revolve_dialog,
-            'fillet': self._start_fillet,
-            'chamfer': self._start_chamfer,
-            'shell': self._start_shell,
-            'sweep': self._start_sweep,
-            'loft': self._start_loft,
-            'pattern': self._start_pattern,
-            'draft': self._draft_dialog,
-            'hole': self._hole_dialog,
-            'thread': self._thread_dialog,
-            'split': self._split_body_dialog,
-            'split_body': self._split_body_dialog,
+            'extrude': '_extrude_dialog',
+            'revolve': '_revolve_dialog',
+            'fillet': '_start_fillet',
+            'chamfer': '_start_chamfer',
+            'shell': '_start_shell',
+            'sweep': '_start_sweep',
+            'loft': '_start_loft',
+            'pattern': '_start_pattern',
+            'draft': '_draft_dialog',
+            'hole': '_hole_dialog',
+            'thread': '_thread_dialog',
+            'split': '_split_body_dialog',
+            'split_body': '_split_body_dialog',
             
             # Boolean (short + prefixed keys from tool_panel_3d)
             'union': lambda: self._boolean_operation_dialog('Union'),
@@ -90,43 +88,52 @@ class ToolMixin:
             'rotate_body': lambda: self._start_transform_mode('rotate'),
             'scale': lambda: self._start_transform_mode('scale'),
             'scale_body': lambda: self._start_transform_mode('scale'),
-            'mirror': self._mirror_body,
-            'mirror_body': self._mirror_body,
-            'copy': self._copy_body,
-            'copy_body': self._copy_body,
-            'point_to_point': self._start_point_to_point_move,
+            'mirror': '_mirror_body',
+            'mirror_body': '_mirror_body',
+            'copy': '_copy_body',
+            'copy_body': '_copy_body',
+            'point_to_point': '_start_point_to_point_move',
             
             # View / Inspect
-            'section_view': self._toggle_section_view,
-            'measure': self._start_measure_mode,
-            'wall_thickness': self._wall_thickness_dialog,
+            'section_view': '_toggle_section_view',
+            'measure': '_start_measure_mode',
+            'wall_thickness': '_wall_thickness_dialog',
             
             # Import/Export
-            'import_mesh': self._import_mesh_dialog,
-            'import_step': self._import_step,
-            'import_svg': self._import_svg,
-            'stl_to_cad': self._on_stl_to_cad,
-            'export_stl': self._export_stl,
-            'export_step': self._export_step,
-            'convert_to_brep': self._convert_selected_body_to_brep,
+            'import_mesh': '_import_mesh_dialog',
+            'import_step': '_import_step',
+            'import_svg': '_import_svg',
+            'stl_to_cad': '_on_stl_to_cad',
+            'export_stl': '_export_stl',
+            'export_step': '_export_step',
+            'convert_to_brep': '_convert_selected_body_to_brep',
             
             # Special (short + prefixed keys from tool_panel_3d)
-            'brep_cleanup': self._toggle_brep_cleanup,
-            'texture': self._start_texture_mode,
-            'surface_texture': self._start_texture_mode,
-            'lattice': self._start_lattice,
-            'nsided_patch': self._nsided_patch_dialog,
-            'sketch_agent': self._sketch_agent_dialog,
+            'brep_cleanup': '_toggle_brep_cleanup',
+            'texture': '_start_texture_mode',
+            'surface_texture': '_start_texture_mode',
+            'lattice': '_start_lattice',
+            'nsided_patch': '_nsided_patch_dialog',
+            'sketch_agent': '_sketch_agent_dialog',
         }
 
-        handler = action_handlers.get(action)
-        if handler:
-            try:
-                handler()
-            except Exception as e:
-                logger.error(f"Aktion '{action}' fehlgeschlagen: {e}")
-        else:
+        handler_spec = action_handlers.get(action)
+        if handler_spec is None:
             logger.warning(f"Aktion '{action}' nicht gefunden")
+            return
+
+        if callable(handler_spec):
+            handler = handler_spec
+        else:
+            handler = getattr(self, handler_spec, None)
+            if handler is None:
+                logger.error(f"Aktion '{action}' fehlgeschlagen: Handler '{handler_spec}' fehlt")
+                return
+
+        try:
+            handler()
+        except Exception as e:
+            logger.error(f"Aktion '{action}' fehlgeschlagen: {e}")
     
     # =========================================================================
     # Transform Tools
