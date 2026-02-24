@@ -1545,13 +1545,34 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         picker = self._get_picker("standard")  # Phase 4: Reuse picker
         picker.Pick(x, self.plotter.interactor.height()-y, 0, self.plotter.renderer)
         actor = picker.GetActor()
-        
+
         if actor:
+            # Robust mapping for raw/wrapped actor variants.
+            resolved = self._get_body_id_for_actor(actor)
+            if resolved is not None:
+                return resolved
+
+            # Defensive fallback for older mocks/test doubles.
+            picked_addr = None
+            if hasattr(actor, "GetAddressAsString"):
+                try:
+                    picked_addr = actor.GetAddressAsString("")
+                except Exception:
+                    picked_addr = None
+
             for bid, actors in self._body_actors.items():
-                # FIX: Prüfen ob der getroffene Actor zu IRGENDEINEM Teil des Bodies gehört
                 for name in actors:
-                    if self.plotter.renderer.actors.get(name) == actor:
+                    reg_actor = self.plotter.renderer.actors.get(name)
+                    if reg_actor is None:
+                        continue
+                    if reg_actor is actor:
                         return bid
+                    if picked_addr and hasattr(reg_actor, "GetAddressAsString"):
+                        try:
+                            if reg_actor.GetAddressAsString("") == picked_addr:
+                                return bid
+                        except Exception:
+                            pass
         return None
 
     def highlight_body(self, body_id: str):
@@ -1712,14 +1733,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             return None, None
 
         # Finde Body-ID
-        body_id = None
-        for bid, actors in self._body_actors.items():
-            for name in actors:
-                if self.plotter.renderer.actors.get(name) == actor:
-                    body_id = bid
-                    break
-            if body_id:
-                break
+        body_id = self._get_body_id_for_actor(actor)
 
         if not body_id:
             return None, None
@@ -3954,14 +3968,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             
             actor = picker.GetActor()
             if actor:
-                body_id = None
-                for bid, actors in self._body_actors.items():
-                    # FIX: Iteriere über alle Actors des Bodies
-                    for name in actors:
-                        if self.plotter.renderer.actors.get(name) == actor:
-                            body_id = bid
-                            break
-                    if body_id is not None: break
+                body_id = self._get_body_id_for_actor(actor)
                 
                 if body_id is not None:
                     pos = picker.GetPickPosition()
