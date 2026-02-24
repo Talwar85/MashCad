@@ -520,19 +520,27 @@ class ViewportMixin:
     
     def _find_component_for_body(self, body):
         """Findet die Component die einen Body enthält."""
-        if not hasattr(self.document, '_assembly_enabled'):
+        if not getattr(self.document, '_assembly_enabled', False):
             return None
-            
+
+        root_component = getattr(self.document, 'root_component', None)
+        if root_component is None:
+            return None
+
         def search_component(comp):
             if body in comp.bodies:
                 return comp
-            for child in comp.children:
+
+            children = getattr(comp, 'sub_components', None)
+            if children is None:
+                children = getattr(comp, 'children', [])
+            for child in children:
                 result = search_component(child)
                 if result:
                     return result
             return None
 
-        return search_component(self.document.root_component)
+        return search_component(root_component)
     
     def _is_body_in_inactive_component(self, body) -> bool:
         """Prüft ob Body zu einer inaktiven Component gehört (Assembly-System)."""

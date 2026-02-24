@@ -81,6 +81,9 @@ class Document:
         # =========================================================================
         # Assembly System (Phase 1) - Permanent aktiviert
         # =========================================================================
+        # Backward-Compatibility: Viele GUI-Pfade prüfen weiterhin dieses Flag.
+        self._assembly_enabled = True
+
         # Component-basierte Architektur
         self.root_component: Component = Component(name="Root")
         self.root_component.is_active = True
