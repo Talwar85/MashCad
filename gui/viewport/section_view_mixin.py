@@ -465,16 +465,37 @@ class SectionViewMixin:
         Returns:
             (min, max, default): Bounds in mm
         """
-        if not hasattr(self, 'document') or not self.document.bodies:
-            return (-1000.0, 1000.0, 0.0)
-
-        # Berechne Bounding Box aller Bodies
         all_mins = []
         all_maxs = []
 
-        for body in self.document.bodies:
-            if body.vtk_mesh:
-                bounds = body.vtk_mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+        # 1) Dokument-Bodies (component-aware)
+        doc_bodies = []
+        if hasattr(self, "document"):
+            if hasattr(self.document, "get_all_bodies"):
+                try:
+                    doc_bodies = list(self.document.get_all_bodies() or [])
+                except Exception:
+                    doc_bodies = []
+            else:
+                doc_bodies = list(getattr(self.document, "bodies", []) or [])
+
+        for body in doc_bodies:
+            mesh = getattr(body, "vtk_mesh", None)
+            if mesh is None and hasattr(self, "bodies"):
+                mesh = (self.bodies.get(getattr(body, "id", None), {}) or {}).get("mesh")
+            if mesh is None or not hasattr(mesh, "bounds"):
+                continue
+            bounds = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+            all_mins.append([bounds[0], bounds[2], bounds[4]])
+            all_maxs.append([bounds[1], bounds[3], bounds[5]])
+
+        # 2) Fallback auf Viewport-Body-Meshes (wenn Dokument leer/nicht synchron)
+        if not all_mins and hasattr(self, "bodies"):
+            for body_data in (getattr(self, "bodies", {}) or {}).values():
+                mesh = (body_data or {}).get("mesh")
+                if mesh is None or not hasattr(mesh, "bounds"):
+                    continue
+                bounds = mesh.bounds
                 all_mins.append([bounds[0], bounds[2], bounds[4]])
                 all_maxs.append([bounds[1], bounds[3], bounds[5]])
 
