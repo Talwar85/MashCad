@@ -40,6 +40,15 @@ class FeatureMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_document_bodies(self):
+        """Returns all document bodies across components when available."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
     
     # =========================================================================
     # Extrude Operations
@@ -208,8 +217,10 @@ class FeatureMixin:
         Erkennt automatisch welche Operation sinnvoll ist.
         Returns: "New Body", "Join", oder "Cut"
         """
+        all_bodies = self._all_document_bodies()
+
         # Wenn keine Bodies existieren -> New Body
-        if not self.document.bodies:
+        if not all_bodies:
             return "New Body"
         
         # Hole die Ebene der Sketch-Fläche
@@ -217,7 +228,7 @@ class FeatureMixin:
         face_normal = np.array(sketch_face.plane_normal)
         
         # Prüfe für jeden sichtbaren Body ob die Fläche darauf liegt
-        for body in self.document.bodies:
+        for body in all_bodies:
             if not self.viewport_3d.is_body_visible(body.id):
                 continue
                 

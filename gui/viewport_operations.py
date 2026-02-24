@@ -127,14 +127,28 @@ class ViewportMixin:
             
         # Prüfe ob Dokument Bodies oder Sketches hat
         has_content = False
-        if hasattr(self.document, 'bodies') and self.document.bodies:
-            has_content = True
-        if hasattr(self.document, 'sketches') and self.document.sketches:
-            has_content = True
+
+        all_bodies = []
         if hasattr(self.document, 'get_all_bodies'):
-            all_bodies = self.document.get_all_bodies()
-            if all_bodies:
-                has_content = True
+            try:
+                all_bodies = list(self.document.get_all_bodies() or [])
+            except Exception:
+                all_bodies = []
+        if not all_bodies and hasattr(self.document, 'bodies'):
+            all_bodies = list(getattr(self.document, 'bodies', []) or [])
+        if all_bodies:
+            has_content = True
+
+        all_sketches = []
+        if hasattr(self.document, 'get_all_sketches'):
+            try:
+                all_sketches = list(self.document.get_all_sketches() or [])
+            except Exception:
+                all_sketches = []
+        if not all_sketches and hasattr(self.document, 'sketches'):
+            all_sketches = list(getattr(self.document, 'sketches', []) or [])
+        if all_sketches:
+            has_content = True
 
         if has_content and self._getting_started_overlay.isVisible():
             self._getting_started_overlay.hide()

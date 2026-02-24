@@ -36,6 +36,15 @@ class SketchMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_document_bodies(self):
+        """Returns all document bodies across components when available."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
     
     # =========================================================================
     # Sketch Creation
@@ -514,7 +523,7 @@ class SketchMixin:
         bodies_to_rebuild = []
         skipped_bodies = []
 
-        for body in self.document.bodies:
+        for body in self._all_document_bodies():
             needs_rebuild = False
             body_uses_sketch = False
             
