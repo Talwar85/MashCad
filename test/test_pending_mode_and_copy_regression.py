@@ -428,3 +428,110 @@ def test_clone_body_feature_history_copies_features_and_remaps_dependencies():
     assert f1.face_shape_ids == []
     assert f1.edge_shape_id is None
     assert f2.edge_shape_ids == []
+
+
+def _install_copy_test_modules():
+    class _Location:
+        def __init__(self, _xyz):
+            self.xyz = _xyz
+
+    class _Axis:
+        X = object()
+        Y = object()
+        Z = object()
+
+    class _FakeBody:
+        def __init__(self, name, document):
+            self.id = name
+            self.name = name
+            self.document = document
+            self.features = []
+            self._build123d_solid = None
+            self.vtk_mesh = None
+
+        def add_feature(self, feature, rebuild=False):
+            self.features.append(feature)
+
+    fake_modeling = ModuleType("modeling")
+    fake_modeling.__path__ = []
+    fake_modeling.Body = _FakeBody
+
+    fake_tess_module = ModuleType("modeling.cad_tessellator")
+    fake_tess_module.CADTessellator = SimpleNamespace(notify_body_changed=Mock())
+
+    fake_build123d = ModuleType("build123d")
+    fake_build123d.Location = _Location
+    fake_build123d.Axis = _Axis
+
+    return {
+        "modeling": fake_modeling,
+        "modeling.cad_tessellator": fake_tess_module,
+        "build123d": fake_build123d,
+    }
+
+
+class _SolidStub:
+    def moved(self, _location):
+        return self
+
+    def rotated(self, *_args, **_kwargs):
+        return self
+
+    def scaled(self, *_args, **_kwargs):
+        return self
+
+
+def test_copy_body_invokes_feature_history_clone():
+    source = SimpleNamespace(
+        id="B1",
+        name="Body1",
+        _build123d_solid=_SolidStub(),
+        vtk_mesh=None,
+        features=[SimpleNamespace(id="f1")],
+    )
+
+    class _CopyBodyHarness(FeatureDialogsMixin):
+        def __init__(self, src):
+            self._src = src
+            self.document = SimpleNamespace(add_body=Mock())
+            self.browser = SimpleNamespace(get_selected_bodies=lambda: [src], refresh=Mock())
+            self._update_viewport_all = Mock()
+            self._update_body_from_build123d = Mock()
+            self._clone_body_feature_history = Mock(return_value=1)
+
+        def _get_active_body(self):
+            return self._src
+
+    h = _CopyBodyHarness(source)
+
+    with patch.dict(sys.modules, _install_copy_test_modules()):
+        h._copy_body()
+
+    assert h._clone_body_feature_history.call_count == 1
+    src_arg, new_body_arg = h._clone_body_feature_history.call_args[0]
+    assert src_arg is source
+    assert getattr(new_body_arg, "name", "").endswith("_copy")
+    h.document.add_body.assert_called_once()
+
+
+def test_copy_transform_request_clones_feature_history():
+    body = SimpleNamespace(
+        id="B1",
+        name="Body1",
+        _build123d_solid=_SolidStub(),
+        vtk_mesh=None,
+        features=[SimpleNamespace(id="f1")],
+    )
+    h = _Harness(body)
+    h._clone_body_feature_history = Mock(return_value=1)
+    h._update_body_from_build123d = Mock()
+    h.document.add_body = Mock()
+
+    with patch.dict(sys.modules, _install_copy_test_modules()):
+        h._on_body_copy_requested("B1", "move", {"translation": [1.0, 2.0, 3.0]})
+
+    assert h._clone_body_feature_history.call_count == 1
+    src_arg, new_body_arg = h._clone_body_feature_history.call_args[0]
+    assert src_arg is body
+    assert getattr(new_body_arg, "name", "").endswith("_copy")
+    h.document.add_body.assert_called_once()
