@@ -206,7 +206,7 @@ from gui.viewport.picking_mixin import PickingMixin
 from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport.transform_mixin_v3 import TransformMixinV3
 from gui.viewport.edge_selection_mixin import EdgeSelectionMixin
-from gui.viewport.section_view_mixin import SectionViewMixin
+from gui.viewport.section_view_mixin import SectionViewMixin, SectionClipCache
 from gui.viewport.selection_mixin import SelectionMixin  # Paket B: Unified Selection API
 from gui.viewport.feature_preview_mixin import FeaturePreviewMixin  # Live Preview für Shell, Fillet, Chamfer
 from gui.viewport.render_queue import request_render  # Phase 4: Performance
@@ -541,6 +541,17 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._hover_pick_cache = None  # (timestamp, x, y, body_id, cell_id, normal, position)
         self._hover_pick_cache_ttl = 0.008  # 8ms cache validity (~120 FPS worth)
 
+        # Phase 1: Viewport LOD system (coarse during camera interaction)
+        self._lod_enabled = bool(is_enabled("viewport_lod_system"))
+        self._lod_quality_high = float(Tolerances.TESSELLATION_QUALITY)
+        self._lod_quality_interaction = float(Tolerances.TESSELLATION_PREVIEW)
+        self._lod_min_points = 2500
+        self._lod_applied_quality = {}  # body_id -> tessellation quality
+        self._lod_restore_timer = QTimer(self)
+        self._lod_restore_timer.setSingleShot(True)
+        self._lod_restore_timer.setInterval(100)
+        self._lod_restore_timer.timeout.connect(self._on_lod_restore_timeout)
+
         # Route direct viewport events through the same eventFilter logic.
         # Must be installed after state initialization because style/focus setup
         # can fire early events.
@@ -583,6 +594,170 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             request_render(plotter, immediate=immediate)
         except Exception as e:
             logger.debug(f"[viewport] Render request skipped: {e}")
+
+    def _on_camera_interaction_start(self):
+        """Start interaction callback: switch large meshes to interaction LOD."""
+        if not getattr(self, "_lod_enabled", False):
+            return
+        try:
+            if self._lod_restore_timer.isActive():
+                self._lod_restore_timer.stop()
+            self._apply_lod_to_visible_bodies(interaction_active=True)
+        except Exception as e:
+            _log_suppressed_exception("camera interaction start LOD", e)
+
+    def _on_camera_interaction_end(self):
+        """End interaction callback: emit view change and restore quality LOD."""
+        self.view_changed.emit()
+        if not getattr(self, "_lod_enabled", False):
+            return
+        try:
+            self._lod_restore_timer.start()
+        except Exception as e:
+            _log_suppressed_exception("camera interaction end LOD", e)
+
+    def _on_lod_restore_timeout(self):
+        """Delayed quality-restore to avoid immediate re-tessellation thrash."""
+        if not getattr(self, "_lod_enabled", False):
+            return
+        self._apply_lod_to_visible_bodies(interaction_active=False)
+
+    def _is_body_actor_visible(self, body_id: str) -> bool:
+        actor_names = self._body_actors.get(body_id)
+        if not actor_names:
+            return False
+        mesh_actor = self.plotter.renderer.actors.get(actor_names[0])
+        if not mesh_actor:
+            return False
+        try:
+            return bool(mesh_actor.GetVisibility())
+        except Exception:
+            return True
+
+    def _apply_lod_to_visible_bodies(self, interaction_active: bool) -> None:
+        """
+        Apply viewport LOD by swapping actor input meshes.
+
+        - During camera interaction: preview quality for large bodies
+        - After interaction: full quality
+        """
+        if not HAS_PYVISTA or not hasattr(self, "plotter"):
+            return
+
+        from modeling.cad_tessellator import CADTessellator
+
+        target_quality = (
+            self._lod_quality_interaction
+            if interaction_active
+            else self._lod_quality_high
+        )
+
+        updated = 0
+        for body_id in list(self._body_actors.keys()):
+            body_data = self.bodies.get(body_id) or {}
+            source_mesh = body_data.get("mesh")
+            if source_mesh is None:
+                continue
+            current_quality = self._lod_applied_quality.get(body_id)
+            source_points = int(getattr(source_mesh, "n_points", 0))
+            if source_points < self._lod_min_points:
+                is_interaction_lod = (
+                    current_quality is not None
+                    and abs(current_quality - self._lod_quality_interaction) < 1e-12
+                )
+                # Allow restoring full quality even if current interaction mesh is small.
+                if not (not interaction_active and is_interaction_lod):
+                    continue
+            if not self._is_body_actor_visible(body_id):
+                continue
+
+            if current_quality is not None and abs(current_quality - target_quality) < 1e-12:
+                continue
+
+            body_ref = body_data.get("body_ref") or body_data.get("body")
+            solid = getattr(body_ref, "_build123d_solid", None) if body_ref else None
+            if solid is None:
+                continue
+
+            mesh, edge_mesh, _face_info = CADTessellator.tessellate_with_face_ids(
+                solid,
+                quality=target_quality,
+            )
+            if mesh is None:
+                continue
+
+            if not self._apply_lod_mesh_to_actor(body_id, mesh, edge_mesh):
+                continue
+
+            self.bodies[body_id]["mesh"] = mesh
+            self._lod_applied_quality[body_id] = target_quality
+            updated += 1
+
+        if updated > 0:
+            request_render(self.plotter, immediate=interaction_active)
+            logger.debug(
+                f"[LOD] Updated {updated} bodies at quality={target_quality:.4f} "
+                f"(interaction={interaction_active})"
+            )
+
+    def _apply_lod_mesh_to_actor(self, body_id: str, mesh, edge_mesh) -> bool:
+        """Swap actor mapper input for LOD without recreating actors."""
+        actor_names = self._body_actors.get(body_id)
+        if not actor_names:
+            return False
+
+        mesh_actor = self.plotter.renderer.actors.get(actor_names[0])
+        if not mesh_actor:
+            return False
+
+        display_mesh = mesh
+        if getattr(self, "_section_view_enabled", False):
+            try:
+                plane_origins = {
+                    "XY": [0, 0, self._section_position],
+                    "YZ": [self._section_position, 0, 0],
+                    "XZ": [0, self._section_position, 0],
+                }
+                plane_normals = {
+                    "XY": [0, 0, 1],
+                    "YZ": [1, 0, 0],
+                    "XZ": [0, 1, 0],
+                }
+                origin = plane_origins.get(self._section_plane, [0, 0, self._section_position])
+                normal = plane_normals.get(self._section_plane, [0, 0, 1])
+                if self._section_invert:
+                    normal = [-n for n in normal]
+
+                SectionClipCache.invalidate_body(body_id)
+                display_mesh = SectionClipCache.get_clipped(
+                    body_id=body_id,
+                    mesh=mesh,
+                    plane=self._section_plane,
+                    position=self._section_position,
+                    normal=normal,
+                    origin=origin,
+                    inverted=self._section_invert,
+                )
+            except Exception as e:
+                _log_suppressed_exception(f"LOD section clip update (body={body_id})", e)
+                display_mesh = mesh
+
+        try:
+            mapper = mesh_actor.GetMapper()
+            mapper.SetInputData(display_mesh)
+            mapper.Modified()
+            mesh_actor.SetVisibility(True)
+
+            if len(actor_names) > 1 and edge_mesh is not None:
+                edge_actor = self.plotter.renderer.actors.get(actor_names[1])
+                if edge_actor:
+                    edge_mapper = edge_actor.GetMapper()
+                    edge_mapper.SetInputData(edge_mesh)
+                    edge_mapper.Modified()
+            return True
+        except Exception as e:
+            _log_suppressed_exception(f"LOD actor update (body={body_id})", e)
+            return False
 
     def clear_selection(self):
         """
@@ -928,7 +1103,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         # Observer für View-Changes
         try:
             if hasattr(self.plotter, 'iren') and self.plotter.iren:
-                self.plotter.iren.AddObserver('EndInteractionEvent', lambda o,e: self.view_changed.emit())
+                self.plotter.iren.AddObserver('StartInteractionEvent', lambda o, e: self._on_camera_interaction_start())
+                self.plotter.iren.AddObserver('EndInteractionEvent', lambda o, e: self._on_camera_interaction_end())
         except Exception as e:
             _log_suppressed_exception("EndInteractionEvent observer setup", e)
 
@@ -4898,6 +5074,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                         color=col,
                         inactive_component=inactive_component
                     )
+                    if body_id in self.bodies:
+                        self.bodies[body_id]['body'] = body
+                        self.bodies[body_id]['body_ref'] = body
+                    self._lod_applied_quality[body_id] = self._lod_quality_high
                     if hasattr(self, 'plotter'):
                         from gui.viewport.render_queue import request_render
                         request_render(self.plotter, immediate=True)
@@ -4925,6 +5105,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if body.id in self.bodies:
             self.bodies[body.id]['body'] = body
             self.bodies[body.id]['body_ref'] = body
+            self._lod_applied_quality[body.id] = self._lod_quality_high
 
         return True
 
@@ -4933,6 +5114,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if body_id in self.bodies:
             self.bodies[body_id]['body'] = body_obj
             self.bodies[body_id]['body_ref'] = body_obj
+            self._lod_applied_quality.setdefault(body_id, self._lod_quality_high)
 
             # FIX Phase 7: Detector aktualisieren wenn Selection-Mode aktiv
             # Jetzt ist face_info verfügbar (Body-Objekt gesetzt)

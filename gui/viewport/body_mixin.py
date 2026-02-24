@@ -373,6 +373,8 @@ class BodyRenderingMixin:
                 del self._body_actors[only_body_id]
             if only_body_id in self.bodies:
                 del self.bodies[only_body_id]
+            if hasattr(self, '_lod_applied_quality'):
+                self._lod_applied_quality.pop(only_body_id, None)
             if hasattr(self, '_actor_to_body_cache'):
                 self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
                                               if v != only_body_id}
@@ -387,6 +389,8 @@ class BodyRenderingMixin:
                         logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
             self._body_actors.clear()
             self.bodies.clear()
+            if hasattr(self, '_lod_applied_quality'):
+                self._lod_applied_quality.clear()
             ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
 

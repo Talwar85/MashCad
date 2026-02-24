@@ -103,6 +103,11 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # ========================================================================
     "sketch_drag_optimization": True,  # Throttled solver updates during drag
     "sketch_solver_throttle_ms": 16,  # Minimum ms between solver calls
+
+    # ========================================================================
+    # Viewport LOD (Phase 1: Foundation Stabilization)
+    # ========================================================================
+    "viewport_lod_system": True,  # Coarse mesh during camera interaction
     
     # ========================================================================
     # QA & Validation
