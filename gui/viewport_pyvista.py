@@ -3213,6 +3213,54 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                     if self._update_offsetplane_hover_cursor(screen_pos[0], screen_pos[1]):
                         return True
 
+        if self.split_mode:
+            event_type = event.type()
+
+            if event_type == QEvent.MouseMove:
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                x, y = int(pos.x()), int(pos.y())
+                if self._split_body_id is None and event.buttons() == Qt.NoButton:
+                    self._hover_body_face(x, y)
+                if self._split_dragging:
+                    if self.handle_split_mouse_move(x, y):
+                        return True
+                return False
+
+            if event_type == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    if self.handle_split_mouse_press(x, y):
+                        return True
+                return False
+
+            if event_type == QEvent.MouseButtonRelease:
+                if event.button() == Qt.LeftButton:
+                    if self.handle_split_mouse_release():
+                        return True
+                return False
+
+            if event_type == QEvent.KeyPress and self._split_body_id is not None:
+                key = event.key()
+                if key == Qt.Key_X:
+                    self.split_drag_changed.emit(self._split_position)  # trigger sync
+                    return True
+                elif key == Qt.Key_Y:
+                    return True
+                elif key == Qt.Key_Z:
+                    return True
+                elif key == Qt.Key_Up:
+                    self._split_position += 1.0
+                    self._draw_split_plane()
+                    self.split_drag_changed.emit(self._split_position)
+                    return True
+                elif key == Qt.Key_Down:
+                    self._split_position -= 1.0
+                    self._draw_split_plane()
+                    self.split_drag_changed.emit(self._split_position)
+                    return True
+            return False
+
         # --- TRANSFORM MODE (Onshape-Style Gizmo V2) ---
         if self.is_transform_active():
             event_type = event.type()
@@ -3221,18 +3269,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove):
                 pos = event.position() if hasattr(event, 'position') else event.pos()
                 screen_pos = (int(pos.x()), int(pos.y()))
-
-                # Split Mode Drag / Body-Click
-                if self.split_mode:
-                    if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                        if self.handle_split_mouse_press(screen_pos[0], screen_pos[1]):
-                            return True
-                    elif event_type == QEvent.MouseMove and self._split_dragging:
-                        if self.handle_split_mouse_move(screen_pos[0], screen_pos[1]):
-                            return True
-                    elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-                        if self.handle_split_mouse_release():
-                            return True
 
                 if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                     if self.handle_transform_mouse_press(screen_pos):
@@ -3499,33 +3535,6 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             return False
 
         # --- DRAFT MODE (Body-Face picking for draft) ---
-        # --- SPLIT MODE (body already selected, drag/keyboard) ---
-        if self.split_mode and self._split_body_id is not None:
-            event_type = event.type()
-
-            if event_type == QEvent.KeyPress:
-                key = event.key()
-                if key == Qt.Key_X:
-                    self.split_drag_changed.emit(self._split_position)  # trigger sync
-                    return True
-                elif key == Qt.Key_Y:
-                    return True
-                elif key == Qt.Key_Z:
-                    return True
-                elif key == Qt.Key_Up:
-                    self._split_position += 1.0
-                    self._draw_split_plane()
-                    self.split_drag_changed.emit(self._split_position)
-                    return True
-                elif key == Qt.Key_Down:
-                    self._split_position -= 1.0
-                    self._draw_split_plane()
-                    self.split_drag_changed.emit(self._split_position)
-                    return True
-
-            # Let mouse events pass through to eventFilter split handler above
-            return False
-
         if self.draft_mode:
             event_type = event.type()
 
