@@ -41,7 +41,11 @@ class SolverResult:
     final_error: float
     status: ConstraintStatus
     message: str = ""
-    backend_used: str = ""  # W35 P2: Zusätzliches Feld
+    backend_used: str = ""
+    n_variables: int = 0
+    n_constraints: int = 0
+    dof: int = -1
+    error_code: str = ""
 
 
 class ConstraintSolver:
@@ -192,14 +196,18 @@ class ConstraintSolver:
                 callback_interval=callback_interval
             )
             
-            # Konvertiere in altes SolverResult Format (ohne backend_used)
+            # Konvertiere in altes SolverResult Format inkl. DOF-Metadaten
             return SolverResult(
                 success=result.success,
                 iterations=result.iterations,
                 final_error=result.final_error,
                 status=result.status,
                 message=result.message,
-                backend_used=result.backend_used  # W35: Neues Feld
+                backend_used=result.backend_used,
+                n_variables=int(getattr(result, "n_variables", 0) or 0),
+                n_constraints=int(getattr(result, "n_constraints", 0) or 0),
+                dof=int(getattr(result, "dof", -1) if getattr(result, "dof", None) is not None else -1),
+                error_code=str(getattr(result, "error_code", "") or ""),
             )
             
         except Exception as e:
@@ -558,3 +566,4 @@ def auto_constrain_coincident(points: List[Point2D], tolerance: float = 5.0) -> 
             if p1.distance_to(p2) < tolerance:
                 constraints.append(make_coincident(p1, p2))
     return constraints
+

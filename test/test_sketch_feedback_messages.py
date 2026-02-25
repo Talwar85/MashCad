@@ -1,4 +1,5 @@
 from gui.sketch_feedback import (
+    format_direct_edit_solver_message,
     format_solver_failure_message,
     format_trim_failure_message,
     format_trim_warning_message,
@@ -23,6 +24,30 @@ def test_solver_feedback_nan_inf_mentions_numerics():
     msg = format_solver_failure_message("INCONSISTENT", "Ungueltige Residuen (NaN/Inf)", dof=None, context="Constraint solve")
     assert "NaN/Inf" in msg
     assert "Numerische Instabilitaet" in msg
+
+
+def test_solver_feedback_error_catalog_invalid_constraints():
+    msg = format_solver_failure_message(
+        "INCONSISTENT",
+        "Ungueltige Constraints: 2",
+        dof=None,
+        error_code="invalid_constraints",
+        context="Constraint solve",
+    )
+    assert "ungueltige oder geloeschte Geometrie" in msg
+    assert "Entferne ungueltige Constraints" in msg
+
+
+def test_direct_edit_feedback_uses_error_code_catalog():
+    msg = format_direct_edit_solver_message(
+        mode="radius",
+        status="INCONSISTENT",
+        message="Pre-validation failed: geometric impossible",
+        dof=1,
+        error_code="pre_validation_failed",
+    )
+    assert "geometrisch unmoegliche constraint-kombination" in msg.lower()
+    assert "Entferne den zuletzt hinzugefuegten Constraint" in msg
 
 
 def test_trim_feedback_no_target_is_explanatory():

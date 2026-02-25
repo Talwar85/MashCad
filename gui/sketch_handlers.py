@@ -225,6 +225,7 @@ class SketchHandlersMixin:
             status_obj = getattr(result, "status", "")
             status_name = getattr(status_obj, "name", status_obj) or ""
         dof = self._constraint_result_dof(result)
+        error_code = getattr(result, "error_code", "")
 
         if hasattr(self, "_emit_solver_feedback"):
             self._emit_solver_feedback(
@@ -232,11 +233,18 @@ class SketchHandlersMixin:
                 message=msg,
                 dof=float(dof),
                 status_name=status_name,
+                error_code=str(error_code or ""),
                 context=context,
                 show_hud=True,
             )
         else:
-            text = format_solver_failure_message(status_name, msg, dof=dof, context=context)
+            text = format_solver_failure_message(
+                status_name,
+                msg,
+                dof=dof,
+                error_code=error_code,
+                context=context,
+            )
             if hasattr(self, "status_message"):
                 self.status_message.emit(text)
             if hasattr(self, "show_message"):

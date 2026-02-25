@@ -183,9 +183,10 @@ class TestExtrudeFlagIntegration:
         feature.plane_normal = (0, 0, 1)
         feature.id = "test_feature"
 
-        # Act & Assert
-        with pytest.raises(ValueError, match="TNP ShapeNamingService nicht verfügbar"):
-            body._compute_extrude_part(feature)
+        # Act - should NOT raise, instead creates temporary TNP service
+        # The production code gracefully handles missing TNP service by creating a temporary one
+        result = body._compute_extrude_part(feature)
+        assert result is not None, "Extrude should succeed with temporary TNP service"
 
 
 # ============================================================================

@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple, Any, Union, Dict
 from loguru import logger
 
 from config.feature_flags import is_enabled
+from modeling.geometry_utils import normalize_plane_axes
 
 
 def convert_legacy_nsided_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
@@ -286,9 +287,9 @@ def get_plane_from_sketch(sketch) -> 'Plane':
     origin = getattr(sketch, 'plane_origin', (0, 0, 0))
     normal = getattr(sketch, 'plane_normal', (0, 0, 1))
     x_dir = getattr(sketch, 'plane_x_dir', None)
-    if x_dir:
-        return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
-    return Plane(origin=origin, z_dir=normal)
+    y_dir = getattr(sketch, 'plane_y_dir', None)
+    normal, x_dir, _y_dir = normalize_plane_axes(normal, x_dir, y_dir)
+    return Plane(origin=origin, x_dir=x_dir, z_dir=normal)
 
 
 def lookup_geometry_for_polygon(poly, sketch) -> Optional[List]:

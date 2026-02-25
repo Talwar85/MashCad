@@ -90,6 +90,22 @@ class Sketch:
 
     # === TNP v4.1: Sketch-ShapeUUID Verwaltung ===
 
+    def normalize_plane_basis(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+        """
+        Normalisiert die Sketch-Ebenenbasis auf ein stabiles orthonormales Frame.
+        """
+        from modeling.geometry_utils import normalize_plane_axes
+
+        normal, x_dir, y_dir = normalize_plane_axes(
+            getattr(self, 'plane_normal', (0, 0, 1)),
+            getattr(self, 'plane_x_dir', None),
+            getattr(self, 'plane_y_dir', None),
+        )
+        self.plane_normal = normal
+        self.plane_x_dir = x_dir
+        self.plane_y_dir = y_dir
+        return normal, x_dir, y_dir
+
     def get_all_shape_uuids(self) -> Dict[str, str]:
         """
         Gibt alle ShapeUUIDs der Sketch-Geometrie zurück.
@@ -263,6 +279,8 @@ class Sketch:
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
 
+        self.normalize_plane_basis()
+
         center = Point2D(cx, cy)
         circle = Circle2D(center, radius, construction=construction)
 
@@ -306,6 +324,8 @@ class Sketch:
         """
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
+
+        self.normalize_plane_basis()
 
         center = Point2D(cx, cy)
         arc = Arc2D(center, radius, start_angle, end_angle, construction=construction)
@@ -365,6 +385,8 @@ class Sketch:
         from modeling.tnp_system import ShapeID, ShapeType
         import uuid
         
+        self.normalize_plane_basis()
+
         major_radius = max(0.01, float(major_radius))
         minor_radius = max(0.01, float(minor_radius))
         angle = float(angle_deg)
@@ -1071,6 +1093,8 @@ class Sketch:
                 final_error=0.0,
                 status=status,
                 message=message,
+                dof=dof,
+                error_code="",
             )
 
         if raw_name == "TOO_MANY_UNKNOWNS":
@@ -1080,6 +1104,8 @@ class Sketch:
                 final_error=0.0,
                 status=ConstraintStatus.UNDER_CONSTRAINED,
                 message=message or f"Unterbestimmt: {dof} Freiheitsgrade",
+                dof=dof,
+                error_code="too_many_unknowns",
             )
 
         if raw_name == "INCONSISTENT":
@@ -1093,7 +1119,60 @@ class Sketch:
             final_error=float("inf"),
             status=status,
             message=message or "py-slvs konnte nicht loesen",
+            dof=dof,
+            error_code="inconsistent" if raw_name == "INCONSISTENT" else "parametric_failed",
         )
+
+    def _attach_solver_metadata(self, result: SolverResult) -> SolverResult:
+        """
+        Ergänzt SolverResult um konsistente DOF-/Variablen-Metadaten.
+        """
+        vars_count, constraint_count, dof = self.calculate_dof()
+
+        try:
+            result.n_variables = int(vars_count)
+        except Exception:
+            pass
+
+        try:
+            result.n_constraints = int(constraint_count)
+        except Exception:
+            pass
+
+        try:
+            result.dof = int(dof)
+        except Exception:
+            pass
+
+        try:
+            current_code = str(getattr(result, "error_code", "") or "").strip().lower()
+            if not current_code:
+                msg = str(getattr(result, "message", "") or "").lower()
+                status = getattr(result, "status", None)
+
+                inferred = ""
+                if "pre-validation failed" in msg:
+                    inferred = "pre_validation_failed"
+                elif "na" in msg and "inf" in msg:
+                    inferred = "nan_residuals"
+                elif "ung" in msg and "constraint" in msg:
+                    inferred = "invalid_constraints"
+                elif status == ConstraintStatus.OVER_CONSTRAINED:
+                    inferred = "inconsistent"
+                elif status == ConstraintStatus.INCONSISTENT:
+                    inferred = "inconsistent"
+
+                result.error_code = inferred
+        except Exception:
+            pass
+
+        try:
+            if getattr(result, "status", None) == ConstraintStatus.FULLY_CONSTRAINED and dof > 0:
+                result.status = ConstraintStatus.UNDER_CONSTRAINED
+        except Exception:
+            pass
+
+        return result
 
     def solve(self) -> SolverResult:
         """Löst alle Constraints"""
@@ -1118,12 +1197,12 @@ class Sketch:
                         # W35: Spline-Caches invalidieren nach Control-Point-Änderungen
                         self._invalidate_all_spline_caches()
                         self.invalidate_profiles()
-                        return res
+                        return self._attach_solver_metadata(res)
                     raw_result_name = getattr(getattr(raw_res, "result", None), "name", "")
                     # Deterministische py-slvs-Fehler nicht still durch SciPy ueberschreiben.
                     if raw_result_name in {"INCONSISTENT", "TOO_MANY_UNKNOWNS"}:
                         logger.debug(f"py-slvs Ergebnis bleibt aktiv: {res.message}")
-                        return res
+                        return self._attach_solver_metadata(res)
                     fallback_context = f"py-slvs fehlgeschlagen: {res.message}"
                     logger.debug(f"py-slvs Solve fehlgeschlagen, fallback auf SciPy: {res.message}")
                 else:
@@ -1154,13 +1233,18 @@ class Sketch:
             self._invalidate_all_spline_caches()
             self.invalidate_profiles()
 
-        return res
+        return self._attach_solver_metadata(res)
     
     def is_fully_constrained(self) -> bool:
         """Prüft ob der Sketch vollständig bestimmt ist"""
         result = self.solve()
         if hasattr(result, 'status'):
-            return result.status == ConstraintStatus.FULLY_CONSTRAINED
+            if getattr(result, 'status', None) != ConstraintStatus.FULLY_CONSTRAINED:
+                return False
+            dof = getattr(result, 'dof', None)
+            if dof is None:
+                return True
+            return int(dof) <= 0
         if hasattr(result, 'success') and hasattr(result, 'dof'):
             return bool(result.success) and int(result.dof) <= 0
         return False
@@ -1169,7 +1253,11 @@ class Sketch:
         """Gibt den aktuellen Constraint-Status zurück"""
         result = self.solve()
         if hasattr(result, 'status'):
-            return result.status
+            status = result.status
+            dof = getattr(result, 'dof', None)
+            if status == ConstraintStatus.FULLY_CONSTRAINED and dof is not None and int(dof) > 0:
+                return ConstraintStatus.UNDER_CONSTRAINED
+            return status
         if hasattr(result, 'success') and hasattr(result, 'dof'):
             if not result.success:
                 return ConstraintStatus.INCONSISTENT
@@ -1186,47 +1274,47 @@ class Sketch:
             - effective_constraints: Anzahl der effektiven Constraints (ohne FIXED)
             - dof: Verbleibende Freiheitsgrade (max 0)
         """
-        # 1. Variablen zählen
-        n_vars = 0
-        processed_points = set()
-        
-        # Punkte (2 Variablen pro Punkt: x, y)
-        for p in self.points:
-            if not p.fixed and p.id not in processed_points:
-                n_vars += 2
-                processed_points.add(p.id)
-        
-        # Linien-Endpunkte (falls nicht schon gezählt)
-        for line in self.lines:
-            for p in [line.start, line.end]:
+        try:
+            from .constraint_diagnostics import calculate_sketch_dof
+
+            dof, total_variables, effective_constraints, _breakdown = calculate_sketch_dof(
+                self.points,
+                self.lines,
+                self.circles,
+                self.arcs,
+                self.constraints,
+            )
+            return int(total_variables), int(effective_constraints), int(dof)
+        except Exception:
+            # Fallback auf konservative Schätzung
+            n_vars = 0
+            processed_points = set()
+            for p in self.points:
                 if not p.fixed and p.id not in processed_points:
                     n_vars += 2
                     processed_points.add(p.id)
-        
-        # Kreise (1 Variable: radius)
-        for circle in self.circles:
-            n_vars += 1
-            # Center-Punkt falls nicht schon gezählt
-            if not circle.center.fixed and circle.center.id not in processed_points:
-                n_vars += 2
-                processed_points.add(circle.center.id)
-        
-        # Bögen (3 Variablen: radius, start_angle, end_angle)
-        for arc in self.arcs:
-            n_vars += 3
-            # Center-Punkt falls nicht schon gezählt
-            if not arc.center.fixed and arc.center.id not in processed_points:
-                n_vars += 2
-                processed_points.add(arc.center.id)
-        
-        # 2. Effektive Constraints zählen (FIXED zählt nicht, da es durch Variablen-Entfernung behandelt wird)
-        n_constraints = len([c for c in self.constraints 
-                            if c.type != ConstraintType.FIXED and c.is_valid() and getattr(c, 'enabled', True)])
-        
-        # 3. DOF berechnen
-        dof = max(0, n_vars - n_constraints)
-        
-        return n_vars, n_constraints, dof
+            for line in self.lines:
+                for p in [line.start, line.end]:
+                    if not p.fixed and p.id not in processed_points:
+                        n_vars += 2
+                        processed_points.add(p.id)
+            for circle in self.circles:
+                n_vars += 1
+                if not circle.center.fixed and circle.center.id not in processed_points:
+                    n_vars += 2
+                    processed_points.add(circle.center.id)
+            for arc in self.arcs:
+                n_vars += 3
+                if not arc.center.fixed and arc.center.id not in processed_points:
+                    n_vars += 2
+                    processed_points.add(arc.center.id)
+
+            n_constraints = len([
+                c for c in self.constraints
+                if c.type != ConstraintType.FIXED and c.is_valid() and getattr(c, 'enabled', True)
+            ])
+            dof = max(0, n_vars - n_constraints)
+            return n_vars, n_constraints, dof
     
     def get_constraint_summary(self) -> dict:
         """
@@ -1244,20 +1332,32 @@ class Sketch:
         valid = [c for c in self.constraints if c.is_valid()]
         invalid = [c for c in self.constraints if not c.is_valid()]
         vars_count, constr_count, dof = self.calculate_dof()
+        diagnostics = None
         
         # Schnelle Status-Bestimmung ohne zu lösen
         if invalid:
             status = ConstraintStatus.INCONSISTENT
-        elif dof > 0:
-            status = ConstraintStatus.UNDER_CONSTRAINED
-        elif constr_count > vars_count:
-            status = ConstraintStatus.OVER_CONSTRAINED
         else:
-            # Könnte FULLY_CONSTRAINED sein, aber wir wissen es nicht sicher
-            # ohne zu lösen - daher UNDER_CONSTRAINED als konservativer Default
-            status = ConstraintStatus.UNDER_CONSTRAINED
-        
-        return {
+            try:
+                from .constraint_diagnostics import quick_check
+                status, _ = quick_check(self)
+            except Exception:
+                if dof > 0:
+                    status = ConstraintStatus.UNDER_CONSTRAINED
+                elif constr_count > vars_count:
+                    status = ConstraintStatus.OVER_CONSTRAINED
+                else:
+                    status = ConstraintStatus.FULLY_CONSTRAINED
+
+        try:
+            from .constraint_diagnostics import analyze_constraint_state
+            diagnostics = analyze_constraint_state(self)
+            if not invalid:
+                status = diagnostics.status
+        except Exception:
+            diagnostics = None
+
+        summary = {
             'total_constraints': total,
             'valid_constraints': len(valid),
             'invalid_constraints': invalid,
@@ -1266,6 +1366,19 @@ class Sketch:
             'dof': dof,
             'status': status
         }
+
+        if diagnostics is not None:
+            summary.update({
+                'diagnosis_type': diagnostics.diagnosis_type,
+                'redundant_constraints': diagnostics.redundant_constraints,
+                'conflicting_constraints': diagnostics.conflicting_constraints,
+                'suggested_constraints': diagnostics.suggested_constraints,
+                'redundant_count': len(diagnostics.redundant_constraints),
+                'conflict_count': len(diagnostics.conflicting_constraints),
+                'suggestion_count': len(diagnostics.suggested_constraints),
+            })
+
+        return summary
     
     def diagnose_constraints(self, top_n: int = 5) -> List[Tuple[Constraint, float, str]]:
         """
@@ -2055,6 +2168,21 @@ class Sketch:
                 logger.debug(f"[Sketch.from_dict] {len(sketch.closed_profiles)} Profile wiederhergestellt")
             except ImportError:
                 logger.debug("Shapely nicht verfügbar für Profil-Wiederherstellung")
+
+        # FIX: Plane-Daten wiederherstellen (BUG in architecturvision dokumentiert)
+        # Plane-Daten MÜSSEN vor closed_profiles wiederhergestellt werden,
+        # da normalize_plane_basis() sie benötigt
+        if 'plane_origin' in data:
+            sketch.plane_origin = tuple(data['plane_origin'])
+        if 'plane_normal' in data:
+            sketch.plane_normal = tuple(data['plane_normal'])
+        if 'plane_x_dir' in data and data['plane_x_dir'] is not None:
+            sketch.plane_x_dir = tuple(data['plane_x_dir'])
+        if 'plane_y_dir' in data and data['plane_y_dir'] is not None:
+            sketch.plane_y_dir = tuple(data['plane_y_dir'])
+
+        # Normalisiere die Plane-Basis um parallele/degeneirierte Achsen zu korrigieren
+        sketch.normalize_plane_basis()
 
         return sketch
 

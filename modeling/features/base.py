@@ -27,6 +27,7 @@ class FeatureType(Enum):
     NSIDED_PATCH = auto()     # N-seitiger Patch (Surface Fill)
     PRIMITIVE = auto()        # Primitive (Box, Cylinder, Sphere, Cone)
     IMPORT = auto()           # Importierter Body (Mesh-Konvertierung, STEP Import)
+    CADQUERY = auto()         # CadQuery/Build123d Script (editable parametric feature)
 
 @dataclass
 class Feature:

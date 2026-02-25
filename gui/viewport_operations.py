@@ -15,6 +15,7 @@ Usage:
 from typing import TYPE_CHECKING, Optional, List, Dict, Any, Tuple
 import numpy as np
 from loguru import logger
+from modeling.geometry_utils import normalize_plane_axes
 
 from PySide6.QtCore import Qt, QTimer, QPoint
 
@@ -95,8 +96,25 @@ class ViewportMixin:
             color = getattr(body, 'color', None)
             inactive = self._is_body_in_inactive_component(body)
             self.viewport_3d.update_single_body(body, color=color, inactive_component=inactive)
+            if hasattr(self.viewport_3d, 'set_body_object'):
+                self.viewport_3d.set_body_object(body.id, body)
         except Exception as e:
             logger.debug(f"Body update fehlgeschlagen für {body.name}: {e}")
+
+    def _update_body_from_build123d(self, body, solid):
+        """
+        Aktualisiert einen Body aus einem build123d Solid und triggert Viewport-Refresh.
+
+        Diese Methode wird von mehreren Feature-Workflows erwartet
+        (Shell, Copy, Mirror, Transform etc.).
+        """
+        if body is None or solid is None:
+            return
+
+        body._build123d_solid = solid
+        if hasattr(body, 'invalidate_mesh'):
+            body.invalidate_mesh()
+        self._update_single_body(body)
 
     def _update_body_mesh(self, body, mesh_override=None):
         """Lädt die Mesh-Daten aus dem Body-Objekt in den Viewport"""
@@ -109,14 +127,28 @@ class ViewportMixin:
             
         # Prüfe ob Dokument Bodies oder Sketches hat
         has_content = False
-        if hasattr(self.document, 'bodies') and self.document.bodies:
-            has_content = True
-        if hasattr(self.document, 'sketches') and self.document.sketches:
-            has_content = True
+
+        all_bodies = []
         if hasattr(self.document, 'get_all_bodies'):
-            all_bodies = self.document.get_all_bodies()
-            if all_bodies:
-                has_content = True
+            try:
+                all_bodies = list(self.document.get_all_bodies() or [])
+            except Exception:
+                all_bodies = []
+        if not all_bodies and hasattr(self.document, 'bodies'):
+            all_bodies = list(getattr(self.document, 'bodies', []) or [])
+        if all_bodies:
+            has_content = True
+
+        all_sketches = []
+        if hasattr(self.document, 'get_all_sketches'):
+            try:
+                all_sketches = list(self.document.get_all_sketches() or [])
+            except Exception:
+                all_sketches = []
+        if not all_sketches and hasattr(self.document, 'sketches'):
+            all_sketches = list(getattr(self.document, 'sketches', []) or [])
+        if all_sketches:
+            has_content = True
 
         if has_content and self._getting_started_overlay.isVisible():
             self._getting_started_overlay.hide()
@@ -201,7 +233,7 @@ class ViewportMixin:
             self._on_section_disabled()
         else:
             self.section_panel.show_at(self.viewport_3d)
-            self._on_section_enabled('xy', 0.0)
+            self._on_section_enabled('XY', 0.0)
 
     def _on_section_enabled(self, plane: str, position: float):
         """Section View wurde aktiviert."""
@@ -353,6 +385,8 @@ class ViewportMixin:
             self._getting_started_overlay.center_on_parent()
         if hasattr(self, "p2p_panel") and self.p2p_panel.isVisible():
             self.p2p_panel.show_at(self.viewport_3d)
+        if hasattr(self, "measure_panel") and self.measure_panel.isVisible():
+            self.measure_panel.show_at(self.viewport_3d)
         if hasattr(self, "section_panel") and self.section_panel.isVisible():
             if hasattr(self.section_panel, "clamp_to_parent"):
                 self.section_panel.clamp_to_parent()
@@ -481,43 +515,32 @@ class ViewportMixin:
         Berechnet stabile X- und Y-Achsen für eine Ebene basierend auf der Normalen.
         Muss IDENTISCH zu viewport_pyvista.py sein!
         """
-        n = np.array(normal_vec)
-        norm = np.linalg.norm(n)
-        if norm == 0:
-            return (1, 0, 0), (0, 1, 0)
-        n = n / norm
-        
-        # Globale Up-Vektor Strategie (Z-Up)
-        if abs(n[2]) > 0.999:
-            # Normale ist (0,0,1) oder (0,0,-1)
-            x_dir = np.array([1.0, 0.0, 0.0])
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            x_dir = np.cross(y_dir, n)
-        else:
-            global_up = np.array([0.0, 0.0, 1.0])
-            x_dir = np.cross(global_up, n)
-            x_dir = x_dir / np.linalg.norm(x_dir)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            
-        return tuple(x_dir), tuple(y_dir)
+        _normal, x_dir, y_dir = normalize_plane_axes(normal_vec)
+        return x_dir, y_dir
     
     def _find_component_for_body(self, body):
         """Findet die Component die einen Body enthält."""
-        if not hasattr(self.document, '_assembly_enabled'):
+        if not getattr(self.document, '_assembly_enabled', False):
             return None
-            
+
+        root_component = getattr(self.document, 'root_component', None)
+        if root_component is None:
+            return None
+
         def search_component(comp):
             if body in comp.bodies:
                 return comp
-            for child in comp.children:
+
+            children = getattr(comp, 'sub_components', None)
+            if children is None:
+                children = getattr(comp, 'children', [])
+            for child in children:
                 result = search_component(child)
                 if result:
                     return result
             return None
 
-        return search_component(self.document.root_component)
+        return search_component(root_component)
     
     def _is_body_in_inactive_component(self, body) -> bool:
         """Prüft ob Body zu einer inaktiven Component gehört (Assembly-System)."""

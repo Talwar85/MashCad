@@ -50,10 +50,63 @@ def _extract_constraint_suggestions(message: str, status_name: str) -> List[str]
     return suggestions
 
 
+_SOLVER_ERROR_CATALOG = {
+    "invalid_constraints": {
+        "hint": "Mindestens ein Constraint verweist auf ungueltige oder geloeschte Geometrie.",
+        "suggestions": [
+            "Entferne ungueltige Constraints",
+            "Pruefe Referenzen nach Trim/Delete",
+        ],
+    },
+    "pre_validation_failed": {
+        "hint": "Geometrisch unmoegliche Constraint-Kombination erkannt.",
+        "suggestions": [
+            "Entferne den zuletzt hinzugefuegten Constraint",
+            "Pruefe HORIZONTAL + VERTICAL + LENGTH Kombinationen",
+        ],
+    },
+    "nan_input": {
+        "hint": "Ungueltige Startwerte im Solver (NaN/Inf).",
+        "suggestions": [
+            "Setze Geometrie auf gueltige Werte zurueck",
+            "Pruefe Radius/Laengen auf numerische Gueltigkeit",
+        ],
+    },
+    "nan_residuals": {
+        "hint": "Numerische Instabilitaet waehrend der Residuenberechnung.",
+        "suggestions": [
+            "Entferne konfliktierende Constraints",
+            "Reduziere starke Abhaengigkeiten",
+        ],
+    },
+    "non_converged": {
+        "hint": "Der Solver ist nicht konvergiert.",
+        "suggestions": [
+            "Vereinfache Constraints und solve erneut",
+            "Fixiere eine Referenzgeometrie zuerst",
+        ],
+    },
+    "inconsistent": {
+        "hint": "Widerspruechliche Constraints erkannt.",
+        "suggestions": [
+            "Entferne einen konfliktierenden Constraint",
+            "Pruefe Dimensionswerte auf Widerspruch",
+        ],
+    },
+}
+
+
+def _normalize_error_code(error_code: Any) -> str:
+    if not error_code:
+        return ""
+    return str(error_code).strip().lower()
+
+
 def format_solver_failure_message(
     status: Any,
     message: str,
     dof: float | int | None = None,
+    error_code: Any = None,
     context: str = "Solver",
     include_next_actions: bool = True,
 ) -> str:
@@ -71,11 +124,15 @@ def format_solver_failure_message(
         Formatted error message with hints
     """
     status_name = _status_name(status)
+    code = _normalize_error_code(error_code)
     base = (message or "").strip() or "Unbekannter Solver-Fehler"
     lower = base.lower()
+    catalog_entry = _SOLVER_ERROR_CATALOG.get(code)
 
     # Status-spezifische Hinweise
-    if status_name == "OVER_CONSTRAINED":
+    if catalog_entry is not None:
+        hint = catalog_entry["hint"]
+    elif status_name == "OVER_CONSTRAINED":
         hint = "Zu viele Constraints fuer verfuegbare Geometrie."
     elif status_name == "UNDER_CONSTRAINED":
         dof_txt = ""
@@ -100,7 +157,9 @@ def format_solver_failure_message(
     # Naechste Aktionen (optional)
     next_action = ""
     if include_next_actions:
-        suggestions = _extract_constraint_suggestions(base, status_name)
+        suggestions = list(catalog_entry.get("suggestions", [])) if catalog_entry is not None else []
+        if not suggestions:
+            suggestions = _extract_constraint_suggestions(base, status_name)
         if suggestions:
             # Nur die erste relevante Empfehlung anzeigen
             next_action = f" → {suggestions[0]}"
@@ -113,6 +172,7 @@ def format_direct_edit_solver_message(
     status: Any,
     message: str,
     dof: float | int | None = None,
+    error_code: Any = None,
 ) -> str:
     """
     Spezialisierte Fehlermeldung fuer Direct-Edit-Operationen.
@@ -143,6 +203,7 @@ def format_direct_edit_solver_message(
         status,
         message,
         dof=dof,
+        error_code=error_code,
         context=f"{mode_display}-Bearbeitung",
         include_next_actions=True,
     )

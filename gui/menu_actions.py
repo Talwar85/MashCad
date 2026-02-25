@@ -484,7 +484,102 @@ class MenuActionsMixin:
         except Exception as e:
             logger.error(f"STEP Import Fehler: {e}")
             QMessageBox.critical(self, "Import Fehler", f"STEP Import fehlgeschlagen:\n{e}")
-    
+
+    def _import_cadquery_script(self):
+        """Import CadQuery/Build123d script as new body."""
+        from i18n import tr
+        from pathlib import Path
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("CadQuery Script importieren"),
+            "",
+            "Python Files (*.py);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            from modeling.cadquery_importer import CadQueryImporter
+
+            progress = QProgressDialog(
+                "Importiere CadQuery Script...",
+                "Abbrechen",
+                0, 100,
+                self
+            )
+            progress.setWindowTitle("CadQuery Import")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(10)
+
+            # Read the script file
+            script_path = Path(path)
+            script_content = script_path.read_text(encoding='utf-8')
+
+            importer = CadQueryImporter(self.document)
+            result = importer.execute_code(script_content, source=script_path.name)
+
+            progress.setValue(50)
+
+            if result.success and result.solids:
+                # Create bodies with CadQueryFeature (editable!)
+                script_name = script_path.name
+                bodies = importer.create_bodies_from_solids(
+                    result.solids,
+                    name=result.name,
+                    script_source=script_name,
+                    script=script_content  # Store script for editing
+                )
+
+                # Add bodies to document
+                for body in bodies:
+                    self.document.add_body(body)
+
+                progress.setValue(90)
+
+                self.browser.refresh()
+                self._update_viewport_all_impl()
+                logger.success(f"CadQuery Script importiert: {path} ({len(bodies)} Körper)")
+
+                if result.warnings:
+                    for warning in result.warnings:
+                        logger.warning(f"CadQuery: {warning}")
+            else:
+                if result.errors:
+                    error_msg = "\n".join(result.errors)
+                    logger.error(f"CadQuery Import Fehler: {error_msg}")
+                    QMessageBox.critical(self, "Import Fehler", f"Script fehlgeschlagen:\n{error_msg}")
+                else:
+                    logger.warning("Keine Körper aus Script generiert")
+                    QMessageBox.information(self, "Import", "Script wurde ausgeführt aber keine Körper generiert.")
+
+            progress.close()
+
+        except Exception as e:
+            logger.error(f"CadQuery Import Fehler: {e}")
+            QMessageBox.critical(self, "Import Fehler", f"CadQuery Import fehlgeschlagen:\n{e}")
+
+    def _show_cadquery_editor(self):
+        """Show the CadQuery Script Editor dialog."""
+        from gui.cadquery_editor_dialog import CadQueryEditorDialog
+        from i18n import tr
+
+        try:
+            dialog = CadQueryEditorDialog(self.document, parent=self)
+            dialog.script_executed.connect(self._on_cadquery_script_executed)
+            dialog.exec()
+        except Exception as e:
+            logger.error(f"CadQuery Editor Fehler: {e}")
+            QMessageBox.critical(self, "Editor Fehler", f"Konnte Editor nicht öffnen:\n{e}")
+
+    def _on_cadquery_script_executed(self, bodies, script_name):
+        """Handle script execution - bodies already added to document."""
+        if bodies:
+            self.browser.refresh()
+            self._update_viewport_all_impl()
+            logger.success(f"CadQuery: {len(bodies)} Körper erstellt aus '{script_name}'")
+
     def _import_svg(self):
         """Import SVG as sketch geometry."""
         from i18n import tr

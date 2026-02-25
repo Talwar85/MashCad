@@ -15,6 +15,7 @@ Usage:
 from typing import TYPE_CHECKING, Optional, Tuple, List
 import numpy as np
 from loguru import logger
+from modeling.geometry_utils import normalize_plane_axes
 
 if TYPE_CHECKING:
     from sketcher import Sketch
@@ -35,6 +36,15 @@ class SketchMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_document_bodies(self):
+        """Returns all document bodies across components when available."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
     
     # =========================================================================
     # Sketch Creation
@@ -86,18 +96,13 @@ class SketchMixin:
         """Create a new sketch at the specified plane."""
         s = self.document.new_sketch(f"Sketch{len(self.document.sketches)+1}")
 
-        # Berechne Achsen
-        if x_dir_override:
-            # PERFEKT: Wir haben eine stabile Achse vom Detector
-            x_dir = x_dir_override
-            # Y berechnen (Kreuzprodukt)
-            n_vec = np.array(normal)
-            x_vec = np.array(x_dir)
-            y_vec = np.cross(n_vec, x_vec)
-            y_dir = tuple(y_vec)
-        else:
-            # Fallback: Raten (das was bisher Probleme machte)
-            x_dir, y_dir = self._calculate_plane_axes(normal)
+        # Berechne robuste, orthonormale Achsen (auch fuer degenerierte Overrides)
+        fallback_x, fallback_y = self._calculate_plane_axes(normal)
+        normal, x_dir, y_dir = normalize_plane_axes(
+            normal,
+            x_dir_override if x_dir_override is not None else fallback_x,
+            fallback_y,
+        )
 
         # Speichere ALLES im Sketch
         s.plane_origin = origin
@@ -120,7 +125,8 @@ class SketchMixin:
         self.sketch_editor.sketch = s
         
         # Bodies als Referenz übergeben (für Snapping auf Kanten)
-        self._set_sketch_body_references(origin, normal)
+        # Nutzt dieselbe normalisierte X-Achse wie der Sketch selbst.
+        self._set_sketch_body_references(origin, normal, x_dir)
         
         self._set_mode("sketch")
         self.browser.refresh()
@@ -517,7 +523,7 @@ class SketchMixin:
         bodies_to_rebuild = []
         skipped_bodies = []
 
-        for body in self.document.bodies:
+        for body in self._all_document_bodies():
             needs_rebuild = False
             body_uses_sketch = False
             

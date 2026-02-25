@@ -1484,6 +1484,14 @@ class TransformPanel(RoundedPanelFrame):
         if mode.lower() in mode_map:
             self.mode_combo.setCurrentIndex(mode_map[mode.lower()])
 
+    def set_body_name(self, name: str):
+        """
+        Legacy-Kompatibilität: ältere Aufrufer setzen den aktiven Body-Namen.
+        TransformPanel zeigt den Namen derzeit nicht als eigenes Feld an;
+        wir halten ihn als Tooltip sichtbar.
+        """
+        self.setToolTip(f"{tr('Body')}: {name}" if name else "")
+
     def focus_input(self):
         """X-Input fokussieren"""
         self.x_input.setFocus()
@@ -2567,8 +2575,10 @@ class PatternInputPanel(RoundedPanelFrame):
     def set_custom_center(self, x: float, y: float, z: float):
         """Set a custom center point (from viewport pick)."""
         self._custom_center = (x, y, z)
-        # Update combo to show custom selection
+        # Update combo to show custom selection without re-triggering center_pick_requested.
+        was_blocked = self.center_combo.blockSignals(True)
         self.center_combo.setCurrentText("Custom...")
+        self.center_combo.blockSignals(was_blocked)
         self._emit_parameters()
 
     def reset(self):

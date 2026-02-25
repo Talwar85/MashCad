@@ -1,5 +1,5 @@
 [MASTER]
-extension-pkg-allow-list=PySide6,pydantic,numpy,shiboken6,ocp_tessellate,build123d,ocp
+extension-pkg-allow-list=PySide6,pydantic,numpy,shiboken6,ocp_tessellate,build123d,ocp,shapely,pyvistaqt
 init-hook='import sys; sys.path.append("c:\\LiteCad")'
 
 [MESSAGES CONTROL]
@@ -15,7 +15,7 @@ disable=
     W0613, ; unused-argument
 
 [TYPECHECK]
-ignored-modules=build123d,ocp,OCP
+ignored-modules=build123d,ocp,OCP,shapely,shapely.geometry,shapely.ops,pyvistaqt,importlib.metadata
 
 [FORMAT]
 max-line-length=120

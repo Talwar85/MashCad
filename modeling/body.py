@@ -20,7 +20,7 @@ HAS_BUILD123D = False
 HAS_OCP = False
 
 try:
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
     from OCP.BRepBuilderAPI import (
         BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
         BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
@@ -223,6 +223,8 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
     - BodyComputeExtendedMixin: _compute_sweep, _compute_shell, etc.
     """
 
+    _shared_tessellation_manager = None
+
     def __init__(self, name: str = "Body", document=None):
         self.name = name
         self.id = str(uuid.uuid4())[:8]
@@ -276,6 +278,15 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         self._last_operation_error = ""
         self._last_operation_error_details = {}
         self._pending_tnp_failure = None
+        self._async_tessellation_generation = 0
+
+    @classmethod
+    def _get_tessellation_manager(cls):
+        """Lazy singleton manager for async tessellation requests."""
+        if cls._shared_tessellation_manager is None:
+            from gui.workers.tessellation_worker import TessellationManager
+            cls._shared_tessellation_manager = TessellationManager()
+        return cls._shared_tessellation_manager
 
     def _get_face_center(self, face):
         """Helper for TNP registration - delegates to geometry_utils."""
@@ -297,6 +308,27 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
     def _convert_legacy_edge_selectors(edge_selectors: Optional[List]) -> List[dict]:
         """Delegates to shape_builders module - see convert_legacy_edge_selectors."""
         return convert_legacy_edge_selectors(edge_selectors)
+
+    @staticmethod
+    def from_solid(solid, name: str = "Imported Body", document=None) -> 'Body':
+        """
+        Create a Body from a Build123d Solid object.
+
+        This is used by importers (STEP, CadQuery, etc.) to create
+        Body objects from raw Build123d solids.
+
+        Args:
+            solid: Build123d Solid object
+            name: Name for the new body
+            document: Optional Document instance
+
+        Returns:
+            Body instance with the solid set
+        """
+        body = Body(name, document=document)
+        body._build123d_solid = solid
+        body.invalidate_mesh()
+        return body
 
     # === PHASE 2: Lazy-Loaded Properties ===
     @property
@@ -461,7 +493,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 pass  # Solid hat kein wrapped (selten)
 
-    def request_async_tessellation(self, on_ready=None):
+    def request_async_tessellation(self, on_ready=None, priority: int = 0):
         """
         Phase 9: Startet Tessellation im Hintergrund (Non-Blocking).
 
@@ -471,14 +503,22 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         Args:
             on_ready: Optional callback(body_id, mesh, edges, face_info)
                       Wenn None, wird das Mesh direkt in den Cache geschrieben.
+            priority: Scheduling-Priorität (höher = früherer Start)
         """
         if self._build123d_solid is None:
-            return
+            return None
 
-        from gui.workers.tessellation_worker import TessellationWorker
+        self._async_tessellation_generation += 1
+        generation = self._async_tessellation_generation
 
         def _on_mesh_ready(body_id, mesh, edges, face_info):
             """Callback: Mesh ist fertig, in Body-Cache schreiben."""
+            if generation != self._async_tessellation_generation:
+                logger.debug(
+                    f"Ignore stale async mesh for '{self.name}' "
+                    f"(generation {generation} != {self._async_tessellation_generation})"
+                )
+                return
             self._mesh_cache = mesh
             self._edges_cache = edges
             self._face_info_cache = face_info
@@ -488,11 +528,23 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             if on_ready:
                 on_ready(body_id, mesh, edges, face_info)
 
-        worker = TessellationWorker(self.id, self._build123d_solid)
-        worker.mesh_ready.connect(_on_mesh_ready)
-        # Worker-Referenz halten damit er nicht garbage-collected wird
+        def _on_mesh_error(body_id, error_message):
+            if generation != self._async_tessellation_generation:
+                return
+            logger.warning(f"Async Tessellation error for '{self.name}': {error_message}")
+
+        manager = self._get_tessellation_manager()
+        worker = manager.request_tessellation(
+            body_id=self.id,
+            solid=self._build123d_solid,
+            on_ready=_on_mesh_ready,
+            on_error=_on_mesh_error,
+            priority=int(priority),
+        )
+
+        # Worker-Referenz halten, damit er nicht garbage-collected wird
         self._tessellation_worker = worker
-        worker.start()
+        return worker
 
     def add_feature(self, feature: Feature, rebuild: bool = True):
         """Feature hinzufÃ¼gen und optional Geometrie neu berechnen.

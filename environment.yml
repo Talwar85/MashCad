@@ -19,3 +19,5 @@ dependencies:
   - pillow
   - lib3mf
   - scikit-learn
+  - pip:
+    - casadi

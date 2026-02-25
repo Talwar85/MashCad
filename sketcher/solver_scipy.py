@@ -160,7 +160,10 @@ class SciPyBackendBase(ISolverBackend):
                 False, 0, float('inf'),
                 ConstraintStatus.INCONSISTENT,
                 "SciPy nicht installiert!",
-                backend_used=self.name
+                backend_used=self.name,
+                n_variables=total_n_vars,
+                n_constraints=len(active_constraints),
+                dof=dof_estimate,
             )
 
         points = problem.points
@@ -171,18 +174,26 @@ class SciPyBackendBase(ISolverBackend):
         options = problem.options
         # W35: Spline Control Points aus Problem extrahieren
         spline_control_points = getattr(problem, 'spline_control_points', [])
+        refs_all, x0_all = self._collect_variables(points, lines, circles, arcs, spline_control_points)
+        total_n_vars = len(x0_all)
 
         if not constraints:
             return SolverResult(
                 True, 0, 0.0,
                 ConstraintStatus.UNDER_CONSTRAINED,
                 "Keine Constraints",
-                backend_used=self.name
+                backend_used=self.name,
+                n_variables=total_n_vars,
+                n_constraints=0,
+                dof=total_n_vars,
+                error_code="no_constraints",
             )
 
         # Nur aktive und valide Constraints
         active_constraints = [c for c in constraints if getattr(c, 'enabled', True) and c.is_valid()]
         invalid_enabled = [c for c in constraints if getattr(c, 'enabled', True) and not c.is_valid()]
+        n_effective_constraints = self._count_effective_constraints(active_constraints)
+        dof_estimate = max(0, total_n_vars - n_effective_constraints)
 
         if invalid_enabled:
             return SolverResult(
@@ -197,7 +208,11 @@ class SciPyBackendBase(ISolverBackend):
                 True, 0, 0.0,
                 ConstraintStatus.UNDER_CONSTRAINED,
                 "Keine aktiven Constraints",
-                backend_used=self.name
+                backend_used=self.name,
+                n_variables=total_n_vars,
+                n_constraints=0,
+                dof=total_n_vars,
+                error_code="no_active_constraints",
             )
 
         # P1: Pre-validation
@@ -208,13 +223,15 @@ class SciPyBackendBase(ISolverBackend):
                     False, 0, float('inf'),
                     ConstraintStatus.INCONSISTENT,
                     f"Pre-validation failed: {'; '.join(issues)}",
-                    backend_used=self.name
+                    backend_used=self.name,
+                    n_variables=total_n_vars,
+                    n_constraints=len(active_constraints),
+                    dof=dof_estimate,
+                    error_code="pre_validation_failed",
                 )
 
         # Variablen sammeln
         refs, x0_vals = self._collect_variables(points, lines, circles, arcs, spline_control_points)
-        
-        n_effective_constraints = self._count_effective_constraints(active_constraints)
         
         if not x0_vals:
             # Keine beweglichen Teile
@@ -225,14 +242,22 @@ class SciPyBackendBase(ISolverBackend):
                     True, 0, total_error,
                     ConstraintStatus.FULLY_CONSTRAINED,
                     "Statisch bestimmt",
-                    backend_used=self.name
+                    backend_used=self.name,
+                    n_variables=0,
+                    n_constraints=len(active_constraints),
+                    dof=0,
+                    error_code="",
                 )
             else:
                 return SolverResult(
                     False, 0, total_error,
                     ConstraintStatus.INCONSISTENT,
                     "Keine Variablen, aber Fehler",
-                    backend_used=self.name
+                    backend_used=self.name,
+                    n_variables=0,
+                    n_constraints=len(active_constraints),
+                    dof=0,
+                    error_code="inconsistent",
                 )
         
         x0 = np.array(x0_vals, dtype=np.float64)
@@ -388,7 +413,9 @@ class SciPyBackendBase(ISolverBackend):
                 message=message,
                 backend_used=self.name,
                 n_variables=n_vars,
-                n_constraints=len(active_constraints)
+                n_constraints=len(active_constraints),
+                dof=max(0, n_vars - n_effective_constraints),
+                error_code="" if success else ("non_converged" if not solver_converged else "inconsistent"),
             )
             
         except Exception as e:
@@ -397,7 +424,8 @@ class SciPyBackendBase(ISolverBackend):
                 False, 0, 0.0,
                 ConstraintStatus.INCONSISTENT,
                 f"Solver-Fehler: {e}",
-                backend_used=self.name
+                backend_used=self.name,
+                error_code="backend_exception",
             )
 
 

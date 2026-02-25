@@ -8,6 +8,7 @@ import numpy as np
 from loguru import logger
 from typing import Dict, Optional, Tuple
 import hashlib
+from collections import OrderedDict
 
 try:
     import pyvista as pv
@@ -72,16 +73,82 @@ class ActorPool:
         cls._mesh_hashes.clear()
 
 
+class MeshInstanceCache:
+    """
+    Memory-aware mesh instancing cache.
+
+    Reuses identical mesh/edge datasets across body actors to reduce memory and
+    mapper input churn for assemblies with repeated geometry.
+    """
+
+    _cache: "OrderedDict[str, Tuple[object, object]]" = OrderedDict()
+    MAX_ENTRIES = 256
+
+    @classmethod
+    def compute_key(cls, mesh_obj, edge_mesh_obj=None) -> Optional[str]:
+        """Create a stable key from geometric mesh characteristics."""
+        if mesh_obj is None:
+            return None
+        try:
+            mesh_bounds = tuple(float(v) for v in getattr(mesh_obj, "bounds", ()))
+            mesh_parts = (
+                int(getattr(mesh_obj, "n_points", 0)),
+                int(getattr(mesh_obj, "n_cells", 0)),
+                mesh_bounds,
+            )
+
+            edge_parts = ()
+            if edge_mesh_obj is not None:
+                edge_bounds = tuple(float(v) for v in getattr(edge_mesh_obj, "bounds", ()))
+                edge_parts = (
+                    int(getattr(edge_mesh_obj, "n_points", 0)),
+                    int(getattr(edge_mesh_obj, "n_lines", 0)),
+                    edge_bounds,
+                )
+
+            payload = repr((mesh_parts, edge_parts)).encode("utf-8")
+            return hashlib.sha1(payload).hexdigest()
+        except Exception:
+            return None
+
+    @classmethod
+    def get(cls, key: Optional[str]):
+        if not key:
+            return None
+        cached = cls._cache.get(key)
+        if cached is not None:
+            cls._cache.move_to_end(key)
+        return cached
+
+    @classmethod
+    def put(cls, key: Optional[str], mesh_obj, edge_mesh_obj=None):
+        if not key or mesh_obj is None:
+            return
+        cls._cache[key] = (mesh_obj, edge_mesh_obj)
+        cls._cache.move_to_end(key)
+        while len(cls._cache) > cls.MAX_ENTRIES:
+            cls._cache.popitem(last=False)
+
+    @classmethod
+    def clear_all(cls):
+        cls._cache.clear()
+
+
 class BodyRenderingMixin:
     """Mixin mit allen Body-Rendering Methoden"""
     
     def add_body(self, bid, name, mesh_obj=None, edge_mesh_obj=None, color=None,
-                 verts=None, faces=None, normals=None, edges=None, edge_lines=None):
+                 verts=None, faces=None, normals=None, edges=None, edge_lines=None,
+                 visible=True, inactive_component=False):
         """
         Fügt einen Körper hinzu.
         Erkennt automatisch Legacy-Listen-Aufrufe.
 
         PERFORMANCE: Actor Pooling - wiederverwendet Actors statt Destroy/Recreate
+
+        Args:
+            visible: Soll der Body sichtbar sein? (Default: True)
+            inactive_component: Ist der Body in einer inaktiven Component? (Default: False)
         """
         if not HAS_PYVISTA:
             return
@@ -111,7 +178,7 @@ class BodyRenderingMixin:
                     ActorPool.clear_hash(n)
                 except Exception as e:
                     logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
-        
+
         actors_list = []
         # Verbesserte Standardfarbe: Warmes Silber-Grau (wie CAD)
         if color is None:
@@ -122,23 +189,42 @@ class BodyRenderingMixin:
         else:
             col_rgb = tuple(color)
 
+        # Inactive Component: Transparenz anwenden
+        if inactive_component:
+            col_rgb = (col_rgb[0] * 0.3, col_rgb[1] * 0.3, col_rgb[2] * 0.3)
+
         try:
             # Pfad A: Modernes PyVista Objekt
             if mesh_obj is not None:
-                has_normals = "Normals" in mesh_obj.point_data
-                if not has_normals:
-                    try:
-                        mesh_obj = mesh_obj.compute_normals(
-                            cell_normals=False,
-                            point_normals=True,
-                            split_vertices=True,
-                            feature_angle=30.0,
-                            consistent_normals=True,
-                            auto_orient_normals=True,
-                        )
-                        has_normals = True
-                    except Exception:
-                        pass
+                instancing_enabled = bool(is_enabled("viewport_mesh_instancing"))
+                instance_key = None
+                instance_hit = False
+                if instancing_enabled:
+                    instance_key = MeshInstanceCache.compute_key(mesh_obj, edge_mesh_obj)
+                    cached_pair = MeshInstanceCache.get(instance_key)
+                    if cached_pair is not None:
+                        mesh_obj, edge_mesh_obj = cached_pair
+                        instance_hit = True
+                        logger.debug(f"📦 Mesh instance hit for body {bid}")
+
+                if not instance_hit:
+                    has_normals = "Normals" in mesh_obj.point_data
+                    if not has_normals:
+                        try:
+                            mesh_obj = mesh_obj.compute_normals(
+                                cell_normals=False,
+                                point_normals=True,
+                                split_vertices=True,
+                                feature_angle=30.0,
+                                consistent_normals=True,
+                                auto_orient_normals=True,
+                            )
+                            has_normals = True
+                        except Exception:
+                            pass
+
+                    if instancing_enabled and instance_key is not None:
+                        MeshInstanceCache.put(instance_key, mesh_obj, edge_mesh_obj)
 
                 # PERFORMANCE: Actor Pooling - wiederverwendet Actor wenn möglich
                 if can_reuse_mesh and ActorPool.needs_update(n_mesh, mesh_obj):
@@ -147,7 +233,7 @@ class BodyRenderingMixin:
                     mapper = actor.GetMapper()
                     mapper.SetInputData(mesh_obj)
                     mapper.Modified()
-                    actor.SetVisibility(True)
+                    actor.SetVisibility(bool(visible))
                     logger.debug(f"♻️ Actor reused, mapper updated for {bid}: {mesh_obj.n_points} pts")
                     actors_list.append(n_mesh)
 
@@ -172,13 +258,13 @@ class BodyRenderingMixin:
 
                     if n_mesh in self.plotter.renderer.actors:
                         actor = self.plotter.renderer.actors[n_mesh]
-                        actor.SetVisibility(True)
+                        actor.SetVisibility(visible)
                         face_mapper = actor.GetMapper()
                         face_mapper.SetResolveCoincidentTopologyToPolygonOffset()
                         face_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(2, 2)
                         # Store hash for future comparisons
                         ActorPool._mesh_hashes[n_mesh] = ActorPool.compute_mesh_hash(mesh_obj)
-                        logger.debug(f"🆕 New actor created for {bid}: {mesh_obj.n_points} pts")
+                        logger.debug(f"🆕 New actor created for {bid}: {mesh_obj.n_points} pts, visible={visible}")
 
                     actors_list.append(n_mesh)
 
@@ -191,6 +277,7 @@ class BodyRenderingMixin:
                         edge_actor.GetProperty().SetRenderLinesAsTubes(False)
                         edge_actor.GetProperty().SetLineWidth(1.5)
                         edge_actor.GetProperty().SetColor(0.15, 0.15, 0.17)
+                        edge_actor.SetVisibility(bool(visible))
                         edge_mapper = edge_actor.GetMapper()
                         edge_mapper.SetInputData(edge_mesh_obj)
                         edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
@@ -217,13 +304,22 @@ class BodyRenderingMixin:
                         # Phase 2.2: Duplicate Mapper SetInputData entfernt
                         if n_edge in self.plotter.renderer.actors:
                             edge_actor = self.plotter.renderer.actors[n_edge]
+                            edge_actor.SetVisibility(visible)
                             edge_mapper = edge_actor.GetMapper()
                             edge_mapper.SetResolveCoincidentTopologyToPolygonOffset()
                             edge_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
 
                     actors_list.append(n_edge)
                 
-                self.bodies[bid] = {'mesh': mesh_obj, 'color': col_rgb}
+                self.bodies[bid] = {
+                    'mesh': mesh_obj,
+                    'color': col_rgb,
+                    'requested_visible': bool(visible),
+                }
+                pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
+                if pending_ref is not None:
+                    self.bodies[bid]["body"] = pending_ref
+                    self.bodies[bid]["body_ref"] = pending_ref
 
                 # PERFORMANCE Phase 5: Invalidate section cache for this body
                 # (mesh changed, so cached clipped versions are stale)
@@ -311,9 +407,23 @@ class BodyRenderingMixin:
                     self.plotter.renderer.actors[n_mesh].SetVisibility(True)
                     
                 actors_list.append(n_mesh)
-                self.bodies[bid] = {'mesh': mesh, 'color': col_rgb}
+                self.bodies[bid] = {
+                    'mesh': mesh,
+                    'color': col_rgb,
+                    'requested_visible': bool(visible),
+                }
+                pending_ref = getattr(self, "_pending_body_refs", {}).pop(bid, None)
+                if pending_ref is not None:
+                    self.bodies[bid]["body"] = pending_ref
+                    self.bodies[bid]["body_ref"] = pending_ref
                 
             self._body_actors[bid] = tuple(actors_list)
+
+            if hasattr(self, '_apply_frustum_culling'):
+                try:
+                    self._apply_frustum_culling(force=False)
+                except Exception as e:
+                    logger.debug(f"[body_mixin] Frustum culling update fehlgeschlagen: {e}")
 
             # ✅ CRITICAL: Force render after Mapper update
             # Ensures VTK displays the new mesh immediately
@@ -324,13 +434,21 @@ class BodyRenderingMixin:
 
     def set_body_visibility(self, body_id, visible):
         """Setzt die Sichtbarkeit eines Körpers"""
-        if body_id not in self._body_actors:
+        if body_id in self.bodies:
+            self.bodies[body_id]['requested_visible'] = bool(visible)
+
+        actors = self._body_actors.get(body_id)
+        if not actors:
             return
+
         try:
-            actors = self._body_actors[body_id]
-            for name in actors:
-                if name in self.plotter.renderer.actors:
-                    self.plotter.renderer.actors[name].SetVisibility(visible)
+            use_frustum = bool(getattr(self, '_frustum_culling_enabled', False)) and hasattr(self, '_apply_frustum_culling')
+            if use_frustum:
+                self._apply_frustum_culling(force=True)
+            else:
+                for name in actors:
+                    if name in self.plotter.renderer.actors:
+                        self.plotter.renderer.actors[name].SetVisibility(visible)
             request_render(self.plotter)
         except Exception as e:
             logger.error(f"Set visibility error: {e}")
@@ -340,18 +458,57 @@ class BodyRenderingMixin:
         for bid in self._body_actors:
             self.set_body_visibility(bid, visible)
 
-    def clear_bodies(self):
-        """Entfernt alle Körper"""
-        for bid in list(self._body_actors.keys()):
-            for name in self._body_actors[bid]:
-                try:
-                    self.plotter.remove_actor(name)
-                    ActorPool.clear_hash(name)  # PERFORMANCE: Clear hash tracking
-                except Exception as e:
-                    logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
-        self._body_actors.clear()
-        self.bodies.clear()
-        ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
+    def set_body_visible(self, body_id: str, visible: bool):
+        """Alias for set_body_visibility - for compatibility with feature_dialogs.py"""
+        self.set_body_visibility(body_id, visible)
+
+    def clear_bodies(self, only_body_id: str = None):
+        """
+        Entfernt Body-Actors aus dem Viewport.
+
+        Args:
+            only_body_id: Wenn angegeben, nur diesen Body entfernen (kein Flicker für andere).
+        """
+        if only_body_id:
+            # Nur einen Body entfernen - KEIN FLICKER für andere!
+            if only_body_id in self._body_actors:
+                for n in self._body_actors[only_body_id]:
+                    try:
+                        self.plotter.remove_actor(n)
+                        ActorPool.clear_hash(n)
+                    except Exception as e:
+                        logger.debug(f"[body_mixin] Fehler beim Entfernen Body-Actor {n}: {e}")
+                del self._body_actors[only_body_id]
+            if only_body_id in self.bodies:
+                del self.bodies[only_body_id]
+            if hasattr(self, '_lod_applied_quality'):
+                self._lod_applied_quality.pop(only_body_id, None)
+            if hasattr(self, '_frustum_culled_body_ids'):
+                self._frustum_culled_body_ids.discard(only_body_id)
+            if hasattr(self, '_pending_body_refs'):
+                self._pending_body_refs.pop(only_body_id, None)
+            if hasattr(self, '_actor_to_body_cache'):
+                self._actor_to_body_cache = {k: v for k, v in self._actor_to_body_cache.items()
+                                              if v != only_body_id}
+        else:
+            # Alle Bodies entfernen
+            for bid in list(self._body_actors.keys()):
+                for name in self._body_actors[bid]:
+                    try:
+                        self.plotter.remove_actor(name)
+                        ActorPool.clear_hash(name)  # PERFORMANCE: Clear hash tracking
+                    except Exception as e:
+                        logger.debug(f"[body_mixin] Fehler beim Entfernen des Actors: {e}")
+            self._body_actors.clear()
+            self.bodies.clear()
+            if hasattr(self, '_lod_applied_quality'):
+                self._lod_applied_quality.clear()
+            if hasattr(self, '_frustum_culled_body_ids'):
+                self._frustum_culled_body_ids.clear()
+            if hasattr(self, '_pending_body_refs'):
+                self._pending_body_refs.clear()
+            MeshInstanceCache.clear_all()
+            ActorPool.clear_all()  # PERFORMANCE: Clear all hashes
 
 
 
@@ -365,6 +522,8 @@ class BodyRenderingMixin:
 
     def is_body_visible(self, body_id):
         """Prüft ob ein Körper sichtbar ist"""
+        if body_id in self.bodies and 'requested_visible' in self.bodies[body_id]:
+            return bool(self.bodies[body_id].get('requested_visible', True))
         if body_id not in self._body_actors:
             return False
         try:

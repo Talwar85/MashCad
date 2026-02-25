@@ -101,7 +101,8 @@ class BodyResolveMixin:
                 if feature and feature.path_shape_id and shape_service:
                     try:
                         resolved_ocp, method = shape_service.resolve_shape_with_method(
-                            feature.path_shape_id, source_solid
+                            feature.path_shape_id, source_solid,
+                            log_unresolved=False,
                         )
                         path_shape_resolution_method = str(method or "").strip().lower()
                         if resolved_ocp is not None:
@@ -942,7 +943,10 @@ class BodyResolveMixin:
             if shape_id and self._document and hasattr(self._document, '_shape_naming_service'):
                 try:
                     service = self._document._shape_naming_service
-                    resolved_ocp, method = service.resolve_shape_with_method(shape_id, solid)
+                    resolved_ocp, method = service.resolve_shape_with_method(
+                        shape_id, solid,
+                        log_unresolved=False,
+                    )
                     if resolved_ocp is not None:
                         from build123d import Face
                         resolved_face = Face(resolved_ocp)
@@ -1108,6 +1112,10 @@ class BodyResolveMixin:
                                                     )
             return resolved_count
 
+        # Track shape-index mismatches for single-ref-pair conflict detection
+        shape_index_mismatches = []  # [(shape_id, resolved_idx, expected_idx, method), ...]
+        direct_mismatch_blocked = False  # True if direct method found wrong index
+        
         def _resolve_by_shape_ids() -> None:
             if not edge_shape_ids or service is None:
                 return
@@ -1120,7 +1128,8 @@ class BodyResolveMixin:
                         solid,
                         log_unresolved=False,
                     )
-                    shape_resolution_methods[str(getattr(shape_id, "uuid", "") or "")] = str(method or "").strip().lower()
+                    method_norm = str(method or "").strip().lower()
+                    shape_resolution_methods[str(getattr(shape_id, "uuid", "") or "")] = method_norm
                     if resolved_ocp is None:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
@@ -1129,6 +1138,48 @@ class BodyResolveMixin:
 
                     matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
                     if matching_edge is not None:
+                        # TNP v4.2: Check for shape-index mismatch on strict edge features
+                        resolved_idx = _edge_index_of(matching_edge)
+                        expected_idx = shape_id.local_index if hasattr(shape_id, 'local_index') else None
+                        
+                        # For Fillet/Chamfer with single ref pair, validate shape-index consistency
+                        if strict_edge_feature and len(edge_shape_ids) == 1 and len(valid_edge_indices) == 1:
+                            expected_from_indices = valid_edge_indices[0]
+                            if resolved_idx is not None and resolved_idx != expected_from_indices:
+                                # Shape resolved to different index than expected
+                                shape_index_mismatches.append((shape_id, resolved_idx, expected_from_indices, method_norm))
+                                
+                                if method_norm == "direct":
+                                    # Direct method mismatch: block resolution entirely
+                                    nonlocal direct_mismatch_blocked
+                                    direct_mismatch_blocked = True
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.warning(
+                                            f"TNP v4.2: Edge shape-index mismatch (direct): "
+                                            f"resolved idx={resolved_idx}, expected idx={expected_from_indices}"
+                                        )
+                                    # Record mismatch for error code propagation
+                                    self._record_tnp_failure(
+                                        feature=feature,
+                                        category="mismatch",
+                                        reference_kind="edge",
+                                        reason=f"ShapeID resolved to index {resolved_idx}, expected {expected_from_indices}",
+                                        expected=1,
+                                        resolved=0,
+                                        strict=True,
+                                    )
+                                    continue  # Don't add to resolved_edges
+                                else:
+                                    # Geometric/hash method mismatch: will prefer index later
+                                    if is_enabled("tnp_debug_logging"):
+                                        logger.debug(
+                                            f"TNP v4.2: Edge shape-index mismatch ({method_norm}): "
+                                            f"resolved idx={resolved_idx}, expected idx={expected_from_indices}"
+                                        )
+                                    # Still add, but index resolution will be preferred
+                                    _append_unique(matching_edge, shape_id=shape_id, source="shape")
+                                    continue
+                        
                         _append_unique(matching_edge, shape_id=shape_id, source="shape")
                         if is_enabled("tnp_debug_logging"):
                             logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelÃ¶st (method={method})")
@@ -1166,9 +1217,42 @@ class BodyResolveMixin:
         if op_resolved < len(edge_shape_ids):
             _resolve_by_shape_ids()
 
-        # Then Index-based
-        if len(resolved_edges) < len(edge_shape_ids) or valid_edge_indices:
+        # Then Index-based (skip if direct mismatch blocked resolution)
+        if not direct_mismatch_blocked and (len(resolved_edges) < len(edge_shape_ids) or valid_edge_indices):
             _resolve_by_indices()
+        
+        # TNP v4.2: Handle single-ref-pair geometric conflict - prefer index over shape
+        # When shape resolved via geometric/hash to wrong index, prefer index resolution
+        if (strict_edge_feature and len(edge_shape_ids) == 1 and len(valid_edge_indices) == 1
+            and shape_index_mismatches):
+            mismatch = shape_index_mismatches[0]
+            shape_id, resolved_idx, expected_idx, method = mismatch
+            
+            # If method was not "direct" (i.e., geometric/hash), prefer index resolution
+            if method != "direct" and resolved_edges_from_index:
+                # Clear shape-resolved edges, keep only index-resolved
+                if len(resolved_edges) > len(resolved_edges_from_index):
+                    # Remove edges that came from shape resolution
+                    resolved_edges.clear()
+                    resolved_edges.extend(resolved_edges_from_index)
+                    resolved_edge_indices.clear()
+                    resolved_edge_indices.extend([valid_edge_indices[0]])
+                    
+                    # Record drift warning
+                    self._record_tnp_failure(
+                        feature=feature,
+                        category="drift",
+                        reference_kind="edge",
+                        reason="single_ref_pair_geometric_shape_conflict_index_preferred",
+                        expected=1,
+                        resolved=1,
+                        strict=False,
+                    )
+                    if is_enabled("tnp_debug_logging"):
+                        logger.warning(
+                            "Sweep: single_ref_pair Path Shape/Index-Konflikt mit schwacher "
+                            "Shape-Auflösung (geometric/hash) -> index-basierten Pfad bevorzugt."
+                        )
 
         # Geometric selector fallback
         # TNP v4.1: Block selector fallback when topological refs were provided but failed
@@ -1177,6 +1261,7 @@ class BodyResolveMixin:
         strict_policy = is_enabled("strict_topology_fallback_policy")
         allow_selector_fallback = geometric_selectors and not resolved_edges and not (topo_refs_failed and strict_policy)
 
+        selector_recovery_used = False
         if allow_selector_fallback:
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
@@ -1188,10 +1273,23 @@ class BodyResolveMixin:
                         geo_sel = selector_data
                     else:
                         continue
-                    _append_unique(geo_sel.find_best_match(all_edges))
+                    matched = geo_sel.find_best_match(all_edges)
+                    if matched is not None:
+                        _append_unique(matched)
+                        selector_recovery_used = True
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
                     logger.debug(f"TNP v4.0: GeometricEdgeSelector-AuflÃ¶sung fehlgeschlagen: {e}")
+
+            # Record drift when selector recovery was used
+            if selector_recovery_used and not strict_policy:
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="drift",
+                    reference_kind="edge",
+                    reason="selector_recovery_used",
+                    strict=False,
+                )
 
         # Update feature references
         if resolved_edge_indices:
@@ -1221,6 +1319,23 @@ class BodyResolveMixin:
 
         total_refs = max(len(edge_shape_ids), len(valid_edge_indices), len(geometric_selectors))
         found = len(resolved_edges)
+
+        # TNP v4.2: Record missing_ref failure when refs were provided but nothing resolved
+        if total_refs > 0 and found == 0 and strict_edge_feature:
+            # Only record missing_ref if no mismatch was already recorded
+            if not direct_mismatch_blocked:
+                self._record_tnp_failure(
+                    feature=feature,
+                    category="missing_ref",
+                    reference_kind="edge",
+                    reason="no_edges_resolved_from_refs",
+                    expected=total_refs,
+                    resolved=0,
+                    strict=True,
+                )
+            if is_enabled("tnp_debug_logging"):
+                logger.warning(f"TNP v4.2: No edges resolved for {feature_name} with {total_refs} refs")
+
         if is_enabled("tnp_debug_logging"):
             if total_refs == 0:
                 logger.warning("TNP v4.0: Feature hat keine Edge-Referenzen")

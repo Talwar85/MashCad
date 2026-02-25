@@ -13,6 +13,7 @@ from typing import List, Optional
 from loguru import logger
 
 from config.feature_flags import is_enabled
+from modeling.geometry_utils import normalize_plane_axes
 
 
 class BodyExtrudeMixin:
@@ -29,22 +30,22 @@ class BodyExtrudeMixin:
 
         Wird verwendet fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen (Zylinder, etc.),
         wo keine Polygon-Extraktion mÃ¶glich ist.
+
+        Delegiert an OCPExtrudeHelper.extrude() als kanonische BRepPrimAPI-Implementierung.
         """
         try:
             from OCP.BRepTools import BRepTools
-            from OCP.TopoDS import TopoDS_Face, TopoDS_Shape
+            from OCP.TopoDS import TopoDS_Shape
             from OCP.BRep import BRep_Builder
-            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-            from OCP.gp import gp_Vec
-            from build123d import Solid
+            from build123d import Face, Vector
+            from modeling.ocp_helpers import OCPExtrudeHelper
+            from modeling.tnp_system import ShapeNamingService
 
-            # Face aus BREP-String deserialisieren
             face_brep = feature.face_brep
             if not face_brep:
                 logger.error("Extrude: face_brep ist leer!")
                 return None
 
-            # BREP in temporÃ¤re Datei schreiben und lesen
             with tempfile.NamedTemporaryFile(mode='w', suffix='.brep', delete=False) as f:
                 f.write(face_brep)
                 temp_path = f.name
@@ -58,26 +59,25 @@ class BodyExtrudeMixin:
                 logger.error("Extrude: Face aus BREP konnte nicht gelesen werden!")
                 return None
 
-            # Extrusions-Richtung aus plane_normal
             normal = feature.plane_normal
             amount = feature.distance * feature.direction
+            direction = Vector(normal[0], normal[1], normal[2])
 
-            extrude_vec = gp_Vec(
-                normal[0] * amount,
-                normal[1] * amount,
-                normal[2] * amount
+            naming_service = None
+            if self._document and hasattr(self._document, '_shape_naming_service'):
+                naming_service = self._document._shape_naming_service
+            if naming_service is None:
+                naming_service = ShapeNamingService()
+
+            feature_id = getattr(feature, 'id', None) or 'face_brep_extrude'
+
+            solid = OCPExtrudeHelper.extrude(
+                face=Face(face_shape),
+                direction=direction,
+                distance=amount,
+                naming_service=naming_service,
+                feature_id=feature_id,
             )
-
-            # BRepPrimAPI_MakePrism fÃ¼r Extrusion
-            prism_maker = BRepPrimAPI_MakePrism(face_shape, extrude_vec)
-            prism_maker.Build()
-
-            if not prism_maker.IsDone():
-                logger.error("Extrude: BRepPrimAPI_MakePrism fehlgeschlagen!")
-                return None
-
-            prism_shape = prism_maker.Shape()
-            solid = Solid(prism_shape)
 
             logger.info(f"Extrude: Face aus BREP erfolgreich extrudiert (type={feature.face_type}, vol={solid.volume:.2f})")
             return solid
@@ -230,13 +230,78 @@ class BodyExtrudeMixin:
             # === Polygon-basierte Extrusion ===
             for poly in polys_to_extrude:
                 try:
+                    # Skip dict profiles (ellipse, circle, slot) - handled by native paths
+                    if isinstance(poly, dict):
+                        continue
+
                     coords = list(poly.exterior.coords)[:-1]  # Shapely schlieÃŸt Polygon
                     if len(coords) < 3:
                         continue
 
-                    pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                    wire = Wire.make_polygon(pts_3d)
-                    face = make_face(wire)
+                    # Circle-Detection: Polygon-Punkte auf Kreis prüfen
+                    circle_info = self._detect_circle_from_points(coords)
+                    if circle_info and len(coords) >= 8:
+                        cx, cy = circle_info['center']
+                        radius = circle_info['radius']
+                        try:
+                            from build123d import Plane as B3DPlane
+                            center_3d = plane.from_local_coords((cx, cy))
+                            circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                            outer_wire = Wire.make_circle(radius, circle_plane)
+                            
+                            # Handle holes (interiors) for ring shapes
+                            hole_wires = []
+                            if hasattr(poly, 'interiors') and poly.interiors:
+                                for interior in poly.interiors:
+                                    hole_coords = list(interior.coords)[:-1]
+                                    if len(hole_coords) >= 8:
+                                        hole_circle_info = self._detect_circle_from_points(hole_coords)
+                                        if hole_circle_info:
+                                            hcx, hcy = hole_circle_info['center']
+                                            hradius = hole_circle_info['radius']
+                                            hole_center_3d = plane.from_local_coords((hcx, hcy))
+                                            hole_plane = B3DPlane(origin=hole_center_3d, z_dir=plane.z_dir)
+                                            # Create hole circle with reversed orientation
+                                            hole_wire = Wire.make_circle(hradius, hole_plane)
+                                            hole_wires.append(hole_wire)
+                                        else:
+                                            # Reverse polygon points for hole orientation
+                                            hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                            hole_wires.append(Wire.make_polygon(hole_pts_3d))
+                            
+                            if hole_wires:
+                                # Use Face constructor for proper hole handling
+                                from build123d import Face
+                                face = Face(outer_wire, hole_wires)
+                                logger.info(f"[OCP-FIRST] Ring erkannt: outer_r={radius:.2f}, {len(hole_wires)} holes")
+                            else:
+                                face = make_face(outer_wire)
+                                logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
+                        except Exception as e:
+                            logger.debug(f"[OCP-FIRST] Native Kreis-Erstellung fehlgeschlagen, Polygon-Fallback: {e}")
+                            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                            wire = Wire.make_polygon(pts_3d)
+                            face = make_face(wire)
+                    else:
+                        pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                        outer_wire = Wire.make_polygon(pts_3d)
+                        
+                        # Handle holes for non-circle polygons
+                        hole_wires = []
+                        if hasattr(poly, 'interiors') and poly.interiors:
+                            for interior in poly.interiors:
+                                hole_coords = list(interior.coords)[:-1]
+                                if len(hole_coords) >= 3:
+                                    # Reverse points for hole orientation
+                                    hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                    hole_wires.append(Wire.make_polygon(hole_pts_3d))
+                        
+                        if hole_wires:
+                            # Use Face constructor for proper hole handling
+                            from build123d import Face
+                            face = Face(outer_wire, hole_wires)
+                        else:
+                            face = make_face(outer_wire)
 
                     solid = self._extrude_single_face(face, feature, plane, naming_service)
                     if solid:
@@ -251,7 +316,15 @@ class BodyExtrudeMixin:
 
             result = solids[0]
             for s in solids[1:]:
-                result = result.fuse(s)
+                fused = result.fuse(s)
+                # Handle ShapeList return from fuse()
+                if hasattr(fused, '__iter__') and not isinstance(fused, type(result)):
+                    # Extract the first solid from ShapeList
+                    solids_list = list(fused)
+                    if solids_list:
+                        result = solids_list[0]
+                else:
+                    result = fused
 
             return result
 
@@ -306,6 +379,7 @@ class BodyExtrudeMixin:
 
         # Face-Referenz auflÃ¶sen
         face_to_extrude = None
+        resolved_face_index = None  # Track resolved index for healing
         
         # 1. Versuche Face Ã¼ber ShapeID
         if hasattr(feature, 'face_shape_id') and feature.face_shape_id:
@@ -313,10 +387,19 @@ class BodyExtrudeMixin:
                 try:
                     service = self._document._shape_naming_service
                     resolved_ocp, method = service.resolve_shape_with_method(
-                        feature.face_shape_id, current_solid
+                        feature.face_shape_id, current_solid,
+                        log_unresolved=False,
                     )
                     if resolved_ocp is not None:
                         face_to_extrude = Face(resolved_ocp)
+                        # TNP v4.2: Heal stale face_index by finding actual index
+                        try:
+                            from modeling.topology_indexing import face_index_of
+                            resolved_face_index = face_index_of(current_solid, face_to_extrude)
+                            if resolved_face_index is not None:
+                                feature.face_index = resolved_face_index
+                        except Exception:
+                            pass  # Index healing is optional
                 except Exception as e:
                     logger.debug(f"Push/Pull: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
 
@@ -432,12 +515,14 @@ class BodyExtrudeMixin:
                     continue
 
             origin = Vector(*sketch.plane_origin)
-            z_dir = Vector(*sketch.plane_normal)
-            x_dir = Vector(*sketch.plane_x_dir)
-            y_dir = Vector(*sketch.plane_y_dir)
-
-            if y_dir.X == 0 and y_dir.Y == 0 and y_dir.Z == 0:
-                y_dir = z_dir.cross(x_dir)
+            z_norm, x_norm, y_norm = normalize_plane_axes(
+                getattr(sketch, "plane_normal", (0, 0, 1)),
+                getattr(sketch, "plane_x_dir", None),
+                getattr(sketch, "plane_y_dir", None),
+            )
+            z_dir = Vector(*z_norm)
+            x_dir = Vector(*x_norm)
+            y_dir = Vector(*y_norm)
 
             center_3d = origin + x_dir * cx + y_dir * cy
 

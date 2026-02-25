@@ -8,6 +8,7 @@ from .pattern import PatternFeature
 from .transform import TransformFeature
 from .boolean import BooleanFeature
 from .import_feature import ImportFeature
+from .cadquery_feature import CadQueryFeature
 from .advanced import (
     ShellFeature,
     DraftFeature,
@@ -35,6 +36,7 @@ __all__ = [
     "TransformFeature",
     "BooleanFeature",
     "ImportFeature",
+    "CadQueryFeature",
     "ShellFeature",
     "DraftFeature",
     "HoleFeature",

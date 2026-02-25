@@ -664,12 +664,13 @@ class TestEdgeCases:
 # =============================================================================
 
 class TestFeatureFlag:
-    """Test that assembly_system feature flag is enabled."""
+    """Test that assembly_system feature flag has been removed (feature integrated)."""
 
-    def test_assembly_feature_flag_enabled(self):
-        """Verify assembly_system feature flag is True."""
+    def test_assembly_feature_flag_removed(self):
+        """Verify assembly_system feature flag was removed (feature is now integrated)."""
         from config.feature_flags import is_enabled
-        assert is_enabled("assembly_system") is True
+        # Flag was removed after feature integration
+        assert is_enabled("assembly_system") is False
 
 
 if __name__ == "__main__":

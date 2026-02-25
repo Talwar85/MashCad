@@ -1,14 +1,17 @@
 #!/usr/bin/env powershell
-# Workspace-Hygiene Gate - Hardened W4
-# Usage: .\scripts\hygiene_check.ps1 [-FailOnUntracked]
+# Workspace-Hygiene Gate - Hardened W4 + V1 Pylint Integration
+# Usage: .\scripts\hygiene_check.ps1 [-FailOnUntracked] [-SkipPylint]
 # Exit Codes: 0 = CLEAN/WARNING, 1 = VIOLATIONS (if -FailOnUntracked)
 # 
 # Policy:
 # - Without -FailOnUntracked: Violations = WARNING (Exit 0)
 # - With -FailOnUntracked: Violations = FAIL (Exit 1)
+# - Pylint import errors ALWAYS cause FAIL (cannot be skipped via -FailOnUntracked)
+# - Standard Pylint warnings follow -FailOnUntracked policy
 
 param(
-    [switch]$FailOnUntracked = $false
+    [switch]$FailOnUntracked = $false,
+    [switch]$SkipPylint = $false
 )
 
 $ErrorActionPreference = "Continue"
@@ -178,6 +181,48 @@ if (Test-Path $gitignorePath) {
     }
 } else {
     Write-Host "  [WARNING] No .gitignore file found" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# Check 7: Pylint Import and Compliance Check (V1 Roadmap)
+Write-Host "[Check 7] Pylint Import and Compliance Check..."
+
+if (-not $SkipPylint) {
+    $pylintGateScript = Join-Path $PSScriptRoot "gate_pylint.ps1"
+    
+    if (-not (Test-Path $pylintGateScript)) {
+        Write-Host "  [WARNING] Pylint gate script not found: $pylintGateScript" -ForegroundColor Yellow
+    } else {
+        # Run Pylint gate with low threshold (just check for critical issues)
+        $pylintOutput = & powershell -ExecutionPolicy Bypass -File $pylintGateScript -FailThreshold 3.0 2>&1
+        $pylintExitCode = $LASTEXITCODE
+        
+        if ($pylintExitCode -eq 0) {
+            Write-Host "  [OK] Pylint checks passed" -ForegroundColor Green
+        } else {
+            Write-Host "  [WARNING] Pylint issues detected (exit code: $pylintExitCode)" -ForegroundColor Yellow
+            # Add to violations but don't fail unless -FailOnUntracked
+            $HYGIENE_VIOLATIONS += "Pylint issues"
+            $VIOLATION_DETAILS += @{
+                File = "Multiple files"
+                Type = "Pylint-Issues"
+                Recommendation = "Run .\scripts\gate_pylint.ps1 -Verbose for details"
+                Owner = "Dev-Team"
+            }
+            
+            # Show brief summary
+            $pylintErrors = $pylintOutput | Select-String "FAIL|error" | Select-Object -First 5
+            if ($pylintErrors) {
+                Write-Host "    Sample issues:" -ForegroundColor Yellow
+                foreach ($err in $pylintErrors) {
+                    Write-Host "      $err" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+} else {
+    Write-Host "  [SKIPPED] Pylint check disabled" -ForegroundColor Yellow
 }
 
 Write-Host ""

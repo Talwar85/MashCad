@@ -605,13 +605,21 @@ class ShapeNamingService:
         return self._operations[-1] if self._operations else None
     
     def get_stats(self) -> Dict[str, int]:
-        """Statistiken für Debugging"""
+        """Statistiken für Debugging
+        
+        Counts faces/edges from _shapes (source of truth) instead of _spatial_index.
+        This ensures correct counts even when compute_signature() fails silently
+        (e.g., in parallel test execution with xdist).
+        """
+        # Count from _shapes (source of truth), not _spatial_index
+        faces = sum(1 for r in self._shapes.values() if r.shape_id.shape_type == ShapeType.FACE)
+        edges = sum(1 for r in self._shapes.values() if r.shape_id.shape_type == ShapeType.EDGE)
         return {
             'total_shapes': len(self._shapes),
             'operations': len(self._operations),
             'features': len(self._by_feature),
-            'edges': len(self._spatial_index[ShapeType.EDGE]),
-            'faces': len(self._spatial_index[ShapeType.FACE])
+            'edges': edges,
+            'faces': faces
         }
 
     _CONSUMING_FEATURE_TYPES = frozenset([
@@ -1317,6 +1325,33 @@ class ShapeNamingService:
             return count
         except Exception as e:
             logger.warning(f"register_solid_edges fehlgeschlagen: {e}")
+            return 0
+
+    def register_solid_faces(self, solid: Any, feature_id: str) -> int:
+        """Register ALL faces from a solid. Uses IndexedMap for dedup."""
+        if not HAS_OCP:
+            return 0
+
+        try:
+            from OCP.TopTools import TopTools_IndexedMapOfShape
+            from OCP.TopExp import TopExp
+            from OCP.TopoDS import TopoDS
+
+            solid_wrapped = solid.wrapped if hasattr(solid, 'wrapped') else solid
+            face_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(solid_wrapped, TopAbs_FACE, face_map)
+
+            count = 0
+            for i in range(1, face_map.Extent() + 1):
+                face = TopoDS.Face_s(face_map.FindKey(i))
+                self.register_shape(face, ShapeType.FACE, feature_id, i - 1)
+                count += 1
+
+            if is_enabled("tnp_debug_logging"):
+                logger.info(f"TNP: {count} Faces für Feature '{feature_id}' registriert")
+            return count
+        except Exception as e:
+            logger.warning(f"register_solid_faces fehlgeschlagen: {e}")
             return 0
 
     # === Private Helper ===

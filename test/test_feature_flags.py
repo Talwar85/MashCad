@@ -19,8 +19,8 @@ class TestFeatureFlagsBasic:
     
     def test_is_enabled_existing_flag_true(self):
         """Test: Existierendes Flag mit Wert True."""
-        # assembly_system ist auf True gesetzt
-        assert is_enabled("assembly_system") is True
+        # geometry_drift_detection ist auf True gesetzt
+        assert is_enabled("geometry_drift_detection") is True
     
     def test_is_enabled_existing_flag_false(self):
         """Test: Existierendes Flag mit Wert False."""
@@ -65,13 +65,15 @@ class TestFeatureFlagsBasic:
 class TestOCPFirstFeatureFlags:
     """Tests für OCP-First Migration Feature Flags.
 
-    Nach Phase A-F (Feb 2026) sind die meisten OCP-First Flags entfernt,
+    Nach Phase A-F (Feb 2026) sind alle OCP-First Flags entfernt,
     da die Operationen jetzt direkt OCP verwenden (kein Fallback mehr nötig).
+    Die Features sind nun permanent integriert.
     """
 
-    def test_ocp_first_extrude_enabled(self):
-        """Test: ocp_first_extrude ist nach Migration aktiviert."""
-        assert is_enabled("ocp_first_extrude") is True
+    def test_ocp_first_extrude_removed(self):
+        """Test: ocp_first_extrude wurde nach OCP-First Migration entfernt."""
+        # Flag wurde entfernt - Extrude verwendet jetzt direkt OCP
+        assert is_enabled("ocp_first_extrude") is False
 
     def test_ocp_first_revolve_removed(self):
         """Test: ocp_first_revolve wurde nach OCP-First Migration entfernt."""
@@ -108,29 +110,26 @@ class TestOCPFirstFeatureFlags:
         # Flag wurde entfernt - Chamfer verwendet jetzt direkt OCP
         assert is_enabled("ocp_first_chamfer") is False
 
-    def test_ocp_brep_cache_enabled(self):
-        """Test: ocp_brep_cache ist nach Migration aktiviert."""
-        assert is_enabled("ocp_brep_cache") is True
+    def test_ocp_brep_cache_removed(self):
+        """Test: ocp_brep_cache wurde nach Migration entfernt (Feature integriert)."""
+        assert is_enabled("ocp_brep_cache") is False
 
-    def test_ocp_incremental_rebuild_enabled(self):
-        """Test: ocp_incremental_rebuild ist nach Migration aktiviert."""
-        assert is_enabled("ocp_incremental_rebuild") is True
+    def test_ocp_incremental_rebuild_removed(self):
+        """Test: ocp_incremental_rebuild wurde nach Migration entfernt (Feature integriert)."""
+        assert is_enabled("ocp_incremental_rebuild") is False
 
-    def test_ocp_brep_persistence_enabled(self):
-        """Test: ocp_brep_persistence ist nach Migration aktiviert."""
-        assert is_enabled("ocp_brep_persistence") is True
+    def test_ocp_brep_persistence_removed(self):
+        """Test: ocp_brep_persistence wurde nach Migration entfernt (Feature integriert)."""
+        assert is_enabled("ocp_brep_persistence") is False
 
-    def test_all_ocp_first_flags_exist(self):
-        """Test: Alle OCP-First Flags existieren oder entfernt wurden."""
-        # Nach Phase A-F (Feb 2026): Nur ocp_first_extrude bleibt
-        remaining_flags = [
+    def test_all_ocp_first_flags_removed(self):
+        """Test: Alle OCP-First Flags wurden entfernt (Features sind nun integriert)."""
+        # Nach Phase A-F (Feb 2026): Alle OCP-First Flags entfernt
+        removed_flags = [
             "ocp_first_extrude",
             "ocp_brep_cache",
             "ocp_incremental_rebuild",
-            "ocp_brep_persistence"
-        ]
-
-        removed_flags = [
+            "ocp_brep_persistence",
             "ocp_first_fillet",
             "ocp_first_chamfer",
             "ocp_first_revolve",
@@ -142,33 +141,27 @@ class TestOCPFirstFeatureFlags:
 
         flags = get_all_flags()
 
-        # Verbleibende Flags sollten existieren
-        for flag in remaining_flags:
-            assert flag in flags, f"OCP-First Flag {flag} fehlt"
-
-        # Entfernte Flags sollten NICHT mehr existieren
+        # Alle OCP-First Flags sollten NICHT mehr existieren
         for flag in removed_flags:
             assert flag not in flags, f"OCP-First Flag {flag} wurde entfernt, sollte nicht mehr existieren"
 
 
 class TestPerformanceFeatureFlags:
-    """Tests für Performance Optimierung Feature Flags."""
+    """Tests für Performance Optimierung Feature Flags.
+    
+    Hinweis: Viele Performance-Flags wurden nach Integration der Features entfernt.
+    Nur noch aktive Flags werden getestet.
+    """
     
     def test_performance_flags_default_true(self):
-        """Test: Performance Flags sind standardmäßig True."""
+        """Test: Verbleibende Performance Flags sind standardmäßig True."""
+        # Diese Flags existieren noch und sind aktiv
         performance_flags = [
-            "optimized_actor_pooling",
-            "reuse_hover_markers",
-            "picker_pooling",
-            "bbox_early_rejection",
-            "export_cache",
-            "feature_dependency_tracking",
-            "feature_solid_caching",
-            "async_tessellation",
             "ocp_advanced_flags",
-            "ocp_glue_auto_detect",
-            "batch_fillets",
-            "wall_thickness_analysis"
+            "wall_thickness_analysis",
+            "geometry_drift_detection",
+            "export_3mf",
+            "export_auto_repair"
         ]
         
         for flag in performance_flags:
@@ -184,17 +177,20 @@ class TestPerformanceFeatureFlags:
 
 
 class TestBooleanRobustnessFeatureFlags:
-    """Tests für Boolean Robustness Feature Flags."""
+    """Tests für Boolean Robustness Feature Flags.
+    
+    Hinweis: Viele Boolean-Flags wurden nach Integration der Features entfernt.
+    Nur noch aktive Flags werden getestet.
+    """
     
     def test_boolean_robustness_flags_default_true(self):
-        """Test: Boolean Robustness Flags sind standardmäßig True."""
+        """Test: Verbleibende Boolean Robustness Flags sind standardmäßig True."""
+        # Diese Flags existieren noch und sind aktiv
         boolean_flags = [
-            "boolean_self_intersection_check",
-            "boolean_post_validation",
-            "boolean_argument_analyzer",
-            "adaptive_tessellation",
             "export_free_bounds_check",
-            "boolean_tolerance_monitoring"
+            "self_heal_strict",
+            "strict_topology_fallback_policy",
+            "detailed_boolean_history"
         ]
         
         for flag in boolean_flags:
@@ -233,19 +229,25 @@ class TestDebugFeatureFlags:
 
 
 class TestNativeOCPHelixFlag:
-    """Tests für native_ocp_helix Flag."""
+    """Tests für native_ocp_helix Flag.
     
-    def test_native_ocp_helix_default_true(self):
-        """Test: native_ocp_helix ist standardmäßig True."""
-        assert is_enabled("native_ocp_helix") is True
+    Hinweis: Flag wurde nach Integration des Features entfernt.
+    """
+    
+    def test_native_ocp_helix_removed(self):
+        """Test: native_ocp_helix wurde entfernt (Feature ist nun integriert)."""
+        assert is_enabled("native_ocp_helix") is False
 
 
 class TestAssemblySystemFlag:
-    """Tests für assembly_system Flag."""
+    """Tests für assembly_system Flag.
     
-    def test_assembly_system_default_true(self):
-        """Test: assembly_system ist standardmäßig True."""
-        assert is_enabled("assembly_system") is True
+    Hinweis: Flag wurde nach Integration des Features entfernt.
+    """
+    
+    def test_assembly_system_removed(self):
+        """Test: assembly_system wurde entfernt (Feature ist nun integriert)."""
+        assert is_enabled("assembly_system") is False
 
 
 class TestFeatureFlagRuntimeModification:
@@ -264,22 +266,20 @@ class TestFeatureFlagRuntimeModification:
         set_flag("cylindrical_face_edit", False)
         assert is_enabled("cylindrical_face_edit") is False
     
-    def test_ocp_first_flags_can_be_enabled(self):
-        """Test: OCP-First Flags können aktiviert werden."""
-        # Alle OCP-First Flags testweise aktivieren
-        ocp_flags = [
-            "ocp_first_extrude",
-            "ocp_first_fillet",
-            "ocp_first_chamfer",
-            "ocp_first_revolve"
+    def test_debug_flags_can_be_enabled(self):
+        """Test: Debug Flags können aktiviert werden."""
+        # Debug Flags testweise aktivieren
+        debug_flags = [
+            "tnp_debug_logging",
+            "sketch_debug"
         ]
         
-        for flag in ocp_flags:
+        for flag in debug_flags:
             set_flag(flag, True)
             assert is_enabled(flag) is True
         
         # Wieder deaktivieren
-        for flag in ocp_flags:
+        for flag in debug_flags:
             set_flag(flag, False)
             assert is_enabled(flag) is False
     

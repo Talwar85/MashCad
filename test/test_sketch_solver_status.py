@@ -69,6 +69,61 @@ def test_get_constraint_status_supports_legacy_like_result(monkeypatch):
     assert sketch.get_constraint_status() == ConstraintStatus.INCONSISTENT
 
 
+def test_solve_populates_dof_metadata():
+    sketch = Sketch("dof_metadata")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+    sketch.add_horizontal(line)
+
+    result = sketch.solve()
+    vars_count, constraint_count, dof = sketch.calculate_dof()
+
+    assert hasattr(result, "dof")
+    assert int(result.dof) == int(dof)
+    assert int(getattr(result, "n_variables", -1)) == int(vars_count)
+    assert int(getattr(result, "n_constraints", -1)) == int(constraint_count)
+
+
+def test_status_is_corrected_when_backend_reports_fully_but_dof_positive(monkeypatch):
+    sketch = Sketch("status_correction")
+
+    class _BackendLikeResult:
+        success = True
+        status = ConstraintStatus.FULLY_CONSTRAINED
+        dof = 2
+
+    monkeypatch.setattr(sketch, "solve", lambda: _BackendLikeResult())
+
+    assert sketch.get_constraint_status() == ConstraintStatus.UNDER_CONSTRAINED
+    assert sketch.is_fully_constrained() is False
+
+
+def test_constraint_summary_contains_redundancy_diagnostics():
+    sketch = Sketch("summary_redundancy")
+    line = sketch.add_line(0.0, 0.0, 10.0, 0.0)
+
+    c1 = sketch.add_horizontal(line)
+    assert c1 is not None
+
+    duplicate = Constraint(type=ConstraintType.HORIZONTAL, entities=[line], enabled=True)
+    sketch.constraints.append(duplicate)
+
+    summary = sketch.get_constraint_summary()
+    assert "redundant_count" in summary
+    assert summary["redundant_count"] >= 1
+
+
+def test_constraint_summary_contains_conflict_diagnostics():
+    sketch = Sketch("summary_conflicts")
+    line = sketch.add_line(0.0, 0.0, 10.0, 5.0)
+    sketch.add_horizontal(line)
+    sketch.add_vertical(line)
+    sketch.add_length(line, 10.0)
+
+    summary = sketch.get_constraint_summary()
+    assert "conflict_count" in summary
+    assert summary["conflict_count"] >= 1
+
+
 def test_is_fully_constrained_supports_legacy_like_result(monkeypatch):
     sketch = Sketch("legacy_fully")
 

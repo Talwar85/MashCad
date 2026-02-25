@@ -28,6 +28,7 @@ from modeling.features.advanced import (
     LatticeFeature
 )
 from modeling.features.import_feature import ImportFeature
+from modeling.features.cadquery_feature import CadQueryFeature
 
 # OCP/build123d availability flags (set by body.py)
 HAS_OCP = False
@@ -119,6 +120,10 @@ def body_to_dict(body) -> dict:
             _serialize_primitive_feature(feat, feat_dict)
         elif isinstance(feat, ImportFeature):
             _serialize_import_feature(feat, feat_dict)
+        elif isinstance(feat, CadQueryFeature):
+            _serialize_cadquery_feature(feat, feat_dict)
+        elif feat_class == "CadQueryFeature":
+            _serialize_cadquery_feature(feat, feat_dict)
 
         features_data.append(feat_dict)
 
@@ -774,6 +779,16 @@ def _serialize_import_feature(feat, feat_dict: dict):
     })
 
 
+def _serialize_cadquery_feature(feat, feat_dict: dict):
+    """Serialize CadQueryFeature specific data."""
+    feat_dict.update({
+        "feature_class": "CadQueryFeature",
+        "script": feat.script,
+        "source_file": feat.source_file,
+        "parameters": [p.to_dict() for p in feat.parameters],
+    })
+
+
 def body_from_dict(cls, data: dict, body_class):
     """
     Deserialisiert Body aus Dictionary.
@@ -847,6 +862,8 @@ def body_from_dict(cls, data: dict, body_class):
             feat = _deserialize_primitive_feature(feat_dict, base_kwargs)
         elif feat_class == "ImportFeature":
             feat = _deserialize_import_feature(feat_dict, base_kwargs)
+        elif feat_class == "CadQueryFeature":
+            feat = _deserialize_cadquery_feature(feat_dict, base_kwargs)
         else:
             # Generic Feature
             feat = Feature(**base_kwargs)
@@ -873,11 +890,89 @@ def body_from_dict(cls, data: dict, body_class):
     return body
 
 
+def _classify_error_code(error_code: str) -> tuple:
+    """Map error code to status_class and severity."""
+    code_norm = str(error_code or "").strip().lower()
+    warning_codes = {
+        "fallback_used",
+        "tnp_ref_drift",
+    }
+    blocked_codes = {
+        "blocked_by_upstream_error",
+        "fallback_blocked_strict",
+    }
+    critical_codes = {
+        "rebuild_finalize_failed",
+    }
+    if code_norm in critical_codes:
+        return "CRITICAL", "critical"
+    if code_norm in warning_codes:
+        return "WARNING_RECOVERABLE", "warning"
+    if code_norm in blocked_codes:
+        return "BLOCKED", "blocked"
+    return "ERROR", "error"
+
+
+def _default_next_action_for_code(error_code: str) -> str:
+    """Get default next action for error code."""
+    defaults = {
+        "operation_failed": "Parameter pruefen oder Referenz neu auswaehlen und erneut ausfuehren.",
+        "fallback_used": "Ergebnis wurde via Fallback erzeugt. Geometrie pruefen und Parameter/Referenz ggf. nachziehen.",
+        "fallback_failed": "Feature vereinfachen und mit kleineren Werten erneut versuchen.",
+        "fallback_blocked_strict": "Feature neu referenzieren oder self_heal_strict deaktivieren.",
+        "blocked_by_upstream_error": "Zuerst das vorherige fehlgeschlagene Feature beheben.",
+        "no_result_solid": "Eingaben/Referenzen pruefen, da kein Ergebnis-Solid erzeugt wurde.",
+        "self_heal_rollback_invalid_result": "Featureparameter reduzieren oder Referenzflaeche anpassen.",
+        "self_heal_rollback_geometry_drift": "Lokalen Modifier mit kleineren Werten erneut anwenden.",
+        "self_heal_blocked_topology_warning": "Topologie-Referenzen pruefen und Feature neu auswaehlen.",
+        "tnp_ref_missing": "Topologie-Referenz neu waehlen und Rebuild erneut ausfuehren.",
+        "tnp_ref_mismatch": "ShapeID/Index-Referenz stimmt nicht ueberein. Referenz neu waehlen.",
+        "tnp_ref_drift": "Referenzierte Geometrie ist gedriftet. Feature mit kleineren Werten erneut anwenden.",
+        "rebuild_finalize_failed": "Rebuild erneut ausfuehren oder letzte stabile Aenderung rueckgaengig machen.",
+        "ocp_api_unavailable": "OCP-Build pruefen oder alternative Operation verwenden.",
+    }
+    return defaults.get(
+        error_code,
+        "Fehlerdetails pruefen und den letzten gueltigen Bearbeitungsschritt wiederholen.",
+    )
+
+
 def _normalize_status_details_for_load(status_details: Any) -> dict:
-    """Normalize status_details for loading from dict."""
-    if isinstance(status_details, dict):
-        return status_details
-    return {}
+    """
+    Backward-Compat fuer persistierte status_details.
+
+    Legacy-Dateien koennen `code` ohne `status_class`/`severity` enthalten.
+    Beim Laden werden diese Felder deterministisch nachgezogen.
+    """
+    if not isinstance(status_details, dict):
+        return {}
+
+    normalized = dict(status_details)
+    code = str(normalized.get("code", "") or "").strip()
+    if code:
+        normalized.setdefault("schema", "error_envelope_v1")
+    has_status_class = bool(str(normalized.get("status_class", "") or "").strip())
+    has_severity = bool(str(normalized.get("severity", "") or "").strip())
+    if code and (not has_status_class or not has_severity):
+        status_class, severity = _classify_error_code(code)
+        normalized.setdefault("status_class", status_class)
+        normalized.setdefault("severity", severity)
+
+    hint = str(normalized.get("hint", "") or "").strip()
+    next_action = str(normalized.get("next_action", "") or "").strip()
+    if hint and not next_action:
+        normalized["next_action"] = hint
+        next_action = hint
+    if next_action and not hint:
+        normalized["hint"] = next_action
+        hint = next_action
+    if code and not hint and not next_action:
+        action = _default_next_action_for_code(code)
+        if action:
+            normalized["hint"] = action
+            normalized["next_action"] = action
+
+    return normalized
 
 
 def _deserialize_extrude_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'ExtrudeFeature':
@@ -1647,6 +1742,21 @@ def _deserialize_import_feature(feat_dict: dict, base_kwargs: dict) -> 'ImportFe
         brep_string=feat_dict.get("brep_string", ""),
         source_file=feat_dict.get("source_file", ""),
         source_type=feat_dict.get("source_type", ""),
+        **base_kwargs
+    )
+
+
+def _deserialize_cadquery_feature(feat_dict: dict, base_kwargs: dict) -> 'CadQueryFeature':
+    """Deserialize CadQueryFeature from dict."""
+    from modeling.features.cadquery_feature import Parameter
+
+    params_data = feat_dict.get("parameters", [])
+    parameters = [Parameter.from_dict(p) for p in params_data]
+
+    return CadQueryFeature(
+        script=feat_dict.get("script", ""),
+        source_file=feat_dict.get("source_file", ""),
+        parameters=parameters,
         **base_kwargs
     )
 

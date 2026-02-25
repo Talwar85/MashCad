@@ -36,6 +36,7 @@ import numpy as np
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled, FEATURE_FLAGS  # Nur für sketch_input_logging Debug-Flag
+from modeling.geometry_utils import normalize_plane_axes
 
 # SU-005: Drag Performance Monitoring
 try:
@@ -96,6 +97,14 @@ try:
     from gui.sketch_input_logger import sketch_logger
 except ImportError:
     sketch_logger = None
+
+# W35 P4: Incremental Solver for smooth dragging
+try:
+    from gui.incremental_drag_integration import IncrementalDragIntegration
+    HAS_INCREMENTAL_DRAG = True
+except ImportError:
+    HAS_INCREMENTAL_DRAG = False
+    IncrementalDragIntegration = None
 
 # Build123d für parametrische CAD-Operationen
 HAS_BUILD123D = False
@@ -912,6 +921,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._drag_performance_tracker = None
         if HAS_PERFORMANCE_MONITOR and is_enabled("sketch_performance_monitoring"):
             self._drag_performance_tracker = DragPerformanceTracker()
+
+        # W35 P4: Incremental Solver for smooth dragging
+        self._incremental_drag = None
+        if HAS_INCREMENTAL_DRAG and is_enabled("incremental_solver"):
+            try:
+                self._incremental_drag = IncrementalDragIntegration(self)
+                logger.info("[SketchEditor] Incremental drag integration initialized")
+            except Exception as e:
+                logger.warning(f"[SketchEditor] Failed to initialize incremental drag: {e}")
+                self._incremental_drag = None
+
         # W20 P1: Arc Direct Edit State
         self._direct_edit_arc = None
         self._direct_edit_start_start_angle = 0.0
@@ -1037,7 +1057,16 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
             return status
         return ""
 
-    def _emit_solver_feedback(self, success: bool, message: str, dof: float = 0.0, status_name: str = "", context: str = "Solver", show_hud: bool = True):
+    def _emit_solver_feedback(
+        self,
+        success: bool,
+        message: str,
+        dof: float = 0.0,
+        status_name: str = "",
+        error_code: str = "",
+        context: str = "Solver",
+        show_hud: bool = True,
+    ):
         """
         Konsistentes UI-Feedback fuer Solver-Resultate.
         """
@@ -1046,7 +1075,13 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
         import time
 
-        text = format_solver_failure_message(status_name, message, dof=dof, context=context)
+        text = format_solver_failure_message(
+            status_name,
+            message,
+            dof=dof,
+            error_code=error_code,
+            context=context,
+        )
         self.status_message.emit(text)
         logger.warning(text)
 
@@ -1694,31 +1729,8 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Berechnet stabile X- und Y-Achsen.
         Returns native tuples of floats to avoid NumPy types leaking into logic.
         """
-        import numpy as np # Import lokal, falls global fehlt
-        
-        n = np.array(normal_vec, dtype=np.float64)
-        norm = np.linalg.norm(n)
-        if norm == 0: 
-            return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
-        
-        n = n / norm
-        
-        # Safe comparison avoiding numpy.bool output
-        # abs(n[2]) liefert numpy scalar, float() macht es sicher
-        if self._safe_float(abs(n[2])) > 0.999:
-            x_dir = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            x_dir = np.cross(y_dir, n)
-        else:
-            global_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            x_dir = np.cross(global_up, n)
-            x_dir = x_dir / np.linalg.norm(x_dir)
-            y_dir = np.cross(n, x_dir)
-            y_dir = y_dir / np.linalg.norm(y_dir)
-            
-        # CRITICAL: Convert back to native python tuple immediately
-        return tuple(map(float, x_dir)), tuple(map(float, y_dir))
+        _normal, x_dir, y_dir = normalize_plane_axes(normal_vec)
+        return x_dir, y_dir
 
     def to_native_float(self, value):
         """Sicheres Casting von NumPy → Python native"""
@@ -1855,32 +1867,21 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def set_reference_bodies(self, bodies_data, plane_normal=(0,0,1), plane_origin=(0,0,0), plane_x=None):
         self.reference_bodies = []
-        self.sketch_plane_normal = plane_normal
         self.sketch_plane_origin = plane_origin
 
         import numpy as np
 
         # Alles in float64 casten für PrÄzision
-        n = np.array(plane_normal, dtype=np.float64)
-        norm = np.linalg.norm(n)
-        n = n / norm if norm > 0 else np.array([0,0,1], dtype=np.float64)
-
-        if plane_x:
-            u = np.array(plane_x, dtype=np.float64)
-            u = u / np.linalg.norm(u)
-        else:
-            if self._safe_float(abs(n[2])) < 0.9:
-                u = np.cross(n, [0, 0, 1])
-            else:
-                u = np.cross(n, [1, 0, 0])
-            u = u / np.linalg.norm(u)
-
-        v = np.cross(n, u)
+        n_tuple, x_tuple, y_tuple = normalize_plane_axes(plane_normal, plane_x, None)
+        n = np.array(n_tuple, dtype=np.float64)
+        u = np.array(x_tuple, dtype=np.float64)
+        v = np.array(y_tuple, dtype=np.float64)
         origin = np.array(plane_origin, dtype=np.float64)
 
         # NEU: Speichere Achsen für Orientierungs-Indikator
-        self.sketch_plane_x_dir = tuple(u)
-        self.sketch_plane_y_dir = tuple(v)
+        self.sketch_plane_normal = tuple(n_tuple)
+        self.sketch_plane_x_dir = tuple(x_tuple)
+        self.sketch_plane_y_dir = tuple(y_tuple)
 
         # Berechne projizierten Welt-Origin auf die Sketch-Ebene
         # Welt-Origin (0,0,0) → projiziere auf Ebene
@@ -4837,7 +4838,26 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         self._direct_edit_drag_moved = False
         self._direct_edit_last_live_solve_ts = 0.0
         self._direct_edit_pending_solve = False
-        
+
+        # W35 P4: Start incremental solver for smooth dragging
+        if self._incremental_drag is not None:
+            # Determine the entity being dragged
+            entity_id = None
+            point = handle_hit.get("point")
+            if point:
+                entity_id = point.id
+            elif kind == "circle" and mode == "center":
+                circle = handle_hit.get("circle")
+                if circle:
+                    entity_id = circle.center.id
+            elif kind == "polygon" and mode == "center":
+                polygon = handle_hit.get("polygon")
+                if polygon and hasattr(polygon, 'center_point'):
+                    entity_id = polygon.center_point.id
+
+            if entity_id:
+                self._incremental_drag.start_drag(entity_id)
+
         # SU-005: Begin performance tracking for drag operation
         if self._drag_performance_tracker is not None:
             self._drag_performance_tracker.begin_drag()
@@ -5247,12 +5267,37 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
 
     def _maybe_live_solve_during_direct_drag(self):
         """Gedrosseltes Live-Solve für komplexe Abhängigkeiten beim Drag.
-        
+
         SU-005: Enhanced with performance monitoring and feature flag integration.
+        W35 P4: Uses incremental solver for smooth 60 FPS dragging.
         """
         if not self._direct_edit_live_solve:
             return
 
+        # W35 P4: Try incremental solver first (if available and active)
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            now = time.perf_counter()
+            if (now - self._direct_edit_last_live_solve_ts) < self._direct_edit_live_solve_interval_s:
+                self._direct_edit_pending_solve = True
+                return
+
+            # Use incremental solver
+            world_x = self.mouse_world.x()
+            world_y = self.mouse_world.y()
+            result = self._incremental_drag.drag_move(world_x, world_y)
+
+            if result and result.get('success'):
+                # Track performance
+                solve_time_ms = result.get('solve_time_ms', 0)
+                if self._drag_performance_tracker is not None:
+                    self._drag_performance_tracker.record_solver_time(solve_time_ms)
+
+                self._direct_edit_last_live_solve_ts = now
+                self._direct_edit_pending_solve = False
+                self.request_update()
+                return
+
+        # Fallback to full solve
         # SU-005: Check feature flag for drag optimization
         if not is_enabled("sketch_drag_optimization"):
             # Legacy behavior - always solve
@@ -5905,6 +5950,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         Schliesst Direct-Manipulation ab und propagiert UI-Updates.
 
         W33 EPIC AA1: Constraint-Rollback bei unloesbarem Drag.
+        W35 P4: Endet Incremental Solver und führt Final-Solve durch.
         """
         if not self._direct_edit_dragging:
             return
@@ -5912,10 +5958,20 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         moved = self._direct_edit_drag_moved
         mode = self._direct_edit_mode
         source = self._direct_edit_source or "circle"
-        
+
         # WICHTIG: Ellipse und Slot VOR dem Reset speichern!
         dragged_ellipse = getattr(self, "_direct_edit_ellipse", None)
         dragged_slot = getattr(self, "_direct_edit_slot", None)
+
+        # W35 P4: End incremental solver drag (final precise solve)
+        incremental_result = None
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            incremental_result = self._incremental_drag.end_drag()
+            if incremental_result and incremental_result.get('stats'):
+                stats = incremental_result['stats']
+                logger.debug(f"[SketchEditor] Incremental drag complete: "
+                           f"{stats.get('drag_count', 0)} solves, "
+                           f"avg {stats.get('avg_drag_time_ms', 0):.2f}ms")
 
         # W25: Zentralisiertes Zurücksetzen des Direct-Edit-Zustands
         self._reset_direct_edit_state()
@@ -5945,6 +6001,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                         status=getattr(result, "status", ""),
                         message=getattr(result, "message", "Solve failed"),
                         dof=getattr(result, "dof", None),
+                        error_code=getattr(result, "error_code", ""),
                     )
                 except ImportError:
                     error_msg = f"Direct edit: {getattr(result, 'message', 'Solve failed')}"
@@ -5954,6 +6011,7 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
                     message=error_msg,
                     dof=float(getattr(result, "dof", 0.0) or 0.0),
                     status_name=self._solver_status_name(result),
+                    error_code=str(getattr(result, "error_code", "") or ""),
                     context="Direct edit",
                     show_hud=True,
                 )
@@ -8606,6 +8664,10 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         return self._entity_kind(entity) == mode
 
     def _entity_pick_priority(self, entity) -> int:
+        # Ellipse-Handle-Punkte haben höchste Priorität (niedrigste Nummer)
+        if isinstance(entity, Point2D) and getattr(entity, '_ellipse_handle', None) is not None:
+            return -1  # Höchste Priorität für Ellipse-Handles
+
         # Linien/Flaechenkanten zuerst, Punkte zuletzt, damit Selektion stabil bleibt.
         # WICHTIG: Ellipsen-Achsen haben niedrigste Priorität (werden übersprungen)
         if isinstance(entity, Line2D) and getattr(entity, '_ellipse_axis', None) is not None:
@@ -9949,13 +10011,17 @@ class SketchEditor(QWidget, SketchHandlersMixin, SketchRendererMixin):
         W25: Zentralisierte Methode zum Zurücksetzen aller Direct-Edit-ZustÄnde.
         Sorgt für konsistente Zustandsbereinigung nach ESC/Finish/Rechtsklick.
         """
+        # W35 P4: Cancel incremental solver drag if active
+        if self._incremental_drag is not None and self._incremental_drag.is_dragging:
+            self._incremental_drag.cancel_drag()
+
         # SU-005: End performance tracking and log stats
         if self._drag_performance_tracker is not None and self._drag_performance_tracker.is_dragging():
             self._drag_performance_tracker.end_drag()
             stats = self._drag_performance_tracker.get_drag_stats()
             if stats.get('frame_stats', {}).get('frame_count', 0) > 0:
                 logger.debug(f"Drag performance: {stats}")
-        
+
         self._direct_edit_dragging = False
         self._direct_edit_mode = None
         self._direct_edit_circle = None

@@ -15,6 +15,7 @@ Usage:
 from typing import TYPE_CHECKING, Optional, List, Dict, Any, Tuple
 import numpy as np
 from loguru import logger
+from modeling.geometry_utils import normalize_plane_axes
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -39,6 +40,15 @@ class FeatureMixin:
     All methods assume they are called within a MainWindow context
     and access MainWindow attributes via `self`.
     """
+
+    def _all_document_bodies(self):
+        """Returns all document bodies across components when available."""
+        if hasattr(self.document, "get_all_bodies"):
+            try:
+                return list(self.document.get_all_bodies() or [])
+            except Exception:
+                pass
+        return list(getattr(self.document, "bodies", []) or [])
     
     # =========================================================================
     # Extrude Operations
@@ -207,8 +217,10 @@ class FeatureMixin:
         Erkennt automatisch welche Operation sinnvoll ist.
         Returns: "New Body", "Join", oder "Cut"
         """
+        all_bodies = self._all_document_bodies()
+
         # Wenn keine Bodies existieren -> New Body
-        if not self.document.bodies:
+        if not all_bodies:
             return "New Body"
         
         # Hole die Ebene der Sketch-Fläche
@@ -216,7 +228,7 @@ class FeatureMixin:
         face_normal = np.array(sketch_face.plane_normal)
         
         # Prüfe für jeden sichtbaren Body ob die Fläche darauf liegt
-        for body in self.document.bodies:
+        for body in all_bodies:
             if not self.viewport_3d.is_body_visible(body.id):
                 continue
                 
@@ -284,8 +296,9 @@ class FeatureMixin:
     
     def _on_toggle_bodies_visibility(self, hide: bool):
         """Legacy Handler - wird von bodies_visibility_state_changed ersetzt"""
-        # Wird noch für Kompatibilität aufgerufen, eigentliche Logik in _on_bodies_visibility_state_changed
-        pass
+        # Legacy bool-map:
+        # hide=True -> state 2 (versteckt), hide=False -> state 0 (normal)
+        self._on_bodies_visibility_state_changed(2 if bool(hide) else 0)
 
     def _on_bodies_visibility_state_changed(self, state: int):
         """
@@ -329,17 +342,17 @@ class FeatureMixin:
                 sketch, visible = sketch_info
 
             if visible:
+                if hasattr(sketch, "normalize_plane_basis"):
+                    sketch.normalize_plane_basis()
                 x_dir = getattr(sketch, 'plane_x_dir', None)
                 y_dir = getattr(sketch, 'plane_y_dir', None)
-                
-                # Fallback Berechnung falls Achsen fehlen (bei alten Projekten)
-                if x_dir is None:
-                    x_dir, y_dir = self.viewport_3d._calculate_plane_axes(sketch.plane_normal)
+                normal = getattr(sketch, 'plane_normal', (0, 0, 1))
+                _normal, x_dir, y_dir = normalize_plane_axes(normal, x_dir, y_dir)
                 
                 self.viewport_3d.detector.process_sketch(
                     sketch, 
                     sketch.plane_origin, 
-                    sketch.plane_normal, 
+                    _normal, 
                     x_dir,
                     y_dir 
                 )
@@ -365,10 +378,15 @@ class FeatureMixin:
     def _get_plane_from_sketch(self, sketch):
         """Erstellt ein build123d Plane Objekt aus den Sketch-Metadaten"""
         from build123d import Plane, Vector
+        normal, x_dir, _y_dir = normalize_plane_axes(
+            getattr(sketch, 'plane_normal', (0, 0, 1)),
+            getattr(sketch, 'plane_x_dir', None),
+            getattr(sketch, 'plane_y_dir', None),
+        )
         return Plane(
             origin=Vector(sketch.plane_origin),
-            z_dir=Vector(sketch.plane_normal),
-            x_dir=Vector(sketch.plane_x_dir)
+            z_dir=Vector(normal),
+            x_dir=Vector(x_dir)
         )
     
     def _on_extrusion_finished(self, face_indices, height, operation="New Body"):
@@ -564,10 +582,28 @@ class FeatureMixin:
             # Fall B: Body-Face Extrusion (Push/Pull)
             elif first_face.domain_type.startswith('body'):
                 try:
-                    self._extrude_body_face_build123d(selection_data, height, operation)
-                    self._finish_extrusion_ui(success=True)
+                    # Push/Pull funktioniert nur mit EINER Fläche.
+                    # SelectionFace in stabiles Dict-Format überführen (wie vor dem Split).
+                    matching_point = getattr(first_face, 'sample_point', None) or getattr(first_face, 'plane_origin', (0, 0, 0))
+                    face_data = {
+                        'body_id': getattr(first_face, 'owner_id', None),
+                        'center_3d': matching_point,
+                        'center': getattr(first_face, 'plane_origin', matching_point),
+                        'normal': getattr(first_face, 'plane_normal', (0, 0, 1)),
+                        'ocp_face_id': getattr(first_face, 'ocp_face_id', None),
+                        'face_index': getattr(first_face, 'ocp_face_id', None),
+                        'selection_face_id': getattr(first_face, 'id', None),
+                    }
+
+                    success = self._extrude_body_face_build123d(face_data, height, operation)
+                    if success:
+                        self._finish_extrusion_ui(success=True)
+                    else:
+                        logger.error("Push/Pull fehlgeschlagen.")
                 except Exception as e:
                     logger.error(f"Body-Face Extrusion fehlgeschlagen: {e}")
+                    import traceback
+                    traceback.print_exc()
                 finally:
                     self._is_processing_extrusion = False
                 return
@@ -643,7 +679,7 @@ class FeatureMixin:
             for body in selected:
                 self.browser._del_body(body)
 
-    def _edit_feature(self, d): 
+    def _edit_feature(self, d):
         """
         Wird aufgerufen durch Doppelklick im Browser.
         FIX: Lädt jetzt auch die Referenz-Geometrie für den Hintergrund!
@@ -652,12 +688,12 @@ class FeatureMixin:
             sketch = d[1]
             self.active_sketch = sketch
             self.sketch_editor.sketch = sketch
-            
+
             # 1. Gespeicherte Achsen holen (oder Fallback berechnen)
             origin = sketch.plane_origin
             normal = sketch.plane_normal
             x_dir = getattr(sketch, 'plane_x_dir', None)
-            
+
             if x_dir is None:
                 # Fallback für alte Skizzen ohne gespeicherte X-Achse
                 x_dir, _ = self._calculate_plane_axes(normal)
@@ -665,16 +701,22 @@ class FeatureMixin:
             # 2. Hintergrund-Referenzen laden (LÖST PROBLEM 2)
             # Wir übergeben explizit x_dir, damit der Hintergrund nicht verdreht ist
             self._set_sketch_body_references(origin, normal, x_dir)
-            
+
             # 3. Modus wechseln
             self._set_mode("sketch")
-            
+
             # 4. Statusmeldung
             logger.success(f"Bearbeite Skizze: {sketch.name}")
 
         elif d[0] == 'feature':
             feature = d[1]
             body = d[2]
+
+            # CadQueryFeature: Öffne Script Editor
+            from modeling.features.cadquery_feature import CadQueryFeature
+            if isinstance(feature, CadQueryFeature):
+                self._edit_cadquery_feature(feature, body)
+                return
 
             from modeling import (TransformFeature, ExtrudeFeature, FilletFeature,
                                   ChamferFeature, ShellFeature, RevolveFeature, FeatureType)
@@ -845,15 +887,100 @@ class FeatureMixin:
         if data[0] == 'feature':
             feature = data[1]
             body = data[2]
-            
+
             # Feature im Viewport hervorheben
             if hasattr(self.viewport_3d, 'highlight_feature'):
                 self.viewport_3d.highlight_feature(body, feature)
-            
+
             # Feature-Details im Panel anzeigen
             if hasattr(self, 'feature_detail_panel'):
                 self.feature_detail_panel.show_feature(feature, body)
-    
+
+    def _edit_cadquery_feature(self, feature, body):
+        """Öffne den CadQuery Script Editor mit dem Feature-Script."""
+        from gui.cadquery_editor_dialog import CadQueryEditorDialog
+        from modeling.cadquery_importer import CadQueryImporter
+        from gui.design_tokens import DesignTokens
+
+        try:
+            # Create dialog with auto_execute enabled for live parameter updates
+            dialog = CadQueryEditorDialog(self.document, parent=self, auto_execute=True)
+
+            # Lade das Script aus dem Feature
+            if feature.script:
+                dialog.set_script(feature.script)
+            else:
+                # Fallback: Versuche aus Source-File zu laden
+                if feature.source_file:
+                    try:
+                        from pathlib import Path
+                        script_path = Path(__file__).parent.parent / "examples" / "cadquery_examples" / feature.source_file
+                        if script_path.exists():
+                            dialog.set_script(script_path.read_text(encoding='utf-8'))
+                    except:
+                        pass
+
+            # Überschreibe das execute-Verhalten um das Feature zu aktualisieren
+            original_execute = dialog._execute_script
+
+            def execute_and_update():
+                """Führe Script aus und aktualisiere das Feature."""
+                from modeling.body_transaction import BodyTransaction
+                from modeling.result_types import OperationResult
+
+                code = dialog.editor.toPlainText()
+                script_source = dialog.current_file.name if dialog.current_file else feature.source_file
+
+                # Clear error display
+                dialog.error_label.setVisible(False)
+                dialog.error_label.setText("")
+                dialog.error_label.setStyleSheet("")
+
+                # Execute
+                importer = CadQueryImporter(self.document)
+                result = importer.execute_code(code, source=script_source)
+
+                if result.success and result.solids:
+                    # Use transaction for undo/redo support
+                    with BodyTransaction(body, f"Edit CadQuery Feature: {feature.name}") as txn:
+                        # Update the feature's script
+                        feature.script = code
+                        feature.source_file = script_source
+                        # Update parameters
+                        from modeling.features.cadquery_feature import extract_parameters_from_script
+                        feature.parameters = extract_parameters_from_script(code)
+
+                        # Update the solid
+                        if len(result.solids) > 0:
+                            body._build123d_solid = result.solids[0]
+                            body.invalidate_mesh()
+
+                        txn.commit()
+
+                    # Refresh UI
+                    self.browser.refresh()
+                    self._update_viewport_all_impl()
+
+                    dialog._show_success(f"Feature updated: {len(result.solids)} body(s)")
+                    dialog.accept()  # Close dialog on success
+
+                elif result.success:
+                    dialog._show_warning("No solids were generated from the script")
+                else:
+                    error_text = "\n".join(result.errors)
+                    dialog._show_error(f"Execution failed:\n{error_text}")
+
+            # Replace the execute method
+            dialog._execute_script = execute_and_update
+
+            # Block the script_executed signal (we handle execution directly)
+            dialog.script_executed.block = True
+
+            dialog.exec()
+
+        except Exception as e:
+            logger.error(f"Fehler beim Öffnen des CadQuery Editors: {e}")
+
     # =========================================================================
     # Rollback
     # =========================================================================
@@ -877,7 +1004,15 @@ class FeatureMixin:
         self.browser.refresh()
         self.browser.show_rollback_bar(body)
         self.statusBar().showMessage(f"Rollback: {value}/{n} Features")
-    
+
+    def _on_body_deleted(self, body_id: str):
+        """Handle body deletion - remove from viewport."""
+        # Remove body actors from viewport
+        if hasattr(self.viewport_3d, 'clear_bodies'):
+            self.viewport_3d.clear_bodies(only_body_id=body_id)
+        # Full viewport refresh
+        self._update_viewport_all_impl()
+
     # =========================================================================
     # Helper Methods
     # =========================================================================
@@ -890,7 +1025,208 @@ class FeatureMixin:
     def _extrude_body_face_build123d(self, face_data, height, operation):
         """
         Extrudiert eine Body-Fläche mit build123d (Push/Pull).
+
+        Args:
+            face_data: SelectionFace oder Dict mit body/face Referenzen.
+            height: Extrusionshöhe (+ = Pull, - = Push)
+            operation: "cut" oder "join"
         """
-        # Placeholder - implementation would be extensive
-        # This is extracted from main_window.py for modularity
-        pass
+        import numpy as np
+        from modeling import PushPullFeature
+        from modeling.geometric_selector import GeometricFaceSelector
+        from modeling.topology_indexing import face_from_index, iter_faces_with_indices
+        from gui.commands.feature_commands import AddFeatureCommand
+        from loguru import logger
+
+        if face_data is None:
+            logger.warning("Push/Pull abgebrochen: Keine Face-Daten")
+            return False
+
+        # SelectionFace und Dict robust unterstützen
+        is_dict = isinstance(face_data, dict)
+        face_idx = face_data.get('face_index') if is_dict else getattr(face_data, 'face_index', None)
+        ocp_face_id = face_data.get('ocp_face_id') if is_dict else getattr(face_data, 'ocp_face_id', None)
+        face_body_id = (
+            face_data.get('body_id', face_data.get('owner_id')) if is_dict
+            else (getattr(face_data, 'body_id', None) or getattr(face_data, 'owner_id', None))
+        )
+        normal = (
+            face_data.get('normal', face_data.get('plane_normal', (0, 0, 1))) if is_dict
+            else (getattr(face_data, 'normal', None) or getattr(face_data, 'plane_normal', (0, 0, 1)))
+        )
+        center = (
+            face_data.get('center', face_data.get('center_3d', face_data.get('plane_origin', (0, 0, 0)))) if is_dict
+            else (
+                getattr(face_data, 'center', None)
+                or getattr(face_data, 'center_3d', None)
+                or getattr(face_data, 'plane_origin', (0, 0, 0))
+            )
+        )
+
+        def _to_int_or_none(value):
+            try:
+                return int(value) if value is not None else None
+            except Exception:
+                return None
+
+        face_idx = _to_int_or_none(face_idx)
+        ocp_face_id = _to_int_or_none(ocp_face_id)
+
+        # Body über face_body_id finden (zuverlässiger als Browser-Auswahl)
+        body = None
+        if face_body_id:
+            if hasattr(self.document, 'find_body_by_id'):
+                body = self.document.find_body_by_id(face_body_id)
+            if body is None and hasattr(self.document, 'get_all_bodies'):
+                body = next((b for b in self.document.get_all_bodies() if b.id == face_body_id), None)
+
+        # Fallback: Browser-Auswahl
+        if not body:
+            body = self._get_active_body()
+
+        if not body:
+            logger.warning(f"Kein Body gefunden (face_body_id={face_body_id})")
+            return False
+
+        if not body._build123d_solid:
+            logger.warning(f"Body '{body.name}' hat keinen Solid")
+            return False
+
+        solid = body._build123d_solid
+
+        # Face robust auflösen:
+        # 1) face_index (falls vorhanden), 2) ocp_face_id, 3) geometrisches Fallback via center/normal
+        resolved_face = None
+        resolved_face_idx = None
+        for candidate_idx in (face_idx, ocp_face_id):
+            if candidate_idx is None or candidate_idx < 0:
+                continue
+            candidate_face = face_from_index(solid, candidate_idx)
+            if candidate_face is not None:
+                resolved_face = candidate_face
+                resolved_face_idx = int(candidate_idx)
+                break
+
+        if resolved_face is None:
+            center_arr = None
+            try:
+                center_arr = np.asarray(center, dtype=float)
+                if center_arr.shape != (3,):
+                    center_arr = None
+            except Exception:
+                center_arr = None
+
+            expected_normal = None
+            try:
+                expected_normal = np.asarray(normal, dtype=float)
+                nlen = np.linalg.norm(expected_normal)
+                if nlen > 1e-9:
+                    expected_normal = expected_normal / nlen
+                else:
+                    expected_normal = None
+            except Exception:
+                expected_normal = None
+
+            best = None
+            best_dist = float("inf")
+            fallback = None
+            fallback_dist = float("inf")
+
+            for idx, face in iter_faces_with_indices(solid):
+                try:
+                    fc = face.center()
+                    f_center = np.array([fc.X, fc.Y, fc.Z], dtype=float)
+                    dist = float(np.linalg.norm(f_center - center_arr)) if center_arr is not None else 0.0
+                except Exception:
+                    continue
+
+                if dist < fallback_dist:
+                    fallback_dist = dist
+                    fallback = (idx, face)
+
+                if expected_normal is not None:
+                    try:
+                        n = face.normal_at(face.center())
+                        f_normal = np.array([n.X, n.Y, n.Z], dtype=float)
+                        nlen = np.linalg.norm(f_normal)
+                        if nlen <= 1e-9:
+                            continue
+                        f_normal = f_normal / nlen
+                        if abs(float(np.dot(f_normal, expected_normal))) < 0.65:
+                            continue
+                    except Exception:
+                        continue
+
+                if dist < best_dist:
+                    best_dist = dist
+                    best = (idx, face)
+
+            chosen = best or fallback
+            if chosen is not None:
+                resolved_face_idx, resolved_face = int(chosen[0]), chosen[1]
+
+        if resolved_face is None or resolved_face_idx is None:
+            logger.error("Push/Pull: Zielfläche konnte nicht aufgelöst werden")
+            return False
+
+        # Extractionsrichtung (umgekehrt wenn Push/negativ)
+        direction = -1 if height < 0 else 1
+        distance = abs(height)
+
+        # Operation-Typ bestimmen
+        if height < 0:
+            op_type = "cut"  # Push = Material entfernen
+        else:
+            op_type = "join"  # Pull = Material hinzufügen
+
+        # GeometricFaceSelector als Recovery-Info
+        face_selector_dict = None
+        try:
+            face_selector_dict = GeometricFaceSelector.from_face(resolved_face).to_dict()
+        except Exception as selector_err:
+            logger.debug(f"Push/Pull: GeometricFaceSelector konnte nicht erstellt werden: {selector_err}")
+
+        # ShapeID für TNP (wenn verfügbar)
+        face_shape_id = None
+        try:
+            service = getattr(self.document, '_shape_naming_service', None)
+            if service is not None and hasattr(resolved_face, 'wrapped'):
+                face_shape_id = service.find_shape_id_by_shape(resolved_face.wrapped)
+        except Exception as sid_err:
+            logger.debug(f"Push/Pull: ShapeID-Lookup fehlgeschlagen: {sid_err}")
+
+        # PushPullFeature erstellen
+        feature = PushPullFeature(
+            name=f"PushPull: {op_type.capitalize()} {distance:.1f}mm",
+            face_shape_id=face_shape_id,
+            face_index=resolved_face_idx,
+            distance=height,  # Mit Vorzeichen für Push/Pull
+            direction=direction,
+            operation=op_type.capitalize(),
+            face_selector=face_selector_dict
+        )
+
+        # Plane-Info speichern
+        feature.plane_origin = center
+        feature.plane_normal = normal
+
+        # Feature zum Body hinzufügen
+        cmd = AddFeatureCommand(
+            body, feature, self,
+            description=f"PushPull {op_type} {distance:.1f}mm"
+        )
+        self.undo_stack.push(cmd)
+
+        # Redo kann intern rollbacken; Erfolg aktiv prüfen
+        if feature not in getattr(body, 'features', []):
+            logger.error("Push/Pull wurde zurückgerollt (Feature nicht im Body)")
+            return False
+
+        feature_status = str(getattr(feature, 'status', '') or '').strip().upper()
+        if feature_status in {"ERROR", "BLOCKED", "CRITICAL"}:
+            logger.error(f"Push/Pull Feature-Status: {feature_status} ({getattr(feature, 'status_message', '')})")
+            return False
+
+        self.browser.refresh()
+        logger.success(f"Push/Pull: face={resolved_face_idx} {op_type} {distance:.1f}mm")
+        return True

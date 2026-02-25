@@ -42,8 +42,6 @@ class ToolMixin:
     
     def _on_3d_action(self, action: str):
         """Verarbeitet 3D-Tool-Aktionen"""
-        from i18n import tr
-        
         action_handlers = {
             # Primitives (short + prefixed keys from tool_panel_3d)
             'box': lambda: self._primitive_dialog('box'),
@@ -57,23 +55,23 @@ class ToolMixin:
             'torus': lambda: self._primitive_dialog('torus'),
             
             # Sketch
-            'new_sketch': self._new_sketch,
-            'offset_plane': self._start_offset_plane,
+            'new_sketch': '_new_sketch',
+            'offset_plane': '_start_offset_plane',
             
             # Features
-            'extrude': self._extrude_dialog,
-            'revolve': self._revolve_dialog,
-            'fillet': self._start_fillet,
-            'chamfer': self._start_chamfer,
-            'shell': self._start_shell,
-            'sweep': self._start_sweep,
-            'loft': self._start_loft,
-            'pattern': self._start_pattern,
-            'draft': self._draft_dialog,
-            'hole': self._hole_dialog,
-            'thread': self._thread_dialog,
-            'split': self._split_body_dialog,
-            'split_body': self._split_body_dialog,
+            'extrude': '_extrude_dialog',
+            'revolve': '_revolve_dialog',
+            'fillet': '_start_fillet',
+            'chamfer': '_start_chamfer',
+            'shell': '_start_shell',
+            'sweep': '_start_sweep',
+            'loft': '_start_loft',
+            'pattern': '_start_pattern',
+            'draft': '_draft_dialog',
+            'hole': '_hole_dialog',
+            'thread': '_thread_dialog',
+            'split': '_split_body_dialog',
+            'split_body': '_split_body_dialog',
             
             # Boolean (short + prefixed keys from tool_panel_3d)
             'union': lambda: self._boolean_operation_dialog('Union'),
@@ -85,45 +83,58 @@ class ToolMixin:
             
             # Transform (short + prefixed keys from tool_panel_3d)
             'move': lambda: self._start_transform_mode('move'),
+            'move_body': lambda: self._start_transform_mode('move'),
             'rotate': lambda: self._start_transform_mode('rotate'),
+            'rotate_body': lambda: self._start_transform_mode('rotate'),
             'scale': lambda: self._start_transform_mode('scale'),
-            'mirror': self._mirror_body,
-            'mirror_body': self._mirror_body,
-            'copy': self._copy_body,
-            'copy_body': self._copy_body,
-            'point_to_point': self._start_point_to_point_move,
+            'scale_body': lambda: self._start_transform_mode('scale'),
+            'mirror': '_mirror_body',
+            'mirror_body': '_mirror_body',
+            'copy': '_copy_body',
+            'copy_body': '_copy_body',
+            'point_to_point': '_start_point_to_point_move',
+            'point_to_point_move': '_start_point_to_point_move',
             
             # View / Inspect
-            'section_view': self._toggle_section_view,
-            'measure': self._start_measure_mode,
-            'wall_thickness': self._wall_thickness_dialog,
+            'section_view': '_toggle_section_view',
+            'measure': '_start_measure_mode',
+            'wall_thickness': '_wall_thickness_dialog',
             
             # Import/Export
-            'import_mesh': self._import_mesh_dialog,
-            'import_step': self._import_step,
-            'import_svg': self._import_svg,
-            'stl_to_cad': self._on_stl_to_cad,
-            'export_stl': self._export_stl,
-            'export_step': self._export_step,
-            'convert_to_brep': self._convert_selected_body_to_brep,
+            'import_mesh': '_import_mesh_dialog',
+            'import_step': '_import_step',
+            'import_svg': '_import_svg',
+            'stl_to_cad': '_on_stl_to_cad',
+            'export_stl': '_export_stl',
+            'export_step': '_export_step',
+            'convert_to_brep': '_convert_selected_body_to_brep',
             
             # Special (short + prefixed keys from tool_panel_3d)
-            'brep_cleanup': self._toggle_brep_cleanup,
-            'texture': self._start_texture_mode,
-            'surface_texture': self._start_texture_mode,
-            'lattice': self._start_lattice,
-            'nsided_patch': self._nsided_patch_dialog,
-            'sketch_agent': self._sketch_agent_dialog,
+            'brep_cleanup': '_toggle_brep_cleanup',
+            'texture': '_start_texture_mode',
+            'surface_texture': '_start_texture_mode',
+            'lattice': '_start_lattice',
+            'nsided_patch': '_nsided_patch_dialog',
+            'sketch_agent': '_sketch_agent_dialog',
         }
 
-        handler = action_handlers.get(action)
-        if handler:
-            try:
-                handler()
-            except Exception as e:
-                logger.error(f"Aktion '{action}' fehlgeschlagen: {e}")
+        handler_spec = action_handlers.get(action)
+        if handler_spec is None:
+            logger.warning(f"Aktion '{action}' nicht gefunden")
+            return
+
+        if callable(handler_spec):
+            handler = handler_spec
         else:
-            self._show_not_implemented(action)
+            handler = getattr(self, handler_spec, None)
+            if handler is None:
+                logger.error(f"Aktion '{action}' fehlgeschlagen: Handler '{handler_spec}' fehlt")
+                return
+
+        try:
+            handler()
+        except Exception as e:
+            logger.error(f"Aktion '{action}' fehlgeschlagen: {e}")
     
     # =========================================================================
     # Transform Tools
@@ -167,8 +178,15 @@ class ToolMixin:
         """Zeigt Transform-UI für einen Body"""
         if mode:
             self.transform_panel.set_mode(mode)
-        
-        self.transform_panel.set_body_name(body_name)
+
+        # TransformPanel API changed during refactor; keep compatibility with both variants.
+        if hasattr(self.transform_panel, "set_body_name"):
+            self.transform_panel.set_body_name(body_name)
+        elif hasattr(self.transform_panel, "set_body"):
+            self.transform_panel.set_body(body_name)
+        else:
+            # At least expose the selected body context to the user.
+            self.transform_panel.setToolTip(f"Body: {body_name}")
         self.transform_panel.show()
         self._position_transform_panel()
         
@@ -230,7 +248,11 @@ class ToolMixin:
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
         """Handler für Live-Update der Transform-Werte während Drag"""
-        pass  # Wird vom Viewport gehandhabt
+        if hasattr(self, 'transform_panel') and self.transform_panel and self.transform_panel.isVisible():
+            if hasattr(self.transform_panel, 'set_values'):
+                self.transform_panel.set_values(x, y, z)
+            elif hasattr(self.transform_panel, 'update_values'):
+                self.transform_panel.update_values(x, y, z)
 
     def _on_transform_val_change(self, x, y, z):
         """Live Update vom Panel -> Viewport Actor"""
@@ -357,6 +379,7 @@ class ToolMixin:
         
         # Panel anzeigen
         if hasattr(self, 'measure_panel'):
+            self.measure_panel.reset()
             self.measure_panel.show_at(self.viewport_3d)
         
         # Viewport in Pick-Modus versetzen
@@ -367,6 +390,12 @@ class ToolMixin:
 
     def _on_measure_point_picked(self, point):
         """Wird aufgerufen wenn ein Punkt im Measure-Modus gepickt wurde"""
+        # Pattern-Center-Pick hat Priorität vor normalem Measure-Workflow.
+        if getattr(self, '_pattern_center_pick_mode', False):
+            if hasattr(self, '_on_pattern_center_picked'):
+                self._on_pattern_center_picked(point)
+            return
+
         import numpy as np
         
         # Ersten Punkt setzen
@@ -409,10 +438,14 @@ class ToolMixin:
         if not hasattr(self, "measure_panel"):
             return
         
-        if self._measure_points[0] is not None:
-            self.measure_panel.set_point(1, self._measure_points[0])
-        if self._measure_points[1] is not None:
-            self.measure_panel.set_point(2, self._measure_points[1])
+        p1, p2 = self._measure_points
+        self.measure_panel.set_points(p1, p2)
+        if p1 is not None and p2 is not None:
+            import numpy as np
+            distance = float(np.linalg.norm(np.array(p2) - np.array(p1)))
+            self.measure_panel.set_distance(distance)
+        else:
+            self.measure_panel.set_distance(None)
 
     def _on_measure_pick_requested(self, which: int):
         """User wants to re-pick P1 or P2."""
@@ -425,7 +458,7 @@ class ToolMixin:
         self._measure_points = [None, None]
         self._clear_measure_actors()
         if hasattr(self, "measure_panel"):
-            self.measure_panel.clear_points()
+            self.measure_panel.reset()
 
     def _close_measure_panel(self):
         """Schließt das Measure-Panel."""
@@ -506,29 +539,11 @@ class ToolMixin:
     
     def _start_fillet(self):
         """Startet den Fillet-Modus."""
-        self._fillet_mode = 'fillet'
-        self._fillet_target_body = None
-        
-        # Prüfe ob Body selektiert
-        body = self._get_active_body()
-        if body:
-            self._activate_fillet_chamfer_for_body(body, 'fillet')
-        else:
-            self._pending_fillet_mode = True
-            self.statusBar().showMessage("Wähle einen Body für Fase")
+        self._start_fillet_chamfer_mode("fillet")
 
     def _start_chamfer(self):
         """Startet den Chamfer-Modus."""
-        self._fillet_mode = 'chamfer'
-        self._fillet_target_body = None
-        
-        # Prüfe ob Body selektiert
-        body = self._get_active_body()
-        if body:
-            self._activate_fillet_chamfer_for_body(body, 'chamfer')
-        else:
-            self._pending_chamfer_mode = True
-            self.statusBar().showMessage("Wähle einen Body für Fase")
+        self._start_fillet_chamfer_mode("chamfer")
 
     def _start_fillet_chamfer_mode(self, mode: str):
         """
@@ -539,109 +554,391 @@ class ToolMixin:
         """
         self._fillet_mode = mode
         self._fillet_target_body = None
-        
-        # Edge-Selection im Viewport aktivieren
-        self.viewport_3d.set_edge_selection_mode(True)
-        
-        # Panel vorbereiten
-        self.fillet_panel.set_mode(mode)
-        self.fillet_panel.reset()
-        self.fillet_panel.show_at(self.viewport_3d)
-        
-        self.statusBar().showMessage(f"{mode.title()}: Kanten wählen")
 
-    def _on_body_clicked_for_fillet(self, body_id: str):
-        """Handler wenn Body für Fillet/Chamfer geklickt wird."""
-        body = self.document.find_body_by_id(body_id)
-        if body:
-            self._activate_fillet_chamfer_for_body(body, self._fillet_mode)
+        selected_bodies = self.browser.get_selected_bodies() if hasattr(self, 'browser') else []
+
+        # Kein Body selektiert -> Pending-Body-Pick im Viewport aktivieren.
+        if not selected_bodies:
+            # Legacy + neues Flag robust setzen (FeatureDialogs erwartet beides).
+            self._pending_fillet_mode = mode
+            self._pending_chamfer_mode = (mode == "chamfer")
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            self.statusBar().showMessage(f"{mode.capitalize()}: Wähle einen Body")
+            return
+
+        body = selected_bodies[0]
+        self._activate_fillet_chamfer_for_body(body, mode)
+
+    def _resolve_body_for_edge_selection(self, body_id: str):
+        """Robuster Body-Lookup für EdgeSelectionMixin."""
+        body = None
+        if hasattr(self.document, 'find_body_by_id'):
+            body = self.document.find_body_by_id(body_id)
+        if body is None and hasattr(self.document, 'get_all_bodies'):
+            body = next((b for b in self.document.get_all_bodies() if b.id == body_id), None)
+        return body
 
     def _activate_fillet_chamfer_for_body(self, body, mode: str):
         """Aktiviert Fillet/Chamfer-Modus für einen Body."""
-        self._fillet_target_body = body
         self._fillet_mode = mode
-        
+        self._fillet_target_body = body
+        self._pending_fillet_mode = False
+        self._pending_chamfer_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
         # Edge-Selection aktivieren
-        self.viewport_3d.set_edge_selection_mode(True, body.id)
-        
+        if hasattr(self.viewport_3d, 'set_edge_selection_callbacks'):
+            self.viewport_3d.set_edge_selection_callbacks(
+                get_body_by_id=self._resolve_body_for_edge_selection
+            )
+
+        if hasattr(self.viewport_3d, 'start_edge_selection_mode'):
+            # Historisch waren alle Kanten selektierbar; "concave only" hat Fillet faktisch deaktiviert.
+            self.viewport_3d.start_edge_selection_mode(body.id, "all")
+        else:
+            logger.warning("Viewport hat keine start_edge_selection_mode Methode")
+
         # Panel anzeigen
+        if hasattr(self.fillet_panel, 'set_target_body'):
+            self.fillet_panel.set_target_body(body)
         self.fillet_panel.set_mode(mode)
         self.fillet_panel.reset()
+        if hasattr(self.fillet_panel, 'update_edge_count'):
+            self.fillet_panel.update_edge_count(0)
         self.fillet_panel.show_at(self.viewport_3d)
-        
+
         self.statusBar().showMessage(f"{mode.title()}: Kanten wählen")
 
     def _on_edge_selection_changed(self, count: int):
         """Handler wenn sich die Kanten-Selektion ändert."""
         if hasattr(self, 'fillet_panel') and self.fillet_panel.isVisible():
-            self.fillet_panel.set_edge_count(count)
+            if hasattr(self.fillet_panel, 'update_edge_count'):
+                self.fillet_panel.update_edge_count(count)
+            elif hasattr(self.fillet_panel, 'set_edge_count'):
+                self.fillet_panel.set_edge_count(count)
+
+        if getattr(self, '_nsided_patch_mode', False) and hasattr(self, 'nsided_patch_panel'):
+            if hasattr(self.nsided_patch_panel, 'update_edge_count'):
+                self.nsided_patch_panel.update_edge_count(count)
+            elif hasattr(self.nsided_patch_panel, 'set_edge_count'):
+                self.nsided_patch_panel.set_edge_count(count)
+
+        if getattr(self, '_sweep_mode', False) and getattr(self, '_sweep_phase', None) == 'path' and count > 0:
+            if hasattr(self.viewport_3d, 'get_selected_edges') and hasattr(self, '_on_edge_selected_for_sweep'):
+                edges = self.viewport_3d.get_selected_edges() or []
+                self._on_edge_selected_for_sweep(edges)
 
     def _on_fillet_confirmed(self):
-        """Bestätigt Fillet/Chamfer-Operation."""
-        if not self._fillet_target_body:
+        """
+        Wendet Fillet/Chamfer über die Feature-Pipeline mit Undo/Redo an.
+        """
+        from PySide6.QtWidgets import QMessageBox
+        from config.feature_flags import is_enabled
+
+        radius = self.fillet_panel.get_radius()
+        body = self._fillet_target_body
+        mode = getattr(self, '_fillet_mode', 'fillet')
+        if body is None and hasattr(self.fillet_panel, 'get_target_body'):
+            body = self.fillet_panel.get_target_body()
+            self._fillet_target_body = body
+
+        if body is None:
+            logger.warning(f"{mode.capitalize()}: Kein Ziel-Body ausgewählt")
             return
-        
-        # Implementierung in main_window.py
-        pass
+
+        # Selektierte Kanten vom Viewport holen
+        edges = self.viewport_3d.get_selected_edges()
+
+        if not edges:
+            res = QMessageBox.question(
+                self, "Keine Kanten",
+                "Keine Kanten ausgewählt. Alle Kanten bearbeiten?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if res == QMessageBox.Yes:
+                # Alle Kanten nehmen
+                edges = list(body._build123d_solid.edges())
+            else:
+                return
+
+        # Feature erstellen und via Undo-Stack anwenden
+        logger.info(f"Wende {mode} auf {len(edges)} Kanten an (r={radius})...")
+
+        try:
+            from gui.commands.feature_commands import AddFeatureCommand
+            from modeling.geometric_selector import create_geometric_selectors_from_edges
+            from modeling.tnp_system import ShapeType
+
+            selected_edge_indices = []
+            if hasattr(self.viewport_3d, "get_selected_edge_topology_indices"):
+                selected_edge_indices = self.viewport_3d.get_selected_edge_topology_indices() or []
+            if not selected_edge_indices and body is not None and hasattr(body, "_build123d_solid") and body._build123d_solid:
+                try:
+                    all_edges = list(body._build123d_solid.edges())
+
+                    def _is_same_edge(edge_a, edge_b) -> bool:
+                        try:
+                            wa = edge_a.wrapped if hasattr(edge_a, "wrapped") else edge_a
+                            wb = edge_b.wrapped if hasattr(edge_b, "wrapped") else edge_b
+                            return wa.IsSame(wb)
+                        except Exception:
+                            return edge_a is edge_b
+
+                    for edge in edges:
+                        for edge_idx, candidate in enumerate(all_edges):
+                            if _is_same_edge(candidate, edge):
+                                selected_edge_indices.append(edge_idx)
+                                break
+                except Exception:
+                    pass
+            selected_edge_indices = sorted(set(int(i) for i in selected_edge_indices))
+
+            # TNP Phase 1: GeometricSelectors erstellen
+            # WICHTIG: Nutze die bereits ermittelten `edges` (inkl. "alle Kanten"),
+            # nicht nochmal get_selected_edges() aufrufen!
+            geometric_selectors = create_geometric_selectors_from_edges(edges)
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP Phase 1: {len(geometric_selectors)} GeometricSelectors erstellt")
+
+            # TNP Phase 2: OCP Edge Shapes speichern
+            ocp_edge_shapes = []
+            for edge in edges:
+                if hasattr(edge, 'wrapped'):
+                    ocp_edge_shapes.append(edge.wrapped)
+
+            # TNP Phase 2: Finde vorheriges Boolean-Feature (für History-Lookup)
+            depends_on_feature_id = None
+            from modeling import ExtrudeFeature
+            for feat in reversed(body.features):
+                if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
+                    depends_on_feature_id = feat.id
+                    if is_enabled("tnp_debug_logging"):
+                        logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
+                    break
+
+            # Feature erstellen (ZUERST - damit es eine ID bekommt)
+            from modeling import FilletFeature, ChamferFeature
+
+            if mode == "chamfer":
+                feature = ChamferFeature(
+                    distance=radius,
+                    edge_indices=selected_edge_indices,
+                    geometric_selectors=geometric_selectors,
+                    ocp_edge_shapes=ocp_edge_shapes,
+                    depends_on_feature_id=depends_on_feature_id
+                )
+            else:
+                feature = FilletFeature(
+                    radius=radius,
+                    edge_indices=selected_edge_indices,
+                    geometric_selectors=geometric_selectors,
+                    ocp_edge_shapes=ocp_edge_shapes,
+                    depends_on_feature_id=depends_on_feature_id
+                )
+
+            # TNP v4.0: ShapeIDs für ausgewählte Edges finden (nicht neu erstellen!)
+            edge_shape_ids = []
+            if body._document and hasattr(body._document, '_shape_naming_service'):
+                service = body._document._shape_naming_service
+                for edge in edges:
+                    # Finde existierende ShapeID für diese Edge
+                    shape_id = service.find_shape_id_by_edge(edge, require_exact=True)
+                    if shape_id:
+                        edge_shape_ids.append(shape_id)
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
+                    else:
+                        # Fallback: Edge jetzt registrieren, damit TNP weiterarbeiten kann
+                        try:
+                            shape_id = service.register_shape(
+                                ocp_shape=edge.wrapped,
+                                shape_type=ShapeType.EDGE,
+                                feature_id=feature.id,
+                                local_index=len(edge_shape_ids)
+                            )
+                            edge_shape_ids.append(shape_id)
+                            if is_enabled("tnp_debug_logging"):
+                                logger.debug(f"TNP v4.0: Edge registriert (Fallback) {shape_id.uuid[:8]}...")
+                        except Exception as e:
+                            if is_enabled("tnp_debug_logging"):
+                                logger.warning(f"TNP v4.0: Keine ShapeID für Edge gefunden: {e}")
+            else:
+                if is_enabled("tnp_debug_logging"):
+                    logger.warning("TNP v4.0: Kein NamingService verfügbar")
+
+            feature.edge_shape_ids = edge_shape_ids
+            if is_enabled("tnp_debug_logging"):
+                logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
+
+            # TNP v4.0: Keine zusätzliche Registrierung nötig
+            # ShapeIDs wurden bereits vom Extrude registriert
+
+            # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+            # Das ruft body.add_feature() auf, was _rebuild() triggert.
+            # Geometry-Snapshot VOR Operation (für Operation Summary)
+            _pre_sig = self._solid_signature_safe(body)
+
+            cmd = AddFeatureCommand(body, feature, self, description=f"{mode.capitalize()} R={radius}")
+            self.undo_stack.push(cmd)
+
+            # Geometry-Snapshot NACH Operation
+            _post_sig = self._solid_signature_safe(body)
+
+            # Prüfe ob Operation erfolgreich war
+            if body._build123d_solid is None or (hasattr(body, 'vtk_mesh') and body.vtk_mesh is None):
+                logger.warning(f"{mode.capitalize()} ließ Body leer - Undo")
+                self.undo_stack.undo()
+                QMessageBox.warning(
+                    self, "Fehler",
+                    f"{mode.capitalize()} fehlgeschlagen: Geometrie ungültig"
+                )
+                return
+
+            if feature.status == "ERROR":
+                msg = feature.status_message or "Kernel-Operation fehlgeschlagen"
+                self.statusBar().showMessage(f"{mode.capitalize()} fehlgeschlagen: {msg}", 8000)
+                logger.error(f"{mode.capitalize()} fehlgeschlagen: {msg}")
+                self._on_fillet_cancelled()
+                self.browser.refresh()
+                return
+
+            if feature.status == "WARNING":
+                msg = feature.status_message or "Fallback verwendet"
+                self.statusBar().showMessage(f"{mode.capitalize()} mit Warnung: {msg}", 6000)
+                logger.warning(f"{mode.capitalize()} mit Warnung: {msg}")
+
+            # Visualisierung aktualisieren
+            from modeling.cad_tessellator import CADTessellator
+            CADTessellator.notify_body_changed()
+            self._update_body_from_build123d(body, body._build123d_solid)
+
+            # Aufräumen
+            self._on_fillet_cancelled()
+            self.browser.refresh()
+
+            logger.success(f"{mode.capitalize()} erfolgreich: {len(edges)} Kanten, r={radius}")
+
+        except Exception as e:
+            logger.error(f"{mode.capitalize()} fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Fehler", f"{mode.capitalize()} fehlgeschlagen:\n{str(e)}")
 
     def _on_fillet_radius_changed(self, radius):
-        """Handler wenn Fillet-Radius geändert wird."""
-        if hasattr(self.viewport_3d, 'update_fillet_preview'):
-            self.viewport_3d.update_fillet_preview(radius)
+        """
+        Callback wenn der Radius geändert wird.
+        Verwendet das Live-Preview-System für performante Vorschau.
+        """
+        from config.feature_flags import is_enabled
+
+        if not is_enabled("live_preview_fillet"):
+            return
+
+        if not getattr(self, '_fillet_mode', False) or not getattr(self, '_fillet_target_body', None):
+            return
+
+        # Request debounced live preview
+        if hasattr(self, '_request_live_preview'):
+            self._request_live_preview('fillet', {
+                'radius': radius,
+                'body': self._fillet_target_body,
+                'edge_indices': list(getattr(self, '_fillet_edge_indices', [])),
+                'mode': getattr(self, '_fillet_mode', 'fillet')
+            })
 
     def _on_fillet_cancelled(self):
-        """Bricht Fillet/Chamfer-Operation ab."""
-        self._fillet_mode = None
-        self._fillet_target_body = None
-
-        if hasattr(self.viewport_3d, 'set_edge_selection_mode'):
-            self.viewport_3d.set_edge_selection_mode(False)
-
-        # Preview entfernen
-        if hasattr(self.viewport_3d, 'clear_all_feature_previews'):
-            self.viewport_3d.clear_all_feature_previews()
+        """Bricht die Fillet/Chamfer-Operation ab."""
+        if hasattr(self.viewport_3d, 'stop_edge_selection_mode'):
+            self.viewport_3d.stop_edge_selection_mode()
 
         if hasattr(self, 'fillet_panel'):
             self.fillet_panel.hide()
 
-        self.statusBar().clearMessage()
+        # Live-Preview abbrechen
+        if hasattr(self, '_cancel_live_preview'):
+            self._cancel_live_preview('fillet')
+        elif hasattr(self.viewport_3d, 'clear_all_feature_previews'):
+            self.viewport_3d.clear_all_feature_previews()
+
+        self._fillet_mode = None
+        self._fillet_target_body = None
+        self._fillet_edge_indices = []
+        self._pending_fillet_mode = False
+        self._pending_chamfer_mode = False
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+
+        logger.info("Fillet/Chamfer abgebrochen")
 
     def _start_shell(self):
         """Startet den Shell-Modus."""
-        self._shell_mode = False
-        self._shell_target_body = None
-        self._shell_opening_faces = []
-        
-        # Prüfe ob Body selektiert
-        body = self._get_active_body()
-        if body:
-            self._activate_shell_for_body(body)
-        else:
+        if hasattr(self, '_clear_transient_previews'):
+            self._clear_transient_previews(reason="start_shell", clear_interaction_modes=True)
+
+        selected_bodies = self.browser.get_selected_bodies() if hasattr(self, 'browser') else []
+        if not selected_bodies:
             self._pending_shell_mode = True
-            self.statusBar().showMessage("Wähle einen Body für Shell")
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
+            self.statusBar().showMessage("Shell: Wähle einen Body")
+            return
+
+        self._activate_shell_for_body(selected_bodies[0])
 
     def _start_sweep(self):
         """Startet den Sweep-Modus."""
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
         self._sweep_mode = True
         self._sweep_phase = 'profile'
         self._sweep_profile_data = None
         self._sweep_path_data = None
-        
+        self._sweep_profile_shape_id = None
+        self._sweep_profile_face_index = None
+        self._sweep_profile_geometric_selector = None
+
+        # Face picking for profile selection.
+        if hasattr(self.viewport_3d, 'set_sweep_mode'):
+            self.viewport_3d.set_sweep_mode(True)
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(True, enable_preview=False)
+        if hasattr(self, '_update_detector'):
+            self._update_detector()
+
         # Panel anzeigen
         self.sweep_panel.reset()
         self.sweep_panel.show_at(self.viewport_3d)
-        
+
         self.statusBar().showMessage("Sweep: Profil wählen")
 
     def _start_loft(self):
         """Startet den Loft-Modus."""
+        if hasattr(self.viewport_3d, 'hide_transform_gizmo'):
+            self.viewport_3d.hide_transform_gizmo()
+
         self._loft_mode = True
         self._loft_profiles = []
-        
+
+        # Face picking for profile selection.
+        if hasattr(self.viewport_3d, 'set_loft_mode'):
+            self.viewport_3d.set_loft_mode(True)
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(True, enable_preview=False)
+        if hasattr(self, '_update_detector'):
+            self._update_detector()
+
         # Panel anzeigen
         self.loft_panel.reset()
         self.loft_panel.show_at(self.viewport_3d)
-        
+
         self.statusBar().showMessage("Loft: Profile wählen")
 
     def _start_pattern(self):
@@ -655,18 +952,10 @@ class ToolMixin:
             self._activate_pattern_for_body(body)
         else:
             self._pending_pattern_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
             self.statusBar().showMessage("Wähle einen Body für Pattern")
-
-    def _activate_pattern_for_body(self, body):
-        """Aktiviert Pattern-Modus für einen Body."""
-        self._pattern_mode = True
-        self._pattern_target_body = body
-        
-        # Panel anzeigen
-        self.pattern_panel.reset()
-        self.pattern_panel.show_at(self.viewport_3d)
-        
-        self.statusBar().showMessage("Pattern: Parameter einstellen")
 
     def _start_texture_mode(self):
         """Startet den Texture-Modus."""
@@ -679,28 +968,45 @@ class ToolMixin:
             self._activate_texture_for_body(body)
         else:
             self._pending_texture_mode = True
+            self.viewport_3d.setCursor(Qt.CrossCursor)
+            if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+                self.viewport_3d.set_pending_transform_mode(True)
             self.statusBar().showMessage("Wähle einen Body für Textur")
 
     def _activate_texture_for_body(self, body):
         """Aktiviert Texture-Modus für einen Body."""
+        if getattr(body, '_build123d_solid', None) is None:
+            logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
+            return
+
         self._texture_mode = True
         self._texture_target_body = body
+        self._pending_texture_mode = False
+
+        self.viewport_3d.setCursor(Qt.ArrowCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+
+        # Face-Picking aktivieren.
+        if hasattr(self.viewport_3d, 'set_extrude_mode'):
+            self.viewport_3d.set_extrude_mode(True, enable_preview=False)
+        if hasattr(self, '_update_detector'):
+            self._update_detector()
+        if hasattr(self.viewport_3d, 'start_texture_face_mode'):
+            self.viewport_3d.start_texture_face_mode(body.id)
         
         # Panel anzeigen
         self.texture_panel.reset()
-        self.texture_panel.set_body(body)
+        if hasattr(self.texture_panel, 'set_body'):
+            self.texture_panel.set_body(body)
         self.texture_panel.show_at(self.viewport_3d)
         
         self.statusBar().showMessage("Textur: Einstellungen wählen")
-    
+
     # =========================================================================
     # Utility Methods
     # =========================================================================
-    
-    def _show_not_implemented(self, feature: str):
-        """Zeigt Hinweis für noch nicht implementierte Features"""
-        logger.info(f"{feature} - Coming soon!")
-    
+
     def _get_active_body(self):
         """Hilfsfunktion: Gibt den aktuell im Browser ausgewählten Body zurück"""
         if hasattr(self, 'browser'):

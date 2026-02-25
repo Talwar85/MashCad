@@ -165,6 +165,10 @@ class SectionViewMixin:
             plane: "XY", "YZ", "XZ" oder "Custom"
             position: Position der Schnittebene (in mm)
         """
+        plane = str(plane).upper()
+        if plane not in {"XY", "YZ", "XZ"}:
+            plane = "XY"
+
         logger.info(f"🔪 Section View aktiviert: Ebene={plane}, Position={position}mm")
 
         self._section_view_enabled = True
@@ -219,8 +223,10 @@ class SectionViewMixin:
         # Entferne Schnittflächen-Highlights
         self._remove_section_highlights()
 
-        # ✅ WICHTIG: Force Render nach Wiederherstellung
-        self.plotter.render_window.Render()
+        # ✅ WICHTIG: Force Render nach Wiederherstellung (headless-safe)
+        render_window = getattr(self.plotter, "render_window", None)
+        if render_window is not None and hasattr(render_window, "Render"):
+            render_window.Render()
         request_render(self.plotter)
 
     def update_section_position(self, position: float):
@@ -238,6 +244,24 @@ class SectionViewMixin:
 
         # Re-enable mit neuer Position
         self.enable_section_view(self._section_plane, position)
+
+    def update_section_plane(self, plane: str):
+        """
+        Aktualisiert die aktive Schnittebene dynamisch.
+
+        Args:
+            plane: "XY", "YZ" oder "XZ"
+        """
+        plane = str(plane).upper()
+        if plane not in {"XY", "YZ", "XZ"}:
+            logger.debug(f"Section Plane ignoriert (ungültig): {plane}")
+            return
+
+        self._section_plane = plane
+        if self._section_view_enabled:
+            # Plane-Wechsel invalidiert bestehende Clip-Ergebnisse.
+            SectionClipCache.clear()
+            self.enable_section_view(self._section_plane, self._section_position)
 
     def toggle_section_invert(self):
         """Invertiert welche Seite der Schnittebene angezeigt wird."""
@@ -441,16 +465,37 @@ class SectionViewMixin:
         Returns:
             (min, max, default): Bounds in mm
         """
-        if not hasattr(self, 'document') or not self.document.bodies:
-            return (-1000.0, 1000.0, 0.0)
-
-        # Berechne Bounding Box aller Bodies
         all_mins = []
         all_maxs = []
 
-        for body in self.document.bodies:
-            if body.vtk_mesh:
-                bounds = body.vtk_mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+        # 1) Dokument-Bodies (component-aware)
+        doc_bodies = []
+        if hasattr(self, "document"):
+            if hasattr(self.document, "get_all_bodies"):
+                try:
+                    doc_bodies = list(self.document.get_all_bodies() or [])
+                except Exception:
+                    doc_bodies = []
+            else:
+                doc_bodies = list(getattr(self.document, "bodies", []) or [])
+
+        for body in doc_bodies:
+            mesh = getattr(body, "vtk_mesh", None)
+            if mesh is None and hasattr(self, "bodies"):
+                mesh = (self.bodies.get(getattr(body, "id", None), {}) or {}).get("mesh")
+            if mesh is None or not hasattr(mesh, "bounds"):
+                continue
+            bounds = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+            all_mins.append([bounds[0], bounds[2], bounds[4]])
+            all_maxs.append([bounds[1], bounds[3], bounds[5]])
+
+        # 2) Fallback auf Viewport-Body-Meshes (wenn Dokument leer/nicht synchron)
+        if not all_mins and hasattr(self, "bodies"):
+            for body_data in (getattr(self, "bodies", {}) or {}).values():
+                mesh = (body_data or {}).get("mesh")
+                if mesh is None or not hasattr(mesh, "bounds"):
+                    continue
+                bounds = mesh.bounds
                 all_mins.append([bounds[0], bounds[2], bounds[4]])
                 all_maxs.append([bounds[1], bounds[3], bounds[5]])
 

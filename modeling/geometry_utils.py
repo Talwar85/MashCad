@@ -12,6 +12,46 @@ from typing import List, Optional, Tuple, Any, Union
 from loguru import logger
 
 
+def _vec_len(v: Tuple[float, float, float]) -> float:
+    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+
+def _vec_dot(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _vec_cross(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _vec_sub(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _vec_mul(v: Tuple[float, float, float], s: float) -> Tuple[float, float, float]:
+    return (v[0] * s, v[1] * s, v[2] * s)
+
+
+def _vec_normalize(v: Tuple[float, float, float], eps: float = 1e-9) -> Optional[Tuple[float, float, float]]:
+    length = _vec_len(v)
+    if length <= eps:
+        return None
+    return (v[0] / length, v[1] / length, v[2] / length)
+
+
+def _as_vec3(value: Any) -> Optional[Tuple[float, float, float]]:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    except Exception:
+        return None
+
+
 def solid_metrics(solid) -> Optional[dict]:
     """
     Geometry-Fingerprint (volume, faces, edges) eines Solids.
@@ -126,6 +166,66 @@ def validate_plane_normal(plane_normal: Tuple[float, float, float],
     
     # Normalize
     return tuple(c / norm_len for c in plane_normal)
+
+
+def normalize_plane_axes(
+    plane_normal: Tuple[float, float, float],
+    plane_x_dir: Optional[Tuple[float, float, float]] = None,
+    plane_y_dir: Optional[Tuple[float, float, float]] = None,
+    eps: float = 1e-9,
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+    """
+    Normalisiert eine Ebenen-Basis zu einem stabilen orthonormalen Frame.
+
+    Liefert immer ein konsistentes (normal, x_dir, y_dir)-Tripel, auch wenn
+    Eingangsdaten unvollstaendig, parallel oder degeneriert sind.
+    """
+    n = validate_plane_normal(_as_vec3(plane_normal) or (0.0, 0.0, 1.0))
+    x_in = _as_vec3(plane_x_dir)
+    y_in = _as_vec3(plane_y_dir)
+
+    x = None
+
+    # 1) Primär aus x_dir (orthogonal auf Ebene projizieren)
+    if x_in is not None:
+        x_proj = _vec_sub(x_in, _vec_mul(n, _vec_dot(x_in, n)))
+        x = _vec_normalize(x_proj, eps=eps)
+
+    # 2) Sekundär aus y_dir ableiten
+    if x is None and y_in is not None:
+        y_proj = _vec_sub(y_in, _vec_mul(n, _vec_dot(y_in, n)))
+        y_base = _vec_normalize(y_proj, eps=eps)
+        if y_base is not None:
+            x = _vec_normalize(_vec_cross(y_base, n), eps=eps)
+
+    # 3) Robuster Fallback
+    if x is None:
+        if abs(n[2]) < 0.9:
+            x = _vec_normalize(_vec_cross((0.0, 0.0, 1.0), n), eps=eps)
+        else:
+            x = (1.0, 0.0, 0.0)
+        if x is None:
+            x = (1.0, 0.0, 0.0)
+
+    y = _vec_normalize(_vec_cross(n, x), eps=eps)
+    if y is None:
+        # Letzte Absicherung (sollte praktisch nie auftreten)
+        x = (1.0, 0.0, 0.0) if abs(n[2]) > 0.9 else (0.0, 1.0, 0.0)
+        y = _vec_normalize(_vec_cross(n, x), eps=eps) or (0.0, 1.0, 0.0)
+        x = _vec_normalize(_vec_cross(y, n), eps=eps) or (1.0, 0.0, 0.0)
+
+    # Orientierung moeglichst an supplied y_dir anlehnen
+    if y_in is not None:
+        y_hint = _vec_normalize(_vec_sub(y_in, _vec_mul(n, _vec_dot(y_in, n))), eps=eps)
+        if y_hint is not None and _vec_dot(y, y_hint) < 0.0:
+            x = (-x[0], -x[1], -x[2])
+            y = (-y[0], -y[1], -y[2])
+
+    return (
+        (float(n[0]), float(n[1]), float(n[2])),
+        (float(x[0]), float(x[1]), float(x[2])),
+        (float(y[0]), float(y[1]), float(y[2])),
+    )
 
 
 def format_index_refs_for_error(label: str, refs, max_items: int = 3) -> str:
@@ -360,6 +460,7 @@ _solid_metrics = solid_metrics
 _canonicalize_indices = canonicalize_indices
 _get_face_center = get_face_center
 _get_face_area = get_face_area
+_normalize_plane_axes = normalize_plane_axes
 _format_index_refs_for_error = format_index_refs_for_error
 _format_shape_refs_for_error = format_shape_refs_for_error
 _collect_feature_reference_diagnostics = collect_feature_reference_diagnostics

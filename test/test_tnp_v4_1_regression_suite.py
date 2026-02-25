@@ -180,8 +180,8 @@ def test_fillet_edge_tracking():
         for i in range(3)
     ]
 
-    # Führe Fillet aus (direkt auf Body)
-    result_solid = body._ocp_fillet(solid, fillet_edges, 1.0)
+    # Führe Fillet aus (direkt auf Body) - feature_id is required for OCP-First
+    result_solid = body._ocp_fillet(solid, fillet_edges, 1.0, feature_id=feature.id)
 
     assert result_solid is not None
     assert result_solid.is_valid()
@@ -218,8 +218,8 @@ def test_chamfer_edge_tracking():
         )
     ]
 
-    # Führe Chamfer aus (direkt auf Body)
-    result_solid = body._ocp_chamfer(solid, [edge], 1.0)
+    # Führe Chamfer aus (direkt auf Body) - feature_id is required for OCP-First
+    result_solid = body._ocp_chamfer(solid, [edge], 1.0, feature_id=feature.id)
 
     assert result_solid is not None
     assert result_solid.is_valid()
@@ -497,7 +497,7 @@ def test_rebuild_multi_feature_workflow():
     edge_indices = [edge_index_of(body._build123d_solid, e) for e in fillet_edges]
     fillet = FilletFeature(radius=1.0, edge_indices=edge_indices)
 
-    result2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0)
+    result2 = body._ocp_fillet(body._build123d_solid, fillet_edges, 1.0, feature_id=fillet.id)
     assert result2 is not None
     solid2 = result2
     body._build123d_solid = solid2
@@ -676,7 +676,8 @@ def test_complete_modeling_workflow_with_tnp():
         for i in range(4)
     ]
 
-    result2 = body._ocp_fillet(solid, fillet_edges, 2.0)
+    # feature_id is mandatory for OCP-First Fillet
+    result2 = body._ocp_fillet(solid, fillet_edges, 2.0, feature_id=fillet.id)
     assert result2 is not None
     assert result2.is_valid()
 

@@ -41,6 +41,53 @@ class PickingMixin:
 
         # Legacy: Selektierte Face-IDs für Abwärtskompatibilität
         self.selected_face_ids: set = set()
+
+    def _resolve_body_id_for_actor(self, picked_actor):
+        """
+        Resolves a body id for a picked VTK actor.
+
+        Supports both identical actor objects and raw/wrapped actor variants
+        by falling back to VTK actor address comparison.
+        """
+        if picked_actor is None:
+            return None
+
+        # Reuse viewport-level resolver if available.
+        if hasattr(self, "_get_body_id_for_actor"):
+            try:
+                resolved = self._get_body_id_for_actor(picked_actor)
+                if resolved is not None:
+                    return resolved
+            except Exception:
+                pass
+
+        body_actors = getattr(self, "_body_actors", {}) or {}
+        renderer = getattr(getattr(self, "plotter", None), "renderer", None)
+        renderer_actors = getattr(renderer, "actors", {}) if renderer is not None else {}
+
+        picked_addr = None
+        if hasattr(picked_actor, "GetAddressAsString"):
+            try:
+                picked_addr = picked_actor.GetAddressAsString("")
+            except Exception:
+                picked_addr = None
+
+        for bid, actor_names in body_actors.items():
+            for name in actor_names:
+                reg_actor = renderer_actors.get(name)
+                if reg_actor is None:
+                    continue
+                if reg_actor is picked_actor:
+                    return bid
+
+                if picked_addr and hasattr(reg_actor, "GetAddressAsString"):
+                    try:
+                        if reg_actor.GetAddressAsString("") == picked_addr:
+                            return bid
+                    except Exception:
+                        continue
+
+        return None
     
     def pick(self, x, y, selection_filter=None):
         """
@@ -71,16 +118,7 @@ class PickingMixin:
 
                 # FIX: Identifiziere welcher Body TATSÄCHLICH gepickt wurde
                 # Damit wird verhindert dass Faces von anderen Bodies selektiert werden
-                picked_body_id = None
-                if picked_actor is not None and hasattr(self, '_body_actors'):
-                    for bid, actor_names in self._body_actors.items():
-                        for name in actor_names:
-                            if name in self.plotter.renderer.actors:
-                                if self.plotter.renderer.actors[name] is picked_actor:
-                                    picked_body_id = bid
-                                    break
-                        if picked_body_id is not None:
-                            break
+                picked_body_id = self._resolve_body_id_for_actor(picked_actor)
 
                 # === METHODE 1: EXAKT via face_id cell_data ===
                 # Wenn Body bekannt und Mesh face_id hat → direkte Lookup (keine Heuristik!)
@@ -207,18 +245,9 @@ class PickingMixin:
                         self.hovered_body_face = None
                         self._clear_body_face_highlight()
                     return
-                
-                body_id = None
-                for bid, actors in self._body_actors.items():
-                    for name in actors:
-                        if name in self.plotter.renderer.actors:
-                            body_actor = self.plotter.renderer.actors[name]
-                            if body_actor is actor:
-                                body_id = bid
-                                break
-                    if body_id:
-                        break
-                
+
+                body_id = self._resolve_body_id_for_actor(actor)
+
                 if body_id is not None:
                     normal = cell_picker.GetPickNormal()
                     pos = cell_picker.GetPickPosition()
@@ -248,16 +277,7 @@ class PickingMixin:
         if cell_picker.GetCellId() != -1:
             # Find body ID
             actor = cell_picker.GetActor()
-            body_id = None
-            
-            for bid, actors in self._body_actors.items():
-                for name in actors:
-                    if name in self.plotter.renderer.actors:
-                        if self.plotter.renderer.actors[name] is actor:
-                            body_id = bid
-                            break
-                if body_id:
-                    break
+            body_id = self._resolve_body_id_for_actor(actor)
             
             if body_id is not None:
                 normal = list(cell_picker.GetPickNormal())

@@ -6,6 +6,7 @@ This mixin is designed to be inherited by the Body class.
 """
 
 import math
+import uuid
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
@@ -20,6 +21,19 @@ class BodyComputeExtendedMixin:
     These methods handle the computation of various CAD features
     like sweep, shell, hole, draft, split, thread, etc.
     """
+
+    def _ensure_ocp_feature_id(self, feature_id: Optional[str], op_name: str) -> str:
+        """
+        Stellt sicher, dass OCP-First Helper immer eine Feature-ID erhalten.
+
+        Legacy-Pfade rufen _ocp_fillet/_ocp_chamfer teils ohne feature_id auf.
+        Für TNP-Tracking wird dann eine deterministische Laufzeit-ID erzeugt.
+        """
+        if feature_id:
+            return feature_id
+        generated = f"{op_name}_{str(uuid.uuid4())[:8]}"
+        logger.warning(f"{op_name}: feature_id fehlte, verwende generierte ID '{generated}'")
+        return generated
 
     def _compute_sweep(self, feature: 'SweepFeature', current_solid):
         """
@@ -115,7 +129,8 @@ class BodyComputeExtendedMixin:
         if profile_source_solid is not None and has_profile_shape_ref and shape_service:
             try:
                 resolved_ocp, method = shape_service.resolve_shape_with_method(
-                    feature.profile_shape_id, profile_source_solid
+                    feature.profile_shape_id, profile_source_solid,
+                    log_unresolved=False,
                 )
                 profile_shape_resolution_method = str(method or "").strip().lower()
                 if resolved_ocp is not None:
@@ -2237,42 +2252,21 @@ class BodyComputeExtendedMixin:
         return ShapeNamingService()
 
     # OCP helpers
-    def _ocp_extrude_face(self, face, amount, direction):
-        """OCP helper for face extrusion."""
-        try:
-            from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-            from OCP.gp import gp_Vec
-            from build123d import Solid
-
-            face_shape = face.wrapped if hasattr(face, 'wrapped') else face
-            extrude_vec = gp_Vec(
-                direction[0] * amount,
-                direction[1] * amount,
-                direction[2] * amount
-            )
-
-            prism = BRepPrimAPI_MakePrism(face_shape, extrude_vec)
-            prism.Build()
-
-            if prism.IsDone():
-                return Solid(prism.Shape())
-        except Exception as e:
-            logger.error(f"OCP extrude face failed: {e}")
-        return None
-
     def _ocp_fillet(self, solid, edges, radius, feature_id: Optional[str] = None):
         """OCP helper for fillet operation."""
         from modeling.ocp_helpers import OCPFilletHelper
         
         naming_service = self._get_or_create_shape_naming_service()
-        return OCPFilletHelper.fillet(solid, edges, radius, naming_service, feature_id)
+        op_feature_id = self._ensure_ocp_feature_id(feature_id, "fillet")
+        return OCPFilletHelper.fillet(solid, edges, radius, naming_service, op_feature_id)
 
     def _ocp_chamfer(self, solid, edges, distance, feature_id: Optional[str] = None):
         """OCP helper for chamfer operation."""
         from modeling.ocp_helpers import OCPChamferHelper
         
         naming_service = self._get_or_create_shape_naming_service()
-        return OCPChamferHelper.chamfer(solid, edges, distance, naming_service, feature_id)
+        op_feature_id = self._ensure_ocp_feature_id(feature_id, "chamfer")
+        return OCPChamferHelper.chamfer(solid, edges, distance, naming_service, op_feature_id)
 
     # Transform
     def _apply_transform_feature(self, solid, feature):
@@ -2307,25 +2301,32 @@ class BodyComputeExtendedMixin:
 
     # Profile helpers
     def _detect_circle_from_points(self, points, tolerance=0.02):
-        """Detects if points form a circle."""
-        if len(points) < 3:
+        """Detects if points form a circle via algebraic least-squares fit."""
+        if len(points) < 8:
             return None
-        
+
         try:
             import numpy as np
-            try:
-                from circle_fit import hyper_fit
-            except ImportError:
-                # circle_fit package not available
-                return None
-            
             pts = np.array(points)
-            x, y, r = hyper_fit(pts)
-            
-            # Verify fit quality
-            distances = np.sqrt((pts[:, 0] - x)**2 + (pts[:, 1] - y)**2)
-            if np.max(np.abs(distances - r)) < tolerance:
-                return {'center': (x, y), 'radius': r}
+            if pts.shape[1] < 2:
+                return None
+
+            # Algebraic circle fit: (x-cx)^2 + (y-cy)^2 = r^2
+            # Rewrite as: 2*cx*x + 2*cy*y + (r^2 - cx^2 - cy^2) = x^2 + y^2
+            A = np.column_stack([pts[:, 0], pts[:, 1], np.ones(len(pts))])
+            b = pts[:, 0]**2 + pts[:, 1]**2
+            result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+
+            cx = result[0] / 2
+            cy = result[1] / 2
+            r_sq = result[2] + cx**2 + cy**2
+            if r_sq <= 0:
+                return None
+            r = np.sqrt(r_sq)
+
+            distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
+            if np.max(np.abs(distances - r)) < tolerance * max(r, 1.0):
+                return {'center': (float(cx), float(cy)), 'radius': float(r)}
         except Exception:
             pass
         return None
