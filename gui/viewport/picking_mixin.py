@@ -6,9 +6,15 @@ TNP v4.0 Integration:
 - Verbindet Viewport-Picking mit ShapeNamingService
 - Verwaltet SelectionItems statt nur Integer-IDs
 - Ermöglicht persistente Shape-Referenzen über Operationen hinweg
+
+TNP v5.0 Integration:
+- Capture SelectionContext bei jeder Shape-Selektion
+- Speichert view_direction, selection_point, adjacent_shapes
+- Ermöglicht Semantic Matching für bessere Resolution-Rate
 """
 
 import numpy as np
+from typing import Optional, List, Tuple, Any
 from loguru import logger
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 
@@ -41,6 +47,216 @@ class PickingMixin:
 
         # Legacy: Selektierte Face-IDs für Abwärtskompatibilität
         self.selected_face_ids: set = set()
+
+        # TNP v5.0: SelectionContext storage (face_id -> SelectionContext)
+        self._selection_contexts: dict = {}
+
+    # ========================================================================
+    # TNP v5.0: SelectionContext Capture
+    # ========================================================================
+
+    def _capture_selection_context(
+        self,
+        face_id: int,
+        pick_position: Tuple[float, float, float],
+        screen_x: int,
+        screen_y: int
+    ) -> Optional['SelectionContext']:
+        """
+        TNP v5.0: Captures SelectionContext for a picked face.
+
+        Args:
+            face_id: The selected face ID
+            pick_position: 3D position where the pick occurred
+            screen_x: Screen X coordinate
+            screen_y: Screen Y coordinate
+
+        Returns:
+            SelectionContext or None if capture fails
+        """
+        try:
+            from modeling.tnp_v5 import SelectionContext, ShapeType
+        except ImportError:
+            # TNP v5.0 not available, return None
+            return None
+
+        if not hasattr(self, 'detector') or self.detector is None:
+            return None
+
+        face = next((f for f in self.detector.selection_faces if f.id == face_id), None)
+        if face is None:
+            return None
+
+        # Get view direction from camera
+        view_direction = self._get_view_direction()
+
+        # Get adjacent shapes
+        adjacent_shapes = self._get_adjacent_face_ids(face_id)
+
+        # Get feature context
+        feature_context = self._get_feature_context_for_face(face)
+
+        # Get zoom level
+        zoom_level = self._get_zoom_level()
+
+        # Get viewport ID (for multi-viewport setups)
+        viewport_id = getattr(self, 'viewport_id', None)
+
+        return SelectionContext(
+            shape_id=str(face_id),
+            selection_point=tuple(pick_position),
+            view_direction=view_direction,
+            adjacent_shapes=adjacent_shapes,
+            feature_context=feature_context,
+            screen_position=(screen_x, screen_y),
+            zoom_level=zoom_level,
+            viewport_id=viewport_id
+        )
+
+    def _get_view_direction(self) -> Tuple[float, float, float]:
+        """
+        TNP v5.0: Get the current camera view direction.
+
+        Returns:
+            Normalized view direction vector (dx, dy, dz)
+        """
+        try:
+            if hasattr(self, 'plotter') and hasattr(self.plotter, 'camera_position'):
+                # PyVista camera_position: (position, focal_point, view_up)
+                cam_pos = self.plotter.camera_position
+                if cam_pos and len(cam_pos) >= 2:
+                    position = np.array(cam_pos[0])
+                    focal_point = np.array(cam_pos[1])
+                    direction = focal_point - position
+                    norm = np.linalg.norm(direction)
+                    if norm > 0:
+                        return tuple(direction / norm)
+            return (0, 0, -1)  # Default: looking along -Z
+        except Exception as e:
+            logger.debug(f"[TNP v5.0] Failed to get view direction: {e}")
+            return (0, 0, -1)
+
+    def _get_adjacent_face_ids(self, face_id: int) -> List[int]:
+        """
+        TNP v5.0: Get IDs of faces adjacent to the selected face.
+
+        Uses geometric proximity to find adjacent faces.
+
+        Args:
+            face_id: The selected face ID
+
+        Returns:
+            List of adjacent face IDs
+        """
+        if not hasattr(self, 'detector') or self.detector is None:
+            return []
+
+        selected_face = next(
+            (f for f in self.detector.selection_faces if f.id == face_id),
+            None
+        )
+        if selected_face is None:
+            return []
+
+        adjacent = []
+        selected_origin = np.array(selected_face.plane_origin)
+        selected_normal = np.array(selected_face.plane_normal)
+        tolerance = 1.0  # mm tolerance for adjacency
+
+        for face in self.detector.selection_faces:
+            if face.id == face_id:
+                continue
+            if face.domain_type != selected_face.domain_type:
+                continue
+
+            face_origin = np.array(face.plane_origin)
+            face_normal = np.array(face.plane_normal)
+
+            # Check proximity: faces are adjacent if centers are close
+            dist = np.linalg.norm(face_origin - selected_origin)
+
+            # Additional check: faces might share an edge if centers are close
+            # and they're not parallel (or coplanar)
+            if dist < tolerance * 10:  # Relatively close
+                # Check if faces share geometry (non-parallel normals or coplanar)
+                dot = np.dot(selected_normal, face_normal)
+                if abs(dot) < 0.9 or abs(dot - 1.0) < 0.1:  # Not parallel OR coplanar
+                    adjacent.append(face.id)
+
+        return adjacent
+
+    def _get_feature_context_for_face(self, face) -> str:
+        """
+        TNP v5.0: Get the feature context for a face.
+
+        Args:
+            face: SelectionFace object
+
+        Returns:
+            Feature ID or empty string
+        """
+        # Try to get feature from owner_id
+        if hasattr(face, 'owner_id'):
+            body_id = face.owner_id
+            if hasattr(self, 'bodies') and body_id in self.bodies:
+                body_data = self.bodies[body_id]
+                if isinstance(body_data, dict):
+                    body = body_data.get('body')
+                else:
+                    body = body_data
+
+                if body and hasattr(body, 'feature_id'):
+                    return body.feature_id
+
+        # Check for sketch faces
+        if hasattr(face, 'domain_type') and face.domain_type.startswith('sketch'):
+            if hasattr(face, 'sketch_id'):
+                return f"sketch_{face.sketch_id}"
+
+        return ""  # Empty string = no context
+
+    def _get_zoom_level(self) -> Optional[float]:
+        """
+        TNP v5.0: Get the current zoom level of the viewport.
+
+        Returns:
+            Zoom level factor or None
+        """
+        try:
+            if hasattr(self, 'plotter') and hasattr(self.plotter, 'camera_position'):
+                cam_pos = self.plotter.camera_position
+                if cam_pos and len(cam_pos) >= 2:
+                    position = np.array(cam_pos[0])
+                    focal_point = np.array(cam_pos[1])
+                    distance = np.linalg.norm(position - focal_point)
+                    # Convert to approximate zoom factor (larger distance = lower zoom)
+                    if distance > 0:
+                        return 1000.0 / distance  # Normalized zoom factor
+            return None
+        except Exception:
+            return None
+
+    def get_selection_context(self, face_id: int) -> Optional['SelectionContext']:
+        """
+        TNP v5.0: Get the SelectionContext for a face.
+
+        Args:
+            face_id: The face ID
+
+        Returns:
+            SelectionContext or None if not available
+        """
+        return self._selection_contexts.get(face_id)
+
+    def store_selection_context(self, face_id: int, context) -> None:
+        """
+        TNP v5.0: Store a SelectionContext for a face.
+
+        Args:
+            face_id: The face ID
+            context: SelectionContext to store
+        """
+        self._selection_contexts[face_id] = context
 
     def _resolve_body_id_for_actor(self, picked_actor):
         """
@@ -305,6 +521,8 @@ class PickingMixin:
 
         TNP v4.0: Erzeugt SelectionItems mit ShapeID-Referenzen
         statt nur Integer-IDs zu speichern.
+
+        TNP v5.0: Captured SelectionContext für Semantic Matching
         """
         # Picker mit aktivem Filter aufrufen
         face_id = self.pick(x, y, selection_filter=self.active_selection_filter)
@@ -346,6 +564,28 @@ class PickingMixin:
                 # Legacy-Set synchronisieren
                 self.selected_face_ids.clear()
                 self.selected_face_ids.add(face_id)
+
+            # TNP v5.0: Capture SelectionContext
+            # Get pick position from VTK picker
+            pick_position = (0.0, 0.0, 0.0)
+            if HAS_VTK and hasattr(self, 'plotter'):
+                try:
+                    picker = HAS_VTK and vtk.vtkCellPicker() if HAS_VTK else None
+                    if picker:
+                        height = self.plotter.interactor.height()
+                        picker.Pick(x, height - y, 0, self.plotter.renderer)
+                        pos = picker.GetPickPosition()
+                        if pos and pos != (0, 0, 0):
+                            pick_position = tuple(pos)
+
+                    context = self._capture_selection_context(face_id, pick_position, x, y)
+                    if context is not None:
+                        self.store_selection_context(face_id, context)
+                        logger.debug(f"[TNP v5.0] Captured context for face {face_id}: "
+                                   f"point={pick_position}, view={context.view_direction}, "
+                                   f"adjacent={len(context.adjacent_shapes)}")
+                except Exception as e:
+                    logger.debug(f"[TNP v5.0] Failed to capture selection context: {e}")
 
             # Cache drag direction und Face-Daten für die erste selektierte Fläche
             if self.selected_face_ids:

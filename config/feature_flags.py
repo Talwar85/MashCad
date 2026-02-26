@@ -42,6 +42,7 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # ========================================================================
     "sketch_input_logging": False,  # Detailliertes Sketch-Input Logging
     "tnp_debug_logging": False,  # TNP v4.0 Shape-Tracking Debug (sehr verbose)
+    "tnp_v5_enabled": True,  # TNP v5.0 - Neue Topological Naming Engine (PRODUCTION READY)
     "sketch_debug": False,  # Sketch-editor Debug ([Orientation], [PROFILE])
     "extrude_debug": False,  # Extrude Operation Debug ([EXTRUDE DEBUG])
     "viewport_debug": False,  # Viewport/Mesh Debug (Mesh regeneration)

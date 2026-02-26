@@ -11,13 +11,21 @@ Lösungen in V8:
 - Batch Rendering: Alle normalen Kanten in EINEM Actor
 - Edge Filterung: Nur relevante Kanten für Fillet/Chamfer
 - Spatial Index: Schnelles Picking via BoundingBox
+
+TNP v5.0 Integration:
+- Capture SelectionContext bei jeder Edge-Selektion
+- Speichert view_direction, selection_point, adjacent_shapes
+- Ermöglicht Semantic Matching für bessere Edge-Resolution
 """
 
 import numpy as np
-from typing import Optional, List, Dict, Set, Tuple, Callable
+from typing import Optional, List, Dict, Set, Tuple, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 from loguru import logger
 from config.feature_flags import is_enabled
+
+if TYPE_CHECKING:
+    from modeling.tnp_v5 import SelectionContext
 
 try:
     import pyvista as pv
@@ -86,6 +94,192 @@ class EdgeSelectionMixin:
         self._batch_mesh_normal: Optional[object] = None  # PolyData für alle normalen Kanten
         self._batch_mesh_selected: Optional[object] = None  # PolyData für selektierte Kanten
         self._edge_filter_mode: str = "all"  # "all", "convex", "concave"
+
+        # TNP v5.0: SelectionContext storage (edge_id -> SelectionContext)
+        self._edge_selection_contexts: Dict[int, 'SelectionContext'] = {}
+
+    # ========================================================================
+    # TNP v5.0: SelectionContext Capture for Edges
+    # ========================================================================
+
+    def _capture_edge_selection_context(
+        self,
+        edge_id: int,
+        pick_position: Tuple[float, float, float],
+        screen_x: int,
+        screen_y: int
+    ) -> Optional['SelectionContext']:
+        """
+        TNP v5.0: Captures SelectionContext for a picked edge.
+
+        Args:
+            edge_id: The selected edge ID
+            pick_position: 3D position where the pick occurred
+            screen_x: Screen X coordinate
+            screen_y: Screen Y coordinate
+
+        Returns:
+            SelectionContext or None if capture fails
+        """
+        try:
+            from modeling.tnp_v5 import SelectionContext, ShapeType
+        except ImportError:
+            # TNP v5.0 not available, return None
+            return None
+
+        # Find the edge
+        edge = next((e for e in self._selectable_edges if e.id == edge_id), None)
+        if edge is None:
+            return None
+
+        # Get view direction from camera
+        view_direction = self._get_edge_view_direction()
+
+        # Get adjacent shapes (faces sharing this edge)
+        adjacent_shapes = self._get_adjacent_face_ids_for_edge(edge)
+
+        # Get feature context
+        feature_context = self._get_feature_context_for_edge(edge)
+
+        # Get zoom level
+        zoom_level = self._get_edge_zoom_level()
+
+        # Get viewport ID
+        viewport_id = getattr(self, 'viewport_id', None)
+
+        return SelectionContext(
+            shape_id=str(edge_id),
+            selection_point=tuple(pick_position),
+            view_direction=view_direction,
+            adjacent_shapes=adjacent_shapes,
+            feature_context=feature_context,
+            screen_position=(screen_x, screen_y),
+            zoom_level=zoom_level,
+            viewport_id=viewport_id
+        )
+
+    def _get_edge_view_direction(self) -> Tuple[float, float, float]:
+        """
+        TNP v5.0: Get the current camera view direction for edge selection.
+
+        Returns:
+            Normalized view direction vector (dx, dy, dz)
+        """
+        try:
+            if hasattr(self, 'plotter') and hasattr(self.plotter, 'camera_position'):
+                cam_pos = self.plotter.camera_position
+                if cam_pos and len(cam_pos) >= 2:
+                    position = np.array(cam_pos[0])
+                    focal_point = np.array(cam_pos[1])
+                    direction = focal_point - position
+                    norm = np.linalg.norm(direction)
+                    if norm > 0:
+                        return tuple(direction / norm)
+            return (0, 0, -1)
+        except Exception as e:
+            logger.debug(f"[TNP v5.0 Edge] Failed to get view direction: {e}")
+            return (0, 0, -1)
+
+    def _get_adjacent_face_ids_for_edge(self, edge: SelectableEdge) -> List[str]:
+        """
+        TNP v5.0: Get IDs of faces adjacent to the selected edge.
+
+        Uses OCP topology to find faces sharing this edge.
+
+        Args:
+            edge: SelectableEdge object
+
+        Returns:
+            List of adjacent face identifiers
+        """
+        adjacent = []
+        try:
+            if edge.build123d_edge is None:
+                return adjacent
+
+            # Try to use OCP to find adjacent faces
+            if hasattr(self, '_get_body_by_id') and self._get_body_by_id:
+                body = self._get_body_by_id(edge.body_id)
+                if body and hasattr(body, '_build123d_solid'):
+                    solid = body._build123d_solid
+
+                    # Find which faces contain this edge
+                    for i, face in enumerate(solid.faces()):
+                        try:
+                            # Check if this face contains the edge
+                            face_edges = list(face.edges())
+                            for j, face_edge in enumerate(face_edges):
+                                if face_edge.is_same(edge.build123d_edge):
+                                    adjacent.append(f"face_{i}")
+                                    break
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            logger.debug(f"[TNP v5.0 Edge] Failed to get adjacent faces: {e}")
+
+        return adjacent
+
+    def _get_feature_context_for_edge(self, edge: SelectableEdge) -> str:
+        """
+        TNP v5.0: Get the feature context for an edge.
+
+        Args:
+            edge: SelectableEdge object
+
+        Returns:
+            Feature ID or empty string
+        """
+        try:
+            if hasattr(self, '_get_body_by_id') and self._get_body_by_id:
+                body = self._get_body_by_id(edge.body_id)
+                if body and hasattr(body, 'feature_id'):
+                    return body.feature_id
+        except Exception:
+            pass
+        return ""
+
+    def _get_edge_zoom_level(self) -> Optional[float]:
+        """
+        TNP v5.0: Get the current zoom level for edge selection.
+
+        Returns:
+            Zoom level factor or None
+        """
+        try:
+            if hasattr(self, 'plotter') and hasattr(self.plotter, 'camera_position'):
+                cam_pos = self.plotter.camera_position
+                if cam_pos and len(cam_pos) >= 2:
+                    position = np.array(cam_pos[0])
+                    focal_point = np.array(cam_pos[1])
+                    distance = np.linalg.norm(position - focal_point)
+                    if distance > 0:
+                        return 1000.0 / distance
+            return None
+        except Exception:
+            return None
+
+    def get_edge_selection_context(self, edge_id: int) -> Optional['SelectionContext']:
+        """
+        TNP v5.0: Get the SelectionContext for an edge.
+
+        Args:
+            edge_id: The edge ID
+
+        Returns:
+            SelectionContext or None if not available
+        """
+        return self._edge_selection_contexts.get(edge_id)
+
+    def store_edge_selection_context(self, edge_id: int, context: 'SelectionContext') -> None:
+        """
+        TNP v5.0: Store a SelectionContext for an edge.
+
+        Args:
+            edge_id: The edge ID
+            context: SelectionContext to store
+        """
+        self._edge_selection_contexts[edge_id] = context
 
     def set_edge_selection_callbacks(self, get_body_by_id: Callable):
         self._get_body_by_id = get_body_by_id
@@ -161,10 +355,13 @@ class EdgeSelectionMixin:
         self._hovered_edge_id = -1
         self._hovered_loop_ids.clear()
         self._last_hovered_face_id = -1
-        
+
+        # TNP v5.0: Clear selection contexts
+        self._edge_selection_contexts.clear()
+
         from PySide6.QtCore import Qt
         self.setCursor(Qt.ArrowCursor)
-        
+
         if hasattr(self, 'plotter'): request_render(self.plotter)
 
     # ==================== Passive Edge Highlighting ====================
@@ -845,40 +1042,64 @@ class EdgeSelectionMixin:
                 
         return True
 
-    def handle_edge_click(self, _x, _y, is_multi) -> bool:
-        """V8: Click handler - x,y nicht mehr benötigt da Hover-State genutzt wird."""
+    def handle_edge_click(self, x, y, is_multi) -> bool:
+        """
+        V8: Click handler - x,y nicht mehr benötigt da Hover-State genutzt wird.
+
+        TNP v5.0: Captured SelectionContext für Semantic Matching
+        """
         if not self.edge_select_mode: return False
-        
+
         # A. Klick auf einzelne Kante
         if self._hovered_edge_id != -1:
             eid = self._hovered_edge_id
             if eid in self._selected_edge_ids:
                 self._selected_edge_ids.remove(eid)
+                # Remove context when deselecting
+                self._edge_selection_contexts.pop(eid, None)
             else:
                 if not is_multi: self._selected_edge_ids.clear()
                 self._selected_edge_ids.add(eid)
-            
+
+                # TNP v5.0: Capture SelectionContext
+                edge = next((e for e in self._selectable_edges if e.id == eid), None)
+                if edge is not None:
+                    pick_position = edge.center
+                    context = self._capture_edge_selection_context(eid, pick_position, x, y)
+                    if context is not None:
+                        self.store_edge_selection_context(eid, context)
+                        logger.debug(f"[TNP v5.0 Edge] Captured context for edge {eid}: "
+                                   f"point={pick_position}, adjacent={len(context.adjacent_shapes)}")
+
             self._draw_edges_modern()
             if hasattr(self, 'edge_selection_changed'):
                 self.edge_selection_changed.emit(len(self._selected_edge_ids))
             request_render(self.plotter)
             return True
-            
+
         # B. Klick auf Fläche (Loop)
         elif self._hovered_loop_ids:
             if not is_multi: self._selected_edge_ids.clear()
-            
+
             for eid in self._hovered_loop_ids:
                 self._selected_edge_ids.add(eid)
-                
+
+                # TNP v5.0: Capture SelectionContext for each loop edge
+                edge = next((e for e in self._selectable_edges if e.id == eid), None)
+                if edge is not None:
+                    pick_position = edge.center
+                    context = self._capture_edge_selection_context(eid, pick_position, x, y)
+                    if context is not None:
+                        self.store_edge_selection_context(eid, context)
+
             logger.info(f"Loop Select: {len(self._hovered_loop_ids)} Kanten markiert.")
-                
+
             self._draw_edges_modern()
             if hasattr(self, 'edge_selection_changed'):
                 self.edge_selection_changed.emit(len(self._selected_edge_ids))
             request_render(self.plotter)
             return True
-            
+
         return False
     
     

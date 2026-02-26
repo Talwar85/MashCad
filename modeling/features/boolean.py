@@ -7,7 +7,7 @@ from .base import Feature, FeatureType
 class BooleanFeature(Feature):
     """
     Boolean-Feature für professionelle CAD-Operationen.
-    
+
     Unterützt Union (Join), Cut und Common (Intersect) mit:
     - BooleanEngineV4 Integration (Transaction Safety, Fail-Fast)
     - TNP v4.0 Shape-Tracking für verlässliche Referenzen
@@ -36,6 +36,21 @@ class BooleanFeature(Feature):
 
     # Geometrie-Info für Validation
     expected_volume_change: Optional[float] = None  # Erwartete Volumenänderung
+
+    # TNP v5.0: Input Shape UUIDs (shapes before boolean operation)
+    tnp_v5_input_face_ids: list = field(default_factory=list)
+    tnp_v5_input_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Shape UUIDs (shapes after boolean operation)
+    tnp_v5_output_face_ids: list = field(default_factory=list)
+    tnp_v5_output_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: OCCT History data (when available)
+    tnp_v5_occt_history: dict = None  # Serialized OCCT BRepTools_History
+
+    # TNP v5.0: Shape transformation map (input -> output mappings)
+    # Maps input shape UUIDs to their post-operation UUIDs
+    tnp_v5_transformation_map: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.type = FeatureType.BOOLEAN

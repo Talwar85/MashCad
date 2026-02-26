@@ -8,7 +8,19 @@
       "Bash(cd /c/LiteCad && /c/Users/User/miniforge3/envs/cad_env/python.exe test/test_live_preview_manual_verification.py 2>&1)",
       "Bash(cd /c/LiteCad && /c/Users/User/miniforge3/envs/cad_env/python.exe -m pytest test/test_live_preview_smoke.py -v --tb=no 2>&1)",
       "Bash(cd /c/LiteCad && /c/Users/User/miniforge3/envs/cad_env/python.exe test/test_texture_quality_simple.py 2>&1)",
-      "Bash(cd /c/LiteCad && /c/Users/User/miniforge3/envs/cad_env/python.exe -m pytest test/test_texture_quality_simple.py -v -s 2>&1)"
+      "Bash(cd /c/LiteCad && /c/Users/User/miniforge3/envs/cad_env/python.exe -m pytest test/test_texture_quality_simple.py -v -s 2>&1)",
+      "Bash(cd /c/LiteCad && conda run -n cad_env python tests/test_cq_importer.py 2>&1)",
+      "Bash(tail:*)",
+      "Bash(cd /c/LiteCad && conda run -n cad_env python -c \"\nfrom gui.main_window import MainWindow\nfrom modeling import FilletFeature, ChamferFeature, ShellFeature, PushPullFeature, ExtrudeFeature\nfrom sketcher import Sketch\n\nprint\\('All imports successful!'\\)\nprint\\('FilletFeature:', FilletFeature\\)\nprint\\('ChamferFeature:', ChamferFeature\\)\nprint\\('ShellFeature:', ShellFeature\\)\nprint\\('PushPullFeature:', PushPullFeature\\)\nprint\\('ExtrudeFeature:', ExtrudeFeature\\)\nprint\\('Sketch:', Sketch\\)\n\" 2>&1)",
+      "Bash(done)",
+      "Bash(cd /c/LiteCad && git checkout gui/viewport_pyvista.py 2>&1)",
+      "Bash(cd /c/LiteCad && cat << 'EOF'\n# Handled actions:\nhandled=\"\"\"\nbody\nboolean_cut\nboolean_intersect\nboolean_union\nbox\nbrep_cleanup\nchamfer\ncone\nconvert_to_brep\ncopy\ncopy_body\ncut\ncylinder\ndraft\nexport_step\nexport_stl\nextrude\nfillet\nhole\nimport_mesh\nimport_step\nimport_svg\nintersect\nlattice\nloft\nmeasure\nmirror\nmirror_body\nmove\nmove_body\nnew_sketch\nnsided_patch\noffset_plane\npattern\npoint_to_point\nprimitive_box\nprimitive_cone\nprimitive_cylinder\nprimitive_sphere\nrevolve\nrotate\nrotate_body\nscale\nscale_body\nsection_view\nshell\nsketch_agent\nsphere\nsplit\nsplit_body\ntorus\ntexture\nunion\nstl_to_cad\nsurface_texture\n\"\"\"\n\n# Check for missing\necho \"Missing actions that might log 'nicht gefunden':\"\necho \"  torus\"\necho \"  texture \\(panel action\\)\"\necho \"  union \\(panel action\\)\"\necho \"  intersect \\(panel action\\)\"\necho \"  cut \\(panel action\\)\"\necho \"  stl_to_cad\"\necho \"  surface_texture\"\n\n# Check if torus primitive exists\ngrep -q \"'torus':\" gui/tool_operations.py && echo \"torus: FOUND\" || echo \"torus: MISSING\"\n\n# Check panel synonyms\ngrep -q \"\\\\\"union\\\\\":\" gui/tool_operations.py && echo \"union: FOUND \\(panel synonym\\)\" || echo \"union: MISSING\"\ngrep -q \"\\\\\"intersect\\\\\":\" gui/tool_operations.py && echo \"intersect: FOUND \\(panel synonym\\)\" || echo \"intersect: MISSING\"\ngrep -q \"\\\\\"cut\\\\\":\" gui/tool_operations.py && echo \"cut: FOUND \\(panel synonym\\)\" || echo \"cut: MISSING\"\nEOF)",
+      "WebSearch",
+      "Bash(conda run:*)",
+      "Bash(ls:*)",
+      "Bash(del:*)",
+      "Bash(cd /c/LiteCad && PYTHONPATH=. conda run -n cad_env python test/test_phase1_exit_criteria.py 2>&1)",
+      "Bash(git add:*)"
     ]
   }
 }

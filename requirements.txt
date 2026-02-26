@@ -39,6 +39,9 @@ pyransac3d
 trimesh>=4.0.0
 gmsh >= 4.15.0
 
+# === TNP v5.0 Spatial Indexing ===
+rtree>=1.0.0
+
 # === Dev / Test ===
 pytest>=7.0.0
 pytest-qt>=4.2.0

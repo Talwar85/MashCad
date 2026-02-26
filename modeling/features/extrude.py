@@ -44,6 +44,17 @@ class ExtrudeFeature(Feature):
     # Dies ermöglicht die Rückverfolgung von Sketch-Kanten zu 3D-Edges
     sketch_edge_mappings: dict = field(default_factory=dict)
 
+    # TNP v5.0: Output Face ShapeIDs (persistent after boolean operations)
+    # List of face UUIDs registered with TNP v5.0 service
+    tnp_v5_face_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Edge ShapeIDs (for edge tracking)
+    tnp_v5_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Selection contexts for each profile (when faces selected from sketch)
+    # List of SelectionContext dicts, one per selected profile
+    tnp_v5_selection_contexts: list = field(default_factory=list)
+
     def __post_init__(self):
         self.type = FeatureType.EXTRUDE
         if not self.name or self.name == "Feature": self.name = "Extrude"
@@ -99,6 +110,15 @@ class PushPullFeature(Feature):
 
     # Profile als Fallback (wenn Face-BREP nicht verfügbar)
     precalculated_polys: list = field(default_factory=list)
+
+    # TNP v5.0: Output Face ShapeIDs (persistent after boolean operations)
+    tnp_v5_face_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Edge ShapeIDs
+    tnp_v5_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Selection context (captured when face was selected for push/pull)
+    tnp_v5_selection_context: dict = None
 
     def __post_init__(self):
         self.type = FeatureType.PUSHPULL
