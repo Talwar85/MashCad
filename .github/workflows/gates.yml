@@ -34,7 +34,7 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install pytest pytest-xdist pytest-timeout
         conda run -n cad_env python -m pip install -r requirements.txt
 
     - name: Verify Test Environment
@@ -86,8 +86,8 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda install -y pytest
-        pip install -r requirements.txt
+        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install -r requirements.txt
 
     - name: Run PI-010 Gate
       shell: powershell
@@ -118,7 +118,7 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install pytest pytest-timeout
         conda run -n cad_env python -m pip install -r requirements.txt
         conda run -n cad_env python -m pip install PySide6  # UI dependencies
 
@@ -201,7 +201,7 @@ jobs:
     - name: Install dependencies
       shell: powershell
       run: |
-        conda run -n cad_env python -m pip install pytest
+        conda run -n cad_env python -m pip install pytest pytest-timeout
         conda run -n cad_env python -m pip install -r requirements.txt
 
     - name: Generate Gate Evidence (W3)
@@ -223,7 +223,7 @@ jobs:
       shell: powershell
       run: |
         # Find latest W3 or W2 evidence
-        $evidence = Get-ChildItem roadmap_ctp/QA_EVIDENCE_W*_*.md | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $evidence = Get-ChildItem roadmap_ctp/QA_EVIDENCE_W*_*.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($evidence) {
           $content = Get-Content $evidence -Raw
 
@@ -240,6 +240,9 @@ jobs:
           "@
 
           $summary + $content | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+        } else {
+          "## QA Evidence Summary (W3)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          "_No QA_EVIDENCE_W*_*.md file generated in this run._" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
         }
 
   # Summary Job (W3: Enhanced with Status Classification)
@@ -251,6 +254,7 @@ jobs:
 
     steps:
     - name: Generate Summary
+      shell: powershell
       run: |
         echo "## Gate Run Summary (W3)" >> $env:GITHUB_STEP_SUMMARY
         echo "" >> $env:GITHUB_STEP_SUMMARY
@@ -258,26 +262,26 @@ jobs:
         echo "|------|--------|-------|" >> $env:GITHUB_STEP_SUMMARY
 
         # Core-Gate
-        $coreStatus = if (${{ needs.core-gate.result }} -eq "success") { "✅ PASS" } else { "❌ FAIL" }
+        $coreStatus = if ("${{ needs.core-gate.result }}" -eq "success") { "[PASS]" } else { "[FAIL]" }
         echo "| Core-Gate | $coreStatus | Expected: 248 passed |" >> $env:GITHUB_STEP_SUMMARY
 
         # PI-010-Gate
-        $pi10Status = if (${{ needs.pi010-gate.result }} -eq "success") { "✅ PASS" } else { "❌ FAIL" }
+        $pi10Status = if ("${{ needs.pi010-gate.result }}" -eq "success") { "[PASS]" } else { "[FAIL]" }
         echo "| PI-010-Gate | $pi10Status | Expected: 20 passed |" >> $env:GITHUB_STEP_SUMMARY
 
         # UI-Gate (W3: BLOCKED_INFRA aware)
-        if (${{ needs.ui-gate.result }} -eq "success") {
-          echo "| UI-Gate | ✅ PASS/BLOCKED_INFRA | 8/14 passing (57%) |" >> $env:GITHUB_STEP_SUMMARY
+        if ("${{ needs.ui-gate.result }}" -eq "success") {
+          echo "| UI-Gate | [PASS/BLOCKED_INFRA] | 8/14 passing (57%) |" >> $env:GITHUB_STEP_SUMMARY
         } else {
-          echo "| UI-Gate | 🔴 FAIL | See UI_GATE_TRIAGE_W3.md |" >> $env:GITHUB_STEP_SUMMARY
+          echo "| UI-Gate | [FAIL] | See UI_GATE_TRIAGE_W3.md |" >> $env:GITHUB_STEP_SUMMARY
         }
 
         # Hygiene-Gate
-        $hygieneStatus = if (${{ needs.hygiene-gate.result }} -eq "success") { "⚠️ WARNING" } else { "❌ FAIL" }
+        $hygieneStatus = if ("${{ needs.hygiene-gate.result }}" -eq "success") { "[WARNING]" } else { "[FAIL]" }
         echo "| Hygiene-Gate | $hygieneStatus | 7 violations (non-blocking) |" >> $env:GITHUB_STEP_SUMMARY
 
         echo "" >> $env:GITHUB_STEP_SUMMARY
-        echo "**Evidence:** Artifacts uploaded to \`qa-evidence\`" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Evidence:** Artifacts uploaded to `qa-evidence`" >> $env:GITHUB_STEP_SUMMARY
 
     - name: Check Overall Status (Core must pass)
       if: needs.core-gate.result != 'success'

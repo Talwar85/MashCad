@@ -61,6 +61,8 @@ jobs:
       run: |
         conda install -c conda-forge -y \
           pytest \
+          pytest-xdist \
+          pytest-timeout \
           pyside6 \
           build123d \
           ocp \

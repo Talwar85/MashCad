@@ -120,12 +120,26 @@ run_core_gate() {
     
     # Keep Linux core behavior aligned with scripts/gate_core.ps1 (Windows).
     cd "$PROJECT_ROOT"
-    conda run -n cad_env python -m pytest \
-        -m "$CORE_MARKER" \
-        -n "$CORE_WORKERS" \
-        --timeout=120 \
-        --maxfail=30 \
-        -q 2>&1 | tee test_output_core.txt
+
+    local pytest_args=(
+        -m "$CORE_MARKER"
+        --maxfail=30
+        -q
+    )
+
+    if conda run -n cad_env python -c "import xdist" >/dev/null 2>&1 && [[ "$CORE_WORKERS" -gt 1 ]]; then
+        pytest_args+=(-n "$CORE_WORKERS")
+    else
+        echo -e "  ${YELLOW}[INFO] pytest-xdist not available -> sequential mode${NC}"
+    fi
+
+    if conda run -n cad_env python -c "import pytest_timeout" >/dev/null 2>&1; then
+        pytest_args+=(--timeout=120)
+    else
+        echo -e "  ${YELLOW}[INFO] pytest-timeout not available -> timeout arg skipped${NC}"
+    fi
+
+    conda run -n cad_env python -m pytest "${pytest_args[@]}" 2>&1 | tee test_output_core.txt
     local exit_code=${PIPESTATUS[0]}
     
     local end_time=$(date +%s)
