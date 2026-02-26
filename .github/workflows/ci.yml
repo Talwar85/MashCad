@@ -274,6 +274,7 @@ jobs:
 
     steps:
     - name: Generate Summary
+      shell: pwsh
       run: |
         echo "## Cross-Platform CI Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY

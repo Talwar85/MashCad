@@ -882,9 +882,32 @@ class Sketch:
                 minor_neg = ellipse._minor_axis.start
                 center_pt = ellipse._center_point
 
-                # Berechne Center aus Achsen-Mittelpunkten
-                center_x = (major_pos.x + major_neg.x) / 2
-                center_y = (major_pos.y + major_neg.y) / 2
+                prev_center_x = float(ellipse.center.x)
+                prev_center_y = float(ellipse.center.y)
+
+                # Center from axis midpoint (default source of truth)
+                axis_center_x = (major_pos.x + major_neg.x) / 2
+                axis_center_y = (major_pos.y + major_neg.y) / 2
+
+                # If only the center handle moved (direct drag), shift all axis points.
+                handle_dx = center_pt.x - prev_center_x
+                handle_dy = center_pt.y - prev_center_y
+                axis_dx = axis_center_x - prev_center_x
+                axis_dy = axis_center_y - prev_center_y
+                handle_moved = math.hypot(handle_dx, handle_dy) > 1e-9
+                axis_moved = math.hypot(axis_dx, axis_dy) > 1e-9
+
+                if handle_moved and not axis_moved:
+                    shift_x = center_pt.x - axis_center_x
+                    shift_y = center_pt.y - axis_center_y
+                    for pt in (major_pos, major_neg, minor_pos, minor_neg):
+                        pt.x += shift_x
+                        pt.y += shift_y
+                    center_x = center_pt.x
+                    center_y = center_pt.y
+                else:
+                    center_x = axis_center_x
+                    center_y = axis_center_y
 
                 # Berechne Radien aus Achsen-Längen
                 major_dx = major_pos.x - major_neg.x
@@ -907,7 +930,7 @@ class Sketch:
                 ellipse.radius_y = max(0.01, new_ry)
                 ellipse.rotation = new_rotation
 
-                # Synchronisiere Center-Point mit berechnetem Center
+                # Keep center handle in sync with computed center
                 center_pt.x = center_x
                 center_pt.y = center_y
 

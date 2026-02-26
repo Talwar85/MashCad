@@ -10,6 +10,7 @@ Diese Tests prüfen:
 import math
 import pytest
 from PySide6.QtCore import QPointF
+from PySide6.QtWidgets import QApplication
 
 # Versuche Imports - handle falls GUI nicht verfügbar
 try:
@@ -26,6 +27,16 @@ try:
     GUI_AVAILABLE = True
 except ImportError:
     GUI_AVAILABLE = False
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_qapplication():
+    """Ensure Qt application exists before creating SketchEditor widgets."""
+    if not GUI_AVAILABLE:
+        yield None
+        return
+    app = QApplication.instance() or QApplication([])
+    yield app
 
 
 @pytest.mark.skipif(not SKETCHER_AVAILABLE, reason="Sketcher not available")
