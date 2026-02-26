@@ -34,8 +34,8 @@ jobs:
       with:
         python-version: '3.11'
         miniforge-version: latest
-        activate-environment: cad_env
-        auto-activate-base: false
+        activate-environment: base
+        auto-activate: false
 
     - name: Setup Miniconda (Linux)
       if: runner.os == 'Linux'
@@ -43,8 +43,8 @@ jobs:
       with:
         python-version: '3.11'
         miniforge-version: latest
-        activate-environment: cad_env
-        auto-activate-base: false
+        activate-environment: base
+        auto-activate: false
 
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
@@ -59,7 +59,8 @@ jobs:
     - name: Install Python dependencies
       shell: bash -el {0}
       run: |
-        conda install -c conda-forge -y \
+        conda create -y -n cad_env python=3.11
+        conda install -n cad_env -c conda-forge -y \
           pytest \
           pytest-xdist \
           pytest-timeout \
@@ -78,7 +79,7 @@ jobs:
           matplotlib \
           pillow \
           lib3mf
-        pip install ocp-tessellate
+        conda run -n cad_env pip install ocp-tessellate
 
     - name: Verify environment
       shell: bash -el {0}
@@ -131,8 +132,8 @@ jobs:
       with:
         python-version: '3.11'
         miniforge-version: latest
-        activate-environment: cad_env
-        auto-activate-base: false
+        activate-environment: base
+        auto-activate: false
 
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
@@ -150,7 +151,8 @@ jobs:
     - name: Install Python dependencies
       shell: bash -el {0}
       run: |
-        conda install -c conda-forge -y \
+        conda create -y -n cad_env python=3.11
+        conda install -n cad_env -c conda-forge -y \
           pytest pytest-qt \
           pyside6 \
           build123d \
@@ -167,7 +169,7 @@ jobs:
           matplotlib \
           pillow \
           lib3mf
-        pip install ocp-tessellate
+        conda run -n cad_env pip install ocp-tessellate
 
     - name: Run UI-Gate (Windows)
       if: runner.os == 'Windows'
@@ -243,14 +245,15 @@ jobs:
       with:
         python-version: '3.11'
         miniforge-version: latest
-        activate-environment: cad_env
-        auto-activate-base: false
+        activate-environment: base
+        auto-activate: false
 
     - name: Install dependencies
       shell: bash -el {0}
       run: |
-        conda install -c conda-forge -y pytest
-        pip install -r requirements.txt
+        conda create -y -n cad_env python=3.11
+        conda install -n cad_env -c conda-forge -y pytest
+        conda run -n cad_env pip install -r requirements.txt
 
     - name: Generate Gate Evidence
       shell: pwsh
