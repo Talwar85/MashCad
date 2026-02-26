@@ -691,33 +691,50 @@ def register_boolean_input_shapes(
     """
     face_ids = []
     edge_ids = []
+    face_index = 0
+    edge_index = 0
 
     try:
-        # Register target solid faces
-        if target_solid is not None:
-            faces = list(target_solid.faces())
-            for idx, face in enumerate(faces):
+        def _register_solid(solid: Any, role: str) -> None:
+            nonlocal face_index, edge_index
+            if solid is None:
+                return
+
+            faces = list(solid.faces())
+            for face in faces:
                 ocp_shape = face.wrapped if hasattr(face, 'wrapped') else face
                 shape_id = tnp_service.register_shape(
                     ocp_shape=ocp_shape,
                     shape_type=ShapeType.FACE,
                     feature_id=feature_id,
-                    local_index=idx,
+                    local_index=face_index,
                     context=None
                 )
                 face_ids.append(shape_id)
+                face_index += 1
 
-            edges = list(target_solid.edges())
-            for idx, edge in enumerate(edges):
+            edges = list(solid.edges())
+            for edge in edges:
                 ocp_shape = edge.wrapped if hasattr(edge, 'wrapped') else edge
                 shape_id = tnp_service.register_shape(
                     ocp_shape=ocp_shape,
                     shape_type=ShapeType.EDGE,
                     feature_id=feature_id,
-                    local_index=idx,
+                    local_index=edge_index,
                     context=None
                 )
                 edge_ids.append(shape_id)
+                edge_index += 1
+
+            logger.debug(
+                f"[TNP v5.0] Registered boolean input {role}: "
+                f"{len(faces)} faces, {len(edges)} edges"
+            )
+
+        # Register target + tool input shapes.
+        # Local indices are monotonic across both solids to avoid ShapeID reuse collisions.
+        _register_solid(target_solid, "target")
+        _register_solid(tool_solid, "tool")
 
         logger.debug(f"[TNP v5.0] Registered {len(face_ids)} faces, {len(edge_ids)} edges "
                     f"for boolean '{feature_id}' input")

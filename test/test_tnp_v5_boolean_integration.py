@@ -85,8 +85,12 @@ class TestRegisterBooleanInputShapes:
             service, target, tool, "bool_1"
         )
 
-        # Currently only target is registered (tool tracking could be added)
-        assert len(face_ids) >= 1
+        # Both target and tool faces must be tracked as boolean inputs.
+        assert len(face_ids) == 2
+        assert len(edge_ids) == 0
+        assert service.register_shape.call_count == 2
+        local_indices = [c.kwargs["local_index"] for c in service.register_shape.call_args_list]
+        assert local_indices == [0, 1]
 
 
 class TestRegisterBooleanOutputShapes:

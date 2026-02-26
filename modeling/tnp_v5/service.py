@@ -7,6 +7,7 @@ Primary interface for shape naming and resolution.
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Tuple
 from loguru import logger
+import time
 
 from .types import (
     ShapeID,
@@ -56,7 +57,7 @@ class TNPService:
         self._shapes: Dict[str, ShapeRecord] = {}
 
         # Operation history
-        self._operations: List[Any] = []  # TODO: OperationRecord
+        self._operations: List[Dict[str, Any]] = []
 
         # Feature-based lookup
         self._by_feature: Dict[str, List[ShapeID]] = {}
@@ -187,8 +188,26 @@ class TNPService:
         Raises:
             ValueError: If operation data is invalid
         """
-        # TODO: Implement in Phase 1
+        if not operation_type:
+            raise ValueError("operation_type cannot be empty")
+        if not feature_id:
+            raise ValueError("feature_id cannot be empty")
+        if inputs is None or outputs is None:
+            raise ValueError("inputs and outputs cannot be None")
+
         operation_id = f"op_{feature_id}_{operation_type}_{len(self._operations)}"
+        op_data = {
+            "operation_id": operation_id,
+            "operation_type": operation_type,
+            "feature_id": feature_id,
+            "inputs": [self._shape_ref_to_dict(s) for s in inputs],
+            "outputs": [self._shape_ref_to_dict(s) for s in outputs],
+            "occt_history": occt_history,
+            "timestamp": time.time(),
+            "generation": self._generation,
+        }
+        self._operations.append(op_data)
+
         logger.debug(f"[TNP v5.0] Recorded operation {operation_id}")
         return operation_id
 
@@ -220,12 +239,7 @@ class TNPService:
 
         Returns:
             ResolutionResult with resolved shape or failure information
-
-        Note:
-            This is a stub implementation. Full implementation comes in Phase 2.
         """
-        import time
-
         if options is None:
             options = ResolutionOptions()
 
@@ -263,6 +277,10 @@ class TNPService:
                         disambiguation_used=None
                     )
                 elif semantic_result.is_ambiguous:
+                    candidate_ids = [c.shape_id for c in semantic_result.candidates]
+                    if not candidate_ids and semantic_result.alternative_scores:
+                        candidate_ids = [shape_uuid for shape_uuid, _ in semantic_result.alternative_scores]
+
                     # Ambiguous - return result with candidates for user confirmation
                     duration_ms = (time.perf_counter() - start) * 1000
                     return ResolutionResult(
@@ -271,11 +289,36 @@ class TNPService:
                         method=ResolutionMethod.SEMANTIC,
                         confidence=semantic_result.score,
                         duration_ms=duration_ms,
-                        alternative_candidates=[],  # TODO: Add candidate shapes
+                        alternative_candidates=candidate_ids,
                         disambiguation_used="ambiguous_match"
                     )
 
-        # TODO: Implement other strategies in Phase 2 and 3
+        # Strategy 3: History Match
+        if options.use_history_tracing:
+            history_resolved = self._try_history_match(shape_id, current_solid)
+            if history_resolved is not None:
+                duration_ms = (time.perf_counter() - start) * 1000
+                return ResolutionResult(
+                    shape_id=shape_id.uuid,
+                    resolved_shape=history_resolved,
+                    method=ResolutionMethod.HISTORY,
+                    confidence=0.85,
+                    duration_ms=duration_ms
+                )
+
+        # Strategy 4: User guided fallback (candidate suggestion only)
+        if options.require_user_confirmation:
+            candidates = self._build_user_guided_candidates(shape_id)
+            duration_ms = (time.perf_counter() - start) * 1000
+            return ResolutionResult(
+                shape_id=shape_id.uuid,
+                resolved_shape=None,
+                method=ResolutionMethod.USER_GUIDED,
+                confidence=0.0,
+                duration_ms=duration_ms,
+                alternative_candidates=candidates,
+                disambiguation_used="user_confirmation_required"
+            )
 
         # Failed to resolve
         duration_ms = (time.perf_counter() - start) * 1000
@@ -304,11 +347,7 @@ class TNPService:
         Returns:
             List of ResolutionResults (same order as input)
         """
-        # TODO: Implement in Phase 2 with optimization
-        results = []
-        for shape_id in shape_ids:
-            results.append(self.resolve(shape_id, current_solid, options))
-        return results
+        return [self.resolve(shape_id, current_solid, options) for shape_id in shape_ids]
 
     # ==========================================================================
     # Validation API
@@ -329,12 +368,42 @@ class TNPService:
 
         Returns:
             ValidationResult with issues found
-
-        Note:
-            This is a stub. Full implementation comes in Phase 4.
         """
-        # TODO: Implement in Phase 4
-        return ValidationResult(is_valid=True, issues=[])
+        issues: List[str] = []
+        seen_resolved_shape: Dict[int, str] = {}
+        seen_shape_id: set[str] = set()
+
+        for idx, result in enumerate(resolutions):
+            if result is None:
+                issues.append(f"resolution[{idx}] is None")
+                continue
+
+            if not result.shape_id:
+                issues.append(f"resolution[{idx}] has empty shape_id")
+                continue
+
+            if result.shape_id in seen_shape_id:
+                issues.append(f"duplicate shape_id in batch: {result.shape_id}")
+            seen_shape_id.add(result.shape_id)
+
+            if result.confidence < 0.0 or result.confidence > 1.0:
+                issues.append(f"invalid confidence for {result.shape_id}: {result.confidence}")
+
+            if result.resolved_shape is not None:
+                resolved_key = id(result.resolved_shape)
+                other_shape_id = seen_resolved_shape.get(resolved_key)
+                if other_shape_id is not None and other_shape_id != result.shape_id:
+                    issues.append(
+                        f"multiple shape_ids resolved to same shape: {other_shape_id}, {result.shape_id}"
+                    )
+                else:
+                    seen_resolved_shape[resolved_key] = result.shape_id
+            elif result.method not in (ResolutionMethod.FAILED, ResolutionMethod.USER_GUIDED, ResolutionMethod.SEMANTIC):
+                issues.append(
+                    f"resolution without shape uses unexpected method for {result.shape_id}: {result.method}"
+                )
+
+        return ValidationResult(is_valid=(len(issues) == 0), issues=issues)
 
     def check_ambiguity(
         self,
@@ -352,12 +421,57 @@ class TNPService:
 
         Returns:
             AmbiguityReport detailing any ambiguity
-
-        Note:
-            This is a stub. Full implementation comes in Phase 3.
         """
-        # TODO: Implement in Phase 3
-        return AmbiguityReport(is_ambiguous=False, ambiguity_type="none")
+        record = self.get_shape_record(shape_id.uuid)
+        if record is None:
+            return AmbiguityReport(
+                is_ambiguous=True,
+                ambiguity_type="missing_shape",
+                candidates=[],
+                disambiguation_questions=["Original shape reference does not exist in TNP registry."],
+                recommended_resolution=None
+            )
+
+        context = record.selection_context
+        if context is None:
+            return AmbiguityReport(
+                is_ambiguous=False,
+                ambiguity_type="insufficient_context",
+                candidates=[],
+                disambiguation_questions=[],
+                recommended_resolution=None
+            )
+
+        semantic_result = self._try_semantic_match(
+            shape_id=shape_id,
+            context=context,
+            current_solid=current_solid,
+            options=ResolutionOptions(max_candidates=10)
+        )
+
+        candidate_ids = [c.shape_id for c in semantic_result.candidates]
+        if not candidate_ids and semantic_result.alternative_scores:
+            candidate_ids = [shape_uuid for shape_uuid, _ in semantic_result.alternative_scores]
+
+        if semantic_result.is_ambiguous and candidate_ids:
+            return AmbiguityReport(
+                is_ambiguous=True,
+                ambiguity_type="semantic_ambiguous",
+                candidates=candidate_ids,
+                disambiguation_questions=[
+                    f"Multiple candidates match with close scores (top score {semantic_result.score:.3f}). "
+                    f"Please confirm intended shape."
+                ],
+                recommended_resolution=candidate_ids[0]
+            )
+
+        return AmbiguityReport(
+            is_ambiguous=False,
+            ambiguity_type="none",
+            candidates=[],
+            disambiguation_questions=[],
+            recommended_resolution=None
+        )
 
     # ==========================================================================
     # Internal Methods
@@ -519,6 +633,80 @@ class TNPService:
                 candidates=[],
                 is_ambiguous=False
             )
+
+    def _shape_ref_to_dict(self, shape_ref: Any) -> Dict[str, Any]:
+        """Normalize ShapeID-like references for operation storage."""
+        if isinstance(shape_ref, ShapeID):
+            return shape_ref.to_v4_format()
+
+        if isinstance(shape_ref, dict):
+            if "uuid" in shape_ref:
+                return dict(shape_ref)
+            return {"uuid": str(shape_ref)}
+
+        if isinstance(shape_ref, str):
+            return {"uuid": shape_ref}
+
+        if hasattr(shape_ref, "uuid"):
+            return {
+                "uuid": str(getattr(shape_ref, "uuid")),
+                "shape_type": getattr(shape_ref, "shape_type", None),
+                "feature_id": getattr(shape_ref, "feature_id", ""),
+                "local_index": getattr(shape_ref, "local_index", -1),
+                "geometry_hash": getattr(shape_ref, "geometry_hash", ""),
+            }
+
+        return {"uuid": str(shape_ref)}
+
+    @staticmethod
+    def _extract_ref_uuid(shape_ref: Any) -> Optional[str]:
+        """Extract UUID from stored operation shape references."""
+        if isinstance(shape_ref, dict):
+            uuid = shape_ref.get("uuid")
+            return str(uuid) if uuid is not None else None
+        if isinstance(shape_ref, ShapeID):
+            return shape_ref.uuid
+        if isinstance(shape_ref, str):
+            return shape_ref
+        if hasattr(shape_ref, "uuid"):
+            return str(getattr(shape_ref, "uuid"))
+        return None
+
+    def _try_history_match(self, shape_id: ShapeID, current_solid: Any) -> Optional[Any]:
+        """Strategy 3: Resolve through recorded operation input/output links."""
+        for op in reversed(self._operations):
+            inputs = [self._extract_ref_uuid(ref) for ref in op.get("inputs", [])]
+            outputs = [self._extract_ref_uuid(ref) for ref in op.get("outputs", [])]
+            inputs = [uuid for uuid in inputs if uuid]
+            outputs = [uuid for uuid in outputs if uuid]
+
+            # If queried shape is an operation output, verify it still exists.
+            if shape_id.uuid in outputs:
+                record = self.get_shape_record(shape_id.uuid)
+                if record is not None and record.ocp_shape is not None:
+                    if self._shape_exists_in_solid(record.ocp_shape, current_solid):
+                        return record.ocp_shape
+
+            # If queried shape is operation input, try mapped outputs.
+            if shape_id.uuid in inputs:
+                for out_uuid in outputs:
+                    record = self.get_shape_record(out_uuid)
+                    if record is None or record.ocp_shape is None:
+                        continue
+                    if self._shape_exists_in_solid(record.ocp_shape, current_solid):
+                        return record.ocp_shape
+
+        return None
+
+    def _build_user_guided_candidates(self, shape_id: ShapeID) -> List[str]:
+        """Return candidate UUIDs for manual disambiguation."""
+        feature_candidates = [
+            sid.uuid for sid in self.get_shapes_by_feature(shape_id.feature_id)
+            if sid.shape_type == shape_id.shape_type
+        ]
+        # Keep order stable and unique.
+        unique_candidates = list(dict.fromkeys(feature_candidates))
+        return unique_candidates[:10]
 
     # ==========================================================================
     # Spatial Query API (Phase 2)
