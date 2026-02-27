@@ -1998,18 +1998,24 @@ class Sketch:
         return {
             'name': self.name,
             'id': self.id,
+            # Phase E1: Plane-Information serialisieren
+            'plane_origin': self.plane_origin,
+            'plane_normal': self.plane_normal,
+            'plane_x_dir': self.plane_x_dir,
+            'plane_y_dir': self.plane_y_dir,
             'points': [(p.x, p.y, p.id, p.fixed, p.construction, p.standalone) for p in self.points],
             'lines': [(l.start.x, l.start.y, l.end.x, l.end.y, l.id, l.construction,
-                       bool(getattr(l, "_suppress_endpoint_markers", False)))
+                       bool(getattr(l, "_suppress_endpoint_markers", False)), l.start.id, l.end.id)
                       for l in self.lines],
             'line_slot_markers': line_slot_data,  # W34: Slot-Marker persistieren
-            'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction)
+            'circles': [(c.center.x, c.center.y, c.radius, c.id, c.construction,
+                         c.native_ocp_data, c.center.id)
                         for c in self.circles],
             'arcs': [(a.center.x, a.center.y, a.radius, a.start_angle, a.sweep_angle,
-                      a.id, a.construction) for a in self.arcs],
+                      a.id, a.construction, a.native_ocp_data, a.center.id) for a in self.arcs],
             'arc_slot_markers': arc_slot_data,  # W34: Slot-Arc-Marker persistieren
             'ellipses': [(e.center.x, e.center.y, e.radius_x, e.radius_y, e.rotation,
-                         e.id, e.construction, e.native_ocp_data) for e in self.ellipses],
+                         e.id, e.construction, e.native_ocp_data, e.center.id) for e in self.ellipses],
             'splines': splines_data,
             'native_splines': native_splines_data,
             'constraints': constraints_data,
@@ -2021,6 +2027,13 @@ class Sketch:
         """Erstellt Sketch aus Dictionary (für Undo)"""
         sketch = cls(name=data.get('name', 'Sketch'))
         sketch.id = data.get('id', sketch.id)
+
+        # Phase E1: Plane-Information wiederherstellen
+        if 'plane_origin' in data:
+            sketch.plane_origin = data['plane_origin']
+            sketch.plane_normal = data.get('plane_normal', (0, 0, 1))
+            sketch.plane_x_dir = data.get('plane_x_dir', (1, 0, 0))
+            sketch.plane_y_dir = data.get('plane_y_dir', (0, 1, 0))
 
         # Standalone-Punkte wiederherstellen
         for pdata in data.get('points', []):
@@ -2042,10 +2055,16 @@ class Sketch:
             lid = ldata[4] if len(ldata) > 4 else None
             construction = ldata[5] if len(ldata) > 5 else False
             suppress_endpoint_markers = ldata[6] if len(ldata) > 6 else False
+            start_id = ldata[7] if len(ldata) > 7 else None
+            end_id = ldata[8] if len(ldata) > 8 else None
             line = sketch.add_line(x1, y1, x2, y2, construction=construction)
             if lid:
                 line.id = lid
                 line_id_map[lid] = line
+            if start_id:
+                line.start.id = start_id
+            if end_id:
+                line.end.id = end_id
             if suppress_endpoint_markers:
                 line._suppress_endpoint_markers = True
                 line._ellipse_segment = True
@@ -2066,9 +2085,15 @@ class Sketch:
             cx, cy, r = cdata[0], cdata[1], cdata[2]
             cid = cdata[3] if len(cdata) > 3 else None
             construction = cdata[4] if len(cdata) > 4 else False
+            native_ocp_data = cdata[5] if len(cdata) > 5 else None
+            center_id = cdata[6] if len(cdata) > 6 else None
             circle = sketch.add_circle(cx, cy, r, construction=construction)
             if cid:
                 circle.id = cid
+            if native_ocp_data:
+                circle.native_ocp_data = native_ocp_data
+            if center_id:
+                circle.center.id = center_id
 
         # Bögen wiederherstellen
         arc_id_map = {}  # W34: Für Slot-Arc-Referenzen
@@ -2076,10 +2101,16 @@ class Sketch:
             cx, cy, r, start, sweep = adata[0], adata[1], adata[2], adata[3], adata[4]
             aid = adata[5] if len(adata) > 5 else None
             construction = adata[6] if len(adata) > 6 else False
+            native_ocp_data = adata[7] if len(adata) > 7 else None
+            center_id = adata[8] if len(adata) > 8 else None
             arc = sketch.add_arc(cx, cy, r, start, start + sweep, construction=construction)
             if aid:
                 arc.id = aid
                 arc_id_map[aid] = arc
+            if native_ocp_data:
+                arc.native_ocp_data = native_ocp_data
+            if center_id:
+                arc.center.id = center_id
         
         # W34: Slot-Marker für Arcs wiederherstellen
         arc_slot_markers = data.get('arc_slot_markers', {})
@@ -2094,12 +2125,15 @@ class Sketch:
             eid = edata[5] if len(edata) > 5 else None
             construction = edata[6] if len(edata) > 6 else False
             native_ocp_data = edata[7] if len(edata) > 7 else None
+            center_id = edata[8] if len(edata) > 8 else None
 
             ellipse = sketch.add_ellipse(cx, cy, rx, ry, rotation, construction=construction)
             if eid:
                 ellipse.id = eid
             if native_ocp_data:
                 ellipse.native_ocp_data = native_ocp_data
+            if center_id:
+                ellipse.center.id = center_id
 
         # Splines wiederherstellen
         for sdata in data.get('splines', []):
@@ -2170,6 +2204,14 @@ class Sketch:
                     driving=cdata.get('driving', True),
                 )
                 sketch.constraints.append(constraint)
+
+                # FIX: FIXED-Constraint setzt auch point.fixed = True (wie make_fixed)
+                # Das ist wichtig für die Solver-Logik
+                if ctype == ConstraintType.FIXED and entities:
+                    entity = entities[0]
+                    if hasattr(entity, 'fixed'):
+                        entity.fixed = True
+
             except (KeyError, Exception) as e:
                 logger.debug(f"Constraint-Wiederherstellung übersprungen: {e}")
 

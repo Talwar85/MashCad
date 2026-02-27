@@ -66,6 +66,34 @@ class Build123dProfileDetector:
         """Letzte Fehlermeldung (für Debugging)"""
         return self._last_error
 
+    def _point_key(self, x: float, y: float) -> Tuple[int, int]:
+        scale = max(self.tolerance, 1e-9)
+        return (round(x / scale), round(y / scale))
+
+    def _has_open_contours(self, lines, arcs) -> bool:
+        """Reject sketches with unmatched open endpoints before OCP face creation."""
+        endpoint_degree = {}
+
+        def add_endpoint(x: float, y: float) -> None:
+            key = self._point_key(x, y)
+            endpoint_degree[key] = endpoint_degree.get(key, 0) + 1
+
+        for line in lines:
+            add_endpoint(line.start.x, line.start.y)
+            add_endpoint(line.end.x, line.end.y)
+
+        for arc in arcs:
+            start_rad = math.radians(arc.start_angle)
+            end_rad = math.radians(arc.end_angle)
+            start_x = arc.center.x + arc.radius * math.cos(start_rad)
+            start_y = arc.center.y + arc.radius * math.sin(start_rad)
+            end_x = arc.center.x + arc.radius * math.cos(end_rad)
+            end_y = arc.center.y + arc.radius * math.sin(end_rad)
+            add_endpoint(start_x, start_y)
+            add_endpoint(end_x, end_y)
+
+        return any(degree % 2 != 0 for degree in endpoint_degree.values())
+
     def detect_profiles(self, sketch: 'Sketch', plane: Optional['Plane'] = None) -> List['Face']:
         """
         Konvertiert Sketch-Geometrie zu Build123d und findet alle geschlossenen Faces.
@@ -97,6 +125,11 @@ class Build123dProfileDetector:
             return []
 
         logger.debug(f"Profile-Detection: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Arcs")
+
+        if self._has_open_contours(lines, arcs):
+            self._last_error = "Offene Konturen im Sketch"
+            logger.debug(self._last_error)
+            return []
 
         try:
             # Methode 1: Direkte Edge-basierte Face-Erkennung mit OCP
