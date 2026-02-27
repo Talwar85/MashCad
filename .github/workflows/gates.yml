@@ -297,29 +297,34 @@ jobs:
         retention-days: 30
 
     - name: Generate Step Summary (W3)
-      shell: powershell
+      shell: pwsh
+      env:
+        REF_NAME: ${{ github.ref_name }}
+        COMMIT_SHA: ${{ github.sha }}
       run: |
-        # Find latest W3 or W2 evidence
-        $evidence = Get-ChildItem roadmap_ctp/QA_EVIDENCE_W*_*.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $env:GITHUB_STEP_SUMMARY) {
+          Write-Host "::notice::GITHUB_STEP_SUMMARY not available; skipping step summary generation"
+          exit 0
+        }
+
+        $summaryPath = $env:GITHUB_STEP_SUMMARY
+        $evidence = Get-ChildItem "roadmap_ctp/QA_EVIDENCE_W*_*.md" -ErrorAction SilentlyContinue |
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 1
+
+        Set-Content -Path $summaryPath -Value "## QA Evidence Summary (W3)" -Encoding utf8
+        Add-Content -Path $summaryPath -Value ""
+        Add-Content -Path $summaryPath -Value "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC"
+        Add-Content -Path $summaryPath -Value "Branch: $env:REF_NAME"
+        Add-Content -Path $summaryPath -Value "Commit: $env:COMMIT_SHA"
+        Add-Content -Path $summaryPath -Value ""
+        Add-Content -Path $summaryPath -Value "---"
+        Add-Content -Path $summaryPath -Value ""
+
         if ($evidence) {
-          $content = Get-Content $evidence -Raw
-
-          # Add W3 status header
-          $summary = @"
-
-          ## QA Evidence Summary (W3)
-          Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-
-          ---
-
-          "@
-
-          $summary + $content | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          Add-Content -Path $summaryPath -Value (Get-Content $evidence.FullName -Raw)
         } else {
-          "## QA Evidence Summary (W3)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
-          "_No QA_EVIDENCE_W*_*.md file generated in this run._" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Add-Content -Path $summaryPath -Value "_No QA_EVIDENCE_W*_*.md file generated in this run._"
         }
 
   # Summary Job (W3: Enhanced with Status Classification)

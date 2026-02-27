@@ -297,6 +297,9 @@ class SpatialIndex:
         self._stats = SpatialIndexStats()
         self._enable_cache = enable_cache
         self._cache = QueryCache(max_size=cache_size) if enable_cache else None
+        self._rtree_ids: Dict[str, int] = {}
+        self._rtree_shape_ids: Dict[int, str] = {}
+        self._next_rtree_id = 1
 
         if HAS_RTREE:
             try:
@@ -348,7 +351,13 @@ class SpatialIndex:
         # Insert into R-tree if available
         if self._use_rtree and self._index is not None:
             try:
-                self._index.insert(id(shape_id), bounds_obj.to_tuple(), obj=shape_id)
+                rtree_id = self._rtree_ids.get(shape_id)
+                if rtree_id is None:
+                    rtree_id = self._next_rtree_id
+                    self._next_rtree_id += 1
+                    self._rtree_ids[shape_id] = rtree_id
+                    self._rtree_shape_ids[rtree_id] = shape_id
+                self._index.insert(rtree_id, bounds_obj.to_tuple())
             except Exception as e:
                 logger.debug(f"[SpatialIndex] Failed to insert {shape_id}: {e}")
 
@@ -397,17 +406,15 @@ class SpatialIndex:
         max_pt = (x + radius, y + radius, z + radius)
 
         try:
-            candidates = list(self._index.intersection(min_pt + max_pt, objects=True))
+            candidate_ids = self._index.intersection(min_pt + max_pt)
         except Exception as e:
             logger.debug(f"[SpatialIndex] R-tree query failed: {e}")
             return []
 
-        # Extract shape IDs from candidate objects
         result = []
-        for candidate in candidates:
-            if hasattr(candidate, 'object'):
-                shape_id = candidate.object
-            else:
+        for candidate_id in candidate_ids:
+            shape_id = self._rtree_shape_ids.get(candidate_id)
+            if shape_id is None:
                 continue
 
             # Filter by shape type if requested
@@ -498,17 +505,16 @@ class SpatialIndex:
     ) -> List[str]:
         """Find nearest using R-tree."""
         try:
-            candidates = list(self._index.nearest(point, max_results * 2, objects=True))
+            candidate_ids = self._index.nearest(point, max_results * 2)
         except Exception as e:
             logger.debug(f"[SpatialIndex] R-tree nearest failed: {e}")
             return []
 
         # Sort by actual distance and filter
         results = []
-        for candidate in candidates:
-            if hasattr(candidate, 'object'):
-                shape_id = candidate.object
-            else:
+        for candidate_id in candidate_ids:
+            shape_id = self._rtree_shape_ids.get(candidate_id)
+            if shape_id is None:
                 continue
 
             # Filter by shape type
@@ -630,7 +636,10 @@ class SpatialIndex:
         if self._use_rtree and self._index is not None:
             try:
                 bounds = self._bounds[shape_id]
-                self._index.delete(id(shape_id), bounds.to_tuple())
+                rtree_id = self._rtree_ids.pop(shape_id, None)
+                if rtree_id is not None:
+                    self._index.delete(rtree_id, bounds.to_tuple())
+                    self._rtree_shape_ids.pop(rtree_id, None)
             except Exception as e:
                 logger.debug(f"[SpatialIndex] Failed to remove {shape_id}: {e}")
 
@@ -646,6 +655,9 @@ class SpatialIndex:
         self._bounds.clear()
         self._shapes.clear()
         self._count = 0
+        self._rtree_ids.clear()
+        self._rtree_shape_ids.clear()
+        self._next_rtree_id = 1
 
         # Clear cache if enabled
         if self._cache:

@@ -157,10 +157,6 @@ class TNPService:
                     'local_index': local_index
                 }
             )
-            logger.debug(f"[TNP v5.0] Added shape {shape_id.uuid[:8]}... to spatial index")
-
-        logger.debug(f"[TNP v5.0] Registered shape {shape_id.uuid[:8]}... "
-                    f"type={shape_type.name} feature={feature_id}")
 
         return shape_id
 
