@@ -657,21 +657,21 @@ class TestSciPySolverPreValidation:
 class TestSciPySolverSolve:
     """Tests for solve method."""
     
-    def test_solve_no_scipy(self):
-        """Test solve returns error when SciPy not available."""
-        from sketcher.solver_scipy import SciPyBackendBase, HAS_SCIPY
+    def test_solve_no_scipy(self, monkeypatch):
+        """Test solve returns error when SciPy is forced unavailable."""
+        import sketcher.solver_scipy as solver_scipy_module
         from sketcher.solver_interface import SolverProblem
-        
-        if HAS_SCIPY:
-            pytest.skip("SciPy is available, skipping no-SciPy test")
-        
-        backend = SciPyBackendBase()
+
+        monkeypatch.setattr(solver_scipy_module, "HAS_SCIPY", False)
+
+        backend = solver_scipy_module.SciPyBackendBase()
         problem = SolverProblem(points=[], lines=[], circles=[], arcs=[], constraints=[])
-        
+
         result = backend.solve(problem)
-        
+
         assert result.success is False
         assert "SciPy" in result.message
+        assert result.error_code == "no_scipy"
     
     def test_solve_no_constraints(self):
         """Test solve with no constraints."""

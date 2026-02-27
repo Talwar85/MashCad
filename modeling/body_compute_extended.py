@@ -320,13 +320,15 @@ class BodyComputeExtendedMixin:
 
         # Fallback: OCP Wire-Building aus Edges
         if profile_wire is None:
+            from OCP.TopoDS import TopoDS
+
             explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
             profile_wire_builder = BRepBuilderAPI_MakeWire()
             while explorer.More():
                 try:
-                    profile_wire_builder.Add(explorer.Current())
+                    profile_wire_builder.Add(TopoDS.Edge_s(explorer.Current()))
                 except Exception:
-                    pass
+                    logger.debug("Sweep: Edge konnte nicht in Profil-Wire uebernommen werden")
                 explorer.Next()
 
             if not profile_wire_builder.IsDone():

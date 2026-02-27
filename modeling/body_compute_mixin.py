@@ -199,6 +199,7 @@ class BodyComputeMixin:
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS
         from OCP.Approx import Approx_ParametrizationType
         from build123d import Solid
 
@@ -228,7 +229,7 @@ class BodyComputeMixin:
                 if edges:
                     wire_builder = BRepBuilderAPI_MakeWire()
                     for edge in edges:
-                        wire_builder.Add(edge)
+                        wire_builder.Add(TopoDS.Edge_s(edge))
                     wire_builder.Build()
                     if wire_builder.IsDone():
                         loft_builder.AddWire(wire_builder.Wire())

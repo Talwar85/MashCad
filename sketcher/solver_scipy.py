@@ -152,6 +152,138 @@ class SciPyBackendBase(ISolverBackend):
             for c in constraints
             if c.type != ConstraintType.FIXED
         )
+
+    def _calculate_dof_with_dependency_graph(self, points, lines, circles, arcs, constraints, refs, x0_vals):
+        """
+        Phase B1+B2: Echte DOF-Analyse mit Dependency Graph.
+
+        Berechnet DOF pro unabhängiger Komponente statt globaler Heuristik.
+        Dies vermeidet False-Positives bei überbestimmten Systemen.
+
+        Args:
+            points, lines, circles, arcs: Geometrie
+            constraints: Liste aller Constraints
+            refs: Variablen-Referenzen vom Solver
+            x0_vals: Anzahl der Variablen
+
+        Returns:
+            (total_dof, component_info_list, has_overconstraint)
+        """
+        from .dependency_graph import DependencyGraph
+
+        # Mock-Sketch für Graph-Building
+        class MockSketch:
+            def __init__(self, points, lines, circles, arcs, constraints):
+                self.points = points
+                self.lines = lines
+                self.circles = circles
+                self.arcs = arcs
+                self.constraints = constraints
+                self.splines = []
+                self.native_splines = []
+                self.ellipses = []
+
+        sketch = MockSketch(points, lines, circles, arcs, constraints)
+
+        # Dependency Graph aufbauen
+        graph = DependencyGraph()
+        try:
+            graph.build_from_sketch(sketch)
+        except Exception as e:
+            # Fallback bei Graph-Fehlern
+            from loguru import logger
+            logger.warning(f"[Solver] Dependency graph build failed: {e}, using heuristic DOF")
+            heuristic_balance = len(x0_vals) - self._count_effective_constraints(constraints)
+            return max(0, heuristic_balance), [], heuristic_balance < 0
+
+        variable_counts = {}
+        for obj, _attr in refs:
+            entity_id = graph._entity_id(obj)
+            if not entity_id:
+                continue
+            variable_counts[entity_id] = variable_counts.get(entity_id, 0) + 1
+
+        constrained_entities = set()
+        for entity_ids in graph._constraint_entities.values():
+            constrained_entities.update(entity_ids)
+
+        if not constrained_entities:
+            # Keine constraintgebundenen Komponenten - alle Variablen sind frei
+            return len(x0_vals), [], False
+
+        # Komponenten auf Entity-Graph-Basis statt nur über geteilte Constraint-Entities.
+        # So bleiben Linien/Endpunkte, Kreis/Zentrum usw. in derselben DOF-Komponente.
+        component_entities = []
+        visited_entities = set()
+        for root_entity in constrained_entities:
+            if root_entity in visited_entities:
+                continue
+
+            stack = [root_entity]
+            entity_component = set()
+            while stack:
+                current = stack.pop()
+                if current in visited_entities:
+                    continue
+                visited_entities.add(current)
+                entity_component.add(current)
+                for neighbor in graph._adjacency.get(current, set()):
+                    if neighbor not in visited_entities:
+                        stack.append(neighbor)
+
+            if entity_component:
+                component_entities.append(entity_component)
+
+        # DOF pro Teilsystem berechnen
+        component_info = []
+        covered_entities = set()
+        has_overconstraint = False
+
+        for subset_id, entity_ids in enumerate(component_entities):
+            covered_entities.update(entity_ids)
+
+            # Constraints in diesem Teilsystem finden
+            constraint_ids = [
+                constraint_id
+                for constraint_id, constraint_entities in graph._constraint_entities.items()
+                if constraint_entities & entity_ids
+            ]
+            constraint_id_set = set(constraint_ids)
+            subset_constraints = [
+                c for c in constraints
+                if hasattr(c, 'id') and str(c.id) in constraint_id_set
+            ]
+
+            # Variablen in diesem Teilsystem zählen basierend auf echten Solver-Refs.
+            subset_vars = sum(variable_counts.get(entity_id, 0) for entity_id in entity_ids)
+
+            # Constraints in diesem Teilsystem zählen (gewichtet)
+            subset_effective_constraints = self._count_effective_constraints(subset_constraints)
+
+            # Rohbilanz für dieses Teilsystem. Negativ bedeutet überbestimmt.
+            component_balance = subset_vars - subset_effective_constraints
+            component_dof = max(0, component_balance)
+            if component_balance < 0:
+                has_overconstraint = True
+
+            component_info.append({
+                'id': subset_id,
+                'constraint_ids': list(constraint_ids),
+                'entity_count': len(entity_ids),
+                'variables': subset_vars,
+                'effective_constraints': subset_effective_constraints,
+                'raw_balance': component_balance,
+                'dof': component_dof,
+            })
+
+        # Variablen ohne Constraint-Komponente bleiben komplett frei.
+        free_entities = set(variable_counts) - covered_entities
+        free_dof = sum(variable_counts.get(entity_id, 0) for entity_id in free_entities)
+
+        # Total DOF ist Summe der positiven Komponenten + freier Variablen.
+        total_dof = free_dof + sum(c['dof'] for c in component_info)
+
+        return total_dof, component_info, has_overconstraint
     
     def solve(self, problem: SolverProblem) -> SolverResult:
         """Implementierung des SciPy Solvers"""
@@ -161,9 +293,10 @@ class SciPyBackendBase(ISolverBackend):
                 ConstraintStatus.INCONSISTENT,
                 "SciPy nicht installiert!",
                 backend_used=self.name,
-                n_variables=total_n_vars,
-                n_constraints=len(active_constraints),
-                dof=dof_estimate,
+                n_variables=0,
+                n_constraints=0,
+                dof=0,
+                error_code="no_scipy",
             )
 
         points = problem.points
@@ -193,14 +326,17 @@ class SciPyBackendBase(ISolverBackend):
         active_constraints = [c for c in constraints if getattr(c, 'enabled', True) and c.is_valid()]
         invalid_enabled = [c for c in constraints if getattr(c, 'enabled', True) and not c.is_valid()]
         n_effective_constraints = self._count_effective_constraints(active_constraints)
-        dof_estimate = max(0, total_n_vars - n_effective_constraints)
 
         if invalid_enabled:
             return SolverResult(
                 False, 0, float('inf'),
                 ConstraintStatus.INCONSISTENT,
                 f"Ungültige Constraints: {len(invalid_enabled)}",
-                backend_used=self.name
+                backend_used=self.name,
+                n_variables=total_n_vars,
+                n_constraints=len(active_constraints),
+                dof=max(0, total_n_vars - n_effective_constraints),
+                error_code="invalid_constraints",
             )
 
         if not active_constraints:
@@ -226,12 +362,17 @@ class SciPyBackendBase(ISolverBackend):
                     backend_used=self.name,
                     n_variables=total_n_vars,
                     n_constraints=len(active_constraints),
-                    dof=dof_estimate,
+                    dof=max(0, total_n_vars - n_effective_constraints),
                     error_code="pre_validation_failed",
                 )
 
         # Variablen sammeln
         refs, x0_vals = self._collect_variables(points, lines, circles, arcs, spline_control_points)
+
+        # Phase B1+B2: Echte DOF-Analyse mit Dependency Graph (nachdem refs verfügbar)
+        dof_calculated, component_info, has_overconstraint = self._calculate_dof_with_dependency_graph(
+            points, lines, circles, arcs, active_constraints, refs, x0_vals
+        )
         
         if not x0_vals:
             # Keine beweglichen Teile
@@ -279,8 +420,9 @@ class SciPyBackendBase(ISolverBackend):
                 backend_used=self.name
             )
         
-        overconstrained_hint = n_effective_constraints > n_vars
-        
+        # Phase B1+B2: Overconstrained-Hint basiert auf Rohbilanz, nicht auf abgeklemmtem DOF.
+        overconstrained_hint = has_overconstraint
+
         # Fehlerfunktion
         def error_function(x):
             """Berechnet Residuen für least_squares."""
@@ -381,13 +523,12 @@ class SciPyBackendBase(ISolverBackend):
             
             if solver_converged and total_error_small and max_error_small:
                 success = True
-                if n_effective_constraints >= n_vars:
+                if dof_calculated == 0:
                     status = ConstraintStatus.FULLY_CONSTRAINED
                     message = f"Vollständig bestimmt (Fehler: {constraint_error:.2e})"
                 else:
                     status = ConstraintStatus.UNDER_CONSTRAINED
-                    dof = n_vars - n_effective_constraints
-                    message = f"Unterbestimmt ({dof} Freiheitsgrade)"
+                    message = f"Unterbestimmt ({dof_calculated} Freiheitsgrade)"
             elif not solver_converged:
                 success = False
                 status = ConstraintStatus.OVER_CONSTRAINED if overconstrained_hint else ConstraintStatus.INCONSISTENT
@@ -401,10 +542,10 @@ class SciPyBackendBase(ISolverBackend):
                     message = f"Gesamtfehler zu groß ({constraint_error:.2e})"
                 else:
                     message = f"Maximaler Einzelfehler zu groß ({max_error:.2e})"
-            
+
             if not success:
                 restore_initial_values()
-            
+
             return SolverResult(
                 success=bool(success),
                 iterations=int(result.nfev),
@@ -414,7 +555,7 @@ class SciPyBackendBase(ISolverBackend):
                 backend_used=self.name,
                 n_variables=n_vars,
                 n_constraints=len(active_constraints),
-                dof=max(0, n_vars - n_effective_constraints),
+                dof=max(0, dof_calculated),  # Phase B1+B2: Echte DOF aus Dependency Graph
                 error_code="" if success else ("non_converged" if not solver_converged else "inconsistent"),
             )
             
