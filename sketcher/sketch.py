@@ -1154,18 +1154,18 @@ class Sketch:
 
         try:
             result.n_variables = int(vars_count)
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.debug(f"Sketch.solve: n_variables konnte nicht gesetzt werden: {exc}")
 
         try:
             result.n_constraints = int(constraint_count)
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.debug(f"Sketch.solve: n_constraints konnte nicht gesetzt werden: {exc}")
 
         try:
             result.dof = int(dof)
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.debug(f"Sketch.solve: dof konnte nicht gesetzt werden: {exc}")
 
         try:
             current_code = str(getattr(result, "error_code", "") or "").strip().lower()
@@ -1186,14 +1186,14 @@ class Sketch:
                     inferred = "inconsistent"
 
                 result.error_code = inferred
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Sketch.solve: error_code-Inferenz fehlgeschlagen: {exc}")
 
         try:
             if getattr(result, "status", None) == ConstraintStatus.FULLY_CONSTRAINED and dof > 0:
                 result.status = ConstraintStatus.UNDER_CONSTRAINED
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Sketch.solve: Statuskorrektur fehlgeschlagen: {exc}")
 
         return result
 

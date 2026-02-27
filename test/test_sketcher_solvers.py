@@ -373,7 +373,7 @@ class TestUnifiedConstraintSolver:
         """Test solving with no constraints returns under-constrained."""
         from sketcher.solver_interface import UnifiedConstraintSolver
         from sketcher.constraints import ConstraintStatus
-        
+
         solver = UnifiedConstraintSolver()
         
         # Mock the backend to return a result
@@ -388,8 +388,8 @@ class TestUnifiedConstraintSolver:
                 message="Keine Constraints",
                 backend_used="test"
             )
-            mock_select.return_value = mock_backend
-            
+            mock_select.return_value = (mock_backend, "test", "")
+
             result = solver.solve(
                 points=[mock_point(0, 0)],
                 lines=[mock_line(0, 0, 10, 0)],
@@ -397,8 +397,45 @@ class TestUnifiedConstraintSolver:
                 arcs=[],
                 constraints=[]
             )
-            
+
             assert result.success is True
+            assert result.backend_used == "test"
+            assert result.requested_backend == "test"
+
+    def test_solve_exposes_backend_selection_detail(self, mock_point, mock_line):
+        """Backend fallback details must be visible in the returned result."""
+        from sketcher.solver_interface import UnifiedConstraintSolver
+        from sketcher.constraints import ConstraintStatus
+
+        solver = UnifiedConstraintSolver()
+
+        with patch.object(solver, '_select_backend') as mock_select:
+            mock_backend = Mock()
+            mock_backend.name = "scipy_lm"
+            mock_backend.solve.return_value = Mock(
+                success=True,
+                iterations=4,
+                final_error=0.0,
+                status=ConstraintStatus.UNDER_CONSTRAINED,
+                message="Solved",
+                backend_used="",
+            )
+            detail = "requested backend 'staged' cannot solve: test reason; fell back to 'scipy_lm'"
+            mock_select.return_value = (mock_backend, "staged", detail)
+
+            result = solver.solve(
+                points=[mock_point(0, 0)],
+                lines=[mock_line(0, 0, 10, 0)],
+                circles=[],
+                arcs=[],
+                constraints=[],
+            )
+
+            assert result.success is True
+            assert result.backend_used == "scipy_lm"
+            assert result.requested_backend == "staged"
+            assert result.selection_detail == detail
+            assert detail in result.message
 
 
 # ============================================================================

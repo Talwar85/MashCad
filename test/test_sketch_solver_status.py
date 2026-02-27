@@ -2,6 +2,7 @@ from sketcher.constraints import Constraint, ConstraintType
 import sketcher.constraints as constraints_module
 import sketcher.parametric_solver as parametric_solver_module
 import sketcher.solver as solver_module
+import sketcher.solver_interface as solver_interface_module
 import sketcher.solver_scipy as solver_scipy_module
 from sketcher.sketch import ConstraintStatus, Sketch
 from types import SimpleNamespace
@@ -291,6 +292,28 @@ def test_scipy_failure_reports_parametric_skip_reason(monkeypatch):
     assert "SciPy fehlgeschlagen" in result.message
     assert "py-slvs übersprungen" in result.message
     assert "Arc" in result.message or "Arcs" in result.message
+
+def test_constraint_solver_exposes_unified_to_legacy_fallback(monkeypatch):
+    def _raise_unified(*_args, **_kwargs):
+        raise RuntimeError("forced unified failure")
+
+    monkeypatch.setattr(solver_interface_module.UnifiedConstraintSolver, "solve", _raise_unified)
+
+    sketch = Sketch("legacy_fallback_visible")
+    result = sketch._solver.solve(
+        sketch.points,
+        sketch.lines,
+        sketch.circles,
+        sketch.arcs,
+        sketch.constraints,
+    )
+
+    assert result.success is True
+    assert result.status == ConstraintStatus.UNDER_CONSTRAINED
+    assert result.requested_backend == "unified"
+    assert result.error_code == "legacy_solver_fallback"
+    assert "forced unified failure" in result.selection_detail
+    assert "forced unified failure" in result.message
 
 
 def test_scipy_non_convergence_restores_original_geometry(monkeypatch):
