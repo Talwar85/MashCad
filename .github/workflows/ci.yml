@@ -72,7 +72,10 @@ jobs:
           pyvistaqt \
           numpy \
           scipy \
+          scikit-learn \
+          casadi \
           shapely \
+          rtree \
           ezdxf \
           loguru \
           trimesh \
@@ -84,10 +87,11 @@ jobs:
     - name: Verify environment
       shell: bash -el {0}
       run: |
-        python --version
-        python -m pytest --version
-        python -c "import build123d; print('build123d OK')"
-        python -c "import OCP; print('OCP OK')"
+        conda run -n cad_env python --version
+        conda run -n cad_env python -m pytest --version
+        conda run -n cad_env python -c "import build123d; print('build123d OK')"
+        conda run -n cad_env python -c "import OCP; print('OCP OK')"
+        conda run -n cad_env python -c "import rtree; print('rtree OK')"
 
     - name: Run Core-Gate (Windows)
       if: runner.os == 'Windows'
@@ -162,7 +166,10 @@ jobs:
           pyvistaqt \
           numpy \
           scipy \
+          scikit-learn \
+          casadi \
           shapely \
+          rtree \
           ezdxf \
           loguru \
           trimesh \
@@ -252,7 +259,11 @@ jobs:
       shell: bash -el {0}
       run: |
         conda create -y -n cad_env python=3.11
-        conda install -n cad_env -c conda-forge -y pytest
+        conda install -n cad_env -c conda-forge -y \
+          pytest \
+          scikit-learn \
+          casadi \
+          rtree
         conda run -n cad_env pip install -r requirements.txt
 
     - name: Generate Gate Evidence

@@ -46,7 +46,10 @@ jobs:
           pyvistaqt `
           numpy `
           scipy `
+          scikit-learn `
+          casadi `
           shapely `
+          rtree `
           ezdxf `
           loguru `
           trimesh `
@@ -111,7 +114,10 @@ jobs:
           ocp `
           numpy `
           scipy `
+          scikit-learn `
+          casadi `
           shapely `
+          rtree `
           ezdxf `
           loguru `
           trimesh `
@@ -161,7 +167,10 @@ jobs:
           pyvistaqt `
           numpy `
           scipy `
+          scikit-learn `
+          casadi `
           shapely `
+          rtree `
           ezdxf `
           loguru `
           trimesh `
@@ -260,7 +269,10 @@ jobs:
           pyvistaqt `
           numpy `
           scipy `
+          scikit-learn `
+          casadi `
           shapely `
+          rtree `
           ezdxf `
           loguru `
           trimesh `
