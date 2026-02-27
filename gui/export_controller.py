@@ -22,11 +22,12 @@ from loguru import logger
 from pathlib import Path
 from typing import List, Optional, Callable, Any
 
+from gui.workers.main_thread_worker import MainThreadWorkerMixin
 from i18n import tr
 
 
-class STLExportWorker(QThread):
-    """Worker thread for async STL export."""
+class STLExportWorker(MainThreadWorkerMixin, QThread):
+    """Queued main-thread worker for STL export."""
     finished = Signal(bool, str)  # success, message
     progress = Signal(str)
     
@@ -36,11 +37,31 @@ class STLExportWorker(QThread):
         self.bodies = bodies
         self.filepath = filepath
         self.options = options
+        self._cancelled = False
+        self._running = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def start(self):
+        self._start_queued_task("STL export", self._execute)
+
+    def _execute(self):
+        try:
+            self.run()
+        finally:
+            self._running = False
         
     def run(self):
         try:
+            if self._cancelled:
+                self.finished.emit(False, tr("STL Export abgebrochen"))
+                return
             self.progress.emit(tr("Exportiere STL..."))
             result = self.export_func(self.bodies, self.filepath, self.options)
+            if self._cancelled:
+                self.finished.emit(False, tr("STL Export abgebrochen"))
+                return
             if result.success:
                 msg = tr(f"STL Export erfolgreich: {result.triangle_count:,} Dreiecke")
                 self.finished.emit(True, msg)

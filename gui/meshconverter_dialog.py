@@ -2,9 +2,9 @@
 MashCad - MeshConverter Dialog
 ===============================
 
-Async Mesh-to-BREP Konvertierung mit Progress Dialog.
+Queued main-thread Mesh-to-BREP Konvertierung mit Progress Dialog.
 
-Verhindert UI-Freezing bei grossen Meshes durch QThread-basierte Konvertierung.
+Verhindert OCP/OpenCASCADE im Background-Thread.
 Zeigt detaillierten Fortschritt mit Phase, Progress-Bar und Status-Updates.
 
 Features:
@@ -22,6 +22,7 @@ from pathlib import Path
 from loguru import logger
 
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QProgressBar, QPushButton, QComboBox, QFileDialog,
     QGroupBox, QTextEdit, QRadioButton, QButtonGroup
@@ -29,12 +30,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QMutex, QMutexLocker
 from PySide6.QtGui import QFont, QColor
 
+from gui.workers.main_thread_worker import MainThreadWorkerMixin
 from i18n import tr
 
 
-class MeshConverterWorker(QThread):
+class MeshConverterWorker(MainThreadWorkerMixin, QThread):
     """
-    Background Worker für Mesh-Konvertierung.
+    Deferred main-thread worker für Mesh-Konvertierung.
 
     Signals:
         progress: (ProgressUpdate) - Fortschritts-Update
@@ -58,6 +60,7 @@ class MeshConverterWorker(QThread):
         self.mesh = mesh
         self._cancelled = False
         self._mutex = QMutex()
+        self._running = False
 
     def cancel(self):
         """Bricht die Konvertierung ab."""
@@ -69,10 +72,21 @@ class MeshConverterWorker(QThread):
         with QMutexLocker(self._mutex):
             return self._cancelled
 
+    def start(self):
+        """Queue conversion on the main thread."""
+        self._start_queued_task("mesh conversion", self._execute)
+
+    def _execute(self):
+        try:
+            self.run()
+        finally:
+            self._running = False
+
     def run(self):
-        """Führt Konvertierung im Background-Thread aus."""
+        """Führt Konvertierung auf dem Main Thread aus."""
         try:
             if self.is_cancelled():
+                self.error.emit(tr("Konvertierung abgebrochen"))
                 return
 
             # Progress Callback Wrapper
@@ -83,8 +97,11 @@ class MeshConverterWorker(QThread):
             # Konvertierung ausführen
             result = self.converter.convert_async(self.mesh, on_progress)
 
-            if not self.is_cancelled():
-                self.finished.emit(result)
+            if self.is_cancelled():
+                self.error.emit(tr("Konvertierung abgebrochen"))
+                return
+
+            self.finished.emit(result)
 
         except Exception as e:
             if not self.is_cancelled():
@@ -380,6 +397,7 @@ class MeshConverterDialog(QDialog):
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
+        self.worker.error.connect(lambda _msg: self._on_worker_done())
         self.worker.finished.connect(self._on_worker_done)
         self.worker.start()
 
@@ -409,6 +427,8 @@ class MeshConverterDialog(QDialog):
         # Log (nur wichtige Messages)
         if update.progress > 0.1:  # Nicht loggen bei jedem kleinen Update
             self._log(f"[{phase_name}] {progress_percent}% - {update.message}")
+
+        QApplication.processEvents()
 
     def _on_finished(self, result):
         """Wenn Konvertierung fertig."""

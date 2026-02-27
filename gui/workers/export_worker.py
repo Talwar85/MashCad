@@ -2,10 +2,10 @@
 MashCAD - Async Export Worker
 =============================
 
-PERFORMANCE (Phase 6): Background thread für File-Export.
+PERFORMANCE (Phase 6): Deferred main-thread execution for file export.
 
-Problem: STL/STEP Export mit großen Meshes blockiert die UI (Freeze).
-Lösung: QThread-basierter Worker mit Progress-Callbacks.
+Problem: OCP/OpenCASCADE ist nicht thread-safe.
+Lösung: queued main-thread worker mit Progress-Callbacks.
 
 Features:
 - Non-blocking Export (UI bleibt responsiv)
@@ -23,8 +23,10 @@ from loguru import logger
 
 from PySide6.QtCore import QThread, Signal
 
+from gui.workers.main_thread_worker import MainThreadWorkerMixin
 
-class STLExportWorker(QThread):
+
+class STLExportWorker(MainThreadWorkerMixin, QThread):
     """
     Background Worker für STL Export.
 
@@ -64,15 +66,30 @@ class STLExportWorker(QThread):
         self.scale = scale
         self.apply_textures = apply_textures
         self._cancelled = False
+        self._running = False
 
     def cancel(self):
         """Request cancellation of export."""
         self._cancelled = True
         logger.info("STL Export cancelled by user")
 
-    def run(self):
-        """Main export logic (runs in background thread)."""
+    def start(self):
+        """Queue export on the main thread."""
+        self._start_queued_task("STL export", self._execute)
+
+    def _execute(self):
         try:
+            self.run()
+        finally:
+            self._running = False
+
+    def run(self):
+        """Main export logic (runs on the main thread)."""
+        try:
+            if self._cancelled:
+                self.error.emit("Export abgebrochen")
+                return
+
             import pyvista as pv
 
             merged_polydata = None
@@ -155,7 +172,7 @@ class STLExportWorker(QThread):
         return mesh_to_add
 
 
-class STEPExportWorker(QThread):
+class STEPExportWorker(MainThreadWorkerMixin, QThread):
     """
     Background Worker für STEP Export.
 
@@ -172,20 +189,45 @@ class STEPExportWorker(QThread):
         self.solids = solids
         self.filepath = filepath
         self._cancelled = False
+        self._running = False
 
     def cancel(self):
         self._cancelled = True
 
+    def start(self):
+        """Queue export on the main thread."""
+        self._start_queued_task("STEP export", self._execute)
+
+    def _execute(self):
+        try:
+            self.run()
+        finally:
+            self._running = False
+
     def run(self):
         try:
+            if self._cancelled:
+                self.error.emit("Export abgebrochen")
+                return
+
             from build123d import Compound, export_step
 
             self.progress.emit(20, "Erstelle Compound...")
 
-            if len(self.solids) == 1:
-                shape_to_export = self.solids[0]
+            solids = []
+            for item in self.solids:
+                solid = getattr(item, "_build123d_solid", item)
+                if solid is not None:
+                    solids.append(solid)
+
+            if not solids:
+                self.error.emit("Keine gültigen Solids zum Exportieren")
+                return
+
+            if len(solids) == 1:
+                shape_to_export = solids[0]
             else:
-                shape_to_export = Compound(children=self.solids)
+                shape_to_export = Compound(children=solids)
 
             if self._cancelled:
                 self.error.emit("Export abgebrochen")

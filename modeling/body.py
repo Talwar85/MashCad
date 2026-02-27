@@ -282,7 +282,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     @classmethod
     def _get_tessellation_manager(cls):
-        """Lazy singleton manager for async tessellation requests."""
+        """Lazy singleton manager for deferred tessellation requests."""
         if cls._shared_tessellation_manager is None:
             from gui.workers.tessellation_worker import TessellationManager
             cls._shared_tessellation_manager = TessellationManager()

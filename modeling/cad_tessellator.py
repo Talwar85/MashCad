@@ -18,6 +18,7 @@ import threading
 from config.tolerances import Tolerances  # Phase 5: Zentralisierte Toleranzen
 from config.feature_flags import is_enabled
 from collections import OrderedDict  # PERFORMANCE: O(1) LRU operations
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
 from modeling.topology_indexing import iter_faces_with_indices
 
 # VERSION für Cache-Invalidierung - ERHÖHEN bei Änderungen!
@@ -187,6 +188,8 @@ class CADTessellator:
         """
         if not HAS_OCP or solid is None:
             return None
+
+        ensure_ocp_main_thread("extract B-Rep edges")
 
         try:
             from OCP.TopoDS import TopoDS
@@ -451,6 +454,8 @@ class CADTessellator:
         if not solid:
             return None, None
 
+        ensure_ocp_main_thread("tessellate solid")
+
         # OCP Feature Audit: Adaptive Deflection basierend auf Modellgröße
         if quality is None:
             if is_enabled("adaptive_tessellation"):
@@ -602,6 +607,8 @@ class CADTessellator:
         if not HAS_OCP or solid is None:
             return None, None, {}
 
+        ensure_ocp_main_thread("tessellate solid with face IDs")
+
         if quality is None:
             if is_enabled("adaptive_tessellation"):
                 quality = CADTessellator._compute_adaptive_deflection(solid)
@@ -751,6 +758,11 @@ class CADTessellator:
             - vertices: List von (x, y, z) Tuples
             - faces: List von Triangle-Indices (0-based)
         """
+        if solid is None:
+            return None, None
+
+        ensure_ocp_main_thread("tessellate solid for export")
+
         try:
             # Cache-Key aus Geometrie + Export-Parametern
             geom_hash = CADTessellator._get_geometry_hash(solid)

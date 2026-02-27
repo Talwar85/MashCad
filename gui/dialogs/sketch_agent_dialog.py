@@ -12,12 +12,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QThread
 from loguru import logger
 
+from gui.workers.main_thread_worker import MainThreadWorkerMixin
 from i18n import tr
 from gui.design_tokens import DesignTokens
 
 
-class SketchAgentWorker(QThread):
-    """Background-Worker für Part-Generierung."""
+class SketchAgentWorker(MainThreadWorkerMixin, QThread):
+    """Deferred main-thread worker für Part-Generierung."""
     finished = Signal(object)
     progress = Signal(str)
 
@@ -26,6 +27,16 @@ class SketchAgentWorker(QThread):
         self.agent = agent
         self.complexity = complexity
         self.seed = seed
+        self._running = False
+
+    def start(self):
+        self._start_queued_task("sketch-agent generation", self._execute)
+
+    def _execute(self):
+        try:
+            self.run()
+        finally:
+            self._running = False
 
     def run(self):
         try:

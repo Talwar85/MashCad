@@ -10,6 +10,7 @@ Garantiert wasserdichte Ergebnisse durch echtes Edge-Sharing.
 import numpy as np
 from typing import Optional, List, Dict, Tuple
 from loguru import logger
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
 
 try:
     import pyvista as pv
@@ -86,6 +87,8 @@ class DirectMeshConverter:
         Returns:
             ConversionResult
         """
+        ensure_ocp_main_thread("convert mesh to BREP (DirectMeshConverter)")
+
         if not HAS_OCP:
             return ConversionResult(
                 status=ConversionStatus.FAILED,

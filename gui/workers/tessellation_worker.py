@@ -2,7 +2,7 @@
 MashCAD - Async Tessellation Worker
 ===================================
 
-Background thread worker and priority manager for non-blocking tessellation.
+Queued main-thread worker and priority manager for non-blocking tessellation.
 """
 
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -10,25 +10,40 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from loguru import logger
 from PySide6.QtCore import QMutex, QMutexLocker, QThread, Signal
 
+from gui.workers.main_thread_worker import MainThreadWorkerMixin
 
-class TessellationWorker(QThread):
-    """Background worker that tessellates one solid."""
+
+class TessellationWorker(MainThreadWorkerMixin, QThread):
+    """Deferred main-thread worker that tessellates one solid."""
 
     mesh_ready = Signal(str, object, object, object)  # body_id, mesh, edges, face_info
     error = Signal(str, str)  # body_id, error_message
+    finished = Signal()
 
     def __init__(self, body_id: str, solid: Any, parent=None):
         super().__init__(parent)
         self.body_id = body_id
         self.solid = solid
         self._cancelled = False
+        self._running = False
 
     def cancel(self):
         """Cancel this tessellation request."""
         self._cancelled = True
 
+    def start(self):
+        """Queue tessellation on the next main-thread event loop turn."""
+        self._start_queued_task("OCP tessellation", self._execute)
+
+    def _execute(self):
+        try:
+            self.run()
+        finally:
+            self._running = False
+            self.finished.emit()
+
     def run(self):
-        """Execute tessellation in the worker thread."""
+        """Execute tessellation on the main thread."""
         try:
             if self._cancelled:
                 return
@@ -50,12 +65,12 @@ class TessellationWorker(QThread):
 
 class TessellationManager:
     """
-    Manages tessellation workers with per-body supersede and priority scheduling.
+    Manages tessellation requests with per-body supersede and priority scheduling.
 
     - At most one active worker per body.
     - New request for same body cancels old active/pending request.
     - Higher priority requests are started first.
-    - max_concurrent controls global concurrency (default 1 for kernel safety).
+    - max_concurrent controls queued parallelism metadata (default 1).
     """
 
     def __init__(self, max_concurrent: int = 1):
@@ -93,8 +108,16 @@ class TessellationManager:
             self._workers[body_id] = worker
             self._request_seq += 1
             self._pending.append((int(priority), self._request_seq, body_id))
-            self._schedule_locked()
-            return worker
+            workers_to_start = self._schedule_locked()
+
+        for scheduled_worker in workers_to_start:
+            scheduled_worker.start()
+            logger.debug(
+                f"Tessellation started for {scheduled_worker.body_id} "
+                f"(active={len(self._active_body_ids)}, pending={len(self._pending)})"
+            )
+
+        return worker
 
     def _remove_pending_locked(self, body_id: str):
         self._pending = [item for item in self._pending if item[2] != body_id]
@@ -114,11 +137,12 @@ class TessellationManager:
         _prio, _seq, body_id = self._pending.pop(best_idx)
         return body_id
 
-    def _schedule_locked(self):
+    def _schedule_locked(self) -> List[TessellationWorker]:
+        workers_to_start: List[TessellationWorker] = []
         while len(self._active_body_ids) < self._max_concurrent:
             next_body_id = self._pop_next_pending_body_locked()
             if next_body_id is None:
-                return
+                break
 
             worker = self._workers.get(next_body_id)
             if worker is None:
@@ -129,11 +153,9 @@ class TessellationManager:
                 continue
 
             self._active_body_ids.add(next_body_id)
-            worker.start()
-            logger.debug(
-                f"Tessellation started for {next_body_id} "
-                f"(active={len(self._active_body_ids)}, pending={len(self._pending)})"
-            )
+            workers_to_start.append(worker)
+
+        return workers_to_start
 
     def _cleanup_worker(self, body_id: str):
         """Called when a worker finishes."""
@@ -145,7 +167,14 @@ class TessellationManager:
             if worker is not None and not worker.isRunning():
                 del self._workers[body_id]
 
-            self._schedule_locked()
+            workers_to_start = self._schedule_locked()
+
+        for scheduled_worker in workers_to_start:
+            scheduled_worker.start()
+            logger.debug(
+                f"Tessellation started for {scheduled_worker.body_id} "
+                f"(active={len(self._active_body_ids)}, pending={len(self._pending)})"
+            )
 
     def cancel_all(self):
         """Cancel all active and pending requests."""
