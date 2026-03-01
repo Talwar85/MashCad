@@ -16,10 +16,12 @@ import build123d as bd
 from build123d import Solid, Location, Vector
 
 from modeling import (
-    Body, Document, PushPullFeature,
+    Body, Document, PrimitiveFeature, PushPullFeature,
     FeatureType
 )
+from modeling.brepfeat_operations import brepfeat_prism
 from modeling.tnp_system import ShapeID, ShapeType
+from modeling.topology_indexing import face_index_of
 
 
 # ============================================================================
@@ -305,6 +307,72 @@ class TestPushPullFeatureIntegration:
         body.add_feature(feat2)
 
         assert len(body.features) == 2
+
+    def test_brepfeat_prism_uses_preferred_direction_for_bottom_face_join(self):
+        """Bottom-face Join darf kein No-Op sein wenn die Selektionsnormale gesetzt ist."""
+        box = bd.Solid.make_box(10, 10, 10)
+        bottom_face = min(list(box.faces()), key=lambda face: float(face.center().Z))
+
+        result = brepfeat_prism(
+            base_solid=box,
+            face=bottom_face.wrapped,
+            height=5.0,
+            fuse=True,
+            preferred_direction=(0.0, 0.0, -1.0),
+        )
+
+        assert result is not None
+        assert result.volume == pytest.approx(1500.0, rel=1e-6)
+        assert result.bounding_box().min.Z == pytest.approx(-5.0, rel=1e-6)
+
+    def test_pushpull_bottom_face_join_respects_plane_normal_on_rebuild(self):
+        """Push/Pull auf Unterseite muss über Rebuild Material hinzufügen."""
+        doc = Document("Bottom PushPull Test")
+        body = Body("TestBody", document=doc)
+        doc.add_body(body)
+
+        base = PrimitiveFeature(
+            primitive_type="box",
+            length=10.0,
+            width=10.0,
+            height=10.0,
+            name="Base Box",
+        )
+        body.add_feature(base, rebuild=True)
+        assert body._build123d_solid is not None
+        box = body._build123d_solid
+
+        bottom_face = min(list(box.faces()), key=lambda face: float(face.center().Z))
+        face_index = face_index_of(box, bottom_face)
+        assert face_index is not None
+        face_index = int(face_index)
+
+        center = bottom_face.center()
+        face_shape_id = doc._shape_naming_service.register_shape(
+            bottom_face.wrapped,
+            ShapeType.FACE,
+            "bottom_face_seed",
+            face_index,
+            (float(center.X), float(center.Y), float(center.Z), float(bottom_face.area)),
+        )
+
+        feat = PushPullFeature(
+            face_index=face_index,
+            face_shape_id=face_shape_id,
+            distance=5.0,
+            direction=1,
+            operation="Join",
+            plane_origin=(float(center.X), float(center.Y), float(center.Z)),
+            plane_normal=(0.0, 0.0, -1.0),
+            name="Bottom Join",
+        )
+
+        body.add_feature(feat, rebuild=True)
+
+        assert feat.status == "SUCCESS"
+        assert body._build123d_solid is not None
+        assert body._build123d_solid.volume == pytest.approx(1500.0, rel=1e-6)
+        assert body._build123d_solid.bounding_box().min.Z == pytest.approx(-5.0, rel=1e-6)
 
 
 # ============================================================================

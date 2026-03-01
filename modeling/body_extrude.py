@@ -438,10 +438,33 @@ class BodyExtrudeMixin:
         # OCP Face extrahieren
         ocp_face = face_to_extrude.wrapped if hasattr(face_to_extrude, 'wrapped') else face_to_extrude
 
-        # Fuse-Modus aus Feature-Direction bestimmen
-        # direction=1 -> Join (fuse=True), direction=-1 -> Cut (fuse=False)
-        fuse_mode = getattr(feature, 'direction', 1) >= 0
-        height = abs(feature.distance)
+        # Operation robust bestimmen:
+        # - primär über explizites Feature.operation
+        # - sekundär über direction/effective distance für ältere Daten
+        operation = str(getattr(feature, 'operation', '') or '').strip().lower()
+        if operation in {'join', 'cut'}:
+            fuse_mode = (operation == 'join')
+        else:
+            effective_distance = None
+            try:
+                effective_distance = float(feature.get_effective_distance())
+            except Exception:
+                try:
+                    effective_distance = float(getattr(feature, 'distance', 0.0)) * float(getattr(feature, 'direction', 1))
+                except Exception:
+                    effective_distance = None
+            if effective_distance is None:
+                fuse_mode = getattr(feature, 'direction', 1) >= 0
+            else:
+                fuse_mode = effective_distance >= 0.0
+
+        height = abs(float(getattr(feature, 'distance', 0.0)))
+
+        preferred_direction = self._get_pushpull_preferred_direction(
+            feature,
+            current_solid,
+            ocp_face,
+        )
 
         # Kanonische brepfeat_prism() verwenden
         result_solid = brepfeat_prism(
@@ -449,11 +472,15 @@ class BodyExtrudeMixin:
             face=ocp_face,
             height=height,
             fuse=fuse_mode,
-            unify=True
+            unify=True,
+            preferred_direction=preferred_direction,
         )
 
         if result_solid is None:
             raise ValueError("BRepFeat_MakePrism fehlgeschlagen")
+
+        if not self._pushpull_geometry_changed(current_solid, result_solid):
+            raise ValueError("Push/Pull ergab keine Geometrieaenderung")
 
         # TNP-Registrierung
         if self._document and hasattr(self._document, '_shape_naming_service'):
@@ -465,6 +492,137 @@ class BodyExtrudeMixin:
                 logger.debug(f"Push/Pull TNP-Registrierung fehlgeschlagen: {e}")
 
         return result_solid
+
+    def _pushpull_geometry_changed(self, source_solid, result_solid) -> bool:
+        """
+        Erkennt No-Op Push/Pull Ergebnisse robust genug für Rebuild/UI-Fehler.
+
+        Ein nicht-null Push/Pull darf nicht als Erfolg durchgehen, wenn der
+        resultierende Solid topologisch und volumetrisch unverändert bleibt.
+        """
+        if source_solid is None or result_solid is None:
+            return True
+
+        try:
+            if hasattr(source_solid, "wrapped") and hasattr(result_solid, "wrapped"):
+                try:
+                    if result_solid.wrapped.IsSame(source_solid.wrapped):
+                        return False
+                except Exception:
+                    pass
+
+            volume_delta = abs(float(result_solid.volume) - float(source_solid.volume))
+            return volume_delta > 1e-6
+        except Exception as compare_err:
+            logger.debug(f"Push/Pull: No-Op Vergleich fehlgeschlagen: {compare_err}")
+            return True
+
+    def _get_pushpull_preferred_direction(self, feature, current_solid, ocp_face):
+        """
+        Bestimmt die gewünschte lineare Extrusionsrichtung für Push/Pull.
+
+        Priorität:
+        1. Aus der aufgelösten Face im aktuellen Solid abgeleitete Außen-Normale
+        2. Gespeicherte plane_normal aus GUI/Serialization
+        3. Keine Richtungsvorgabe
+        """
+        try:
+            effective_distance = float(feature.get_effective_distance())
+        except Exception:
+            try:
+                effective_distance = float(getattr(feature, 'distance', 0.0)) * float(getattr(feature, 'direction', 1))
+            except Exception:
+                effective_distance = 0.0
+
+        direction_sign = 1.0 if effective_distance >= 0.0 else -1.0
+
+        base_direction = self._estimate_outward_face_normal(current_solid, ocp_face)
+        if base_direction is None:
+            try:
+                plane_normal = tuple(float(v) for v in getattr(feature, 'plane_normal', (0.0, 0.0, 0.0)))
+                base_direction = self._normalize_direction_tuple(plane_normal)
+            except Exception:
+                base_direction = None
+
+        if base_direction is None:
+            return None
+
+        return tuple(component * direction_sign for component in base_direction)
+
+    def _estimate_outward_face_normal(self, current_solid, ocp_face):
+        """Schätzt die Außen-Normale einer Face relativ zum aktuellen Solid."""
+        face_normal = self._surface_normal_from_face(ocp_face)
+        if face_normal is None:
+            return None
+
+        try:
+            from build123d import Face
+
+            face_obj = Face(ocp_face)
+            face_center = face_obj.center()
+            solid_bbox = current_solid.bounding_box()
+            solid_center = solid_bbox.center()
+
+            outward_hint = (
+                float(face_center.X) - float(solid_center.X),
+                float(face_center.Y) - float(solid_center.Y),
+                float(face_center.Z) - float(solid_center.Z),
+            )
+            hint_normalized = self._normalize_direction_tuple(outward_hint)
+            if hint_normalized is None:
+                return face_normal
+
+            dot = sum(a * b for a, b in zip(face_normal, hint_normalized))
+            if dot < 0.0:
+                return tuple(-component for component in face_normal)
+            return face_normal
+        except Exception as normal_err:
+            logger.debug(f"Push/Pull: Außen-Normale konnte nicht geschätzt werden: {normal_err}")
+            return face_normal
+
+    def _surface_normal_from_face(self, ocp_face):
+        """Berechnet eine lokale Flächennormale für planare und allgemeine Faces."""
+        try:
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.GeomAbs import GeomAbs_Plane
+            from OCP.gp import gp_Pnt, gp_Vec
+
+            adaptor = BRepAdaptor_Surface(ocp_face)
+            u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2.0
+            v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2.0
+
+            point = gp_Pnt()
+            du = gp_Vec()
+            dv = gp_Vec()
+            adaptor.D1(u_mid, v_mid, point, du, dv)
+            normal_vec = du.Crossed(dv)
+
+            if normal_vec.Magnitude() <= 1e-9 and adaptor.GetType() == GeomAbs_Plane:
+                plane_dir = adaptor.Plane().Axis().Direction()
+                return self._normalize_direction_tuple((plane_dir.X(), plane_dir.Y(), plane_dir.Z()))
+
+            magnitude = normal_vec.Magnitude()
+            if magnitude <= 1e-9:
+                return None
+            return (
+                normal_vec.X() / magnitude,
+                normal_vec.Y() / magnitude,
+                normal_vec.Z() / magnitude,
+            )
+        except Exception as normal_err:
+            logger.debug(f"Push/Pull: Surface-Normale konnte nicht berechnet werden: {normal_err}")
+            return None
+
+    def _normalize_direction_tuple(self, direction):
+        """Normalisiert einen 3D-Vektor oder liefert None bei degenerierter Richtung."""
+        try:
+            dx, dy, dz = (float(direction[0]), float(direction[1]), float(direction[2]))
+            magnitude = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if magnitude <= 1e-9:
+                return None
+            return (dx / magnitude, dy / magnitude, dz / magnitude)
+        except Exception:
+            return None
     def _extrude_sketch_ellipses(self, sketch, plane, profile_selector=None):
         """
         TNP v4.1: Erstellt native OCP Ellipse Faces aus Sketch-Ellipsen.

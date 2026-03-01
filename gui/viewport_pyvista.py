@@ -373,6 +373,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        PickingMixin.__init__(self)
         self.setMouseTracking(True)
         self._viewcube_created = False  # VOR _setup_plotter initialisieren
 

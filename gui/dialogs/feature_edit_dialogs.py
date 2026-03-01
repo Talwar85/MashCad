@@ -14,9 +14,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QComboBox, QGroupBox
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator
 from loguru import logger
-from gui.design_tokens import DesignTokens
+from gui.design_tokens import DesignTokens, parse_decimal, setup_decimal_input
 from i18n import tr
 
 
@@ -76,9 +75,7 @@ def _create_number_input(label_text, parent_layout, suffix=""):
     row.addWidget(label)
 
     line_edit = QLineEdit()
-    validator = QDoubleValidator()
-    validator.setNotation(QDoubleValidator.StandardNotation)
-    line_edit.setValidator(validator)
+    setup_decimal_input(line_edit)
     row.addWidget(line_edit)
 
     if suffix:
@@ -348,7 +345,7 @@ class ExtrudeEditDialog(QDialog):
 
     def _on_apply(self):
         try:
-            distance = float(self.distance_input.text() or "10")
+            distance = parse_decimal(self.distance_input.text(), 10.0)
             if distance <= 0:
                 logger.warning("Distance must be > 0")
                 return
@@ -373,6 +370,74 @@ class ExtrudeEditDialog(QDialog):
             'direction': self.feature.direction,
             'operation': self.feature.operation,
         }
+
+
+class PushPullEditDialog(QDialog):
+    """Edit-Dialog fuer Push/Pull: Distanz + Join/Cut + Face-Info."""
+
+    def __init__(self, feature, body, parent=None):
+        super().__init__(parent)
+        self.feature = feature
+        self.body = body
+        self._parent_window = parent
+        self.setWindowTitle(f"Edit {feature.name}")
+        self.setMinimumWidth(400)
+        self.setStyleSheet(DesignTokens.stylesheet_dialog())
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"<b>{feature.name}</b><br>Body: {body.name}")
+        info.setStyleSheet("color: #ddd; padding: 10px; background: #1e1e1e; border-radius: 4px;")
+        layout.addWidget(info)
+
+        group = QGroupBox(tr("Push/Pull Parameters"))
+        group_layout = QVBoxLayout()
+
+        effective_distance = getattr(feature, "get_effective_distance", lambda: feature.distance)()
+        self.distance_input = _create_number_input(tr("Distance:"), group_layout, "mm")
+        self.distance_input.setText(str(abs(float(effective_distance))))
+
+        op_layout = QHBoxLayout()
+        op_layout.addWidget(QLabel(tr("Operation:")))
+        self.op_combo = QComboBox()
+        self.op_combo.addItems([tr("Join"), tr("Cut")])
+        current_op = feature.operation if feature.operation in {"Join", "Cut"} else ("Cut" if effective_distance < 0 else "Join")
+        _set_operation_combo(self.op_combo, current_op)
+        op_layout.addWidget(self.op_combo)
+        op_layout.addStretch()
+        group_layout.addLayout(op_layout)
+
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+
+        _add_geometry_delta_section(layout, feature, body, self)
+
+        apply_btn = _create_buttons(layout, self)
+        apply_btn.clicked.connect(self._on_apply)
+
+    def _on_apply(self):
+        try:
+            distance = parse_decimal(self.distance_input.text(), 10.0)
+            if distance <= 0:
+                logger.warning("Distance must be > 0")
+                return
+
+            operation = _get_operation_key(self.op_combo.currentText())
+            self.feature.distance = distance
+            self.feature.direction = -1 if operation == "Cut" else 1
+            self.feature.operation = operation
+            self.feature.name = f"PushPull: {operation} {distance:.1f}mm"
+            self.accept()
+        except ValueError as e:
+            logger.error(f"Ungueltige Eingabe (Push/Pull): {e}")
+
+    def closeEvent(self, event):
+        _clear_face_highlight(self._parent_window)
+        super().closeEvent(event)
+
+    def reject(self):
+        _clear_face_highlight(self._parent_window)
+        super().reject()
 
 
 class FilletEditDialog(QDialog):
@@ -420,7 +485,7 @@ class FilletEditDialog(QDialog):
 
     def _on_apply(self):
         try:
-            radius = float(self.radius_input.text() or "2")
+            radius = parse_decimal(self.radius_input.text(), 2.0)
             if radius <= 0:
                 logger.warning("Radius must be > 0")
                 return
@@ -482,7 +547,7 @@ class ChamferEditDialog(QDialog):
 
     def _on_apply(self):
         try:
-            distance = float(self.distance_input.text() or "2")
+            distance = parse_decimal(self.distance_input.text(), 2.0)
             if distance <= 0:
                 logger.warning("Distance must be > 0")
                 return
@@ -540,7 +605,7 @@ class ShellEditDialog(QDialog):
 
     def _on_apply(self):
         try:
-            thickness = float(self.thickness_input.text() or "2")
+            thickness = parse_decimal(self.thickness_input.text(), 2.0)
             if thickness <= 0:
                 logger.warning("Thickness must be > 0")
                 return
@@ -610,7 +675,7 @@ class RevolveEditDialog(QDialog):
 
     def _on_apply(self):
         try:
-            angle = float(self.angle_input.text() or "360")
+            angle = parse_decimal(self.angle_input.text(), 360.0)
             if angle <= 0 or angle > 360:
                 logger.warning("Angle must be 0-360")
                 return
@@ -768,8 +833,9 @@ class SweepEditDialog(QDialog):
         try:
             self.feature.operation = _get_operation_key(self.op_combo.currentText())
             self.feature.is_frenet = (self.frenet_combo.currentIndex() == 1)
-            twist = float(self.twist_input.text() or "0")
+            twist = parse_decimal(self.twist_input.text(), 0.0)
             self.feature.twist_angle = twist
             self.accept()
         except ValueError as e:
             logger.error(f"Ungueltige Eingabe (Sweep): {e}")
+

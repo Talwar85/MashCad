@@ -1288,14 +1288,22 @@ class FeatureDialogsMixin:
         """User hat den Pick-Button im TNP-Panel geklickt."""
         self._pending_tnp_pick_mode = True
         self.viewport_3d.setCursor(Qt.CrossCursor)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(True)
+        if hasattr(self, 'tnp_stats_panel'):
+            self.tnp_stats_panel.set_picking_active(True)
         self.statusBar().showMessage("Wähle Body für TNP-Analyse")
 
     def _on_body_clicked_for_tnp(self, body_id: str):
         """Body wurde im Viewport für TNP-Panel ausgewählt."""
         self._pending_tnp_pick_mode = False
         self.viewport_3d.setCursor(Qt.ArrowCursor)
-        
-        body = self.document.find_body_by_id(body_id)
+        if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
+            self.viewport_3d.set_pending_transform_mode(False)
+        if hasattr(self, 'tnp_stats_panel'):
+            self.tnp_stats_panel.set_picking_active(False)
+
+        body = self._find_body_by_id_global(body_id)
         if body:
             self._update_tnp_stats(body)
 
@@ -1319,14 +1327,10 @@ class FeatureDialogsMixin:
             return
         
         if body:
-            signature = self._solid_signature_safe(body)
-            if signature:
-                self.tnp_stats_panel.set_body_stats(
-                    body.name,
-                    signature['faces'],
-                    signature['edges'],
-                    signature['volume']
-                )
+            if hasattr(self.tnp_stats_panel, 'update_stats'):
+                self.tnp_stats_panel.update_stats(body)
+            elif hasattr(self.tnp_stats_panel, 'refresh'):
+                self.tnp_stats_panel.refresh(body)
     
     # =========================================================================
     # Component Operations
@@ -1640,13 +1644,15 @@ class FeatureDialogsMixin:
 
     def _on_edit_feature_requested(self, feature):
         """Handler für Edit Feature Request."""
-        body = self._get_active_body()
+        body = self._find_feature_owner_body(feature) if hasattr(self, '_find_feature_owner_body') else None
         if body:
-            self._edit_parametric_feature(feature, body, 'unknown')
+            self._edit_feature(('feature', feature, body))
+        else:
+            logger.warning(f"Edit Feature: Kein Owner-Body für '{getattr(feature, 'name', 'Feature')}' gefunden")
 
     def _on_rebuild_feature_requested(self, feature):
         """Handler für Rebuild Feature Request."""
-        body = self._get_active_body()
+        body = self._find_feature_owner_body(feature) if hasattr(self, '_find_feature_owner_body') else None
         if body and hasattr(feature, '_rebuild'):
             try:
                 feature._rebuild(body)
@@ -1659,7 +1665,7 @@ class FeatureDialogsMixin:
 
     def _on_delete_feature_requested(self, feature):
         """Handler für Delete Feature Request."""
-        body = self._get_active_body()
+        body = self._find_feature_owner_body(feature) if hasattr(self, '_find_feature_owner_body') else None
         if body:
             self._on_feature_deleted(feature, body)
 
