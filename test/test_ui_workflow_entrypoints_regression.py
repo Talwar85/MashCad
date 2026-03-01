@@ -100,8 +100,10 @@ def test_hole_face_click_resolves_body_via_find_body_by_id():
         find_body_by_id=lambda bid: cad_body if bid == cad_body.id else None,
     )
     mw.viewport_3d = SimpleNamespace(
+        _hole_body_id=None,
         _hole_position=None,
         _hole_normal=None,
+        _hole_plane_origin=None,
         show_hole_preview=Mock(),
     )
     mw.hole_panel = SimpleNamespace(
@@ -113,6 +115,8 @@ def test_hole_face_click_resolves_body_via_find_body_by_id():
     MainWindow._on_body_face_clicked_for_hole(mw, "B1", 7, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0))
 
     assert mw._hole_target_body is cad_body
+    assert mw.viewport_3d._hole_body_id == "B1"
+    assert mw.viewport_3d._hole_plane_origin == (1.0, 2.0, 3.0)
     mw.viewport_3d.show_hole_preview.assert_called_once()
 
 
@@ -133,6 +137,28 @@ def test_cancel_live_preview_clears_existing_feature_preview():
     assert mw._preview_configs["fillet"] is None
     viewport._clear_fillet_preview.assert_called_once()
     viewport.clear_all_feature_previews.assert_not_called()
+
+
+def test_stop_texture_mode_cancels_pending_live_preview():
+    mw, _sb = _make_stub()
+    mw._texture_mode = True
+    mw._texture_target_body = object()
+    mw._pending_texture_mode = True
+    mw._cancel_live_preview = Mock()
+    mw.viewport_3d = SimpleNamespace(
+        setCursor=Mock(),
+        set_pending_transform_mode=Mock(),
+        stop_texture_face_mode=Mock(),
+        set_extrude_mode=Mock(),
+    )
+    mw.texture_panel = SimpleNamespace(hide=Mock())
+
+    MainWindow._stop_texture_mode(mw)
+
+    mw._cancel_live_preview.assert_called_once_with("texture")
+    assert mw._texture_mode is False
+    assert mw._texture_target_body is None
+    assert mw._pending_texture_mode is False
 
 
 def test_draft_dialog_enters_mode_detects_faces_and_opens_panel():

@@ -590,6 +590,8 @@ class FeatureDialogsMixin:
 
     def _stop_texture_mode(self):
         """Beendet den Texture-Modus und räumt auf."""
+        if hasattr(self, '_cancel_live_preview'):
+            self._cancel_live_preview('texture')
         self._texture_mode = False
         self._texture_target_body = None
         self._pending_texture_mode = False

@@ -825,8 +825,10 @@ class DialogMixin:
             return
 
         self._hole_target_body = body
+        self.viewport_3d._hole_body_id = body.id
         self.viewport_3d._hole_position = tuple(position)
         self.viewport_3d._hole_normal = tuple(normal)
+        self.viewport_3d._hole_plane_origin = tuple(position)
 
         try:
             from modeling.geometric_selector import GeometricFaceSelector

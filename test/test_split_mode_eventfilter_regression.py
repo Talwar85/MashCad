@@ -186,6 +186,25 @@ def test_hole_mode_mouse_press_refreshes_hover_before_click(monkeypatch):
     host._click_body_face.assert_called_once()
 
 
+def test_hole_mode_mouse_move_updates_preview_from_cursor_after_face_selection(monkeypatch):
+    host = _make_host(monkeypatch)
+    host.split_mode = False
+    host.hole_mode = True
+    host._hole_body_id = "B1"
+    host._hole_plane_origin = (1.0, 2.0, 3.0)
+    host._hole_normal = (0.0, 0.0, 1.0)
+    host._update_hole_preview_from_cursor = Mock()
+    host._hover_body_face = Mock()
+
+    event = _MouseEvent(QEvent.MouseMove, x=17, y=19, buttons=Qt.NoButton)
+
+    result = PyVistaViewport.eventFilter(host, host, event)
+
+    assert result is False
+    host._update_hole_preview_from_cursor.assert_called_once_with(17, 19)
+    host._hover_body_face.assert_not_called()
+
+
 def test_click_body_face_in_hole_mode_uses_full_face_highlight():
     host = SimpleNamespace(
         hovered_body_face=("B1", 9, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0)),
@@ -204,5 +223,7 @@ def test_click_body_face_in_hole_mode_uses_full_face_highlight():
     PyVistaViewport._click_body_face(host)
 
     assert host.hole_face_clicked.calls == [("B1", 9, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0))]
+    assert host._hole_body_id == "B1"
+    assert host._hole_plane_origin == (1.0, 2.0, 3.0)
     host._draw_full_face_hover.assert_called_once_with("B1", (0.0, 0.0, 1.0), (0.0, 0.0, 1.0), cell_id=9)
     host._draw_body_face_selection.assert_not_called()

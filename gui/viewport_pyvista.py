@@ -420,6 +420,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._hole_preview_actor = None
         self._hole_position = None      # (x, y, z) on face
         self._hole_normal = None        # face normal
+        self._hole_plane_origin = None  # fixed support point on selected face plane
         self._hole_diameter = 8.0
         self._hole_depth = 0.0          # 0 = through all
         self._hole_body_id = None
@@ -2129,12 +2130,14 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if enabled:
             self._hole_position = None
             self._hole_normal = None
+            self._hole_plane_origin = None
             self._hole_body_id = None
             # Enable body face picking (X-ray not needed, we pick on body surface)
         else:
             self.clear_hole_preview()
             self._hole_position = None
             self._hole_normal = None
+            self._hole_plane_origin = None
             self._hole_body_id = None
 
     def show_hole_preview(self, position, normal, diameter, depth):
@@ -2200,6 +2203,42 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             request_render(self.plotter)
         except Exception as e:
             logger.error(f"Hole preview error: {e}")
+
+    def _update_hole_preview_from_cursor(self, x: int, y: int):
+        """Projiziert den Cursor auf die selektierte Hole-Face-Ebene und aktualisiert die Preview."""
+        if self._hole_body_id is None or self._hole_plane_origin is None or self._hole_normal is None:
+            return
+
+        try:
+            ray_origin, ray_direction = self.get_ray_from_click(x, y)
+        except Exception as e:
+            logger.debug(f"Hole cursor projection failed to create ray: {e}")
+            return
+
+        plane_origin = np.array(self._hole_plane_origin, dtype=float)
+        plane_normal = np.array(self._hole_normal, dtype=float)
+        normal_len = np.linalg.norm(plane_normal)
+        if normal_len <= 1e-9:
+            return
+        plane_normal = plane_normal / normal_len
+
+        ray_origin = np.array(ray_origin, dtype=float)
+        ray_direction = np.array(ray_direction, dtype=float)
+        denom = float(np.dot(ray_direction, plane_normal))
+        if abs(denom) <= 1e-9:
+            return
+
+        t = float(np.dot(plane_origin - ray_origin, plane_normal) / denom)
+        if t <= 0.0:
+            return
+
+        projected = ray_origin + t * ray_direction
+        self.show_hole_preview(
+            tuple(float(v) for v in projected),
+            self._hole_normal,
+            float(self._hole_diameter),
+            float(self._hole_depth),
+        )
 
     def clear_hole_preview(self):
         """Entfernt die Hole-Preview."""
@@ -3498,7 +3537,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if buttons == Qt.NoButton:
                     pos = event.position() if hasattr(event, 'position') else event.pos()
                     x, y = int(pos.x()), int(pos.y())
-                    self._hover_body_face(x, y)
+                    if self._hole_body_id is not None and self._hole_plane_origin is not None and self._hole_normal is not None:
+                        self._update_hole_preview_from_cursor(x, y)
+                    else:
+                        self._hover_body_face(x, y)
                 return False  # Let VTK handle camera
 
             if event_type == QEvent.MouseButtonPress:
@@ -6669,6 +6711,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
         # Hole Mode: Emit face click for hole placement
         if self.hole_mode:
+            self._hole_body_id = body_id
+            self._hole_plane_origin = tuple(pos)
             self.hole_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
             self._draw_full_face_hover(body_id, tuple(normal), tuple(normal), cell_id=cell_id)
             return
