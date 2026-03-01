@@ -141,7 +141,6 @@ FEATURE_FLAGS: Dict[str, bool] = {
     # Normal Map Preview (Phase 3 - Advanced, experimental)
     # ========================================================================
     "normal_map_preview": False,  # Normal map visualization
-    "normal_map_shader": False,  # Shader-based normal mapping
     
     # ========================================================================
     # Experimental Features

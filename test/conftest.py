@@ -123,7 +123,6 @@ FEATURE_FLAG_DEFAULTS = {
     
     # Normal Map Preview
     "normal_map_preview": False,
-    "normal_map_shader": False,
     
     # Advanced
     "detailed_boolean_history": True,
