@@ -421,6 +421,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         self._hole_position = None      # (x, y, z) on face
         self._hole_normal = None        # face normal
         self._hole_plane_origin = None  # fixed support point on selected face plane
+        self._hole_position_locked = False
         self._hole_diameter = 8.0
         self._hole_depth = 0.0          # 0 = through all
         self._hole_body_id = None
@@ -2240,6 +2241,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self._hole_position = None
             self._hole_normal = None
             self._hole_plane_origin = None
+            self._hole_position_locked = False
             self._hole_body_id = None
             # Enable body face picking (X-ray not needed, we pick on body surface)
         else:
@@ -2247,6 +2249,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             self._hole_position = None
             self._hole_normal = None
             self._hole_plane_origin = None
+            self._hole_position_locked = False
             self._hole_body_id = None
 
     def show_hole_preview(self, position, normal, diameter, depth):
@@ -2315,6 +2318,8 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
     def _update_hole_preview_from_cursor(self, x: int, y: int):
         """Projiziert den Cursor auf die selektierte Hole-Face-Ebene und aktualisiert die Preview."""
+        if self._hole_position_locked:
+            return
         if self._hole_body_id is None or self._hole_plane_origin is None or self._hole_normal is None:
             return
 
@@ -2348,6 +2353,13 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             float(self._hole_diameter),
             float(self._hole_depth),
         )
+
+    def lock_hole_preview_position(self) -> bool:
+        """Fixiert die aktuelle Hole-Preview-Position bis zur Bestätigung."""
+        if self._hole_body_id is None or self._hole_position is None or self._hole_normal is None:
+            return False
+        self._hole_position_locked = True
+        return True
 
     def clear_hole_preview(self):
         """Entfernt die Hole-Preview."""
@@ -3646,14 +3658,21 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
                 if buttons == Qt.NoButton:
                     pos = event.position() if hasattr(event, 'position') else event.pos()
                     x, y = int(pos.x()), int(pos.y())
-                    if self._hole_body_id is not None and self._hole_plane_origin is not None and self._hole_normal is not None:
+                    if (
+                        self._hole_body_id is not None
+                        and self._hole_plane_origin is not None
+                        and self._hole_normal is not None
+                        and not self._hole_position_locked
+                    ):
                         self._update_hole_preview_from_cursor(x, y)
-                    else:
+                    elif self._hole_body_id is None:
                         self._hover_body_face(x, y)
                 return False  # Let VTK handle camera
 
             if event_type == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    if self._hole_body_id is not None and self._hole_position is not None:
+                        return bool(self.lock_hole_preview_position())
                     pos = event.position() if hasattr(event, 'position') else event.pos()
                     x, y = int(pos.x()), int(pos.y())
                     self._hover_body_face(x, y)
@@ -6822,6 +6841,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         if self.hole_mode:
             self._hole_body_id = body_id
             self._hole_plane_origin = tuple(pos)
+            self._hole_position_locked = False
             self.hole_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
             self._draw_full_face_hover(body_id, tuple(normal), tuple(normal), cell_id=cell_id)
             return

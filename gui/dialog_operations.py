@@ -829,6 +829,7 @@ class DialogMixin:
         self.viewport_3d._hole_position = tuple(position)
         self.viewport_3d._hole_normal = tuple(normal)
         self.viewport_3d._hole_plane_origin = tuple(position)
+        self.viewport_3d._hole_position_locked = False
 
         try:
             from modeling.geometric_selector import GeometricFaceSelector
@@ -868,7 +869,9 @@ class DialogMixin:
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
         self.viewport_3d.show_hole_preview(position, normal, diameter, depth)
-        self.statusBar().showMessage(f"Hole auf {body.name} — Parameter einstellen, Enter bestätigen")
+        self.statusBar().showMessage(
+            f"Hole auf {body.name} — Maus bewegt Vorschau, Klick fixiert, Enter bestätigt"
+        )
     
     # =========================================================================
     # Thread Dialog

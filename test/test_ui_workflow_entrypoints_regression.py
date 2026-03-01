@@ -104,6 +104,7 @@ def test_hole_face_click_resolves_body_via_find_body_by_id():
         _hole_position=None,
         _hole_normal=None,
         _hole_plane_origin=None,
+        _hole_position_locked=True,
         show_hole_preview=Mock(),
     )
     mw.hole_panel = SimpleNamespace(
@@ -117,6 +118,7 @@ def test_hole_face_click_resolves_body_via_find_body_by_id():
     assert mw._hole_target_body is cad_body
     assert mw.viewport_3d._hole_body_id == "B1"
     assert mw.viewport_3d._hole_plane_origin == (1.0, 2.0, 3.0)
+    assert mw.viewport_3d._hole_position_locked is False
     mw.viewport_3d.show_hole_preview.assert_called_once()
 
 
