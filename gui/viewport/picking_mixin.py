@@ -471,7 +471,15 @@ class PickingMixin:
                     new_hover = (body_id, cell_id, tuple(normal), tuple(pos))
                     if self.hovered_body_face != new_hover:
                         self.hovered_body_face = new_hover
-                        self._draw_body_face_highlight(pos, normal)
+                        if (
+                            getattr(self, 'hole_mode', False)
+                            or getattr(self, 'thread_mode', False)
+                            or getattr(self, 'draft_mode', False)
+                            or getattr(self, 'texture_face_mode', False)
+                        ) and hasattr(self, '_draw_full_face_hover'):
+                            self._draw_full_face_hover(body_id, tuple(normal), tuple(normal), cell_id=cell_id)
+                        else:
+                            self._draw_body_face_highlight(pos, normal)
                     return
             
             if self.hovered_body_face is not None:

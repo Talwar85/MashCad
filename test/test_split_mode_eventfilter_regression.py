@@ -157,3 +157,52 @@ def test_split_mode_mouse_move_routes_drag_without_transform_gizmo(monkeypatch):
     assert result is True
     host.handle_split_mouse_move.assert_called_once_with(7, 9)
     host._hover_body_face.assert_not_called()
+
+
+def test_hole_mode_mouse_press_refreshes_hover_before_click(monkeypatch):
+    host = _make_host(monkeypatch)
+    host.split_mode = False
+    host.hole_mode = True
+    host.hovered_body_face = None
+
+    def _hover(x, y):
+        host.hovered_body_face = ("B1", 7, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0))
+
+    host._hover_body_face = Mock(side_effect=_hover)
+    host._click_body_face = Mock()
+
+    event = _MouseEvent(
+        QEvent.MouseButtonPress,
+        x=11,
+        y=13,
+        button=Qt.LeftButton,
+        buttons=Qt.LeftButton,
+    )
+
+    result = PyVistaViewport.eventFilter(host, host, event)
+
+    assert result is True
+    host._hover_body_face.assert_called_once_with(11, 13)
+    host._click_body_face.assert_called_once()
+
+
+def test_click_body_face_in_hole_mode_uses_full_face_highlight():
+    host = SimpleNamespace(
+        hovered_body_face=("B1", 9, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0)),
+        hole_mode=True,
+        thread_mode=False,
+        draft_mode=False,
+        texture_face_mode=False,
+        hole_face_clicked=_Emitter(),
+        thread_face_clicked=_Emitter(),
+        clear_trace_hint=Mock(),
+        _draw_full_face_hover=Mock(),
+        _draw_body_face_selection=Mock(),
+        _detect_cylindrical_face=Mock(return_value=None),
+    )
+
+    PyVistaViewport._click_body_face(host)
+
+    assert host.hole_face_clicked.calls == [("B1", 9, (0.0, 0.0, 1.0), (1.0, 2.0, 3.0))]
+    host._draw_full_face_hover.assert_called_once_with("B1", (0.0, 0.0, 1.0), (0.0, 0.0, 1.0), cell_id=9)
+    host._draw_body_face_selection.assert_not_called()

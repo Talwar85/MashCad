@@ -116,6 +116,25 @@ def test_hole_face_click_resolves_body_via_find_body_by_id():
     mw.viewport_3d.show_hole_preview.assert_called_once()
 
 
+def test_cancel_live_preview_clears_existing_feature_preview():
+    mw, _sb = _make_stub()
+    timer = Mock()
+    viewport = SimpleNamespace(
+        _clear_fillet_preview=Mock(),
+        clear_all_feature_previews=Mock(),
+    )
+    mw.viewport_3d = viewport
+    mw._preview_timers = {"fillet": timer}
+    mw._preview_configs = {"fillet": {"radius": 2.0}}
+
+    MainWindow._cancel_live_preview(mw, "fillet")
+
+    timer.stop.assert_called_once()
+    assert mw._preview_configs["fillet"] is None
+    viewport._clear_fillet_preview.assert_called_once()
+    viewport.clear_all_feature_previews.assert_not_called()
+
+
 def test_draft_dialog_enters_mode_detects_faces_and_opens_panel():
     _qt_app()
     mw, sb = _make_stub()

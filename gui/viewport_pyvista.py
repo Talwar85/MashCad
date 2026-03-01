@@ -3406,6 +3406,10 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             # NUR Left-Click für Face-Selektion abfangen - ABER NUR wenn Body getroffen!
             if event_type == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
+
                     # Nur konsumieren wenn tatsächlich eine Face gehovered ist
                     if self.hovered_body_face is not None:
                         self._click_body_face()
@@ -3499,6 +3503,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
             if event_type == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
                     if self.hovered_body_face is not None:
                         self._click_body_face()
                         return True
@@ -3524,6 +3531,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
             if event_type == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
                     if self.hovered_body_face is not None:
                         self._click_body_face()
                         return True
@@ -3549,6 +3559,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
 
             if event_type == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    pos = event.position() if hasattr(event, 'position') else event.pos()
+                    x, y = int(pos.x()), int(pos.y())
+                    self._hover_body_face(x, y)
                     if self.hovered_body_face is not None:
                         self._click_body_face()
                         return True
@@ -6657,7 +6670,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         # Hole Mode: Emit face click for hole placement
         if self.hole_mode:
             self.hole_face_clicked.emit(body_id, cell_id, tuple(normal), tuple(pos))
-            self._draw_body_face_selection(pos, normal)
+            self._draw_full_face_hover(body_id, tuple(normal), tuple(normal), cell_id=cell_id)
             return
 
         # Thread Mode: Emit face click for thread placement on cylindrical faces
@@ -6667,7 +6680,7 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
             if cyl_info:
                 diameter, axis_dir, is_internal = cyl_info
                 self.thread_face_clicked.emit(body_id, cell_id, tuple(axis_dir), tuple(pos), diameter)
-                self._draw_body_face_selection(pos, axis_dir)
+                self._draw_full_face_hover(body_id, tuple(normal), tuple(normal), cell_id=cell_id)
             else:
                 logger.warning("Thread: Keine zylindrische Fläche erkannt")
             return

@@ -282,6 +282,24 @@ class MainWindow(
         if feature_type in self._preview_timers:
             self._preview_timers[feature_type].stop()
         self._preview_configs[feature_type] = None
+
+        viewport = getattr(self, "viewport_3d", None)
+        if viewport is None:
+            return
+
+        clear_method_name = {
+            "shell": "_clear_shell_preview",
+            "fillet": "_clear_fillet_preview",
+            "chamfer": "_clear_chamfer_preview",
+        }.get(feature_type)
+
+        clear_method = getattr(viewport, clear_method_name, None) if clear_method_name else None
+        if callable(clear_method):
+            clear_method()
+        else:
+            clear_all = getattr(viewport, "clear_all_feature_previews", None)
+            if callable(clear_all):
+                clear_all()
     
     def _cleanup_notification(self, notif):
         """Cleanup notification."""
