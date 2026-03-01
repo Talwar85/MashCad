@@ -5,7 +5,7 @@ Integration tests for TNP v5.0 with ExtrudeFeature.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock
 
 from modeling.tnp_v5 import (
     TNPService,
@@ -38,9 +38,7 @@ class TestGetTNPV5Service:
         doc.name = "test_doc"
         doc._tnp_v5_service = None
 
-        # Mock feature flag
-        with patch('config.feature_flags.is_enabled', return_value=True):
-            service = get_tnp_v5_service(doc)
+        service = get_tnp_v5_service(doc)
 
         assert service is not None
         assert doc._tnp_v5_service == service
@@ -56,15 +54,17 @@ class TestGetTNPV5Service:
 
         assert service == existing_service
 
-    def test_get_service_disabled(self):
-        """Test when feature flag is disabled."""
+    def test_get_service_creates_without_feature_flag_gate(self):
+        """TNP v5.0 service is always available once the runtime is v5-only."""
         doc = Mock()
         doc._tnp_v5_service = None
+        doc.name = "always_on_doc"
 
-        with patch('config.feature_flags.is_enabled', return_value=False):
-            service = get_tnp_v5_service(doc)
+        service = get_tnp_v5_service(doc)
 
-        assert service is None
+        assert service is not None
+        assert service.document_id == "always_on_doc"
+        assert doc._tnp_v5_service is service
 
 
 class TestCaptureSketchSelectionContext:

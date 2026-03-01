@@ -40,11 +40,6 @@ def get_tnp_v5_service(document: Any) -> Optional[TNPService]:
     if service is not None:
         return service
 
-    # Check if TNP v5.0 is enabled
-    from config.feature_flags import is_enabled
-    if not is_enabled("tnp_v5_enabled"):
-        return None
-
     # Create new service
     try:
         doc_id = getattr(document, 'name', 'unknown')
