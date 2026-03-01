@@ -74,9 +74,10 @@ class Document:
         
         # TNP v4.0: Shape Naming Service fÃ¼r persistente Shape-Referenzen
         from modeling.tnp_system import ShapeNamingService
-        self._shape_naming_service = ShapeNamingService()
+        self._shape_naming_service = ShapeNamingService(name)
+        self._tnp_v5_service = self._shape_naming_service
         if is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.0: ShapeNamingService initialisiert fÃ¼r '{name}'")
+            logger.debug(f"TNP v5.0: ShapeNamingService initialisiert fuer '{name}'")
 
         # =========================================================================
         # Assembly System (Phase 1) - Permanent aktiviert
@@ -1477,4 +1478,6 @@ class Document:
 
 
 __all__ = ['Document', 'SplitResult']
+
+
 

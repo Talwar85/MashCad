@@ -249,7 +249,7 @@ class SemanticMatcher:
             center = bounds.center()
             candidates.append(MatchCandidate(
                 shape_id=uuid,
-                shape=None,  # Will be filled by caller if needed
+                shape=shape_data.get('shape'),
                 center=center,
                 normal=None,  # TODO: Extract from geometry
                 adjacent=[],

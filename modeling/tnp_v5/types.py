@@ -87,6 +87,7 @@ class ShapeID:
     parent_uuid: Optional[str] = None
     creation_generation: int = 0
     tags: Tuple[str, ...] = ()
+    timestamp: float = field(default_factory=time.time)
 
     @classmethod
     def create(
@@ -196,6 +197,7 @@ class ShapeID:
             'feature_id': self.feature_id,
             'local_index': self.local_index,
             'geometry_hash': self.geometry_hash,
+            'timestamp': self.timestamp,
         }
 
     @classmethod
@@ -219,6 +221,8 @@ class ShapeID:
             parent_uuid=None,
             creation_generation=0,
             tags=()
+            ,
+            timestamp=data.get('timestamp', time.time())
         )
 
 

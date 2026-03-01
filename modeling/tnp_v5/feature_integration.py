@@ -25,8 +25,18 @@ def get_tnp_v5_service(document: Any) -> Optional[TNPService]:
     Returns:
         TNPService or None if not available
     """
+    if document is None:
+        return None
+
+    # Single-service runtime: prefer the document's primary naming service.
+    document_dict = getattr(document, '__dict__', {})
+    primary_service = document_dict.get('_shape_naming_service')
+    if primary_service is not None:
+        document._tnp_v5_service = primary_service
+        return primary_service
+
     # Try to get existing service
-    service = getattr(document, '_tnp_v5_service', None)
+    service = document_dict.get('_tnp_v5_service')
     if service is not None:
         return service
 

@@ -2949,7 +2949,7 @@ _document_services: Dict[str, ShapeNamingService] = {}
 def get_naming_service(document_id: str) -> ShapeNamingService:
     """Gibt oder erstellt den NamingService für ein Document"""
     if document_id not in _document_services:
-        _document_services[document_id] = ShapeNamingService()
+        _document_services[document_id] = ShapeNamingService(document_id)
     return _document_services[document_id]
 
 
@@ -3035,3 +3035,444 @@ if __name__ == "__main__":
     import sys
     success = test_foundation()
     sys.exit(0 if success else 1)
+
+# ============================================================================
+# TNP v5 runtime unification
+# ============================================================================
+
+from modeling.tnp_v5.types import (
+    ShapeID as _V5ShapeID,
+    ShapeRecord as _V5ShapeRecord,
+    ShapeType as _V5ShapeType,
+    SelectionContext as _V5SelectionContext,
+    ResolutionOptions as _V5ResolutionOptions,
+    ResolutionMethod as _V5ResolutionMethod,
+    ResolutionResult as _V5ResolutionResult,
+)
+from modeling.tnp_v5.service import (
+    ValidationResult as _V5ValidationResult,
+    AmbiguityReport as _V5AmbiguityReport,
+)
+from modeling.tnp_v5.spatial import (
+    SpatialIndex as _V5SpatialIndex,
+    Bounds as _V5Bounds,
+    compute_bounds_from_signature as _v5_compute_bounds_from_signature,
+)
+from modeling.tnp_v5.semantic_matcher import SemanticMatcher as _V5SemanticMatcher
+
+_legacy_invalidate_feature = ShapeNamingService.invalidate_feature
+_legacy_compact = ShapeNamingService.compact
+
+
+def _v5_rebuild_semantic_index(self) -> None:
+    self._semantic_spatial_index = _V5SpatialIndex()
+    self._semantic_matcher = _V5SemanticMatcher(self._semantic_spatial_index)
+
+    for record in self._shapes.values():
+        if record is None or record.ocp_shape is None:
+            continue
+        bounds = _v5_compute_bounds_from_signature(record.geometric_signature)
+        if bounds is None and "center" in record.geometric_signature:
+            bounds = _V5Bounds.from_center(tuple(record.geometric_signature["center"]), 0.5)
+        if bounds is None:
+            continue
+        self._semantic_spatial_index.insert(
+            shape_id=record.shape_id.uuid,
+            bounds=bounds,
+            shape_data={
+                "shape_type": record.shape_id.shape_type.name,
+                "feature_id": record.shape_id.feature_id,
+                "local_index": int(record.shape_id.local_index),
+                "shape": record.ocp_shape,
+            },
+        )
+
+
+def _v5_shape_naming_service_init(self, document_id: str = ""):
+    self.document_id = str(document_id or "")
+    self._shapes = {}
+    self._operations = []
+    self._by_feature = {}
+    self._generation = 0
+    self._spatial_index = {
+        _V5ShapeType.EDGE: [],
+        _V5ShapeType.FACE: [],
+        _V5ShapeType.VERTEX: [],
+    }
+    self._semantic_spatial_index = _V5SpatialIndex()
+    self._semantic_matcher = _V5SemanticMatcher(self._semantic_spatial_index)
+    if is_enabled("tnp_debug_logging"):
+        logger.info(f"[TNP v5.0] ShapeNamingService initialized for document '{self.document_id}'")
+
+
+def _v5_update_spatial_index(self, shape_id: _V5ShapeID, record: _V5ShapeRecord):
+    for shape_type_key in self._spatial_index:
+        self._spatial_index[shape_type_key] = [
+            (pos, sid)
+            for pos, sid in self._spatial_index[shape_type_key]
+            if sid.uuid != shape_id.uuid
+        ]
+
+    center = record.geometric_signature.get("center")
+    if center is not None:
+        self._spatial_index[shape_id.shape_type].append((np.array(center), shape_id))
+
+    if hasattr(self, "_semantic_spatial_index"):
+        self._semantic_spatial_index.remove(shape_id.uuid)
+        bounds = _v5_compute_bounds_from_signature(record.geometric_signature)
+        if bounds is None and center is not None:
+            bounds = _V5Bounds.from_center(tuple(center), 0.5)
+        if bounds is not None:
+            self._semantic_spatial_index.insert(
+                shape_id=shape_id.uuid,
+                bounds=bounds,
+                shape_data={
+                    "shape_type": shape_id.shape_type.name,
+                    "feature_id": shape_id.feature_id,
+                    "local_index": int(shape_id.local_index),
+                    "shape": record.ocp_shape,
+                },
+            )
+
+
+def _v5_register_shape(
+    self,
+    ocp_shape,
+    shape_type,
+    feature_id,
+    local_index,
+    geometry_data=None,
+    context: Optional[_V5SelectionContext] = None,
+):
+    if geometry_data is None and HAS_OCP:
+        geometry_data = self._extract_geometry_data(ocp_shape, shape_type)
+
+    feature_bucket = self._by_feature.setdefault(feature_id, [])
+    existing_shape_id = None
+    existing_index = None
+    for idx in range(len(feature_bucket) - 1, -1, -1):
+        sid = feature_bucket[idx]
+        if sid.shape_type != shape_type:
+            continue
+        if int(getattr(sid, "local_index", -1)) == int(local_index):
+            existing_shape_id = sid
+            existing_index = idx
+            break
+
+    if existing_shape_id is not None:
+        shape_id = existing_shape_id
+    else:
+        shape_id = _V5ShapeID.create(
+            shape_type=shape_type,
+            feature_id=feature_id,
+            local_index=local_index,
+            geometry_data=geometry_data or (),
+        )
+
+    if context is not None:
+        shape_id = shape_id.with_context(context)
+
+    if existing_index is not None:
+        feature_bucket[existing_index] = shape_id
+    elif existing_shape_id is None:
+        feature_bucket.append(shape_id)
+
+    record = _V5ShapeRecord(shape_id=shape_id, ocp_shape=ocp_shape, is_valid=True)
+    record.geometric_signature = record.compute_signature()
+    if context is not None:
+        record.selection_context = context
+
+    self._shapes[shape_id.uuid] = record
+    self._update_spatial_index(shape_id, record)
+
+    if is_enabled("tnp_debug_logging"):
+        logger.debug(f"[TNP v5.0] Shape registered: {shape_id}")
+    return shape_id
+
+
+def _v5_seed_shape(self, shape_id: _V5ShapeID, ocp_shape) -> None:
+    if shape_id is None or not getattr(shape_id, "uuid", ""):
+        return
+
+    record = _V5ShapeRecord(shape_id=shape_id, ocp_shape=ocp_shape)
+    record.geometric_signature = record.compute_signature()
+    self._shapes[shape_id.uuid] = record
+
+    feature_bucket = self._by_feature.setdefault(shape_id.feature_id, [])
+    if not any(existing.uuid == shape_id.uuid for existing in feature_bucket):
+        feature_bucket.append(shape_id)
+
+    self._update_spatial_index(shape_id, record)
+
+
+def _v5_get_shape_record(self, shape_id_or_uuid: str):
+    if isinstance(shape_id_or_uuid, str):
+        if shape_id_or_uuid in self._shapes:
+            return self._shapes[shape_id_or_uuid]
+        for record in self._shapes.values():
+            if record.shape_id.uuid == shape_id_or_uuid:
+                return record
+    return None
+
+
+def _v5_try_semantic_match(self, shape_id: _V5ShapeID, context: _V5SelectionContext, current_solid, options):
+    try:
+        max_candidates = getattr(options, "max_candidates", 10) if options is not None else 10
+        return self._semantic_matcher.match(shape_id, context, current_solid, max_candidates=max_candidates)
+    except Exception as e:
+        logger.debug(f"[TNP v5.0] Semantic match failed: {e}")
+        return None
+
+
+def _v5_resolve_shape_with_method(
+    self,
+    shape_id: _V5ShapeID,
+    current_solid: Any,
+    *,
+    log_unresolved: bool = True,
+    resolution_options: Optional[_V5ResolutionOptions] = None,
+) -> Tuple[Optional[Any], str]:
+    options = resolution_options or _V5ResolutionOptions()
+
+    if shape_id.uuid not in self._shapes:
+        ghash = getattr(shape_id, "geometry_hash", None)
+        stype = getattr(shape_id, "shape_type", None)
+        if ghash and stype is not None:
+            for uuid, rec in self._shapes.items():
+                sid = rec.shape_id
+                if sid.geometry_hash == ghash and sid.shape_type == stype:
+                    if rec.is_valid and rec.ocp_shape is not None and self._shape_exists_in_solid(rec.ocp_shape, current_solid):
+                        if is_enabled("tnp_debug_logging"):
+                            logger.debug(
+                                f"[TNP v5.0] Shape {shape_id.uuid[:8]} resolved via geometry_hash ({ghash[:8]}) -> {uuid[:8]}"
+                            )
+                        return rec.ocp_shape, "geometry_hash"
+        if log_unresolved:
+            logger.warning(f"[TNP v5.0] Unknown ShapeID: {shape_id.uuid}")
+        return None, "unresolved"
+
+    record = self._shapes[shape_id.uuid]
+
+    if record.is_valid and record.ocp_shape is not None:
+        if self._shape_exists_in_solid(record.ocp_shape, current_solid):
+            return record.ocp_shape, "direct"
+
+    if options.use_semantic_matching and getattr(record, "selection_context", None) is not None:
+        semantic_result = self._try_semantic_match(shape_id, record.selection_context, current_solid, options)
+        if semantic_result is not None and getattr(semantic_result, "matched_shape", None) is not None:
+            return semantic_result.matched_shape, "geometric"
+
+    resolved = self._trace_via_history(shape_id, current_solid)
+    if resolved:
+        return resolved, "history"
+
+    resolved = self._lookup_brepfeat_mapping(shape_id, current_solid)
+    if resolved:
+        return resolved, "brepfeat"
+
+    resolved = self._match_geometrically(shape_id, current_solid)
+    if resolved:
+        return resolved, "geometric"
+
+    if log_unresolved:
+        logger.warning(f"[TNP v5.0] Shape {shape_id.uuid[:8]} could not be resolved")
+    return None, "unresolved"
+
+
+def _v5_resolve_shape(self, shape_id: _V5ShapeID, current_solid: Any, *, log_unresolved: bool = True):
+    resolved, _method = self.resolve_shape_with_method(
+        shape_id,
+        current_solid,
+        log_unresolved=log_unresolved,
+    )
+    return resolved
+
+
+def _v5_resolve(self, shape_id: _V5ShapeID, current_solid: Any, options: Optional[_V5ResolutionOptions] = None):
+    options = options or _V5ResolutionOptions()
+    start = time.perf_counter()
+
+    record = self.get_shape_record(shape_id.uuid)
+    if record is not None and record.ocp_shape is not None and self._shape_exists_in_solid(record.ocp_shape, current_solid):
+        return _V5ResolutionResult(
+            shape_id=shape_id.uuid,
+            resolved_shape=record.ocp_shape,
+            method=_V5ResolutionMethod.EXACT,
+            confidence=1.0,
+            duration_ms=(time.perf_counter() - start) * 1000,
+        )
+
+    if options.use_semantic_matching and record is not None and getattr(record, "selection_context", None) is not None:
+        semantic_result = self._try_semantic_match(shape_id, record.selection_context, current_solid, options)
+        if semantic_result is not None:
+            if getattr(semantic_result, "matched_shape", None) is not None:
+                return _V5ResolutionResult(
+                    shape_id=shape_id.uuid,
+                    resolved_shape=semantic_result.matched_shape,
+                    method=_V5ResolutionMethod.SEMANTIC,
+                    confidence=float(getattr(semantic_result, "score", 0.0)),
+                    duration_ms=(time.perf_counter() - start) * 1000,
+                )
+            if getattr(semantic_result, "is_ambiguous", False):
+                candidate_ids = [c.shape_id for c in getattr(semantic_result, "candidates", [])]
+                return _V5ResolutionResult(
+                    shape_id=shape_id.uuid,
+                    resolved_shape=None,
+                    method=_V5ResolutionMethod.SEMANTIC,
+                    confidence=float(getattr(semantic_result, "score", 0.0)),
+                    duration_ms=(time.perf_counter() - start) * 1000,
+                    alternative_candidates=candidate_ids,
+                    disambiguation_used="ambiguous_match",
+                )
+
+    resolved, method = self.resolve_shape_with_method(
+        shape_id,
+        current_solid,
+        log_unresolved=False,
+        resolution_options=_V5ResolutionOptions(
+            use_semantic_matching=False,
+            use_history_tracing=options.use_history_tracing,
+            require_user_confirmation=options.require_user_confirmation,
+            position_tolerance=options.position_tolerance,
+            angle_tolerance=options.angle_tolerance,
+            enable_spatial_index=options.enable_spatial_index,
+            max_candidates=options.max_candidates,
+            on_failure=options.on_failure,
+        ),
+    )
+    method_map = {
+        "direct": _V5ResolutionMethod.EXACT,
+        "history": _V5ResolutionMethod.HISTORY,
+        "brepfeat": _V5ResolutionMethod.HISTORY,
+        "geometric": _V5ResolutionMethod.SEMANTIC,
+        "geometry_hash": _V5ResolutionMethod.HISTORY,
+        "unresolved": _V5ResolutionMethod.FAILED,
+    }
+    confidence_map = {
+        "direct": 1.0,
+        "history": 0.85,
+        "brepfeat": 0.75,
+        "geometric": 0.65,
+        "geometry_hash": 0.8,
+        "unresolved": 0.0,
+    }
+    return _V5ResolutionResult(
+        shape_id=shape_id.uuid,
+        resolved_shape=resolved,
+        method=method_map.get(method, _V5ResolutionMethod.FAILED),
+        confidence=confidence_map.get(method, 0.0),
+        duration_ms=(time.perf_counter() - start) * 1000,
+    )
+
+
+def _v5_resolve_batch(self, shape_ids, current_solid, options=None):
+    return [self.resolve(shape_id, current_solid, options) for shape_id in shape_ids]
+
+
+def _v5_validate_resolutions(self, resolutions):
+    issues: List[str] = []
+    seen_resolved_shape: Dict[int, str] = {}
+    seen_shape_id: Set[str] = set()
+
+    for idx, result in enumerate(resolutions):
+        if result is None:
+            issues.append(f"resolution[{idx}] is None")
+            continue
+        if not result.shape_id:
+            issues.append(f"resolution[{idx}] has empty shape_id")
+            continue
+        if result.shape_id in seen_shape_id:
+            issues.append(f"duplicate shape_id in batch: {result.shape_id}")
+        seen_shape_id.add(result.shape_id)
+        if result.confidence < 0.0 or result.confidence > 1.0:
+            issues.append(f"invalid confidence for {result.shape_id}: {result.confidence}")
+        if result.resolved_shape is not None:
+            resolved_key = id(result.resolved_shape)
+            other_shape_id = seen_resolved_shape.get(resolved_key)
+            if other_shape_id is not None and other_shape_id != result.shape_id:
+                issues.append(f"multiple shape_ids resolved to same shape: {other_shape_id}, {result.shape_id}")
+            else:
+                seen_resolved_shape[resolved_key] = result.shape_id
+    return _V5ValidationResult(is_valid=(len(issues) == 0), issues=issues)
+
+
+def _v5_check_ambiguity(self, shape_id: _V5ShapeID, current_solid: Any):
+    record = self.get_shape_record(shape_id.uuid)
+    if record is None:
+        return _V5AmbiguityReport(
+            is_ambiguous=True,
+            ambiguity_type="missing_shape",
+            candidates=[],
+            disambiguation_questions=["Original shape reference does not exist in TNP registry."],
+            recommended_resolution=None,
+        )
+    context = getattr(record, "selection_context", None)
+    if context is None:
+        return _V5AmbiguityReport(
+            is_ambiguous=False,
+            ambiguity_type="insufficient_context",
+            candidates=[],
+            disambiguation_questions=[],
+            recommended_resolution=None,
+        )
+    semantic_result = self._try_semantic_match(
+        shape_id=shape_id,
+        context=context,
+        current_solid=current_solid,
+        options=_V5ResolutionOptions(max_candidates=10),
+    )
+    candidate_ids = []
+    if semantic_result is not None:
+        candidate_ids = [c.shape_id for c in getattr(semantic_result, "candidates", [])]
+        if getattr(semantic_result, "is_ambiguous", False) and candidate_ids:
+            return _V5AmbiguityReport(
+                is_ambiguous=True,
+                ambiguity_type="semantic_ambiguous",
+                candidates=candidate_ids,
+                disambiguation_questions=[
+                    f"Multiple candidates match with close scores (top score {getattr(semantic_result, 'score', 0.0):.3f}). Please confirm intended shape."
+                ],
+                recommended_resolution=candidate_ids[0],
+            )
+    return _V5AmbiguityReport(
+        is_ambiguous=False,
+        ambiguity_type="none",
+        candidates=[],
+        disambiguation_questions=[],
+        recommended_resolution=None,
+    )
+
+
+def _v5_invalidate_feature(self, feature_id: str) -> None:
+    _legacy_invalidate_feature(self, feature_id)
+    _v5_rebuild_semantic_index(self)
+
+
+def _v5_compact(self, current_solid: Any) -> int:
+    removed = _legacy_compact(self, current_solid)
+    _v5_rebuild_semantic_index(self)
+    return removed
+
+
+ShapeID = _V5ShapeID
+ShapeRecord = _V5ShapeRecord
+ShapeType = _V5ShapeType
+SelectionContext = _V5SelectionContext
+ShapeReference = ShapeRecord
+
+ShapeNamingService.__init__ = _v5_shape_naming_service_init
+ShapeNamingService._update_spatial_index = _v5_update_spatial_index
+ShapeNamingService.register_shape = _v5_register_shape
+ShapeNamingService.seed_shape = _v5_seed_shape
+ShapeNamingService.get_shape_record = _v5_get_shape_record
+ShapeNamingService.resolve_shape_with_method = _v5_resolve_shape_with_method
+ShapeNamingService.resolve_shape = _v5_resolve_shape
+ShapeNamingService.resolve = _v5_resolve
+ShapeNamingService.resolve_batch = _v5_resolve_batch
+ShapeNamingService.validate_resolutions = _v5_validate_resolutions
+ShapeNamingService.check_ambiguity = _v5_check_ambiguity
+ShapeNamingService.invalidate_feature = _v5_invalidate_feature
+ShapeNamingService.compact = _v5_compact
+ShapeNamingService._rebuild_semantic_index = _v5_rebuild_semantic_index
+ShapeNamingService._try_semantic_match = _v5_try_semantic_match
+
