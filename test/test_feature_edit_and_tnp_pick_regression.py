@@ -5,7 +5,14 @@ import os
 from PySide6.QtCore import Qt, QLocale
 from PySide6.QtWidgets import QApplication
 
-from gui.dialogs.feature_edit_dialogs import ChamferEditDialog, FilletEditDialog
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+
+from gui.dialogs.feature_edit_dialogs import (
+    ChamferEditDialog,
+    FilletEditDialog,
+    _highlight_edges_in_viewport,
+    _highlight_face_in_viewport,
+)
 from gui.design_tokens import parse_decimal
 from gui.feature_dialogs import FeatureDialogsMixin
 from gui.feature_operations import FeatureMixin
@@ -92,6 +99,27 @@ class _PushPullHarness(FeatureMixin):
 
     def _find_or_register_face_shape_id(self, *args, **kwargs):
         return "shape-1"
+
+
+class _FakeWrapped:
+    def __init__(self, shape_type, token):
+        self._shape_type = shape_type
+        self.token = token
+
+    def ShapeType(self):
+        return self._shape_type
+
+    def IsSame(self, other):
+        return getattr(other, "token", None) == self.token
+
+
+class _FakeShape:
+    def __init__(self, shape_type, token, center=(0.0, 0.0, 0.0)):
+        self.wrapped = _FakeWrapped(shape_type, token)
+        self._center = SimpleNamespace(X=center[0], Y=center[1], Z=center[2])
+
+    def center(self):
+        return self._center
 
 
 def test_edit_feature_routes_pushpull_loft_and_sweep_when_body_is_not_in_tuple():
@@ -205,6 +233,58 @@ def test_update_tnp_stats_uses_panel_update_stats_api():
 
     harness.tnp_stats_panel.update_stats.assert_called_once_with(body)
     harness.tnp_stats_panel.refresh.assert_not_called()
+
+
+def test_edge_highlight_ignores_resolved_face_shapes_and_uses_matching_edges():
+    edge0 = _FakeShape(TopAbs_EDGE, "edge-0", (0.0, 0.0, 0.0))
+    edge1 = _FakeShape(TopAbs_EDGE, "edge-1", (10.0, 0.0, 0.0))
+    wrong_face = _FakeShape(TopAbs_FACE, "face-0", (5.0, 5.0, 0.0))
+    resolved_edge = _FakeShape(TopAbs_EDGE, "edge-1", (10.0, 0.0, 0.0))
+
+    solid = SimpleNamespace(edges=lambda: [edge0, edge1], faces=lambda: [])
+    service = SimpleNamespace(
+        resolve_shape_with_method=lambda sid, _solid, log_unresolved=False: (
+            (wrong_face if sid == "sid-face" else resolved_edge),
+            "brepfeat",
+        )
+    )
+    body = SimpleNamespace(
+        _build123d_solid=solid,
+        _document=SimpleNamespace(_shape_naming_service=service),
+    )
+    viewport = SimpleNamespace(
+        highlight_edges_by_ocp_shapes=Mock(),
+        highlight_edges_by_index=Mock(),
+    )
+    main_window = SimpleNamespace(viewport_3d=viewport)
+
+    _highlight_edges_in_viewport(main_window, body, [0], ["sid-face", "sid-edge"])
+
+    viewport.highlight_edges_by_ocp_shapes.assert_called_once()
+    highlighted_edges = viewport.highlight_edges_by_ocp_shapes.call_args.args[0]
+    assert highlighted_edges == [edge1]
+    viewport.highlight_edges_by_index.assert_not_called()
+
+
+def test_face_highlight_prefers_face_shape_id_over_stale_face_index():
+    face0 = _FakeShape(TopAbs_FACE, "face-0", (0.0, 0.0, 0.0))
+    face1 = _FakeShape(TopAbs_FACE, "face-1", (20.0, 0.0, 0.0))
+    resolved_face = _FakeShape(TopAbs_FACE, "face-1", (20.0, 0.0, 0.0))
+
+    solid = SimpleNamespace(faces=lambda: [face0, face1])
+    service = SimpleNamespace(
+        resolve_shape_with_method=lambda _sid, _solid, log_unresolved=False: (resolved_face, "direct")
+    )
+    body = SimpleNamespace(
+        _build123d_solid=solid,
+        _document=SimpleNamespace(_shape_naming_service=service),
+    )
+    viewport = SimpleNamespace(highlight_face_by_index=Mock())
+    main_window = SimpleNamespace(viewport_3d=viewport)
+
+    _highlight_face_in_viewport(main_window, body, 0, "face-sid", None)
+
+    viewport.highlight_face_by_index.assert_called_once_with(body, 1)
 
 
 def test_feature_edit_dialog_preserves_decimal_text_under_german_locale():

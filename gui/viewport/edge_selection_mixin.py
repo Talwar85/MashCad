@@ -1266,9 +1266,14 @@ class EdgeSelectionMixin:
             if hasattr(edge, 'Wrapped') or 'TopoDS' in str(type(edge)):
                 from OCP.BRepAdaptor import BRepAdaptor_Curve
                 from OCP.GCPnts import GCPnts_QuasiUniformDeflection
+                from OCP.TopAbs import TopAbs_EDGE
                 
-                adaptor = BRepAdaptor_Curve(edge)
-                deflection = 0.01  # 10µm Genauigkeit
+                wrapped = edge.wrapped if hasattr(edge, 'wrapped') else edge
+                if hasattr(wrapped, 'ShapeType') and wrapped.ShapeType() != TopAbs_EDGE:
+                    return None
+                
+                adaptor = BRepAdaptor_Curve(wrapped)
+                deflection = 0.01  # 10? Genauigkeit
                 
                 try:
                     discretizer = GCPnts_QuasiUniformDeflection()

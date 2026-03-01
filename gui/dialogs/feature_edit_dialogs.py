@@ -178,15 +178,26 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
         face_label.setStyleSheet(f"color: {color}; font-size: 10px;")
         face_row.addWidget(face_label)
 
-        if is_valid:
-            show_face_btn = QPushButton(tr("Fläche anzeigen"))
+        has_stable_face_ref = (
+            getattr(feature, 'face_shape_id', None) is not None or
+            getattr(feature, 'face_selector', None) is not None
+        )
+
+        if is_valid or has_stable_face_ref:
+            show_face_btn = QPushButton(tr("Fl??che anzeigen"))
             show_face_btn.setFixedHeight(20)
             show_face_btn.setStyleSheet(
                 "QPushButton { background: #333; color: #ccc; border: 1px solid #555; "
                 "border-radius: 3px; font-size: 10px; padding: 1px 8px; }"
                 "QPushButton:hover { background: #444; color: white; }"
             )
-            show_face_btn.clicked.connect(lambda: _highlight_face_in_viewport(dialog._parent_window, body, face_index))
+            show_face_btn.clicked.connect(lambda: _highlight_face_in_viewport(
+                dialog._parent_window,
+                body,
+                face_index,
+                getattr(feature, 'face_shape_id', None),
+                getattr(feature, 'face_selector', None),
+            ))
             face_row.addWidget(show_face_btn)
 
         group_layout.addLayout(face_row)
@@ -215,9 +226,18 @@ def _highlight_edges_in_viewport(main_window, body, edge_indices, edge_shape_ids
                 resolved_edges = []
                 solid = body._build123d_solid
                 for shape_id in edge_shape_ids:
-                    resolved = service.resolve_shape(shape_id, solid, log_unresolved=False)
-                    if resolved is not None:
-                        resolved_edges.append(resolved)
+                    if hasattr(service, 'resolve_shape_with_method'):
+                        resolved, _method = service.resolve_shape_with_method(
+                            shape_id,
+                            solid,
+                            log_unresolved=False,
+                        )
+                    else:
+                        resolved = service.resolve_shape(shape_id, solid, log_unresolved=False)
+
+                    matched_edge = _match_edge_shape_to_solid(solid, resolved)
+                    if matched_edge is not None:
+                        resolved_edges.append(matched_edge)
                 if resolved_edges:
                     viewport.highlight_edges_by_ocp_shapes(resolved_edges)
                     logger.debug(f"TNP-Edge-Highlight: {len(resolved_edges)}/{len(edge_shape_ids)} Kanten via ShapeIDs")
@@ -229,7 +249,7 @@ def _highlight_edges_in_viewport(main_window, body, edge_indices, edge_shape_ids
         logger.debug(f"Edge-Highlighting fehlgeschlagen: {e}")
 
 
-def _highlight_face_in_viewport(main_window, body, face_index):
+def _highlight_face_in_viewport(main_window, body, face_index, face_shape_id=None, face_selector=None):
     """Highlighted die angegebene Fläche im Viewport."""
     if main_window is None:
         return
@@ -237,9 +257,192 @@ def _highlight_face_in_viewport(main_window, body, face_index):
     if viewport is None:
         return
     try:
-        viewport.highlight_face_by_index(body, face_index)
+        resolved_index = _resolve_face_index_for_highlight(body, face_index, face_shape_id, face_selector)
+        if resolved_index is not None:
+            viewport.highlight_face_by_index(body, resolved_index)
     except Exception as e:
         logger.debug(f"Face-Highlighting fehlgeschlagen: {e}")
+
+
+def _resolve_face_index_for_highlight(body, face_index, face_shape_id=None, face_selector=None):
+    """Löst die beste Face für Dialog-Highlight auf: ShapeID -> Selector -> Index."""
+    solid = getattr(body, '_build123d_solid', None) if body is not None else None
+    if solid is None or not hasattr(solid, 'faces'):
+        return None
+
+    all_faces = list(solid.faces())
+    if not all_faces:
+        return None
+
+    resolved_face = None
+    if face_shape_id is not None and hasattr(body, '_document'):
+        service = getattr(body._document, '_shape_naming_service', None)
+        if service is not None:
+            try:
+                if hasattr(service, 'resolve_shape_with_method'):
+                    resolved_shape, _method = service.resolve_shape_with_method(
+                        face_shape_id,
+                        solid,
+                        log_unresolved=False,
+                    )
+                else:
+                    resolved_shape = service.resolve_shape(face_shape_id, solid, log_unresolved=False)
+                resolved_face = _match_face_shape_to_solid(all_faces, resolved_shape)
+            except Exception as resolve_err:
+                logger.debug(f"Face-Highlight: ShapeID-Auflösung fehlgeschlagen: {resolve_err}")
+
+    if resolved_face is None and face_selector:
+        try:
+            from modeling.geometric_selector import GeometricFaceSelector
+
+            selector = GeometricFaceSelector.from_dict(face_selector)
+            resolved_face = selector.find_best_match(all_faces)
+        except Exception as selector_err:
+            logger.debug(f"Face-Highlight: Selector-Auflösung fehlgeschlagen: {selector_err}")
+
+    if resolved_face is not None:
+        resolved_index = _face_index_in_solid(all_faces, resolved_face)
+        if resolved_index is not None:
+            return resolved_index
+
+    if face_index is None:
+        return None
+    if 0 <= face_index < len(all_faces):
+        return int(face_index)
+    return None
+
+
+def _match_edge_shape_to_solid(solid, resolved_shape):
+    """Mappt eine aufgelöste Shape robust auf eine aktuelle Solid-Edge."""
+    if solid is None or resolved_shape is None or not _is_edge_shape(resolved_shape):
+        return None
+
+    all_edges = list(solid.edges()) if hasattr(solid, 'edges') else []
+    resolved_wrapped = resolved_shape.wrapped if hasattr(resolved_shape, 'wrapped') else resolved_shape
+
+    for solid_edge in all_edges:
+        try:
+            if hasattr(solid_edge, 'wrapped') and solid_edge.wrapped.IsSame(resolved_wrapped):
+                return solid_edge
+        except Exception:
+            continue
+
+    resolved_center = _shape_center_tuple(resolved_shape)
+    if resolved_center is None:
+        return None
+
+    best_match = None
+    best_dist = float('inf')
+    for solid_edge in all_edges:
+        solid_center = _shape_center_tuple(solid_edge)
+        if solid_center is None:
+            continue
+        dist = (
+            (resolved_center[0] - solid_center[0]) ** 2 +
+            (resolved_center[1] - solid_center[1]) ** 2 +
+            (resolved_center[2] - solid_center[2]) ** 2
+        ) ** 0.5
+        if dist < 0.01 and dist < best_dist:
+            best_match = solid_edge
+            best_dist = dist
+
+    return best_match
+
+
+def _match_face_shape_to_solid(all_faces, resolved_shape):
+    """Mappt eine aufgelöste Shape robust auf eine aktuelle Solid-Face."""
+    if resolved_shape is None or not _is_face_shape(resolved_shape):
+        return None
+
+    resolved_wrapped = resolved_shape.wrapped if hasattr(resolved_shape, 'wrapped') else resolved_shape
+
+    for solid_face in all_faces:
+        try:
+            if hasattr(solid_face, 'wrapped') and solid_face.wrapped.IsSame(resolved_wrapped):
+                return solid_face
+        except Exception:
+            continue
+
+    resolved_center = _shape_center_tuple(resolved_shape)
+    if resolved_center is None:
+        return None
+
+    best_match = None
+    best_dist = float('inf')
+    for solid_face in all_faces:
+        solid_center = _shape_center_tuple(solid_face)
+        if solid_center is None:
+            continue
+        dist = (
+            (resolved_center[0] - solid_center[0]) ** 2 +
+            (resolved_center[1] - solid_center[1]) ** 2 +
+            (resolved_center[2] - solid_center[2]) ** 2
+        ) ** 0.5
+        if dist < 0.01 and dist < best_dist:
+            best_match = solid_face
+            best_dist = dist
+
+    return best_match
+
+
+def _shape_center_tuple(shape):
+    """Liefert den Center einer Face/Edge robust als XYZ-Tuple."""
+    try:
+        center = shape.center()
+        return (float(center.X), float(center.Y), float(center.Z))
+    except Exception:
+        try:
+            from build123d import Edge as B3dEdge, Face as B3dFace
+
+            wrapped = shape.wrapped if hasattr(shape, 'wrapped') else shape
+            for cls in (B3dEdge, B3dFace):
+                try:
+                    center = cls(wrapped).center()
+                    return (float(center.X), float(center.Y), float(center.Z))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return None
+
+
+def _face_index_in_solid(all_faces, target_face):
+    """Findet den topologischen Index einer Face im aktuellen Solid."""
+    target_wrapped = target_face.wrapped if hasattr(target_face, 'wrapped') else target_face
+    for idx, face in enumerate(all_faces):
+        try:
+            wrapped = face.wrapped if hasattr(face, 'wrapped') else face
+            if wrapped.IsSame(target_wrapped):
+                return idx
+        except Exception:
+            continue
+    return None
+
+
+def _is_edge_shape(shape):
+    """Prüft robust, ob ein Objekt eine Edge repräsentiert."""
+    try:
+        from OCP.TopAbs import TopAbs_EDGE
+
+        wrapped = shape.wrapped if hasattr(shape, 'wrapped') else shape
+        if hasattr(wrapped, 'ShapeType'):
+            return wrapped.ShapeType() == TopAbs_EDGE
+    except Exception:
+        pass
+    return hasattr(shape, 'position_at')
+
+
+def _is_face_shape(shape):
+    """Prüft robust, ob ein Objekt eine Face repräsentiert."""
+    try:
+        from OCP.TopAbs import TopAbs_FACE
+
+        wrapped = shape.wrapped if hasattr(shape, 'wrapped') else shape
+        if hasattr(wrapped, 'ShapeType'):
+            return wrapped.ShapeType() == TopAbs_FACE
+    except Exception:
+        pass
+    return hasattr(shape, 'normal_at')
 
 
 def _clear_edge_highlight(main_window):
