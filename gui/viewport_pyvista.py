@@ -1610,6 +1610,115 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         except Exception as e:
             _log_suppressed_exception("unhighlight_body", e)
 
+    def clear_feature_highlight(self):
+        """Entfernt passives CAD-Feature-Highlighting."""
+        try:
+            if hasattr(self, "clear_edge_highlight"):
+                self.clear_edge_highlight()
+            if hasattr(self, "clear_face_highlight"):
+                self.clear_face_highlight()
+            highlighted_body_id = getattr(self, "_highlighted_feature_body_id", None)
+            if highlighted_body_id:
+                self.unhighlight_body(highlighted_body_id)
+            self._highlighted_feature_body_id = None
+        except Exception as e:
+            _log_suppressed_exception("clear_feature_highlight", e)
+
+    def highlight_feature(self, body, feature):
+        """Hebt ein CAD-Feature im Viewport über stabile Face-/Edge-Referenzen hervor."""
+        self.clear_feature_highlight()
+        if body is None or feature is None:
+            return
+
+        body_id = getattr(body, "id", None)
+        if body_id:
+            self.highlight_body(body_id)
+            self._highlighted_feature_body_id = body_id
+
+        solid = getattr(body, "_build123d_solid", None)
+        service = getattr(getattr(body, "_document", None), "_shape_naming_service", None)
+        highlighted_specific = False
+
+        try:
+            from gui.dialogs.feature_edit_dialogs import (
+                _match_edge_shape_to_solid,
+                _resolve_face_index_for_highlight,
+            )
+
+            edge_shape_ids = list(getattr(feature, "edge_shape_ids", []) or [])
+            edge_indices = list(getattr(feature, "edge_indices", []) or [])
+            if solid is not None and service is not None and edge_shape_ids:
+                resolved_edges = []
+                for shape_id in edge_shape_ids:
+                    try:
+                        if hasattr(service, "resolve_shape_with_method"):
+                            resolved_shape, _method = service.resolve_shape_with_method(
+                                shape_id,
+                                solid,
+                                log_unresolved=False,
+                            )
+                        else:
+                            resolved_shape = service.resolve_shape(shape_id, solid, log_unresolved=False)
+                        matched_edge = _match_edge_shape_to_solid(solid, resolved_shape)
+                        if matched_edge is not None:
+                            resolved_edges.append(matched_edge)
+                    except Exception as resolve_err:
+                        logger.debug(f"Feature-Highlight: Edge-ShapeID-Auflösung fehlgeschlagen: {resolve_err}")
+                if resolved_edges:
+                    self.highlight_edges_by_ocp_shapes(resolved_edges)
+                    highlighted_specific = True
+
+            if not highlighted_specific and edge_indices:
+                self.highlight_edges_by_index(body, edge_indices)
+                highlighted_specific = True
+
+            if not highlighted_specific:
+                face_candidates = []
+                face_candidates.append((
+                    getattr(feature, "face_index", None),
+                    getattr(feature, "face_shape_id", None),
+                    getattr(feature, "face_selector", None),
+                ))
+
+                selector_list = list(getattr(feature, "face_selectors", []) or [])
+                index_list = list(getattr(feature, "face_indices", []) or [])
+                shape_id_list = list(getattr(feature, "face_shape_ids", []) or [])
+                face_ref_count = max(len(shape_id_list), len(index_list), len(selector_list))
+                for idx in range(face_ref_count):
+                    face_candidates.append((
+                        index_list[idx] if idx < len(index_list) else None,
+                        shape_id_list[idx] if idx < len(shape_id_list) else None,
+                        selector_list[idx] if idx < len(selector_list) else None,
+                    ))
+
+                selector_list = list(getattr(feature, "opening_face_selectors", []) or [])
+                index_list = list(getattr(feature, "opening_face_indices", []) or [])
+                shape_id_list = list(getattr(feature, "opening_face_shape_ids", []) or [])
+                opening_face_ref_count = max(len(shape_id_list), len(index_list), len(selector_list))
+                for idx in range(opening_face_ref_count):
+                    face_candidates.append((
+                        index_list[idx] if idx < len(index_list) else None,
+                        shape_id_list[idx] if idx < len(shape_id_list) else None,
+                        selector_list[idx] if idx < len(selector_list) else None,
+                    ))
+
+                for face_index, face_shape_id, face_selector in face_candidates:
+                    resolved_index = _resolve_face_index_for_highlight(
+                        body,
+                        face_index,
+                        face_shape_id,
+                        face_selector,
+                    )
+                    if resolved_index is not None:
+                        self.highlight_face_by_index(body, resolved_index)
+                        highlighted_specific = True
+                        break
+        except Exception as e:
+            _log_suppressed_exception("highlight_feature", e)
+
+        if not highlighted_specific and body_id:
+            logger.debug(f"Feature-Highlight: Fallback auf Body-Highlight für '{getattr(feature, 'name', 'Feature')}'")
+
     def set_pending_transform_mode(self, active: bool):
         """Aktiviert/deaktiviert den pending transform mode für Body-Highlighting"""
         self.pending_transform_mode = active

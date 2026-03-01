@@ -16,6 +16,7 @@ from gui.dialogs.feature_edit_dialogs import (
 from gui.design_tokens import parse_decimal
 from gui.feature_dialogs import FeatureDialogsMixin
 from gui.feature_operations import FeatureMixin
+from gui.viewport.body_mixin import BodyRenderingMixin
 from gui.viewport_pyvista import PyVistaViewport
 from modeling.features.advanced import LoftFeature, SweepFeature
 from modeling.features.extrude import PushPullFeature
@@ -233,6 +234,106 @@ def test_update_tnp_stats_uses_panel_update_stats_api():
 
     harness.tnp_stats_panel.update_stats.assert_called_once_with(body)
     harness.tnp_stats_panel.refresh.assert_not_called()
+
+
+def test_viewport_remove_body_alias_routes_to_clear_bodies():
+    host = SimpleNamespace(clear_bodies=Mock())
+
+    BodyRenderingMixin.remove_body(host, "B1")
+
+    host.clear_bodies.assert_called_once_with(only_body_id="B1")
+
+
+def test_viewport_highlight_feature_prefers_tnp_edges_and_marks_body():
+    edge0 = _FakeShape(TopAbs_EDGE, "edge-0", (0.0, 0.0, 0.0))
+    edge1 = _FakeShape(TopAbs_EDGE, "edge-1", (10.0, 0.0, 0.0))
+    resolved_edge = _FakeShape(TopAbs_EDGE, "edge-1", (10.0, 0.0, 0.0))
+
+    solid = SimpleNamespace(edges=lambda: [edge0, edge1], faces=lambda: [])
+    service = SimpleNamespace(
+        resolve_shape_with_method=lambda _sid, _solid, log_unresolved=False: (resolved_edge, "direct")
+    )
+    body = SimpleNamespace(
+        id="B1",
+        _build123d_solid=solid,
+        _document=SimpleNamespace(_shape_naming_service=service),
+    )
+    feature = SimpleNamespace(
+        name="Fillet",
+        edge_shape_ids=["sid-edge"],
+        edge_indices=[],
+        face_index=None,
+        face_shape_id=None,
+        face_selector=None,
+        face_shape_ids=[],
+        face_indices=[],
+        face_selectors=[],
+        opening_face_shape_ids=[],
+        opening_face_indices=[],
+        opening_face_selectors=[],
+    )
+    host = SimpleNamespace(
+        clear_edge_highlight=Mock(),
+        clear_face_highlight=Mock(),
+        unhighlight_body=Mock(),
+        highlight_body=Mock(),
+        highlight_edges_by_ocp_shapes=Mock(),
+        highlight_edges_by_index=Mock(),
+        highlight_face_by_index=Mock(),
+        _highlighted_feature_body_id="OLD",
+    )
+    host.clear_feature_highlight = lambda: PyVistaViewport.clear_feature_highlight(host)
+
+    PyVistaViewport.highlight_feature(host, body, feature)
+
+    host.unhighlight_body.assert_called_once_with("OLD")
+    host.highlight_body.assert_called_once_with("B1")
+    host.highlight_edges_by_ocp_shapes.assert_called_once()
+    host.highlight_edges_by_index.assert_not_called()
+    host.highlight_face_by_index.assert_not_called()
+
+
+def test_viewport_highlight_feature_falls_back_to_face_reference_lists():
+    face0 = _FakeShape(TopAbs_FACE, "face-0", (0.0, 0.0, 0.0))
+    face1 = _FakeShape(TopAbs_FACE, "face-1", (20.0, 0.0, 0.0))
+    solid = SimpleNamespace(edges=lambda: [], faces=lambda: [face0, face1])
+    body = SimpleNamespace(
+        id="B1",
+        _build123d_solid=solid,
+        _document=SimpleNamespace(_shape_naming_service=None),
+    )
+    feature = SimpleNamespace(
+        name="Hole",
+        edge_shape_ids=[],
+        edge_indices=[],
+        face_index=None,
+        face_shape_id=None,
+        face_selector=None,
+        face_shape_ids=[],
+        face_indices=[1],
+        face_selectors=[],
+        opening_face_shape_ids=[],
+        opening_face_indices=[],
+        opening_face_selectors=[],
+    )
+    host = SimpleNamespace(
+        clear_edge_highlight=Mock(),
+        clear_face_highlight=Mock(),
+        unhighlight_body=Mock(),
+        highlight_body=Mock(),
+        highlight_edges_by_ocp_shapes=Mock(),
+        highlight_edges_by_index=Mock(),
+        highlight_face_by_index=Mock(),
+        _highlighted_feature_body_id=None,
+    )
+    host.clear_feature_highlight = lambda: PyVistaViewport.clear_feature_highlight(host)
+
+    PyVistaViewport.highlight_feature(host, body, feature)
+
+    host.highlight_body.assert_called_once_with("B1")
+    host.highlight_face_by_index.assert_called_once_with(body, 1)
+    host.highlight_edges_by_ocp_shapes.assert_not_called()
+    host.highlight_edges_by_index.assert_not_called()
 
 
 def test_edge_highlight_ignores_resolved_face_shapes_and_uses_matching_edges():

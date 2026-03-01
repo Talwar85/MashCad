@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from gui.commands.feature_commands import AddBodyCommand
+from gui.commands.feature_commands import _remove_body_from_viewport
 from modeling.document import Document
 
 
@@ -60,3 +61,12 @@ def test_add_body_command_undo_removes_body_from_owning_component():
     assert body not in inactive.bodies
     mw.viewport_3d.remove_body.assert_called_once_with("B1")
     mw.browser.refresh.assert_called_once()
+
+
+def test_remove_body_from_viewport_falls_back_to_clear_bodies():
+    viewport = SimpleNamespace(clear_bodies=Mock())
+    mw = SimpleNamespace(viewport_3d=viewport)
+
+    _remove_body_from_viewport(mw, "B9")
+
+    viewport.clear_bodies.assert_called_once_with(only_body_id="B9")
