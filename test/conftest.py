@@ -91,7 +91,9 @@ FEATURE_FLAG_DEFAULTS = {
     "printability_trust_gate": True,
     "printability_min_score": 60,
     "printability_block_on_critical": True,
-    
+    "printability_check": True,
+    "print_orientation_optimizer": True,
+
     # Export
     
     # Live Preview

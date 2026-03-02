@@ -105,6 +105,7 @@ class ToolMixin:
             'import_step': '_import_step',
             'import_svg': '_import_svg',
             'stl_to_cad': '_on_stl_to_cad',
+            'optimize_print_orientation': '_optimize_print_orientation_dialog',
             'export_stl': '_export_stl',
             'export_step': '_export_step',
             'convert_to_brep': '_convert_selected_body_to_brep',

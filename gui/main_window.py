@@ -9,6 +9,7 @@ and mixin inheritance. All functionality is in mixin modules.
 import sys
 import os
 from loguru import logger
+from i18n import tr
 
 from PySide6.QtWidgets import QApplication, QMainWindow
 from PySide6.QtCore import Qt
@@ -86,7 +87,6 @@ class MainWindow(
         
         # Initialize document
         from modeling import Document
-        from i18n import tr
         self.document = Document("Projekt1")
         self._current_project_path = None
         

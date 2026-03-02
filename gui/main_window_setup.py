@@ -674,7 +674,7 @@ class SetupMixin:
         edit_menu.addSeparator()
         edit_menu.addAction(tr("Parameters..."), self._show_parameters_dialog, "Ctrl+Shift+P")
 
-        
+
         # Ansicht-Menü
         view_menu = mb.addMenu(tr("View"))
         view_menu.addAction(tr("Isometric"), lambda: self.viewport_3d.set_view('iso'))

@@ -71,6 +71,8 @@ FEATURE_FLAGS: dict[str, bool] = {
     "geometry_drift_detection": True,
     "printability_trust_gate": True,
     "printability_block_on_critical": True,
+    "printability_check": True,  # Show printability warnings in export dialog
+    "print_orientation_optimizer": True,  # Optimize for 3D Printing dialog and tool
 
     # ========================================================================
     # OCP Runtime Policies

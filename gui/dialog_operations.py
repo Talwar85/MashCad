@@ -1863,7 +1863,32 @@ class DialogMixin:
             return
 
         WallThicknessDialog(body, parent=self).exec()
-    
+
+    # =========================================================================
+    # Print Optimization Dialog
+    # =========================================================================
+
+    def _optimize_print_orientation_dialog(self):
+        """
+        Open the Print Orientation Optimization Dialog.
+
+        If a body is selected, it's pre-selected in the dialog.
+        Otherwise, user can select from available bodies.
+        """
+        from gui.dialogs.print_optimize_dialog import show_print_optimize_dialog
+
+        try:
+            show_print_optimize_dialog(self)
+        except Exception as e:
+            logger.error(f"Print optimization dialog error: {e}")
+            from PySide6.QtWidgets import QMessageBox
+            from i18n import tr
+            QMessageBox.critical(
+                self,
+                tr("Error"),
+                f"Could not open print optimization dialog:\n{e}"
+            )
+
     # =========================================================================
     # Lattice Dialog
     # =========================================================================

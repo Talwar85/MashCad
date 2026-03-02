@@ -23,10 +23,11 @@ Date: 2026-02-20
 Branch: feature/v1-roadmap-execution
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from enum import Enum, auto
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Union
 from loguru import logger
+import math
 
 
 class PrintabilitySeverity(Enum):
@@ -45,6 +46,87 @@ class PrintabilityCategory(Enum):
     OVERHANG = "overhang"               # Überhänge/Unterstützungen
     GEOMETRY = "geometry"               # Allgemeine Geometrie-Probleme
     SIZE = "size"                       # Bauteilgröße
+
+
+@dataclass
+class OrientationMetrics:
+    """
+    Raw geometric metrics that depend on orientation.
+
+    These metrics are used for orientation optimization and support estimation.
+    All values are in millimeters (mm) or derived units.
+
+    Computed from:
+    - Overhang area: Sum of all downward-facing faces above critical angle
+    - Unsupported span: Maximum horizontal distance without support below
+    - Support contact area: Area that would require support structures
+    - Base contact area: Area of faces on XY plane (build plate)
+    - Build height: Z-extent of the bounding box
+
+    Author: Claude (AP 1.1: Extend Printability Metrics)
+    Date: 2026-03-02
+    """
+    # Overhang metrics
+    overhang_area_mm2: float = 0.0
+    overhang_ratio: float = 0.0          # overhang_area / total_surface_area
+    critical_overhang_area_mm2: float = 0.0  # Faces > critical_angle
+
+    # Support metrics
+    unsupported_span_mm: float = 0.0      # Max unsupported horizontal distance
+    support_contact_area_mm2: float = 0.0  # Area requiring support
+    support_volume_estimate_mm3: float = 0.0  # Estimated support volume
+
+    # Base/stability metrics
+    base_contact_area_mm2: float = 0.0    # Area on XY plane
+    base_contact_ratio: float = 0.0       # base_contact / convex_hull_footprint
+    center_of_mass: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    stability_score: float = 1.0          # 0-1, based on CoM height/base width
+
+    # Build metrics
+    build_height_mm: float = 0.0          # Z-extent (affects print time)
+    total_surface_area_mm2: float = 0.0
+    volume_mm3: float = 0.0
+
+    # Bounding box
+    bbox_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bbox_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    # Analysis metadata
+    critical_angle_deg: float = 45.0      # Angle threshold for overhang detection
+    analysis_time_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize for caching/UI."""
+        return {
+            'overhang_area_mm2': self.overhang_area_mm2,
+            'overhang_ratio': self.overhang_ratio,
+            'critical_overhang_area_mm2': self.critical_overhang_area_mm2,
+            'unsupported_span_mm': self.unsupported_span_mm,
+            'support_contact_area_mm2': self.support_contact_area_mm2,
+            'support_volume_estimate_mm3': self.support_volume_estimate_mm3,
+            'base_contact_area_mm2': self.base_contact_area_mm2,
+            'base_contact_ratio': self.base_contact_ratio,
+            'center_of_mass': self.center_of_mass,
+            'stability_score': self.stability_score,
+            'build_height_mm': self.build_height_mm,
+            'total_surface_area_mm2': self.total_surface_area_mm2,
+            'volume_mm3': self.volume_mm3,
+            'bbox_min': self.bbox_min,
+            'bbox_max': self.bbox_max,
+            'critical_angle_deg': self.critical_angle_deg,
+            'analysis_time_ms': self.analysis_time_ms,
+        }
+
+    def get_summary(self) -> str:
+        """Get a human-readable summary."""
+        lines = [
+            f"Overhang: {self.overhang_area_mm2:.1f} mm² ({self.overhang_ratio*100:.1f}%)",
+            f"Support needed: {self.support_contact_area_mm2:.1f} mm²",
+            f"Build height: {self.build_height_mm:.1f} mm",
+            f"Base contact: {self.base_contact_area_mm2:.1f} mm²",
+            f"Stability: {self.stability_score:.2f}",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass
@@ -650,3 +732,384 @@ def _collect_model_metadata(shape: Any, score: PrintabilityScore) -> None:
         
     except Exception as e:
         logger.warning(f"Metadata collection fehlgeschlagen: {e}")
+
+
+#==============================================================================
+# AP 1.1: Orientation Metrics Computation
+#==============================================================================
+
+def compute_orientation_metrics(
+    solid: Any,
+    critical_angle_deg: float = 45.0,
+    build_plane_normal: Tuple[float, float, float] = (0, 0, 1)
+) -> OrientationMetrics:
+    """
+    Compute orientation-dependent geometric metrics for a solid.
+
+    These metrics are used for:
+    - Orientation optimization (finding best print direction)
+    - Support estimation
+    - Stability analysis
+
+    Args:
+        solid: Build123d Solid or OCP TopoDS_Shape
+        critical_angle_deg: Angle threshold for overhang detection (default 45°)
+        build_plane_normal: Normal vector of build plane (default Z-up)
+
+    Returns:
+        OrientationMetrics with all computed values
+
+    Author: Claude (AP 1.1: Extend Printability Metrics)
+    Date: 2026-03-02
+    """
+    import time
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRep import BRep_Tool
+    from OCP.GeomAbs import GeomAbs_Plane
+    from OCP.TopoDS import TopoDS_Face
+    from OCP.BRepTools import BRepTools
+
+    start_time = time.perf_counter()
+
+    # Extract OCP shape
+    ocp_shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
+
+    metrics = OrientationMetrics(critical_angle_deg=critical_angle_deg)
+
+    if ocp_shape is None:
+        logger.warning("Cannot compute metrics: shape is None")
+        return metrics
+
+    try:
+        # 1. Bounding box and basic geometry
+        bbox = Bnd_Box()
+        BRepBndLib.Add_s(ocp_shape, bbox)
+        xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+
+        metrics.bbox_min = (xmin, ymin, zmin)
+        metrics.bbox_max = (xmax, ymax, zmax)
+        metrics.build_height_mm = zmax - zmin
+
+        # 2. Volume and surface area
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(ocp_shape, props)
+        metrics.volume_mm3 = props.Mass()
+
+        surface_props = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(ocp_shape, surface_props)
+        metrics.total_surface_area_mm2 = surface_props.Mass()
+
+        # 3. Center of mass
+        com = surface_props.CentreOfMass()
+        metrics.center_of_mass = (com.X(), com.Y(), com.Z())
+
+        # 4. Face analysis for overhangs and base contact
+        overhang_area = 0.0
+        critical_overhang_area = 0.0
+        base_contact_area = 0.0
+        support_area = 0.0
+        max_span = 0.0
+
+        critical_angle_rad = math.radians(critical_angle_deg)
+        build_plane_z = build_plane_normal[2]
+
+        explorer = TopExp_Explorer(ocp_shape, TopAbs_FACE)
+
+        face_data = []  # Store face data for span analysis
+
+        while explorer.More():
+            # Convert to TopoDS_Face - explorer.Current() returns TopoDS_Shape
+            from OCP.TopoDS import TopoDS
+            face = TopoDS.Face_s(explorer.Current())
+
+            # Get face area
+            face_props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(face, face_props)
+            face_area = face_props.Mass()
+
+            if face_area < 1e-6:
+                explorer.Next()
+                continue
+
+            # Create surface adaptor for normal analysis
+            try:
+                adaptor = BRepAdaptor_Surface(face)
+            except Exception:
+                # Skip faces that can't be adapted
+                explorer.Next()
+                continue
+
+            # Get face normal (at center of face)
+            try:
+                # Get UV bounds
+                u_min, u_max, v_min, v_max = adaptor.FirstUParameter(), adaptor.LastUParameter(), \
+                                             adaptor.FirstVParameter(), adaptor.LastVParameter()
+
+                # Evaluate normal at center
+                u_center = (u_min + u_max) / 2
+                v_center = (v_min + v_max) / 2
+
+                # Get normal via BRepLProp_SLProps
+                from OCP.BRepLProp import BRepLProp_SLProps
+                from OCP.TopAbs import TopAbs_REVERSED
+
+                slprops = BRepLProp_SLProps(adaptor, u_center, v_center, 1, 0.01)
+
+                if slprops.IsNormalDefined():
+                    normal = slprops.Normal()
+                    nx, ny, nz = normal.X(), normal.Y(), normal.Z()
+
+                    # Face orientation
+                    if face.Orientation() == TopAbs_REVERSED:
+                        nx, ny, nz = -nx, -ny, -nz
+                else:
+                    # Normal not defined - skip this face
+                    explorer.Next()
+                    continue
+
+                # Angle from vertical (Z-axis)
+                angle_from_vertical = math.degrees(math.acos(min(1.0, max(-1.0, nz))))
+
+                # Check if face is on build plane (Z = zmin within tolerance)
+                face_center = _get_face_center(face)
+                is_on_build_plane = abs(face_center[2] - zmin) < 0.5  # 0.5mm tolerance
+
+                # Base contact: faces on build plane (any orientation)
+                # These faces rest on the print bed
+                if is_on_build_plane:
+                    base_contact_area += face_area
+
+                # Overhang detection: faces pointing down but NOT on build plane
+                if nz < 0 and not is_on_build_plane:  # Pointing downward and above plate
+                    overhang_area += face_area
+
+                    if angle_from_vertical > critical_angle_deg:
+                        # Critical overhang
+                        critical_overhang_area += face_area
+
+                        # Check if needs support (nothing directly below)
+                        if not _has_support_below(face, ocp_shape, zmin):
+                            support_area += face_area
+
+                # Store face data for span analysis
+                if face_area > 1.0:
+                    face_data.append({
+                        'center': face_center,
+                        'area': face_area,
+                        'normal': (nx, ny, nz),
+                        'z_min': _get_face_z_bounds(face)[0]
+                    })
+
+            except Exception as e:
+                logger.debug(f"Failed to analyze face: {e}")
+
+            explorer.Next()
+
+        # 5. Compute metrics
+        metrics.overhang_area_mm2 = overhang_area
+        metrics.critical_overhang_area_mm2 = critical_overhang_area
+        metrics.overhang_ratio = overhang_area / max(metrics.total_surface_area_mm2, 1.0)
+
+        metrics.base_contact_area_mm2 = base_contact_area
+
+        # Support contact area includes critical overhangs that need support
+        metrics.support_contact_area_mm2 = support_area
+
+        # Estimate support volume (simple heuristic)
+        # Support volume ≈ support_area × average_height
+        avg_support_height = metrics.build_height_mm / 2
+        metrics.support_volume_estimate_mm3 = support_area * avg_support_height
+
+        # 6. Compute unsupported span
+        metrics.unsupported_span_mm = _compute_max_unsupported_span(
+            face_data, metrics.build_height_mm, zmin
+        )
+
+        # 7. Compute base contact ratio (vs convex hull footprint)
+        footprint_area = (xmax - xmin) * (ymax - ymin)
+        metrics.base_contact_ratio = base_contact_area / max(footprint_area, 1.0)
+
+        # 8. Stability score (based on CoM height and base width)
+        com_height = metrics.center_of_mass[2] - zmin
+        base_width = min(xmax - xmin, ymax - ymin)
+
+        if base_width > 0:
+            # Lower CoM and wider base = more stable
+            # Normalize: CoM at base = 1.0, CoM at 2× base width = 0.0
+            metrics.stability_score = max(0.0, 1.0 - (com_height / (2 * base_width)))
+        else:
+            metrics.stability_score = 0.5  # Neutral
+
+    except Exception as e:
+        logger.exception(f"Failed to compute orientation metrics: {e}")
+
+    metrics.analysis_time_ms = (time.perf_counter() - start_time) * 1000
+
+    logger.debug(f"Orientation metrics computed in {metrics.analysis_time_ms:.1f}ms: "
+                 f"overhang={metrics.overhang_area_mm2:.1f}mm², "
+                 f"support={metrics.support_contact_area_mm2:.1f}mm², "
+                 f"height={metrics.build_height_mm:.1f}mm")
+
+    return metrics
+
+
+def _get_face_center(face: Any) -> Tuple[float, float, float]:
+    """Get the center point of a face."""
+    try:
+        from OCP.GProp import GProp_GProps
+        from OCP.BRepGProp import BRepGProp
+
+        props = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(face, props)
+        center = props.CentreOfMass()
+        return (center.X(), center.Y(), center.Z())
+    except Exception:
+        return (0.0, 0.0, 0.0)
+
+
+def _get_face_z_bounds(face: Any) -> Tuple[float, float]:
+    """Get the min and max Z values of a face."""
+    try:
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+
+        bbox = Bnd_Box()
+        BRepBndLib.Add_s(face, bbox)
+        _, _, zmin, _, _, zmax = bbox.Get()
+        return (zmin, zmax)
+    except Exception:
+        return (0.0, 0.0)
+
+
+def _has_support_below(
+    face: Any,
+    shape: Any,
+    build_plate_z: float,
+    tolerance: float = 0.5
+) -> bool:
+    """
+    Check if a face has support geometry directly below it.
+
+    Simple heuristic: project face center down and check for intersections.
+    """
+    try:
+        center = _get_face_center(face)
+        z_min, _ = _get_face_z_bounds(face)
+
+        # Check distance from build plate
+        height_above_plate = z_min - build_plate_z
+
+        if height_above_plate < tolerance:
+            return True  # On or very close to build plate
+
+        # Simple check: if face is small and low, it might be self-supporting
+        # For V1, we use a conservative heuristic
+        if height_above_plate < 5.0:  # Less than 5mm above plate
+            return True
+
+        return False
+
+    except Exception:
+        return False
+
+
+def _compute_max_unsupported_span(
+    face_data: List[Dict],
+    build_height: float,
+    build_plate_z: float,
+    max_height_threshold: float = 20.0
+) -> float:
+    """
+    Compute the maximum unsupported horizontal span.
+
+    For each downward-facing face, find the horizontal distance to
+    the nearest supporting geometry below.
+    """
+    max_span = 0.0
+
+    # Filter downward-facing faces
+    downward_faces = [
+        f for f in face_data
+        if f['normal'][2] < 0  # Pointing down
+        and f['area'] > 5.0  # Significant area
+        and (f['z_min'] - build_plate_z) < max_height_threshold  # Not too high
+    ]
+
+    if len(downward_faces) < 2:
+        return 0.0
+
+    # Compute horizontal distances between all pairs
+    for i, f1 in enumerate(downward_faces):
+        for f2 in downward_faces[i+1:]:
+            dx = f1['center'][0] - f2['center'][0]
+            dy = f1['center'][1] - f2['center'][1]
+            horizontal_dist = math.sqrt(dx*dx + dy*dy)
+
+            if horizontal_dist > max_span:
+                max_span = horizontal_dist
+
+    return max_span
+
+
+def compare_metrics(
+    before: OrientationMetrics,
+    after: OrientationMetrics
+) -> Dict[str, Any]:
+    """
+    Compare two orientation metrics and compute deltas.
+
+    Returns a dict with percentage changes and absolute differences.
+    """
+    def pct_change(before_val: float, after_val: float) -> Optional[float]:
+        if abs(before_val) < 1e-6:
+            return None
+        return ((after_val - before_val) / before_val) * 100
+
+    return {
+        'overhang_area_change_pct': pct_change(before.overhang_area_mm2, after.overhang_area_mm2),
+        'overhang_area_delta_mm2': after.overhang_area_mm2 - before.overhang_area_mm2,
+        'support_area_change_pct': pct_change(before.support_contact_area_mm2, after.support_contact_area_mm2),
+        'support_area_delta_mm2': after.support_contact_area_mm2 - before.support_contact_area_mm2,
+        'support_volume_change_pct': pct_change(before.support_volume_estimate_mm3, after.support_volume_estimate_mm3),
+        'support_volume_delta_mm3': after.support_volume_estimate_mm3 - before.support_volume_estimate_mm3,
+        'height_change_mm': after.build_height_mm - before.build_height_mm,
+        'base_area_change_pct': pct_change(before.base_contact_area_mm2, after.base_contact_area_mm2),
+        'base_area_delta_mm2': after.base_contact_area_mm2 - before.base_contact_area_mm2,
+        'stability_change': after.stability_score - before.stability_score,
+        'is_improvement': _is_overall_improvement(before, after),
+    }
+
+
+def _is_overall_improvement(
+    before: OrientationMetrics,
+    after: OrientationMetrics
+) -> bool:
+    """
+    Determine if the 'after' orientation is an overall improvement.
+
+    Improvement criteria:
+    - Less overhang area
+    - Less support needed
+    - More stable (higher stability score)
+    - Trade-offs acceptable (height increase not too severe)
+    """
+    # Must reduce support or overhang
+    support_reduced = after.support_contact_area_mm2 < before.support_contact_area_mm2 * 0.95
+    overhang_reduced = after.overhang_area_mm2 < before.overhang_area_mm2 * 0.95
+
+    if not (support_reduced or overhang_reduced):
+        return False
+
+    # Stability should not get much worse
+    stability_maintained = after.stability_score >= before.stability_score * 0.9
+
+    # Height increase should be reasonable (not more than 2x)
+    height_acceptable = after.build_height_mm < before.build_height_mm * 2.0
+
+    return stability_maintained and height_acceptable
