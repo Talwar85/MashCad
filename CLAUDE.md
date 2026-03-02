@@ -521,8 +521,97 @@ logger.warning("...")    # Warnung
 logger.error("...")      # Fehler
 ```
 
-### Pre-Commit Checklist
+---
 
+## MANDATORY: Test-Verifikungs-Regeln ⚠️
+
+**KRITISCH:** Diese Regeln MÜSSEN befolgt werden. Keine Ausnahmen.
+
+### Regel 1: Tests IMMER ausführen und verifizieren
+
+```bash
+# VOR Code-Änderung oder "Erfolg"-Meldung:
+conda run -n cad_env python -m pytest test/<meine_tests>.py -v --tb=short
+
+# Nur wenn GRÜN zurückkommt, darf "erfolgreich" gemeldet werden
+# ROT = Problem, nicht ignorieren!
+```
+
+**VERBOTEN:**
+- Behaupten "alle Tests bestanden" ohne sie auszuführen
+- Test-Ergebnisse ignorieren oder "überspringen"
+- Fehlgeschlagene Tests als "kleiniges Problem" abtun
+
+### Regel 2: API-Verwendung PRÜFEN bevor Code geschrieben wird
+
+```python
+# VOR Verwendung einer Klasse/API:
+# 1. Source lesen (Grep/Read)
+# 2. Aktuelle Signatur verstehen
+# 3. Beispiel-Code in existierenden Tests finden
+
+# BEISPIEL - FALSCH:
+body = Body(name="test", solid=box)  # ← alte API, funktioniert nicht mehr!
+
+# BEISPIEL - RICHTIG:
+# Zuerst prüfen:
+grep -n "def __init__" modeling/body.py
+# Ergebnis: def __init__(self, name: str = "Body", document=None)
+
+# Dann richtig verwenden:
+body = Body(name="test")
+# Solid später via Features hinzufügen
+```
+
+### Regel 3: Keine Platzhalter - NUR echte Implementierung
+
+```python
+# VERBOTEN:
+def test_selection_performance():
+    for i in range(100):
+        pass  # ← NICHT ERLAUBT!
+
+# ERLAUBT:
+def test_selection_performance():
+    times = []
+    for i in range(100):
+        start = time.perf_counter()
+        result = perform_selection()  # Echte Messung
+        times.append((time.perf_counter() - start) * 1000)
+    assert max(times) < 10  # Echtes Kriterium
+```
+
+### Regel 4: Ehrliche Status-Berichterstattung
+
+```python
+# FALSCH:
+print("✅ Alle Tests erfolgreich")  # Aber 10 Tests sind rot!
+
+# RICHTIG:
+if test_results.failed > 0:
+    print(f"⚠️ {test_results.failed} Tests fehlgeschlagen:")
+    for test in test_results.failed:
+        print(f"  - {test.name}: {test.error}")
+```
+
+### Regel 5: Anti-Pattern "Scheinerfolg" erkennen und vermeiden
+
+Das passiert NICHT mehr:
+
+1. Tests schreiben → Tests ausführen → **Tests rot** → Trotzdem "Erfolg" melden ❌
+2. `pass` als Platzhalter verwenden und behaupten "ist implementiert" ❌
+3. Veraltete API verwenden und ignorieren dass es crasht ❌
+4. Von Regression-Schutz schreiben ohne Tests zu validieren ❌
+
+**WICHTIG:** Ein Test der rot ist, ist EIN FEHLER. Kein "eigentlich funktioniert es". Fixen oder ehrlich melden.
+
+---
+
+## Pre-Commit Checklist
+
+- [ ] **Tests AUSFÜHREN** (`conda run -n cad_env python -m pytest ...`) - Nur bei GRÜN weitermachen
+- [ ] **API prüfen** (aktuelle Signatur mit Grep/Read ermitteln)
+- [ ] **Keine `pass` Platzhalter** (nur echte Implementierungen)
 - [ ] Kernel-Operationen in Transaction gewrapped
 - [ ] `invalidate_mesh()` nach Kernel-Änderungen
 - [ ] Result-Types für alle Operationen
@@ -536,6 +625,8 @@ logger.error("...")      # Fehler
 
 | Version | Datum | Änderungen |
 |---------|-------|------------|
+| V15 | Feb 2026 | Test-Verifikungs-Regeln hinzugefügt (nach "Scheinerfolg"-Incident) |
+| V14 | Feb 2026 | Sketcher-Reliability, TNP v5, Plane-Serialisierung, DOF-Analyse |
 | V13 | Jan 2026 | Phase 2+3 implementiert, neue CLAUDE.md |
 | V12 | Jan 2026 | Transform V3, Cache-Counter |
 | V11 | Dez 2025 | Sketch-Solver verbessert |
